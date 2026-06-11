@@ -183,7 +183,7 @@ export class BridgeRuntimeClient {
       bridgeId: state?.bridgeId ?? this.statusSnapshot.bridgeId,
       connectCode: null,
       workspaceConnected: false,
-      message: `Registering bridge with ${env.BRIDGE_CLOUD_URL}.`
+      message: `Registering bridge with ${env.BRIDGE_SERVER_URL}.`
     })
     let registration: BridgeRuntimeRegistrationResponse
     try {
@@ -236,7 +236,7 @@ export class BridgeRuntimeClient {
 
     let response: Response
     try {
-      response = await fetch(new URL('/api/bridge-runtime/register', env.BRIDGE_CLOUD_URL), {
+      response = await fetch(new URL('/api/bridge-runtime/register', env.BRIDGE_SERVER_URL), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -244,7 +244,7 @@ export class BridgeRuntimeClient {
     } catch (error) {
       throw new BridgeRuntimeFailure(
         'api-unavailable',
-        `Bridge API at ${env.BRIDGE_CLOUD_URL} is unavailable during registration${describeErrorSuffix(error)} Retrying in ${RECONNECT_DELAY_MS / 1000}s.`
+        `Bridge API at ${env.BRIDGE_SERVER_URL} is unavailable during registration${describeErrorSuffix(error)} Retrying in ${RECONNECT_DELAY_MS / 1000}s.`
       )
     }
 
@@ -256,7 +256,7 @@ export class BridgeRuntimeClient {
   }
 
   private async connect(registration: BridgeRuntimeRegistrationResponse): Promise<void> {
-    const wsUrl = buildWebSocketUrl(env.BRIDGE_CLOUD_URL, registration.connectPath)
+    const wsUrl = buildWebSocketUrl(env.BRIDGE_SERVER_URL, registration.connectPath)
     this.updateStatus({
       lifecycle: registration.bridge.connectCode ? 'pairing' : 'connecting',
       bridgeId: registration.bridge.id,
@@ -847,7 +847,7 @@ export class BridgeRuntimeClient {
       return { accepted: false, status: 'updateAvailable', message: 'Bridge update metadata is available, but no app bundle is published yet.' }
     }
 
-    const bundleUrl = resolveBridgeReleaseUrl(release.bundle.url, env.BRIDGE_CLOUD_URL)
+    const bundleUrl = resolveBridgeReleaseUrl(release.bundle.url, env.BRIDGE_SERVER_URL)
     const response = await fetch(bundleUrl)
     if (!response.ok) {
       return { accepted: false, status: 'updateAvailable', message: `Bridge update download failed with HTTP ${response.status}.` }
@@ -910,7 +910,7 @@ export class BridgeRuntimeClient {
   }
 
   private async loadLatestBridgeRelease() {
-    const manifestResponse = await fetch(new URL(`/api/bridge-runtime/releases/${env.BRIDGE_UPDATE_CHANNEL}`, env.BRIDGE_CLOUD_URL))
+    const manifestResponse = await fetch(new URL(`/api/bridge-runtime/releases/${env.BRIDGE_UPDATE_CHANNEL}`, env.BRIDGE_SERVER_URL))
     if (!manifestResponse.ok) {
       throw new Error(`Bridge release manifest request failed with HTTP ${manifestResponse.status}`)
     }

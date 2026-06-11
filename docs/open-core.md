@@ -24,6 +24,13 @@ surface lives in clearly bounded `private/` directories that the public export s
   footer) and/or the platform admin surface (overview + tenants views, nav tabs).
 - `packages/shared/src/private/` — contracts for the private surface, consumed as
   `@printstream/shared/private`.
+- The **public demo** machinery is private too: `apps/api/src/private/demo/`,
+  the bridge simulator entrypoints (`apps/bridge/src/demo-index.ts`,
+  `demo-simulator.ts`), the compose demo services (between
+  `BEGIN/END PRIVATE DEMO` markers), `data/demo-library/`, and the demo npm
+  scripts. Core keeps only the inert demo policy guards. See
+  `docs/private/demo.md`.
+- `docs/private/` — operational docs for the hosted deployment.
 
 ## Rules
 
@@ -56,6 +63,13 @@ run). Push the targets to their GitHub repos:
 cd ../printstream-public && git remote add origin git@github.com:PrintStreamApp/printstream.git && git push -u origin main
 cd ../printstream-home-assistant && git remote add origin git@github.com:PrintStreamApp/printstream-home-assistant.git && git push -u origin main
 ```
+
+## Parked branches
+
+Unfinished surfaces live on branches, not in the mainline (and therefore never
+reach the public export). Currently: `bridge-desktop-app` — the Electron tray
+wrapper for the bridge (desktop packaging scripts, electron deps, the desktop
+package CI matrix).
 
 Public contributions arrive as PRs against `PrintStreamApp/printstream` and are
 applied to this monorepo manually; the next snapshot export then reconciles the

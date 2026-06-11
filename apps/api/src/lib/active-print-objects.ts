@@ -19,7 +19,6 @@ import { printerManager } from './printer-manager.js'
 import { resolvePrinterCoverPath } from './printer-cover-source.js'
 import { choosePreferredExactPrinterFilePath, isMetadataPlateGcodePath } from './printer-file-path.js'
 import { clearDispatchedPrintSource, getDispatchedPrintSource } from './dispatched-print-source-cache.js'
-import { DEMO_PRINTER_SEEDS } from './demo/demo-printers.js'
 import { readPrinterStorageActivePrintObjects, readPrinterStorageActivePrintObjectsFromMetadata } from './printer-storage-3mf.js'
 import { readPlateObjectsWithPreview } from './three-mf.js'
 
@@ -32,7 +31,21 @@ const ACTIVE_SKIP_OBJECT_EXTERNAL_STORAGE_MODELS = new Set<Printer['model']>([
   'H2DPRO',
   'H2S'
 ])
-const DEMO_PRINTER_SERIALS = new Set(DEMO_PRINTER_SEEDS.map((seed) => seed.serial))
+/**
+ * Optional hook for synthetic deployments (e.g. a simulated demo bridge) to
+ * fabricate placeholder skip-objects for printers that have no real archive.
+ * Return null to fall through to the default empty list.
+ */
+export type ActivePrintObjectPlaceholderProvider = (
+  context: Pick<ActivePrintObjectLoadContext, 'printer' | 'jobName' | 'resolvedGcodeFile' | 'activePlateIndex'>
+) => PrinterActivePrintObject[] | null
+
+let activePrintObjectPlaceholderProvider: ActivePrintObjectPlaceholderProvider | null = null
+
+/** Pass `null` to clear (tests). */
+export function registerActivePrintObjectPlaceholderProvider(provider: ActivePrintObjectPlaceholderProvider | null): void {
+  activePrintObjectPlaceholderProvider = provider
+}
 
 interface ActivePrintObjectDeps {
   getActivePrintJobAssets: typeof getActivePrintJobAssets
@@ -256,7 +269,7 @@ async function loadActivePrintObjects(
     }
 
     const emptyObjects = loadState.emptyObjects
-      ?? buildDemoPlaceholderActivePrintObjects(timedContext)
+      ?? activePrintObjectPlaceholderProvider?.(timedContext)
       ?? []
     if (!signal?.aborted) {
       cacheActivePrintObjectsIfCurrent(
@@ -370,39 +383,6 @@ function parseActivePrintPlateIndex(gcodeFile: string | null): number | null {
   if (!match) return null
   const plateIndex = Number.parseInt(match[1] ?? '', 10)
   return Number.isFinite(plateIndex) && plateIndex > 0 ? plateIndex : null
-}
-
-function buildDemoPlaceholderActivePrintObjects(
-  context: Pick<ActivePrintObjectLoadContext, 'printer' | 'jobName' | 'resolvedGcodeFile' | 'activePlateIndex'>
-): PrinterActivePrintObject[] | null {
-  if (!DEMO_PRINTER_SERIALS.has(context.printer.serial)) return null
-
-  const seed = hashDemoObjectSeed(`${context.printer.serial}:${context.jobName}:${context.resolvedGcodeFile ?? ''}:${context.activePlateIndex ?? 0}`)
-  const objectCount = 3 + (Math.abs(seed) % 3)
-
-  return Array.from({ length: objectCount }, (_value, index) => {
-    const column = index % 2
-    const row = Math.floor(index / 2)
-    const minX = column * 12
-    const minY = row * 10
-    const maxX = minX + 9
-    const maxY = minY + 7
-    return {
-      id: index,
-      name: `Object ${index + 1}`,
-      previewPath: `M ${minX} ${minY} L ${maxX} ${minY} L ${maxX} ${maxY} L ${minX} ${maxY} L ${minX} ${minY} Z`,
-      previewBounds: { minX, minY, maxX, maxY }
-    }
-  })
-}
-
-function hashDemoObjectSeed(value: string): number {
-  let hash = 0
-  for (const char of value) {
-    hash = ((hash << 5) - hash) + char.charCodeAt(0)
-    hash |= 0
-  }
-  return hash
 }
 
 export function inferActivePrintObjectsUnavailableState(

@@ -14,7 +14,6 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
-    "demo:bootstrap": "tsx scripts/dev/bootstrap-public-demo.ts",
     "db:reset-auth": "tsx scripts/dev/reset-auth.ts"
   },
   "dependencies": {

@@ -58,7 +58,12 @@ export function resolveWorkspacePath(value: string): string {
 }
 
 const envSchema = z.object({
-  BRIDGE_CLOUD_URL: z.string().url().default('http://api:4000'),
+  // Canonical name for the PrintStream server origin. `BRIDGE_CLOUD_URL` is
+  // the legacy alias and keeps working so existing installs are unaffected.
+  BRIDGE_SERVER_URL: z.preprocess(
+    (value) => value ?? process.env.BRIDGE_CLOUD_URL,
+    z.string().url().default('http://api:4000')
+  ),
   BRIDGE_SIMULATOR_STATUS_INTERVAL_MS: z.coerce.number().int().positive().default(10_000),
   DISCOVERY_PORT: z.coerce.number().int().positive().default(2021),
   BRIDGE_LIBRARY_DIR: z.string().default('/data/library'),

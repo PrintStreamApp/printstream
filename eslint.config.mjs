@@ -11,6 +11,8 @@ export default tseslint.config(
       '**/.vite/**',
       '**/node_modules/**',
       'tmp/**',
+      // Gitignored runtime data, incl. public-repo export snapshots.
+      'data/**',
       // Gitignored scratch dumps/scripts from dev-DB resets.
       '.backups/**',
       '**/prisma/migrations/**'

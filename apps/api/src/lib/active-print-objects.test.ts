@@ -154,19 +154,26 @@ test('fetchActivePrintObjects returns no objects when direct metadata and tracke
   assert.equal(localObjectCalls, 0)
 })
 
-test('fetchActivePrintObjects returns placeholder objects for demo printers when extraction yields nothing', async () => {
-  const demoPrinter = {
+test('fetchActivePrintObjects consults a registered placeholder provider when extraction yields nothing', async (t) => {
+  const syntheticPrinter = {
     ...printer,
-    serial: 'DEMO-P1S-001'
+    serial: 'SYNTH-001'
   }
 
-  mock.method(printerManagerModule.printerManager, 'getPrinter', () => demoPrinter)
+  mock.method(printerManagerModule.printerManager, 'getPrinter', () => syntheticPrinter)
   mock.method(printerManagerModule.printerManager, 'getStatus', () => ({
-    jobName: 'Demo Job',
+    jobName: 'Synthetic Job',
     gcodeFile: '/data/Metadata/plate_2.gcode',
-    taskId: 'task-demo'
+    taskId: 'task-synth'
   }))
-  mock.method(printerManagerModule.printerManager, 'getLastJobName', () => 'Demo Job')
+  mock.method(printerManagerModule.printerManager, 'getLastJobName', () => 'Synthetic Job')
+
+  activePrintObjectsModule.registerActivePrintObjectPlaceholderProvider((context) =>
+    context.printer.serial === 'SYNTH-001'
+      ? [{ id: 0, name: 'Object 1', previewPath: 'M 0 0 L 1 0 Z', previewBounds: { minX: 0, minY: 0, maxX: 1, maxY: 1 } }]
+      : null
+  )
+  t.after(() => activePrintObjectsModule.registerActivePrintObjectPlaceholderProvider(null))
 
   activePrintObjectsModule.setActivePrintObjectDepsForTests({
     getActivePrintJobAssets: async () => null,
@@ -175,10 +182,10 @@ test('fetchActivePrintObjects returns placeholder objects for demo printers when
     readPlateObjectsWithPreview: async () => []
   })
 
-  const objects = await activePrintObjectsModule.fetchActivePrintObjects(demoPrinter.id, {
-    jobName: 'Demo Job',
+  const objects = await activePrintObjectsModule.fetchActivePrintObjects(syntheticPrinter.id, {
+    jobName: 'Synthetic Job',
     gcodeFile: '/data/Metadata/plate_2.gcode',
-    taskId: 'task-demo'
+    taskId: 'task-synth'
   })
 
   assert.equal(objects.length > 0, true)

@@ -31,7 +31,7 @@ services:
     environment:
       NODE_ENV: production
       # Point this at the public API origin the bridge should register with.
-      BRIDGE_CLOUD_URL: ${BRIDGE_CLOUD_URL:-https://printstream.app}
+      BRIDGE_SERVER_URL: ${BRIDGE_SERVER_URL:-https://printstream.app}
       DISCOVERY_PORT: ${DISCOVERY_PORT:-2021}
       BRIDGE_LIBRARY_DIR: /data/library
       BRIDGE_NAME: ${BRIDGE_NAME:-PrintStream Bridge}

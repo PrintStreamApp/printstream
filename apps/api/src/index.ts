@@ -4,7 +4,6 @@
  * even before any client connects.
  */
 import { createServer } from 'node:http'
-import { PUBLIC_DEMO_TENANT_SLUG } from '@printstream/shared'
 import { app } from './app.js'
 import { env } from './lib/env.js'
 import { attachWebSocketServer } from './lib/ws-server.js'
@@ -22,8 +21,6 @@ import {
   startActivePrintObjectCache,
   stopActivePrintObjectCache
 } from './lib/active-print-objects.js'
-import { pruneSeededDemoData } from './lib/demo/demo-data.js'
-import { rootPrisma } from './lib/prisma.js'
 import { ensureDefaultWorkspace } from './lib/default-workspace.js'
 
 const httpServer = createServer(app)
@@ -77,18 +74,6 @@ httpServer.listen(env.API_PORT, () => {
       console.error('Failed to start HMS code service', error)
     }
     try {
-      if (await publicDemoTenantExists()) {
-        console.log('Public demo tenant exists; preserving seeded demo data for simulator bridge.')
-      } else {
-        const cleaned = await pruneSeededDemoData()
-        if (cleaned.printersRemoved > 0 || cleaned.thumbnailsRemoved > 0) {
-          console.log('Removed persisted demo data', cleaned)
-        }
-      }
-    } catch (error) {
-      console.error('Failed to reconcile demo data', error)
-    }
-    try {
       await printerManager.start()
     } catch (error) {
       console.error('Failed to start printer manager', error)
@@ -100,14 +85,6 @@ httpServer.listen(env.API_PORT, () => {
     }
   })()
 })
-
-async function publicDemoTenantExists(): Promise<boolean> {
-  const tenant = await rootPrisma.tenant.findUnique({
-    where: { slug: PUBLIC_DEMO_TENANT_SLUG },
-    select: { id: true }
-  })
-  return tenant != null
-}
 
 function shutdown(signal: NodeJS.Signals) {
   console.log(`Received ${signal}, shutting down`)

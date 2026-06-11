@@ -30,7 +30,7 @@ import { SlicingEditorAction } from './SlicingEditorAction'
 export const modelPreviewerPlugin: WebPlugin = {
   name: 'model-previewer',
   version: '0.1.0',
-  description: 'Three.js viewer for STL files and plate-scoped 3MF previews.',
+  description: '3D preview and editor for library files: STL, plated 3MF, and G-code previews plus a multi-plate project editor with painting, supports, and per-layer filament changes.',
   slots: [
     { name: 'library.fileActions', component: LibraryPreviewAction },
     { name: 'library.overlays', component: PreviewOverlay },
