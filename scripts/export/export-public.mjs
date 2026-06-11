@@ -33,7 +33,7 @@ const EXCLUDED_PREFIXES = [
   'apps/web/src/private/',
   'packages/shared/src/private/',
   'apps/web/public/marketing/',
-  'data/demo-library/',
+  'data/',
   'docs/private/',
   'integrations/'
 ]
