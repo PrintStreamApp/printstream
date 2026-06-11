@@ -36,18 +36,18 @@
     "prepare": "husky || true"
   },
   "devDependencies": {
-    "@eslint/js": "^9.24.0",
-    "concurrently": "^9.1.2",
-    "eslint": "^9.24.0",
-    "eslint-plugin-react-hooks": "^5.2.0",
-    "eslint-plugin-react-refresh": "^0.4.19",
-    "globals": "^16.0.0",
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.3",
+    "eslint": "^10.4.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
     "husky": "^9.1.7",
-    "typescript": "^5.8.3",
-    "typescript-eslint": "^8.29.0"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.0"
   },
   "dependencies": {
-    "@types/multer": "^1.4.13",
+    "@types/multer": "^2.1.0",
     "multer": "^2.1.1"
   }
 }
