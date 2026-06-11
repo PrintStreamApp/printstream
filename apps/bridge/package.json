@@ -1,0 +1,108 @@
+{
+  "name": "@printstream/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Desktop tray bridge for connecting LAN Bambu printers to PrintStream.",
+  "homepage": "https://github.com/RyanEwen/printstream",
+  "author": {
+    "name": "PrintStream",
+    "email": "noreply@printstream.local"
+  },
+  "main": "dist/desktop/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev:desktop": "npm run build && electron .",
+    "dev": "node --env-file ../../.env ../../node_modules/.bin/tsx watch --include ../../packages/bridge-runtime/dist/**/*.js --include ../../packages/shared/dist/**/*.js src/index.ts",
+    "dev:demo": "node --env-file ../../.env ../../node_modules/.bin/tsx watch --include ../../packages/shared/dist/**/*.js src/demo-index.ts",
+    "package:appimage": "npm run build && node scripts/package-desktop.mjs appimage",
+    "package:appimage:arm64": "npm run build && node scripts/package-desktop.mjs appimage arm64",
+    "package:appimage:x64": "npm run build && node scripts/package-desktop.mjs appimage x64",
+    "package:all-supported": "npm run build && node scripts/package-desktop.mjs all-supported",
+    "package:all-supported:arm64": "npm run build && node scripts/package-desktop.mjs all-supported arm64",
+    "package:all-supported:x64": "npm run build && node scripts/package-desktop.mjs all-supported x64",
+    "package:desktop:dir": "npm run build && node scripts/package-desktop.mjs dir",
+    "package:host": "npm run build && node scripts/package-desktop.mjs host",
+    "package:host:arm64": "npm run build && node scripts/package-desktop.mjs host arm64",
+    "package:host:x64": "npm run build && node scripts/package-desktop.mjs host x64",
+    "package:linux:all": "npm run build && node scripts/package-desktop.mjs linux-all",
+    "package:linux": "npm run build && node scripts/package-desktop.mjs linux",
+    "package:linux:arm64": "npm run build && node scripts/package-desktop.mjs linux arm64",
+    "package:linux:x64": "npm run build && node scripts/package-desktop.mjs linux x64",
+    "package:mac": "npm run build && node scripts/package-desktop.mjs mac",
+    "package:plan": "node scripts/package-desktop.mjs plan",
+    "package:plan:arm64": "node scripts/package-desktop.mjs plan arm64",
+    "package:plan:x64": "node scripts/package-desktop.mjs plan x64",
+    "package:update-bundle": "npm run build && node scripts/package-update-bundle.mjs",
+    "package:update-bundle:api": "npm run build && node scripts/package-update-bundle.mjs --out-dir data/bridge-releases",
+    "package:win:all": "npm run build && node scripts/package-desktop.mjs win-all",
+    "package:win": "npm run build && node scripts/package-desktop.mjs win",
+    "package:win:arm64": "npm run build && node scripts/package-desktop.mjs win arm64",
+    "package:win:x64": "npm run build && node scripts/package-desktop.mjs win x64",
+    "start:demo": "node dist/demo-index.js",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "build": {
+    "appId": "com.printstream.bridge",
+    "productName": "PrintStream Bridge",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*.js",
+      "dist/**/*.d.ts",
+      "package.json",
+      "!dist/**/*.test.*",
+      "!node_modules/@printstream/shared/src{,/**}",
+      "!node_modules/@printstream/shared/tsconfig.json",
+      "!node_modules/@printstream/shared/dist/**/*.test.*",
+      "!node_modules/@printstream/bridge-runtime/src{,/**}",
+      "!node_modules/@printstream/bridge-runtime/tsconfig.json",
+      "!node_modules/@printstream/bridge-runtime/dist/**/*.test.*"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "category": "Utility",
+      "maintainer": "PrintStream <noreply@printstream.local>",
+      "target": [
+        "AppImage",
+        "deb",
+        "tar.gz"
+      ]
+    }
+  },
+  "dependencies": {
+    "@printstream/bridge-runtime": "0.1.0",
+    "@printstream/shared": "0.1.0",
+    "dotenv": "^16.4.7",
+    "mqtt": "^5.10.1",
+    "ws": "^8.18.0",
+    "yauzl": "^3.3.0",
+    "yazl": "^3.3.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "@types/ws": "^8.5.13",
+    "@types/yauzl": "^2.10.3",
+    "@types/yazl": "^3.3.1",
+    "electron": "36.9.5",
+    "electron-builder": "^26.0.12",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

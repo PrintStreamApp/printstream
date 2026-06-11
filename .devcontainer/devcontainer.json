@@ -1,0 +1,55 @@
+{
+  "name": "printstream",
+  "dockerComposeFile": [
+    "compose.yml",
+    "compose.persist.yml",
+    "compose.${localEnv:PRINTSTREAM_DEVCONTAINER_VARIANT:localhost}.yml"
+  ],
+  "service": "workspace",
+  "runServices": [
+    "workspace",
+    "db",
+    "slicer"
+  ],
+  "shutdownAction": "stopCompose",
+  "workspaceFolder": "/workspace/printstream",
+  "remoteUser": "node",
+  "updateRemoteUserUID": true,
+  // Only the workspace container's own ports belong here: forwardPorts targets the
+  // `service` container (workspace), so 4000 (API) and 5173 (Vite) forward correctly
+  // and give a localhost fallback even in the nginx variant, which publishes no host
+  // ports. The db (5432) and slicer (4010) run in other services and are already
+  // published to the host by their compose `ports:`, so listing them here did nothing.
+  "forwardPorts": [
+    4000,
+    5173
+  ],
+  "remoteEnv": {
+    "DATABASE_URL": "postgresql://postgres:postgres@db:5432/printstream?schema=public",
+    "API_PORT": "4000"
+    // CLIENT_ORIGIN intentionally not set here: the devcontainer `${localEnv:VAR:default}`
+    // syntax splits on ":" and truncates a colon-containing default, so
+    // "http://localhost:5173" collapsed to "http" — an invalid URL that broke
+    // `new URL()` in the passkey relying-party lookup (and any CLIENT_ORIGIN consumer).
+    // CLIENT_ORIGIN now comes from .env (e.g. https://dev.printstream.app for the nginx
+    // overlay), falling back to the env.ts default http://localhost:5173 when unset.
+    // To override per host, set CLIENT_ORIGIN in .env (or add it to a compose overlay's
+    // `environment:`, where Compose's ${VAR:-default} handles colons correctly).
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "Prisma.prisma",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "editor.codeActionsOnSave": {
+          "source.fixAll.eslint": "explicit"
+        },
+        "eslint.useFlatConfig": true
+      }
+    }
+  },
+  "postCreateCommand": "git config --global --add safe.directory /workspace/printstream && npm install && npm run db:generate && npm run db:wait && node scripts/bootstrap-prisma-migrations.mjs"
+}

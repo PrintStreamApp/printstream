@@ -1,0 +1,55 @@
+{
+  "name": "printstream",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "benchmark:printer-ftps": "node --env-file=.env --import tsx scripts/dev/benchmark-printer-ftps.ts",
+    "build": "npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/api && npm run build --workspace @printstream/bridge && npm run build --workspace @printstream/slicer && npm run build --workspace @printstream/web",
+    "capture:printer-media": "tsx scripts/dev/capture-live-printer-media.ts",
+    "deploy:prod:ssh": "node --env-file=.env scripts/deploy/deploy-over-ssh.mjs",
+    "deploy:staging:ssh": "node --env-file=.env scripts/deploy/deploy-over-ssh.mjs --staging",
+    "deploy:slicer:ssh": "node --env-file=.env scripts/deploy/rebuild-slicer-over-ssh.mjs",
+    "deploy:slicer:staging:ssh": "node --env-file=.env scripts/deploy/rebuild-slicer-over-ssh.mjs --staging",
+    "dev": "npm run dev:db && npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && concurrently -n shared,api,bridge,web -c magenta,green,yellow,blue \"npm run dev --workspace @printstream/shared\" \"npm run dev --workspace @printstream/api\" \"npm run dev --workspace @printstream/bridge\" \"npm run dev --workspace @printstream/web\"",
+    "dev:deploy-slicer": "node --env-file=.env scripts/dev/dev-with-deploy-slicer.mjs",
+    "dev:demo": "npm run dev:db && PUBLIC_DEMO_BRIDGE_NAME='PrintStream Demo Bridge' PUBLIC_DEMO_BRIDGE_STATE_FILE=./data/demo-bridge-state.json PUBLIC_DEMO_BRIDGE_LIBRARY_DIR=./data/demo-library npm run demo:bootstrap --workspace @printstream/api && npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && concurrently -n shared,api,demo-bridge,web -c magenta,green,yellow,blue \"npm run dev --workspace @printstream/shared\" \"npm run dev --workspace @printstream/api\" \"BRIDGE_NAME='PrintStream Demo Bridge' BRIDGE_STATE_FILE=../../data/demo-bridge-state.json BRIDGE_LIBRARY_DIR=../../data/demo-library npm run dev:demo --workspace @printstream/bridge\" \"npm run dev --workspace @printstream/web\"",
+    "dev:demo:parallel": "npm run dev:db && PUBLIC_DEMO_BRIDGE_NAME='PrintStream Demo Bridge' PUBLIC_DEMO_BRIDGE_STATE_FILE=./data/demo-bridge-state.json PUBLIC_DEMO_BRIDGE_LIBRARY_DIR=./data/demo-library npm run demo:bootstrap --workspace @printstream/api && npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && concurrently -n shared,api,bridge,demo-bridge,web -c magenta,green,yellow,cyan,blue \"npm run dev --workspace @printstream/shared\" \"npm run dev --workspace @printstream/api\" \"npm run dev --workspace @printstream/bridge\" \"BRIDGE_NAME='PrintStream Demo Bridge' BRIDGE_STATE_FILE=../../data/demo-bridge-state.json BRIDGE_LIBRARY_DIR=../../data/demo-library npm run dev:demo --workspace @printstream/bridge\" \"npm run dev --workspace @printstream/web\"",
+    "export:ha": "node scripts/export/export-home-assistant.mjs",
+    "export:public": "node scripts/export/export-public.mjs",
+    "dev:db": "npm run db:wait && node scripts/bootstrap-prisma-migrations.mjs",
+    "lint": "eslint .",
+    "notices": "node scripts/dev/generate-third-party-notices.mjs",
+    "test": "NODE_ENV=test node scripts/dev/run-tests.mjs",
+    "typecheck": "npm run typecheck --workspace @printstream/shared && npm run build --workspace @printstream/shared && npm run typecheck --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/bridge-runtime && npm run typecheck --workspace @printstream/api && npm run typecheck --workspace @printstream/bridge && npm run typecheck --workspace @printstream/slicer && npm run typecheck --workspace @printstream/web",
+    "validate": "npm run lint && npm run test && npm run typecheck && npm run prisma:validate --workspace @printstream/api",
+    "web:icons:export": "node scripts/dev/export-web-icons.mjs",
+    "db:wait": "node --env-file=.env scripts/dev/wait-for-db.mjs",
+    "db:generate": "npm run prisma:generate --workspace @printstream/api",
+    "db:push": "npm run prisma:db:push --workspace @printstream/api --",
+    "db:reset-auth": "npm run db:reset-auth --workspace @printstream/api",
+    "db:migrate": "npm run prisma:migrate:dev --workspace @printstream/api --",
+    "db:migrate:deploy": "npm run prisma:migrate:deploy --workspace @printstream/api",
+    "prepare": "husky || true"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.24.0",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.24.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^16.0.0",
+    "husky": "^9.1.7",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.29.0"
+  },
+  "dependencies": {
+    "@types/multer": "^1.4.13",
+    "multer": "^2.1.1"
+  }
+}

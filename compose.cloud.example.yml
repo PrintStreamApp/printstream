@@ -1,0 +1,207 @@
+# Copy this file to compose.yml for a real deployment and keep the
+# server-specific copy out of git.
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: printstream
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d printstream"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - printstream-postgres-data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        PRINTSTREAM_BRIDGE_BUILD_REVISION: ${PRINTSTREAM_BRIDGE_BUILD_REVISION:-unknown}
+        PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT: ${PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT:-unknown}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/printstream?schema=public}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:8080}
+      CLOUDFLARE_EMAIL_ACCOUNT_ID: ${CLOUDFLARE_EMAIL_ACCOUNT_ID:-}
+      CLOUDFLARE_EMAIL_API_TOKEN: ${CLOUDFLARE_EMAIL_API_TOKEN:-}
+      CLOUDFLARE_EMAIL_FROM_EMAIL: ${CLOUDFLARE_EMAIL_FROM_EMAIL:-}
+      CLOUDFLARE_EMAIL_FROM_NAME: ${CLOUDFLARE_EMAIL_FROM_NAME:-}
+      BETA_SIGNUP_TO_EMAIL: ${BETA_SIGNUP_TO_EMAIL:-}
+      AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES: ${AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES:-}
+      LIBRARY_DIR: /data/library
+      SLICER_SERVICE_URL: ${SLICER_SERVICE_URL:-http://slicer:4010}
+      SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
+      SLICING_MAX_CONCURRENT_JOBS: ${SLICING_MAX_CONCURRENT_JOBS:-1}
+      SLICING_MAX_QUEUED_JOBS: ${SLICING_MAX_QUEUED_JOBS:-10}
+      PLUGINS_DIR: /data/plugins
+      DISCOVERY_PORT: ${DISCOVERY_PORT:-2021}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      PUBLIC_DEMO_BRIDGE_NAME: ${PUBLIC_DEMO_BRIDGE_NAME:-PrintStream Demo Bridge}
+      PUBLIC_DEMO_BRIDGE_LIBRARY_DIR: ${PUBLIC_DEMO_BRIDGE_LIBRARY_DIR:-/data/demo-library}
+      PUBLIC_DEMO_BRIDGE_STATE_FILE: ${PUBLIC_DEMO_BRIDGE_STATE_FILE:-/data/demo-bridge-state.json}
+      PUBLIC_DEMO_BRIDGE_RUNTIME_TOKEN: ${PUBLIC_DEMO_BRIDGE_RUNTIME_TOKEN:-change-me-demo-runtime-token}
+      NTFY_TOPIC_URL: ${NTFY_TOPIC_URL:-}
+      # Single nginx hop in front; trust X-Forwarded-* from it so
+      # `req.ip` and `req.protocol` reflect the real client.
+      TRUST_PROXY: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - printstream-data:/data
+    networks:
+      - default
+      - slicer-internal
+
+  slicer:
+    build:
+      context: .
+      dockerfile: apps/slicer/Dockerfile
+    restart: unless-stopped
+    environment:
+      SLICER_PORT: 4010
+      SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
+      SLICER_DEFAULT_TARGET_ID: ${SLICER_DEFAULT_TARGET_ID:-}
+      SLICER_CLI_ARGS_TEMPLATE: ${SLICER_CLI_ARGS_TEMPLATE:---slice {plate} --debug 2 --outputdir {outputDir} --min-save --export-3mf {outputFileName} --export-json {input} {input}}
+      SLICER_ENABLE_PIPE_PROGRESS: ${SLICER_ENABLE_PIPE_PROGRESS:-true}
+      SLICER_WORK_DIR: /work
+      SLICER_BAMBUSTUDIO_HOME_DIR: /work/bambustudio-home
+      SLICER_BAMBUSTUDIO_DATA_DIR: /work/bambustudio-data
+    ports:
+      - "${SLICER_BIND_HOST:-127.0.0.1}:${SLICER_BIND_PORT:-4010}:4010"
+    volumes:
+      - printstream-slicer-work:/work
+    networks:
+      - slicer-internal
+
+  demo-bootstrap:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/printstream?schema=public}
+      LIBRARY_DIR: /data/library
+      PLUGINS_DIR: /data/plugins
+      PUBLIC_DEMO_BRIDGE_NAME: ${PUBLIC_DEMO_BRIDGE_NAME:-PrintStream Demo Bridge}
+      PUBLIC_DEMO_BRIDGE_LIBRARY_DIR: ${PUBLIC_DEMO_BRIDGE_LIBRARY_DIR:-/data/demo-library}
+      PUBLIC_DEMO_BRIDGE_STATE_FILE: ${PUBLIC_DEMO_BRIDGE_STATE_FILE:-/data/demo-bridge-state.json}
+      PUBLIC_DEMO_BRIDGE_RUNTIME_TOKEN: ${PUBLIC_DEMO_BRIDGE_RUNTIME_TOKEN:-change-me-demo-runtime-token}
+    command: ["sh", "-c", "node scripts/bootstrap-prisma-migrations.mjs && npm run demo:bootstrap --workspace @printstream/api"]
+    volumes:
+      - printstream-data:/data
+
+  bridge:
+    build:
+      context: .
+      dockerfile: apps/bridge/Dockerfile
+      args:
+        BRIDGE_BUILD_REVISION: ${BRIDGE_BUILD_REVISION:-unknown}
+        BRIDGE_SOURCE_FINGERPRINT: ${BRIDGE_SOURCE_FINGERPRINT:-unknown}
+    profiles:
+      - bridge
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRIDGE_CLOUD_URL: ${BRIDGE_CLOUD_URL:-http://api:4000}
+      DISCOVERY_PORT: ${DISCOVERY_PORT:-2021}
+      BRIDGE_LIBRARY_DIR: /data/library
+      BRIDGE_NAME: ${BRIDGE_NAME:-PrintStream Bridge}
+      BRIDGE_STATE_FILE: /data/bridge-state.json
+      BRIDGE_UPDATE_CHANNEL: ${BRIDGE_UPDATE_CHANNEL:-stable}
+      BRIDGE_AUTO_UPDATE: ${BRIDGE_AUTO_UPDATE:-false}
+      BRIDGE_RELEASES_DIR: /data/releases
+      BRIDGE_RELEASE_RETENTION_DAYS: ${BRIDGE_RELEASE_RETENTION_DAYS:-7}
+    # NOTE: Bridge-owned SSDP discovery requires receiving LAN multicast
+    # packets. If you need auto-discovery from inside Docker, change this
+    # service to `network_mode: host` and point `BRIDGE_CLOUD_URL` at an
+    # API address reachable from the host network.
+    volumes:
+      - printstream-bridge-data:/data
+
+  demo-bridge:
+    build:
+      context: .
+      dockerfile: apps/bridge/Dockerfile
+      target: demo-runtime
+      args:
+        BRIDGE_BUILD_REVISION: ${BRIDGE_BUILD_REVISION:-unknown}
+        BRIDGE_SOURCE_FINGERPRINT: ${BRIDGE_SOURCE_FINGERPRINT:-unknown}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      demo-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      BRIDGE_CLOUD_URL: ${BRIDGE_CLOUD_URL:-http://api:4000}
+      BRIDGE_LIBRARY_DIR: ${PUBLIC_DEMO_BRIDGE_LIBRARY_DIR:-/data/demo-library}
+      BRIDGE_NAME: ${PUBLIC_DEMO_BRIDGE_NAME:-PrintStream Demo Bridge}
+      BRIDGE_STATE_FILE: ${PUBLIC_DEMO_BRIDGE_STATE_FILE:-/data/demo-bridge-state.json}
+      BRIDGE_UPDATE_CHANNEL: ${BRIDGE_UPDATE_CHANNEL:-stable}
+      BRIDGE_AUTO_UPDATE: ${BRIDGE_AUTO_UPDATE:-false}
+      BRIDGE_RELEASES_DIR: /data/releases
+      BRIDGE_RELEASE_RETENTION_DAYS: ${BRIDGE_RELEASE_RETENTION_DAYS:-7}
+    volumes:
+      - printstream-data:/data
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        BUILD_VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8080}:8080"
+
+  web-migration:
+    profiles:
+      - migration
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        BUILD_VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        BUILD_VITE_DOMAIN_MIGRATION_TARGET: ${VITE_DOMAIN_MIGRATION_TARGET:-}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  printstream-data:
+    name: ${APP_DATA_VOLUME_NAME:-printstream-data}
+  printstream-bridge-data:
+    name: ${BRIDGE_DATA_VOLUME_NAME:-printstream-bridge-data}
+  printstream-slicer-work:
+    name: ${SLICER_WORK_VOLUME_NAME:-printstream-slicer-work}
+  printstream-postgres-data:
+    name: ${POSTGRES_DATA_VOLUME_NAME:-printstream-postgres-data}
+
+networks:
+  slicer-internal:
+    internal: true

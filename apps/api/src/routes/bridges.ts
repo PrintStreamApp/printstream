@@ -1,0 +1,406 @@
+/**
+ * Tenant bridge management routes.
+ *
+ * Owns bridge listing plus the initial connect/rename flows so the web app
+ * can attach dormant bridge records to a tenant before deeper bridge
+ * transport work lands.
+ */
+import express from 'express'
+import {
+  SETTINGS_MANAGE_PERMISSION,
+  bridgeListResponseSchema,
+  bridgeResponseSchema,
+  bridgePingParamsSchema,
+  bridgePingResultSchema,
+  bridgeTestResponseSchema,
+  bridgeUpdateActionResponseSchema,
+  bridgeUpdateActionResultSchema,
+  bridgeUpdateInstallParamsSchema,
+  connectBridgeRequestSchema,
+  updateBridgeRequestSchema
+} from '@printstream/shared'
+import { requireRequestPermission } from '../lib/authorization.js'
+import { recoverBridgeLibraryAssignments, recoveredBridgeLibraryAssignmentCount } from '../lib/bridge-library-assignment-recovery.js'
+import { recoverBridgePrinterAssignments } from '../lib/bridge-assignment-recovery.js'
+import { buildBridgeUpdateSummary } from '../lib/bridge-update-policy.js'
+import { syncBridgePrinterConfig } from '../lib/bridge-printer-config.js'
+import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
+import { conflict, notFound } from '../lib/http-error.js'
+import { printerManager } from '../lib/printer-manager.js'
+import { toPrinterDto } from '../lib/printer-record.js'
+import { prisma, rootPrisma } from '../lib/prisma.js'
+import { requireRequestTenantId, requireRouteParam } from '../lib/request-helpers.js'
+import { broadcastBridgesChanged, broadcastLibraryChanged, broadcastPrinterViewsChanged } from '../lib/ws-resource-events.js'
+
+export const bridgesRouter = express.Router()
+
+const BRIDGE_HEARTBEAT_INTERVAL_SECONDS = 15
+
+bridgesRouter.use(requireRequestPermission(SETTINGS_MANAGE_PERMISSION))
+
+bridgesRouter.get('/', async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const bridges = await prisma.bridge.findMany({
+    where: { tenantId },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      version: true,
+      buildRevision: true,
+      sourceFingerprint: true,
+      protocolVersion: true,
+      runnerAbiVersion: true,
+      updateChannel: true,
+      updateStatus: true,
+      latestAvailableVersion: true,
+      lastUpdateCheckAt: true,
+      lastUpdateError: true,
+      lastSeenAt: true,
+      createdAt: true,
+      updatedAt: true,
+      _count: {
+        select: {
+          printers: true
+        }
+      }
+    }
+  })
+
+  response.json(bridgeListResponseSchema.parse({
+    bridges: bridges.map((bridge) => toBridgeSummary(bridge))
+  }))
+})
+
+bridgesRouter.post('/connect', async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const parsed = connectBridgeRequestSchema.parse(request.body)
+  const existing = await rootPrisma.bridge.findUnique({
+    where: { connectCode: parsed.connectCode },
+    select: {
+      id: true,
+      tenantId: true
+    }
+  })
+
+  if (!existing) {
+    throw notFound('Bridge connect code not found.')
+  }
+  if (existing.tenantId) {
+    throw conflict('Bridge has already been connected to a workspace.')
+  }
+
+  const bridge = await rootPrisma.bridge.update({
+    where: { id: existing.id },
+    data: {
+      tenantId,
+      ...(parsed.name ? { name: parsed.name } : {})
+    },
+    select: {
+      id: true,
+      name: true,
+      version: true,
+      buildRevision: true,
+      sourceFingerprint: true,
+      protocolVersion: true,
+      runnerAbiVersion: true,
+      updateChannel: true,
+      updateStatus: true,
+      latestAvailableVersion: true,
+      lastUpdateCheckAt: true,
+      lastUpdateError: true,
+      lastSeenAt: true,
+      createdAt: true,
+      updatedAt: true,
+      _count: {
+        select: {
+          printers: true
+        }
+      }
+    }
+  })
+
+  const reattachedPrinters = await recoverBridgePrinterAssignments({ tenantId, bridgeId: bridge.id })
+  const reassignedLibrary = await recoverBridgeLibraryAssignments({ tenantId, bridgeId: bridge.id })
+
+  if (bridgeSessionManager.setTenantId(bridge.id, tenantId)) {
+    bridgeSessionManager.sendMessage(bridge.id, {
+      type: 'bridge.welcome',
+      bridgeId: bridge.id,
+      connected: true,
+      tenantId,
+      heartbeatIntervalSeconds: BRIDGE_HEARTBEAT_INTERVAL_SECONDS
+    })
+    await syncBridgePrinterConfig(bridge.id)
+  }
+
+  broadcastBridgesChanged(tenantId)
+  if (recoveredBridgeLibraryAssignmentCount(reassignedLibrary) > 0) {
+    broadcastLibraryChanged(tenantId)
+  }
+  if (reattachedPrinters.length > 0) {
+    broadcastPrinterViewsChanged(tenantId)
+  }
+
+  response.status(201).json(bridgeResponseSchema.parse({
+    bridge: {
+      ...toBridgeSummary(bridge),
+      printerCount: bridge._count.printers + reattachedPrinters.length
+    }
+  }))
+})
+
+bridgesRouter.patch('/:id', async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const bridgeId = requireRouteParam(request.params.id, 'id')
+  const parsed = updateBridgeRequestSchema.parse(request.body)
+  const bridge = await prisma.bridge.update({
+    where: { id: bridgeId },
+    data: { name: parsed.name },
+    select: {
+      id: true,
+      name: true,
+      version: true,
+      buildRevision: true,
+      sourceFingerprint: true,
+      protocolVersion: true,
+      runnerAbiVersion: true,
+      updateChannel: true,
+      updateStatus: true,
+      latestAvailableVersion: true,
+      lastUpdateCheckAt: true,
+      lastUpdateError: true,
+      lastSeenAt: true,
+      createdAt: true,
+      updatedAt: true,
+      _count: {
+        select: {
+          printers: true
+        }
+      }
+    }
+  })
+
+  broadcastBridgesChanged(tenantId)
+  response.json(bridgeResponseSchema.parse({ bridge: toBridgeSummary(bridge) }))
+})
+
+bridgesRouter.post('/:id/test', async (request, response) => {
+  requireRequestTenantId(request)
+  const bridgeId = requireRouteParam(request.params.id, 'id')
+  const bridgeCount = await prisma.bridge.count({
+    where: { id: bridgeId }
+  })
+
+  if (bridgeCount === 0) {
+    throw notFound('Bridge not found.')
+  }
+  if (!bridgeSessionManager.isConnected(bridgeId)) {
+    throw conflict('Bridge is not connected.')
+  }
+
+  const startedAt = Date.now()
+
+  try {
+    const result = bridgePingResultSchema.parse(await bridgeSessionManager.requestRpc(
+      bridgeId,
+      'bridge.ping',
+      bridgePingParamsSchema.parse({ requestedAt: new Date().toISOString() }),
+      { timeoutMs: 5_000 }
+    ))
+
+    response.json(bridgeTestResponseSchema.parse({
+      respondedAt: result.respondedAt,
+      responseTimeMs: Math.max(0, Date.now() - startedAt)
+    }))
+  } catch (error) {
+    throw conflict(resolveBridgeTestErrorMessage(error))
+  }
+})
+
+bridgesRouter.post('/:id/update/check', async (request, response) => {
+  const bridge = await loadTenantBridgeForUpdate(request)
+  const checkedAt = new Date()
+  const update = buildBridgeUpdateSummary({
+    ...bridge,
+    lastUpdateCheckAt: checkedAt,
+    lastUpdateError: null
+  })
+
+  await prisma.bridge.update({
+    where: { id: bridge.id },
+    data: {
+      updateStatus: update.status,
+      latestAvailableVersion: update.latestVersion,
+      lastUpdateCheckAt: checkedAt,
+      lastUpdateError: null
+    }
+  })
+
+  response.json(bridgeUpdateActionResponseSchema.parse({
+    accepted: false,
+    status: update.status,
+    message: update.status === 'current' ? 'Bridge is current.' : 'Bridge update status refreshed.'
+  }))
+})
+
+bridgesRouter.post('/:id/update/start', async (request, response) => {
+  const bridge = await loadTenantBridgeForUpdate(request)
+  const update = buildBridgeUpdateSummary(bridge)
+  if (update.status === 'imageUpdateRequired' || update.status === 'runnerUpdateRequired') {
+    response.json(bridgeUpdateActionResponseSchema.parse({
+      accepted: false,
+      status: update.status,
+      message: update.manualUpdateCommand
+        ? `Manual bridge update required: ${update.manualUpdateCommand}`
+        : 'Manual bridge update required.'
+    }))
+    return
+  }
+
+  if (!bridgeSessionManager.isConnected(bridge.id)) {
+    throw conflict('Bridge is not connected.')
+  }
+
+  const result = bridgeUpdateActionResultSchema.parse(await bridgeSessionManager.requestRpc(
+    bridge.id,
+    'bridge.update.install',
+    bridgeUpdateInstallParamsSchema.parse({ requestedAt: new Date().toISOString() }),
+    { timeoutMs: 30_000 }
+  ))
+
+  await prisma.bridge.update({
+    where: { id: bridge.id },
+    data: {
+      updateStatus: result.status,
+      lastUpdateCheckAt: new Date(),
+      lastUpdateError: result.accepted || result.status === 'current' ? null : result.message
+    }
+  })
+
+  response.json(bridgeUpdateActionResponseSchema.parse(result))
+})
+
+bridgesRouter.delete('/:id', async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const bridgeId = requireRouteParam(request.params.id, 'id')
+  const bridge = await rootPrisma.bridge.findUnique({
+    where: { id: bridgeId },
+    select: {
+      id: true,
+      tenantId: true
+    }
+  })
+
+  if (!bridge || bridge.tenantId !== tenantId) {
+    throw notFound('Bridge not found.')
+  }
+
+  const attachedPrinters = await prisma.printer.findMany({
+    where: { bridgeId },
+    orderBy: { position: 'asc' }
+  })
+
+  await rootPrisma.$transaction(async (transaction) => {
+    await transaction.printer.updateMany({
+      where: {
+        tenantId,
+        bridgeId
+      },
+      data: { bridgeId: null }
+    })
+    await transaction.bridge.update({
+      where: { id: bridgeId },
+      data: { tenantId: null }
+    })
+  })
+
+  for (const printer of attachedPrinters) {
+    printerManager.update(toPrinterDto({ ...printer, bridgeId: null }), tenantId, null)
+  }
+
+  if (bridgeSessionManager.setTenantId(bridgeId, null)) {
+    bridgeSessionManager.sendMessage(bridgeId, {
+      type: 'bridge.welcome',
+      bridgeId,
+      connected: false,
+      tenantId: null,
+      heartbeatIntervalSeconds: BRIDGE_HEARTBEAT_INTERVAL_SECONDS
+    })
+  }
+
+  await syncBridgePrinterConfig(bridgeId)
+  broadcastBridgesChanged(tenantId)
+  broadcastPrinterViewsChanged(tenantId)
+  response.status(204).end()
+})
+
+function toBridgeSummary(bridge: {
+  id: string
+  name: string
+  version: string | null
+  buildRevision: string | null
+  sourceFingerprint: string | null
+  protocolVersion: number | null
+  runnerAbiVersion: string | null
+  updateChannel: string | null
+  updateStatus: string | null
+  latestAvailableVersion: string | null
+  lastUpdateCheckAt: Date | null
+  lastUpdateError: string | null
+  lastSeenAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+  _count: {
+    printers: number
+  }
+}) {
+  return {
+    id: bridge.id,
+    name: bridge.name,
+    printerCount: bridge._count.printers,
+    lastSeenAt: bridge.lastSeenAt?.toISOString() ?? null,
+    createdAt: bridge.createdAt.toISOString(),
+    updatedAt: bridge.updatedAt.toISOString(),
+    connectionStats: bridgeSessionManager.getConnectionStats(bridge.id),
+    update: buildBridgeUpdateSummary(bridge)
+  }
+}
+
+function resolveBridgeTestErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return 'Bridge test failed.'
+  }
+  if (error.message.includes('timed out')) {
+    return 'Bridge test timed out.'
+  }
+  if (error.message.includes('disconnected')) {
+    return 'Bridge disconnected during the test.'
+  }
+  return `Bridge test failed: ${error.message}`
+}
+
+async function loadTenantBridgeForUpdate(request: express.Request) {
+  requireRequestTenantId(request)
+  const bridgeId = requireRouteParam(request.params.id, 'id')
+  const bridge = await prisma.bridge.findUnique({
+    where: { id: bridgeId },
+    select: {
+      id: true,
+      version: true,
+      buildRevision: true,
+      sourceFingerprint: true,
+      protocolVersion: true,
+      runnerAbiVersion: true,
+      updateChannel: true,
+      updateStatus: true,
+      latestAvailableVersion: true,
+      lastUpdateCheckAt: true,
+      lastUpdateError: true
+    }
+  })
+  if (!bridge) {
+    throw notFound('Bridge not found.')
+  }
+  return bridge
+}

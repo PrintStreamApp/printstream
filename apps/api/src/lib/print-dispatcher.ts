@@ -1,0 +1,833 @@
+/**
+ * Server-side print dispatcher.
+ *
+ * Uploading a 3MF over a printer's FTPS server can take minutes on
+ * slower models. This module lets HTTP requests enqueue work and return
+ * immediately while the API process serializes dispatches per printer.
+ * Queued jobs can be cancelled; uploading jobs honor cancellation before
+ * publishing the MQTT start command.
+ */
+import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import {
+  bridgeUpdateBlocksPrinting,
+  bridgeUpdateStatusSchema,
+  getPrinterPrintStartOptions,
+  isDirectPrintableFileName,
+  type PrintDispatchJob,
+  type PrintFromLibrary,
+  type PrintNozzleOffsetCalibrationMode,
+  type PrintOnOffAutoMode,
+  type PrinterStatus,
+  printerModelSchema,
+  type PrinterModel
+} from '@printstream/shared'
+import { conflict } from './http-error.js'
+import { readLibraryProjectFilamentChips } from './library-three-mf.js'
+import { prisma, rootPrisma } from './prisma.js'
+import { printerManager } from './printer-manager.js'
+import {
+  uploadBridgeLibraryFileToPrinterPath,
+  uploadBridgeLibraryPlateToPrinterPath,
+  uploadFileToPrinter
+} from './printer-ftp.js'
+import { createSinglePlateThreeMf, readEntry } from './three-mf.js'
+import { printGuards } from './print-guards.js'
+import { ensureLibraryFileSnapshot, type SnapshotLibraryFile } from './print-file-snapshots.js'
+import { registerPendingDispatchedPrintSource } from './dispatched-print-source-cache.js'
+import type { PendingPrintJobSource } from './pending-print-job-source.js'
+import { normalizeExactPrinterFilePath } from './printer-file-path.js'
+import { cancelTrackedPrintJobRecord, startTrackedPrintJob } from './print-job-recorder.js'
+import { ensureLibraryFileReplica, resolveLibraryFileToLocalPath } from './bridge-library-files.js'
+
+type DispatchStatus = PrintDispatchJob['status']
+const MAX_UPLOAD_ATTEMPTS = 3
+const UPLOAD_RETRY_BACKOFF_MS = [2_000, 5_000]
+const ACTIVE_DISPATCH_STATUSES: readonly DispatchStatus[] = ['queued', 'uploading']
+export const ACTIVE_DISPATCH_CONFLICT_MESSAGE = 'A print is already being dispatched to this printer. Wait for it to finish or cancel it first.'
+
+interface DispatchJobState {
+  id: string
+  submissionId: string
+  tenantId: string
+  printerId: string
+  printerName: string
+  fileId: string
+  fileName: string
+  jobName: string
+  plateName: string | null
+  isMultiPlate: boolean
+  fileSizeBytes: number
+  sourceKind: '3mf' | 'gcode'
+  projectFilamentChips: PrintDispatchJob['projectFilamentChips']
+  localPath: string | null
+  bridgeLibraryPath: string | null
+  remoteName: string
+  options: Omit<PrintFromLibrary, 'fileId' | 'printerId'>
+  status: DispatchStatus
+  progressMessage: string
+  uploadAttempt: number
+  uploadMaxAttempts: number
+  uploadBytesSent: number
+  uploadTotalBytes: number | null
+  uploadPercent: number | null
+  error: string | null
+  createdAt: Date
+  updatedAt: Date
+  startedAt: Date | null
+  finishedAt: Date | null
+  cancelRequested: boolean
+}
+
+interface EnqueueLibraryPrintInput extends PrintFromLibrary {
+  plateName?: string | null
+  /** Whether the source 3MF contains more than one plate. Defaults to true. */
+  isMultiPlate?: boolean
+}
+
+interface TenantScopedEnqueueLibraryPrintInput extends EnqueueLibraryPrintInput {
+  tenantId: string
+}
+
+interface EnqueueSnapshotPrintInput extends Omit<EnqueueLibraryPrintInput, 'fileId'> {
+  fileName: string
+  snapshot: SnapshotLibraryFile
+}
+
+type PrintStartOptionSelection = Pick<
+  PrintFromLibrary,
+  | 'bedLevel'
+  | 'vibrationCompensation'
+  | 'flowCalibration'
+  | 'firstLayerInspection'
+  | 'timelapse'
+  | 'filamentDynamicsCalibration'
+  | 'nozzleOffsetCalibration'
+>
+
+const BAMBU_STUDIO_SEND_DIALOG_DEFAULTS = {
+  vibrationCompensation: false,
+  firstLayerInspection: true,
+  filamentDynamicsCalibration: false
+} as const
+
+class PrintDispatcher {
+  private readonly jobs = new Map<string, DispatchJobState>()
+  private readonly printerQueues = new Map<string, Promise<void>>()
+
+  hasActiveDispatchForPrinter(printerId: string): boolean {
+    return Array.from(this.jobs.values()).some((job) => job.printerId === printerId && ACTIVE_DISPATCH_STATUSES.includes(job.status))
+  }
+
+  /**
+   * Refuse to dispatch through a bridge whose update status is incompatible
+   * (protocol/runner/image out of date or unsupported). Such a bridge may still be
+   * connected enough to report status, but it must not run printer-affecting actions
+   * — an out-of-date bridge is exactly how a server fix fails to reach the print path.
+   * The web surfaces the same status with an in-place "Update bridge" action; this is
+   * the server-side backstop so a stale bridge cannot print even if the UI is bypassed.
+   */
+  async assertBridgeAllowsPrinting(bridgeId: string, tenantId: string): Promise<void> {
+    // `Bridge` is not in TENANT_SCOPED_MODELS, so we scope explicitly with the
+    // caller's tenantId. rootPrisma is used deliberately (no auto-scoping needed for a
+    // by-id lookup that already carries tenantId).
+    const bridge = await rootPrisma.bridge.findFirst({
+      where: { id: bridgeId, tenantId },
+      select: { name: true, updateStatus: true }
+    })
+    const status = bridgeUpdateStatusSchema.safeParse(bridge?.updateStatus)
+    if (status.success && bridgeUpdateBlocksPrinting(status.data)) {
+      throw conflict(
+        `Bridge "${bridge?.name ?? bridgeId}" needs to be updated before it can print (status: ${status.data}). Update the bridge and try again.`
+      )
+    }
+  }
+
+  assertNoActiveDispatchForPrinter(printerId: string): void {
+    if (this.hasActiveDispatchForPrinter(printerId)) {
+      throw conflict(ACTIVE_DISPATCH_CONFLICT_MESSAGE)
+    }
+  }
+
+  async enqueueLibraryPrint(input: TenantScopedEnqueueLibraryPrintInput): Promise<PrintDispatchJob> {
+    const [file, printer] = await Promise.all([
+      prisma.libraryFile.findFirst({ where: { id: input.fileId, tenantId: input.tenantId } }),
+      prisma.printer.findFirst({ where: { id: input.printerId, tenantId: input.tenantId } })
+    ])
+    if (!file) throw new Error('File not found')
+    if (!isDirectPrintableFileName(file.name)) throw new Error('Only .gcode or .gcode.3mf files can be printed directly')
+    const snapshot = await ensureLibraryFileSnapshot(file.id)
+    return this.enqueueSnapshotPrint({
+      ...input,
+      fileName: file.name,
+      snapshot,
+      printerId: printer?.id ?? input.printerId
+    }, printer)
+  }
+
+  async enqueueSnapshotPrint(
+    input: EnqueueSnapshotPrintInput,
+    loadedPrinter?: Awaited<ReturnType<typeof prisma.printer.findFirst>> | null
+  ): Promise<PrintDispatchJob> {
+    const printer = loadedPrinter ?? await prisma.printer.findFirst({ where: { id: input.printerId, tenantId: input.snapshot.tenantId } })
+    const fileName = input.fileName
+    const snapshot = input.snapshot
+    if (!printer) throw new Error('Printer not found')
+    if (printer.tenantId !== snapshot.tenantId) throw new Error('Printer not found')
+    if (!printerManager.getPrinter(printer.id)) throw new Error('Printer not connected')
+    if (!printer.bridgeId) throw new Error('Printer bridge assignment is required')
+    await this.assertBridgeAllowsPrinting(printer.bridgeId, printer.tenantId)
+    this.assertNoActiveDispatchForPrinter(printer.id)
+    const blocked = printGuards.evaluate({ printerId: printer.id, source: 'dispatch' })
+    if (blocked) throw new Error(blocked.reason ?? 'Print blocked by a plugin')
+    if (!snapshot.ownerBridgeId) throw new Error('Library snapshots must be bridge-backed')
+    const bridgeLibraryPath = await ensureLibraryFileReplica({
+      tenantId: snapshot.tenantId,
+      libraryFileId: snapshot.id,
+      fileName: snapshot.name,
+      sourceBridgeId: snapshot.ownerBridgeId,
+      sourceStoredPath: snapshot.storedPath,
+      sizeBytes: snapshot.sizeBytes,
+      targetBridgeId: printer.bridgeId
+    })
+    const sourceKind = getPrintSourceKind(fileName)
+    const localPath = sourceKind === '3mf'
+      ? await resolveLibraryFileToLocalPath({
+        ownerBridgeId: printer.bridgeId,
+        storedPath: bridgeLibraryPath
+      }).catch(() => null)
+      : null
+    const plateName = normalizePlateName(input.plateName)
+    const isMultiPlate = input.isMultiPlate ?? true
+    const parsedModel = printerModelSchema.safeParse(printer.model)
+    const normalizedOptions = normalizePrintStartOptionsForPrinter(
+      parsedModel.success ? parsedModel.data : 'unknown',
+      input,
+      printerManager.getStatus(printer.id)
+    )
+    const projectFilamentChips = await readLibraryProjectFilamentChips(snapshot).catch(() => [])
+    // `ams_mapping` is indexed by project filament; entries for filaments the printed
+    // plate does not use must be -1. Sending a real tray there makes the printer treat a
+    // single-nozzle plate as a multi-nozzle job and run nozzle-offset calibration on a
+    // nozzle the plate never uses (H2D error 0300-4010). Prune to the plate's actual
+    // filaments; no-op for multi-filament plates and fail-safe if the plate can't be read.
+    const amsMapping = await resolvePlateAmsMapping(sourceKind, localPath, input.plate, input.amsMapping)
+
+    const now = new Date()
+    const target = getRemotePrintTarget(fileName, sourceKind, input.plate, plateName, { isMultiPlate })
+    const job: DispatchJobState = {
+      id: randomUUID(),
+      submissionId: createDispatchSubmissionId(),
+      tenantId: snapshot.tenantId,
+      printerId: printer.id,
+      printerName: printer.name,
+      fileId: snapshot.id,
+      fileName,
+      jobName: target.subtaskName,
+      plateName,
+      isMultiPlate,
+      fileSizeBytes: snapshot.sizeBytes,
+      sourceKind,
+      projectFilamentChips,
+      localPath,
+      bridgeLibraryPath,
+      remoteName: target.remoteName,
+      options: {
+        useAms: input.useAms,
+        bedLevel: normalizedOptions.bedLevel,
+        vibrationCompensation: normalizedOptions.vibrationCompensation,
+        flowCalibration: normalizedOptions.flowCalibration,
+        firstLayerInspection: normalizedOptions.firstLayerInspection,
+        timelapse: normalizedOptions.timelapse,
+        filamentDynamicsCalibration: normalizedOptions.filamentDynamicsCalibration,
+        nozzleOffsetCalibration: normalizedOptions.nozzleOffsetCalibration,
+        allowIncompatibleFilament: input.allowIncompatibleFilament,
+        allowPlateTypeMismatch: input.allowPlateTypeMismatch,
+        currentPlateType: input.currentPlateType,
+        currentNozzleDiameters: input.currentNozzleDiameters,
+        plate: input.plate,
+        amsMapping
+      },
+      status: 'queued',
+      progressMessage: 'Waiting to send',
+      uploadAttempt: 0,
+      uploadMaxAttempts: MAX_UPLOAD_ATTEMPTS,
+      uploadBytesSent: 0,
+      uploadTotalBytes: null,
+      uploadPercent: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: null,
+      finishedAt: null,
+      cancelRequested: false
+    }
+    this.jobs.set(job.id, job)
+    this.enqueueForPrinter(job)
+    this.pruneOldJobs()
+    return toDto(job)
+  }
+
+  list(tenantId: string): PrintDispatchJob[] {
+    return Array.from(this.jobs.values())
+      .filter((job) => job.tenantId === tenantId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map(toDto)
+  }
+
+  async cancel(tenantId: string, jobId: string): Promise<PrintDispatchJob | null> {
+    const job = this.jobs.get(jobId)
+    if (!job || job.tenantId !== tenantId) return null
+    if (job.status === 'sent' || job.status === 'cancelled') {
+      return toDto(job)
+    }
+    job.cancelRequested = true
+    if (job.status === 'queued' || job.status === 'failed') {
+      await cancelTrackedPrintJobRecord({
+        jobId: job.id,
+        printerId: job.printerId,
+        jobName: job.jobName,
+        metadata: this.buildPendingStartMetadata(job),
+        startedAt: job.startedAt ?? job.createdAt
+      })
+      this.finish(job, 'cancelled', job.status === 'failed' ? 'Cancelled after failed dispatch' : 'Cancelled before upload')
+    } else {
+      this.touch(job, 'Cancellation requested')
+    }
+    return toDto(job)
+  }
+
+  retry(tenantId: string, jobId: string): PrintDispatchJob | null {
+    const job = this.jobs.get(jobId)
+    if (!job || job.tenantId !== tenantId) return null
+    if (job.status !== 'failed') return toDto(job)
+    job.status = 'queued'
+    job.progressMessage = 'Waiting to retry'
+    job.uploadAttempt = 0
+    job.uploadBytesSent = 0
+    job.uploadTotalBytes = null
+    job.uploadPercent = null
+    job.error = null
+    job.startedAt = null
+    job.finishedAt = null
+    job.cancelRequested = false
+    job.updatedAt = new Date()
+    this.enqueueForPrinter(job)
+    return toDto(job)
+  }
+
+  private enqueueForPrinter(job: DispatchJobState): void {
+    const previous = this.printerQueues.get(job.printerId) ?? Promise.resolve()
+    const run = previous.catch(() => undefined).then(() => this.runJob(job))
+    const tail = run.then(() => undefined, () => undefined)
+    this.printerQueues.set(job.printerId, tail)
+    tail.finally(() => {
+      if (this.printerQueues.get(job.printerId) === tail) {
+        this.printerQueues.delete(job.printerId)
+      }
+    })
+  }
+
+  private async runJob(job: DispatchJobState): Promise<void> {
+    if (job.cancelRequested || job.status === 'cancelled') return
+    const printer = printerManager.getPrinter(job.printerId)
+    if (!printer) {
+      this.finish(job, 'failed', 'Printer not connected', 'Printer not connected')
+      return
+    }
+
+    job.status = 'uploading'
+    job.startedAt = new Date()
+    this.touch(job, 'Uploading to printer storage')
+
+    try {
+      const artifact = await preparePrintArtifact(job)
+      try {
+        await this.uploadArtifactWithRetry(job, printer, artifact)
+      } finally {
+        await artifact.cleanup()
+      }
+      if (job.cancelRequested) {
+        await cancelTrackedPrintJobRecord({
+          printerId: job.printerId,
+          jobId: job.id,
+          jobName: job.jobName,
+          metadata: this.buildPendingStartMetadata(job),
+          startedAt: job.startedAt ?? job.createdAt
+        })
+        this.finish(job, 'cancelled', 'Cancelled after upload; print was not started')
+        return
+      }
+
+      this.touch(job, 'Sending start command')
+      const printPayload = buildPrintStartPayload(job)
+      await registerPendingDispatchedPrintSource({
+        printerId: job.printerId,
+        jobId: job.id,
+        localPath: job.localPath,
+        sourceKind: job.sourceKind
+      })
+      const startedJobId = await startTrackedPrintJob({
+        jobId: job.id,
+        printerId: job.printerId,
+        jobName: job.jobName,
+        fileName: job.fileName,
+        metadata: this.buildPendingStartMetadata(job),
+        publish: () => printerManager.publishCommand(printer.id, { print: printPayload })
+      })
+      if (!startedJobId) {
+        this.finish(job, 'failed', 'Printer disconnected before start command', 'Printer disconnected')
+        return
+      }
+      this.finish(job, 'sent', 'Start command sent')
+    } catch (error) {
+      this.finish(job, 'failed', 'Dispatch failed', (error as Error).message)
+    }
+  }
+
+  private touch(job: DispatchJobState, message: string): void {
+    job.progressMessage = message
+    job.updatedAt = new Date()
+  }
+
+  private finish(job: DispatchJobState, status: DispatchStatus, message: string, error: string | null = null): void {
+    job.status = status
+    job.progressMessage = message
+    job.error = error
+    job.finishedAt = new Date()
+    job.updatedAt = job.finishedAt
+  }
+
+  private updateUploadProgress(job: DispatchJobState, bytesSent: number, totalBytes: number | null): void {
+    const normalizedBytesSent = Math.max(0, Math.round(bytesSent))
+    if (typeof totalBytes === 'number' && Number.isFinite(totalBytes) && totalBytes >= 0) {
+      job.uploadBytesSent = Math.min(totalBytes, normalizedBytesSent)
+      job.uploadTotalBytes = totalBytes
+      job.uploadPercent = totalBytes > 0 ? Math.max(0, Math.min(100, (job.uploadBytesSent / totalBytes) * 100)) : null
+      job.progressMessage = `Uploading ${formatBytes(job.uploadBytesSent)} of ${formatBytes(totalBytes)}`
+    } else {
+      job.uploadBytesSent = normalizedBytesSent
+      job.uploadTotalBytes = null
+      job.uploadPercent = null
+      job.progressMessage = `Uploading ${formatBytes(job.uploadBytesSent)}`
+    }
+    job.updatedAt = new Date()
+  }
+
+  private async uploadArtifactWithRetry(job: DispatchJobState, printer: NonNullable<ReturnType<typeof printerManager.getPrinter>>, artifact: PrintArtifact): Promise<void> {
+    let lastError: Error | null = null
+    for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt += 1) {
+      if (job.cancelRequested) throw new Error('Upload cancelled')
+      const bridgeBackedUpload = artifact.bridgeLibraryPlatePath != null || job.bridgeLibraryPath != null
+      job.uploadAttempt = attempt
+      job.uploadMaxAttempts = MAX_UPLOAD_ATTEMPTS
+      job.uploadBytesSent = 0
+      job.uploadTotalBytes = artifact.sizeBytes
+      job.uploadPercent = artifact.sizeBytes != null ? 0 : null
+      this.touch(job, `${artifact.uploadMessage} (attempt ${attempt} of ${MAX_UPLOAD_ATTEMPTS})`)
+      try {
+        if (artifact.bridgeLibraryPlatePath && artifact.bridgeLibraryPlate != null) {
+          const upload = await uploadBridgeLibraryPlateToPrinterPath(
+            printer,
+            artifact.bridgeLibraryPlatePath,
+            artifact.bridgeLibraryPlate,
+            `/${artifact.remoteName}`,
+            (bytesSent, totalBytes) => {
+              this.updateUploadProgress(job, bytesSent, totalBytes)
+            }
+          )
+          const uploadedSizeBytes = upload.sizeBytes ?? job.uploadTotalBytes ?? artifact.sizeBytes
+          if (uploadedSizeBytes != null) {
+            job.fileSizeBytes = uploadedSizeBytes
+            this.updateUploadProgress(job, uploadedSizeBytes, uploadedSizeBytes)
+          }
+        } else if (job.bridgeLibraryPath) {
+          const upload = await uploadBridgeLibraryFileToPrinterPath(printer, job.bridgeLibraryPath, `/${artifact.remoteName}`, (bytesSent, totalBytes) => {
+            this.updateUploadProgress(job, bytesSent, totalBytes)
+          })
+          const uploadedSizeBytes = upload.sizeBytes ?? job.uploadTotalBytes ?? artifact.sizeBytes
+          if (uploadedSizeBytes != null) {
+            job.fileSizeBytes = uploadedSizeBytes
+            this.updateUploadProgress(job, uploadedSizeBytes, uploadedSizeBytes)
+          }
+        } else {
+          if (!artifact.localPath) throw new Error('Upload artifact missing local source path')
+          await uploadFileToPrinter(printer, artifact.localPath, artifact.remoteName, (bytesSent) => {
+            this.updateUploadProgress(job, bytesSent, artifact.sizeBytes)
+          })
+        }
+        if (!bridgeBackedUpload && artifact.sizeBytes != null) {
+          this.updateUploadProgress(job, artifact.sizeBytes, artifact.sizeBytes)
+        }
+        return
+      } catch (error) {
+        lastError = error as Error
+        if (attempt >= MAX_UPLOAD_ATTEMPTS || job.cancelRequested) break
+        const backoff = UPLOAD_RETRY_BACKOFF_MS[attempt - 1] ?? UPLOAD_RETRY_BACKOFF_MS.at(-1) ?? 2_000
+        job.error = lastError.message
+        this.touch(job, `Upload failed; retrying in ${Math.round(backoff / 1000)}s (attempt ${attempt + 1} of ${MAX_UPLOAD_ATTEMPTS})`)
+        await delay(backoff)
+      }
+    }
+    throw lastError ?? new Error('Upload failed')
+  }
+
+  private buildPendingStartMetadata(job: DispatchJobState): PendingPrintJobSource {
+    return {
+      jobKind: 'file',
+      jobId: job.id,
+      printerFilePath: normalizeExactPrinterFilePath(`/${job.remoteName}`),
+      fileId: job.fileId,
+      fileName: job.fileName,
+      fileSizeBytes: job.fileSizeBytes,
+      sourceKind: job.sourceKind,
+      plate: job.options.plate,
+      useAms: job.options.useAms,
+      bedLevel: job.options.bedLevel !== 'off',
+      amsMapping: job.options.amsMapping ?? null,
+      calibrationOption: null
+    }
+  }
+
+
+  private pruneOldJobs(): void {
+    const finished = Array.from(this.jobs.values())
+      .filter((job) => job.finishedAt)
+      .sort((a, b) => (b.finishedAt?.getTime() ?? 0) - (a.finishedAt?.getTime() ?? 0))
+    for (const job of finished.slice(100)) {
+      this.jobs.delete(job.id)
+    }
+  }
+}
+
+interface PrintArtifact {
+  localPath: string | null
+  remoteName: string
+  sizeBytes: number | null
+  uploadMessage: string
+  bridgeLibraryPlatePath: string | null
+  bridgeLibraryPlate: number | null
+  cleanup: () => Promise<void>
+}
+
+async function preparePrintArtifact(job: DispatchJobState): Promise<PrintArtifact> {
+  const target = getRemotePrintTarget(job.fileName, job.sourceKind, job.options.plate, job.plateName, { isMultiPlate: job.isMultiPlate })
+  if (job.sourceKind === 'gcode') {
+    if (job.bridgeLibraryPath) {
+      return {
+        localPath: null,
+        remoteName: target.remoteName,
+        sizeBytes: job.fileSizeBytes,
+        uploadMessage: 'Uploading G-code to printer storage',
+        bridgeLibraryPlatePath: null,
+        bridgeLibraryPlate: null,
+        cleanup: async () => undefined
+      }
+    }
+    if (!job.localPath) throw new Error('Dispatch artifact missing local source path')
+    const stats = await stat(job.localPath)
+    return {
+      localPath: job.localPath,
+      remoteName: target.remoteName,
+      sizeBytes: stats.size,
+      uploadMessage: 'Uploading G-code to printer storage',
+      bridgeLibraryPlatePath: null,
+      bridgeLibraryPlate: null,
+      cleanup: async () => undefined
+    }
+  }
+
+  if (job.bridgeLibraryPath) {
+    return {
+      localPath: null,
+      remoteName: target.remoteName,
+      sizeBytes: null,
+      uploadMessage: `Uploading plate ${job.options.plate} 3MF to printer storage`,
+      bridgeLibraryPlatePath: job.bridgeLibraryPath,
+      bridgeLibraryPlate: job.options.plate,
+      cleanup: async () => undefined
+    }
+  }
+
+  if (!job.localPath) throw new Error('Dispatch artifact missing local source path')
+
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-plate-'))
+  const tempPath = path.join(tempDir, target.remoteName)
+  try {
+    await createSinglePlateThreeMf(job.localPath, tempPath, job.options.plate)
+  } catch (error) {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+    throw new Error(`Failed to create plate ${job.options.plate} 3MF: ${(error as Error).message}`)
+  }
+  return {
+    localPath: tempPath,
+    remoteName: target.remoteName,
+    sizeBytes: (await stat(tempPath)).size,
+    uploadMessage: `Uploading plate ${job.options.plate} 3MF to printer storage`,
+    bridgeLibraryPlatePath: null,
+    bridgeLibraryPlate: null,
+    cleanup: async () => {
+      await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
+}
+
+interface RemotePrintTarget {
+  remoteName: string
+  param: string
+  subtaskName: string
+}
+
+function buildPrintStartPayload(job: DispatchJobState): Record<string, unknown> {
+  const target = getRemotePrintTarget(job.fileName, job.sourceKind, job.options.plate, job.plateName, { isMultiPlate: job.isMultiPlate })
+  const printPayload: Record<string, unknown> = {
+    command: 'project_file',
+    param: target.param,
+    url: `ftp:///${target.remoteName}`,
+    file: target.remoteName,
+    md5: '',
+    bed_type: 'auto',
+    timelapse: job.options.timelapse,
+    bed_leveling: isPrintOnOffAutoModeEnabled(job.options.bedLevel),
+    auto_bed_leveling: resolvePrintOnOffAutoModeFlag(job.options.bedLevel),
+    flow_cali: isPrintOnOffAutoModeEnabled(job.options.flowCalibration),
+    auto_flow_cali: resolvePrintOnOffAutoModeFlag(job.options.flowCalibration),
+    vibration_cali: job.options.vibrationCompensation,
+    layer_inspect: job.options.firstLayerInspection,
+    use_ams: job.options.useAms,
+    cfg: '0',
+    extrude_cali_flag: job.options.filamentDynamicsCalibration ? 1 : 0,
+    extrude_cali_manual_mode: 0,
+    nozzle_offset_cali: resolveNozzleOffsetCalibrationFlag(job.options.nozzleOffsetCalibration),
+    subtask_name: target.subtaskName,
+    profile_id: '0',
+    project_id: job.submissionId,
+    subtask_id: job.submissionId,
+    task_id: job.submissionId
+  }
+  if (job.options.amsMapping && job.options.amsMapping.length > 0) {
+    printPayload.ams_mapping = job.options.amsMapping
+  }
+  return printPayload
+}
+
+/**
+ * Resolve the AMS mapping actually sent to the printer, pruned to the filaments the
+ * printed plate uses. Only applies to bridge-resolvable 3MF sources (we read the plate's
+ * `filament_ids` from the artifact); everything else passes through unchanged.
+ */
+async function resolvePlateAmsMapping(
+  sourceKind: '3mf' | 'gcode',
+  localPath: string | null,
+  plate: number | null,
+  amsMapping: number[] | undefined
+): Promise<number[] | undefined> {
+  if (!amsMapping || amsMapping.length === 0 || sourceKind !== '3mf' || !localPath || plate == null) return amsMapping
+  const usedFilamentIndices = await readPlateUsedFilamentIndices(localPath, plate)
+  return prunePlateAmsMapping(amsMapping, usedFilamentIndices)
+}
+
+/**
+ * The 0-based project-filament indices a plate uses, read from the 3MF's
+ * `Metadata/plate_{plate}.json` `filament_ids`. Returns an empty set on any read/parse
+ * failure so callers fall back to leaving the mapping untouched.
+ */
+async function readPlateUsedFilamentIndices(localPath: string, plate: number): Promise<ReadonlySet<number>> {
+  try {
+    const buffer = await readEntry(localPath, `Metadata/plate_${plate}.json`)
+    const parsed = JSON.parse(buffer.toString('utf8')) as { filament_ids?: unknown }
+    const ids = Array.isArray(parsed.filament_ids)
+      ? parsed.filament_ids.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value >= 0)
+      : []
+    return new Set(ids)
+  } catch {
+    return new Set()
+  }
+}
+
+/**
+ * -1 out the AMS-mapping entries for filaments the plate does not use, then drop trailing
+ * -1s. `ams_mapping[i]` is the tray for project filament `i` (0-based). A plate that uses
+ * only filament 0 of a 3-filament project yields `[tray]` rather than `[tray, x, y]`, so
+ * the printer treats it as the single-nozzle job it is. Empty `usedFilamentIndices` (read
+ * failed) or no matching used entry leaves the mapping unchanged — never break a print.
+ */
+export function prunePlateAmsMapping(amsMapping: number[], usedFilamentIndices: ReadonlySet<number>): number[] {
+  if (usedFilamentIndices.size === 0) return amsMapping
+  const pruned = amsMapping.map((value, index) => (usedFilamentIndices.has(index) ? value : -1))
+  let lastUsed = -1
+  for (let index = 0; index < pruned.length; index += 1) {
+    const value = pruned[index]
+    if (value !== undefined && value >= 0) lastUsed = index
+  }
+  return lastUsed === -1 ? amsMapping : pruned.slice(0, lastUsed + 1)
+}
+
+export function getPrintSourceKind(fileName: string): '3mf' | 'gcode' {
+  return fileName.toLowerCase().endsWith('.gcode.3mf') ? '3mf' : 'gcode'
+}
+
+function createDispatchSubmissionId(): string {
+  return String((Date.now() % 2_147_483_647) || 1)
+}
+
+export function getRemotePrintTarget(
+  fileName: string,
+  sourceKind: '3mf' | 'gcode',
+  plate: number,
+  plateName?: string | null,
+  options?: { isMultiPlate?: boolean }
+): RemotePrintTarget {
+  if (sourceKind === 'gcode') {
+    const remoteName = sanitizeRemoteName(fileName)
+    return { remoteName, param: remoteName, subtaskName: stripPrintableExtension(remoteName) }
+  }
+  const base = stripPrintableExtension(sanitizeRemoteName(fileName))
+  // A single-plate 3MF already identifies its plate through the file name (e.g. a
+  // sliced "Best Shot Golf - Plate 4" output). Appending the plate label again would
+  // duplicate it, so only multi-plate projects get the plate label to disambiguate
+  // which plate is being printed.
+  if (options?.isMultiPlate === false) {
+    return { remoteName: `${base}.gcode.3mf`, param: `Metadata/plate_${plate}.gcode`, subtaskName: base }
+  }
+  const plateLabel = normalizePlateName(plateName) ?? `plate_${plate}`
+  const subtaskName = `${base} - ${plateLabel}`
+  const remoteName = `${sanitizeRemoteName(subtaskName)}.gcode.3mf`
+  return { remoteName, param: `Metadata/plate_${plate}.gcode`, subtaskName }
+}
+
+export function resolveNozzleOffsetCalibrationFlag(mode: PrintNozzleOffsetCalibrationMode): 0 | 1 | 2 {
+  switch (mode) {
+    case 'on':
+      return 1
+    case 'auto':
+      return 2
+    case 'off':
+    default:
+      return 0
+  }
+}
+
+export function resolvePrintOnOffAutoModeFlag(mode: PrintOnOffAutoMode): 0 | 1 | 2 {
+  switch (mode) {
+    case 'on':
+      return 1
+    case 'auto':
+      return 2
+    case 'off':
+    default:
+      return 0
+  }
+}
+
+export function isPrintOnOffAutoModeEnabled(mode: PrintOnOffAutoMode): boolean {
+  return mode === 'on'
+}
+
+export function normalizePrintStartOptionsForPrinter(
+  model: PrinterModel,
+  options: PrintStartOptionSelection,
+  status?: (Pick<PrinterStatus, 'printOptions'> & { printStartOptions?: PrinterStatus['printStartOptions'] }) | null
+): PrintStartOptionSelection {
+  const printStartOptions = getPrinterPrintStartOptions(model, status)
+  return {
+    bedLevel: normalizePrintOnOffAutoMode(
+      options.bedLevel,
+      printStartOptions.bedLevel.supported,
+      printStartOptions.bedLevel.autoSupported
+    ),
+    vibrationCompensation: BAMBU_STUDIO_SEND_DIALOG_DEFAULTS.vibrationCompensation,
+    flowCalibration: normalizePrintOnOffAutoMode(
+      options.flowCalibration,
+      printStartOptions.flowCalibration.supported,
+      printStartOptions.flowCalibration.autoSupported
+    ),
+    firstLayerInspection: printStartOptions.firstLayerInspection.supported && options.firstLayerInspection,
+    timelapse: printStartOptions.timelapse.supported && options.timelapse,
+    filamentDynamicsCalibration: BAMBU_STUDIO_SEND_DIALOG_DEFAULTS.filamentDynamicsCalibration,
+    nozzleOffsetCalibration: printStartOptions.nozzleOffsetCalibration.supported ? options.nozzleOffsetCalibration : 'off'
+  }
+}
+
+function normalizePrintOnOffAutoMode(
+  mode: PrintOnOffAutoMode,
+  supported: boolean,
+  autoSupported: boolean
+): PrintOnOffAutoMode {
+  if (!supported) return 'off'
+  if (mode === 'auto' && !autoSupported) return 'on'
+  return mode
+}
+
+function stripPrintableExtension(fileName: string): string {
+  return fileName.replace(/\.gcode\.3mf$/i, '').replace(/\.(3mf|gcode)$/i, '')
+}
+
+function normalizePlateName(value: string | null | undefined): string | null {
+  const normalized = value?.trim().replace(/\s+/g, ' ')
+  return normalized ? normalized : null
+}
+
+function toDto(job: DispatchJobState): PrintDispatchJob {
+  return {
+    id: job.id,
+    printJobId: job.id,
+    printerId: job.printerId,
+    printerName: job.printerName,
+    fileId: job.fileId,
+    fileName: job.fileName,
+    jobName: job.jobName,
+    fileSizeBytes: job.fileSizeBytes,
+    sourceKind: job.sourceKind,
+    projectFilamentChips: job.projectFilamentChips,
+    plate: job.options.plate,
+    plateName: job.plateName,
+    useAms: job.options.useAms,
+    bedLevel: job.options.bedLevel,
+    amsMapping: job.options.amsMapping ?? null,
+    status: job.status,
+    progressMessage: job.progressMessage,
+    uploadAttempt: job.uploadAttempt,
+    uploadMaxAttempts: job.uploadMaxAttempts,
+    uploadBytesSent: job.uploadBytesSent,
+    uploadTotalBytes: job.uploadTotalBytes,
+    uploadPercent: job.uploadPercent,
+    error: job.error,
+    createdAt: job.createdAt.toISOString(),
+    updatedAt: job.updatedAt.toISOString(),
+    startedAt: job.startedAt?.toISOString() ?? null,
+    finishedAt: job.finishedAt?.toISOString() ?? null,
+    cancelRequested: job.cancelRequested
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  const digits = value >= 10 || unit === 0 ? 0 : 1
+  return `${value.toFixed(digits)} ${units[unit]}`
+}
+
+/**
+ * Bambu firmware rejects names containing path separators or non-ASCII chars; FAT
+ * also reserves `<>:"|?*`. Everything else (brackets, +, ', etc.) is kept — Bambu
+ * Studio itself sends names like "Mount (landscape).gcode.3mf" to printers.
+ */
+export function sanitizeRemoteName(name: string): string {
+  const base = name.replace(/^.*[\\/]/, '')
+  return base.trim().replace(/[<>:"|?*]/g, '_').replace(/[^\x20-\x7e]+/g, '_')
+}
+
+export const printDispatcher = new PrintDispatcher()
