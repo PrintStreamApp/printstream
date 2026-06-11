@@ -23,7 +23,7 @@ RUN npm ci
 COPY . .
 RUN bridge_source_fingerprint="$PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT" \
   && if [ "$bridge_source_fingerprint" = "unknown" ]; then \
-    bridge_source_fingerprint="$(find apps/bridge/src packages/bridge-runtime/src packages/shared/src apps/bridge/package.json packages/bridge-runtime/package.json packages/shared/package.json apps/bridge/Dockerfile apps/bridge/tsconfig.json packages/bridge-runtime/tsconfig.json packages/shared/tsconfig.json tsconfig.base.json package-lock.json -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"; \
+    bridge_source_fingerprint="$(find apps/bridge/src packages/bridge-runtime/src packages/shared/src apps/bridge/tsconfig.json packages/bridge-runtime/tsconfig.json packages/shared/tsconfig.json tsconfig.base.json package-lock.json -type f ! -path 'packages/shared/src/private/*' ! -path 'apps/bridge/src/demo-*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"; \
   fi \
   && printf '{"bridgeBuildRevision":"%s","bridgeSourceFingerprint":"%s"}\n' "$PRINTSTREAM_BRIDGE_BUILD_REVISION" "$bridge_source_fingerprint" > bridge-build-metadata.json
 RUN npm run db:generate
