@@ -55,7 +55,11 @@ export function commitSnapshot(target, message) {
     const value = git(['config', '--get', key]).trim()
     if (value) git(['config', key, value], target)
   }
-  git(['add', '-A'], target)
+  // Force-add: everything in the target tree was deliberately copied from the
+  // monorepo's tracked files, so ignore rules (e.g. a root-scoped pattern that
+  // happens to match a nested copy) must never silently drop a file from the
+  // snapshot.
+  git(['add', '-A', '-f'], target)
   const status = git(['status', '--porcelain'], target)
   if (!status.trim()) {
     console.log(`No changes to commit in ${target}.`)

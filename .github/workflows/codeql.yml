@@ -11,6 +11,9 @@ on:
 jobs:
   analyze:
     name: Analyze
+    # CodeQL is free on the public repo only; the private monorepo would need
+    # a GitHub Advanced Security license, so skip it there.
+    if: github.repository == 'PrintStreamApp/printstream'
     runs-on: ubuntu-latest
     permissions:
       security-events: write

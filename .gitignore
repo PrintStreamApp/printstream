@@ -28,9 +28,11 @@ docs/current-work-status.md
 *.db-wal
 *.db-shm
 .DS_Store
-compose.yml
-compose.prod.yml
-nginx.conf
+# Deployment-local copies live at the repo root; nested copies
+# (.devcontainer/compose.yml, apps/web/nginx.conf) are tracked.
+/compose.yml
+/compose.prod.yml
+/nginx.conf
 
 # Local Claude Code session state (transcripts, memory, runtime locks)
 .claude/projects/
