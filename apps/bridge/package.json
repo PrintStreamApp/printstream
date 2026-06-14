@@ -1,0 +1,39 @@
+{
+  "name": "@printstream/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Desktop tray bridge for connecting LAN Bambu printers to PrintStream.",
+  "homepage": "https://github.com/RyanEwen/printstream",
+  "author": {
+    "name": "PrintStream",
+    "email": "noreply@printstream.local"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --env-file ../../.env ../../node_modules/.bin/tsx watch --include ../../packages/bridge-runtime/dist/**/*.js --include ../../packages/shared/dist/**/*.js src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@printstream/bridge-runtime": "0.1.0",
+    "@printstream/shared": "0.1.0",
+    "dotenv": "^16.4.7",
+    "mqtt": "^5.10.1",
+    "ws": "^8.18.0",
+    "yauzl": "^3.3.0",
+    "yazl": "^3.3.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "@types/ws": "^8.5.13",
+    "@types/yauzl": "^2.10.3",
+    "@types/yazl": "^3.3.1",
+    "esbuild": "^0.25.5",
+    "postject": "^1.0.0-alpha.6",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

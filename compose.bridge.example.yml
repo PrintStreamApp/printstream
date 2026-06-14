@@ -1,0 +1,48 @@
+services:
+  slicer:
+    build:
+      context: .
+      dockerfile: apps/slicer/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SLICER_PORT: ${SLICER_PORT:-4010}
+      SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
+      SLICER_DEFAULT_TARGET_ID: ${SLICER_DEFAULT_TARGET_ID:-}
+      SLICER_ENABLE_PIPE_PROGRESS: ${SLICER_ENABLE_PIPE_PROGRESS:-true}
+      SLICER_WORK_DIR: /data/slicer-work
+      SLICER_BAMBUSTUDIO_HOME_DIR: /data/bambustudio-home
+      SLICER_BAMBUSTUDIO_DATA_DIR: /data/bambustudio-data
+    volumes:
+      - printstream-slicer-data:/data
+
+  bridge:
+    build:
+      context: .
+      dockerfile: apps/bridge/Dockerfile
+      args:
+        BRIDGE_BUILD_REVISION: ${BRIDGE_BUILD_REVISION:-unknown}
+        BRIDGE_SOURCE_FINGERPRINT: ${BRIDGE_SOURCE_FINGERPRINT:-unknown}
+    restart: unless-stopped
+    # Default to host networking so SSDP/LAN discovery works without
+    # extra Docker multicast setup. The bridge is outbound-only, so it
+    # does not need any published ports of its own.
+    network_mode: host
+    environment:
+      NODE_ENV: production
+      # The PrintStream server origin this bridge registers with. Set it in
+      # .env to your server's public URL (see .env.bridge.example).
+      BRIDGE_SERVER_URL: ${BRIDGE_SERVER_URL:?Set BRIDGE_SERVER_URL in .env to your PrintStream server origin}
+      DISCOVERY_PORT: ${DISCOVERY_PORT:-2021}
+      BRIDGE_LIBRARY_DIR: /data/library
+      BRIDGE_NAME: ${BRIDGE_NAME:-PrintStream Bridge}
+      BRIDGE_STATE_FILE: /data/bridge-state.json
+      BRIDGE_AUTO_UPDATE: ${BRIDGE_AUTO_UPDATE:-false}
+      BRIDGE_RELEASES_DIR: /data/releases
+      BRIDGE_RELEASE_RETENTION_DAYS: ${BRIDGE_RELEASE_RETENTION_DAYS:-7}
+    volumes:
+      - printstream-bridge-data:/data
+
+volumes:
+  printstream-slicer-data:
+  printstream-bridge-data:

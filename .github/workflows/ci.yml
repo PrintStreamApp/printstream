@@ -1,0 +1,36 @@
+name: CI
+
+# Runs the full repo validation (lint, tests, typecheck, prisma validate) and
+# a production build. Push-to-main coverage matters for the public repo, which
+# receives snapshot exports as direct pushes to main rather than PRs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure ~/.ssh exists for devcontainer bind mount
+        run: mkdir -p ~/.ssh
+
+      - name: Run checks in devcontainer
+        uses: devcontainers/ci@v0.3
+        with:
+          # This automatically builds the devcontainer, starts the compose services (like db),
+          # runs the postCreateCommand (which installs deps and migrates the db),
+          # and then executes the runCmd.
+          # Build first: tests resolve workspace packages (@printstream/shared,
+          # @printstream/bridge-runtime) through their dist/ entry points, which
+          # don't exist yet on a fresh install.
+          runCmd: npm run build && npm run validate

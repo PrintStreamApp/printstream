@@ -1,0 +1,77 @@
+# Example host-level reverse-proxy config for printstream. This sits in
+# front of the app stack and forwards the public origin to the `web`
+# container, which then forwards `/api` and `/ws` to the API service.
+#
+# Replace `printstream.example.com` with your server's domain. The real
+# `nginx.conf` stays local/server-specific and is ignored by git.
+server {
+    server_name printstream.example.com;
+
+    listen 80;
+
+    return 308 https://$host$request_uri;
+}
+
+server {
+    server_name printstream.example.com;
+
+    listen 443 ssl http2;
+
+    ssl_certificate /letsencrypt/live/printstream.example.com/fullchain.pem;
+    ssl_certificate_key /letsencrypt/live/printstream.example.com/privkey.pem;
+
+    resolver 127.0.0.11 valid=30s;
+
+    proxy_buffering off;
+
+    # Match the API's default 1 GB upload ceiling so large 3MF uploads
+    # do not fail at the reverse proxy before multer can enforce its own limit.
+    client_max_body_size 1g;
+
+    location = /api/bridge-runtime/connect {
+        set $upstream printstream-web;
+        proxy_pass http://$upstream:8080;
+        proxy_http_version 1.1;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host $host;
+        proxy_set_header Scheme $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_redirect off;
+    }
+
+    location /ws {
+        set $upstream printstream-web;
+        proxy_pass http://$upstream:8080;
+        proxy_http_version 1.1;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host $host;
+        proxy_set_header Scheme $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_redirect off;
+    }
+
+    location / {
+        set $upstream printstream-web;
+        proxy_pass http://$upstream:8080;
+        proxy_http_version 1.1;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Host $host;
+        proxy_set_header Scheme $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_redirect off;
+    }
+}

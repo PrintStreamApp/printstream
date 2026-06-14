@@ -1,0 +1,27 @@
+# Match game-is-up: keep build context small and reproducible.
+node_modules
+**/node_modules
+**/dist
+**/.vite
+**/.cache
+.git
+.github
+.devcontainer
+.husky
+.vscode
+**/coverage
+data
+!data/demo-library
+!data/demo-library/**
+!data/demo-camera-snapshots
+!data/demo-camera-snapshots/**
+!data/demo-captures
+!data/demo-captures/**
+apps/api/data
+apps/bridge/release
+!apps/web/src/data
+!apps/web/src/data/**
+apps/web/public/README.md
+deploy
+*.log
+tmp
