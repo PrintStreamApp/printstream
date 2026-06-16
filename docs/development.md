@@ -78,13 +78,7 @@ curl http://slicer:4010/health
 
 Then run `npm run dev`, upload an unsliced `.3mf` project to the library, and use the file action menu's `Slice` command. The slicer runs BambuStudio under isolated `HOME` and XDG config/cache directories inside the slicer work volume so first-run state does not use the container user's default home. The exact `SLICER_CLI_ARGS_TEMPLATE` must match the CLI flags supported by the BambuStudio build you install; PrintStream substitutes `{input}`, `{output}`, `{outputDir}`, `{outputFileName}`, 1-based `{plate}`, `{plateZeroBased}`, `{homeDir}`, `{configDir}`, `{cacheDir}`, and `{dataDir}`.
 
-If you want local development to use a deploy server's slicer instead of the local sidecar, set `SLICER_SERVICE_URL=http://127.0.0.1:4010` in your local `.env` and run:
-
-```bash
-npm run dev:deploy-slicer
-```
-
-That helper opens an SSH tunnel to the deploy host using `DEPLOY_SSH_HOST`, `DEPLOY_SSH_PORT`, and `DEPLOY_SSH_KEY` from `.env`, forwards local port `4010` to the remote slicer loopback port, forces the local API to use the tunneled `SLICER_SERVICE_URL`, and tears the tunnel down again when the dev command exits. If your local `.env` does not define `SLICER_SERVICE_TOKEN`, the helper reads the token from the deploy host's repo `.env` over SSH before it starts the API.
+On **x86** the slicer runs inside the workspace container automatically as part of `npm run dev` (it bootstraps BambuStudio into a named volume on first run; see `apps/slicer/CLAUDE.md`). On **arm64** (BambuStudio is x86-only) it is not started — point `SLICER_SERVICE_URL` in your local `.env` at a reachable x86 slicer (e.g. staging) and run `npm run dev` as usual.
 
 The default CLI template includes `--export-json` so the slicer generates metadata (estimated print time, filament weight, filament cost) which the web UI displays in the slicing progress toast and final result. The metadata comes from the JSON export file generated during slicing.
 

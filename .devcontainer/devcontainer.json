@@ -8,8 +8,7 @@
   "service": "workspace",
   "runServices": [
     "workspace",
-    "db",
-    "slicer"
+    "db"
   ],
   "shutdownAction": "stopCompose",
   "workspaceFolder": "/workspace/printstream",

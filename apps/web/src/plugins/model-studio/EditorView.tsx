@@ -154,6 +154,7 @@ import {
   type SupportPaintBrushMode
 } from './lib/supportPaint'
 import {
+  EDITOR_HOME_VIEW_DIRECTION as EDITOR_HOME_VIEW,
   VIEW_CUBE_SIZE,
   VIEW_PRESET_CONFIG,
   createViewCube,
@@ -374,7 +375,8 @@ const ISO_UP = new THREE.Vector3(0, 0, 1)
  * Editor default camera direction (offset from the bed centre to the camera): mostly
  * top-down but tilted toward the front, similar to Bambu Studio's prepare view.
  */
-const EDITOR_HOME_VIEW_DIRECTION = new THREE.Vector3(0, -0.55, 1).normalize()
+// Shared with the read-only G-code preview so both open at the same angle (see viewCube.ts).
+const EDITOR_HOME_VIEW_DIRECTION = new THREE.Vector3(EDITOR_HOME_VIEW.x, EDITOR_HOME_VIEW.y, EDITOR_HOME_VIEW.z).normalize()
 
 /** Keyboard move steps (mm) for the bed plane. */
 const KEY_MOVE_STEP = 1

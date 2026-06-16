@@ -11,6 +11,7 @@ import { attachBridgeSessionServer } from './lib/bridge-session-server.js'
 import { printerManager } from './lib/printer-manager.js'
 import { startHmsCodeService } from './lib/hms-codes.js'
 import { startLibraryCleanup, stopLibraryCleanup } from './lib/library-cleanup.js'
+import { startAppUpdateChecks } from './lib/app-update-check.js'
 import { registerBuiltinPlugins } from './plugin/builtin.js'
 import { pluginRegistry } from './plugin/registry.js'
 import { loadInstalledExternalPlugins } from './plugin/installer.js'
@@ -93,6 +94,13 @@ httpServer.listen(env.API_PORT, () => {
       startLibraryCleanup()
     } catch (error) {
       console.error('Failed to start library cleanup', error)
+    }
+    try {
+      // No-op unless this is the published open-core image; warms the GHCR
+      // update check that powers the footer "update available" hint.
+      startAppUpdateChecks()
+    } catch (error) {
+      console.error('Failed to start app update checks', error)
     }
   })()
 })

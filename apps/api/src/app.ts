@@ -12,6 +12,7 @@ import { installTenantContext } from './lib/tenant-context.js'
 import { HttpError } from './lib/http-error.js'
 import { authRouter } from './routes/auth.js'
 import { healthRouter } from './routes/health.js'
+import { appRouter } from './routes/app.js'
 import { printersRouter } from './routes/printers.js'
 import { libraryRouter } from './routes/library.js'
 import { jobsRouter } from './routes/jobs.js'
@@ -116,6 +117,7 @@ app.use('/api', createRateLimitMiddleware({
 
 app.use('/api/auth', authRouter)
 app.use('/api/health', healthRouter)
+app.use('/api/app', appRouter)
 app.use('/api/printers', printersRouter)
 app.use('/api/printer-views', printerViewsRouter)
 app.use('/api/library', libraryRouter)

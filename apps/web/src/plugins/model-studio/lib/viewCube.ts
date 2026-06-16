@@ -15,6 +15,13 @@ import * as THREE from 'three'
 
 export const BAMBU_THREE_MF_ISO_VIEW = { x: -0.5, y: -0.5, z: Math.SQRT1_2 } as const
 export const BAMBU_THREE_MF_ISO_UP = { x: 0, y: 0, z: 1 } as const
+/**
+ * The editor's default "home" camera direction — a slightly-elevated **front** view
+ * (no left/right rotation), distinct from the iso corner view. Shared so the read-only
+ * G-code preview can open at the same angle the full editor does. Consumers normalize it
+ * and scale by their own view distance; the up vector is {@link BAMBU_THREE_MF_ISO_UP}.
+ */
+export const EDITOR_HOME_VIEW_DIRECTION = { x: 0, y: -0.55, z: 1 } as const
 export const BAMBU_THREE_MF_ORTHO_MARGIN = 1.04
 export const VIEW_CUBE_SIZE = 136
 

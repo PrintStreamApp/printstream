@@ -39,6 +39,7 @@ import { AppShell, type ShellTab } from './components/AppShell'
 import { marketingModule, platformAdminModule } from './lib/privateModules'
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner'
 import { DevRuntimeStatus } from './components/DevRuntimeStatus'
+import { AppVersionFooter } from './components/AppVersionFooter'
 import { DeleteOperationToasts } from './components/DeleteOperationToasts'
 import { DispatchToasts } from './components/DispatchToasts'
 import { SlicingToasts } from './components/SlicingToasts'
@@ -52,6 +53,7 @@ import { apiFetch } from './lib/apiClient'
 import { AuthBootstrapQueryProvider, buildAuthBootstrapQueryOptions } from './lib/authQuery'
 import { resolveAuthRouteState, resolveProtectedRouteState, shouldShowAccountTab, shouldShowWorkspaceSwitcher, shouldUsePlatformAuthTheme } from './lib/authRoute'
 import { getBrowserEnv } from './lib/browserEnv'
+import { buildDocumentTitle, getDeploymentEnvironment } from './lib/deploymentEnvironment'
 import { publishAuthBootstrapData, publishPluginCatalogData } from './lib/appShellQueryData'
 import { PluginCatalogQueryProvider, usePluginCatalogQuery } from './lib/pluginCatalogQuery'
 import { isTenantWorkspaceLandingReady, pluginBasePath, resolveDefaultWorkspaceRoute, resolveTenantRouteRedirect, resolveTenantWorkspaceLandingPath, resolveWorkspaceSwitchDestination, shouldClearPendingWorkspaceRoute } from './lib/workspaceSwitch'
@@ -119,6 +121,12 @@ interface DevHealthResponse {
 export function App() {
   const queryClient = useQueryClient()
   const browserEnv = getBrowserEnv()
+  // Tag non-production deployments in the page title so an open tab is
+  // unmistakable (e.g. "[staging] PrintStream"); production stays bare.
+  useEffect(() => {
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : ''
+    document.title = buildDocumentTitle(getDeploymentEnvironment(hostname, browserEnv.devMode))
+  }, [browserEnv.devMode])
   const location = useLocation()
   const navigate = useNavigate()
   const workspacePath = parseWorkspacePathname(location.pathname)
@@ -690,6 +698,14 @@ export function App() {
       apiRuntimeError={devHealthQuery.isError}
     />
   ) : null
+  // App-shell footer: dev runtime chips (dev only) plus the running build /
+  // update hint. AppVersionFooter renders nothing when there is no build to show.
+  const appFooterTrailing = (
+    <Stack spacing={0.75} alignItems="center" useFlexGap>
+      {devRuntimeIndicator}
+      <AppVersionFooter />
+    </Stack>
+  )
   const shouldAutoSelectOnlyTenantWorkspace = authBootstrapReady
     && isAuthenticated
     && !isMarketingRoute
@@ -903,7 +919,9 @@ export function App() {
               onOpenWorkspaceChooser={openWorkspaceChooser}
               workspaceChooserPending={workspaceSwitchPending}
               onLogoClick={() => navigate('/')}
-              footerTrailing={(isMarketingRoute || isPublicInfoRoute) && marketingModule ? <marketingModule.Footer /> : devRuntimeIndicator}
+              footerTrailing={(isMarketingRoute || isPublicInfoRoute)
+                ? (marketingModule ? <marketingModule.Footer /> : devRuntimeIndicator)
+                : appFooterTrailing}
             >
               {disabledActivePluginRoute ? <Navigate to={inPlatformMode ? '/platform/settings/plugins' : `${tenantSettingsPath}/plugins`} replace /> : null}
               <AuthBootstrapQueryProvider value={authBootstrapQuery}>

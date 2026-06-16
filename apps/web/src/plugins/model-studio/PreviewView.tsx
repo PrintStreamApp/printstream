@@ -24,6 +24,7 @@ import {
 } from './lib/threeMfScene'
 import {
   BAMBU_THREE_MF_ISO_UP,
+  EDITOR_HOME_VIEW_DIRECTION,
   VIEW_CUBE_SIZE,
   VIEW_PRESET_CONFIG,
   computePlatedOrthoFrameRadius,
@@ -32,6 +33,13 @@ import {
 } from './lib/viewCube'
 
 const PLATED_PREVIEW_GRID_SIZE = 320
+// Normalized editor "home" direction, so the G-code preview opens at the same angle the full
+// editor does (a slightly-elevated front view) instead of the iso corner.
+const PREVIEW_HOME_VIEW_DIRECTION = (() => {
+  const { x, y, z } = EDITOR_HOME_VIEW_DIRECTION
+  const length = Math.hypot(x, y, z) || 1
+  return { x: x / length, y: y / length, z: z / length }
+})()
 
 /**
  * Modal 3D previewer for STL files, plated 3MF projects, and
@@ -322,7 +330,21 @@ export function PreviewView(props: Record<string, unknown>) {
         camera.far = Math.max(distance * 20, 5000)
         camera.updateProjectionMatrix()
       }
-      applyViewPreset('iso')
+      if (previewMode === 'plate-gcode') {
+        // Open the G-code preview from the editor's home angle (shared direction) so it matches
+        // the full editor's view rather than the iso corner. Orbit/view-cube still work after.
+        camera.up.set(BAMBU_THREE_MF_ISO_UP.x, BAMBU_THREE_MF_ISO_UP.y, BAMBU_THREE_MF_ISO_UP.z)
+        camera.position.set(
+          PREVIEW_HOME_VIEW_DIRECTION.x * viewDistance,
+          PREVIEW_HOME_VIEW_DIRECTION.y * viewDistance,
+          PREVIEW_HOME_VIEW_DIRECTION.z * viewDistance
+        )
+        camera.lookAt(0, 0, 0)
+        controls.target.set(0, 0, 0)
+        controls.update()
+      } else {
+        applyViewPreset('iso')
+      }
       syncViewCubeOrientation()
       setViewerState({ loading: false, error: null })
     }

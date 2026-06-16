@@ -16,7 +16,7 @@
     "db:migrate:deploy": "npm run prisma:migrate:deploy --workspace @printstream/api",
     "db:reset-auth": "npm run db:reset-auth --workspace @printstream/api",
     "db:wait": "node --env-file=.env scripts/dev/wait-for-db.mjs",
-    "dev": "npm run dev:db && npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && concurrently -n shared,api,bridge,web -c magenta,green,yellow,blue \"npm run dev --workspace @printstream/shared\" \"npm run dev --workspace @printstream/api\" \"npm run dev --workspace @printstream/bridge\" \"npm run dev --workspace @printstream/web\"",
+    "dev": "node scripts/dev/run-dev.mjs",
     "dev:db": "npm run db:wait && node scripts/bootstrap-prisma-migrations.mjs",
     "export:web-icons": "node scripts/dev/export-web-icons.mjs",
     "lint": "eslint .",

@@ -3,6 +3,7 @@
  * plus inferred TS types) used by both the API and the web app.
  */
 export * from './auth.js'
+export * from './app-version.js'
 export * from './permissions.js'
 export * from './printer.js'
 export * from './print-plate.js'

@@ -77,6 +77,12 @@ jobs:
           file: Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Bake the running-image identity for the footer version + GHCR update
+          # hint. PUBLISHED=true marks this as the open-core image with a registry
+          # update channel; REVISION is the commit shown to users.
+          build-args: |
+            PRINTSTREAM_IMAGE_REVISION=${{ github.sha }}
+            PRINTSTREAM_IMAGE_PUBLISHED=true
           outputs: type=image,name=ghcr.io/printstreamapp/printstream,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=printstream-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=printstream-${{ matrix.arch }}

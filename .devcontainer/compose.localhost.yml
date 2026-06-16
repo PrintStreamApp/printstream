@@ -4,8 +4,9 @@
 #
 # All host port publishing lives here, NOT in the base compose, so the shared-host
 # (nginx) variant publishes nothing and can't collide with another stack's ports.
-# db (5432) and slicer (4010) are convenience publishes for connecting host tools;
-# the app itself reaches them over the compose network by service name.
+# db (5432) and the in-workspace slicer (4010, served inside the workspace
+# container) are convenience publishes for connecting host tools; the app itself
+# reaches them over the compose network by service name.
 #
 # Variant selection: devcontainer.json picks the overlay via the host env var
 # PRINTSTREAM_DEVCONTAINER_VARIANT, defaulting to `localhost` (this file). Set it
@@ -15,9 +16,7 @@ services:
     ports:
       - "4000:4000"
       - "5173:5173"
+      - "4010:4010"
   db:
     ports:
       - "5432:5432"
-  slicer:
-    ports:
-      - "4010:4010"

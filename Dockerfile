@@ -14,6 +14,13 @@ RUN apt-get update \
 FROM base AS build
 ARG BRIDGE_BUILD_REVISION=unknown
 ARG PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT=unknown
+# App image identity, surfaced in the web footer. REVISION is the git commit the
+# image was built from; PUBLISHED is "true" only for the open-core image pushed to
+# GHCR by the public docker-publish workflow (that image — and only that image —
+# has a registry update channel). The cloud image and local/source runs leave
+# PUBLISHED at its default. See apps/api/src/lib/app-build-info.ts.
+ARG PRINTSTREAM_IMAGE_REVISION=unknown
+ARG PRINTSTREAM_IMAGE_PUBLISHED=false
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/bridge/package.json apps/bridge/package.json
@@ -35,6 +42,8 @@ RUN bridge_source_fingerprint="$PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT" \
   fi \
   && bridge_release_fingerprint="$(bash scripts/bridge-release-fingerprint.sh 2>/dev/null || echo unknown)" \
   && printf '{"bridgeBuildRevision":"%s","bridgeSourceFingerprint":"%s","bridgeReleaseFingerprint":"%s"}\n' "$BRIDGE_BUILD_REVISION" "$bridge_source_fingerprint" "$bridge_release_fingerprint" > bridge-build-metadata.json
+# App-image identity for the footer version/update hint (read at runtime by the API).
+RUN printf '{"revision":"%s","published":"%s"}\n' "$PRINTSTREAM_IMAGE_REVISION" "$PRINTSTREAM_IMAGE_PUBLISHED" > app-build-metadata.json
 # prisma.config.ts requires DATABASE_URL even though `generate` never connects;
 # a placeholder satisfies it at build time. The real URL comes from the runtime
 # environment (compose `db` service / DATABASE_URL).

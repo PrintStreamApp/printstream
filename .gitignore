@@ -19,6 +19,9 @@ __pycache__/
 !/data/demo-library/Tire Rotation Markers.gcode.3mf
 apps/api/data/
 apps/api/prisma/data/
+# Transient BambuStudio CLI output written to CWD when the slicer runs in-workspace dev
+# (scripts/dev/run-dev.mjs). Slice output itself goes to SLICER_WORK_DIR (/tmp).
+apps/slicer/result.json
 apps/bridge/data/
 apps/bridge/apps/bridge/data/
 apps/bridge/release/

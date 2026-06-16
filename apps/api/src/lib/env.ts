@@ -160,6 +160,18 @@ const envSchema = z.object({
    */
   MQTT_DEBUG_LOGS: booleanEnv(false),
   PUBLIC_DEMO_BRIDGE_LIBRARY_DIR: z.string().default('./data/demo-library'),
+  /**
+   * Disable the outbound GHCR check that powers the footer "update available"
+   * hint. Only the published open-core image checks at all; set this to opt that
+   * image out of the periodic registry request. See `app-update-check.ts`.
+   */
+  PRINTSTREAM_DISABLE_UPDATE_CHECK: booleanEnv(false),
+  /**
+   * Registry repository the update check compares against, as `owner/name`
+   * (no registry host or tag). Defaults to the canonical open-core image;
+   * override for a fork that publishes its own GHCR image.
+   */
+  PRINTSTREAM_UPDATE_CHECK_IMAGE: z.string().default('printstreamapp/printstream'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development')
 })
 

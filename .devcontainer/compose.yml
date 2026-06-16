@@ -31,25 +31,8 @@ services:
     volumes:
       - postgres-dev-data:/var/lib/postgresql/data
 
-  slicer:
-    build:
-      context: ..
-      dockerfile: apps/slicer/Dockerfile
-    restart: unless-stopped
-    environment:
-      SLICER_PORT: 4010
-      SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
-      SLICER_DEFAULT_TARGET_ID: ${SLICER_DEFAULT_TARGET_ID:-}
-      SLICER_WORK_DIR: /work
-      SLICER_BAMBUSTUDIO_HOME_DIR: /work/bambustudio-home
-      SLICER_BAMBUSTUDIO_DATA_DIR: /work/bambustudio-data
-    # No host `ports:` here. The API reaches the slicer over the compose network as
-    # `slicer:4010`; host publishing is a single-stack convenience kept in
-    # compose.localhost.yml so this port can't collide with another stack's slicer
-    # on a shared host (the exact clash that broke the nginx-variant devcontainer).
-    volumes:
-      - slicer-dev-work:/work
-
+  # The slicer runs INSIDE the workspace container in dev (scripts/dev/run-dev.mjs, x86) — there is
+  # no sibling slicer service. On arm64 point SLICER_SERVICE_URL at a remote x86 slicer.
   workspace:
     build:
       context: ..
@@ -60,6 +43,9 @@ services:
       - "${DOCKER_GID:-1001}"
     volumes:
       - ..:/workspace/printstream:cached
+      # Persists the in-workspace slicer's BambuStudio AppImage + generated profile caches
+      # (opt-in: PRINTSTREAM_DEV_SLICER=workspace) so they survive rebuilds and download once.
+      - slicer-dev-data:/home/node/.printstream-slicer
     # Host port publishing and reverse-proxy wiring are environment-specific and
     # live in overlays: compose.localhost.yml (default; publishes 4000/5173) and
     # compose.nginx.yml (shared-nginx server). See devcontainer.json.
@@ -67,5 +53,5 @@ services:
 volumes:
   postgres-dev-data:
     name: ${DEVCONTAINER_POSTGRES_VOLUME:-printstream-postgres-dev-data}
-  slicer-dev-work:
-    name: ${DEVCONTAINER_SLICER_WORK_VOLUME:-printstream-slicer-dev-work}
+  slicer-dev-data:
+    name: ${DEVCONTAINER_SLICER_DATA_VOLUME:-printstream-slicer-dev-data}
