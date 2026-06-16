@@ -1,0 +1,39 @@
+tmp/
+node_modules/
+dist/
+.vite/
+__pycache__/
+*.pyc
+*.log
+.env
+.env.local
+.env.*.local
+.secrets/
+.backups/
+/data/*
+!/data/demo-library/
+/data/demo-library/*
+!/data/demo-library/Rail Mount.gcode.3mf
+!/data/demo-library/Card Holder (3 rows).gcode.3mf
+!/data/demo-library/Number Plates.gcode.3mf
+!/data/demo-library/Tire Rotation Markers.gcode.3mf
+apps/api/data/
+apps/api/prisma/data/
+apps/bridge/data/
+apps/bridge/apps/bridge/data/
+apps/bridge/release/
+apps/bridge/.cache/
+docs/current-work-status.md
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store
+# Deployment-local copies live at the repo root; the nested
+# .devcontainer/compose.yml is tracked.
+/compose.yml
+/nginx.conf
+
+# Local Claude Code session state (transcripts, memory, runtime locks)
+.claude/projects/
+.claude/scheduled_tasks.lock

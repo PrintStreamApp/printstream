@@ -1,0 +1,169 @@
+# Copy this file to compose.yml for a real deployment and keep the
+# server-specific copy out of git.
+
+# Cap container log growth — json-file logs are unbounded by default, so a chatty
+# or crash-looping container can fill the disk over time. Every service below
+# references this anchor via `logging: *default-logging` (50 MB max per container).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    logging: *default-logging
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: printstream
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d printstream"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - printstream-postgres-data:/var/lib/postgresql/data
+
+  # The combined app image (web + API + bridge); the entrypoint runs the API by
+  # default and the `bridge` service below reuses the same image with a command.
+  api:
+    logging: *default-logging
+    image: ghcr.io/printstreamapp/printstream:latest
+    # To build from source instead of pulling, uncomment and run `docker compose up -d --build`:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    #   args:
+    #     BRIDGE_BUILD_REVISION: ${BRIDGE_BUILD_REVISION:-unknown}
+    #     PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT: ${PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT:-unknown}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # Single web-facing port. The API serves the built web SPA (SERVE_WEB_DIR is
+    # baked into the image) alongside /api and /ws, so one container fronts the
+    # whole app — no separate nginx. To run the API behind your own web tier
+    # instead, set SERVE_WEB_DIR= (empty) below.
+    ports:
+      - "${PORT:-8080}:4000"
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/printstream?schema=public}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:8080}
+      CLOUDFLARE_EMAIL_ACCOUNT_ID: ${CLOUDFLARE_EMAIL_ACCOUNT_ID:-}
+      CLOUDFLARE_EMAIL_API_TOKEN: ${CLOUDFLARE_EMAIL_API_TOKEN:-}
+      CLOUDFLARE_EMAIL_FROM_EMAIL: ${CLOUDFLARE_EMAIL_FROM_EMAIL:-}
+      CLOUDFLARE_EMAIL_FROM_NAME: ${CLOUDFLARE_EMAIL_FROM_NAME:-}
+      AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES: ${AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES:-}
+      LIBRARY_DIR: /data/library
+      # Bridge release artifacts (published by CI, promoted by deploys) live in
+      # the repo checkout and are bind-mounted so the API can serve them.
+      BRIDGE_RELEASES_DIR: /data/bridge-releases
+      SLICER_SERVICE_URL: ${SLICER_SERVICE_URL:-http://slicer:4010}
+      SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
+      SLICING_MAX_CONCURRENT_JOBS: ${SLICING_MAX_CONCURRENT_JOBS:-1}
+      SLICING_MAX_QUEUED_JOBS: ${SLICING_MAX_QUEUED_JOBS:-10}
+      PLUGINS_DIR: /data/plugins
+      DISCOVERY_PORT: ${DISCOVERY_PORT:-2021}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      # Managed-bridge mode: the bundled bridge auto-pairs into this workspace
+      # on first start and the Bridges settings page is hidden — a single-bridge,
+      # start-up-and-go self-host. The API auto-generates a provisioning token
+      # at MANAGED_BRIDGE_TOKEN_FILE on the shared `printstream-provision` volume
+      # and the bridge reads it from the same path; no operator secret needed.
+      # Set MANAGED_BRIDGE=false to manage bridges by hand (the connect-code
+      # flow), e.g. when running a bridge on another host.
+      MANAGED_BRIDGE: ${MANAGED_BRIDGE:-true}
+      MANAGED_BRIDGE_TOKEN_FILE: /run/provision/managed-bridge-token
+      NTFY_TOPIC_URL: ${NTFY_TOPIC_URL:-}
+      # Single nginx hop in front; trust X-Forwarded-* from it so
+      # `req.ip` and `req.protocol` reflect the real client.
+      TRUST_PROXY: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - printstream-data:/data
+      - ./data/bridge-releases:/data/bridge-releases
+      # Carries the auto-generated managed-bridge provisioning token to the
+      # bundled bridge. The API (which mounts this first via depends_on) owns it.
+      - printstream-provision:/run/provision
+    networks:
+      - default
+      - slicer-internal
+
+  slicer:
+    logging: *default-logging
+    image: ghcr.io/printstreamapp/printstream-slicer:latest
+    # build:
+    #   context: .
+    #   dockerfile: apps/slicer/Dockerfile
+    restart: unless-stopped
+    environment:
+      SLICER_PORT: 4010
+      SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
+      SLICER_DEFAULT_TARGET_ID: ${SLICER_DEFAULT_TARGET_ID:-}
+      SLICER_CLI_ARGS_TEMPLATE: ${SLICER_CLI_ARGS_TEMPLATE:---slice {plate} --debug 2 --outputdir {outputDir} --min-save --export-3mf {outputFileName} --export-json {input} {input}}
+      SLICER_ENABLE_PIPE_PROGRESS: ${SLICER_ENABLE_PIPE_PROGRESS:-true}
+      SLICER_WORK_DIR: /work
+      SLICER_BAMBUSTUDIO_HOME_DIR: /work/bambustudio-home
+      SLICER_BAMBUSTUDIO_DATA_DIR: /work/bambustudio-data
+    ports:
+      - "${SLICER_BIND_HOST:-127.0.0.1}:${SLICER_BIND_PORT:-4010}:4010"
+    volumes:
+      - printstream-slicer-work:/work
+    networks:
+      - slicer-internal
+
+  # Reuses the combined app image (built by `api`) and runs the bridge role.
+  bridge:
+    logging: *default-logging
+    image: ghcr.io/printstreamapp/printstream:latest
+    command: ["bridge"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRIDGE_SERVER_URL: ${BRIDGE_SERVER_URL:-http://api:4000}
+      DISCOVERY_PORT: ${DISCOVERY_PORT:-2021}
+      BRIDGE_LIBRARY_DIR: /data/library
+      BRIDGE_NAME: ${BRIDGE_NAME:-PrintStream Bridge}
+      BRIDGE_STATE_FILE: /data/bridge-state.json
+      # Reads the API-generated provisioning token from the shared mount so the
+      # managed server auto-pairs this bridge. Harmless when MANAGED_BRIDGE is
+      # off (the file simply won't exist).
+      MANAGED_BRIDGE_TOKEN_FILE: /run/provision/managed-bridge-token
+      BRIDGE_AUTO_UPDATE: ${BRIDGE_AUTO_UPDATE:-false}
+      BRIDGE_RELEASES_DIR: /data/releases
+      BRIDGE_RELEASE_RETENTION_DAYS: ${BRIDGE_RELEASE_RETENTION_DAYS:-7}
+    # NOTE: Bridge-owned SSDP discovery requires receiving LAN multicast
+    # packets. If you need auto-discovery from inside Docker, change this
+    # service to `network_mode: host` and point `BRIDGE_SERVER_URL` at an
+    # API address reachable from the host network.
+    volumes:
+      - printstream-bridge-data:/data
+      - printstream-provision:/run/provision:ro
+
+volumes:
+  printstream-data:
+    name: ${APP_DATA_VOLUME_NAME:-printstream-data}
+  printstream-bridge-data:
+    name: ${BRIDGE_DATA_VOLUME_NAME:-printstream-bridge-data}
+  printstream-provision:
+    name: ${PROVISION_VOLUME_NAME:-printstream-provision}
+  printstream-slicer-work:
+    name: ${SLICER_WORK_VOLUME_NAME:-printstream-slicer-work}
+  printstream-postgres-data:
+    name: ${POSTGRES_DATA_VOLUME_NAME:-printstream-postgres-data}
+
+networks:
+  slicer-internal:
+    internal: true

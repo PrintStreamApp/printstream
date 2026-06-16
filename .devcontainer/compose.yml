@@ -1,0 +1,71 @@
+# Dev container compose. Two important details for permission hygiene:
+#
+# 1. We do NOT pin `user:` here. The devcontainer feature
+#    (`updateRemoteUserUID: true` in devcontainer.json) rebuilds the
+#    image so the in-image `node` user's UID/GID match the host user,
+#    then runs everything as `remoteUser: node`. Pinning `user:` here
+#    defeats that and leads to root-owned files in the bind mount on
+#    hosts where the host UID is not 1000.
+#
+# 2. The workspace is bind-mounted from the host. Anything you create
+#    or modify inside the container is owned by the rebuilt `node`
+#    user, which now has the same UID/GID as your host user, so
+#    editing the same files outside the container Just Works.
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: printstream
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d printstream"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # No host `ports:` here. The workspace reaches the db over the compose network
+    # as `db:5432`; publishing to the host is a single-stack convenience that lives
+    # in compose.localhost.yml so the shared-host (nginx) variant can't collide with
+    # another stack's published 5432.
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+
+  slicer:
+    build:
+      context: ..
+      dockerfile: apps/slicer/Dockerfile
+    restart: unless-stopped
+    environment:
+      SLICER_PORT: 4010
+      SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
+      SLICER_DEFAULT_TARGET_ID: ${SLICER_DEFAULT_TARGET_ID:-}
+      SLICER_WORK_DIR: /work
+      SLICER_BAMBUSTUDIO_HOME_DIR: /work/bambustudio-home
+      SLICER_BAMBUSTUDIO_DATA_DIR: /work/bambustudio-data
+    # No host `ports:` here. The API reaches the slicer over the compose network as
+    # `slicer:4010`; host publishing is a single-stack convenience kept in
+    # compose.localhost.yml so this port can't collide with another stack's slicer
+    # on a shared host (the exact clash that broke the nginx-variant devcontainer).
+    volumes:
+      - slicer-dev-work:/work
+
+  workspace:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    command: sleep infinity
+    working_dir: /workspace/printstream
+    group_add:
+      - "${DOCKER_GID:-1001}"
+    volumes:
+      - ..:/workspace/printstream:cached
+    # Host port publishing and reverse-proxy wiring are environment-specific and
+    # live in overlays: compose.localhost.yml (default; publishes 4000/5173) and
+    # compose.nginx.yml (shared-nginx server). See devcontainer.json.
+
+volumes:
+  postgres-dev-data:
+    name: ${DEVCONTAINER_POSTGRES_VOLUME:-printstream-postgres-dev-data}
+  slicer-dev-work:
+    name: ${DEVCONTAINER_SLICER_WORK_VOLUME:-printstream-slicer-dev-work}

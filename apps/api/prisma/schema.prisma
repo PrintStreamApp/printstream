@@ -1,0 +1,731 @@
+// Prisma schema for printstream. PostgreSQL is the primary datastore for
+// self-hosted deployments. Prefer migrations over `db push` once the schema
+// is settled.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  printers           Printer[]
+  bridges            Bridge[]
+  jobs               PrintJob[]
+  libraryFiles       LibraryFile[]
+  libraryFileVersions LibraryFileVersion[]
+  libraryFolders     LibraryFolder[]
+  libraryFileReplicas LibraryFileReplica[]
+  printerViews       PrinterView[]
+  authMemberships    AuthTenantMembership[]
+  authGroups         AuthGroup[]
+  authServiceAccounts AuthServiceAccount[]
+  orderTemplates     OrderTemplate[]
+  orderTemplateVariants OrderTemplateVariant[]
+  orderTemplatePrints OrderTemplatePrint[]
+  orders             Order[]
+  orderVariantSelections OrderVariantSelection[]
+  orderPrints        OrderPrint[]
+  auditLogs          AuditLog[]
+  stats              TenantStats?
+  printerStats       PrinterStats[]
+
+  @@unique([name])
+}
+
+model Printer {
+  id         String   @id @default(cuid())
+  tenantId   String
+  bridgeId   String?
+  name       String
+  host       String
+  serial     String
+  accessCode String
+  model      String   @default("unknown")
+  currentPlateType String?
+  currentNozzleDiameters String?
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bridge     Bridge?  @relation(fields: [bridgeId], references: [id], onDelete: SetNull)
+  jobs       PrintJob[]
+  startedOrderPrints OrderPrint[] @relation("OrderPrintStartedPrinter")
+
+  @@unique([tenantId, serial])
+  @@index([tenantId, bridgeId, position])
+  @@index([tenantId, position])
+}
+
+model Bridge {
+  id         String   @id @default(cuid())
+  tenantId   String?
+  name       String
+  connectCode  String?  @unique
+  runtimeTokenHash String?
+  version    String?
+  buildRevision String?
+  sourceFingerprint String?
+  releaseFingerprint String?
+  protocolVersion Int?
+  runnerAbiVersion String?
+  updateChannel String @default("stable")
+  updateStatus String?
+  latestAvailableVersion String?
+  lastUpdateCheckAt DateTime?
+  lastUpdateError String?
+  lastSeenAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant                Tenant?             @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  printers              Printer[]
+  ownedLibraryFiles     LibraryFile[]       @relation("LibraryFileOwnerBridge")
+  ownedLibraryFolders   LibraryFolder[]     @relation("LibraryFolderOwnerBridge")
+  libraryFileReplicas   LibraryFileReplica[]
+
+  @@index([tenantId, createdAt])
+  @@index([runtimeTokenHash])
+}
+
+model PrintJob {
+  id              String    @id @default(cuid())
+  tenantId        String
+  printerId       String
+  taskId          String?
+  printerFilePath String?
+  jobName         String
+  sourceType      String    @default("library")
+  calibrationOption Int?
+  fileId          String?
+  fileName        String?
+  fileSizeBytes   Int?
+  plate           Int?
+  useAms          Boolean?
+  bedLevel        Boolean?
+  amsMapping      String?
+  progressPercent Int?
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  durationSeconds Int?
+  result          String    @default("unknown")
+  thumbnailPath   String?
+  snapshotPath    String?
+  filamentUsedGrams Decimal? @db.Decimal(14, 3)
+  filamentUsedMeters Decimal? @db.Decimal(14, 3)
+  printerStatsRecordedAt DateTime?
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  printer         Printer   @relation(fields: [printerId], references: [id], onDelete: Cascade)
+  file            LibraryFile? @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  orderPrints     OrderPrint[] @relation("OrderPrintLastJob")
+
+  @@index([tenantId, printerId, startedAt])
+  @@index([tenantId, printerId, finishedAt, startedAt])
+  @@index([tenantId, printerId, taskId])
+  @@index([tenantId, finishedAt, printerId])
+  @@index([tenantId, fileId])
+}
+
+model TenantStats {
+  tenantId            String   @id
+  totalPrints         Int      @default(0)
+  successfulPrints    Int      @default(0)
+  failedPrints        Int      @default(0)
+  cancelledPrints     Int      @default(0)
+  successfulPrintDurationSeconds Int @default(0)
+  failedPrintDurationSeconds Int @default(0)
+  cancelledPrintDurationSeconds Int @default(0)
+  wastedPrintDurationSeconds Int @default(0)
+  trackedFilamentPrints Int    @default(0)
+  filamentUsedGrams   Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
+  filamentUsedMeters  Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model PlatformStats {
+  id                             String   @id
+  tenantCount                    Int      @default(0)
+  userCount                      Int      @default(0)
+  printerCount                   Int      @default(0)
+  totalPrints                    Int      @default(0)
+  successfulPrintDurationSeconds Int      @default(0)
+  failedPrintDurationSeconds     Int      @default(0)
+  cancelledPrintDurationSeconds  Int      @default(0)
+  wastedPrintDurationSeconds     Int      @default(0)
+  trackedFilamentPrints          Int      @default(0)
+  filamentUsedGrams              Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedGrams    Decimal  @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedGrams        Decimal  @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedGrams     Decimal  @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedGrams        Decimal  @default(0) @db.Decimal(14, 3)
+  filamentUsedMeters             Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedMeters   Decimal  @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedMeters       Decimal  @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedMeters    Decimal  @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedMeters       Decimal  @default(0) @db.Decimal(14, 3)
+  createdAt                      DateTime @default(now())
+  updatedAt                      DateTime @updatedAt
+}
+
+model PrinterStats {
+  tenantId              String
+  printerSerial         String
+  totalPrints           Int      @default(0)
+  successfulPrints      Int      @default(0)
+  failedPrints          Int      @default(0)
+  cancelledPrints       Int      @default(0)
+  successfulPrintDurationSeconds Int @default(0)
+  failedPrintDurationSeconds Int @default(0)
+  cancelledPrintDurationSeconds Int @default(0)
+  wastedPrintDurationSeconds Int @default(0)
+  trackedFilamentPrints Int      @default(0)
+  filamentUsedGrams     Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
+  filamentUsedMeters    Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, printerSerial])
+  @@index([tenantId, updatedAt])
+}
+
+model LibraryFile {
+  id            String   @id @default(cuid())
+  tenantId      String
+  ownerBridgeId String?
+  name          String
+  storedPath    String
+  sizeBytes     Int
+  kind          String
+  thumbnailPath String?
+  uploadedAt    DateTime @default(now())
+  currentVersionNumber Int @default(1)
+  folderId      String?
+  snapshotKey   String?  @unique
+  // Hidden files are persisted on disk so previously-printed jobs can
+  // still be re-dispatched, but they don't appear in the user-facing
+  // library listing. Some hidden files are transient one-off uploads,
+  // while others are immutable job snapshots retained for future
+  // reprints. `snapshotKey` is only populated for the retained snapshot
+  // variant; transient hidden files keep it null and are eligible for
+  // periodic cleanup.
+  hidden        Boolean  @default(false)
+  // Recycle bin: soft-deleted files keep their bytes + version history and
+  // stay restorable until the cleanup task hard-deletes them after the
+  // retention window (LIBRARY_RECYCLE_RETENTION_DAYS).
+  deletedAt     DateTime?
+  // What created the row: 'upload' | 'slice' | 'scaffold' | 'snapshot'.
+  // Null on rows created before origin tracking. Drives transient-file
+  // cleanup (unsaved sliced outputs age out faster than uploads).
+  origin        String?
+  // Actor attribution for the current content (denormalized for display;
+  // the audit log remains the authoritative record).
+  createdById   String?
+  createdByName String?
+  // Set when the current content was produced by restoring an older
+  // version; holds that source version's number.
+  restoredFromVersionNumber Int?
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerBridge   Bridge?  @relation("LibraryFileOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
+  folder        LibraryFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  replicas      LibraryFileReplica[]
+  jobs          PrintJob[]
+  versions      LibraryFileVersion[]
+  orderTemplatePrints OrderTemplatePrint[]
+  orderPrints   OrderPrint[]
+
+  @@index([tenantId, uploadedAt])
+  @@index([tenantId, folderId])
+  @@index([tenantId, ownerBridgeId, folderId])
+  @@index([tenantId, hidden, uploadedAt])
+  @@index([tenantId, ownerBridgeId, folderId, name, hidden, uploadedAt])
+  @@index([tenantId, deletedAt])
+}
+
+model LibraryFileVersion {
+  id            String   @id @default(cuid())
+  tenantId      String
+  libraryFileId String
+  ownerBridgeId String?
+  folderId      String?
+  name          String
+  storedPath    String
+  sizeBytes     Int
+  kind          String   @default("other")
+  thumbnailPath String?
+  uploadedAt    DateTime
+  versionNumber Int
+  createdAt     DateTime @default(now())
+  // Actor attribution + restore provenance, copied from the LibraryFile row
+  // at the moment this version was archived.
+  createdById   String?
+  createdByName String?
+  restoredFromVersionNumber Int?
+
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  libraryFile   LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
+
+  @@unique([libraryFileId, versionNumber])
+  @@index([tenantId, libraryFileId, versionNumber])
+}
+
+/**
+ * User-organized folder tree for the library. Folders only group
+ * `LibraryFile` rows; files are still stored flat on disk under
+ * `LIBRARY_DIR` (the folder is purely a metadata grouping). A null
+ * `parentId` is a top-level folder.
+ */
+model LibraryFolder {
+  id        String   @id @default(cuid())
+  tenantId  String
+  ownerBridgeId String?
+  name      String
+  parentId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerBridge Bridge?       @relation("LibraryFolderOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
+  parent    LibraryFolder?  @relation("LibraryFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  LibraryFolder[] @relation("LibraryFolderTree")
+  files     LibraryFile[]
+
+  @@unique([tenantId, parentId, name])
+  @@index([tenantId, ownerBridgeId, parentId])
+  @@index([tenantId, parentId])
+}
+
+model LibraryFileReplica {
+  id             String   @id @default(cuid())
+  tenantId       String
+  libraryFileId  String
+  bridgeId       String
+  storedPath     String
+  contentHash    String?
+  sizeBytes      Int
+  replicaKind    String   @default("cache")
+  status         String   @default("pending")
+  lastVerifiedAt DateTime?
+  lastAccessedAt DateTime?
+  expiresAt      DateTime?
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  libraryFile    LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
+  bridge         Bridge      @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
+
+  @@unique([libraryFileId, bridgeId])
+  @@index([tenantId, bridgeId, status])
+  @@index([tenantId, expiresAt])
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+model PrinterView {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  name                 String
+  printerIds           String?
+  cardsPerRow          Int      @default(3)
+  stateFilter          String   @default("all")
+  modelFilter          String   @default("[]")
+  nozzleDiameterFilter String   @default("[]")
+  plateTypeFilter      String   @default("[]")
+  sortKey              String   @default("name")
+  sortDirection        String   @default("asc")
+  cardContentSettings  String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@index([tenantId, name])
+}
+
+/**
+ * Externally installed plugins (uploaded archives or, eventually, store
+ * downloads). Built-in plugins are not tracked here — they live in code
+ * and use the `Setting` table for their install/enabled flags. An entry
+ * here means the registry should dynamic-import `entryPath` (relative
+ * to `installPath`) at startup and register the resulting `ApiPlugin`.
+ */
+model Plugin {
+  name        String   @id
+  version     String?
+  description String?
+  /** Where the package came from: 'upload' for now; 'store' is reserved. */
+  source      String
+  /** Absolute or env-rooted directory holding the extracted package. */
+  installPath String
+  /** ESM entry file relative to `installPath`. */
+  entryPath   String
+  installedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AuthUser {
+  id            String                   @id @default(cuid())
+  email         String
+  displayName   String?
+  isPlatformUser  Boolean                  @default(false)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  tenantMemberships AuthTenantMembership[]
+  memberships   AuthUserGroupMembership[]
+  passkeys      AuthPasskeyCredential[]
+  emailCodeTokens AuthEmailCodeToken[]
+  sessions      AuthSession[]
+  auditLogs     AuditLog[]
+
+  @@unique([email])
+  @@index([email])
+  @@index([createdAt])
+}
+
+model AuthTenantMembership {
+  userId        String
+  tenantId      String
+  loginDisabled Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user          AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([userId, tenantId])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, loginDisabled])
+}
+
+model AuthGroup {
+  id          String                            @id @default(cuid())
+  tenantId    String?
+  key         String?
+  name        String
+  description String?
+  permissions String[]
+  isSystem    Boolean                           @default(false)
+  isEditable  Boolean                           @default(true)
+  isRemovable Boolean                           @default(true)
+  createdAt   DateTime                          @default(now())
+  updatedAt   DateTime                          @updatedAt
+
+  tenant                    Tenant?                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userMemberships           AuthUserGroupMembership[]
+  serviceAccountMemberships AuthServiceAccountGroupMembership[]
+
+  @@unique([tenantId, key])
+  @@unique([tenantId, name])
+  @@index([tenantId, key])
+  @@index([tenantId, createdAt])
+}
+
+model AuthUserGroupMembership {
+  userId    String
+  groupId   String
+  createdAt DateTime  @default(now())
+
+  user      AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group     AuthGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([userId, groupId])
+  @@index([groupId])
+}
+
+model AuthServiceAccount {
+  id          String                             @id @default(cuid())
+  tenantId    String
+  name        String
+  tokenHash   String                             @unique
+  tokenPrefix String                             @unique
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime                           @default(now())
+  updatedAt   DateTime                           @updatedAt
+
+  tenant      Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  memberships AuthServiceAccountGroupMembership[]
+  sessions    AuthSession[]
+  auditLogs   AuditLog[]
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, revokedAt])
+}
+
+model AuthServiceAccountGroupMembership {
+  serviceAccountId String
+  groupId          String
+  createdAt        DateTime           @default(now())
+
+  serviceAccount   AuthServiceAccount @relation(fields: [serviceAccountId], references: [id], onDelete: Cascade)
+  group            AuthGroup          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([serviceAccountId, groupId])
+  @@index([groupId])
+}
+
+model AuthPasskeyCredential {
+  id             String    @id @default(cuid())
+  userId         String
+  credentialId   String    @unique
+  publicKey      Bytes
+  transports     String[]
+  counter        Int       @default(0)
+  aaguid         String?
+  backedUp       Boolean   @default(false)
+  nickname       String?
+  lastUsedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user           AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AuthEmailCodeToken {
+  id         String    @id @default(cuid())
+  userId      String?
+  email      String
+  tokenHash  String    @unique
+  redirectTo String?
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user       AuthUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, expiresAt])
+  @@index([userId, expiresAt])
+  @@map("AuthMagicLinkToken")
+}
+
+model AuthSession {
+  id               String               @id @default(cuid())
+  secretHash       String               @unique
+  userId           String?
+  serviceAccountId String?
+  userAgent        String?
+  expiresAt        DateTime
+  lastSeenAt       DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime             @default(now())
+
+  user             AuthUser?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceAccount   AuthServiceAccount?  @relation(fields: [serviceAccountId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([serviceAccountId, expiresAt])
+  @@index([revokedAt])
+}
+
+model AuditLog {
+  id                 String               @id @default(cuid())
+  tenantId           String?
+  actorType          String
+  actorUserId        String?
+  actorServiceAccountId String?
+  actorLabel         String?
+  requestMethod      String
+  requestPath        String
+  action             String
+  resource           String
+  summary            String
+  statusCode         Int
+  ipAddress          String?
+  metadataJson       String?
+  createdAt          DateTime             @default(now())
+
+  tenant             Tenant?              @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  actorUser          AuthUser?            @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorServiceAccount AuthServiceAccount? @relation(fields: [actorServiceAccountId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([tenantId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([actorServiceAccountId, createdAt])
+  @@index([action, createdAt])
+}
+
+model OrderTemplate {
+  id            String   @id @default(cuid())
+  tenantId      String
+  name          String
+  code          String?
+  description   String?
+  notesTemplate String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  variants      OrderTemplateVariant[]
+  orders        Order[]
+
+  @@index([tenantId, name])
+  @@index([tenantId, createdAt])
+}
+
+model OrderTemplateVariant {
+  id            String   @id @default(cuid())
+  tenantId      String
+  templateId    String
+  name          String
+  position      Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template      OrderTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  items         OrderTemplatePrint[]
+  orderSelections OrderVariantSelection[]
+  orderPrints   OrderPrint[]
+
+  @@index([tenantId, templateId, position])
+}
+
+model OrderTemplatePrint {
+  id              String   @id @default(cuid())
+  tenantId        String
+  templateVariantId String
+  libraryFileId   String?
+  libraryFileName String
+  plate           Int
+  quantity        Int
+  notes           String?
+  position        Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  variant         OrderTemplateVariant @relation(fields: [templateVariantId], references: [id], onDelete: Cascade)
+  libraryFile     LibraryFile?        @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
+  orderPrints     OrderPrint[]
+
+  @@index([tenantId, templateVariantId, position])
+  @@index([tenantId, libraryFileId])
+}
+
+model Order {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  templateId          String?
+  templateName        String
+  templateCode        String?
+  templateDescription String?
+  name                String
+  notes               String?
+  status              String   @default("active")
+  completedAt         DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant              Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template            OrderTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  selectedVariants    OrderVariantSelection[]
+  prints              OrderPrint[]
+
+  @@index([tenantId, templateId])
+  @@index([tenantId, status, createdAt])
+}
+
+model OrderVariantSelection {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  orderId            String
+  templateVariantId  String?
+  templateVariantName String
+  quantity           Int
+  position           Int
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order              Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  templateVariant    OrderTemplateVariant? @relation(fields: [templateVariantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, orderId, position])
+  @@index([tenantId, templateVariantId])
+}
+
+model OrderPrint {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  orderId            String
+  templatePrintId    String?
+  templateVariantId  String?
+  templateVariantName String?
+  projectFilamentOverrides Json?
+  libraryFileId      String?
+  libraryFileName    String
+  plate              Int
+  notes              String?
+  groupPosition      Int
+  sequenceNumber     Int
+  sequenceCount      Int
+  status             String    @default("pending")
+  completionSource   String?
+  attemptCount       Int       @default(0)
+  startedPrinterId   String?
+  startedAt          DateTime?
+  lastPrintJobId     String?
+  lastPrintResult    String?
+  lastPrintFinishedAt DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order              Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  templatePrint      OrderTemplatePrint? @relation(fields: [templatePrintId], references: [id], onDelete: SetNull)
+  templateVariant    OrderTemplateVariant? @relation(fields: [templateVariantId], references: [id], onDelete: SetNull)
+  libraryFile        LibraryFile?       @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
+  startedPrinter     Printer?           @relation("OrderPrintStartedPrinter", fields: [startedPrinterId], references: [id], onDelete: SetNull)
+  lastPrintJob       PrintJob?          @relation("OrderPrintLastJob", fields: [lastPrintJobId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, orderId, groupPosition, sequenceNumber])
+  @@index([tenantId, status, startedAt])
+  @@index([tenantId, templateVariantId])
+  @@index([tenantId, libraryFileId])
+  @@index([tenantId, startedPrinterId])
+  @@index([tenantId, lastPrintJobId])
+}

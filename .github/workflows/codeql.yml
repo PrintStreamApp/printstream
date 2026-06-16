@@ -1,0 +1,35 @@
+name: "CodeQL Advanced Security Scan"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '30 4 * * 0' # Run weekly at 04:30 on Sunday
+
+jobs:
+  analyze:
+    name: Analyze
+    # CodeQL is free on the public repo only; the private monorepo would need
+    # a GitHub Advanced Security license, so skip it there.
+    if: github.repository == 'PrintStreamApp/printstream'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: javascript
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:javascript"

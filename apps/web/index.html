@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/icon-192.png?v=20260519a" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260519a" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0d1322" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PrintStream" />
+    <title>PrintStream</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: 'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background-color: #070b14;
+        --printstream-body-background: radial-gradient(circle at top left, #0f5444 0%, #304159 100%);
+        --app-splash-panel-radius: 16px;
+        --app-splash-logo-radius: 16px;
+        --app-safe-top: env(safe-area-inset-top, 0px);
+        --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+        --app-titlebar-height: env(titlebar-area-height, 0px);
+        --app-top-inset: max(var(--app-safe-top), var(--app-titlebar-height));
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body, #root {
+        width: 100%;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        min-height: 100vh;
+        background: var(--printstream-body-background);
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+        font-family: 'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+
+      #root {
+        min-height: 100vh;
+        visibility: hidden;
+      }
+
+      body.app-boot-ready #root {
+        visibility: visible;
+      }
+
+      #app-splash {
+        --app-splash-progress: 0%;
+        position: fixed;
+        inset: 0;
+        z-index: 1600;
+        display: grid;
+        place-items: center;
+        padding: max(24px, var(--app-top-inset)) 20px max(24px, var(--app-safe-bottom));
+        background: radial-gradient(circle at top left, #0f5444 0%, #304159 100%);
+        transition: visibility 220ms ease;
+      }
+
+      #app-splash.is-complete {
+        pointer-events: none;
+      }
+
+      #app-splash.is-hidden {
+        display: none;
+      }
+
+      .app-splash__panel {
+        width: min(100%, 460px);
+        padding: 28px 24px 24px;
+        border-radius: var(--app-splash-panel-radius);
+        border: 1px solid rgba(184, 202, 255, 0.14);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+          rgba(7, 13, 22, 0.78);
+        box-shadow:
+          0 28px 70px rgba(0, 0, 0, 0.35),
+          inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(18px);
+        isolation: isolate;
+      }
+
+      .app-splash__header {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+
+      .app-splash__brand {
+        display: block;
+        flex: 0 0 auto;
+      }
+
+      .app-splash__copy {
+        min-width: 0;
+      }
+
+      .app-splash__logo {
+        display: block;
+        width: 84px;
+        height: 84px;
+        border-radius: var(--app-splash-logo-radius);
+        object-fit: cover;
+        object-position: center;
+      }
+
+      .app-splash__title {
+        margin: 0;
+        color: #f4f8ff;
+        line-height: 0.9;
+      }
+
+      .app-splash__subtitle {
+        margin: 12px 0 0;
+        color: rgba(221, 233, 248, 0.72);
+        font-size: 0.98rem;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 479px) {
+        .app-splash__header {
+          gap: 14px;
+          align-items: flex-start;
+        }
+
+        .app-splash__logo {
+          width: 72px;
+          height: 72px;
+        }
+      }
+
+      .app-splash__meter {
+        margin-top: 22px;
+      }
+
+      .app-splash__meter-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 10px;
+      }
+
+      .app-splash__status {
+        color: #f4f8ff;
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+
+      .app-splash__percent {
+        color: rgba(221, 233, 248, 0.68);
+        font-family: 'Space Grotesk', 'IBM Plex Sans', system-ui, sans-serif;
+        font-size: 0.9rem;
+        font-weight: 700;
+      }
+
+      .app-splash__track {
+        position: relative;
+        overflow: hidden;
+        isolation: isolate;
+        height: 11px;
+        border-radius: 999px;
+        background: rgba(180, 196, 230, 0.12);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+      }
+
+      .app-splash__fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        overflow: hidden;
+        width: var(--app-splash-progress);
+        border-radius: inherit;
+        background: linear-gradient(90deg, #2dd4a3 0%, #62c5ff 52%, #9f8bff 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        transition: width 180ms ease;
+      }
+
+      .app-splash__fill::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+        transform: translateX(-100%);
+        animation: app-splash-shimmer 1.4s linear infinite;
+      }
+
+      @keyframes app-splash-shimmer {
+        to {
+          transform: translateX(180%);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app-splash" aria-live="polite">
+      <div class="app-splash__panel">
+        <div class="app-splash__header">
+          <div class="app-splash__brand" aria-hidden="true">
+            <img class="app-splash__logo" src="/icon-512.png" alt="" />
+          </div>
+          <div class="app-splash__copy">
+            <h4 class="app-splash__title">Getting Ready...</h4>
+            <p class="app-splash__subtitle">Loading the app and connecting to the API</p>
+          </div>
+        </div>
+        <div class="app-splash__meter">
+          <div class="app-splash__meter-head">
+            <div id="app-splash-status" class="app-splash__status">Starting up</div>
+            <div id="app-splash-percent" class="app-splash__percent">0%</div>
+          </div>
+          <div class="app-splash__track" aria-hidden="true">
+            <div id="app-splash-fill" class="app-splash__fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      document.getElementById('app-splash')?.setAttribute('data-started-at', String(Date.now()))
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

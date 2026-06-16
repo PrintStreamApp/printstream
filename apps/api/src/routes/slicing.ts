@@ -1,0 +1,459 @@
+/**
+ * Server-side slicing API.
+ *
+ * Routes validate tenant-owned source files and optional real-printer
+ * targets, then hand orchestration to the API-side slicing queue. The
+ * BambuStudio CLI itself runs in a separate slicer runtime/container.
+ */
+import { Router } from 'express'
+import { z } from 'zod'
+import {
+  createSlicingJobSchema,
+  isDirectPrintableFileName,
+  JOBS_DELETE_PERMISSION,
+  JOBS_VIEW_PERMISSION,
+  LIBRARY_UPLOAD_PERMISSION,
+  LIBRARY_VIEW_PERMISSION,
+  PRINTS_DISPATCH_PERMISSION,
+  printFromLibrarySchema,
+  processSettingsCatalog,
+  resolveProcessConfigRequestSchema,
+  SETTINGS_MANAGE_PERMISSION,
+  uploadSlicingProfileSchema,
+  type CreateSlicingJob,
+  type ProcessConfig,
+  type ResolveProcessConfigResponse,
+  type SlicingCapabilities
+} from '@printstream/shared'
+import { annotateRequestAuditLog } from '../lib/audit-logs.js'
+import { persistHistoryThumbnailFromLibrary } from '../lib/job-history-thumbnail-source.js'
+import { readPrintJobThumbnail } from '../lib/print-job-thumbnails.js'
+import { badRequest, notFound } from '../lib/http-error.js'
+import { prisma } from '../lib/prisma.js'
+import { requireRequestPermission } from '../lib/authorization.js'
+import { requireRequestTenantId, requireRouteParam } from '../lib/request-helpers.js'
+import { env } from '../lib/env.js'
+import { slicerClient } from '../lib/slicer-client.js'
+import { slicingJobs } from '../lib/slicing-jobs.js'
+import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
+import { readEntry } from '../lib/three-mf.js'
+import { enqueueLibraryPrint } from '../lib/library-printing.js'
+import { discardHiddenSlicedOutput, unhideSlicedOutput } from '../lib/library-files.js'
+import { broadcastLibraryChanged, broadcastPrintDispatchChanged, broadcastSlicingChanged } from '../lib/ws-resource-events.js'
+import { createCustomSlicingProfiles, deleteCustomSlicingProfile, listCustomSlicingProfiles, resolveSlicingProfileFiles } from '../lib/slicing-profiles.js'
+
+export const slicingRouter = Router()
+
+slicingRouter.get('/capabilities', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (_request, response) => {
+  const capabilities = await slicerClient.capabilities()
+  response.json({
+    configured: capabilities.configured,
+    healthy: capabilities.healthy,
+    slicerName: capabilities.slicerName,
+    defaultTargetId: capabilities.defaultTargetId,
+    targets: capabilities.targets,
+    maxConcurrentJobs: env.SLICING_MAX_CONCURRENT_JOBS,
+    maxQueuedJobs: env.SLICING_MAX_QUEUED_JOBS,
+    targetModes: ['realPrinter', 'manualProfile']
+  } satisfies SlicingCapabilities)
+})
+
+slicingRouter.get('/jobs', requireRequestPermission(JOBS_VIEW_PERMISSION), (request, response) => {
+  response.json({ jobs: slicingJobs.list(requireRequestTenantId(request)) })
+})
+
+slicingRouter.get('/jobs/:id/thumbnail', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const jobId = requireRouteParam(request.params.id, 'Slicing job id')
+  const thumbnail = slicingJobs.getThumbnailInfo(tenantId, jobId)
+
+  if (thumbnail.thumbnailPath) {
+    const png = await readPrintJobThumbnail(thumbnail.thumbnailPath)
+    if (png) {
+      response.setHeader('Content-Type', 'image/png')
+      response.setHeader('Cache-Control', 'private, max-age=300')
+      response.send(png)
+      return
+    }
+  }
+
+  const storedPath = await persistHistoryThumbnailFromLibrary({
+    jobId,
+    preferredFileIds: [thumbnail.outputFileId, thumbnail.sourceFileId],
+    plate: thumbnail.plate
+  })
+  if (!storedPath) throw notFound('Thumbnail missing')
+
+  slicingJobs.setThumbnailPath(tenantId, jobId, storedPath)
+  const png = await readPrintJobThumbnail(storedPath)
+  if (!png) throw notFound('Thumbnail missing')
+  response.setHeader('Content-Type', 'image/png')
+  response.setHeader('Cache-Control', 'private, max-age=300')
+  response.send(png)
+})
+
+slicingRouter.get('/profiles', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const builtinProfiles = await slicerClient.profiles(targetId)
+  const customProfiles = await listCustomSlicingProfiles(tenantId, builtinProfiles)
+  response.json({ profiles: [...customProfiles, ...builtinProfiles] })
+})
+
+slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const parsed = resolveProcessConfigRequestSchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid resolve request')
+  const tenantId = requireRequestTenantId(request)
+  if (parsed.data.processProfileId.startsWith(PROJECT_PROFILE_ID_PREFIX)) {
+    const project = await resolveProjectProcessConfig(parsed.data.sourceFileId ?? null)
+    // Baseline = the resolved parent profile (reset target + diff source). When it resolves, the
+    // value-diff against it yields only the project's own overrides. When it doesn't (parent not
+    // installed here), fall back to the effective config + the 3MF's changed-from-system keys.
+    const baseline = await resolveBaselineProcessConfig(tenantId, parsed.data.targetId ?? null, project.presetName)
+    const responseBody: ResolveProcessConfigResponse = baseline
+      ? { config: project.config, baseConfig: baseline, overriddenKeys: [] }
+      : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys }
+    response.json(responseBody)
+    return
+  }
+  const [profileFile] = await resolveSlicingProfileFiles(tenantId, [{ id: parsed.data.processProfileId, kind: 'process' }])
+  if (!profileFile) throw notFound('Process profile not found')
+  const config = await slicerClient.resolveProcessConfig(parsed.data.targetId ?? null, {
+    source: profileFile.source,
+    name: profileFile.name,
+    content: profileFile.content
+  })
+  if (!config) throw notFound('Process profile could not be resolved')
+  // An installed/builtin preset has no baked overrides: both baselines are the resolved preset.
+  const responseBody: ResolveProcessConfigResponse = { config, baseConfig: config, overriddenKeys: [] }
+  response.json(responseBody)
+})
+
+slicingRouter.post('/profiles', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+  const parsed = uploadSlicingProfileSchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid slicing profile payload')
+  const tenantId = requireRequestTenantId(request)
+  const { profiles, replaced, conflicts } = await createCustomSlicingProfiles(tenantId, parsed.data)
+  if (conflicts.length > 0) {
+    // 409: the upload was not stored; the client can re-send with `overwrite: true` after confirming.
+    response.status(409).json({ error: `Replacing existing preset${conflicts.length > 1 ? 's' : ''}: ${conflicts.join(', ')}`, conflicts })
+    return
+  }
+  const profile = profiles[0]
+  if (!profile) throw badRequest('Uploaded profile file did not contain any slicing presets')
+  annotateRequestAuditLog(request, {
+    action: 'create-slicing-profile',
+    resource: 'slicing profile',
+    summary: profiles.length === 1 ? `Uploaded slicing profile ${profile.name}.` : `Uploaded ${profiles.length} slicing profiles.`,
+    metadata: { profileCount: profiles.length, profileId: profile.id, profileName: profile.name, profileKind: profile.kind, replacedCount: replaced.length }
+  })
+  broadcastSlicingChanged(tenantId)
+  response.status(201).json({ profile, replaced })
+})
+
+slicingRouter.delete('/profiles/:id', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const profileId = requireRouteParam(request.params.id, 'Slicing profile id')
+  await deleteCustomSlicingProfile(tenantId, profileId)
+  annotateRequestAuditLog(request, {
+    action: 'delete-slicing-profile',
+    resource: 'slicing profile',
+    summary: 'Deleted a slicing profile.',
+    metadata: { profileId }
+  })
+  broadcastSlicingChanged(tenantId)
+  response.status(204).end()
+})
+
+slicingRouter.get('/jobs/:id', requireRequestPermission(JOBS_VIEW_PERMISSION), (request, response) => {
+  response.json({ job: slicingJobs.get(requireRequestTenantId(request), requireRouteParam(request.params.id, 'Slicing job id')) })
+})
+
+slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
+  const parsed = createSlicingJobSchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid slicing payload')
+
+  const tenantId = requireRequestTenantId(request)
+  const sourceFile = await prisma.libraryFile.findUnique({
+    where: { id: parsed.data.sourceFileId },
+    select: { id: true, name: true, kind: true, ownerBridgeId: true, storedPath: true }
+  })
+  if (!sourceFile) throw notFound('Source file not found')
+
+  // Slicing an archived version reads that version's bytes while the job
+  // stays attributed to the parent file (outputs land beside it as usual).
+  let sourceEntry: { name: string; ownerBridgeId: string | null; storedPath: string } = sourceFile
+  if (parsed.data.sourceVersionId) {
+    const version = await prisma.libraryFileVersion.findUnique({
+      where: { id: parsed.data.sourceVersionId },
+      select: { libraryFileId: true, name: true, ownerBridgeId: true, storedPath: true }
+    })
+    if (!version || version.libraryFileId !== sourceFile.id) throw notFound('Source version not found')
+    sourceEntry = version
+  }
+  if (isDirectPrintableFileName(sourceEntry.name) || !sourceEntry.name.toLowerCase().endsWith('.3mf')) {
+    throw badRequest('Only unsliced .3mf files can be sliced')
+  }
+
+  if (parsed.data.target.mode === 'realPrinter') {
+    const printer = await prisma.printer.findUnique({
+      where: { id: parsed.data.target.printerId },
+      select: { id: true }
+    })
+    if (!printer) throw notFound('Target printer not found')
+  }
+
+  const profileFiles = await resolveSlicingProfileFiles(tenantId, collectRequestedProfileIds(parsed.data))
+
+  const job = slicingJobs.enqueue({
+    tenantId,
+    tenant: request.tenant ?? { id: tenantId, slug: tenantId, name: tenantId },
+    sourceFileId: sourceFile.id,
+    sourceFileName: sourceEntry.name,
+    sourcePath: await resolveLibraryFileToLocalPath(sourceEntry),
+    targetBridgeId: sourceEntry.ownerBridgeId,
+    request: parsed.data,
+    profileFiles
+  })
+  annotateRequestAuditLog(request, {
+    action: 'slice',
+    resource: 'library file',
+    summary: `Queued slicing for ${sourceEntry.name}.`,
+    metadata: {
+      slicingJobId: job.id,
+      fileId: sourceFile.id,
+      fileName: sourceEntry.name,
+      sourceVersionId: parsed.data.sourceVersionId ?? null,
+      slicerTargetId: parsed.data.slicerTargetId ?? null,
+      targetMode: parsed.data.target.mode,
+      printerId: parsed.data.target.mode === 'realPrinter' ? parsed.data.target.printerId : null,
+      plate: parsed.data.plate
+    }
+  })
+  response.status(202).json({ job })
+})
+
+function collectRequestedProfileIds(input: CreateSlicingJob): Array<{ id: string | null | undefined; kind: 'machine' | 'process' | 'filament' }> {
+  return [
+    { id: input.target.printerProfileId, kind: 'machine' },
+    { id: input.target.processProfileId, kind: 'process' },
+    ...(input.target.filamentMappings ?? []).map((mapping) => ({ id: mapping.profileId, kind: 'filament' as const }))
+  ]
+}
+
+/** Profile id prefix for presets embedded in a project 3MF rather than installed. */
+const PROJECT_PROFILE_ID_PREFIX = 'project:'
+const PROJECT_SETTINGS_ENTRY_PATH = 'Metadata/project_settings.config'
+
+interface ProjectProcessConfig {
+  /** Effective, already-merged process config embedded in the 3MF. */
+  config: ProcessConfig
+  /** The project's process preset name (`print_settings_id`), used to resolve the baseline. */
+  presetName: string | null
+  /** Process keys the 3MF records as changed from system (`different_settings_to_system[0]`). */
+  overriddenKeys: string[]
+}
+
+/**
+ * Resolves the editor base config for a project-embedded process profile by
+ * reading the source 3MF's flattened `project_settings.config`. Unlike installed
+ * presets, the project config is already fully merged, so it needs no slicer
+ * round-trip; we keep only keys the process catalog knows about. Also surfaces the
+ * preset name and the keys Bambu marks as changed-from-system so the editor can show
+ * the baked overrides as modified/resettable.
+ */
+async function resolveProjectProcessConfig(sourceFileId: string | null): Promise<ProjectProcessConfig> {
+  if (!sourceFileId) throw badRequest('Source file is required to resolve a project process profile')
+  const sourceFile = await prisma.libraryFile.findUnique({
+    where: { id: sourceFileId },
+    select: { id: true, name: true, ownerBridgeId: true, storedPath: true }
+  })
+  if (!sourceFile) throw notFound('Source file not found')
+  const localPath = await resolveLibraryFileToLocalPath(sourceFile)
+  let buffer: Buffer
+  try {
+    buffer = await readEntry(localPath, PROJECT_SETTINGS_ENTRY_PATH)
+  } catch {
+    throw notFound('Process profile could not be resolved')
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(buffer.toString('utf8'))
+  } catch {
+    throw notFound('Process profile could not be resolved')
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw notFound('Process profile could not be resolved')
+  }
+  const record = raw as Record<string, unknown>
+  const config: ProcessConfig = {}
+  for (const key of Object.keys(processSettingsCatalog.options)) {
+    const value = record[key]
+    if (typeof value === 'string') {
+      config[key] = value
+    } else if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) {
+      config[key] = value as string[]
+    }
+  }
+  return {
+    config,
+    presetName: typeof record.print_settings_id === 'string' && record.print_settings_id.trim() ? record.print_settings_id.trim() : null,
+    overriddenKeys: extractProcessOverriddenKeys(record.different_settings_to_system)
+  }
+}
+
+/**
+ * Parses the process slot (index 0) of Bambu's `different_settings_to_system` — a `;`-separated
+ * list of keys changed from the system preset — keeping only keys known to the process catalog.
+ */
+function extractProcessOverriddenKeys(value: unknown): string[] {
+  const first = Array.isArray(value) ? value[0] : value
+  if (typeof first !== 'string') return []
+  return first
+    .split(';')
+    .map((key) => key.trim())
+    .filter((key) => key.length > 0 && processSettingsCatalog.options[key] !== undefined)
+}
+
+/**
+ * Resolves the baseline a project's process config should be diffed/reset against: the **named
+ * parent profile** (`print_settings_id`) as it exists in this workspace's slicer profiles (custom
+ * preferred over builtin, mirroring the profile list). Returns its fully-resolved config, or null
+ * when that profile is not installed here — in which case the editor falls back to the 3MF's
+ * `different_settings_to_system` signal (which is relative to the system preset, not the parent).
+ *
+ * Resolving the exact parent (e.g. "0.20mm Standard @BBL H2D - Ryan") is what lets the editor show
+ * only the project's own overrides, instead of also flagging the parent profile's customizations.
+ */
+async function resolveBaselineProcessConfig(tenantId: string, targetId: string | null, presetName: string | null): Promise<ProcessConfig | null> {
+  if (!presetName) return null
+  const builtinProfiles = await slicerClient.profiles(targetId)
+  const customProfiles = await listCustomSlicingProfiles(tenantId, builtinProfiles)
+  const match = [...customProfiles, ...builtinProfiles].find(
+    (profile) => profile.kind === 'process' && profile.name === presetName
+  )
+  if (!match) return null
+  const [file] = await resolveSlicingProfileFiles(tenantId, [{ id: match.id, kind: 'process' }])
+  if (!file) return null
+  return await slicerClient.resolveProcessConfig(targetId, { source: file.source, name: file.name, content: file.content })
+}
+
+slicingRouter.post('/jobs/:id/cancel', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), (request, response) => {
+  const job = slicingJobs.cancel(requireRequestTenantId(request), requireRouteParam(request.params.id, 'Slicing job id'))
+  annotateRequestAuditLog(request, {
+    action: 'cancel-slicing',
+    resource: 'slicing job',
+    summary: `Cancelled slicing for ${job.sourceFileName}.`,
+    metadata: {
+      slicingJobId: job.id,
+      fileId: job.sourceFileId,
+      fileName: job.sourceFileName
+    }
+  })
+  response.json({ job })
+})
+
+slicingRouter.delete('/jobs/:id', requireRequestPermission(JOBS_DELETE_PERMISSION), async (request, response) => {
+  const job = await slicingJobs.delete(requireRequestTenantId(request), requireRouteParam(request.params.id, 'Slicing job id'))
+  annotateRequestAuditLog(request, {
+    action: 'delete-slicing-job',
+    resource: 'slicing job',
+    summary: `Deleted slicing history for ${job.outputFileName ?? job.sourceFileName}.`,
+    metadata: {
+      slicingJobId: job.id,
+      fileId: job.sourceFileId,
+      fileName: job.outputFileName ?? job.sourceFileName,
+      status: job.status
+    }
+  })
+  response.status(204).end()
+})
+
+slicingRouter.post('/jobs/:id/print', requireRequestPermission(PRINTS_DISPATCH_PERMISSION), async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const parsed = printFromLibrarySchema.omit({ fileId: true }).safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid print payload')
+  const slicingJob = slicingJobs.get(tenantId, requireRouteParam(request.params.id, 'Slicing job id'))
+  if (slicingJob.status !== 'ready' || !slicingJob.outputFileId) {
+    throw badRequest('Slicing job is not ready to print')
+  }
+  const dispatchJob = await enqueueLibraryPrint({
+    fileId: slicingJob.outputFileId,
+    ...parsed.data
+  }, tenantId)
+  annotateRequestAuditLog(request, {
+    action: 'start-print',
+    resource: 'print job',
+    summary: `Queued print ${dispatchJob.jobName} on ${dispatchJob.printerName}.`,
+    metadata: {
+      slicingJobId: slicingJob.id,
+      jobId: dispatchJob.id,
+      printerId: dispatchJob.printerId,
+      printerName: dispatchJob.printerName,
+      fileId: dispatchJob.fileId,
+      fileName: dispatchJob.fileName,
+      plate: dispatchJob.plate
+    }
+  })
+  broadcastPrintDispatchChanged(tenantId)
+  response.status(202).json({ job: dispatchJob })
+})
+
+// Persist a "slice without saving" output into the library (un-hide the hidden gcode),
+// optionally moving it to a chosen folder and/or renaming it.
+const saveSlicedOutputSchema = z.object({
+  outputFolderId: z.string().trim().min(1).nullable().optional(),
+  outputFileName: z.string().trim().min(1).max(200).optional()
+})
+slicingRouter.post('/jobs/:id/save', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const slicingJob = slicingJobs.get(tenantId, requireRouteParam(request.params.id, 'Slicing job id'))
+  if (slicingJob.status !== 'ready' || !slicingJob.outputFileId) {
+    throw badRequest('Slicing job is not ready to save')
+  }
+  const parsed = saveSlicedOutputSchema.safeParse(request.body ?? {})
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid save request')
+  const file = await unhideSlicedOutput(slicingJob.outputFileId, {
+    // Only move when the client explicitly chose a destination (string folder or null
+    // root); omitting it leaves the output where the slice placed it.
+    ...(parsed.data.outputFolderId !== undefined ? { folderId: parsed.data.outputFolderId } : {}),
+    name: parsed.data.outputFileName
+  })
+  // Saving over an existing file folds the output into that row; repoint the
+  // job so "Print" after saving dispatches the surviving file.
+  slicingJobs.setOutputFile(tenantId, slicingJob.id, file)
+  annotateRequestAuditLog(request, {
+    action: 'save-sliced-output',
+    resource: 'library file',
+    summary: file.replacedExisting
+      ? `Saved sliced file ${file.name} to the library, replacing the existing file.`
+      : `Saved sliced file ${file.name} to the library.`,
+    metadata: { slicingJobId: slicingJob.id, fileId: file.id, fileName: file.name, replacedExisting: file.replacedExisting }
+  })
+  broadcastLibraryChanged(tenantId)
+  response.status(200).json({ file })
+})
+
+// Discard a "slice without saving" output the user didn't keep (closed the results
+// without saving or printing). Removes the still-hidden gcode and the slice job record.
+slicingRouter.post('/jobs/:id/discard', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const slicingJob = slicingJobs.get(tenantId, requireRouteParam(request.params.id, 'Slicing job id'))
+  const discarded = slicingJob.outputFileId ? await discardHiddenSlicedOutput(slicingJob.outputFileId) : false
+  // Drop the now-empty job record too; ignore if it is still slicing (cancel handles that).
+  await slicingJobs.delete(tenantId, slicingJob.id).catch(() => undefined)
+  if (discarded) broadcastLibraryChanged(tenantId)
+  // Destructive (POST verb): the unsaved sliced output and the job record are removed.
+  annotateRequestAuditLog(request, {
+    action: 'discard-sliced-output',
+    resource: 'slicing job',
+    summary: `Discarded the unsaved sliced output for ${slicingJob.sourceFileName}.`,
+    metadata: {
+      slicingJobId: slicingJob.id,
+      fileId: slicingJob.sourceFileId,
+      fileName: slicingJob.sourceFileName,
+      discardedOutput: discarded
+    }
+  })
+  response.status(204).end()
+})

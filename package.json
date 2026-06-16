@@ -1,0 +1,42 @@
+{
+  "name": "printstream",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/api && npm run build --workspace @printstream/bridge && npm run build --workspace @printstream/slicer && npm run build --workspace @printstream/web",
+    "capture:printer-media": "tsx scripts/dev/capture-live-printer-media.ts",
+    "db:generate": "npm run prisma:generate --workspace @printstream/api",
+    "db:migrate": "npm run prisma:migrate:dev --workspace @printstream/api --",
+    "db:migrate:deploy": "npm run prisma:migrate:deploy --workspace @printstream/api",
+    "db:reset-auth": "npm run db:reset-auth --workspace @printstream/api",
+    "db:wait": "node --env-file=.env scripts/dev/wait-for-db.mjs",
+    "dev": "npm run dev:db && npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && concurrently -n shared,api,bridge,web -c magenta,green,yellow,blue \"npm run dev --workspace @printstream/shared\" \"npm run dev --workspace @printstream/api\" \"npm run dev --workspace @printstream/bridge\" \"npm run dev --workspace @printstream/web\"",
+    "dev:db": "npm run db:wait && node scripts/bootstrap-prisma-migrations.mjs",
+    "export:web-icons": "node scripts/dev/export-web-icons.mjs",
+    "lint": "eslint .",
+    "notices": "node scripts/dev/generate-third-party-notices.mjs",
+    "test": "NODE_ENV=test node scripts/dev/run-tests.mjs",
+    "typecheck": "npm run typecheck --workspace @printstream/shared && npm run build --workspace @printstream/shared && npm run typecheck --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/bridge-runtime && npm run typecheck --workspace @printstream/api && npm run typecheck --workspace @printstream/bridge && npm run typecheck --workspace @printstream/slicer && npm run typecheck --workspace @printstream/web",
+    "validate": "npm run lint && npm run test && npm run typecheck && npm run prisma:validate --workspace @printstream/api"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.24.0",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.24.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^16.0.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.29.0"
+  },
+  "dependencies": {
+    "@types/multer": "^1.4.13",
+    "multer": "^2.1.1"
+  }
+}

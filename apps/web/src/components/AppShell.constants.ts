@@ -1,0 +1,1 @@
+export const appShellDesktopSecondaryNavHostId = 'app-shell-desktop-secondary-nav-host' as const
