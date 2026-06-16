@@ -180,7 +180,8 @@ proposed `packages/sea-runtime` — that both builds consume:
 
 The bridge code is already shaped for this seam (the spec was written generic on
 purpose). Doing the extraction up front keeps both builds in lockstep and avoids a
-mirror-maintenance burden like the 3MF parser duplication the repo already carries.
+mirror-maintenance burden like the 3MF index parser, which used to be hand-copied
+between the API and the bridge before it was unified into `@printstream/shared/three-mf`.
 Re-pointing the existing bridge at the extracted package — with no behavior change —
 is the test that the seam is clean.
 

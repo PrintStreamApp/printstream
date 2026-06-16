@@ -1,15 +1,19 @@
 /**
- * Module-level library upload queue with toast-based progress.
+ * Module-level library upload store with per-file progress, cancel, and retry.
  *
- * Lives outside the React tree so a file/folder upload keeps running — and
- * keeps reporting progress — when the user navigates away from the library
- * (only a full page reload aborts it). Items upload sequentially through the
- * rate-limit-paced chunked uploader; each file's destination is pinned at
- * enqueue time, so navigation never redirects an in-flight batch. Cache
- * refresh rides the server's `resource.changed` WS broadcast, so no
- * queryClient handle is needed here.
+ * Lives outside the React tree so a file/folder upload keeps running — and keeps
+ * reporting progress — when the user navigates away from the library (only a full
+ * page reload aborts it). Files upload sequentially through the rate-limit-paced
+ * chunked uploader; each file's destination is pinned at enqueue time, so
+ * navigation never redirects an in-flight batch. Cache refresh rides the server's
+ * `resource.changed` WS broadcast.
+ *
+ * The store is subscribable (see {@link subscribeLibraryUploads}) so a floating
+ * upload panel can render each file's status and offer cancel/retry. Identical
+ * re-uploads are reported as `unchanged` (the server skips creating a new
+ * version) with a toast.
  */
-import { uploadLibraryFileInChunks, type ChunkedLibraryUploadProgress } from './chunkedLibraryUpload'
+import { isUploadAbortError, uploadLibraryFileInChunks, type ChunkedLibraryUploadPhase, type ChunkedLibraryUploadProgress } from './chunkedLibraryUpload'
 import { formatUploadTreeItemPath, type LibraryUploadTreeItem } from './libraryUploadTree'
 import { toast } from './toast'
 
@@ -19,25 +23,67 @@ export interface LibraryUploadDestination {
   bridgeId: string | null
 }
 
-interface QueuedUpload {
-  item: LibraryUploadTreeItem
-  destination: LibraryUploadDestination
-  /** Returns an error message to fail the file locally (e.g. demo size cap), or null to upload. */
-  validateItem: ((item: LibraryUploadTreeItem) => string | null) | null
+export type LibraryUploadStatus = 'queued' | 'uploading' | 'done' | 'unchanged' | 'failed' | 'cancelled'
+
+/** Public, render-friendly view of one upload. */
+export interface LibraryUploadEntry {
+  id: string
+  name: string
+  status: LibraryUploadStatus
+  uploadedBytes: number
+  totalBytes: number
+  phase: ChunkedLibraryUploadPhase | null
+  error: string | null
 }
 
-const queue: QueuedUpload[] = []
+interface InternalEntry extends LibraryUploadEntry {
+  item: LibraryUploadTreeItem
+  destination: LibraryUploadDestination
+  validateItem: ((item: LibraryUploadTreeItem) => string | null) | null
+  abort: AbortController | null
+}
+
+const entries = new Map<string, InternalEntry>()
+const pending: string[] = []
 let draining = false
-let progressToastId: number | null = null
-// Set when the user dismisses the progress toast mid-run: stop re-showing
-// progress for the rest of the run (the final failure summary still appears).
-let progressSuppressed = false
-// Counters span the whole drain run: enqueueing more while uploads are running
-// extends the same progress toast instead of spawning a second one.
-let totalCount = 0
-let doneCount = 0
-let failureCount = 0
-let firstError: string | null = null
+let idCounter = 0
+
+const listeners = new Set<() => void>()
+let snapshot: LibraryUploadEntry[] = []
+
+function toPublic(entry: InternalEntry): LibraryUploadEntry {
+  return {
+    id: entry.id,
+    name: entry.name,
+    status: entry.status,
+    uploadedBytes: entry.uploadedBytes,
+    totalBytes: entry.totalBytes,
+    phase: entry.phase,
+    error: entry.error
+  }
+}
+
+function emitChange(): void {
+  snapshot = Array.from(entries.values(), toPublic)
+  for (const listener of listeners) {
+    try {
+      listener()
+    } catch {
+      // A faulty subscriber must never break the queue.
+    }
+  }
+}
+
+export function subscribeLibraryUploads(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+export function getLibraryUploadsSnapshot(): LibraryUploadEntry[] {
+  return snapshot
+}
 
 export function enqueueLibraryUploads(
   items: LibraryUploadTreeItem[],
@@ -46,111 +92,148 @@ export function enqueueLibraryUploads(
 ): void {
   if (items.length === 0) return
   for (const item of items) {
-    queue.push({ item, destination, validateItem: options?.validateItem ?? null })
+    const id = `upload-${Date.now().toString(36)}-${idCounter++}`
+    entries.set(id, {
+      id,
+      name: formatUploadTreeItemPath(item),
+      status: 'queued',
+      uploadedBytes: 0,
+      totalBytes: item.file.size,
+      phase: null,
+      error: null,
+      item,
+      destination,
+      validateItem: options?.validateItem ?? null,
+      abort: null
+    })
+    pending.push(id)
   }
-  totalCount += items.length
+  emitChange()
   if (!draining) void drain()
 }
 
 async function drain(): Promise<void> {
   draining = true
   try {
-    for (let next = queue.shift(); next; next = queue.shift()) {
-      const path = formatUploadTreeItemPath(next.item)
-      const localError = next.validateItem?.(next.item) ?? null
-      if (localError) {
-        recordFailure(path, localError)
-      } else {
-        updateProgressToast(path, { phase: 'uploading-to-server', uploadedBytes: 0, totalBytes: next.item.file.size })
-        try {
-          await uploadLibraryFileInChunks(next.item.file, {
-            folderId: next.destination.folderId,
-            bridgeId: next.destination.bridgeId,
-            relativeFolderPath: next.item.folderSegments,
-            onProgress: (progress) => updateProgressToast(path, progress)
-          })
-        } catch (error) {
-          recordFailure(path, error instanceof Error ? error.message : 'upload failed')
-        }
-      }
-      doneCount += 1
+    for (let id = pending.shift(); id; id = pending.shift()) {
+      const entry = entries.get(id)
+      if (!entry || entry.status !== 'queued') continue
+      await runUpload(entry)
     }
   } finally {
     draining = false
-    finishProgressToast()
   }
 }
 
-function recordFailure(path: string, message: string): void {
-  failureCount += 1
-  if (!firstError) firstError = `${path}: ${message}`
-}
+async function runUpload(entry: InternalEntry): Promise<void> {
+  const localError = entry.validateItem?.(entry.item) ?? null
+  if (localError) {
+    entry.status = 'failed'
+    entry.error = localError
+    emitChange()
+    return
+  }
 
-function updateProgressToast(path: string, progress: ChunkedLibraryUploadProgress): void {
-  if (progressSuppressed) return
-  const counter = totalCount > 1 ? `${doneCount + 1} of ${totalCount} — ` : ''
-  const detail = formatProgressDetail(progress)
-  const message = `Uploading ${counter}${path}${detail ? ` · ${detail}` : ''}`
-  const percent = Math.floor((progress.uploadedBytes / Math.max(progress.totalBytes, 1)) * 100)
-  if (progressToastId === null) {
-    const id = toast.loading({
-      message,
-      progress: percent,
-      onClose: (reason) => {
-        if (progressToastId === id) progressToastId = null
-        if (reason === 'dismiss' && draining) progressSuppressed = true
-      }
+  entry.status = 'uploading'
+  entry.phase = 'uploading-to-server'
+  entry.uploadedBytes = 0
+  entry.abort = new AbortController()
+  emitChange()
+
+  try {
+    const { unchanged } = await uploadLibraryFileInChunks(entry.item.file, {
+      folderId: entry.destination.folderId,
+      bridgeId: entry.destination.bridgeId,
+      relativeFolderPath: entry.item.folderSegments,
+      signal: entry.abort.signal,
+      onProgress: (progress) => updateProgress(entry, progress)
     })
-    progressToastId = id
-  } else {
-    toast.update(progressToastId, { message, progress: percent })
+    entry.status = unchanged ? 'unchanged' : 'done'
+    entry.uploadedBytes = entry.totalBytes
+    entry.phase = null
+    entry.abort = null
+    if (unchanged) {
+      toast.show({ message: `${entry.name} is unchanged — no new version created.`, tone: 'neutral', durationMs: 5000 })
+    }
+    emitChange()
+  } catch (error) {
+    entry.abort = null
+    entry.phase = null
+    // Cancellation always aborts the in-flight request, so an AbortError marks a
+    // user cancel; anything else is a genuine failure the user can retry.
+    if (isUploadAbortError(error)) {
+      entry.status = 'cancelled'
+    } else {
+      entry.status = 'failed'
+      entry.error = error instanceof Error ? error.message : 'upload failed'
+    }
+    emitChange()
   }
 }
 
-function formatProgressDetail(progress: ChunkedLibraryUploadProgress): string {
-  switch (progress.phase) {
-    case 'sending-to-bridge':
-      return 'sending to bridge'
-    case 'finalizing':
-      return 'finalizing'
-    case 'waiting-for-server':
-      return 'waiting for server (rate limited)'
-    case 'uploading-to-server':
-    default:
-      return ''
+function updateProgress(entry: InternalEntry, progress: ChunkedLibraryUploadProgress): void {
+  if (entry.status !== 'uploading') return
+  entry.uploadedBytes = progress.uploadedBytes
+  entry.totalBytes = progress.totalBytes
+  entry.phase = progress.phase
+  emitChange()
+}
+
+/** Cancel a queued or in-flight upload. */
+export function cancelLibraryUpload(id: string): void {
+  const entry = entries.get(id)
+  if (!entry) return
+  if (entry.status === 'uploading') {
+    entry.status = 'cancelled'
+    entry.abort?.abort()
+    emitChange()
+    return
+  }
+  if (entry.status === 'queued') {
+    entry.status = 'cancelled'
+    const index = pending.indexOf(id)
+    if (index >= 0) pending.splice(index, 1)
+    emitChange()
   }
 }
 
-function finishProgressToast(): void {
-  const summary = failureCount > 0
-    ? {
-        message: failureCount === 1 && totalCount === 1 && firstError
-          ? `Upload failed — ${firstError}`
-          : `${failureCount} of ${totalCount} uploads failed. First error — ${firstError ?? 'unknown error'}`,
-        tone: 'danger' as const,
-        loading: false,
-        progress: null,
-        // Failures stay until dismissed; the user may have left the library.
-        durationMs: 0
-      }
-    : {
-        message: totalCount === 1 ? 'Upload complete' : `Uploaded ${totalCount} files`,
-        tone: 'success' as const,
-        loading: false,
-        progress: null,
-        durationMs: 6000
-      }
-  if (progressToastId !== null) {
-    toast.update(progressToastId, summary)
-    progressToastId = null
-  } else if (failureCount > 0 || !progressSuppressed) {
-    // A user who dismissed the progress toast opted out of the happy-path
-    // chatter, but failures must still surface.
-    toast.show(summary)
+/** Re-queue a failed or cancelled upload. */
+export function retryLibraryUpload(id: string): void {
+  const entry = entries.get(id)
+  if (!entry || (entry.status !== 'failed' && entry.status !== 'cancelled')) return
+  entry.status = 'queued'
+  entry.error = null
+  entry.uploadedBytes = 0
+  entry.phase = null
+  pending.push(id)
+  emitChange()
+  if (!draining) void drain()
+}
+
+export function cancelAllLibraryUploads(): void {
+  for (const entry of entries.values()) {
+    if (entry.status === 'queued' || entry.status === 'uploading') cancelLibraryUpload(entry.id)
   }
-  progressSuppressed = false
-  totalCount = 0
-  doneCount = 0
-  failureCount = 0
-  firstError = null
+}
+
+export function retryFailedLibraryUploads(): void {
+  for (const entry of [...entries.values()]) {
+    if (entry.status === 'failed' || entry.status === 'cancelled') retryLibraryUpload(entry.id)
+  }
+}
+
+/** Remove a single finished (done/unchanged/failed/cancelled) entry from the list. */
+export function dismissLibraryUpload(id: string): void {
+  const entry = entries.get(id)
+  if (!entry || entry.status === 'queued' || entry.status === 'uploading') return
+  entries.delete(id)
+  emitChange()
+}
+
+/** Remove all finished entries, leaving active ones in place. */
+export function clearFinishedLibraryUploads(): void {
+  for (const entry of [...entries.values()]) {
+    if (entry.status !== 'queued' && entry.status !== 'uploading') entries.delete(entry.id)
+  }
+  emitChange()
 }

@@ -98,7 +98,7 @@ test('readBridgeLibraryThreeMfIndex exposes plate objects (by object_id) for uns
 
 test('readBridgeLibraryThreeMfIndex back-fills plate filaments from model-settings extruders for unsliced 3MFs', async () => {
   // Unsliced project: no slice_info filament metadata, so plate filaments must be derived from
-  // the model_settings object->extruder mapping (mirrors apps/api/src/lib/three-mf-reader.ts).
+  // the model_settings object->extruder mapping (via the shared @printstream/shared/three-mf parser).
   // Without this back-fill the library shows no filament chips for freshly uploaded projects.
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-bridge-unsliced-filaments-'))
   const sourcePath = path.join(tempDir, 'source.3mf')

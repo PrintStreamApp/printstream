@@ -4,6 +4,7 @@
  * added to the discriminated union so both ends stay aligned.
  */
 import { z } from 'zod'
+import { bridgeDebugCaptureStatusSchema } from './bridges.js'
 import { discoveredPrinterSchema, printerStatusSchema, printerSchema } from './printer.js'
 
 export const wsHelloEventSchema = z.object({
@@ -82,6 +83,18 @@ export const wsAuthChangedEventSchema = z.object({
 })
 export type WsAuthChangedEvent = z.infer<typeof wsAuthChangedEventSchema>
 
+/**
+ * Live debug-capture state for a bridge. Emitted when a capture starts, stops,
+ * or auto-stops so the global "capture active" banner and the settings controls
+ * update in real time without polling.
+ */
+export const wsBridgeDebugCaptureEventSchema = z.object({
+  type: z.literal('bridge.debug.capture'),
+  bridgeId: z.string(),
+  status: bridgeDebugCaptureStatusSchema
+})
+export type WsBridgeDebugCaptureEvent = z.infer<typeof wsBridgeDebugCaptureEventSchema>
+
 export const wsErrorEventSchema = z.object({
   type: z.literal('error'),
   message: z.string()
@@ -112,6 +125,7 @@ export const wsEventSchema = z.discriminatedUnion('type', [
   wsPrinterFtpActivityEventSchema,
   wsResourceChangedEventSchema,
   wsAuthChangedEventSchema,
+  wsBridgeDebugCaptureEventSchema,
   wsPluginEventSchema,
   wsErrorEventSchema
 ])

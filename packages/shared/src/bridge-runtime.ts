@@ -5,7 +5,12 @@
  * library file access, and 3MF inspection, and the release/update manifest.
  */
 import { z } from 'zod'
-import { bridgeSummarySchema, bridgeUpdateActionResponseSchema } from './bridges.js'
+import {
+  bridgeDebugCaptureStatusSchema,
+  bridgeSummarySchema,
+  bridgeUpdateActionResponseSchema
+} from './bridges.js'
+import { logLevelSchema } from './logs.js'
 import {
   discoveredPrinterSchema,
   printerConnectionValidationInputSchema,
@@ -145,6 +150,19 @@ export const bridgePrinterDiscoveredMessageSchema = z.object({
   printers: z.array(discoveredPrinterSchema)
 })
 
+/**
+ * Result of the bridge's periodic per-printer LAN connection probe, pushed
+ * unsolicited so the API can surface a "not in LAN/developer mode" warning on
+ * the printer card without the operator opening the edit dialog.
+ */
+export const bridgePrinterConnectionMessageSchema = z.object({
+  type: z.literal('bridge.printer.connection'),
+  printerId: z.string().min(1),
+  validation: printerConnectionValidationSchema
+})
+
+export type BridgePrinterConnectionMessage = z.infer<typeof bridgePrinterConnectionMessageSchema>
+
 export const bridgePrinterValidationParamsSchema = printerConnectionValidationInputSchema
 
 export type BridgePrinterValidationParams = z.infer<typeof bridgePrinterValidationParamsSchema>
@@ -164,6 +182,94 @@ export const bridgePingResultSchema = z.object({
 })
 
 export type BridgePingResult = z.infer<typeof bridgePingResultSchema>
+
+/**
+ * One captured bridge console line. The bridge logs to stdout/stderr, which the
+ * Docker runner exposes via `docker logs` but the standalone (native) build
+ * redirects to an on-disk file the operator can't easily reach. To make bridge
+ * diagnostics visible in the web app regardless of packaging, the bridge keeps a
+ * bounded in-memory ring buffer and serves it over the `system.logs` RPC.
+ */
+export const bridgeSystemLogEntrySchema = z.object({
+  timestamp: z.string().datetime(),
+  level: logLevelSchema,
+  message: z.string()
+})
+
+export type BridgeSystemLogEntry = z.infer<typeof bridgeSystemLogEntrySchema>
+
+export const bridgeSystemLogsParamsSchema = z.object({
+  limit: z.number().int().positive().max(1000).optional()
+})
+
+export type BridgeSystemLogsParams = z.infer<typeof bridgeSystemLogsParamsSchema>
+
+export const bridgeSystemLogsResultSchema = z.object({
+  entries: z.array(bridgeSystemLogEntrySchema)
+})
+
+export type BridgeSystemLogsResult = z.infer<typeof bridgeSystemLogsResultSchema>
+
+/**
+ * One recorded frame of bridge↔printer transport during a debug capture. The
+ * bridge taps every MQTT send/receive, FTPS activity toggle, camera lifecycle
+ * event, connection transition, and its own console log, tags each with a
+ * monotonic `seq` + timestamp, and buffers them for download. `payload` carries
+ * the parsed MQTT JSON or event detail; it never includes the LAN access code or
+ * other connection secrets (see the capture redaction rules on the bridge).
+ */
+export const bridgeDebugCaptureFrameSchema = z.object({
+  seq: z.number().int().nonnegative(),
+  at: z.string().datetime(),
+  kind: z.enum(['mqtt', 'ftps', 'camera', 'log', 'connection']),
+  direction: z.enum(['rx', 'tx']).optional(),
+  printerId: z.string().optional(),
+  printerName: z.string().optional(),
+  topic: z.string().optional(),
+  summary: z.string().optional(),
+  payload: z.unknown().optional()
+})
+
+export type BridgeDebugCaptureFrame = z.infer<typeof bridgeDebugCaptureFrameSchema>
+
+export const bridgeDebugCaptureStartParamsSchema = z.object({
+  maxDurationMs: z.number().int().positive().optional(),
+  maxFrames: z.number().int().positive().optional(),
+  maxBytes: z.number().int().positive().optional()
+})
+
+export type BridgeDebugCaptureStartParams = z.infer<typeof bridgeDebugCaptureStartParamsSchema>
+
+export const bridgeDebugCaptureStopParamsSchema = z.object({})
+
+export type BridgeDebugCaptureStopParams = z.infer<typeof bridgeDebugCaptureStopParamsSchema>
+
+export const bridgeDebugCaptureReadParamsSchema = z.object({})
+
+export type BridgeDebugCaptureReadParams = z.infer<typeof bridgeDebugCaptureReadParamsSchema>
+
+/** Result of start/stop/status RPCs: the bridge's current capture status. */
+export const bridgeDebugCaptureStatusResultSchema = bridgeDebugCaptureStatusSchema
+
+export type BridgeDebugCaptureStatusResult = z.infer<typeof bridgeDebugCaptureStatusResultSchema>
+
+export const bridgeDebugCaptureReadResultSchema = z.object({
+  startedAt: z.string().datetime().nullable(),
+  stoppedAt: z.string().datetime().nullable(),
+  frames: z.array(bridgeDebugCaptureFrameSchema),
+  droppedFrames: z.number().int().nonnegative(),
+  truncated: z.boolean()
+})
+
+export type BridgeDebugCaptureReadResult = z.infer<typeof bridgeDebugCaptureReadResultSchema>
+
+/** Pushed bridge→API whenever capture starts, stops, or auto-stops. */
+export const bridgeDebugCaptureStatusMessageSchema = z.object({
+  type: z.literal('bridge.debug.capture.status'),
+  status: bridgeDebugCaptureStatusSchema
+})
+
+export type BridgeDebugCaptureStatusMessage = z.infer<typeof bridgeDebugCaptureStatusMessageSchema>
 
 export const bridgeReleaseBinarySchema = z.object({
   url: z.string().url(),
@@ -596,7 +702,9 @@ export const bridgeRuntimeInboundMessageSchema = z.discriminatedUnion('type', [
   bridgePrinterReportMessageSchema,
   bridgePrinterDiscoveredMessageSchema,
   bridgePrinterOfflineMessageSchema,
-  bridgePrinterRemovedMessageSchema
+  bridgePrinterRemovedMessageSchema,
+  bridgeDebugCaptureStatusMessageSchema,
+  bridgePrinterConnectionMessageSchema
 ])
 
 export type BridgeRuntimeInboundMessage = z.infer<typeof bridgeRuntimeInboundMessageSchema>

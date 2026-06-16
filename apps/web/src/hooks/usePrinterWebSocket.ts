@@ -6,7 +6,7 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { wsEventSchema, type DiscoveredPrinter, type PrinterStatus } from '@printstream/shared'
-import { invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
+import { applyBridgeDebugCaptureStatus, invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
 import { clearPrinterFtpActivity, markPrinterFtpActivity } from './usePrinterFtpActivity'
 import { markSnapshotUpdated } from './useSnapshotInterest'
 import { invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
@@ -105,6 +105,9 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           void queryClient.invalidateQueries({ queryKey: ['orders'] })
           void queryClient.invalidateQueries({ queryKey: ['orders', 'templates'] })
         }
+      }
+      if (event.type === 'bridge.debug.capture') {
+        applyBridgeDebugCaptureStatus(queryClient, event.bridgeId, event.status)
       }
       if (event.type === 'auth.changed') {
         clearPrinterFtpActivity()

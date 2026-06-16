@@ -14,6 +14,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./three-mf": {
+      "types": "./dist/three-mf/index.d.ts",
+      "default": "./dist/three-mf/index.js"
     }
   },
   "scripts": {

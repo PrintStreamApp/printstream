@@ -215,6 +215,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
     persistArtifact: async (input) => {
       persistedInputs.push({ hidden: input.hidden, folderId: input.folderId, fileName: input.fileName })
       return {
+        file: {
         id: 'hidden-output-file',
         tenantId: input.tenantId,
         ownerBridgeId: input.bridgeId,
@@ -228,6 +229,8 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
         thumbnailPath: null,
         currentVersionNumber: 1,
         snapshotKey: null
+        },
+        unchanged: false
       } as Awaited<ReturnType<PersistSlicedArtifact>>
     }
   })
@@ -278,6 +281,7 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
     progressPollIntervalMs: 10,
     progressHeartbeatIntervalMs: 10_000,
     persistArtifact: async (input) => ({
+      file: {
       id: 'output-file-1',
       tenantId: input.tenantId,
       ownerBridgeId: input.bridgeId,
@@ -291,6 +295,8 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
       thumbnailPath: null,
       currentVersionNumber: 1,
       snapshotKey: null
+      },
+      unchanged: false
     }) as Awaited<ReturnType<PersistSlicedArtifact>>,
     persistThumbnail: async (input) => {
       persistedThumbnailCalls.push(input)

@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
+import { inactiveBridgeDebugCaptureStatus } from '@printstream/shared'
 import { bridgeRuntimeRouter } from './bridge-runtime.js'
 import { HttpError } from '../lib/http-error.js'
 import { env } from '../lib/env.js'
@@ -239,7 +240,8 @@ test('bridge runtime register refreshes an existing bridge when credentials matc
           activeCameraWatchCount: 0,
           activePrinterFtpCount: 0
         },
-        update: currentBridgeUpdate
+        update: currentBridgeUpdate,
+        debugCapture: inactiveBridgeDebugCaptureStatus
       },
       runtimeToken,
       connectPath: '/api/bridge-runtime/connect',
@@ -325,7 +327,8 @@ test('bridge runtime register preserves a connected bridge name on reconnect', a
           activeCameraWatchCount: 0,
           activePrinterFtpCount: 0
         },
-        update: currentBridgeUpdate
+        update: currentBridgeUpdate,
+        debugCapture: inactiveBridgeDebugCaptureStatus
       },
       runtimeToken,
       connectPath: '/api/bridge-runtime/connect',

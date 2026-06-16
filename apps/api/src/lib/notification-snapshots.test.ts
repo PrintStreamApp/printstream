@@ -330,6 +330,7 @@ function makeStatus(overrides: Partial<PrinterStatus>): PrinterStatus {
     externalSpools: [],
     firmwareVersion: null,
     sdCardPresent: true,
+    connectionWarnings: [],
     observedAt: new Date().toISOString(),
     ...overrides,
     taskId: overrides.taskId ?? null

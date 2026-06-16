@@ -14,6 +14,7 @@ import {
   createAbortError,
   type BridgeLibraryThreeMfIndex
 } from '@printstream/shared'
+import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import { bridgeUnavailableMessage } from './managed-bridge.js'
 import { libraryDir, locateLibraryFile } from './library-paths.js'
@@ -25,12 +26,11 @@ const bridgeLibraryDerivedCacheDir = path.join(libraryDir, '_bridge-derived-cach
 const BRIDGE_LIBRARY_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024
 const BRIDGE_LIBRARY_DERIVED_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /**
- * Version for the on-disk derived 3MF index cache. Bump whenever the index shape or the parser
- * that produces it changes (e.g. new per-plate fields like `objects`) so stale entries from older
- * parsers are ignored instead of served. Keep in step with the parser cache version in
- * apps/bridge/src/library-3mf.ts and apps/api/src/lib/three-mf.ts.
+ * Version for the on-disk derived 3MF index cache. Derived from the shared parser version
+ * ({@link THREE_MF_INDEX_PARSER_VERSION}) so the index shape and the cache invalidate together —
+ * bumping the shared parser version drops stale derived entries automatically.
  */
-const BRIDGE_LIBRARY_DERIVED_CACHE_VERSION = 8
+const BRIDGE_LIBRARY_DERIVED_CACHE_VERSION = THREE_MF_INDEX_PARSER_VERSION
 
 type CachedBridgeThreeMfIndex = {
   mtimeMs: number

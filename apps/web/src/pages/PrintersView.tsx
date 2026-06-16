@@ -8,6 +8,7 @@ import {
 } from '@mui/joy'
 import AddIcon from '@mui/icons-material/Add'
 import DragIndicatorRoundedIcon from '@mui/icons-material/DragIndicatorRounded'
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded'
@@ -3432,6 +3433,23 @@ function PrinterCard({
               printerSerial={printer.serial}
             />
           )}
+          {status?.connectionWarnings && status.connectionWarnings.length > 0 && (
+            <Tooltip
+              variant="soft"
+              size="sm"
+              title={status.connectionWarnings.map((warning) => warning.message).join(' ')}
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                startDecorator={<WarningAmberRoundedIcon />}
+                sx={{ flexShrink: 0 }}
+              >
+                LAN mode
+              </Chip>
+            </Tooltip>
+          )}
           <PluginSlot name="printer.card.headerChips" context={{ printerId: printer.id, printerName: printer.name }} />
           <Dropdown>
             <MenuButton
@@ -6794,21 +6812,26 @@ function AmsSlotEditModal({
 
   const send = useMutation({
     mutationFn: async () => {
-      const trayColor = color.replace('#', '').padEnd(8, 'F').slice(0, 8).toUpperCase()
-      const { tempMin, tempMax } = tempsForCurrentType()
-      await apiFetch(`/api/printers/${printerId}/command`, {
-        method: 'POST',
-        body: {
-          type: 'setAmsSlot',
-          amsId: unit.unitId,
-          slotId: slot.slot,
-          trayInfoIdx,
-          trayColor,
-          trayType: type,
-          nozzleTempMin: tempMin,
-          nozzleTempMax: tempMax
-        }
-      })
+      // A Bambu RFID spool reports its own filament/color/temps, so the slot
+      // fields are read-only — only the pressure advance selection is editable.
+      // Skip setAmsSlot in that case so we never overwrite the detected spool.
+      if (!isBambuSpool) {
+        const trayColor = color.replace('#', '').padEnd(8, 'F').slice(0, 8).toUpperCase()
+        const { tempMin, tempMax } = tempsForCurrentType()
+        await apiFetch(`/api/printers/${printerId}/command`, {
+          method: 'POST',
+          body: {
+            type: 'setAmsSlot',
+            amsId: unit.unitId,
+            slotId: slot.slot,
+            trayInfoIdx,
+            trayColor,
+            trayType: type,
+            nozzleTempMin: tempMin,
+            nozzleTempMax: tempMax
+          }
+        })
+      }
       let profileToApply = selectedPaProfile
       if (canManagePressureAdvanceProfiles) {
         if (paEditorMode !== 'idle') {
@@ -6942,7 +6965,10 @@ function AmsSlotEditModal({
   const pressureAdvanceProfilesQueryKey = ['printer-pressure-advance-profiles', printerId, unit.unitId, slot.slot, trayInfoIdx] as const
   const pressureAdvanceProfilesQuery = useQuery({
     queryKey: pressureAdvanceProfilesQueryKey,
-    enabled: !isBambuSpool && trayInfoIdx !== '',
+    // Pressure advance (flow dynamics / K-value) calibration applies to Bambu
+    // RFID spools too, not just custom filament — the only requirement is a
+    // known filament id to scope the profiles to.
+    enabled: trayInfoIdx !== '',
     queryFn: fetchPressureAdvanceProfiles
   })
   const pressureAdvanceProfiles: PrinterPressureAdvanceProfile[] = pressureAdvanceProfilesQuery.data?.profiles ?? []
@@ -7243,11 +7269,10 @@ function AmsSlotEditModal({
             </DialogSection>
           )}
 
-          {!isBambuSpool && (
-            <DialogSection
-              title="Pressure advance"
-              description="Default uses the printer's built-in behavior. Profiles are tied to the selected filament preset and keep their own custom names."
-            >
+          <DialogSection
+            title="Pressure advance"
+            description="Default uses the printer's built-in behavior. Profiles are tied to the selected filament preset and keep their own custom names."
+          >
               <Stack spacing={1.25}>
                 <Typography level="body-xs" textColor="text.tertiary">
                   Preset: {trayInfoIdx !== '' ? (selectedPresetOption?.label ?? 'Selected preset') : 'Select a filament preset first'}
@@ -7362,7 +7387,6 @@ function AmsSlotEditModal({
                 )}
               </Stack>
             </DialogSection>
-          )}
 
           <DialogSection
             title="Filament actions"
@@ -7470,16 +7494,14 @@ function AmsSlotEditModal({
               <Button variant="plain" onClick={onClose}>
                 {isBambuSpool ? 'Close' : 'Cancel'}
               </Button>
-              {!isBambuSpool && (
-                <Button
-                  loading={send.isPending}
-                  disabled={deletePressureAdvanceProfile.isPending || (paEditorMode !== 'idle' && !isPressureAdvanceDraftValid) || (canManagePressureAdvanceProfiles && !selectedPaProfileExists && paEditorMode === 'idle')}
-                  startDecorator={<SaveRoundedIcon />}
-                  onClick={() => send.mutate()}
-                >
-                  Save
-                </Button>
-              )}
+              <Button
+                loading={send.isPending}
+                disabled={deletePressureAdvanceProfile.isPending || (paEditorMode !== 'idle' && !isPressureAdvanceDraftValid) || (canManagePressureAdvanceProfiles && !selectedPaProfileExists && paEditorMode === 'idle')}
+                startDecorator={<SaveRoundedIcon />}
+                onClick={() => send.mutate()}
+              >
+                {isBambuSpool ? 'Save profile' : 'Save'}
+              </Button>
             </Stack>
           </Stack>
         </Stack>
@@ -7973,6 +7995,15 @@ function PrinterFormModal({
   const title = mode === 'add' ? 'Add printer' : 'Edit printer'
   const submitLabel = mode === 'add' ? 'Add' : 'Save'
   const connectionValidationFeedback = buildPrinterConnectionValidationFeedback(connectionValidation)
+  const canTestConnection = Boolean(host.trim() && serial.trim() && accessCode.trim() && bridgeId) && bridges.length > 0
+  const runConnectionTest = () => {
+    setConnectionValidationError(null)
+    setConnectionValidation(null)
+    validateConnection.mutate(
+      { host: host.trim(), serial: serial.trim().toUpperCase(), accessCode: accessCode.trim(), bridgeId },
+      { onSuccess: (result) => setConnectionValidation(result) }
+    )
+  }
   const submitPending = submitting || validateConnection.isPending
   const isDualNozzleModel = DUAL_NOZZLE_PRINTER_MODELS.includes(model)
   const editableExtruderIds = isDualNozzleModel ? [0, 1] : [0]
@@ -8262,14 +8293,35 @@ function PrinterFormModal({
                     </Typography>
                   </FormControl>
                 )}
+                <Box>
+                  <Button
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    loading={validateConnection.isPending}
+                    disabled={demoMode || !canTestConnection}
+                    onClick={runConnectionTest}
+                  >
+                    Test connection
+                  </Button>
+                </Box>
                 {connectionValidationFeedback && (
                   <Alert color={connectionValidationFeedback.color} variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
                     <Stack spacing={0.25}>
-                      <Typography level="body-sm" fontWeight="lg">Connection check failed</Typography>
+                      <Typography level="body-sm" fontWeight="lg">
+                        {connectionValidationFeedback.color === 'danger' ? 'Connection check failed' : 'Connection needs attention'}
+                      </Typography>
                       {connectionValidationFeedback.messages.map((message) => (
                         <Typography key={message} level="body-sm">{message}</Typography>
                       ))}
                     </Stack>
+                  </Alert>
+                )}
+                {connectionValidation?.ok && (
+                  <Alert color="success" variant="soft" startDecorator={<CheckCircleRoundedIcon />}>
+                    <Typography level="body-sm">
+                      Connection successful — the printer is reachable in LAN mode{connectionValidation.developerModeEnabled ? ' with developer mode enabled' : ''}.
+                    </Typography>
                   </Alert>
                 )}
                 {connectionValidationError && <Typography color="danger" level="body-sm">{connectionValidationError}</Typography>}

@@ -620,6 +620,67 @@ test('readPlateIndex adds support-interface filament ids for support-enabled mod
   }
 })
 
+test('readPlateIndex surfaces the dedicated support material on every unsliced plate without leaking the support-base colour', async () => {
+  // Regression for a manual/global-support project: support is enabled project-wide
+  // (enable_support=1) and filament 4 is a dedicated support material (filament_is_support),
+  // while the support BASE is the regular print colour filament 1. Because which plate actually
+  // generates support is only known after slicing, the dedicated support material is surfaced on
+  // EVERY plate (so it can be mapped), but the support-base colour must NOT be added to a plate
+  // whose geometry doesn't otherwise use it (that's what made a print colour look "used").
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-global-support-filaments-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+
+  try {
+    await writeZipFixture(sourcePath, [
+      ['Metadata/slice_info.config', Buffer.from('<?xml version="1.0" encoding="UTF-8"?><config><header/></config>', 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from([
+        '<config>',
+        // Plate-1 object: prints in filament 3 only, no per-object support metadata.
+        '  <object id="8">',
+        '    <metadata key="extruder" value="3"/>',
+        '  </object>',
+        // Plate-2 object: prints in filament 1 only, no per-object support metadata.
+        '  <object id="9">',
+        '    <metadata key="extruder" value="1"/>',
+        '  </object>',
+        '  <plate>',
+        '    <metadata key="plater_id" value="1"/>',
+        '    <model_instance>',
+        '      <metadata key="object_id" value="8"/>',
+        '    </model_instance>',
+        '  </plate>',
+        '  <plate>',
+        '    <metadata key="plater_id" value="2"/>',
+        '    <model_instance>',
+        '      <metadata key="object_id" value="9"/>',
+        '    </model_instance>',
+        '  </plate>',
+        '</config>'
+      ].join('\n'), 'utf8')],
+      ['Metadata/project_settings.config', Buffer.from(JSON.stringify({
+        filament_type: ['PLA', 'PETG', 'PLA', 'PLA'],
+        filament_settings_id: ['Bambu PLA Basic', 'Bambu PETG HF', 'Bambu PLA Basic', 'Bambu Support For PLA/PETG'],
+        filament_is_support: ['0', '0', '0', '1'],
+        enable_support: '1',
+        support_filament: '1',
+        support_interface_filament: '4'
+      }), 'utf8')]
+    ])
+
+    const index = await readPlateIndex(sourcePath)
+
+    assert.deepEqual(index.plates.map((plate) => plate.index), [1, 2])
+    // Plate 1 geometry is filament 3; it gains the dedicated support material 4 but NOT the
+    // support-base colour 1 (which its geometry never uses).
+    assert.deepEqual(index.plates[0]?.filaments.map((filament) => filament.id), [3, 4])
+    // Plate 2 geometry is filament 1, which already covers the support base; it also gains 4.
+    assert.deepEqual(index.plates[1]?.filaments.map((filament) => filament.id), [1, 4])
+    assert.equal(index.plates[0]?.filaments[1]?.filamentName, 'Bambu Support For PLA/PETG')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('createSinglePlateThreeMf strips bulk 3D payload while keeping the selected plate gcode', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-test-'))
   const sourcePath = path.join(tempDir, 'source.3mf')

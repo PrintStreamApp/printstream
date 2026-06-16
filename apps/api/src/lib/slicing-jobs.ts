@@ -323,7 +323,7 @@ export class SlicingJobs {
           job.request = { ...job.request, sceneEdit: { ...job.request.sceneEdit!, plateThumbnails: undefined } }
         }
         const info = await stat(result.artifactPath)
-        const saved = await this.persistArtifact({
+        const { file: saved } = await this.persistArtifact({
           tenantId: job.tenantId,
           sourcePath: result.artifactPath,
           fileName: job.outputFileName,

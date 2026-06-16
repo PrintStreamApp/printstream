@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
- * Dev runner. Runs web/api/bridge/shared and — on x86 — the slicer, all inside the workspace
- * container (no sibling slicer container).
+ * Dev runner. Runs web/api/bridge/shared and the slicer, all inside the workspace container
+ * (no sibling slicer container).
  *
  * Slicer:
- *   - **x86 (default):** bootstrap the BambuStudio AppImage + profiles into a named volume
- *     (`scripts/dev/setup-slicer.mjs`, once) and run the slicer here under `tsx watch`, with the
- *     API pointed at `http://localhost:4010`.
- *   - **arm64, or `PRINTSTREAM_DEV_SLICER=remote`:** don't run a local slicer (BambuStudio is
- *     x86-only). The API uses `SLICER_SERVICE_URL` as-is — point it at a reachable x86 slicer
- *     (e.g. staging) in `.env`.
+ *   - **x86 / amd64 (the common case):** bootstrap the BambuStudio AppImage + profiles into a
+ *     named volume (`scripts/dev/setup-slicer.mjs`, once) and run the slicer here under
+ *     `tsx watch`, with the API pointed at `http://localhost:4010`.
+ *   - **arm64 (Windows on ARM / WSL, Apple silicon, etc.):** BambuStudio is x86-only, so bootstrap an x86-64 qemu emulation
+ *     environment (`scripts/dev/setup-slicer-qemu.mjs`, once) and run the same slicer here under
+ *     emulation. Slower than native but real, local slicing — no remote dependency.
+ *   - **`PRINTSTREAM_DEV_SLICER=remote` (any arch):** don't run a local slicer. The API uses
+ *     `SLICER_SERVICE_URL` as-is — point it at a reachable x86 slicer (e.g. staging) in `.env`.
  */
 import { spawnSync, spawn } from 'node:child_process'
 import path from 'node:path'
@@ -17,7 +19,8 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const forceRemote = (process.env.PRINTSTREAM_DEV_SLICER || '').toLowerCase() === 'remote'
-const runLocalSlicer = !forceRemote && process.arch === 'x64'
+const runLocalSlicer = !forceRemote
+const useQemuSlicer = runLocalSlicer && process.arch !== 'x64'
 const DATA_ROOT = process.env.SLICER_DATA_ROOT || '/home/node/.printstream-slicer'
 
 function runSync(command, args) {
@@ -32,16 +35,21 @@ runSync('npm', ['run', 'build', '--workspace', '@printstream/bridge-runtime'])
 
 let slicerEnv = {}
 if (runLocalSlicer) {
-  runSync('node', ['scripts/dev/setup-slicer.mjs']) // idempotent first-run bootstrap
+  // idempotent first-run bootstrap (native AppImage on x86, qemu emulation on arm64)
+  runSync('node', [useQemuSlicer ? 'scripts/dev/setup-slicer-qemu.mjs' : 'scripts/dev/setup-slicer.mjs'])
   slicerEnv = {
     SLICER_SERVICE_URL: 'http://localhost:4010',
     SLICER_TARGETS_FILE: path.join(DATA_ROOT, 'slicers', 'targets.json'),
     SLICER_WORK_DIR: process.env.SLICER_WORK_DIR || '/tmp/printstream-slicer',
     SLICER_PORT: process.env.SLICER_PORT || '4010'
   }
+  if (useQemuSlicer) {
+    // The qemu wrapper defaults to this, but set it explicitly so a custom SLICER_DATA_ROOT works.
+    slicerEnv.SLICER_QEMU_SYSROOT = process.env.SLICER_QEMU_SYSROOT || path.join(DATA_ROOT, 'x86root')
+    console.log('[dev] slicer: running locally under x86-64 qemu emulation (arm64). First-run bootstrap downloads ~400MB once.')
+  }
 } else {
-  const why = forceRemote ? 'PRINTSTREAM_DEV_SLICER=remote' : `arch=${process.arch} (BambuStudio is x86-only)`
-  console.log(`[dev] slicer: not running locally (${why}). The API uses SLICER_SERVICE_URL=${process.env.SLICER_SERVICE_URL || '(unset)'} — point it at a reachable x86 slicer.`)
+  console.log(`[dev] slicer: not running locally (PRINTSTREAM_DEV_SLICER=remote). The API uses SLICER_SERVICE_URL=${process.env.SLICER_SERVICE_URL || '(unset)'} — point it at a reachable x86 slicer.`)
 }
 
 const procs = [

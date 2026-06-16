@@ -30,7 +30,7 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-profiles.ts` |
 | **Slicing** | slicer | `apps/slicer/**` — the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
 | **Shared 3MF model** | shared | `packages/shared/src/slicing.ts` (`SceneEdit`, slicing job contracts), the scene/index schemas in `printer.ts` |
-| **Shared 3MF model** | api/bridge | the `apps/api/src/lib/three-mf-*.ts` modules (read + write, re-exported via the `three-mf.ts` barrel); the read/index half `three-mf-reader.ts` has a hand-kept mirror `apps/bridge/src/library-3mf.ts` (read only) |
+| **Shared 3MF model** | api/bridge/shared | the `apps/api/src/lib/three-mf-*.ts` modules (read + write, re-exported via the `three-mf.ts` barrel); the pure **index** parse lives in `@printstream/shared/three-mf` and is shared by `three-mf-reader.ts` and the bridge's `apps/bridge/src/library-3mf.ts` (no hand-kept mirror) |
 | **Printer retarget** | shared/api | "Save as a different printer" — rewrites a project's machine + process settings (no slicing). `packages/shared/src/machine-retarget.ts`, `apps/api/src/lib/save-retarget.ts`. See `docs/project-printer-retarget.md` |
 
 ## The `SceneEdit` contract (the seam)
@@ -118,16 +118,17 @@ Forward path:
 Round-trip (reopen): `readSceneManifest` parses `<item printable="0">` back onto the scene
 instance (`parseRootBuildItemPrintable`), so the editor seeds `EditorInstance.printable`
 and a reopened project keeps its greyed objects. This read path is **API-only** — the bridge
-mirror does not parse build items; the scene is always assembled by `three-mf-reader.ts` from a
-locally-resolved file.
+does not parse build items (the shared parser only builds the index); the scene is always
+assembled by `three-mf-reader.ts` from a locally-resolved file.
 
 ## Invariants
 
-- **api/bridge 3MF mirror.** `apps/api/src/lib/three-mf-reader.ts` and
-  `apps/bridge/src/library-3mf.ts` are hand-kept mirrors for the parsed *index* shape.
-  Changing the index shape means updating both, the shared schema, and bumping the cache
-  versions — see `apps/api/src/lib/CLAUDE.md` and `apps/bridge/CLAUDE.md`. (The full scene
-  parse — `three-mf-reader.ts`'s `readSceneManifest` — and all 3MF *writing*
+- **Shared 3MF index parser.** The parsed *index* shape is produced by one shared module,
+  `@printstream/shared/three-mf`, consumed by both `apps/api/src/lib/three-mf-reader.ts` and
+  `apps/bridge/src/library-3mf.ts`. Changing the index shape means editing that parser once,
+  updating the shared schema, and bumping `THREE_MF_INDEX_PARSER_VERSION` — see
+  `apps/api/src/lib/CLAUDE.md` and `apps/bridge/CLAUDE.md`. (The full scene parse —
+  `three-mf-reader.ts`'s `readSceneManifest` — and all 3MF *writing*
   (`three-mf-scene-builder.ts`, `three-mf-output.ts`) live only in the api modules.)
 - **Nozzle-id mapping** in the slicer's `output-metadata.ts` must stay byte-for-byte —
   see `apps/slicer/CLAUDE.md`.
@@ -140,7 +141,8 @@ own verified change — do not big-bang):
 
 - **Done:** `apps/api/src/lib/three-mf.ts` (~3.7k lines) split into `three-mf-internal.ts`
   (shared ZIP I/O + abort/escape helpers + `rewriteModelSettingsThreeMf`), `three-mf-reader.ts`
-  (shared read/index/scene parse — the bridge-mirrored half), `three-mf-scene-builder.ts` (editor:
+  (read/index/scene parse — the index half delegates to the shared `@printstream/shared/three-mf`
+  parser), `three-mf-scene-builder.ts` (editor:
   `buildEditedThreeMf`/`writeArrangedThreeMf`), and `three-mf-output.ts` (slicing: single-plate/
   thumbnail output + sliced-gcode object previews). Dependencies flow one way
   (output/scene-builder → reader → internal); `three-mf.ts` is now a re-export barrel for the

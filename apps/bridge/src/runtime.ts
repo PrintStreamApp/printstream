@@ -17,6 +17,8 @@ import {
   bridgePrinterFtpActivityMessageSchema,
   bridgePingParamsSchema,
   bridgePingResultSchema,
+  bridgeSystemLogsParamsSchema,
+  bridgeSystemLogsResultSchema,
   bridgeUpdateCheckParamsSchema,
   bridgeUpdateActionResultSchema,
   bridgeUpdateInstallParamsSchema,
@@ -49,6 +51,11 @@ import {
   bridgeRuntimeHelloMessageSchema,
   bridgeRuntimeOutboundMessageSchema,
   bridgeRuntimeRegistrationResponseSchema,
+  bridgeDebugCaptureStartParamsSchema,
+  bridgeDebugCaptureStopParamsSchema,
+  bridgeDebugCaptureReadParamsSchema,
+  bridgeDebugCaptureReadResultSchema,
+  bridgeDebugCaptureStatusResultSchema,
   createAbortError,
   type BridgeRuntimeInboundMessage,
   type Printer,
@@ -74,6 +81,15 @@ import {
   validatePrinterLanConnection
 } from '@printstream/bridge-runtime'
 import { env } from './env.js'
+import { getBridgeLogs, installBridgeLogCapture } from './bridge-logs.js'
+import {
+  getCaptureStatus,
+  onCaptureStatusChange,
+  readCapture,
+  recordCaptureFrame,
+  startCapture,
+  stopCapture
+} from './debug-capture.js'
 import {
   appendBridgeLibraryFileChunk,
   copyBridgeLibraryFile,
@@ -100,6 +116,10 @@ import { createBundleUpdateDriver } from './update-driver-bundle.js'
 
 const RECONNECT_DELAY_MS = 5_000
 const CAMERA_STREAM_RETRY_DELAY_MS = 1_000
+/** Delay before the first per-printer LAN connection probe, letting the persistent monitor connect first. */
+const INITIAL_CONNECTION_PROBE_DELAY_MS = 45_000
+/** How often the bridge re-checks each printer's LAN/developer-mode reachability. */
+const CONNECTION_PROBE_INTERVAL_MS = 10 * 60_000
 
 type BridgeRuntimeFailureKind = 'api-unavailable' | 'invalid-credentials' | 'registration-failed' | 'connection-failed'
 
@@ -155,6 +175,8 @@ export class BridgeRuntimeClient {
   private readonly ftpActivityUnsubscribers = new Map<string, () => void>()
   private readonly rpcAbortControllers = new Map<string, AbortController>()
   private restartScheduled = false
+  private connectionProbeTimer: ReturnType<typeof setInterval> | null = null
+  private connectionProbeInitialTimer: ReturnType<typeof setTimeout> | null = null
   private readonly simulator: BridgeRuntimeSimulator | null
   private readonly updateDriver: BridgeUpdateDriver
   private statusSnapshot: BridgeRuntimeStatusSnapshot = {
@@ -165,6 +187,10 @@ export class BridgeRuntimeClient {
     message: 'Starting bridge runtime.'
   }
   constructor(private readonly options: BridgeRuntimeClientOptions = {}) {
+    // Capture console output into a ring buffer so the `system.logs` RPC can
+    // surface bridge diagnostics in the web app — essential for native builds,
+    // whose console output is otherwise hidden in an on-disk service log file.
+    installBridgeLogCapture()
     this.simulator = options.simulator ?? null
     this.updateDriver = options.updateDriver ?? createBundleUpdateDriver()
   }
@@ -305,6 +331,14 @@ export class BridgeRuntimeClient {
         socket.send(JSON.stringify(message))
       }
     })
+    // Push debug-capture status changes (start/stop/auto-stop) to the API so the
+    // "capture active" banner stays live. The capture itself runs locally and
+    // survives bridge↔API reconnects; only this notifier is per-connection.
+    onCaptureStatusChange((status) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'bridge.debug.capture.status', status }))
+      }
+    })
     this.simulator?.start((message) => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(message))
@@ -419,11 +453,17 @@ export class BridgeRuntimeClient {
               : 'Waiting for a workspace to connect this bridge.'
           })
           console.log(`Bridge ${parsed.data.bridgeId} is ${parsed.data.connected ? 'connected to a workspace' : 'waiting for a workspace connection'}`)
+          // Re-announce any in-progress capture so an API that restarted (or just
+          // (re)connected) re-learns it and keeps the banner accurate.
+          if (parsed.data.connected && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'bridge.debug.capture.status', status: getCaptureStatus() }))
+          }
         }
       })
 
       socket.once('close', () => {
         if (heartbeatTimer) clearInterval(heartbeatTimer)
+        onCaptureStatusChange(null)
         this.stopAllCameraStreams()
         stopDiscovery()
         printerMonitor.stopAll()
@@ -438,6 +478,7 @@ export class BridgeRuntimeClient {
       })
       socket.once('error', (error) => {
         if (heartbeatTimer) clearInterval(heartbeatTimer)
+        onCaptureStatusChange(null)
         this.stopAllCameraStreams()
         stopDiscovery()
         printerMonitor.stopAll()
@@ -499,6 +540,48 @@ export class BridgeRuntimeClient {
           result: bridgePingResultSchema.parse({
             respondedAt: new Date().toISOString()
           })
+        }))
+        return
+      }
+
+      if (request.method === 'system.logs') {
+        const parsed = bridgeSystemLogsParamsSchema.parse(request.params)
+        socket.send(JSON.stringify({
+          type: 'bridge.rpc.success',
+          id: request.id,
+          result: bridgeSystemLogsResultSchema.parse({
+            entries: getBridgeLogs(parsed.limit)
+          })
+        }))
+        return
+      }
+
+      if (request.method === 'debug.capture.start') {
+        const params = bridgeDebugCaptureStartParamsSchema.parse(request.params)
+        socket.send(JSON.stringify({
+          type: 'bridge.rpc.success',
+          id: request.id,
+          result: bridgeDebugCaptureStatusResultSchema.parse(startCapture(params))
+        }))
+        return
+      }
+
+      if (request.method === 'debug.capture.stop') {
+        bridgeDebugCaptureStopParamsSchema.parse(request.params)
+        socket.send(JSON.stringify({
+          type: 'bridge.rpc.success',
+          id: request.id,
+          result: bridgeDebugCaptureStatusResultSchema.parse(stopCapture('manual'))
+        }))
+        return
+      }
+
+      if (request.method === 'debug.capture.read') {
+        bridgeDebugCaptureReadParamsSchema.parse(request.params)
+        socket.send(JSON.stringify({
+          type: 'bridge.rpc.success',
+          id: request.id,
+          result: bridgeDebugCaptureReadResultSchema.parse(readCapture())
         }))
         return
       }
@@ -899,6 +982,8 @@ export class BridgeRuntimeClient {
         this.startCameraStream(socket, printerId)
       }
     }
+
+    this.scheduleConnectionProbes(socket)
   }
 
   private startCameraStream(socket: WebSocket, printerId: string): void {
@@ -909,6 +994,7 @@ export class BridgeRuntimeClient {
 
     const controller = new AbortController()
     this.cameraControllers.set(printerId, controller)
+    recordCaptureFrame({ kind: 'camera', printerId, printerName: printer.name, summary: 'camera stream started' })
     void this.pumpCameraFrames(socket, printer, controller)
   }
 
@@ -917,6 +1003,7 @@ export class BridgeRuntimeClient {
     if (!controller) return
 
     this.cameraControllers.delete(printerId)
+    recordCaptureFrame({ kind: 'camera', printerId, summary: 'camera stream stopped' })
     controller.abort()
   }
 
@@ -925,12 +1012,74 @@ export class BridgeRuntimeClient {
       this.stopCameraStream(printerId)
     }
     this.stopAllFtpActivitySubscriptions()
+    this.clearConnectionProbeTimers()
     this.watchedCameraPrinterIds.clear()
     this.configuredPrinters.clear()
   }
 
+  /**
+   * (Re)schedule the periodic per-printer LAN connection probe. Runs an initial
+   * probe shortly after configuration (so the persistent monitor connects first)
+   * then on a long interval, pushing each result to the API so it can warn when a
+   * printer is reachable but not in LAN/developer mode. Skipped in demo mode.
+   */
+  private scheduleConnectionProbes(socket: WebSocket): void {
+    this.clearConnectionProbeTimers()
+    if (this.simulator || this.configuredPrinters.size === 0) return
+    this.connectionProbeInitialTimer = setTimeout(() => {
+      void this.runConnectionProbes(socket)
+    }, INITIAL_CONNECTION_PROBE_DELAY_MS)
+    this.connectionProbeInitialTimer.unref?.()
+    this.connectionProbeTimer = setInterval(() => {
+      void this.runConnectionProbes(socket)
+    }, CONNECTION_PROBE_INTERVAL_MS)
+    this.connectionProbeTimer.unref?.()
+  }
+
+  private clearConnectionProbeTimers(): void {
+    if (this.connectionProbeTimer) {
+      clearInterval(this.connectionProbeTimer)
+      this.connectionProbeTimer = null
+    }
+    if (this.connectionProbeInitialTimer) {
+      clearTimeout(this.connectionProbeInitialTimer)
+      this.connectionProbeInitialTimer = null
+    }
+  }
+
+  private async runConnectionProbes(socket: WebSocket): Promise<void> {
+    if (this.simulator) return
+    for (const printer of [...this.configuredPrinters.values()]) {
+      if (socket.readyState !== WebSocket.OPEN) return
+      try {
+        const validation = await validatePrinterLanConnection({
+          host: printer.host,
+          serial: printer.serial,
+          accessCode: printer.accessCode
+        })
+        recordCaptureFrame({
+          kind: 'connection',
+          printerId: printer.id,
+          printerName: printer.name,
+          summary: `LAN probe: ok=${validation.ok} mqttReachable=${validation.mqttReachable} developerMode=${validation.developerModeEnabled}`
+        })
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'bridge.printer.connection', printerId: printer.id, validation }))
+        }
+      } catch (error) {
+        console.warn(`[bridge:printer:${printer.name}] connection probe failed`, error instanceof Error ? error.message : error)
+      }
+    }
+  }
+
   private subscribeToFtpActivity(socket: WebSocket, printer: Printer): void {
     const sendActivity = (active: boolean) => {
+      recordCaptureFrame({
+        kind: 'ftps',
+        printerId: printer.id,
+        printerName: printer.name,
+        summary: active ? 'FTPS transfer active' : 'FTPS transfer idle'
+      })
       if (socket.readyState !== WebSocket.OPEN) return
       socket.send(JSON.stringify(bridgePrinterFtpActivityMessageSchema.parse({
         type: 'bridge.printer.ftps.active',
@@ -976,6 +1125,12 @@ export class BridgeRuntimeClient {
             `[bridge:camera:${printer.id}] stream error`,
             error instanceof Error ? error.message : error
           )
+          recordCaptureFrame({
+            kind: 'camera',
+            printerId: printer.id,
+            printerName: printer.name,
+            summary: `camera stream error: ${error instanceof Error ? error.message : String(error)}`
+          })
         }
 
         try {

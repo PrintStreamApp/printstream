@@ -6,11 +6,12 @@
  * dev data dir (a named volume mounted in the workspace) instead of the image, so the
  * BambuStudio AppImage + flattened profile caches persist across devcontainer rebuilds and
  * are only fetched once. Idempotent (skips when already populated) and **arch-gated**:
- * BambuStudio is x86-only, so on arm64 (Apple silicon) this no-ops — those devs run dev
- * against a remote x86 slicer instead (set `SLICER_SERVICE_URL`; see `npm run deploy:slicer`).
+ * BambuStudio is x86-only, so on arm64 this no-ops. arm64 dev hosts instead bootstrap an
+ * x86-64 qemu emulation environment via `scripts/dev/setup-slicer-qemu.mjs` — `run-dev.mjs`
+ * picks the right one by arch. (Set `PRINTSTREAM_DEV_SLICER=remote` to use a remote x86 slicer.)
  *
- * Invoked by `scripts/dev/run-dev.mjs` when `PRINTSTREAM_DEV_SLICER=workspace`. The slicer
- * service then reads `SLICER_TARGETS_FILE=<data>/targets.json`.
+ * Invoked by `scripts/dev/run-dev.mjs` on x86. The slicer service then reads
+ * `SLICER_TARGETS_FILE=<data>/targets.json`.
  */
 import { existsSync, chmodSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -26,10 +27,10 @@ const TARGETS_FILE = path.join(INSTALL_ROOT, 'targets.json')
 const installScript = path.join(repoRoot, 'apps/slicer/docker/install-slicer-targets.mjs')
 const cliPath = path.join(repoRoot, 'apps/slicer/docker/bambu-studio-cli.sh')
 
-// BambuStudio ships x86 binaries only; `process.arch` is 'x64' on amd64, 'arm64' on Apple silicon.
+// BambuStudio ships x86 binaries only; `process.arch` is 'x64' on amd64, 'arm64' otherwise.
 if (process.arch !== 'x64') {
-  console.log(`[setup-slicer] arch=${process.arch}: skipping the in-workspace slicer (BambuStudio is x86-only).`)
-  console.log('[setup-slicer] Point SLICER_SERVICE_URL at a remote x86 slicer (rebuilt with `npm run deploy:slicer`).')
+  console.log(`[setup-slicer] arch=${process.arch}: skipping the native AppImage path (BambuStudio is x86-only).`)
+  console.log('[setup-slicer] arm64 dev uses scripts/dev/setup-slicer-qemu.mjs (x86-64 qemu emulation) — run-dev.mjs picks it automatically.')
   process.exit(0)
 }
 

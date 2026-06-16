@@ -38,7 +38,8 @@ import {
   type PrinterLightMode,
   type PrinterPressureAdvanceProfile,
   type PrinterStage,
-  type PrinterStatus
+  type PrinterStatus,
+  type PrinterConnectionValidation
 } from '@printstream/shared'
 import { env } from './env.js'
 import { bridgeSessionManager } from './bridge-session-manager.js'
@@ -323,6 +324,18 @@ class PrinterManager {
     entry.offlineSince = null
     this.clearRecycleTimer(entry)
     this.applyStatusDelta(entry, status)
+  }
+
+  /**
+   * Record the bridge's periodic LAN connection probe result, surfacing any
+   * "not in LAN/developer mode" warning on the printer's live status so the web
+   * can warn on the card. Reported separately from MQTT reports, so it merges
+   * into the cached status without waiting for the next telemetry frame.
+   */
+  ingestBridgeConnectionValidation(printerId: string, validation: PrinterConnectionValidation): void {
+    const entry = this.managed.get(printerId)
+    if (!entry || !this.bridgeIds.get(printerId)) return
+    this.mergeAndEmit(entry, { connectionWarnings: validation.ok ? [] : validation.warnings })
   }
 
   markBridgePrinterOffline(printerId: string): void {
@@ -646,6 +659,7 @@ function makeOfflineStatus(printer: Printer): PrinterStatus {
     externalSpools: buildDefaultExternalSpools(printer),
     firmwareVersion: null,
     sdCardPresent: null,
+    connectionWarnings: [],
     observedAt: new Date().toISOString()
   }
 }

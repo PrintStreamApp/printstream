@@ -12,6 +12,13 @@ import {
   bridgeResponseSchema,
   bridgePingParamsSchema,
   bridgePingResultSchema,
+  bridgeSystemLogsParamsSchema,
+  bridgeSystemLogsResultSchema,
+  bridgeDebugCaptureStartParamsSchema,
+  bridgeDebugCaptureStopParamsSchema,
+  bridgeDebugCaptureReadParamsSchema,
+  bridgeDebugCaptureReadResultSchema,
+  bridgeDebugCaptureStatusResultSchema,
   bridgeTestResponseSchema,
   bridgeUpdateActionResponseSchema,
   bridgeUpdateActionResultSchema,
@@ -22,6 +29,7 @@ import {
 } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
+import { getBridgeDebugCaptureStatus } from '../lib/bridge-debug-capture.js'
 import { pairBridgeToTenant } from '../lib/bridge-pairing.js'
 import { listBridgeStandaloneDownloads } from '../lib/bridge-standalone-downloads.js'
 import { buildBridgeUpdateSummary, resolveBridgeAssetOrigin } from '../lib/bridge-update-policy.js'
@@ -211,6 +219,117 @@ bridgesRouter.post('/:id/test', async (request, response) => {
   }
 })
 
+bridgesRouter.get('/:id/logs', async (request, response) => {
+  requireRequestTenantId(request)
+  const bridgeId = requireRouteParam(request.params.id, 'id')
+  const bridgeCount = await prisma.bridge.count({
+    where: { id: bridgeId }
+  })
+
+  if (bridgeCount === 0) {
+    throw notFound('Bridge not found.')
+  }
+  if (!bridgeSessionManager.isConnected(bridgeId)) {
+    throw conflict('Bridge is not connected.')
+  }
+
+  const result = bridgeSystemLogsResultSchema.parse(await bridgeSessionManager.requestRpc(
+    bridgeId,
+    'system.logs',
+    bridgeSystemLogsParamsSchema.parse({ limit: 1000 }),
+    { timeoutMs: 10_000 }
+  ))
+
+  response.json(result)
+})
+
+/**
+ * Debug traffic capture. Start/stop a bounded recording of the bridge↔printer
+ * transport on the bridge, then download the buffered frames as newline-delimited
+ * JSON. The capture lives on the bridge (see `apps/bridge/src/debug-capture.ts`);
+ * these routes are thin RPC pass-throughs. The whole router is gated on
+ * `SETTINGS_MANAGE_PERMISSION`, so no extra auth is needed here.
+ */
+async function requireConnectedTenantBridge(request: express.Request): Promise<{ id: string; name: string }> {
+  const tenantId = requireRequestTenantId(request)
+  const bridgeId = requireRouteParam(request.params.id, 'id')
+  const bridge = await prisma.bridge.findFirst({
+    where: { id: bridgeId, tenantId },
+    select: { id: true, name: true }
+  })
+  if (!bridge) {
+    throw notFound('Bridge not found.')
+  }
+  if (!bridgeSessionManager.isConnected(bridge.id)) {
+    throw conflict('Bridge is not connected.')
+  }
+  return bridge
+}
+
+bridgesRouter.post('/:id/debug-capture/start', async (request, response) => {
+  const bridge = await requireConnectedTenantBridge(request)
+  const params = bridgeDebugCaptureStartParamsSchema.parse(request.body ?? {})
+  const result = bridgeDebugCaptureStatusResultSchema.parse(await bridgeSessionManager.requestRpc(
+    bridge.id,
+    'debug.capture.start',
+    params,
+    { timeoutMs: 10_000 }
+  ))
+  annotateRequestAuditLog(request, {
+    action: 'start-bridge-debug-capture',
+    resource: 'bridge',
+    summary: `Started debug traffic capture on bridge ${bridge.name}.`,
+    metadata: { bridgeId: bridge.id, bridgeName: bridge.name }
+  })
+  response.json(result)
+})
+
+bridgesRouter.post('/:id/debug-capture/stop', async (request, response) => {
+  const bridge = await requireConnectedTenantBridge(request)
+  const result = bridgeDebugCaptureStatusResultSchema.parse(await bridgeSessionManager.requestRpc(
+    bridge.id,
+    'debug.capture.stop',
+    bridgeDebugCaptureStopParamsSchema.parse({}),
+    { timeoutMs: 10_000 }
+  ))
+  annotateRequestAuditLog(request, {
+    action: 'stop-bridge-debug-capture',
+    resource: 'bridge',
+    summary: `Stopped debug traffic capture on bridge ${bridge.name}.`,
+    metadata: { bridgeId: bridge.id, bridgeName: bridge.name }
+  })
+  response.json(result)
+})
+
+bridgesRouter.get('/:id/debug-capture/download', async (request, response) => {
+  const bridge = await requireConnectedTenantBridge(request)
+  const capture = bridgeDebugCaptureReadResultSchema.parse(await bridgeSessionManager.requestRpc(
+    bridge.id,
+    'debug.capture.read',
+    bridgeDebugCaptureReadParamsSchema.parse({}),
+    { timeoutMs: 30_000 }
+  ))
+
+  const header = {
+    kind: 'capture-meta',
+    bridgeId: bridge.id,
+    bridgeName: bridge.name,
+    startedAt: capture.startedAt,
+    stoppedAt: capture.stoppedAt,
+    frameCount: capture.frames.length,
+    droppedFrames: capture.droppedFrames,
+    truncated: capture.truncated,
+    exportedAt: new Date().toISOString()
+  }
+  const lines = [header, ...capture.frames].map((entry) => JSON.stringify(entry))
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const safeName = bridge.name.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'bridge'
+  response.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
+  response.setHeader('Content-Disposition', `attachment; filename="traffic-${safeName}-${stamp}.jsonl"`)
+  response.send(`${lines.join('\n')}\n`)
+})
+
 bridgesRouter.post('/:id/update/check', async (request, response) => {
   const bridge = await loadTenantBridgeForUpdate(request)
   const checkedAt = new Date()
@@ -380,7 +499,8 @@ function toBridgeSummary(bridge: {
     createdAt: bridge.createdAt.toISOString(),
     updatedAt: bridge.updatedAt.toISOString(),
     connectionStats: bridgeSessionManager.getConnectionStats(bridge.id),
-    update: buildBridgeUpdateSummary(bridge)
+    update: buildBridgeUpdateSummary(bridge),
+    debugCapture: getBridgeDebugCaptureStatus(bridge.id)
   }
 }
 

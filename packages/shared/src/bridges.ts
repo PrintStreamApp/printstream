@@ -84,6 +84,41 @@ export const bridgeUpdateSummarySchema = z.object({
 
 export type BridgeUpdateSummary = z.infer<typeof bridgeUpdateSummarySchema>
 
+/**
+ * Live state of a bridge's debug traffic capture. A capture is an
+ * operator-triggered, time-bounded recording of the bridge↔printer transport
+ * (MQTT/FTPS/camera/log frames) used to diagnose connectivity issues without
+ * shell access to the bridge host. The bridge owns the capture and reports this
+ * status to the API, which surfaces it here (for the "capture active" banner and
+ * the settings controls) and broadcasts changes over the `bridge.debug.capture`
+ * WS event. `hasCapture` stays true after a capture stops while its frames remain
+ * buffered and downloadable.
+ */
+export const bridgeDebugCaptureStatusSchema = z.object({
+  active: z.boolean(),
+  startedAt: z.string().datetime().nullable(),
+  stoppedAt: z.string().datetime().nullable(),
+  frameCount: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+  droppedFrames: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  hasCapture: z.boolean()
+})
+
+export type BridgeDebugCaptureStatus = z.infer<typeof bridgeDebugCaptureStatusSchema>
+
+/** A bridge with no capture running and nothing buffered. */
+export const inactiveBridgeDebugCaptureStatus: BridgeDebugCaptureStatus = {
+  active: false,
+  startedAt: null,
+  stoppedAt: null,
+  frameCount: 0,
+  bytes: 0,
+  droppedFrames: 0,
+  truncated: false,
+  hasCapture: false
+}
+
 export const bridgeSummarySchema = z.object({
   id: z.string(),
   name: z.string().min(1).max(120),
@@ -92,7 +127,8 @@ export const bridgeSummarySchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   connectionStats: bridgeConnectionStatsSchema,
-  update: bridgeUpdateSummarySchema
+  update: bridgeUpdateSummarySchema,
+  debugCapture: bridgeDebugCaptureStatusSchema
 })
 
 export type BridgeSummary = z.infer<typeof bridgeSummarySchema>

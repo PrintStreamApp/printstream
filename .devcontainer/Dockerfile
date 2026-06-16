@@ -50,6 +50,18 @@ RUN set -eux; \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
+# arm64 (Windows on ARM / WSL, Apple silicon, etc.): BambuStudio is x86-only, so the in-workspace slicer runs the x86-64 CLI
+# under qemu-user emulation (scripts/dev/setup-slicer-qemu.mjs builds the x86-64 sysroot into the
+# slicer data volume on first `npm run dev`). Bake the emulator + Xvfb here so they survive
+# rebuilds; the x86-64 GTK/WebKit/Mesa runtime is supplied by the sysroot, not this image.
+RUN set -eux; \
+    if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
+      apt-get update; \
+      apt-get install -y --no-install-recommends \
+        qemu-user-static xauth xvfb; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Persist bash history to a named volume mounted at /commandhistory so it
 # survives devcontainer rebuilds. The volume is declared in compose.persist.yml.
 RUN set -eux; \

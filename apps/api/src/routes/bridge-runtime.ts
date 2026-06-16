@@ -18,6 +18,7 @@ import {
   hashBridgeRuntimeToken
 } from '../lib/bridge-runtime-auth.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
+import { getBridgeDebugCaptureStatus } from '../lib/bridge-debug-capture.js'
 import { readRequestOrigin } from '../lib/request-helpers.js'
 import { buildBridgeUpdateSummary, getBridgeReleaseManifest, resolveBridgeAssetOrigin } from '../lib/bridge-update-policy.js'
 import { resolveBridgeReleaseAsset } from '../lib/bridge-release-assets.js'
@@ -179,7 +180,8 @@ bridgeRuntimeRouter.post('/register', async (request, response) => {
         createdAt: updated.createdAt.toISOString(),
         updatedAt: updated.updatedAt.toISOString(),
         connectionStats: bridgeSessionManager.getConnectionStats(updated.id),
-        update: buildBridgeUpdateSummary(updated)
+        update: buildBridgeUpdateSummary(updated),
+        debugCapture: getBridgeDebugCaptureStatus(updated.id)
       },
       runtimeToken: parsed.runtimeToken,
       connectPath: BRIDGE_RUNTIME_CONNECT_PATH,
@@ -243,7 +245,8 @@ bridgeRuntimeRouter.post('/register', async (request, response) => {
       createdAt: created.createdAt.toISOString(),
       updatedAt: created.updatedAt.toISOString(),
       connectionStats: bridgeSessionManager.getConnectionStats(created.id),
-      update: buildBridgeUpdateSummary(created)
+      update: buildBridgeUpdateSummary(created),
+      debugCapture: getBridgeDebugCaptureStatus(created.id)
     },
     runtimeToken,
     connectPath: BRIDGE_RUNTIME_CONNECT_PATH,

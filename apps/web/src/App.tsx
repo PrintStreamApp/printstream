@@ -38,6 +38,8 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { AppShell, type ShellTab } from './components/AppShell'
 import { marketingModule, platformAdminModule } from './lib/privateModules'
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner'
+import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
+import { LibraryUploadPanel } from './components/LibraryUploadPanel'
 import { DevRuntimeStatus } from './components/DevRuntimeStatus'
 import { AppVersionFooter } from './components/AppVersionFooter'
 import { DeleteOperationToasts } from './components/DeleteOperationToasts'
@@ -929,6 +931,8 @@ export function App() {
                   <PrintDispatchJobsQueryProvider value={shellDispatchQuery}>
                     <ScrollReset />
                     {hasTenantContext && canManageSettings && <BridgeUpdateBanner />}
+                    {hasTenantContext && canManageSettings && <BridgeDebugCaptureBanner />}
+                    {hasTenantContext && <LibraryUploadPanel />}
                     <RouteErrorBoundary>
                       <Routes>
                 <Route path="/" element={rootRouteElement} />

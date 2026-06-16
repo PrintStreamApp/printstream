@@ -1,12 +1,13 @@
 import React from 'react'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
+import ArticleRoundedIcon from '@mui/icons-material/ArticleRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import FileUploadRoundedIcon from '@mui/icons-material/FileUploadRounded'
 import HubRoundedIcon from '@mui/icons-material/HubRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
-import { Alert, Box, Button, Card, CardContent, Checkbox, Chip, DialogTitle, Divider, FormControl, FormLabel, Input, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, Card, CardContent, Checkbox, Chip, DialogTitle, Divider, FormControl, FormLabel, Input, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import {
   type AppLandingPageSetting,
   type AppThemeSetting,
@@ -14,6 +15,9 @@ import {
   type BridgeStandaloneDownloadsResponse,
   type BridgeResponse,
   type BridgeSummary,
+  type BridgeDebugCaptureStatus,
+  type BridgeSystemLogEntry,
+  type BridgeSystemLogsResult,
   type BridgeTestResponse,
   type BridgeUpdateActionResponse,
   extractErrorMessage,
@@ -40,10 +44,12 @@ import { PaginatedSection } from '../components/PaginationFooter'
 import { PluginManagerSection } from '../components/PluginManagerSection'
 import { usePromptDialog } from '../components/PromptDialogProvider'
 import { ApiError, apiFetch } from '../lib/apiClient'
+import { buildApiUrl } from '../lib/apiUrl'
 import { getBrowserEnv } from '../lib/browserEnv'
 import { detectBridgePlatformKey, placeholderBridgeDownloads } from '../lib/bridgePlatform'
 import { invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
 import { consumePendingBridgeConnectCode } from '../lib/pendingBridgeConnect'
+import { formatDateTime } from '../lib/time'
 import { formatBridgeUpdateStatus } from '../lib/bridgeUpdateStatus'
 import { authQueryKeys, resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
 import { CORE_LANDING_PAGE_OPTIONS, type LandingPageOption } from '../lib/landingPageOptions'
@@ -1435,6 +1441,7 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
   const queryClient = useQueryClient()
   const [name, setName] = React.useState(bridge.name)
   const [removeOpen, setRemoveOpen] = React.useState(false)
+  const [logsOpen, setLogsOpen] = React.useState(false)
   const [lastTestResult, setLastTestResult] = React.useState<BridgeTestResponse | null>(null)
   const [lastUpdateResult, setLastUpdateResult] = React.useState<BridgeUpdateActionResponse | null>(null)
   const renameBridge = useMutation({
@@ -1483,8 +1490,31 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
       await invalidateBridgeQueries(queryClient)
     }
   })
+  const startCapture = useMutation({
+    mutationFn: () => apiFetch<BridgeDebugCaptureStatus>(`/api/bridges/${encodeURIComponent(bridge.id)}/debug-capture/start`, {
+      method: 'POST',
+      body: {}
+    }),
+    onSuccess: async () => {
+      await invalidateBridgeQueries(queryClient)
+    }
+  })
+  const stopCapture = useMutation({
+    mutationFn: () => apiFetch<BridgeDebugCaptureStatus>(`/api/bridges/${encodeURIComponent(bridge.id)}/debug-capture/stop`, {
+      method: 'POST'
+    }),
+    onSuccess: async () => {
+      await invalidateBridgeQueries(queryClient)
+    }
+  })
   const renameError = renameBridge.error ? extractErrorMessage(renameBridge.error) : null
   const testError = testBridge.error ? extractErrorMessage(testBridge.error) : null
+  const captureError = startCapture.error
+    ? extractErrorMessage(startCapture.error)
+    : stopCapture.error
+      ? extractErrorMessage(stopCapture.error)
+      : null
+  const capture = bridge.debugCapture
   const updateError = checkBridgeUpdate.error
     ? extractErrorMessage(checkBridgeUpdate.error)
     : startBridgeUpdate.error
@@ -1573,30 +1603,102 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
                 </Button>
                 <Button
                   variant="outlined"
-                  loading={checkBridgeUpdate.isPending}
-                  disabled={renameBridge.isPending || removeBridge.isPending || testBridge.isPending || startBridgeUpdate.isPending}
-                  onClick={() => {
-                    checkBridgeUpdate.reset()
-                    startBridgeUpdate.reset()
-                    checkBridgeUpdate.mutate()
-                  }}
+                  startDecorator={<ArticleRoundedIcon />}
+                  disabled={!online || bridgeActionPending}
+                  onClick={() => setLogsOpen(true)}
                 >
-                  Check for updates
+                  View logs
                 </Button>
-                <Button
-                  variant="outlined"
-                  loading={startBridgeUpdate.isPending}
-                  disabled={!canStartBridgeUpdate || bridgeActionPending}
-                  onClick={() => {
-                    startBridgeUpdate.reset()
-                    checkBridgeUpdate.reset()
-                    startBridgeUpdate.mutate()
-                  }}
-                >
-                  Update bridge
-                </Button>
+                {/* One button: check for updates until one is found, then update.
+                    There's nothing to update until a check confirms one, so the
+                    action flips to "Update bridge" only once an applicable update
+                    is known. */}
+                {canStartBridgeUpdate ? (
+                  <Button
+                    variant="outlined"
+                    loading={startBridgeUpdate.isPending}
+                    disabled={bridgeActionPending}
+                    onClick={() => {
+                      startBridgeUpdate.reset()
+                      checkBridgeUpdate.reset()
+                      startBridgeUpdate.mutate()
+                    }}
+                  >
+                    Update bridge
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outlined"
+                    loading={checkBridgeUpdate.isPending}
+                    disabled={bridgeActionPending}
+                    onClick={() => {
+                      checkBridgeUpdate.reset()
+                      startBridgeUpdate.reset()
+                      checkBridgeUpdate.mutate()
+                    }}
+                  >
+                    Check for updates
+                  </Button>
+                )}
               </Stack>
 
+              <Divider />
+
+              <Stack spacing={1}>
+                <Box>
+                  <Typography level="title-sm">Debug traffic capture</Typography>
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    Record this bridge’s MQTT, FTPS, and camera traffic to a downloadable log for troubleshooting. A reminder appears across the app while a capture runs.
+                  </Typography>
+                </Box>
+                {capture.active && (
+                  <Typography level="body-xs">
+                    Recording… {capture.frameCount.toLocaleString()} frame{capture.frameCount === 1 ? '' : 's'} captured
+                    {capture.droppedFrames > 0 ? ` (${capture.droppedFrames.toLocaleString()} dropped)` : ''}
+                    {capture.truncated ? ' — size limit reached' : ''}.
+                  </Typography>
+                )}
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} flexWrap="wrap" useFlexGap>
+                  {capture.active ? (
+                    <Button
+                      variant="outlined"
+                      color="primary"
+                      loading={stopCapture.isPending}
+                      disabled={bridgeActionPending}
+                      onClick={() => {
+                        stopCapture.reset()
+                        stopCapture.mutate()
+                      }}
+                    >
+                      Stop capture
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outlined"
+                      loading={startCapture.isPending}
+                      disabled={!online || bridgeActionPending}
+                      onClick={() => {
+                        startCapture.reset()
+                        startCapture.mutate()
+                      }}
+                    >
+                      Start capture
+                    </Button>
+                  )}
+                  <Button
+                    variant="outlined"
+                    color="neutral"
+                    component="a"
+                    href={buildApiUrl(`/api/bridges/${encodeURIComponent(bridge.id)}/debug-capture/download`)}
+                    download={`traffic-${bridge.name}.jsonl`}
+                    disabled={!online || !capture.hasCapture}
+                  >
+                    Download capture
+                  </Button>
+                </Stack>
+              </Stack>
+
+              {captureError && <Alert color="danger">{captureError}</Alert>}
               {renameError && <Alert color="danger">{renameError}</Alert>}
               {testError && <Alert color="danger">{testError}</Alert>}
               {updateError && <Alert color="danger">{updateError}</Alert>}
@@ -1647,7 +1749,82 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
         }}
         onConfirm={() => removeBridge.mutate()}
       />
+
+      {logsOpen && <BridgeLogsDialog bridge={bridge} onClose={() => setLogsOpen(false)} />}
     </>
+  )
+}
+
+/** Bridge log level chip color, matching the Logs view conventions. */
+function bridgeLogLevelColor(level: BridgeSystemLogEntry['level']): 'neutral' | 'warning' | 'danger' | 'primary' {
+  switch (level) {
+    case 'error': return 'danger'
+    case 'warn': return 'warning'
+    case 'debug': return 'neutral'
+    default: return 'primary'
+  }
+}
+
+/**
+ * Live tail of the bridge's recent console output, fetched over the bridge RPC.
+ * This is the only way to see bridge diagnostics on native builds, where the
+ * console stream is otherwise hidden in an on-disk service log file.
+ */
+function BridgeLogsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClose: () => void }) {
+  const logsQuery = useQuery({
+    queryKey: ['bridge-logs', bridge.id],
+    queryFn: ({ signal }) => apiFetch<BridgeSystemLogsResult>(`/api/bridges/${encodeURIComponent(bridge.id)}/logs`, { signal }),
+    refetchInterval: 5_000
+  })
+  // Newest-first for display; the RPC returns oldest-first.
+  const ordered = React.useMemo(() => [...(logsQuery.data?.entries ?? [])].reverse(), [logsQuery.data])
+  const loadError = logsQuery.error ? extractErrorMessage(logsQuery.error) : null
+
+  return (
+    <BackAwareModal open onClose={onClose}>
+      <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 640 } }}>
+        <DialogTitle>{bridge.name} logs</DialogTitle>
+        <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
+          <Stack spacing={1.25}>
+            <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center">
+              <Typography level="body-sm" textColor="text.tertiary">
+                Most recent {ordered.length} bridge log {ordered.length === 1 ? 'line' : 'lines'}. Refreshes every 5s.
+              </Typography>
+              <Button size="sm" variant="plain" loading={logsQuery.isFetching} onClick={() => logsQuery.refetch()}>
+                Refresh
+              </Button>
+            </Stack>
+            {loadError && <Alert color="danger">{loadError}</Alert>}
+            {!loadError && ordered.length === 0 && (
+              <Alert color="neutral">{logsQuery.isLoading ? 'Loading bridge logs…' : 'No bridge log entries yet.'}</Alert>
+            )}
+            {ordered.length > 0 && (
+              <Sheet
+                variant="outlined"
+                sx={{ borderRadius: 'md', overflow: 'hidden', fontFamily: 'monospace', fontSize: 'xs' }}
+              >
+                <Stack divider={<Box sx={{ borderTop: '1px solid var(--joy-palette-neutral-800)' }} />}>
+                  {ordered.map((entry, index) => (
+                    <Stack key={`${entry.timestamp}-${index}`} spacing={0.5} sx={{ p: 1 }}>
+                      <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                        <Typography level="body-xs" textColor="text.tertiary">{formatDateTime(entry.timestamp)}</Typography>
+                        <Chip size="sm" variant="soft" color={bridgeLogLevelColor(entry.level)}>{entry.level}</Chip>
+                      </Stack>
+                      <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {entry.message}
+                      </Typography>
+                    </Stack>
+                  ))}
+                </Stack>
+              </Sheet>
+            )}
+          </Stack>
+        </ScrollableDialogBody>
+        <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 1.5 }}>
+          <Button variant="plain" color="neutral" onClick={onClose}>Close</Button>
+        </Stack>
+      </ScrollableModalDialog>
+    </BackAwareModal>
   )
 }
 

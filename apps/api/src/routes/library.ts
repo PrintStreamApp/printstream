@@ -665,7 +665,7 @@ libraryRouter.post(
   // these after their retention window.
   const hidden = resolveLibraryUploadHidden(request, parseBooleanField(request.body?.hidden), request.file.size)
   try {
-    const created = await createLibraryFileFromUpload({
+    const { file: created, unchanged } = await createLibraryFileFromUpload({
       request,
       sourcePath: request.file.path,
       fileName: request.file.originalname,
@@ -674,7 +674,7 @@ libraryRouter.post(
       bridgeId,
       hidden
     })
-    response.status(201).json({ file: await toDto(created) })
+    response.status(201).json({ file: await toDto(created), unchanged })
   } finally {
     await unlink(request.file.path).catch(() => undefined)
   }
@@ -799,7 +799,7 @@ libraryRouter.post('/uploads/:uploadId/complete', requireRequestPermission(LIBRA
         await writeUploadSession(session)
       }
     })
-    response.status(201).json({ file: await toDto(created) })
+    response.status(201).json({ file: await toDto(created.file), unchanged: created.unchanged })
   } finally {
     await deleteUploadSession(uploadId)
   }

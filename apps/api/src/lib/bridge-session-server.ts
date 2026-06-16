@@ -17,6 +17,11 @@ import { recoverBridgePrinterAssignments } from './bridge-assignment-recovery.js
 import { bridgeRuntimeTokenMatches } from './bridge-runtime-auth.js'
 import { syncBridgePrinterConfig } from './bridge-printer-config.js'
 import { bridgeSessionManager } from './bridge-session-manager.js'
+import {
+  clearBridgeDebugCaptureStatus,
+  setBridgeDebugCaptureStatus
+} from './bridge-debug-capture.js'
+import { inactiveBridgeDebugCaptureStatus } from '@printstream/shared'
 import { printerDiscovery } from './printer-discovery.js'
 import { printerManager } from './printer-manager.js'
 import { wsBroadcaster } from './ws-server.js'
@@ -119,10 +124,17 @@ export function attachBridgeSessionServer(server: HttpServer): AttachedBridgeSes
       if (authenticatedBridgeId) {
         const tenantId = authenticatedConnection?.tenantId ?? null
         const clearedPrinterIds = bridgeSessionManager.clearBridgePrinterFtpActivity(authenticatedBridgeId)
+        clearBridgeDebugCaptureStatus(authenticatedBridgeId)
         if (tenantId) {
           for (const printerId of clearedPrinterIds) {
             wsBroadcaster.broadcast({ type: 'printer.ftps.active', printerId, active: false }, tenantId)
           }
+          // A disconnected bridge can no longer be controlled or report capture
+          // progress; clear the banner. It re-announces on reconnect.
+          wsBroadcaster.broadcast(
+            { type: 'bridge.debug.capture', bridgeId: authenticatedBridgeId, status: inactiveBridgeDebugCaptureStatus },
+            tenantId
+          )
           broadcastBridgesChanged(tenantId)
         }
         bridgeSessionManager.unregisterConnection(authenticatedBridgeId, authenticatedConnection ?? undefined)
@@ -269,6 +281,10 @@ function handleAuthenticatedMessage(
       printerManager.markBridgePrinterOffline(message.printerId)
       return
     }
+    case 'bridge.printer.connection': {
+      printerManager.ingestBridgeConnectionValidation(message.printerId, message.validation)
+      return
+    }
     case 'bridge.printer.status': {
       bridgeSessionManager.setPrinterStatus(bridgeId, message.printer)
       printerManager.ingestBridgeStatus(message.printer)
@@ -276,6 +292,13 @@ function handleAuthenticatedMessage(
     }
     case 'bridge.printer.removed': {
       bridgeSessionManager.removePrinterStatus(message.printerId)
+      return
+    }
+    case 'bridge.debug.capture.status': {
+      setBridgeDebugCaptureStatus(bridgeId, message.status)
+      if (tenantId) {
+        wsBroadcaster.broadcast({ type: 'bridge.debug.capture', bridgeId, status: message.status }, tenantId)
+      }
       return
     }
     case 'bridge.hello': {

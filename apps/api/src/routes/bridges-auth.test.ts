@@ -5,7 +5,7 @@ import { afterEach, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { SETTINGS_MANAGE_PERMISSION } from '@printstream/shared'
+import { SETTINGS_MANAGE_PERMISSION, inactiveBridgeDebugCaptureStatus } from '@printstream/shared'
 import { bridgesRouter } from './bridges.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
@@ -151,7 +151,8 @@ test('bridge list returns connected tenant bridges for settings managers', async
             activeCameraWatchCount: 2,
             activePrinterFtpCount: 1
           },
-          update: unknownBridgeUpdate
+          update: unknownBridgeUpdate,
+          debugCapture: inactiveBridgeDebugCaptureStatus
         }
       ]
     })
@@ -228,7 +229,8 @@ test('bridge connect attaches a dormant bridge to the current tenant', async () 
           activeCameraWatchCount: 0,
           activePrinterFtpCount: 0
         },
-        update: unknownBridgeUpdate
+        update: unknownBridgeUpdate,
+        debugCapture: inactiveBridgeDebugCaptureStatus
       }
     })
   })
@@ -415,7 +417,8 @@ test('bridge connect reattaches orphaned tenant printers when this is the only t
           activeCameraWatchCount: 0,
           activePrinterFtpCount: 0
         },
-        update: unknownBridgeUpdate
+        update: unknownBridgeUpdate,
+        debugCapture: inactiveBridgeDebugCaptureStatus
       }
     })
   })

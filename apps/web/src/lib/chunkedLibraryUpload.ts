@@ -205,15 +205,24 @@ export interface ChunkedLibraryUploadOptions {
    */
   relativeFolderPath?: string[]
   onProgress?: (progress: ChunkedLibraryUploadProgress) => void
+  /** Abort the upload (cancels in-flight requests and discards the session). */
+  signal?: AbortSignal
+}
+
+/** True for an aborted-request error, which must propagate instead of retrying. */
+export function isUploadAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
 }
 
 export async function uploadLibraryFileInChunks(
   file: File,
   options: ChunkedLibraryUploadOptions = {}
-): Promise<{ file: LibraryFile }> {
+): Promise<{ file: LibraryFile; unchanged: boolean }> {
+  options.signal?.throwIfAborted()
   const started = await pacedUploadWrite(
     () => apiFetch<BeginUploadResponse>('/api/library/uploads', {
       method: 'POST',
+      signal: options.signal,
       body: {
         fileName: file.name,
         sizeBytes: file.size,
@@ -234,11 +243,13 @@ export async function uploadLibraryFileInChunks(
     options.onProgress?.({ phase: 'uploading-to-server', uploadedBytes, totalBytes: file.size })
 
     while (uploadedBytes < file.size) {
+      options.signal?.throwIfAborted()
       uploadedBytes = await uploadChunkWithResume({
         uploadId: started.uploadId,
         file,
         offset: uploadedBytes,
         chunkSize,
+        signal: options.signal,
         onRateLimitWait: () => options.onProgress?.({ phase: 'waiting-for-server', uploadedBytes, totalBytes: file.size })
       })
       options.onProgress?.({ phase: 'uploading-to-server', uploadedBytes, totalBytes: file.size })
@@ -247,19 +258,23 @@ export async function uploadLibraryFileInChunks(
     options.onProgress?.({ phase: 'sending-to-bridge', uploadedBytes: 0, totalBytes: file.size })
     const poller = startUploadStatusPolling(started.uploadId, options)
     try {
-      return await pacedUploadWrite(
-        () => apiFetch<{ file: LibraryFile }>(`/api/library/uploads/${encodeURIComponent(started.uploadId)}/complete`, {
+      const result = await pacedUploadWrite(
+        () => apiFetch<{ file: LibraryFile; unchanged?: boolean }>(`/api/library/uploads/${encodeURIComponent(started.uploadId)}/complete`, {
           method: 'POST',
+          signal: options.signal,
           body: {},
           onResponseHeaders: recordUploadWriteBudget
         }),
         () => options.onProgress?.({ phase: 'waiting-for-server', uploadedBytes: file.size, totalBytes: file.size })
       )
+      return { file: result.file, unchanged: result.unchanged ?? false }
     } finally {
       poller.stop()
       await poller.done
     }
   } catch (error) {
+    // Abandon the server-side session (use a fresh, un-aborted request so
+    // cleanup still runs even when the upload was cancelled).
     await apiFetch(`/api/library/uploads/${encodeURIComponent(started.uploadId)}`, { method: 'DELETE' }).catch(() => undefined)
     throw error
   }
@@ -272,11 +287,11 @@ function startUploadStatusPolling(uploadId: string, options: ChunkedLibraryUploa
       stopped = true
     },
     done: (async () => {
-      while (!stopped) {
+      while (!stopped && !options.signal?.aborted) {
         await delay(500)
-        if (stopped) return
+        if (stopped || options.signal?.aborted) return
         try {
-          const status = await apiFetch<UploadStatusResponse>(`/api/library/uploads/${encodeURIComponent(uploadId)}`)
+          const status = await apiFetch<UploadStatusResponse>(`/api/library/uploads/${encodeURIComponent(uploadId)}`, { signal: options.signal })
           options.onProgress?.(mapStatusToProgress(status))
         } catch {
           return
@@ -317,6 +332,7 @@ interface ChunkResumeParams {
   file: File
   offset: number
   chunkSize: number
+  signal?: AbortSignal
   /** Invoked when a chunk pauses to wait out a rate-limit window. */
   onRateLimitWait?: () => void
 }
@@ -333,17 +349,20 @@ async function uploadChunkWithResume(params: ChunkResumeParams): Promise<number>
   let currentOffset = params.offset
   let lastError: unknown
   for (let attempt = 1; attempt <= MAX_CHUNK_ATTEMPTS; attempt += 1) {
+    params.signal?.throwIfAborted()
     const end = Math.min(file.size, currentOffset + params.chunkSize)
     const chunk = file.slice(currentOffset, end)
     try {
       // 429s wait out the server's window here (pacing) rather than burning
       // the bounded failure retries below.
       const result = await pacedUploadWrite(
-        () => uploadChunk(uploadId, currentOffset, chunk),
+        () => uploadChunk(uploadId, currentOffset, chunk, params.signal),
         params.onRateLimitWait
       )
       return result.uploadedBytes
     } catch (error) {
+      // A cancelled upload must abort immediately, not consume retries.
+      if (isUploadAbortError(error)) throw error
       lastError = error
       const status = error instanceof ChunkUploadError ? error.status : null
       const retriable = status === null || status === 408 || status === 409 || status === 429 || status >= 500
@@ -374,11 +393,12 @@ function retryDelayMs(attempt: number): number {
   return Math.min(8_000, 500 * 2 ** (attempt - 1))
 }
 
-async function uploadChunk(uploadId: string, offset: number, chunk: Blob): Promise<ChunkUploadResponse> {
+async function uploadChunk(uploadId: string, offset: number, chunk: Blob, signal?: AbortSignal): Promise<ChunkUploadResponse> {
   const workspaceContext = readWorkspaceContextHeader()
   const response = await fetch(buildApiUrl(`/api/library/uploads/${encodeURIComponent(uploadId)}/chunks`), {
     method: 'POST',
     credentials: 'include',
+    signal,
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/octet-stream',

@@ -4,13 +4,15 @@
  * Bytes are stored through the bridge-backed library path, while metadata
  * and overwrite/version behavior stay centralized here.
  */
+import { createHash } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import type { Request } from 'express'
 import { classifyLibraryFileKind } from '@printstream/shared'
 import { annotateRequestAuditLog } from './audit-logs.js'
 import { badRequest, notFound } from './http-error.js'
 import { prisma } from './prisma.js'
 import { broadcastLibraryChanged } from './ws-resource-events.js'
-import { deleteBridgeLibraryFile, deleteLibraryFileBytes, storeBridgeLibraryFile } from './bridge-library-files.js'
+import { deleteBridgeLibraryFile, deleteLibraryFileBytes, statBridgeLibraryFile, storeBridgeLibraryFile } from './bridge-library-files.js'
 import { resolveRequestActorAttribution } from './actor-attribution.js'
 import { visibleLibraryFilesWhere } from './library-visibility.js'
 import { isUniqueConstraintError } from './prisma-errors.js'
@@ -49,7 +51,7 @@ export async function persistLibraryFileFromLocalPath(input: {
   missingBridgeMessage?: string
   onBridgeProgress?: (transferredBytes: number) => Promise<void> | void
   onBridgeComplete?: () => Promise<void> | void
-}): Promise<PersistedLibraryFileRow> {
+}): Promise<{ file: PersistedLibraryFileRow; unchanged: boolean }> {
   const attribution = await resolveRequestActorAttribution(input.request)
   // Lifecycle origin drives cleanup windows (unsaved sliced outputs age out
   // faster than transient uploads).
@@ -73,6 +75,18 @@ export async function persistLibraryFileFromLocalPath(input: {
       name: input.fileName
     })
     : null
+  // Skip creating a redundant version when the upload is byte-identical to the
+  // current file. We have the new bytes locally (`sourcePath`) before sending
+  // them to the bridge, so hash here and compare against the current version's
+  // hash on the bridge — identical content never gets stored or versioned. A
+  // probe failure falls through to a normal upload rather than blocking it.
+  if (overwriteTarget) {
+    const unchangedFile = await resolveUnchangedOverwrite(ownerBridgeId, overwriteTarget, input.sourcePath)
+    if (unchangedFile) {
+      return { file: unchangedFile, unchanged: true }
+    }
+  }
+
   const storedPath = buildLibraryStoredPath(input.fileName)
   await storeBridgeLibraryFile(ownerBridgeId, storedPath, input.sourcePath, { onProgress: input.onBridgeProgress })
   await input.onBridgeComplete?.()
@@ -149,7 +163,45 @@ export async function persistLibraryFileFromLocalPath(input: {
     })
   }
   if (!input.hidden) broadcastLibraryChanged()
-  return created
+  return { file: created, unchanged: false }
+}
+
+/**
+ * Returns the unchanged current file row when an overwrite's bytes are identical
+ * to what is already stored (so no new version is created), or null when the
+ * content differs or the comparison could not be made (probe failure → upload
+ * proceeds normally). Only applies to bridge-backed files.
+ */
+async function resolveUnchangedOverwrite(
+  ownerBridgeId: string,
+  overwriteTarget: LibraryOverwriteTarget,
+  sourcePath: string
+): Promise<PersistedLibraryFileRow | null> {
+  try {
+    const [newHash, existing] = await Promise.all([
+      hashLocalFile(sourcePath),
+      statBridgeLibraryFile({ ownerBridgeId, storedPath: overwriteTarget.storedPath })
+    ])
+    if (existing.contentSha256 !== newHash) return null
+    return await prisma.libraryFile.findUniqueOrThrow({ where: { id: overwriteTarget.id } })
+  } catch (error) {
+    // Benign: a failed hash/stat probe just means we can't prove the upload is
+    // identical, so it proceeds as a normal (new-version) upload. Log so a
+    // persistent bridge stat failure is still visible.
+    console.warn(`[library] identical-upload check failed for ${overwriteTarget.name}; proceeding with upload`, error instanceof Error ? error.message : error)
+    return null
+  }
+}
+
+/** SHA-256 (hex) of a local file's bytes, streamed so large files don't buffer. */
+async function hashLocalFile(filePath: string): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const hash = createHash('sha256')
+    const stream = createReadStream(filePath)
+    stream.on('error', reject)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('end', () => resolve(hash.digest('hex')))
+  })
 }
 
 /**

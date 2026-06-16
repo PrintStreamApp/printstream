@@ -189,7 +189,7 @@ editorRouter.post(
       }
       const sizeBytes = (await stat(persistSourcePath)).size
 
-      const created = await persistLibraryFileFromLocalPath({
+      const { file: created } = await persistLibraryFileFromLocalPath({
         tenantId,
         sourcePath: persistSourcePath,
         fileName: target.name,
@@ -240,7 +240,7 @@ editorRouter.post('/new-project', requireRequestPermission(LIBRARY_UPLOAD_PERMIS
   try {
     await buildEditedThreeMf(null, outputPath, { plates: [{ index: 1 }], instances: [] }, [])
     const sizeBytes = (await stat(outputPath)).size
-    const created = await persistLibraryFileFromLocalPath({
+    const { file: created } = await persistLibraryFileFromLocalPath({
       tenantId,
       sourcePath: outputPath,
       fileName,

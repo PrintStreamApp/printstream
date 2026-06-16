@@ -10,6 +10,7 @@
  * thumbnail is the focus and only the name is shown.
  */
 import React, { useEffect, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
+import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded'
 import { AspectRatio, Box, Checkbox, Chip, Stack, Tooltip, Typography } from '@mui/joy'
 import { formatBytes, type LibraryFile, type LibraryFolder } from '@printstream/shared'
 import { buildApiUrl } from '../lib/apiUrl'
@@ -572,6 +573,7 @@ export function LibraryFileRow({
       )}
       <Box sx={{ position: 'relative', width: 56, height: 56, flexShrink: 0 }}>
         <FileThumbnail file={file} size={56} disabled={disableThumbnail} />
+        {disabledReason && <FileUnavailableOverlay reason={disabledReason} iconSize={20} />}
         <Chip
           size="sm"
           variant="solid"
@@ -607,11 +609,6 @@ export function LibraryFileRow({
             kind="filament"
             align="left"
           />
-        )}
-        {disabledReason && (
-          <Typography level="body-xs" color="warning">
-            {disabledReason}
-          </Typography>
         )}
       </Stack>
       {!hideMetadataTags && <FileTags file={file} hideFilament />}
@@ -796,6 +793,7 @@ function FileTile({
       <AspectRatio ratio="1 / 1" sx={{ '--AspectRatio-radius': '0px', flexShrink: 0 }}>
         <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
           <FileThumbnail file={file} fill disabled={disableThumbnail} />
+          {disabledReason && <FileUnavailableOverlay reason={disabledReason} iconSize={30} />}
           {selectable && onSelectionToggle && (
             <Checkbox
               checked={selected}
@@ -890,11 +888,6 @@ function FileTile({
             kind="meta"
             align="center"
           />
-        )}
-        {disabledReason && (
-          <Typography level="body-xs" color="warning" sx={{ minWidth: 0, textAlign: 'center' }}>
-            {disabledReason}
-          </Typography>
         )}
       </Stack>
     </Box>
@@ -1240,6 +1233,34 @@ function summarizeChipLabel(label: string): { shortLabel: string; truncated: boo
  * Square plate-1 thumbnail. Falls back to the kind label when the file
  * is not a 3MF/gcode (no embedded image) or the request errors.
  */
+/**
+ * Full-cover overlay marking a file whose backing source (e.g. a disconnected
+ * bridge) is temporarily unavailable. Replaces per-card explanatory text — the
+ * page-level banner carries the full reason — with a compact icon; the reason
+ * stays available on hover.
+ */
+function FileUnavailableOverlay({ reason, iconSize }: { reason: string; iconSize: number }) {
+  return (
+    <Tooltip variant="soft" size="sm" title={reason}>
+      <Box
+        aria-label={reason}
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 2,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--joy-palette-warning-300)',
+          backgroundColor: 'rgba(7, 10, 16, 0.55)'
+        }}
+      >
+        <LinkOffRoundedIcon sx={{ fontSize: iconSize }} />
+      </Box>
+    </Tooltip>
+  )
+}
+
 export function FileThumbnail({
   file,
   size,

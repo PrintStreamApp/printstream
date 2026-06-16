@@ -1094,6 +1094,18 @@ export const printerNozzleSchema = z.object({
 })
 export type PrinterNozzle = z.infer<typeof printerNozzleSchema>
 
+export const printerConnectionWarningCodeSchema = z.enum([
+  'localConnectionFailed',
+  'developerModeDisabled'
+])
+export type PrinterConnectionWarningCode = z.infer<typeof printerConnectionWarningCodeSchema>
+
+export const printerConnectionWarningSchema = z.object({
+  code: printerConnectionWarningCodeSchema,
+  message: z.string()
+})
+export type PrinterConnectionWarning = z.infer<typeof printerConnectionWarningSchema>
+
 export const printerStatusSchema = z.object({
   printerId: z.string(),
   online: z.boolean(),
@@ -1171,6 +1183,13 @@ export const printerStatusSchema = z.object({
    * has not yet sent a state-bearing report (no information either way).
    */
   sdCardPresent: z.boolean().nullable(),
+  /**
+   * LAN connection-mode warnings from the bridge's periodic connection probe
+   * (e.g. the printer is reachable but rejected the LAN connection because
+   * LAN-only / developer mode is off). Empty when the connection looks healthy
+   * or has not been probed yet.
+   */
+  connectionWarnings: z.array(printerConnectionWarningSchema).default([]),
   observedAt: z.string()
 })
 export type PrinterStatus = z.infer<typeof printerStatusSchema>
@@ -1443,18 +1462,6 @@ export const printerConnectionValidationInputSchema = printerBaseSchema.pick({
   accessCode: true
 })
 export type PrinterConnectionValidationInput = z.infer<typeof printerConnectionValidationInputSchema>
-
-export const printerConnectionWarningCodeSchema = z.enum([
-  'localConnectionFailed',
-  'developerModeDisabled'
-])
-export type PrinterConnectionWarningCode = z.infer<typeof printerConnectionWarningCodeSchema>
-
-export const printerConnectionWarningSchema = z.object({
-  code: printerConnectionWarningCodeSchema,
-  message: z.string()
-})
-export type PrinterConnectionWarning = z.infer<typeof printerConnectionWarningSchema>
 
 export const printerConnectionValidationSchema = z.object({
   ok: z.boolean(),

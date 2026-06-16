@@ -40,3 +40,7 @@ docs/current-work-status.md
 # Local Claude Code session state (transcripts, memory, runtime locks)
 .claude/projects/
 .claude/scheduled_tasks.lock
+
+# Project-scoped MCP config: holds a per-install localhost token (Integrated
+# Browser MCP), so it's developer-local, not shared/committed.
+/.mcp.json
