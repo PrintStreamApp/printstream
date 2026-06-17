@@ -1,29 +1,33 @@
 /**
- * Download card for the standalone bridge packages. A single Download button
- * opens a menu of every package grouped by OS, with the one matching the
- * visitor's detected machine highlighted and flagged "Compatible with this
- * machine". Choosing a package opens an install dialog that carries the per-OS
- * instructions and the actual download button. Renders nothing when no packages
- * are published (e.g. self-hosted installs); a dev placeholder set can be passed
- * in to preview it.
+ * Install card for the bridge. A single Install button opens a menu of every
+ * native package grouped by OS — with the one matching the visitor's detected
+ * machine highlighted and flagged "Compatible with this machine" — plus a "Run
+ * with Docker" entry for users who prefer the published container image.
+ * Choosing a native package opens a dialog with per-OS instructions and the
+ * download button; choosing Docker opens the compose quick-start. Always renders
+ * (Docker is available even with no published native packages, e.g. self-hosted
+ * installs); a dev placeholder download set can be passed in to preview the
+ * native packages.
  */
-import { Box, Button, Card, CardContent, Chip, DialogTitle, Dropdown, IconButton, ListDivider, ListItem, Menu, MenuButton, MenuItem, Sheet, Stack, Typography } from '@mui/joy'
+import { Button, Card, CardContent, Chip, DialogTitle, Dropdown, ListDivider, ListItem, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy'
 import React from 'react'
 import ArrowDropDownRoundedIcon from '@mui/icons-material/ArrowDropDownRounded'
-import CheckRoundedIcon from '@mui/icons-material/CheckRounded'
-import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded'
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import type { BridgeStandaloneDownload } from '@printstream/shared'
 import { bridgePlatformArchLabel, bridgePlatformLabel, groupByBridgeOs } from '../lib/bridgePlatform'
 import { BackAwareModal } from './BackAwareModal'
+import { BridgeDockerDialog } from './BridgeDockerDialog'
+import { CopyableCodeBlock } from './CopyableCodeBlock'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 
-export function BridgeDownloadsCard({ downloads, detectedPlatformKey }: {
+export function BridgeInstallCard({ downloads, detectedPlatformKey, serverUrl }: {
   downloads: BridgeStandaloneDownload[]
   detectedPlatformKey: string | null
+  serverUrl: string
 }) {
   const [selected, setSelected] = React.useState<BridgeStandaloneDownload | null>(null)
-  if (downloads.length === 0) return null
+  const [dockerOpen, setDockerOpen] = React.useState(false)
+  const hasDownloads = downloads.length > 0
 
   return (
     <Card variant="outlined">
@@ -36,7 +40,7 @@ export function BridgeDownloadsCard({ downloads, detectedPlatformKey }: {
               startDecorator={<DownloadRoundedIcon />}
               endDecorator={<ArrowDropDownRoundedIcon />}
             >
-              Download
+              Install
             </MenuButton>
             <Menu placement="bottom-start">
               {groupByBridgeOs(downloads, (download) => download.platformKey).map((group, groupIndex) => (
@@ -65,14 +69,21 @@ export function BridgeDownloadsCard({ downloads, detectedPlatformKey }: {
                   })}
                 </React.Fragment>
               ))}
+              {hasDownloads ? <ListDivider /> : null}
+              <MenuItem onClick={() => setDockerOpen(true)}>Run with Docker</MenuItem>
             </Menu>
           </Dropdown>
-          <Typography level="body-sm" textColor="text.tertiary">Build {downloadBuildLabel(downloads[0]!)}</Typography>
+          {hasDownloads ? (
+            <Typography level="body-sm" textColor="text.tertiary">Build {downloadBuildLabel(downloads[0]!)}</Typography>
+          ) : null}
         </Stack>
       </CardContent>
 
       {selected ? (
         <BridgeInstallDialog download={selected} onClose={() => setSelected(null)} />
+      ) : null}
+      {dockerOpen ? (
+        <BridgeDockerDialog serverUrl={serverUrl} onClose={() => setDockerOpen(false)} />
       ) : null}
     </Card>
   )
@@ -125,7 +136,7 @@ function BridgeInstallHint({ platformKey, fileName }: { platformKey: string; fil
           Double-click the downloaded file to install. If macOS blocks it (unidentified developer),
           right-click the file and choose Open — or run:
         </Typography>
-        <CommandBlock text={`xattr -d com.apple.quarantine ${fileName}`} />
+        <CopyableCodeBlock text={`xattr -d com.apple.quarantine ${fileName}`} copyAriaLabel="Copy command" />
       </Stack>
     )
   }
@@ -134,31 +145,8 @@ function BridgeInstallHint({ platformKey, fileName }: { platformKey: string; fil
       <Typography level="body-sm">
         In a terminal, in the folder you downloaded to, make it executable and run the installer:
       </Typography>
-      <CommandBlock text={`chmod +x ${fileName}\nsudo ./${fileName} setup`} />
+      <CopyableCodeBlock text={`chmod +x ${fileName}\nsudo ./${fileName} setup`} copyAriaLabel="Copy command" />
     </Stack>
-  )
-}
-
-/** Monospace command block with a copy button. */
-function CommandBlock({ text }: { text: string }) {
-  const [copied, setCopied] = React.useState(false)
-  const copy = () => {
-    void navigator.clipboard?.writeText(text)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1500)
-  }
-  return (
-    <Sheet variant="soft" sx={{ borderRadius: 'sm', p: 1, display: 'flex', gap: 1, alignItems: 'flex-start' }}>
-      <Box
-        component="pre"
-        sx={{ m: 0, flex: 1, minWidth: 0, fontFamily: 'code', fontSize: 'sm', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
-      >
-        {text}
-      </Box>
-      <IconButton size="sm" variant="plain" color="neutral" onClick={copy} aria-label="Copy command">
-        {copied ? <CheckRoundedIcon /> : <ContentCopyRoundedIcon />}
-      </IconButton>
-    </Sheet>
   )
 }
 

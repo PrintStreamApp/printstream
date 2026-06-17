@@ -3,11 +3,14 @@
 # `main` (i.e. each `npm run export:public` snapshot) rebuilds and republishes
 # `:latest`, plus an immutable `:sha-<short>` for pinning a specific build.
 #
-# Two images:
+# Three images:
 #   printstream          - the combined app (web + API + bridge in one image; the
 #                          entrypoint runs `api` by default or `bridge` on demand).
 #                          Published multi-arch (linux/amd64 + linux/arm64) so it
 #                          runs on Raspberry Pi / ARM NAS as well as x86 hosts.
+#   printstream-bridge   - the slim, bridge-only image (Dockerfile `bridge` target):
+#                          a single esbuild-bundled runtime on the base image, for
+#                          running just a LAN bridge host. Also multi-arch.
 #   printstream-slicer   - the optional server-side slicer (bundles the x86 Bambu
 #                          Studio CLI, so amd64 only).
 #
@@ -101,6 +104,34 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # The slim, bridge-only image (Dockerfile `bridge` target): the published
+      # image people pull to run just a LAN bridge, without the API/web/Prisma
+      # weight of the combined image. Same multi-arch + push-by-digest pattern.
+      - id: build-bridge
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: bridge
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/printstreamapp/printstream-bridge,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=printstream-bridge-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=printstream-bridge-${{ matrix.arch }}
+
+      - name: Export bridge digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests-bridge"
+          digest="${{ steps.build-bridge.outputs.digest }}"
+          touch "${{ runner.temp }}/digests-bridge/${digest#sha256:}"
+
+      - name: Upload bridge digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests-bridge/*
+          if-no-files-found: error
+          retention-days: 1
+
   # Merge the per-arch digests into a single multi-arch manifest and tag it.
   merge-app:
     needs: build-app
@@ -142,6 +173,48 @@ jobs:
 
       - name: Inspect image
         run: docker buildx imagetools inspect ghcr.io/printstreamapp/printstream:latest
+
+  # Merge the per-arch bridge digests into a single multi-arch manifest and tag it.
+  merge-bridge:
+    needs: build-app
+    if: github.repository == 'PrintStreamApp/printstream'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: bridge-digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/printstreamapp/printstream-bridge
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Create multi-arch manifest and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/printstreamapp/printstream-bridge@sha256:%s ' *)
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect ghcr.io/printstreamapp/printstream-bridge:latest
 
   # Slicer bundles the x86 Bambu Studio CLI, so it stays amd64-only and is pushed
   # directly with tags (no per-arch merge needed).

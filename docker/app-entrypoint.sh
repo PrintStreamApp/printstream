@@ -2,7 +2,7 @@
 # Dispatches the combined PrintStream app image to a role:
 #   (default) / "api"  -> apply DB migrations, then run the API (which serves the
 #                         web SPA + /api + /ws on one port via SERVE_WEB_DIR)
-#   "bridge"           -> run the LAN bridge (launcher)
+#   "bridge"           -> run the LAN bridge (updates by image pull, not in place)
 #   anything else      -> exec'd verbatim (e.g. the demo bootstrap command)
 # One image builds web + API + bridge; the cloud build and the published
 # open-core image are identical (no divergence). PostgreSQL is the `db` service.
@@ -14,7 +14,7 @@ case "${1:-api}" in
     exec node apps/api/dist/index.js
     ;;
   bridge)
-    exec node apps/bridge/dist/launcher.js
+    exec node apps/bridge/dist/index.js
     ;;
   *)
     exec "$@"

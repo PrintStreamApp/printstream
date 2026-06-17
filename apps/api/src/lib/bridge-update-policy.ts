@@ -198,17 +198,15 @@ function readCurrentBridgeBuildPointer(releasesDir: string): CurrentBridgeBuildP
 }
 
 /**
- * One build ships as separate fragments (a Docker app bundle and a standalone
- * binary set, both `*.release.json`); merge every fragment matching the
- * promoted fingerprint into the announced build. Returns null when no
- * artifacts for the promoted build have been published yet.
+ * A build's artifacts are published as `*.release.json` fragments; merge every
+ * fragment matching the promoted fingerprint into the announced build. Returns
+ * null when no artifacts for the promoted build have been published yet.
  *
- * The two fragments describe different runner families, so each fragment's
- * ABI coordinates are pushed down onto its own artifacts (`bundle` /
- * `binaries[*]`) and the merged build's top-level coordinates always come
- * from the bundle-carrying (Docker) fragment when one exists — legacy Docker
- * bridges gate installs on the top-level value, while standalone bridges
- * read their binary's own coordinate.
+ * Today only the standalone binary fragment is published (Docker bridges update
+ * by image pull, so no app-bundle fragment exists). The merge stays general —
+ * each fragment's ABI coordinates are pushed onto its own artifacts (`bundle` /
+ * `binaries[*]`), and a bundle-carrying fragment, if one were ever present
+ * again, would still supply the merged build's top-level coordinates.
  */
 function mergePublishedBuildFragments(releasesDir: string, pointer: CurrentBridgeBuildPointer): BridgeBuild | null {
   let merged: BridgeBuild | null = null

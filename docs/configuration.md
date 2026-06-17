@@ -16,11 +16,10 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `MANAGED_BRIDGE` | `false` (public Docker example defaults it on) | Enables **managed-bridge mode** for single-host self-hosting: the bundled bridge auto-pairs into the sole workspace and the Bridges settings page is hidden. Set `false` to keep manual connect-code pairing (cloud, multiple bridges, or a bridge on a separate host). |
 | `MANAGED_BRIDGE_TOKEN_FILE` | `/run/provision/managed-bridge-token` | Path to the managed-bridge provisioning token. In managed mode the API generates this token on first start; the bundled bridge reads it from the same path over a shared mount to authenticate its auto-pairing. Operators never set the token value — only the file location, which must resolve to the same file in both containers. |
 | `BRIDGE_STATE_FILE` | `./data/bridge-state.json` | Path where the bridge persists its connected identity and runtime token. |
-| `BRIDGE_AUTO_UPDATE` | `false` | When true, the bridge installs an available compatible app-bundle update after registration and restarts through the launcher. |
-| `BRIDGE_RELEASES_DIR` | `./data/releases` | Bridge-container directory for staged and activated app-bundle releases. |
-| `BRIDGE_RELEASE_RETENTION_DAYS` | `7` | How long to keep rollback releases after the active release has confirmed healthy. |
-| `BRIDGE_UPDATE_PUBLIC_KEY` | official PrintStream key | Optional Ed25519 public key override for verifying signed app-bundle updates. Normal bridge installs should leave this unset. Compose `.env` files may use a one-line PEM with `\n` escapes when overriding. |
-| API `BRIDGE_RELEASES_DIR` | `./data/bridge-releases` | API-container directory containing signed bridge release JSON fragments and zip assets served to bridges. |
+| `BRIDGE_AUTO_UPDATE` | `false` | Standalone bridges only: when true, a standalone executable installs an available compatible update in place after registration. Docker bridges update by image pull and ignore this. |
+| `BRIDGE_RELEASES_DIR` | `./data/releases` | Standalone bridges only: directory for staged self-update binaries. Docker bridges keep no release state (the image is the unit of update). |
+| `BRIDGE_UPDATE_PUBLIC_KEY` | official PrintStream key | Optional Ed25519 public key override for verifying signed standalone updates. Normal bridge installs should leave this unset. Compose `.env` files may use a one-line PEM with `\n` escapes when overriding. |
+| API `BRIDGE_RELEASES_DIR` | `./data/bridge-releases` | API-container directory containing signed bridge release JSON fragments and the standalone binary assets served to bridges. |
 | `CLOUDFLARE_EMAIL_ACCOUNT_ID` | *(unset)* | Cloudflare account ID for Email Sending. Required for local-auth one-time email codes outside demo mode. |
 | `CLOUDFLARE_EMAIL_API_TOKEN` | *(unset)* | Cloudflare API token with Email Sending permission. Treat this as a secret and rotate it if exposed. |
 | `CLOUDFLARE_EMAIL_FROM_EMAIL` | *(unset)* | Verified sender address for Cloudflare Email Sending. |

@@ -30,12 +30,12 @@ COPY packages/shared/package.json packages/shared/package.json
 COPY packages/shared/src packages/shared/src
 RUN npm ci
 COPY . .
-# Image-drift fingerprint: covers what app-bundle self-updates cannot deliver —
-# the dependency tree baked into node_modules and this Dockerfile (base image,
-# apt ffmpeg). App sources are excluded (bundles keep code lockstep, so hashing
-# sources would re-flag every self-built image). The bridge *release* fingerprint
-# (lockstep identity, bridge-release-fingerprint.sh) hashes sources separately
-# and is unaffected by this Dockerfile.
+# Image-drift fingerprint: the dependency tree baked into node_modules and this
+# Dockerfile (base image, apt ffmpeg) — the part of a Docker bridge that only an
+# image rebuild/pull can change. App sources are excluded (the bridge *release*
+# fingerprint, bridge-release-fingerprint.sh, covers those separately; hashing
+# sources here would re-flag every self-built image). Drift feeds the
+# non-blocking imageUpdateRequired warning shown in Settings.
 RUN bridge_source_fingerprint="$PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT" \
   && if [ "$bridge_source_fingerprint" = "unknown" ]; then \
     bridge_source_fingerprint="$(find package-lock.json Dockerfile -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"; \
@@ -53,6 +53,29 @@ RUN npm run build --workspace @printstream/shared \
   && npm run build --workspace @printstream/web \
   && npm run build --workspace @printstream/api \
   && npm run build --workspace @printstream/bridge
+
+# Slim, bridge-only image, published as ghcr.io/printstreamapp/printstream-bridge
+# for running just a LAN bridge host. The bridge has a tiny dependency footprint
+# (no Prisma, web, or API deps), so we esbuild-bundle its runtime entry into a
+# single file (bundle-docker.mjs) and ship it on the base image — which already
+# carries the ffmpeg the camera relay needs — instead of copying the full
+# workspace node_modules the combined `runtime` stage does. Updates ship by image
+# pull (no in-place self-updater). The combined image can still run the bridge via
+# its `bridge` role; this is the dedicated, smaller alternative. Build with
+# `docker build --target bridge`.
+FROM build AS bridge-build
+RUN node apps/bridge/scripts/bundle-docker.mjs
+
+FROM base AS bridge
+ENV NODE_ENV=production
+WORKDIR /app
+# Library files, bridge state, and other bridge-owned assets live under /data.
+RUN mkdir -p /data && chown -R node:node /data
+COPY --chown=node:node --from=bridge-build /app/apps/bridge/dist/bridge-runner.cjs /app/bridge-runner.cjs
+# Build identity for the footer version/update hint (env.ts reads it from cwd).
+COPY --chown=node:node --from=bridge-build /app/bridge-build-metadata.json /app/bridge-build-metadata.json
+USER node
+ENTRYPOINT ["node", "/app/bridge-runner.cjs"]
 
 FROM base AS runtime
 ENV NODE_ENV=production

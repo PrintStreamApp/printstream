@@ -7,7 +7,7 @@
  * Self-healing by design: it reconnects on every failure, clears and re-registers
  * when stored credentials are rejected, and exits (for the supervisor to restart)
  * after an accepted update. Update mechanics are delegated to a `BridgeUpdateDriver`
- * so this module stays packaging-agnostic (Docker bundle vs standalone self-update).
+ * so this module stays packaging-agnostic (Docker image-pull vs standalone self-update).
  */
 import { setTimeout as delay } from 'node:timers/promises'
 import { readFile, stat } from 'node:fs/promises'
@@ -112,7 +112,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { BridgeUpdateDriver } from './update-driver.js'
-import { createBundleUpdateDriver } from './update-driver-bundle.js'
+import { createImagePullUpdateDriver } from './update-driver-imagepull.js'
 
 const RECONNECT_DELAY_MS = 5_000
 const CAMERA_STREAM_RETRY_DELAY_MS = 1_000
@@ -144,7 +144,7 @@ export interface BridgeRuntimeStatusSnapshot {
 export interface BridgeRuntimeClientOptions {
   onStatusChange?: (snapshot: BridgeRuntimeStatusSnapshot) => void
   simulator?: BridgeRuntimeSimulator | null
-  /** Packaging-specific update mechanics; defaults to the Docker bundle driver. */
+  /** Packaging-specific update mechanics; defaults to the Docker image-pull driver. */
   updateDriver?: BridgeUpdateDriver
 }
 
@@ -192,7 +192,7 @@ export class BridgeRuntimeClient {
     // whose console output is otherwise hidden in an on-disk service log file.
     installBridgeLogCapture()
     this.simulator = options.simulator ?? null
-    this.updateDriver = options.updateDriver ?? createBundleUpdateDriver()
+    this.updateDriver = options.updateDriver ?? createImagePullUpdateDriver()
   }
 
   getStatusSnapshot(): BridgeRuntimeStatusSnapshot {

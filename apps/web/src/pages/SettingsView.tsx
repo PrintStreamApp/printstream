@@ -31,7 +31,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AuthAccessSection } from '../components/AuthAccessSection'
 import { BackAwareModal } from '../components/BackAwareModal'
-import { BridgeDownloadsCard } from '../components/BridgeDownloadsCard'
+import { BridgeInstallCard } from '../components/BridgeInstallCard'
 import { ConfirmActionDialog } from '../components/ConfirmActionDialog'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../components/ScrollableDialog'
 import { type DirectorySortDirection, type DirectorySortOption } from '../components/DirectoryControls'
@@ -1251,6 +1251,9 @@ function BridgeSettingsSection() {
     ? realBridgeDownloads
     : (getBrowserEnv().devMode ? placeholderBridgeDownloads() : [])
   const bridges = bridgesQuery.data?.bridges ?? []
+  // The origin a bridge registers with is this PrintStream server's public URL,
+  // i.e. the site the operator is viewing now — pre-fill the Docker snippet with it.
+  const bridgeServerUrl = typeof window !== 'undefined' ? window.location.origin : 'https://your-server.example.com'
   const listError = bridgesQuery.error ? extractErrorMessage(bridgesQuery.error) : null
 
   const openConnectDialog = () => {
@@ -1272,17 +1275,18 @@ function BridgeSettingsSection() {
         </Stack>
       </Alert>
 
-      {bridgeDownloads.length > 0 && (
-        <>
-          <Box>
-            <Typography level="title-md">Install a bridge</Typography>
-            <Typography level="body-sm" textColor="text.tertiary">
-              Run the bridge app on a computer near your printers. It shows a connect code once it starts.
-            </Typography>
-          </Box>
-          <BridgeDownloadsCard downloads={bridgeDownloads} detectedPlatformKey={detectedPlatformKey} />
-        </>
-      )}
+      <Box>
+        <Typography level="title-md">Install a bridge</Typography>
+        <Typography level="body-sm" textColor="text.tertiary">
+          Run the bridge on a computer near your printers — install a native build or run it with Docker.
+          It shows a connect code once it starts.
+        </Typography>
+      </Box>
+      <BridgeInstallCard
+        downloads={bridgeDownloads}
+        detectedPlatformKey={detectedPlatformKey}
+        serverUrl={bridgeServerUrl}
+      />
 
       <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
         <Box sx={{ minWidth: 0 }}>

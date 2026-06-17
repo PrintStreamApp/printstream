@@ -309,7 +309,11 @@ export const bridgeBuildSchema = z.object({
   minimumRunnerAbiVersion: z.string().min(1),
   releasedAt: z.string().datetime(),
   notesUrl: z.string().url().nullable(),
-  /** Docker app bundle (zip of dist). */
+  /**
+   * Legacy Docker app bundle (zip of dist). No build publishes one anymore —
+   * Docker bridges update by image pull, not in place — so this is always
+   * `null` now; kept nullable for wire compatibility with older manifests.
+   */
   bundle: z.object({
     url: z.string().url(),
     sha256: z.string().min(1),

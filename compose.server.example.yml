@@ -141,9 +141,6 @@ services:
       # managed server auto-pairs this bridge. Harmless when MANAGED_BRIDGE is
       # off (the file simply won't exist).
       MANAGED_BRIDGE_TOKEN_FILE: /run/provision/managed-bridge-token
-      BRIDGE_AUTO_UPDATE: ${BRIDGE_AUTO_UPDATE:-false}
-      BRIDGE_RELEASES_DIR: /data/releases
-      BRIDGE_RELEASE_RETENTION_DAYS: ${BRIDGE_RELEASE_RETENTION_DAYS:-7}
     # NOTE: Bridge-owned SSDP discovery requires receiving LAN multicast
     # packets. If you need auto-discovery from inside Docker, change this
     # service to `network_mode: host` and point `BRIDGE_SERVER_URL` at an

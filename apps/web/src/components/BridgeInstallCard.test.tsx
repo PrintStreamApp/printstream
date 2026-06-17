@@ -19,7 +19,7 @@ animationFrameWindow.cancelAnimationFrame = (handle) => dom.window.clearTimeout(
 const React = (await import('react')).default
 const { CssVarsProvider } = await import('@mui/joy/styles')
 const { cleanup, fireEvent, render } = await import('@testing-library/react')
-const { BridgeDownloadsCard } = await import('./BridgeDownloadsCard')
+const { BridgeInstallCard } = await import('./BridgeInstallCard')
 
 afterEach(() => {
   cleanup()
@@ -50,14 +50,14 @@ const ALL_DOWNLOADS = [
 test('flags the package matching the machine and opens its dialog with a Download button', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeDownloadsCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" />
+      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" />
     </CssVarsProvider>
   )
 
-  // The chooser is a single Download button; the actual download link lives on
+  // The chooser is a single Install button; the actual download link lives on
   // the install dialog, so it should not exist before a package is chosen.
   assert.equal(view.queryByRole('link', { name: 'Download' }), null)
-  fireEvent.click(view.getByRole('button', { name: 'Download' }))
+  fireEvent.click(view.getByRole('button', { name: 'Install' }))
 
   const recommended = await view.findByRole('menuitem', { name: 'Windows (x64)' })
   assert.match(recommended.textContent ?? '', /Compatible with this machine/)
@@ -72,11 +72,11 @@ test('flags the package matching the machine and opens its dialog with a Downloa
 test('a Linux package shows the chmod + sudo install command', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeDownloadsCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" />
+      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" />
     </CssVarsProvider>
   )
 
-  fireEvent.click(view.getByRole('button', { name: 'Download' }))
+  fireEvent.click(view.getByRole('button', { name: 'Install' }))
   fireEvent.click(await view.findByRole('menuitem', { name: 'Linux (x64)' }))
 
   const link = await view.findByRole('link', { name: 'Download' })
@@ -87,11 +87,11 @@ test('a Linux package shows the chmod + sudo install command', async () => {
 test('without a detected platform nothing is flagged, and each package opens the dialog', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeDownloadsCard downloads={ALL_DOWNLOADS} detectedPlatformKey={null} />
+      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey={null} serverUrl="https://printstream.example.com" />
     </CssVarsProvider>
   )
 
-  fireEvent.click(view.getByRole('button', { name: 'Download' }))
+  fireEvent.click(view.getByRole('button', { name: 'Install' }))
   const items = await view.findAllByRole('menuitem')
   for (const item of items) {
     assert.doesNotMatch(item.textContent ?? '', /Compatible with this machine/)
@@ -102,13 +102,33 @@ test('without a detected platform nothing is flagged, and each package opens the
   assert.equal(link.getAttribute('href'), download('darwin-arm64').url)
 })
 
-test('renders nothing without published packages', () => {
+test('the Docker entry opens a compose quick-start with the server origin filled in', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeDownloadsCard downloads={[]} detectedPlatformKey="win32-x64" />
+      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" />
     </CssVarsProvider>
   )
 
-  assert.equal(view.queryByRole('button'), null)
-  assert.equal(view.queryByRole('link'), null)
+  fireEvent.click(view.getByRole('button', { name: 'Install' }))
+  fireEvent.click(await view.findByRole('menuitem', { name: 'Run with Docker' }))
+
+  const compose = (await view.findAllByText(/ghcr\.io\/printstreamapp\/printstream-bridge:latest/))[0]?.textContent ?? ''
+  assert.match(compose, /BRIDGE_SERVER_URL: https:\/\/printstream\.example\.com/)
+  // The dedicated bridge image's entrypoint is the bridge, so no `command:`.
+  assert.doesNotMatch(compose, /command:/)
+  assert.ok(view.getAllByText('docker compose up -d').length > 0)
+})
+
+test('without published native packages the Install button still offers Docker', async () => {
+  const view = render(
+    <CssVarsProvider>
+      <BridgeInstallCard downloads={[]} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" />
+    </CssVarsProvider>
+  )
+
+  // No native build label and no per-OS items, but Docker is always available.
+  assert.equal(view.queryByText(/^Build /), null)
+  fireEvent.click(view.getByRole('button', { name: 'Install' }))
+  const items = await view.findAllByRole('menuitem')
+  assert.deepEqual(items.map((item) => item.textContent), ['Run with Docker'])
 })

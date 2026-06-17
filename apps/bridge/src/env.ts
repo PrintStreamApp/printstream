@@ -89,7 +89,6 @@ const envSchema = z.object({
   BRIDGE_RUNNER_ABI_VERSION: z.string().trim().min(1).max(120).default('node22-ffmpeg7-v1'),
   BRIDGE_AUTO_UPDATE: z.coerce.boolean().default(false),
   BRIDGE_RELEASES_DIR: z.string().default('/data/releases'),
-  BRIDGE_RELEASE_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(7),
   BRIDGE_UPDATE_PUBLIC_KEY: z.string().trim().optional(),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development')
 })

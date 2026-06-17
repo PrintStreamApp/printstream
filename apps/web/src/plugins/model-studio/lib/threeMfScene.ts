@@ -392,7 +392,10 @@ export function createBedGridLines(minX: number, maxX: number, minY: number, max
  */
 function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: number): THREE.Object3D {
   const group = new THREE.Group()
-  const labelHeight = 5 // mm of text height on the bed; small enough to stay unobtrusive
+  // mm of text height on the bed. Sized to stay legible when the whole bed is in
+  // view (a 256mm plate): at 5mm the numbers were an invisible speck until heavily
+  // zoomed in, which was the real complaint behind the (ineffective) billboard hack.
+  const labelHeight = 9
   const margin = labelHeight * 0.9
   const firstX = Math.ceil(minX / BED_GRID_MAJOR_STEP_MM) * BED_GRID_MAJOR_STEP_MM
   for (let x = firstX; x <= maxX + 1e-6; x += BED_GRID_MAJOR_STEP_MM) {
@@ -412,13 +415,12 @@ function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: num
 }
 
 /**
- * A small numeric tick label for a bed edge, rendered as a camera-facing sprite.
+ * A flat numeric tick label lying on the bed plane, like a ruler mark.
  *
- * It used to be a flat quad lying in the bed plane, which foreshortened to an
- * unreadable sliver at the editor's usual tilted camera angle (visible only when
- * the camera was nearly top-down). A sprite always billboards toward the camera,
- * and `depthTest: false` keeps it legible over the translucent bed/grid from any
- * orientation, so the X/Y coordinates stay readable regardless of zoom or tilt.
+ * It scales with the bed/grid (`heightMm` is real bed millimetres), so the
+ * numbers line up with the grid lines they annotate at every zoom level. The
+ * size is chosen so they remain readable when the whole plate is in view rather
+ * than only once the camera is zoomed in close.
  */
 function createAxisTickLabel(text: string, heightMm: number): THREE.Object3D | null {
   const fontSize = 44
@@ -439,14 +441,11 @@ function createAxisTickLabel(text: string, heightMm: number): THREE.Object3D | n
   const texture = new THREE.CanvasTexture(canvas)
   texture.anisotropy = 4
   const aspect = canvas.width / canvas.height
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0.72, depthTest: false, depthWrite: false })
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(aspect * heightMm, heightMm),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide })
   )
-  // Match the previous on-bed text size so the sprite scales with zoom like the grid.
-  sprite.scale.set(aspect * heightMm, heightMm, 1)
-  // Draw after the bed/grid so the always-on-top label is never washed out by them.
-  sprite.renderOrder = 4
-  return sprite
+  return mesh
 }
 
 /**
