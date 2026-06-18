@@ -1589,7 +1589,9 @@ export const libraryThreeMfSceneInstancePartSchema = z.object({
   /** Component-local transform (12-element), applied under the instance placement. */
   transform: z.array(z.number()).length(12),
   /** Raw `subtype` (support_blocker/support_enforcer/modifier_part/...) or null for a normal part. */
-  subtype: z.string().nullable().default(null)
+  subtype: z.string().nullable().default(null),
+  /** Per-part PROCESS overrides saved in the 3MF; the editor re-seeds its per-part gear from these. */
+  processOverrides: z.record(z.string(), z.string()).optional()
 })
 export type LibraryThreeMfSceneInstancePart = z.infer<typeof libraryThreeMfSceneInstancePartSchema>
 
@@ -1623,6 +1625,12 @@ export const libraryThreeMfSceneInstanceSchema = z.object({
     z: z.number(),
     radius: z.number()
   })).optional(),
+  /**
+   * Per-object PROCESS overrides saved in the 3MF (object-level `<metadata>` in
+   * model_settings.config), keyed by setting key. The editor re-seeds its per-object gear
+   * from these on reopen so saved overrides aren't invisible. Omitted when the object has none.
+   */
+  processOverrides: z.record(z.string(), z.string()).optional(),
   parts: z.array(libraryThreeMfSceneInstancePartSchema)
 })
 export type LibraryThreeMfSceneInstance = z.infer<typeof libraryThreeMfSceneInstanceSchema>

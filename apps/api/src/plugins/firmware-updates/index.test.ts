@@ -17,7 +17,13 @@ import type { RequestAuthContext } from '../../lib/auth-context.js'
 import { HttpError } from '../../lib/http-error.js'
 import { PrinterEventBus } from '../../lib/printer-events.js'
 import { printerManager } from '../../lib/printer-manager.js'
+import { prisma } from '../../lib/prisma.js'
 import { firmwareUpdatesPlugin, setFirmwareVersionRefreshTimeoutMsForTests } from './index.js'
+
+// The per-printer routes authorize through the tenant-scoped singleton prisma (the
+// fake context.prisma below only covers what the plugin itself queries). Stub it to
+// report the test printer as owned so the gate passes; restore after each test.
+const originalScopedPrinterFindUnique = prisma.printer.findUnique
 
 const testRoot = mkdtempSync(path.join(tmpdir(), 'bambu-firmware-plugin-test-'))
 process.env.LIBRARY_DIR = path.join(testRoot, 'library')
@@ -39,6 +45,7 @@ const printer: Printer = {
 
 afterEach(() => {
   mock.restoreAll()
+  prisma.printer.findUnique = originalScopedPrinterFindUnique
   setFirmwareVersionRefreshTimeoutMsForTests(null)
 })
 
@@ -110,6 +117,9 @@ test('firmware-updates routes expose installable versions in the update report',
 test('firmware-updates upload status becomes error when a requested version has no downloadable file yet', async () => {
   const realFetch = globalThis.fetch
   mock.method(printerManager, 'getPrinter', () => printer)
+  // Broadcasts are skipped when the printer's tenant can't be resolved, so this test
+  // (which asserts a broadcast fires) must report a tenant for the printer.
+  mock.method(printerManager, 'getTenantId', () => 'tenant-1')
   mock.method(printerManager, 'getStatus', () => ({ firmwareVersion: '01.09.00.00', sdCardPresent: true } as never))
   mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
@@ -312,6 +322,8 @@ async function withRegisteredPluginApp<T>(
     } satisfies RequestAuthContext
     next()
   })
+
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
 
   const router = express.Router()
   app.use('/api/plugins/firmware-updates', router)

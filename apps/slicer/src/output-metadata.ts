@@ -4,7 +4,7 @@
  * model, process/filament names, colours, manual nozzle assignment) shapes the
  * gcode. `filament_nozzle_map` is written verbatim as a runtime nozzle id and
  * `printer_model` as Bambu's per-model preset name; do NOT remap the nozzle id
- * through `physical_extruder_map` (see slicer CLAUDE.md nozzle-mapping invariant).
+ * through `physical_extruder_map` (see the slicer development notes nozzle-mapping invariant).
  * `slice_info.config` carries the Bambu `model_id` code, not the friendly name.
  */
 import type { CreateSlicingJob, SlicingProfileKind } from '@printstream/shared'

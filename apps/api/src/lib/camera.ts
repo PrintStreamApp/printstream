@@ -50,7 +50,21 @@ export async function* streamFrames(printer: Printer, signal?: AbortSignal): Asy
 	const queue: StreamItem[] = []
 	let resume: (() => void) | null = null
 
+	// The consumer (frame pacer) deliberately sleeps between frames, so a burst from
+	// the bridge could otherwise grow `queue` without bound — full JPEG buffers per
+	// printer held in the API heap. Live video should drop, not buffer: cap the number
+	// of queued frames and discard the oldest when we exceed it. Error/close items are
+	// control signals and are never dropped.
+	const MAX_QUEUED_FRAMES = 8
 	const push = (item: StreamItem) => {
+		if ('frame' in item) {
+			let frameCount = 0
+			for (const queued of queue) if ('frame' in queued) frameCount += 1
+			if (frameCount >= MAX_QUEUED_FRAMES) {
+				const oldestFrameIndex = queue.findIndex((queued) => 'frame' in queued)
+				if (oldestFrameIndex !== -1) queue.splice(oldestFrameIndex, 1)
+			}
+		}
 		queue.push(item)
 		resume?.()
 		resume = null

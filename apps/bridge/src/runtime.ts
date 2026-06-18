@@ -115,7 +115,13 @@ import type { BridgeUpdateDriver } from './update-driver.js'
 import { createImagePullUpdateDriver } from './update-driver-imagepull.js'
 
 const RECONNECT_DELAY_MS = 5_000
+/** Ceiling for the reconnect backoff, so a long outage doesn't stretch retries indefinitely. */
+const MAX_RECONNECT_DELAY_MS = 60_000
+/** A connection that held at least this long is treated as healthy, resetting the backoff to base. */
+const SUSTAINED_CONNECTION_MS = 30_000
 const CAMERA_STREAM_RETRY_DELAY_MS = 1_000
+/** Drop camera frames when the API socket's send buffer exceeds this, to bound bridge memory on a slow uplink. */
+const CAMERA_FRAME_MAX_BUFFERED_BYTES = 4 * 1024 * 1024
 /** Delay before the first per-printer LAN connection probe, letting the persistent monitor connect first. */
 const INITIAL_CONNECTION_PROBE_DELAY_MS = 45_000
 /** How often the bridge re-checks each printer's LAN/developer-mode reachability. */
@@ -205,14 +211,25 @@ export class BridgeRuntimeClient {
       message: 'Starting bridge runtime.'
     })
 
+    // Jittered exponential backoff so a fleet of bridges doesn't reconnect in
+    // lockstep when the API restarts (each reconnect drives registration + DB
+    // recovery server-side — a synchronized 5s beat is a thundering herd). The
+    // delay resets to the base once a connection has held for a while.
+    let reconnectDelayMs = RECONNECT_DELAY_MS
     for (;;) {
+      const attemptStartedAt = Date.now()
       try {
         await this.runOnce()
       } catch (error) {
         this.reportFailure(error)
         logBridgeRuntimeFailure(error)
       }
-      await delay(RECONNECT_DELAY_MS)
+      if (Date.now() - attemptStartedAt >= SUSTAINED_CONNECTION_MS) {
+        reconnectDelayMs = RECONNECT_DELAY_MS
+      }
+      const jitterMs = Math.round(Math.random() * reconnectDelayMs * 0.25)
+      await delay(reconnectDelayMs + jitterMs)
+      reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS)
     }
   }
 
@@ -1109,6 +1126,14 @@ export class BridgeRuntimeClient {
           for await (const frame of streamFrames(printer, controller.signal)) {
             if (controller.signal.aborted || !this.watchedCameraPrinterIds.has(printer.id) || socket.readyState !== WebSocket.OPEN) {
               return
+            }
+
+            // The bridge→API hop crosses the cloud and is the slowest link. If it
+            // backs up, drop this frame instead of letting `ws` queue every JPEG in
+            // bridge memory (base64-inflated, unbounded → OOM on a small bridge box).
+            // Live video should drop, not buffer; the next frame goes out once it drains.
+            if (socket.bufferedAmount > CAMERA_FRAME_MAX_BUFFERED_BYTES) {
+              continue
             }
 
             socket.send(JSON.stringify(bridgeCameraFrameMessageSchema.parse({

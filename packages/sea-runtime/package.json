@@ -1,0 +1,31 @@
+{
+  "name": "@printstream/sea-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/**/*",
+    "scripts/**/*",
+    "package.json",
+    "!dist/**/*.test.*"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./build": "./scripts/build-harness.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "resedit": "^3.0.2",
+    "typescript": "^5.8.3",
+    "yauzl": "^3.3.0"
+  }
+}

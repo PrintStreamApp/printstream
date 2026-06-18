@@ -397,6 +397,12 @@ function sendWsError(socket: WebSocket, message: string): void {
 }
 
 async function readPrinterTenantId(printerId: string): Promise<string | null> {
+  // Status/job/snapshot events fan out at MQTT cadence (live deltas plus a 30s
+  // pushall per printer), so resolve the tenant from the manager's in-memory cache
+  // first — a Postgres findUnique per event would scale DB load with telemetry rate,
+  // not user activity. Fall back to the DB only on a cache miss.
+  const cached = printerManager.getTenantId(printerId)
+  if (cached) return cached
   const row = await rootPrisma.printer.findUnique({
     where: { id: printerId },
     select: { tenantId: true }

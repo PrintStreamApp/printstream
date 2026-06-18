@@ -17,7 +17,7 @@ import { type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBoun
 import { PNG } from 'pngjs'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
-import { escapeRegExp, escapeXmlAttribute, readEntry, readZipEntryBuffer, rewriteModelSettingsThreeMf } from './three-mf-internal.js'
+import { OBJECT_STRUCTURAL_METADATA_KEYS, escapeXmlAttribute, readEntry, readZipEntryBuffer, rewriteModelSettingsThreeMf } from './three-mf-internal.js'
 import { buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex, type ThreeMfPlateObject } from './three-mf-reader.js'
 
 const ACTIVE_PRINT_PREVIEW_MAX_GCODE_BYTES = 128 * 1024 * 1024
@@ -315,26 +315,30 @@ export function rekeyReplacedObjectOverrides(
 }
 
 /**
- * Injects per-object process overrides as `<metadata key=… value=…/>` lines into each matching
- * `<object id="N">` block of `model_settings.config`, replacing any existing same-key metadata so
- * the value wins. Objects without overrides (and all other blocks) are left untouched.
+ * Sets each object's per-object process overrides in `model_settings.config`. For every object in
+ * `overridesByObjectId`, the object's HEAD metadata (before its first `<part>`) has its existing
+ * NON-structural metadata removed and the desired override set injected. Scoping to the head means
+ * a part's per-volume `<metadata>` of the same key is never clobbered; replacing the whole override
+ * set (rather than only the supplied keys) means an override the user CLEARED is actually removed,
+ * not left behind. An empty override map for an object therefore clears all its object-level
+ * overrides. Objects not listed (and all non-object blocks) are left untouched.
  */
 export function applyObjectProcessOverridesXml(xml: string, overridesByObjectId: ObjectProcessOverrides): string {
   return xml.replace(/<object\b([^>]*)>([\s\S]*?)<\/object>/g, (full, attrs: string, body: string) => {
     const objectId = Number.parseInt(/(?:^|\s)id="(\d+)"/.exec(attrs)?.[1] ?? '', 10)
     const overrides = overridesByObjectId[String(objectId)]
     if (!Number.isInteger(objectId) || !overrides) return full
-    const entries = Object.entries(overrides)
-    let nextBody = body
-    for (const [key] of entries) {
-      const existing = new RegExp(`[ \\t]*<metadata\\s+key="${escapeRegExp(key)}"\\s+value="[^"]*"\\s*/>\\n?`, 'g')
-      nextBody = nextBody.replace(existing, '')
-    }
-    const injected = entries.map(([key, value]) => {
+    const firstPart = body.search(/<part\b/)
+    const head = firstPart >= 0 ? body.slice(0, firstPart) : body
+    const tail = firstPart >= 0 ? body.slice(firstPart) : ''
+    // Drop existing object-level process overrides (keep structural metadata like name/extruder).
+    const strippedHead = head.replace(/[ \t]*<metadata\s+key="([^"]+)"\s+value="[^"]*"\s*\/>\n?/g, (line, key: string) =>
+      OBJECT_STRUCTURAL_METADATA_KEYS.has(key) ? line : '')
+    const injected = Object.entries(overrides).map(([key, value]) => {
       const serialized = Array.isArray(value) ? value.join(';') : value
       return `\n    <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(serialized)}"/>`
     }).join('')
-    return `<object${attrs}>${injected}${nextBody}</object>`
+    return `<object${attrs}>${injected}${strippedHead}${tail}</object>`
   })
 }
 

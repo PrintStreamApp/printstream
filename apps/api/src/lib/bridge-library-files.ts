@@ -295,6 +295,15 @@ async function isBridgeLibraryLocalCopyComplete(bridgeId: string, storedPath: st
   return result.eof && chunk.byteLength === 0
 }
 
+/**
+ * Coalesce concurrent replica builds for the same (libraryFileId, targetBridgeId).
+ * The replica's stored path is deterministic ({@link buildReplicaStoredPath}), so two
+ * simultaneous dispatches of the same file to the same bridge would both truncate and
+ * append to the SAME path, interleaving into a corrupt file and racing the `ready`
+ * upsert. Deduping onto one in-flight transfer makes the second caller await the first.
+ */
+const inflightReplicaBuilds = new Map<string, Promise<string>>()
+
 export async function ensureLibraryFileReplica(input: {
   tenantId: string
   libraryFileId: string
@@ -308,6 +317,27 @@ export async function ensureLibraryFileReplica(input: {
     return input.sourceStoredPath
   }
 
+  const inflightKey = `${input.libraryFileId}:${input.targetBridgeId}`
+  const inflight = inflightReplicaBuilds.get(inflightKey)
+  if (inflight) return await inflight
+  const build = ensureLibraryFileReplicaUncoalesced(input)
+  inflightReplicaBuilds.set(inflightKey, build)
+  try {
+    return await build
+  } finally {
+    inflightReplicaBuilds.delete(inflightKey)
+  }
+}
+
+async function ensureLibraryFileReplicaUncoalesced(input: {
+  tenantId: string
+  libraryFileId: string
+  fileName: string
+  sourceBridgeId: string | null
+  sourceStoredPath: string
+  sizeBytes: number
+  targetBridgeId: string
+}): Promise<string> {
   const existing = await prisma.libraryFileReplica.findUnique({
     where: {
       libraryFileId_bridgeId: {

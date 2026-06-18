@@ -170,6 +170,9 @@ app.post('/slice', async (request, response) => {
   const outputPath = path.join(workDir, outputFileName)
   const outputLines: SlicingOutputLine[] = []
   activeSliceOutput.set(parsed.data.jobId, outputLines)
+  // Abort the CLI if the API client cancels (the request connection closes before we respond).
+  const cliAbort = new AbortController()
+  request.on('close', () => { if (!response.writableEnded) cliAbort.abort() })
   try {
     appendStructuredOutput(outputLines, 'system', 'Receiving slicing input')
     await Promise.all([
@@ -214,7 +217,8 @@ app.post('/slice', async (request, response) => {
       bambuHomeDir,
       bambuConfigDir,
       bambuCacheDir,
-      bambuDataDir
+      bambuDataDir,
+      signal: cliAbort.signal
     })
     appendStructuredOutput(outputLines, 'system', 'Collecting sliced artifact')
     await normalizeCliOutput({
@@ -265,7 +269,9 @@ app.post('/slice', async (request, response) => {
       output: outputLines
     })
   } finally {
-    response.on('finish', () => {
+    // 'close' (not 'finish') so the work dir is cleaned on a cancelled/aborted request too,
+    // not only on a fully-streamed response.
+    response.on('close', () => {
       activeSliceOutput.delete(parsed.data.jobId)
       void rm(workDir, { recursive: true, force: true })
     })
@@ -300,6 +306,8 @@ async function runCli(input: {
   bambuConfigDir: string
   bambuCacheDir: string
   bambuDataDir: string
+  /** Aborted when the API client cancels the slice; kills the CLI child so the slot frees. */
+  signal?: AbortSignal
 }): Promise<void> {
   const supportedFlags = input.supportedFlags
   const cliProfileFiles = selectCliProfileFiles(input.profileFiles, {
@@ -372,7 +380,8 @@ async function runCli(input: {
     bambuHomeDir: input.bambuHomeDir,
     bambuConfigDir: input.bambuConfigDir,
     bambuCacheDir: input.bambuCacheDir,
-    bambuDataDir: input.bambuDataDir
+    bambuDataDir: input.bambuDataDir,
+    signal: input.signal
   })
 }
 
@@ -394,6 +403,8 @@ async function runMergedAllPlateFallback(input: {
   bambuConfigDir: string
   bambuCacheDir: string
   bambuDataDir: string
+  /** Client-cancel signal, forwarded to executeCli to kill the CLI child. */
+  signal?: AbortSignal
 }): Promise<void> {
   const workDir = path.dirname(input.outputPath)
   const plateOutputs: Array<{ plate: number; filePath: string }> = []
@@ -428,7 +439,8 @@ async function runMergedAllPlateFallback(input: {
       bambuHomeDir: input.bambuHomeDir,
       bambuConfigDir: input.bambuConfigDir,
       bambuCacheDir: input.bambuCacheDir,
-      bambuDataDir: input.bambuDataDir
+      bambuDataDir: input.bambuDataDir,
+      signal: input.signal
     })
     await normalizeCliOutput({
       outputPath: plateOutputPath,
@@ -476,6 +488,8 @@ interface MachineSwitchExportInput {
   bambuConfigDir: string
   bambuCacheDir: string
   bambuDataDir: string
+  /** Client-cancel signal, forwarded to executeCli to kill the CLI child. */
+  signal?: AbortSignal
 }
 
 async function runEstimateModeMachineSwitch(input: MachineSwitchExportInput): Promise<void> {
@@ -508,7 +522,8 @@ async function runEstimateModeMachineSwitch(input: MachineSwitchExportInput): Pr
     bambuHomeDir: input.bambuHomeDir,
     bambuConfigDir: input.bambuConfigDir,
     bambuCacheDir: input.bambuCacheDir,
-    bambuDataDir: input.bambuDataDir
+    bambuDataDir: input.bambuDataDir,
+    signal: input.signal
   })
 }
 
@@ -550,7 +565,8 @@ async function exportRepairedMachineSwitchProject(input: MachineSwitchExportInpu
     bambuHomeDir: input.bambuHomeDir,
     bambuConfigDir: input.bambuConfigDir,
     bambuCacheDir: input.bambuCacheDir,
-    bambuDataDir: input.bambuDataDir
+    bambuDataDir: input.bambuDataDir,
+    signal: input.signal
   })
 
   await rewriteThreeMfProjectSettings(estimateOutputPath, repairedOutputPath, async (settings) => {
@@ -639,6 +655,8 @@ async function executeCli(input: {
   bambuConfigDir: string
   bambuCacheDir: string
   bambuDataDir: string
+  /** Aborted on client cancel; kills the CLI child so the slicer slot frees. */
+  signal?: AbortSignal
 }): Promise<void> {
   let progressPipePath: string | null = null
   let progressPipeReader: ReturnType<typeof createReadStream> | null = null
@@ -682,6 +700,19 @@ async function executeCli(input: {
         child.kill('SIGTERM')
         reject(new Error('Slicer CLI timed out'))
       }, env.SLICER_TIMEOUT_MS)
+      // Client cancel: kill the CLI so it stops occupying a slicer slot (otherwise it runs to
+      // completion and the next queued job waits on a zombie).
+      const onAbort = () => {
+        console.warn('[slicer:executeCli] client cancelled; sending SIGTERM')
+        child.kill('SIGTERM')
+        clearTimeout(timeout)
+        reject(new Error('Slicing cancelled'))
+      }
+      if (input.signal) {
+        if (input.signal.aborted) { onAbort(); return }
+        input.signal.addEventListener('abort', onAbort, { once: true })
+      }
+      const cleanupAbort = () => input.signal?.removeEventListener('abort', onAbort)
 
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
@@ -695,10 +726,12 @@ async function executeCli(input: {
       })
       child.on('error', (error) => {
         clearTimeout(timeout)
+        cleanupAbort()
         reject(error)
       })
       child.on('close', (code) => {
         clearTimeout(timeout)
+        cleanupAbort()
         if (code === 0) resolve()
         else {
           const stderrTail = stderrCombined.trim().split(/\r?\n/u).filter(Boolean).slice(-5).join(' | ')
@@ -833,7 +866,7 @@ async function mkfifo(pipePath: string): Promise<void> {
   })
 }
 
-async function listBuiltinProfiles(profileDir: string): Promise<Array<{
+interface BuiltinProfileSummary {
   id: string
   source: 'builtin'
   kind: SlicingProfileKind
@@ -850,25 +883,31 @@ async function listBuiltinProfiles(profileDir: string): Promise<Array<{
   defaultProcessProfile?: string
   defaultFilamentProfiles?: string[]
   updatedAt: null
-}>> {
-  const profiles: Array<{
-    id: string
-    source: 'builtin'
-    kind: SlicingProfileKind
-    name: string
-    filamentType?: string
-    filamentVendor?: string
-    printerModels?: string[]
-    compatiblePrinters?: string[]
-    compatiblePrints?: string[]
-    nozzleDiameters?: number[]
-    plateTypes?: string[]
-    compatiblePrintersCondition?: string
-    compatiblePrintsCondition?: string
-    defaultProcessProfile?: string
-    defaultFilamentProfiles?: string[]
-    updatedAt: null
-  }> = []
+}
+
+/**
+ * Parsing every bundled preset (read + JSON.parse + resolve each one's `inherits` chain) is the
+ * dominant cost of the `/profiles` endpoint — hundreds of files — and the editor calls it on every
+ * open. The presets are static per slicer image, so cache the parsed catalogue per profile dir and
+ * reuse it until the `*_full` dirs' mtimes change (a re-extract/upgrade). A cache miss is taken
+ * whenever a dir can't be stat'd (mid-extraction) so a partial catalogue is never cached.
+ */
+const builtinProfilesCache = new Map<string, { signature: string; profiles: BuiltinProfileSummary[] }>()
+
+async function listBuiltinProfiles(profileDir: string): Promise<BuiltinProfileSummary[]> {
+  const kindDirs = (['machine', 'process', 'filament'] as const).map((kind) => path.join(profileDir, `${kind}_full`))
+  let signature: string | null = ''
+  for (const directory of kindDirs) {
+    const mtimeMs = await stat(directory).then((info) => info.mtimeMs).catch(() => null)
+    if (mtimeMs == null) { signature = null; break }
+    signature += `${directory}:${mtimeMs};`
+  }
+  if (signature != null) {
+    const cached = builtinProfilesCache.get(profileDir)
+    if (cached && cached.signature === signature) return cached.profiles
+  }
+
+  const profiles: BuiltinProfileSummary[] = []
   for (const kind of ['machine', 'process', 'filament'] as const) {
     const directory = path.join(profileDir, `${kind}_full`)
     // A populated slicer image always has these dirs; a readdir failure here means the target's
@@ -888,7 +927,9 @@ async function listBuiltinProfiles(profileDir: string): Promise<Array<{
       profiles.push({ id: buildBuiltinProfileId(kind, name), source: 'builtin', kind, name, ...metadata, updatedAt: null })
     }
   }
-  return profiles.sort((left, right) => left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name))
+  profiles.sort((left, right) => left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name))
+  if (signature != null) builtinProfilesCache.set(profileDir, { signature, profiles })
+  return profiles
 }
 
 async function readDisplayProfile(filePath: string, kind: SlicingProfileKind, profileDir: string) {

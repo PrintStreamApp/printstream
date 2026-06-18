@@ -280,6 +280,10 @@ export class SlicingJobs {
       .slice(0, available)
 
     for (const job of queued) {
+      // Claim the slot SYNCHRONOUSLY: run() only flips the status after its first await, so a
+      // re-entrant pumpQueue (from enqueue/cancel/finish in the same tick) would otherwise
+      // re-select this still-`queued` job and double-run it / overshoot the concurrency cap.
+      job.status = 'preparing'
       void this.run(job)
     }
   }
@@ -298,8 +302,11 @@ export class SlicingJobs {
       })
       this.setStatus(job, 'preparing', 'Preparing slicer job')
       this.setStatus(job, 'slicing', 'Submitted to slicer service')
+      // Declared outside the try so the artifact temp dir is cleaned on EVERY exit path
+      // (persist failure, cancel during saving, ...), not only on success.
+      let result: Awaited<ReturnType<typeof this.runSlicerJob>> | null = null
       try {
-        const result = await this.runSlicerJob(job, controller.signal)
+        result = await this.runSlicerJob(job, controller.signal)
         progressController.abort()
         await progressTracker
         this.appendCliOutput(job, result.output.slice(observedOutputCount))
@@ -321,6 +328,12 @@ export class SlicingJobs {
           // Drop the (large base64) thumbnails now they're consumed, so the persisted job state
           // doesn't carry them.
           job.request = { ...job.request, sceneEdit: { ...job.request.sceneEdit!, plateThumbnails: undefined } }
+        }
+        // A cancel that landed during slicing/saving: don't persist the artifact the user
+        // cancelled. (The finally block cleans the artifact temp dir.)
+        if (job.cancelRequested || controller.signal.aborted) {
+          this.finish(job, 'cancelled', 'Slicing cancelled')
+          return
         }
         const info = await stat(result.artifactPath)
         const { file: saved } = await this.persistArtifact({
@@ -354,6 +367,11 @@ export class SlicingJobs {
           this.finish(job, 'failed', (error as Error).message || 'Slicing failed')
         }
       } finally {
+        // Always remove the slicer artifact temp dir (a ≤1 GiB .gcode.3mf); the success path
+        // already removed it, but a failure/cancel after the slice completed would otherwise leak it.
+        if (result?.artifactPath) {
+          await rm(pathDirname(result.artifactPath), { recursive: true, force: true }).catch(() => undefined)
+        }
         progressController.abort()
         await progressTracker.catch(() => undefined)
         job.controller = null
@@ -652,6 +670,8 @@ export class SlicingJobs {
       await rename(tempPath, outputPath)
     }).catch((error: unknown) => {
       console.warn('[slicing] failed to persist slicing jobs state', (error as Error).message)
+      // Don't leave a partial .tmp behind on a write/rename failure.
+      void rm(tempPath, { force: true }).catch(() => undefined)
     })
 
     await this.persistPromise

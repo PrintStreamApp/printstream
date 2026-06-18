@@ -11,7 +11,8 @@
  * The store is subscribable (see {@link subscribeLibraryUploads}) so a floating
  * upload panel can render each file's status and offer cancel/retry. Identical
  * re-uploads are reported as `unchanged` (the server skips creating a new
- * version) with a toast.
+ * version) with a toast. Successfully-finished entries auto-dismiss after a short
+ * delay so completed rows don't pile up; failed/cancelled entries stay for retry.
  */
 import { isUploadAbortError, uploadLibraryFileInChunks, type ChunkedLibraryUploadPhase, type ChunkedLibraryUploadProgress } from './chunkedLibraryUpload'
 import { formatUploadTreeItemPath, type LibraryUploadTreeItem } from './libraryUploadTree'
@@ -47,6 +48,32 @@ const entries = new Map<string, InternalEntry>()
 const pending: string[] = []
 let draining = false
 let idCounter = 0
+
+/** How long a successfully-finished upload lingers before it auto-dismisses itself. */
+const AUTO_DISMISS_MS = 8000
+/** Pending auto-dismiss timers, keyed by entry id, so manual actions can cancel them. */
+const autoDismissTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * Auto-remove a successfully-finished upload after {@link AUTO_DISMISS_MS} so completed
+ * "Uploaded" entries don't pile up. Failed/cancelled entries are left for the user to
+ * retry, so they are never scheduled.
+ */
+function scheduleAutoDismiss(id: string): void {
+  clearAutoDismiss(id)
+  autoDismissTimers.set(id, setTimeout(() => {
+    autoDismissTimers.delete(id)
+    dismissLibraryUpload(id)
+  }, AUTO_DISMISS_MS))
+}
+
+function clearAutoDismiss(id: string): void {
+  const timer = autoDismissTimers.get(id)
+  if (timer != null) {
+    clearTimeout(timer)
+    autoDismissTimers.delete(id)
+  }
+}
 
 const listeners = new Set<() => void>()
 let snapshot: LibraryUploadEntry[] = []
@@ -155,6 +182,7 @@ async function runUpload(entry: InternalEntry): Promise<void> {
     if (unchanged) {
       toast.show({ message: `${entry.name} is unchanged — no new version created.`, tone: 'neutral', durationMs: 5000 })
     }
+    scheduleAutoDismiss(entry.id)
     emitChange()
   } catch (error) {
     entry.abort = null
@@ -201,6 +229,7 @@ export function cancelLibraryUpload(id: string): void {
 export function retryLibraryUpload(id: string): void {
   const entry = entries.get(id)
   if (!entry || (entry.status !== 'failed' && entry.status !== 'cancelled')) return
+  clearAutoDismiss(id)
   entry.status = 'queued'
   entry.error = null
   entry.uploadedBytes = 0
@@ -226,6 +255,7 @@ export function retryFailedLibraryUploads(): void {
 export function dismissLibraryUpload(id: string): void {
   const entry = entries.get(id)
   if (!entry || entry.status === 'queued' || entry.status === 'uploading') return
+  clearAutoDismiss(id)
   entries.delete(id)
   emitChange()
 }
@@ -233,7 +263,10 @@ export function dismissLibraryUpload(id: string): void {
 /** Remove all finished entries, leaving active ones in place. */
 export function clearFinishedLibraryUploads(): void {
   for (const entry of [...entries.values()]) {
-    if (entry.status !== 'queued' && entry.status !== 'uploading') entries.delete(entry.id)
+    if (entry.status !== 'queued' && entry.status !== 'uploading') {
+      clearAutoDismiss(entry.id)
+      entries.delete(entry.id)
+    }
   }
   emitChange()
 }

@@ -208,6 +208,19 @@ export const sceneEditPartFilamentSchema = z.object({
 export type SceneEditPartFilament = z.infer<typeof sceneEditPartFilamentSchema>
 
 /**
+ * Per-PART process overrides — process settings on one part (volume) of an object, separate from
+ * the object's overall overrides (BambuStudio's per-volume config). Keyed by the object id + the
+ * part's component object id; written as `<metadata>` inside that part's `model_settings` block.
+ * Like {@link sceneEditPartFilamentSchema}, a part is shared by every instance of the object.
+ */
+export const sceneEditPartProcessOverrideSchema = z.object({
+  objectId: z.number().int().positive(),
+  componentObjectId: z.number().int().positive(),
+  overrides: processSettingOverridesSchema
+})
+export type SceneEditPartProcessOverride = z.infer<typeof sceneEditPartProcessOverrideSchema>
+
+/**
  * Per-object display-name override (user renamed an object in the editor's object
  * list). Keyed like an instance reference — by base-project `objectId` or by staged
  * `importId` (resolved to its baked object id at write time) — and applied by
@@ -368,10 +381,24 @@ export type SceneEditAddedPart = z.infer<typeof sceneEditAddedPartSchema>
  * replacement's baked object. Object-level: one entry per replaced object, shared by every copy.
  */
 export const sceneEditMeshReplacementSchema = z.object({
-  objectId: z.number().int().positive(),
+  objectId: z.number().int(),
   importId: z.string().trim().min(1)
 })
 export type SceneEditMeshReplacement = z.infer<typeof sceneEditMeshReplacementSchema>
+
+/**
+ * A per-part filament (material) assignment for a multi-solid import (a STEP assembly),
+ * keyed by the import and the 0-based solid index — because an unsaved import has no baked
+ * 3MF part ids yet. Applied while the import's parts are baked into one object, so each
+ * solid keeps its own material. (In-project objects use {@link sceneEditPartFilamentSchema},
+ * which keys by baked object/part ids instead.)
+ */
+export const sceneEditImportPartFilamentSchema = z.object({
+  importId: z.string().trim().min(1),
+  partIndex: z.number().int().nonnegative(),
+  filamentId: z.number().int().positive()
+})
+export type SceneEditImportPartFilament = z.infer<typeof sceneEditImportPartFilamentSchema>
 
 export const sceneEditSchema = z.object({
   plates: z.array(sceneEditPlateSchema).min(1),
@@ -380,8 +407,12 @@ export const sceneEditSchema = z.object({
   addedParts: z.array(sceneEditAddedPartSchema).max(200).optional(),
   /** Optional object→import geometry replacements (Replace-with); see {@link sceneEditMeshReplacementSchema}. */
   meshReplacements: z.array(sceneEditMeshReplacementSchema).max(200).optional(),
-  /** Optional per-object-part filament overrides (material reassignment). */
+  /** Optional per-object-part filament overrides (material reassignment) for in-project objects. */
   partFilaments: z.array(sceneEditPartFilamentSchema).optional(),
+  /** Optional per-part process overrides (process settings on individual parts of an object). */
+  partProcessOverrides: z.array(sceneEditPartProcessOverrideSchema).optional(),
+  /** Optional per-part filament for multi-solid imports, keyed by import + solid index. */
+  importPartFilaments: z.array(sceneEditImportPartFilamentSchema).max(400).optional(),
   /** Optional per-part support-paint maps (parts painted with the support brush). */
   supportPaint: z.array(sceneEditPartPaintSchema).optional(),
   /** Optional per-part seam-paint maps (parts painted with the seam brush). */
@@ -416,12 +447,26 @@ export type StagedImportFormat = z.infer<typeof stagedImportFormatSchema>
  * `SceneEditInstance.importId` until baked into a 3MF. The mesh itself is fetched separately as a
  * binary so it can be rendered with the existing STL loader rather than shipped as JSON.
  */
+/**
+ * One named solid of a staged import. A multi-solid STEP lists each of its solids here so the
+ * editor imports the file as a single object with many parts; a single-solid STEP/STL lists one
+ * part named after the import. Each part's mesh is fetched separately as a binary STL by index.
+ */
+export const stagedImportPartSchema = z.object({
+  name: z.string().min(1),
+  triangleCount: z.number().int().nonnegative(),
+  bounds: z.object({ min: sceneEditVec3Schema, max: sceneEditVec3Schema })
+})
+export type StagedImportPart = z.infer<typeof stagedImportPartSchema>
+
 export const stagedImportSchema = z.object({
   importId: z.string().min(1),
   name: z.string().min(1),
   format: stagedImportFormatSchema,
   triangleCount: z.number().int().nonnegative(),
-  bounds: z.object({ min: sceneEditVec3Schema, max: sceneEditVec3Schema })
+  bounds: z.object({ min: sceneEditVec3Schema, max: sceneEditVec3Schema }),
+  /** The import's named solids (always ≥1; >1 only for a multi-solid STEP assembly). */
+  parts: z.array(stagedImportPartSchema).min(1)
 })
 export type StagedImport = z.infer<typeof stagedImportSchema>
 
@@ -450,6 +495,12 @@ export const saveArrangedThreeMfSchema = z.object({
   folderId: z.string().trim().min(1).nullable().optional(),
   bridgeId: z.string().trim().min(1).nullable().optional(),
   sceneEdit: sceneEditSchema,
+  /**
+   * Per-object process-setting overrides, keyed by Bambu `object_id` (or a fresh import's
+   * synthetic id, which is re-keyed onto the baked object). Persisted into the saved 3MF's
+   * `model_settings.config` so per-object process edits survive the save (not just a slice).
+   */
+  objectProcessOverrides: z.record(z.string().min(1), processSettingOverridesSchema).optional(),
   /**
    * Slicer target (version) used for a cross-model retarget on save. Required alongside
    * `retarget`; chooses which BambuStudio CLI performs the machine switch.

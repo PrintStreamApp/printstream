@@ -211,15 +211,18 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     while (travelLayers.length <= index) travelLayers.push([])
   }
 
+  // Advance to a new layer when an extruding MOVE's target Z changes — called ONCE per move
+  // (not per interpolated arc sub-segment), so a Z-changing arc is one layer, not hundreds.
+  const advanceLayerForZ = (targetZ: number) => {
+    if (currentLayerZ === null || Math.abs(targetZ - currentLayerZ) > Z_EPSILON) {
+      layer += 1
+      currentLayerZ = targetZ
+    }
+  }
+
   /** Record one extrusion segment on the current layer, tagged with the active attributes. */
   const emitExtrusion = (ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
-    if (currentLayerZ === null || Math.abs(bz - currentLayerZ) > Z_EPSILON) {
-      // Arc/line entry Z may differ slightly; key the layer off the segment's end Z.
-      if (currentLayerZ === null || Math.abs(bz - currentLayerZ) > Z_EPSILON) {
-        layer += 1
-        currentLayerZ = bz
-      }
-    }
+    if (layer < 0) advanceLayerForZ(bz) // safety: first extrusion before any layer was opened
     ensureLayer(layer)
     extrusionLayers[layer]!.push(ax, ay, az, bx, by, bz)
     widthLayers[layer]!.push(curWidth > 0 ? curWidth : DEFAULT_EXTRUSION_WIDTH)
@@ -337,6 +340,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
         const dThetaSag = 2 * Math.acos(Math.max(-1, 1 - ARC_CHORD_TOLERANCE / radius))
         const dThetaMax = Math.min(dThetaSag, ARC_MAX_CHORD / radius)
         const steps = Math.min(MAX_ARC_SEGMENTS, Math.max(1, Math.ceil(Math.abs(sweep) / Math.max(dThetaMax, 1e-3))))
+        if (extruding) advanceLayerForZ(z) // one layer for the whole arc, keyed off its target Z
         let px = prevX, py = prevY, pz = prevZ
         for (let k = 1; k <= steps; k++) {
           const t = k / steps
@@ -352,7 +356,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
       }
     }
 
-    if (extruding) emitExtrusion(prevX, prevY, prevZ, x, y, z)
+    if (extruding) { advanceLayerForZ(z); emitExtrusion(prevX, prevY, prevZ, x, y, z) }
     else if (movesXY) emitTravel(prevX, prevY, prevZ, x, y, z)
   }
 

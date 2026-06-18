@@ -4,7 +4,7 @@
  * Bytes are stored through the bridge-backed library path, while metadata
  * and overwrite/version behavior stay centralized here.
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import type { Request } from 'express'
 import { classifyLibraryFileKind } from '@printstream/shared'
@@ -307,7 +307,11 @@ export async function deleteLibraryFolderTree(
 
 function buildLibraryStoredPath(fileName: string): string {
   const safe = fileName.replace(/[^\w.-]+/g, '_')
-  return `${Date.now()}-${safe}`
+  // A short random token disambiguates two uploads of the same name within the
+  // same millisecond — without it they'd resolve to one storedPath and the two
+  // concurrent writers would truncate/append over each other (and one's failure
+  // cleanup would delete the other's bytes).
+  return `${Date.now()}-${randomBytes(4).toString('hex')}-${safe}`
 }
 
 async function findLibraryOverwriteTarget(input: {

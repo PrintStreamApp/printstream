@@ -65,6 +65,12 @@ export interface ProcessSettingsDialogProps {
   baseOverlay?: ProcessSettingOverrides
   /** Title prefix; defaults to "Process settings" (per-object uses "Object settings"). */
   titlePrefix?: string
+  /**
+   * What the Apply button commits to: a `project` (the 3D editor, where the override is saved
+   * with the project) or a one-off `slice` (the print/slice dialog, where it applies to just that
+   * slice). Only changes the button wording. Defaults to `slice`.
+   */
+  applyScope?: 'project' | 'slice'
   onApply: (overrides: ProcessSettingOverrides) => void
 }
 
@@ -75,7 +81,7 @@ type ResolveResponse = {
 }
 
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, onApply } = props
+  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, applyScope = 'slice', onApply } = props
   const allowedKeySet = useMemo(() => (allowedKeys ? new Set(allowedKeys) : null), [allowedKeys])
   const isKeyAllowed = (key: string): boolean => allowedKeySet === null || allowedKeySet.has(key)
   // `baseConfig` is the preset baseline (reset target); `sliceBase` is the effective config the
@@ -443,7 +449,9 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
             <Button variant="outlined" onClick={handleSaveAsPreset} disabled={loading || !baseConfig || saving} loading={saving}>
               Save as preset
             </Button>
-            <Button variant="solid" onClick={handleApply} disabled={loading || !baseConfig || saving}>Apply to this slice</Button>
+            <Button variant="solid" onClick={handleApply} disabled={loading || !baseConfig || saving}>
+              {applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice'}
+            </Button>
           </Stack>
         </DialogActions>
       </ScrollableModalDialog>
@@ -561,6 +569,13 @@ interface ProcessSettingFieldProps {
   onScalarChange: (key: string, value: string) => void
 }
 
+/**
+ * One fixed width for every scalar value control (numeric inputs, percent fields, and enum
+ * selects) so the value column lines up — content-sized controls otherwise vary (a bare number
+ * shrinks; a `%`/`°` decorator or a long enum label grows).
+ */
+const SCALAR_CONTROL_WIDTH = 200
+
 function ProcessSettingField(props: ProcessSettingFieldProps): JSX.Element {
   const { settingKey, option, enabled, enumRestriction, showOwnLabel, isCode, modified, accessor, onScalarChange } = props
   const scalar = accessor.str(settingKey)
@@ -590,7 +605,7 @@ function ProcessSettingField(props: ProcessSettingFieldProps): JSX.Element {
         value={scalar}
         disabled={!enabled}
         onChange={(_event, value) => { if (typeof value === 'string') onScalarChange(settingKey, value) }}
-        sx={{ minWidth: 180 }}
+        sx={{ width: SCALAR_CONTROL_WIDTH }}
       >
         {values.map((value) => {
           const labelIndex = labels.indexOf(value)
@@ -613,16 +628,43 @@ function ProcessSettingField(props: ProcessSettingFieldProps): JSX.Element {
     )
   }
 
-  const isNumeric = option.type === 'int' || option.type === 'float' || option.type === 'percent' || option.type === 'floatOrPercent'
+  const isInteger = option.type === 'int'
+  const isFloat = option.type === 'float'
+  // percent / floatOrPercent may hold a `%` suffix (e.g. "40%"), so they can't be a native
+  // number input — they stay text but only accept number/`.`/`%`/`-` characters.
+  const isPercentish = option.type === 'percent' || option.type === 'floatOrPercent'
+  const isNumeric = isInteger || isFloat || isPercentish
+  // A vector setting packs several values into one string (e.g. "0.4,0.4"); keep it free-text.
+  // A native number input gives the right keyboard + spinners and rejects letters outright.
+  const useNumberInput = (isInteger || isFloat) && !option.vector
+  // Single numeric fields get a FIXED width so every one lines up (otherwise each sizes itself
+  // between min/max from its content + the native spinners, so e.g. "Wall loops" and "Top shell
+  // layers" came out different widths). Vector/string/point keep the wider flexible range.
+  const fixedNumericWidth = isNumeric && !option.vector
 
   return (
     <Input
+      type={useNumberInput ? 'number' : 'text'}
       value={scalar}
       disabled={!enabled}
-      onChange={(event) => onScalarChange(settingKey, event.target.value)}
+      onChange={(event) => {
+        // The native number input already blocks non-numeric text; the percent fields are text,
+        // so strip anything that can't belong to a number/percent as it is typed.
+        const raw = event.target.value
+        onScalarChange(settingKey, isPercentish && !option.vector ? raw.replace(/[^\d.%-]/g, '') : raw)
+      }}
       endDecorator={option.sidetext ? <Typography level="body-xs">{option.sidetext}</Typography> : undefined}
-      slotProps={isNumeric ? { input: { inputMode: 'decimal' } } : undefined}
-      sx={{ minWidth: 140, maxWidth: option.type === 'string' || option.type === 'point' ? 280 : 180 }}
+      slotProps={isNumeric ? {
+        input: {
+          inputMode: isInteger ? 'numeric' : 'decimal',
+          ...(useNumberInput ? { step: isInteger ? 1 : 'any' } : {}),
+          ...(option.min != null ? { min: option.min } : {}),
+          ...(option.max != null ? { max: option.max } : {})
+        }
+      } : undefined}
+      sx={fixedNumericWidth
+        ? { width: SCALAR_CONTROL_WIDTH }
+        : { minWidth: 140, maxWidth: option.type === 'string' || option.type === 'point' ? 280 : 180 }}
     />
   )
 }

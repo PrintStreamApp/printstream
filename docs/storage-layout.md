@@ -67,7 +67,7 @@ Defaults keep today's behavior when the vars are unset: `PRINTSTREAM_DATA_DIR=./
 `PRINTSTREAM_CACHE_DIR=./data/cache`, `PRINTSTREAM_TMP_DIR=${os.tmpdir()}/printstream`. In
 Docker these map to a persistent volume (data), an optional throwaway volume or `tmpfs` (cache),
 and `tmpfs` (tmp). All three resolved once in `env.ts`; no feature code reads `process.env` or
-calls `os.tmpdir()` directly (matches the existing env rule in `apps/api/CLAUDE.md`).
+calls `os.tmpdir()` directly (matches the existing env rule in the API development notes).
 
 ## Helper API
 
@@ -110,7 +110,7 @@ unnecessary and risks the overwrite/version logic), but give it a janitor:
    old `${LIBRARY_DIR}/_bridge-*` dirs exist, delete them (caches regenerate) — no data migration.
 3. Convert temp call sites to `createTempDir(area)` one module at a time (behavior-preserving).
 4. Add `sweepTempDirs()` + the hidden-file janitor with focused regression tests (per
-   `apps/api/CLAUDE.md`: cleanup/retention changes ship with tests).
+   the API development notes: cleanup/retention changes ship with tests).
 5. Update Docker compose to mount cache as throwaway/`tmpfs` and point `PRINTSTREAM_TMP_DIR` at
    `tmpfs`; document the vars in `.env*.example`.
 

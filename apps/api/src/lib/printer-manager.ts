@@ -19,7 +19,6 @@
  * The parser is intentionally tolerant: unknown fields are ignored
  * rather than rejected so firmware updates do not break the connection.
  */
-import type { MqttClient } from 'mqtt'
 import {
   getPrinterDisplayCapabilities,
   getPrinterPrintStartOptions,
@@ -52,19 +51,15 @@ import {
   getHmsDeviceType,
   lookupHmsMessage
 } from './hms-codes.js'
-import { hasLivePrinterControlConnection } from './printer-connection-state.js'
 import { toPrinterDto as toPrinter } from './printer-record.js'
 import { parseTrayColor, parseTrayColors } from './tray-colors.js'
 
 interface ManagedPrinter {
   printer: Printer
-  client: MqttClient | null
   status: PrinterStatus
   lastStage: PrinterStage
   lastJobName: string | null
   sequenceId: number
-  offlineSince: number | null
-  recycleTimer: ReturnType<typeof setTimeout> | null
 }
 
 interface PendingPressureAdvanceProfilesRequest {
@@ -73,7 +68,6 @@ interface PendingPressureAdvanceProfilesRequest {
   reject: (error: Error) => void
 }
 
-const MQTT_RECYCLE_AFTER_MS = 60_000
 const PRESSURE_ADVANCE_REQUEST_TIMEOUT_MS = 5_000
 const VIRTUAL_TRAY_MAIN_ID = 255
 const VIRTUAL_TRAY_DEPUTY_ID = 254
@@ -115,9 +109,7 @@ class PrinterManager {
 
   async stop(): Promise<void> {
     for (const entry of this.managed.values()) {
-      this.clearRecycleTimer(entry)
       this.clearPendingPressureAdvanceRequests(entry.printer.id, 'Printer connection stopped')
-      entry.client?.end(true)
     }
     this.managed.clear()
     this.tenantIds.clear()
@@ -157,9 +149,7 @@ class PrinterManager {
     printerEvents.emit('printer.updated', printer)
     if (hostChanged || accessChanged || serialChanged || bridgeChanged) {
       // Reconnect under new credentials.
-      this.clearRecycleTimer(existing)
       this.clearPendingPressureAdvanceRequests(printer.id, 'Printer connection restarted')
-      existing.client?.end(true)
       this.managed.delete(printer.id)
       this.connect(printer)
     }
@@ -169,9 +159,7 @@ class PrinterManager {
     const existing = this.managed.get(printerId)
     if (!existing) return
     const tenantId = this.tenantIds.get(printerId)
-    this.clearRecycleTimer(existing)
     this.clearPendingPressureAdvanceRequests(printerId, 'Printer was removed')
-    existing.client?.end(true)
     this.managed.delete(printerId)
     this.tenantIds.delete(printerId)
     this.bridgeIds.delete(printerId)
@@ -302,8 +290,6 @@ class PrinterManager {
     const entry = this.managed.get(printerId)
     if (!entry || !this.bridgeIds.get(printerId)) return
 
-    entry.offlineSince = null
-    this.clearRecycleTimer(entry)
     this.resolvePressureAdvanceProfiles(entry, report)
 
     const delta = parseReport(report, entry.printer, entry.status)
@@ -321,8 +307,6 @@ class PrinterManager {
     const entry = this.managed.get(status.printerId)
     if (!entry || !this.bridgeIds.get(status.printerId)) return
 
-    entry.offlineSince = null
-    this.clearRecycleTimer(entry)
     this.applyStatusDelta(entry, status)
   }
 
@@ -341,7 +325,6 @@ class PrinterManager {
   markBridgePrinterOffline(printerId: string): void {
     const entry = this.managed.get(printerId)
     if (!entry || !this.bridgeIds.get(printerId)) return
-    if (entry.offlineSince === null) entry.offlineSince = Date.now()
     this.clearPendingPressureAdvanceRequests(printerId, 'Bridge printer went offline')
     this.mergeAndEmit(entry, { online: false })
   }
@@ -362,8 +345,6 @@ class PrinterManager {
     for (const entry of offlineMatches) {
       const bridgeId = this.bridgeIds.get(entry.printer.id) ?? null
       if (bridgeId && bridgeSessionManager.isConnected(bridgeId)) {
-        entry.offlineSince = null
-        this.clearRecycleTimer(entry)
         this.mergeAndEmit(entry, { online: true })
         reconnected = true
         continue
@@ -381,13 +362,10 @@ class PrinterManager {
     if (bridgeId) {
       const entry: ManagedPrinter = {
         printer,
-        client: null,
         status: previousStatus ?? makeOfflineStatus(printer),
         lastStage: previousStatus?.stage ?? 'unknown',
         lastJobName: previousStatus?.lastJobName ?? null,
-        sequenceId: 0,
-        offlineSince: previousStatus?.online === false ? Date.now() : null,
-        recycleTimer: null
+        sequenceId: 0
       }
       this.managed.set(printer.id, entry)
       return
@@ -395,7 +373,6 @@ class PrinterManager {
 
     const entry: ManagedPrinter = {
       printer,
-      client: null,
       status: previousStatus
         ? {
             ...previousStatus,
@@ -405,42 +382,11 @@ class PrinterManager {
         : makeOfflineStatus(printer),
       lastStage: previousStatus?.stage ?? 'unknown',
       lastJobName: previousStatus?.lastJobName ?? null,
-      sequenceId: 0,
-      offlineSince: previousStatus?.online === false ? Date.now() : null,
-      recycleTimer: null
+      sequenceId: 0
     }
     this.managed.set(printer.id, entry)
 
     console.warn(`[printer:${printer.name}] no bridge assigned; printer will remain offline until connected through a bridge`)
-  }
-
-  private markOffline(entry: ManagedPrinter, reason: string): void {
-    if (this.managed.get(entry.printer.id) !== entry) return
-    if (entry.offlineSince === null) entry.offlineSince = Date.now()
-    this.mergeAndEmit(entry, { online: false })
-    this.scheduleClientRecycle(entry, reason)
-  }
-
-  private scheduleClientRecycle(entry: ManagedPrinter, reason: string): void {
-    if (entry.recycleTimer) return
-    entry.recycleTimer = setTimeout(() => {
-      entry.recycleTimer = null
-      if (this.managed.get(entry.printer.id) !== entry) return
-      if (hasLivePrinterControlConnection(entry.status, entry.client?.connected === true)) return
-      const offlineForMs = entry.offlineSince === null ? MQTT_RECYCLE_AFTER_MS : Date.now() - entry.offlineSince
-      console.warn(
-        `[printer:${entry.printer.name}] mqtt offline for ${Math.round(offlineForMs / 1000)}s; recreating client after ${reason}`
-      )
-      entry.client?.end(true)
-      this.managed.delete(entry.printer.id)
-      this.connect(entry.printer, entry.status)
-    }, MQTT_RECYCLE_AFTER_MS)
-  }
-
-  private clearRecycleTimer(entry: ManagedPrinter): void {
-    if (!entry.recycleTimer) return
-    clearTimeout(entry.recycleTimer)
-    entry.recycleTimer = null
   }
 
   private handleMessage(entry: ManagedPrinter, raw: Buffer): void {

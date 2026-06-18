@@ -4,9 +4,9 @@
  * preview plugin (and future viewers) can fetch the raw bytes without
  * loading them into memory.
  */
-import { createReadStream } from 'node:fs'
+import { createReadStream, mkdirSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFile, copyFile, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import express, { Router } from 'express'
 import type { NextFunction, Request, Response } from 'express'
@@ -51,6 +51,7 @@ import { isUniqueConstraintError } from '../lib/prisma-errors.js'
 import { badRequest, conflict, forbidden, HttpError, notFound } from '../lib/http-error.js'
 import { assertLibraryPrintCompatibilityForIndex } from '../lib/print-filament-compatibility.js'
 import { printerManager } from '../lib/printer-manager.js'
+import { requireTenantOwnedConnectedPrinter } from '../lib/printer-access.js'
 import {
   buildProjectFilePrintCommand,
   getPrintSourceKind,
@@ -93,12 +94,16 @@ import {
   requestAbortSignal,
   requireRequestTenantId,
   requireRouteParam,
+  sendModelBuffer,
   singleUploadWithLimit
 } from '../lib/request-helpers.js'
 
-await mkdir(libraryDir, { recursive: true })
+// Created synchronously at module load: a one-time directory ensure, and keeping
+// it off the top-level `await` path lets this module compile into a CommonJS SEA
+// bundle (Node single-executable apps are CJS-only).
+mkdirSync(libraryDir, { recursive: true })
 const libraryUploadSessionDir = path.join(libraryDir, '.uploads')
-await mkdir(libraryUploadSessionDir, { recursive: true })
+mkdirSync(libraryUploadSessionDir, { recursive: true })
 
 /**
  * Cap on individual library uploads. Sliced 3MFs from Bambu Studio for
@@ -1017,8 +1022,8 @@ libraryRouter.get('/versions/:versionId/scene-entry', requireRequestPermission(L
   const signal = requestAbortSignal(request, response)
   try {
     const buffer = await readEntry(onDisk, entryPath, signal, 256 * 1024 * 1024)
-    response.setHeader('Content-Type', 'application/xml; charset=utf-8')
-    response.send(buffer)
+    if (signal.aborted) return
+    await sendModelBuffer(request, response, buffer, 'application/xml; charset=utf-8')
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
     throw notFound('Scene model entry missing')
@@ -1105,8 +1110,8 @@ libraryRouter.get('/:id/scene-entry', requireRequestPermission(LIBRARY_VIEW_PERM
   const signal = requestAbortSignal(request, response)
   try {
     const buffer = await readEntry(onDisk, entryPath, signal, 256 * 1024 * 1024)
-    response.setHeader('Content-Type', 'application/xml; charset=utf-8')
-    response.send(buffer)
+    if (signal.aborted) return
+    await sendModelBuffer(request, response, buffer, 'application/xml; charset=utf-8')
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
     throw notFound('Scene model entry missing')
@@ -1134,8 +1139,8 @@ libraryRouter.get('/:id/preview-asset/content', requireRequestPermission(LIBRARY
 
   try {
     const buffer = await readEntry(onDisk, asset.entryPath, signal, 256 * 1024 * 1024)
-    response.setHeader('Content-Type', asset.kind === 'stl' ? 'model/stl' : 'application/octet-stream')
-    response.send(buffer)
+    if (signal.aborted) return
+    await sendModelBuffer(request, response, buffer, asset.kind === 'stl' ? 'model/stl' : 'application/octet-stream')
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
     throw notFound('Embedded preview source missing')
@@ -1178,9 +1183,8 @@ libraryRouter.get('/:id/mesh', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
     // 304 above short-circuits warm clients before this point). STL ships verbatim.
     const stl = row.kind === 'step' ? meshToBinaryStl(await tessellateStepMesh(buffer)) : buffer
     if (signal.aborted) return
-    response.setHeader('Content-Type', 'model/stl')
     response.setHeader('Cache-Control', 'private, max-age=300')
-    response.send(stl)
+    await sendModelBuffer(request, response, stl, 'model/stl')
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
     // A malformed STEP fails here rather than (like STL) only on a missing file, so surface the
@@ -1386,8 +1390,9 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
   }
   const file = await prisma.libraryFile.findUnique({ where: { id: fileId } })
   if (!file) throw notFound('File not found')
-  const printer = printerManager.getPrinter(parsed.data.printerId)
-  if (!printer) throw notFound('Printer not found or not connected')
+  // Resolve the target printer through the tenant gate — getPrinter() alone is keyed by
+  // id only, which would let a tenant start a print on another tenant's printer.
+  const printer = await requireTenantOwnedConnectedPrinter(parsed.data.printerId)
 
   if (!isDirectPrintableFileName(file.name)) {
     throw badRequest('Only .gcode or .gcode.3mf files can be printed directly')

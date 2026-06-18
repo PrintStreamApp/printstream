@@ -22,6 +22,7 @@ import {
   disposeObject3D,
   parseThreeMfModelEntry
 } from './lib/threeMfScene'
+import { fetchModelBytes } from './lib/modelFetch'
 import {
   BAMBU_THREE_MF_ISO_UP,
   EDITOR_HOME_VIEW_DIRECTION,
@@ -360,17 +361,18 @@ export function PreviewView(props: Record<string, unknown>) {
       const meshUrl = previewMode === 'step'
         ? buildApiUrl(`${resourceBase}/mesh`)
         : buildApiUrl(`${resourceBase}/download`)
-      const loader = new STLLoader()
-      loader.load(
-        meshUrl,
-        (geometry) => {
+      // Fetch via the stall-guarded, abortable reader so a rapid plate/file switch cancels the
+      // download (STLLoader.load uses its own un-abortable XHR, which kept running and wasting
+      // bandwidth/CPU after the viewer moved on).
+      void fetchModelBytes(meshUrl, { credentials: 'include', signal: loadAbortController.signal })
+        .then((bytes) => {
+          if (cancelled) return
+          const geometry = new STLLoader().parse(bytes.buffer as ArrayBuffer)
           geometry.computeVertexNormals()
           const material = new THREE.MeshStandardMaterial({ color: 0x1cab84, metalness: 0.1, roughness: 0.6 })
           attachObject(new THREE.Mesh(geometry, material))
-        },
-        undefined,
-        handleLoadError
-      )
+        })
+        .catch(handleLoadError)
     } else if (previewMode === 'plate-gcode') {
       void fetch(buildApiUrl(`${resourceBase}/plate-gcode?plate=${selectedPlate}`), {
         credentials: 'include',
@@ -887,51 +889,55 @@ async function buildThreeMfSceneObject(
   signal: AbortSignal
 ): Promise<THREE.Object3D> {
   const plateGroup = new THREE.Group()
-
-  const bedWidth = Math.max(scene.bed.maxX - scene.bed.minX, 1)
-  const bedDepth = Math.max(scene.bed.maxY - scene.bed.minY, 1)
-  const bedCenterX = (scene.bed.minX + scene.bed.maxX) / 2
-  const bedCenterY = (scene.bed.minY + scene.bed.maxY) / 2
-  plateGroup.add(createPreviewPlateSurface({
-    width: bedWidth,
-    depth: bedDepth,
-    centerX: bedCenterX,
-    centerY: bedCenterY,
-    excludeAreas: scene.bed.excludeAreas
-  }))
-
-  const entryPaths = [...new Set(scene.parts.map((part) => part.entryPath))]
-  const modelMaps = new Map<string, Map<number, THREE.BufferGeometry>>()
-  await Promise.all(entryPaths.map(async (entryPath) => {
-    const response = await fetch(buildApiUrl(`${resourceBase}/scene-entry?path=${encodeURIComponent(entryPath)}`), { signal })
-    if (!response.ok) {
-      throw new Error(`Unable to load scene model ${entryPath}.`)
-    }
-    const xmlText = await response.text()
-    modelMaps.set(entryPath, parseThreeMfModelEntry(xmlText))
-  }))
-
-  let placedPartCount = 0
-  for (const part of scene.parts) {
-    const modelMap = modelMaps.get(part.entryPath)
-    const geometry = modelMap?.get(part.objectId)
-    if (!geometry) continue
-    const partTransform = createThreeMfMatrix(part.transform)
-    plateGroup.add(createThreeMfPartObject(geometry, {
-      // Parts without an extruder render in the DEFAULT filament, like Bambu Studio.
-      color: part.color ?? scene.projectFilaments?.[0]?.color ?? null,
-      transform: partTransform,
-      colorPaintFilaments: scene.projectFilaments ?? null
+  try {
+    const bedWidth = Math.max(scene.bed.maxX - scene.bed.minX, 1)
+    const bedDepth = Math.max(scene.bed.maxY - scene.bed.minY, 1)
+    const bedCenterX = (scene.bed.minX + scene.bed.maxX) / 2
+    const bedCenterY = (scene.bed.minY + scene.bed.maxY) / 2
+    plateGroup.add(createPreviewPlateSurface({
+      width: bedWidth,
+      depth: bedDepth,
+      centerX: bedCenterX,
+      centerY: bedCenterY,
+      excludeAreas: scene.bed.excludeAreas
     }))
-    placedPartCount += 1
-  }
 
-  if (placedPartCount === 0) {
+    const entryPaths = [...new Set(scene.parts.map((part) => part.entryPath))]
+    const modelMaps = new Map<string, Map<number, THREE.BufferGeometry>>()
+    await Promise.all(entryPaths.map(async (entryPath) => {
+      const response = await fetch(buildApiUrl(`${resourceBase}/scene-entry?path=${encodeURIComponent(entryPath)}`), { signal })
+      if (!response.ok) {
+        throw new Error(`Unable to load scene model ${entryPath}.`)
+      }
+      const xmlText = await response.text()
+      modelMaps.set(entryPath, parseThreeMfModelEntry(xmlText))
+    }))
+
+    let placedPartCount = 0
+    for (const part of scene.parts) {
+      const modelMap = modelMaps.get(part.entryPath)
+      const geometry = modelMap?.get(part.objectId)
+      if (!geometry) continue
+      const partTransform = createThreeMfMatrix(part.transform)
+      plateGroup.add(createThreeMfPartObject(geometry, {
+        // Parts without an extruder render in the DEFAULT filament, like Bambu Studio.
+        color: part.color ?? scene.projectFilaments?.[0]?.color ?? null,
+        transform: partTransform,
+        colorPaintFilaments: scene.projectFilaments ?? null
+      }))
+      placedPartCount += 1
+    }
+
+    if (placedPartCount === 0) {
+      throw new Error('This plate does not include previewable mesh geometry.')
+    }
+    return plateGroup
+  } catch (error) {
+    // A rejected/aborted scene fetch (e.g. rapid plate/file switch) must not leak the
+    // already-built plate surface + label textures.
     disposeObject3D(plateGroup)
-    throw new Error('This plate does not include previewable mesh geometry.')
+    throw error
   }
-
-  return plateGroup
 }
 
 function buildPlateGcodePreviewObject(object: THREE.Object3D, bed: LibraryThreeMfScene['bed'] | null): THREE.Object3D {

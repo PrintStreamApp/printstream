@@ -59,6 +59,11 @@ function booleanEnv(defaultValue: boolean) {
 
 const envSchema = z.object({
   API_PORT: positiveIntEnv(4000),
+  // The connection string the app uses. In the native self-hosted build the
+  // `EMBEDDED_POSTGRES` switch starts a local cluster and rewrites this before
+  // the env module is imported (see `embedded-postgres.ts` for the ordering and
+  // for `EMBEDDED_POSTGRES` / `EMBEDDED_POSTGRES_DATA_DIR` / `EMBEDDED_POSTGRES_PORT`,
+  // which are read pre-env and so are intentionally not parsed here).
   DATABASE_URL: z.string().min(1).default('postgresql://postgres:postgres@db:5432/printstream?schema=public'),
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
   AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES: positiveIntEnv(15),

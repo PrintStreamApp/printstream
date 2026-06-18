@@ -18,7 +18,7 @@ import type { RequestAuthContext } from '../lib/auth-context.js'
 import { installAuditLogCapture } from '../lib/audit-logs.js'
 import { deleteOperationDispatcher } from '../lib/delete-operation-dispatcher.js'
 import { HttpError } from '../lib/http-error.js'
-import { rootPrisma } from '../lib/prisma.js'
+import { prisma, rootPrisma } from '../lib/prisma.js'
 import { printerManager } from '../lib/printer-manager.js'
 import type { RequestTenantSummary } from '../lib/tenant-context.js'
 
@@ -27,6 +27,7 @@ const originalPrinterStorageDelete = deleteOperationDispatcher.enqueuePrinterSto
 const originalAuditLogCreate = rootPrisma.auditLog.create
 const printerManagerPrototype = Object.getPrototypeOf(printerManager) as typeof printerManager
 const originalGetPrinter = printerManagerPrototype.getPrinter
+const originalPrinterFindUnique = prisma.printer.findUnique
 const TEST_TENANT: RequestTenantSummary = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
 
 const TEST_PRINTER: Printer = {
@@ -48,6 +49,7 @@ afterEach(() => {
   deleteOperationDispatcher.enqueuePrinterStorageDelete = originalPrinterStorageDelete
   rootPrisma.auditLog.create = originalAuditLogCreate
   printerManagerPrototype.getPrinter = originalGetPrinter
+  prisma.printer.findUnique = originalPrinterFindUnique
 })
 
 test('library delete jobs write an explicit audit entry', async () => {
@@ -97,6 +99,7 @@ test('printer storage delete jobs write an explicit audit entry', async () => {
     return { id: 'audit-2' } as never
   }) as unknown as typeof rootPrisma.auditLog.create
   printerManagerPrototype.getPrinter = (() => TEST_PRINTER as never) as typeof printerManagerPrototype.getPrinter
+  prisma.printer.findUnique = ((async () => ({ id: TEST_PRINTER.id })) as unknown) as typeof prisma.printer.findUnique
   deleteOperationDispatcher.enqueuePrinterStorageDelete = (() => createDeleteJob({
     id: 'delete-2',
     kind: 'printer.storage.delete',

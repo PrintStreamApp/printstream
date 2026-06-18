@@ -32,6 +32,7 @@ import {
 } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { printerManager } from '../../lib/printer-manager.js'
+import { assertTenantOwnsPrinter } from '../../lib/printer-access.js'
 import { resolvePrintJobIdByTaskId } from '../../lib/print-job-recorder.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { requireRouteParam } from '../../lib/request-helpers.js'
@@ -111,7 +112,10 @@ export const plateClearingPlugin: ApiPlugin = {
 
     /** Push a state change to WS subscribers so the UI updates live. */
     const broadcast = (printerId: string, cleared: boolean): void => {
-      const tenantId = printerManager.getTenantId(printerId) ?? null
+      // A null tenantId fans out to every client across all tenants; skip rather than
+      // leak this printer's plate state when its tenant can't be resolved.
+      const tenantId = printerManager.getTenantId(printerId)
+      if (!tenantId) return
       // Re-use the generic plugin sub-event format so we don't have to
       // touch the shared discriminated union for every plugin. The
       // web plugin filters on `pluginName`.
@@ -173,6 +177,7 @@ export const plateClearingPlugin: ApiPlugin = {
 
     context.router.post('/state/:printerId/clear', requireRequestPermission(PRINTERS_CLEAR_PLATE_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
+      await assertTenantOwnsPrinter(printerId)
       const printerName = printerManager.getPrinter(printerId)?.name ?? printerId
       const relatedJobId = await resolvePrintJobIdByTaskId(printerId, printerManager.getStatus(printerId)?.taskId ?? null)
       await setCleared(printerId, true)
@@ -196,6 +201,7 @@ export const plateClearingPlugin: ApiPlugin = {
 
     context.router.post('/state/:printerId/needs-clear', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
+      await assertTenantOwnsPrinter(printerId)
       const printerName = printerManager.getPrinter(printerId)?.name ?? printerId
       await setCleared(printerId, false)
       await refreshCache(printerId)

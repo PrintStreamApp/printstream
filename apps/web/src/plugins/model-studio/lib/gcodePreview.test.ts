@@ -98,6 +98,20 @@ test('parseGcodeLayers interpolates G2/G3 arc moves into segments on the arc', (
   assert.equal(parsed.extrusionWidths.length, segCount)
 })
 
+test('parseGcodeLayers keeps a Z-changing (helical) arc on a single layer, not one per sub-segment', () => {
+  // A spiral arc whose Z rises across the sweep — previously each interpolated sub-segment bumped
+  // the layer counter, exploding layerCount. It should count as one layer (keyed off the move).
+  const gcode = [
+    'G90', 'M82',
+    'G1 X10 Y0 Z0.2',          // position only
+    'G3 X0 Y10 Z0.4 I-10 J0 E5' // extruding arc that also climbs in Z
+  ].join('\n')
+
+  const parsed = parseGcodeLayers(gcode)
+  assert.equal(parsed.layerCount, 1)
+  assert.ok(parsed.extrusionPositions.length / 6 >= 6, 'arc still tessellates into many segments')
+})
+
 test('parseGcodeLayers caps arc chord length so large-radius walls stay round', () => {
   // Quarter circle at radius 100: sag tolerance alone would allow ~8mm flat chords, which read
   // as straight facets on big curved walls. Every tessellated chord must stay near 1mm.

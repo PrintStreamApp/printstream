@@ -88,6 +88,11 @@ const envSchema = z.object({
   BRIDGE_PROTOCOL_VERSION: z.coerce.number().int().nonnegative().default(1),
   BRIDGE_RUNNER_ABI_VERSION: z.string().trim().min(1).max(120).default('node22-ffmpeg7-v1'),
   BRIDGE_AUTO_UPDATE: z.coerce.boolean().default(false),
+  // Pin this bridge to its current binary: refuse both periodic self-updates and
+  // server-pushed (lockstep) updates. For running a fixed build (e.g. validating
+  // a pre-release bridge against the production server without being pulled to
+  // the published build).
+  BRIDGE_DISABLE_SELF_UPDATE: z.coerce.boolean().default(false),
   BRIDGE_RELEASES_DIR: z.string().default('/data/releases'),
   BRIDGE_UPDATE_PUBLIC_KEY: z.string().trim().optional(),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development')

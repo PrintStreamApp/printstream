@@ -15,10 +15,15 @@
 import { extractErrorMessage, type StagedImport } from '@printstream/shared'
 import { buildApiUrl } from '../../../lib/apiUrl'
 import { readWorkspaceContextHeader } from '../../../lib/workspaceContext'
+import { fetchModelBytes } from './modelFetch'
 
-/** Build the credentialed binary-mesh URL for a staged import (rendered by `STLLoader.parse`). */
-export function importMeshUrl(importId: string): string {
-  return buildApiUrl(`/api/editor/imports/${encodeURIComponent(importId)}/mesh`)
+/**
+ * Build the credentialed binary-mesh URL for a staged import (rendered by `STLLoader.parse`).
+ * Pass `partIndex` to fetch one solid of a multi-solid import; omit it for the merged mesh.
+ */
+export function importMeshUrl(importId: string, partIndex?: number): string {
+  const base = buildApiUrl(`/api/editor/imports/${encodeURIComponent(importId)}/mesh`)
+  return partIndex == null ? base : `${base}?part=${encodeURIComponent(String(partIndex))}`
 }
 
 function tenantHeaders(): Record<string, string> {
@@ -67,16 +72,19 @@ export async function stageImportFromLibrary(
   return readImportResponse(response)
 }
 
-/** Fetch a staged import's binary STL mesh with credentials (for `STLLoader.parse`). */
-export async function fetchImportMesh(importId: string, signal?: AbortSignal): Promise<ArrayBuffer> {
-  const response = await fetch(importMeshUrl(importId), {
+/**
+ * Fetch a staged import's binary STL mesh with credentials (for `STLLoader.parse`). Pass
+ * `partIndex` for one solid of a multi-solid import; omit it for the merged mesh.
+ */
+export async function fetchImportMesh(importId: string, partIndex?: number, signal?: AbortSignal): Promise<ArrayBuffer> {
+  // Stall-guarded so a transport that hangs mid-body surfaces an error instead of freezing
+  // the editor's geometry build (see `modelFetch`).
+  const bytes = await fetchModelBytes(importMeshUrl(importId, partIndex), {
     method: 'GET',
     credentials: 'include',
     headers: tenantHeaders(),
     signal
   })
-  if (!response.ok) {
-    throw new Error(`Unable to load imported model mesh (${response.status}).`)
-  }
-  return response.arrayBuffer()
+  // `fetchModelBytes` returns a tightly-sized Uint8Array backed by a fresh ArrayBuffer.
+  return bytes.buffer as ArrayBuffer
 }

@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { libraryThreeMfSceneSchema, threeMfIndexSchema, type StagedImport } from '@printstream/shared'
+import * as THREE from 'three'
 import {
   buildSceneEdit,
+  decomposeInstanceTransform,
+  exactTransformIfShearing,
   duplicateInstance,
   fillPlateFromScene,
   instanceFromStagedImport,
@@ -12,12 +15,15 @@ import {
   type EditorState
 } from './editorModel'
 
+const BOUNDS = { min: { x: -1, y: -1, z: 0 }, max: { x: 1, y: 1, z: 2 } }
+
 const STAGED: StagedImport = {
   importId: 'imp-1',
   name: 'Bracket.stl',
   format: 'stl',
   triangleCount: 12,
-  bounds: { min: { x: -1, y: -1, z: 0 }, max: { x: 1, y: 1, z: 2 } }
+  bounds: BOUNDS,
+  parts: [{ name: 'Bracket.stl', triangleCount: 12, bounds: BOUNDS }]
 }
 
 test('seedEmptyEditorState yields one empty plate', () => {
@@ -37,6 +43,57 @@ test('instanceFromStagedImport places an import-backed instance at the plate cen
   assert.equal(instance.parts.length, 0)
 })
 
+test('instanceFromStagedImport carries a multi-solid import as one instance with named parts', () => {
+  const multi: StagedImport = {
+    importId: 'imp-2',
+    name: 'CHM Cylinder',
+    format: 'step',
+    triangleCount: 20,
+    bounds: BOUNDS,
+    parts: [
+      { name: 'Cylinder', triangleCount: 12, bounds: BOUNDS },
+      { name: 'Hole modifier 1', triangleCount: 8, bounds: BOUNDS }
+    ]
+  }
+  const instance = instanceFromStagedImport(multi)
+  assert.equal(instance.parts.length, 2)
+  assert.deepEqual(instance.parts.map((part) => part.name), ['Cylinder', 'Hole modifier 1'])
+  assert.deepEqual(instance.parts.map((part) => part.componentObjectId), [0, 1])
+})
+
+const MULTI: StagedImport = {
+  importId: 'imp-3',
+  name: 'CHM Cylinder',
+  format: 'step',
+  triangleCount: 20,
+  bounds: BOUNDS,
+  parts: [
+    { name: 'Cylinder', triangleCount: 12, bounds: BOUNDS },
+    { name: 'Hole modifier 1', triangleCount: 8, bounds: BOUNDS }
+  ]
+}
+
+test('a fresh import gets a synthetic (negative) object identity for pre-save per-object editing', () => {
+  const instance = instanceFromStagedImport(MULTI)
+  const id = instance.source.kind === 'import' ? instance.source.replacedObjectId : null
+  assert.ok(id != null && id < 0, 'fresh import should carry a negative synthetic object id')
+})
+
+test('buildSceneEdit emits per-part filament + a meshReplacements entry for a multi-solid import', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const instance = instanceFromStagedImport(MULTI)
+  const syntheticId = instance.source.kind === 'import' ? instance.source.replacedObjectId : null
+  // Assign the second solid its own material (what the per-part filament badge does).
+  instance.parts[1]!.filamentId = 2
+  state.plates[0]!.instances.push(instance)
+
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.importPartFilaments, [{ importId: 'imp-3', partIndex: 1, filamentId: 2 }])
+  // The synthetic identity rides along as a meshReplacements entry so per-object process
+  // overrides authored against it re-key onto the baked object at slice time.
+  assert.deepEqual(edit.meshReplacements, [{ objectId: syntheticId, importId: 'imp-3' }])
+})
+
 test('buildSceneEdit emits importId for import-backed instances and objectId otherwise', () => {
   const state: EditorState = seedEmptyEditorState()
   state.plates[0]!.instances.push(instanceFromStagedImport(STAGED))
@@ -54,6 +111,72 @@ test('buildSceneEdit emits importId for import-backed instances and objectId oth
   assert.equal(imported?.objectId, undefined)
   assert.equal(object?.objectId, 7)
   assert.equal(object?.importId, undefined)
+})
+
+test('decomposeInstanceTransform round-trips a rotated, non-uniformly scaled object (T·S·R)', () => {
+  // Build the matrix the editor itself renders/emits: world = T · S · R (scale outside rotation).
+  const position = new THREE.Vector3(10, -20, 3)
+  const rotation = new THREE.Euler(0.3, -0.7, 0.5, 'XYZ')
+  const scale = new THREE.Vector3(2, 1, 0.5) // non-uniform + rotation = the case that used to shear
+  const m = new THREE.Matrix4()
+    .makeTranslation(position.x, position.y, position.z)
+    .multiply(new THREE.Matrix4().makeScale(scale.x, scale.y, scale.z))
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(rotation))
+  const e = m.elements
+  const transform = [e[0]!, e[1]!, e[2]!, e[4]!, e[5]!, e[6]!, e[8]!, e[9]!, e[10]!, e[12]!, e[13]!, e[14]!]
+
+  const decomposed = decomposeInstanceTransform(transform)
+  // Recompose the editor's way and confirm it reproduces the original matrix exactly.
+  const round = new THREE.Matrix4()
+    .makeTranslation(decomposed.position.x, decomposed.position.y, decomposed.position.z)
+    .multiply(new THREE.Matrix4().makeScale(decomposed.scale.x, decomposed.scale.y, decomposed.scale.z))
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(decomposed.rotation))
+  let maxErr = 0
+  for (let i = 0; i < 16; i++) maxErr = Math.max(maxErr, Math.abs((round.elements[i] ?? 0) - (m.elements[i] ?? 0)))
+  assert.ok(maxErr < 1e-9, `T·S·R round-trip error ${maxErr}`)
+})
+
+function transform12(m: THREE.Matrix4): number[] {
+  const e = m.elements
+  return [e[0]!, e[1]!, e[2]!, e[4]!, e[5]!, e[6]!, e[8]!, e[9]!, e[10]!, e[12]!, e[13]!, e[14]!]
+}
+
+test('exactTransformIfShearing flags a foreign T·R·S (rotate+non-uniform) matrix but not the editor\'s T·S·R', () => {
+  const pos = new THREE.Vector3(5, -3, 1)
+  const rot = new THREE.Euler(0.2, 0.6, -0.4, 'XYZ')
+  const nonUniform = new THREE.Vector3(2, 1, 0.5)
+  // Foreign Bambu convention: T·R·S (scale inside rotation) — shears relative to the editor's T·S·R.
+  const foreign = new THREE.Matrix4()
+    .makeTranslation(pos.x, pos.y, pos.z)
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(rot))
+    .multiply(new THREE.Matrix4().makeScale(nonUniform.x, nonUniform.y, nonUniform.z))
+  assert.ok(exactTransformIfShearing(transform12(foreign)) !== undefined, 'foreign T·R·S should be kept exact')
+
+  // The editor's own convention: T·S·R — reproducible from TRS, so no exact matrix needed.
+  const own = new THREE.Matrix4()
+    .makeTranslation(pos.x, pos.y, pos.z)
+    .multiply(new THREE.Matrix4().makeScale(nonUniform.x, nonUniform.y, nonUniform.z))
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(rot))
+  assert.equal(exactTransformIfShearing(transform12(own)), undefined)
+
+  // Uniform scale + rotation is representable either way — no exact matrix.
+  const uniform = new THREE.Matrix4()
+    .makeTranslation(pos.x, pos.y, pos.z)
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(rot))
+    .multiply(new THREE.Matrix4().makeScale(2, 2, 2))
+  assert.equal(exactTransformIfShearing(transform12(uniform)), undefined)
+})
+
+test('buildSceneEdit emits an instance\'s exact matrix verbatim', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const exact = [0.5, 0.1, 0, 0.2, 1.3, 0, 0, 0, 0.8, 10, 20, 0]
+  const instance = instanceFromStagedImport(STAGED)
+  instance.source = { kind: 'object' }
+  instance.objectId = 7
+  instance.exactMatrix = [...exact]
+  state.plates[0]!.instances.push(instance)
+  const emitted = buildSceneEdit(state).instances[0]
+  assert.deepEqual(emitted?.matrix, exact)
 })
 
 test('new instances default to printable and duplicate carries the flag', () => {

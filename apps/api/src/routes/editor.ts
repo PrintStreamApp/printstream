@@ -33,8 +33,8 @@ import { getStagedImport, resolveSceneEditImports, stageImport } from '../lib/im
 import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
 import { detectImportFormat, meshToBinaryStl, parseImportedMesh } from '../lib/mesh-import.js'
 import { prisma } from '../lib/prisma.js'
-import { requireRequestTenantId, requireRouteParam, singleUploadWithLimit } from '../lib/request-helpers.js'
-import { buildEditedThreeMf, embedPlateThumbnails } from '../lib/three-mf.js'
+import { requireRequestTenantId, requireRouteParam, sendModelBuffer, singleUploadWithLimit } from '../lib/request-helpers.js'
+import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from '../lib/three-mf.js'
 
 const MAX_IMPORT_UPLOAD_BYTES = 256 * 1024 * 1024
 
@@ -110,10 +110,19 @@ editorRouter.get(
     const importId = requireRouteParam(request.params.importId, 'Import id')
     const record = getStagedImport(importId, tenantId)
     if (!record) throw notFound('Imported model not found or expired')
-    const stl = meshToBinaryStl(record.mesh)
-    response.setHeader('Content-Type', 'model/stl')
+    // `?part=N` streams the Nth named solid of a multi-solid import; without it (or for a
+    // single-solid import) the merged mesh is returned.
+    const partParam = request.query.part
+    const parts = record.mesh.parts
+    let mesh = record.mesh
+    if (typeof partParam === 'string' && parts && parts.length > 1) {
+      const index = Number.parseInt(partParam, 10)
+      if (!Number.isInteger(index) || index < 0 || index >= parts.length) throw badRequest('Invalid import part')
+      mesh = parts[index]!.mesh
+    }
+    const stl = meshToBinaryStl(mesh)
     response.setHeader('Cache-Control', 'private, max-age=300')
-    response.send(stl)
+    await sendModelBuffer(request, response, stl, 'model/stl')
   }
 )
 
@@ -124,7 +133,7 @@ editorRouter.post(
     const tenantId = requireRequestTenantId(request)
     const parsed = saveArrangedThreeMfSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid save request')
-    const { baseFileId, baseVersionId, mode, sceneEdit, retarget, slicerTargetId } = parsed.data
+    const { baseFileId, baseVersionId, mode, sceneEdit, retarget, slicerTargetId, objectProcessOverrides } = parsed.data
 
     const baseFile = baseFileId
       ? await prisma.libraryFile.findFirst({
@@ -154,13 +163,23 @@ editorRouter.post(
     // Extra temp dirs to clean up (e.g. the retargeted artifact downloaded from the slicer).
     const extraCleanupDirs: string[] = []
     try {
-      await buildEditedThreeMf(basePath, outputPath, sceneEdit, imports)
+      const { replacedObjectIds } = await buildEditedThreeMf(basePath, outputPath, sceneEdit, imports)
+      // Persist per-object PROCESS overrides into the saved 3MF (so they survive the save, not
+      // just a slice). Overrides authored against a replaced/imported object are keyed by its
+      // editor identity; re-key onto the baked object_id, then inject as model_settings metadata.
+      let workingPath = outputPath
+      if (objectProcessOverrides && Object.keys(objectProcessOverrides).length > 0) {
+        const rekeyed = rekeyReplacedObjectOverrides(objectProcessOverrides, replacedObjectIds)
+        const customizedPath = path.join(workDir, 'customized.3mf')
+        await createObjectCustomizedThreeMf(workingPath, customizedPath, 0, { objectProcessOverrides: rekeyed })
+        workingPath = customizedPath
+      }
       // Embed the editor's freshly-rendered plate previews so the saved 3MF's thumbnail
       // reflects the current arrangement. buildEditedThreeMf otherwise preserves the base
       // file's old embedded PNGs, which would show a stale (pre-rearrange) layout.
       if (sceneEdit.plateThumbnails && sceneEdit.plateThumbnails.length > 0) {
         await embedPlateThumbnails(
-          outputPath,
+          workingPath,
           sceneEdit.plateThumbnails.map((thumb) => ({ plateIndex: thumb.plateIndex, png: Buffer.from(thumb.png, 'base64') }))
         ).catch(() => undefined)
       }
@@ -176,11 +195,11 @@ editorRouter.post(
       // "Save as a different printer": retarget the baked project to the chosen machine via the
       // slicer's machine switch, so the saved 3MF opens/slices for the new printer instead of
       // silently keeping the source machine. buildEditedThreeMf alone never switches the machine.
-      let persistSourcePath = outputPath
+      let persistSourcePath = workingPath
       if (retarget) {
         persistSourcePath = await retargetSavedProjectMachine({
           tenantId,
-          arrangedPath: outputPath,
+          arrangedPath: workingPath,
           fileName: target.name,
           slicerTargetId,
           retarget

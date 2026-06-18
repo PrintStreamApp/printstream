@@ -1,10 +1,41 @@
 /**
  * Shared request-derived helpers for routes and plugins.
  */
+import { gzip } from 'node:zlib'
+import { promisify } from 'node:util'
 import type { NextFunction, Request, Response } from 'express'
 import type { Multer } from 'multer'
 import { MulterError } from 'multer'
 import { badRequest } from './http-error.js'
+
+const gzipAsync = promisify(gzip)
+
+/**
+ * Send a model/mesh buffer, gzip-compressing it when the client advertises gzip support.
+ *
+ * Library model entries are multi-megabyte XML (and import/preview meshes can be large binary
+ * STL); they compress several-fold, which both cuts transfer time and — importantly — keeps a
+ * single response from exceeding the in-flight buffer of size-limited proxies, which can
+ * otherwise stall a large body mid-stream and hang the editor's geometry load. Tiny payloads
+ * skip compression (the gzip framing isn't worth it), and clients that don't advertise gzip
+ * still receive the raw bytes.
+ */
+export async function sendModelBuffer(
+  request: Request,
+  response: Response,
+  buffer: Buffer,
+  contentType: string
+): Promise<void> {
+  response.setHeader('Content-Type', contentType)
+  response.vary('Accept-Encoding')
+  const acceptsGzip = /\bgzip\b/i.test(request.headers['accept-encoding'] ?? '')
+  if (acceptsGzip && buffer.length >= 4096) {
+    response.setHeader('Content-Encoding', 'gzip')
+    response.send(await gzipAsync(buffer))
+    return
+  }
+  response.send(buffer)
+}
 
 export function requireRouteParam(value: string | string[] | undefined, name: string): string {
   const resolved = Array.isArray(value) ? value[0] : value

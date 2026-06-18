@@ -14,11 +14,11 @@
  * this module except the public three-mf barrel.
  */
 import { createWriteStream } from 'node:fs'
-import { type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPlateFilamentChanges } from '@printstream/shared'
+import { type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPlateFilamentChanges } from '@printstream/shared'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import type { ImportedMesh } from './mesh-import.js'
-import { escapeXmlAttribute, readEntry, readZipEntryBuffer } from './three-mf-internal.js'
+import { OBJECT_STRUCTURAL_METADATA_KEYS, escapeXmlAttribute, readEntry, readZipEntryBuffer } from './three-mf-internal.js'
 import { BRIM_EAR_POINTS_ENTRY, CUSTOM_GCODE_PER_LAYER_ENTRY, extractPlateType, extractSceneBed, LOGICAL_PART_PLATE_GAP, normalizeColor, parseAttrs, parseModelSettingsScene, parseRootModelComponents, parseRootModelObjectIdOrder } from './three-mf-reader.js'
 
 /**
@@ -220,6 +220,13 @@ export interface ImportedObjectInput {
   importId: string
   name: string
   mesh: ImportedMesh
+  /**
+   * Named sub-solids when the import is a multi-solid assembly (a STEP with several parts). When
+   * present (>1), the import bakes as ONE object whose solids are `<component>` parts, each with
+   * its own `model_settings` `<part>` entry — instead of a single merged `<object><mesh>`. The
+   * top-level {@link ImportedObjectInput.mesh} is the merged geometry, used only when this is absent.
+   */
+  parts?: Array<{ name: string; mesh: ImportedMesh }>
 }
 
 const NEW_PROJECT_MODEL_XML = [
@@ -310,6 +317,46 @@ function renderImportedModelSettingsObjectXml(objectId: number, name: string, ex
   ].join('\n')
 }
 
+/**
+ * Render a multi-solid import's ROOT object: a `<components>` object (no mesh of its own) that
+ * references each solid's already-emitted mesh object by an identity transform. This is the object
+ * a build item places, so the whole assembly moves/clones as one — exactly how BambuStudio loads a
+ * multi-part STEP. (3MF requires an object be mesh XOR components; the solids carry the meshes.)
+ */
+function renderImportedComponentsObjectXml(objectId: number, componentObjectIds: number[]): string {
+  return [
+    `  <object id="${objectId}" type="model">`,
+    '   <components>',
+    ...componentObjectIds.map((id) => `    <component objectid="${id}" transform="${IDENTITY_THREE_MF_TRANSFORM}"/>`),
+    '   </components>',
+    '  </object>'
+  ].join('\n')
+}
+
+/**
+ * Render the `model_settings.config` entry for a multi-solid import: one `<part subtype="normal_part">`
+ * per solid (keyed by its component object id, named, carrying the placing instance's filament as
+ * `extruder` so every part keeps a material). Mirrors {@link renderImportedModelSettingsObjectXml}
+ * for the single-mesh case.
+ */
+function renderImportedMultiPartModelSettingsXml(
+  objectId: number,
+  name: string,
+  parts: Array<{ componentObjectId: number; name: string; extruder: number | null }>
+): string {
+  return [
+    `  <object id="${objectId}">`,
+    `    <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
+    ...parts.flatMap((part) => [
+      `    <part id="${part.componentObjectId}" subtype="normal_part">`,
+      `      <metadata key="name" value="${escapeXmlAttribute(part.name)}"/>`,
+      ...(part.extruder != null ? [`      <metadata key="extruder" value="${part.extruder}"/>`] : []),
+      '    </part>'
+    ]),
+    '  </object>'
+  ].join('\n')
+}
+
 function injectResourcesObjects(modelXml: string, objectsXml: string): string {
   if (!objectsXml) return modelXml
   if (/<\/resources>/.test(modelXml)) {
@@ -382,15 +429,48 @@ function buildEditedThreeMfDocuments(
       importFilament.set(instance.importId, instance.filamentId)
     }
   }
+  // Per-part filament for multi-solid imports: importId -> (0-based solid index -> filamentId).
+  const importPartFilament = new Map<string, Map<number, number>>()
+  for (const entry of edit.importPartFilaments ?? []) {
+    let byPart = importPartFilament.get(entry.importId)
+    if (!byPart) { byPart = new Map(); importPartFilament.set(entry.importId, byPart) }
+    byPart.set(entry.partIndex, entry.filamentId)
+  }
+  const toExtruder = (filamentId: number | null): number | null =>
+    filamentId != null ? filamentToExtruder.get(filamentId) ?? filamentId : null
   for (const imported of imports) {
     const objectId = nextObjectId
     nextObjectId += 1
     importIdToObjectId.set(imported.importId, objectId)
-    meshObjects.push(renderImportedMeshObjectXml(objectId, imported.mesh))
-    if (!partImportIds.has(imported.importId)) {
-      const filamentId = importFilament.get(imported.importId) ?? null
-      const extruder = filamentId != null ? filamentToExtruder.get(filamentId) ?? filamentId : null
-      settingsObjects.push(renderImportedModelSettingsObjectXml(objectId, imported.name, extruder))
+    const isPartImport = partImportIds.has(imported.importId)
+    // A multi-solid import (STEP assembly) bakes as one object whose solids are component parts;
+    // imports consumed as an added part volume stay single-mesh (applyAddedParts wraps them).
+    const multiParts = !isPartImport && imported.parts && imported.parts.length > 1 ? imported.parts : null
+    const objectExtruder = toExtruder(importFilament.get(imported.importId) ?? null)
+    if (multiParts) {
+      const componentIds = multiParts.map(() => {
+        const id = nextObjectId
+        nextObjectId += 1
+        return id
+      })
+      const partFilaments = importPartFilament.get(imported.importId)
+      multiParts.forEach((part, i) => meshObjects.push(renderImportedMeshObjectXml(componentIds[i]!, part.mesh)))
+      meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds))
+      settingsObjects.push(renderImportedMultiPartModelSettingsXml(
+        objectId,
+        imported.name,
+        // Each solid keeps its own filament when assigned; otherwise it inherits the object's.
+        multiParts.map((part, i) => ({
+          componentObjectId: componentIds[i]!,
+          name: part.name,
+          extruder: toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder
+        }))
+      ))
+    } else {
+      meshObjects.push(renderImportedMeshObjectXml(objectId, imported.mesh))
+      if (!isPartImport) {
+        settingsObjects.push(renderImportedModelSettingsObjectXml(objectId, imported.name, objectExtruder))
+      }
     }
   }
 
@@ -439,6 +519,10 @@ function buildEditedThreeMfDocuments(
 
   if (edit.partFilaments && edit.partFilaments.length > 0) {
     modelSettingsXml = applyPartFilamentOverrides(modelSettingsXml, baseModelSettingsXml, edit.partFilaments)
+  }
+
+  if (edit.partProcessOverrides && edit.partProcessOverrides.length > 0) {
+    modelSettingsXml = applyPartProcessOverrides(modelSettingsXml, edit.partProcessOverrides)
   }
 
   if (edit.objectNames && edit.objectNames.length > 0) {
@@ -620,6 +704,39 @@ function applyPartFilamentOverrides(
       const partId = Number.parseInt(parseAttrs(partAttrs).id ?? '', 10)
       const extruder = parts.get(partId)
       return extruder == null ? partBlock : setPartExtruderMetadata(partBlock, extruder)
+    })
+  })
+}
+
+/**
+ * Apply per-PART process overrides: set each part's process `<metadata>` inside its
+ * `model_settings.config` `<part>` block (replacing the whole non-structural override set so a
+ * cleared key is removed), keyed by objectId + componentObjectId. Mirrors
+ * {@link applyObjectProcessOverridesXml} but scoped to one part rather than the object head.
+ */
+export function applyPartProcessOverrides(modelSettingsXml: string, overrides: SceneEditPartProcessOverride[]): string {
+  const byObjectPart = new Map<number, Map<number, Record<string, string | string[]>>>()
+  for (const override of overrides) {
+    let parts = byObjectPart.get(override.objectId)
+    if (!parts) { parts = new Map(); byObjectPart.set(override.objectId, parts) }
+    parts.set(override.componentObjectId, override.overrides)
+  }
+  return modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
+    const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
+    const parts = byObjectPart.get(objectId)
+    if (!parts) return objectBlock
+    return objectBlock.replace(/<part\b([^>]*)>([\s\S]*?)<\/part>/g, (partBlock, partAttrs: string, partBody: string) => {
+      const partId = Number.parseInt(parseAttrs(partAttrs).id ?? '', 10)
+      const partOverrides = parts.get(partId)
+      if (!partOverrides) return partBlock
+      // Drop existing part-level process overrides (keep structural metadata like name/extruder).
+      const stripped = partBody.replace(/[ \t]*<metadata\s+key="([^"]+)"\s+value="[^"]*"\s*\/>\n?/g, (line, key: string) =>
+        OBJECT_STRUCTURAL_METADATA_KEYS.has(key) ? line : '')
+      const injected = Object.entries(partOverrides).map(([key, value]) => {
+        const serialized = Array.isArray(value) ? value.join(';') : value
+        return `\n      <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(serialized)}"/>`
+      }).join('')
+      return `<part${partAttrs}>${injected}${stripped}</part>`
     })
   })
 }

@@ -279,6 +279,10 @@ export class BridgePrinterMonitor {
     this.printers.delete(printerId)
     if (entry.watchdogTimer) clearInterval(entry.watchdogTimer)
     this.clearPushallTimer(entry)
+    // Detach handlers before force-closing so a late close/error/message event from
+    // the torn-down client can't fire (e.g. announcing offline for a removed printer),
+    // mirroring the watchdog recovery path.
+    entry.client.removeAllListeners()
     entry.client.end(true)
     if (announceRemoval) {
       this.sendMessage({

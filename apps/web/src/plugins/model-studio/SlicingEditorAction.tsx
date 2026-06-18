@@ -22,6 +22,11 @@ const EditorView = lazy(() => import('./EditorView'))
 export function SlicingEditorAction(props: Record<string, unknown>) {
   const fileId = typeof props.fileId === 'string' ? props.fileId : null
   const baseVersionId = typeof props.baseVersionId === 'string' && props.baseVersionId ? props.baseVersionId : null
+  // A brand-new project (hidden scaffold): the editor saves via "Save as new" so the user is
+  // prompted for a name + destination instead of silently overwriting the throwaway scaffold.
+  const isNewProject = props.isNewProject === true
+  const bridgeId = typeof props.bridgeId === 'string' ? props.bridgeId : null
+  const folderId = typeof props.folderId === 'string' ? props.folderId : null
   const onApply = typeof props.onApply === 'function'
     ? (props.onApply as (edit: SceneEdit) => void)
     : null
@@ -75,8 +80,14 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
       {open && (
         <Suspense fallback={null}>
           <EditorView
+            // Re-mount on a different file/version so all per-file state and one-shot guards
+            // (seeded scene, re-hydration set, frozen preferred plate) reset cleanly.
+            key={`${fileId}:${baseVersionId ?? 'current'}`}
             baseFileId={fileId}
             baseVersionId={baseVersionId}
+            isNewProject={isNewProject}
+            bridgeId={bridgeId}
+            folderId={folderId}
             currentEdit={currentEdit}
             initialPlateIndex={initialPlateIndex}
             targetPrinterModel={targetPrinterModel}

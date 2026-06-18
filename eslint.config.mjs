@@ -18,7 +18,9 @@ export default tseslint.config(
       '**/prisma/migrations/**',
       // Gitignored standalone (SEA) build outputs and download cache.
       'apps/bridge/release/**',
-      'apps/bridge/.cache/**'
+      'apps/bridge/.cache/**',
+      'apps/server/release/**',
+      'apps/server/.cache/**'
     ]
   },
   js.configs.recommended,

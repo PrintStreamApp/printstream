@@ -85,6 +85,7 @@ export class PrinterDiscovery {
     }
 
     this.entriesByBridge.set(bridgeId, next)
+    this.pruneDismissalsForAbsentSerials()
     if (changed) this.broadcastChange()
   }
 
@@ -97,8 +98,21 @@ export class PrinterDiscovery {
         this.recoveryHints.delete(serial)
       }
     }
+    this.pruneDismissalsForAbsentSerials()
 
     this.broadcastChange()
+  }
+
+  /**
+   * Drop per-tenant dismissals for serials no longer discovered on any bridge.
+   * Without this, `dismissedTenantIds` grows unbounded (serial × dismissing tenant)
+   * over the process lifetime as discovered printers age out, matching the
+   * `recoveryHints` reconciliation already done above.
+   */
+  private pruneDismissalsForAbsentSerials(): void {
+    for (const [serial] of this.dismissedTenantIds) {
+      if (!this.hasSerial(serial)) this.dismissedTenantIds.delete(serial)
+    }
   }
 
   reset(): void {

@@ -13,6 +13,12 @@ import type { RequestAuthContext } from '../../lib/auth-context.js'
 import { HttpError } from '../../lib/http-error.js'
 import { PrinterEventBus } from '../../lib/printer-events.js'
 import { printerManager } from '../../lib/printer-manager.js'
+import { prisma } from '../../lib/prisma.js'
+
+// Per-printer routes authorize through the tenant-scoped singleton prisma; report the
+// test printer as owned so the gate passes and these tests exercise the handler/perm
+// logic they target (not the new ownership 404).
+const originalScopedPrinterFindUnique = prisma.printer.findUnique
 import { firmwareUpdatesPlugin } from './index.js'
 
 afterEach(() => {
@@ -102,7 +108,7 @@ test('firmware upload reaches the handler for printers.manage callers', async ()
     })
 
     assert.equal(response.status, 404)
-    assert.deepEqual(await response.json(), { error: 'Printer not connected' })
+    assert.deepEqual(await response.json(), { error: 'Printer not found or not connected' })
   })
 })
 
@@ -175,6 +181,8 @@ async function withFirmwareUpdatesApp(
     }
   } as never)
 
+  prisma.printer.findUnique = ((async () => ({ id: 'printer-1' })) as unknown) as typeof prisma.printer.findUnique
+
   const server = await listen(app)
   const address = server.address() as AddressInfo
   const baseUrl = `http://127.0.0.1:${address.port}`
@@ -182,6 +190,7 @@ async function withFirmwareUpdatesApp(
     await run({ baseUrl })
   } finally {
     await close(server)
+    prisma.printer.findUnique = originalScopedPrinterFindUnique
   }
 }
 

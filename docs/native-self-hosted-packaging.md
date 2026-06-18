@@ -15,7 +15,7 @@
 
 Let a self-hoster run the whole app by downloading and double-clicking one signed
 executable — no Docker, no Compose, no separate database to operate — on Windows,
-macOS, Raspberry Pi, or a Linux box. The same `service install` / tray / status
+a Raspberry Pi, or a Linux box. The same `service install` / tray / status
 experience the standalone bridge already offers, but for the full stack.
 
 ### Non-goals (v1)
@@ -55,8 +55,8 @@ These transfer with little change:
 
 - **The SEA build pipeline**: esbuild→CJS
   bundle, download + checksum the per-target official Node binary, generate the
-  blob, `postject` inject, brotli-compress embedded assets, per-OS signing. The
-  six targets (`{linux,win32,darwin} × {x64,arm64}`) and the download-cache /
+  blob, `postject` inject, brotli-compress embedded assets, Windows signing. The
+  build targets (Linux x64/arm64, Windows x64) and the download-cache /
   checksum harness apply directly.
 - **The generic service plumbing**, deliberately kept non-bridge-specific:
   `ServiceSpec` + the systemd / launchd / WinSW controllers, `paths.ts`,
@@ -65,8 +65,8 @@ These transfer with little change:
 - **Embedded ffmpeg** — the
   camera relay path spawns ffmpeg via `BRIDGE_FFMPEG_PATH`, so the same
   brotli-embedded static binary works unchanged.
-- **Signing infra** — macOS ad-hoc / rcodesign and the Windows Azure Trusted
-  Signing CI split already exist and apply as-is.
+- **Signing infra** — the Windows Azure Trusted Signing CI split already exists
+  and applies as-is.
 
 ## Architecture of the bundled box
 
@@ -92,6 +92,12 @@ One executable supervises everything; one TCP port faces the user.
 
 ## The five subsystems
 
+> **Foundations status (Phases 1–2):** the database groundwork below is
+> **implemented and Linux-verified** ahead of any SEA packaging — Prisma
+> `binaryTargets`, a CLI-free boot migration applier, and an embedded-Postgres
+> supervisor with a BYO fallback. The SEA entry, `packages/sea-runtime`
+> extraction, CI/signing, and self-update remain pending (Phases 3–5).
+
 ### 1. Database — embedded PostgreSQL (decided)
 
 The schema in [schema.prisma](../apps/api/prisma/schema.prisma) is Postgres-only in
@@ -103,33 +109,50 @@ maintenance tax, so we **embed PostgreSQL** instead and keep the schema,
 migrations, and raw SQL **byte-identical to the Docker stack** — zero divergence
 is what keeps this maintainable.
 
-- Ship a per-platform portable Postgres (e.g. the `embedded-postgres` /
-  `zonky`-style binaries, ~30–60 MB/target, brotli-embedded as a SEA asset like
-  ffmpeg). On first `run`, extract once to `<dataDir>/pgsql/`, `initdb` a cluster
-  under `<dataDir>/db/`, and start it on a loopback socket (prefer a Unix socket /
-  named pipe; no public TCP port).
-- The API connects via `DATABASE_URL` pointed at that local cluster. A
-  **bring-your-own-Postgres fallback** is the documented escape hatch: if the
-  operator sets `DATABASE_URL`, skip the embedded cluster entirely.
-- Supervise the Postgres child: clean shutdown ordering (drain API → stop
-  Postgres), crash restart, and a lock so two app instances cannot open the same
-  cluster (reuse `single-instance.ts`).
+- Ship a per-platform portable Postgres. **Decided:** the `embedded-postgres`
+  package (zonky-style binaries, Postgres 18), which publishes a **real
+  `linux-arm64` build** for the Raspberry Pi target as well as `linux-x64` and
+  `windows-x64` — no emulated borrow needed. For SEA these get brotli-embedded as assets like
+  ffmpeg; the foundations build consumes the npm package directly.
+- **Implemented** ([embedded-postgres.ts](../apps/api/src/lib/embedded-postgres.ts)):
+  `startEmbeddedPostgresIfEnabled()` `initdb`s a cluster under the data dir on
+  first run and creates the `printstream` database. It binds **no TCP port**:
+  on Linux/macOS the cluster listens on a **Unix domain socket only** (so it can
+  never collide with another app's port); on Windows — where Postgres/Prisma
+  socket support is unreliable — it binds a **loopback port chosen free at
+  startup**. `EMBEDDED_POSTGRES_PORT` pins a fixed loopback port if a self-hoster
+  wants one. The API connects via the `DATABASE_URL` it returns.
+- **BYO-Postgres fallback:** the `EMBEDDED_POSTGRES` switch gates the cluster
+  (off by default — Docker, cloud, and self-hosters who run their own Postgres
+  set `DATABASE_URL` and leave the switch off).
+- **Single-instance guard:** Postgres' own `postmaster.pid` is the lock — a
+  second app instance on the same data dir refuses with a clear error (stale
+  pidfiles from a crash are ignored). Clean shutdown drains the API first, then
+  the embedded-postgres exit hook stops the cluster (`persistent`, so an abrupt
+  stop only costs a crash-recovery on next start). A shared `single-instance.ts`
+  converges here when `packages/sea-runtime` is extracted.
 
-Open items: pick the binary source + pin checksums (same pattern as the ffmpeg
-pin); decide arm64 Linux coverage (Raspberry Pi is a primary target, so a real
-`linux-arm64` Postgres build is required, not an emulated borrow).
+Open items (deferred to the SEA phase): pin the Postgres asset checksums (ffmpeg
+pattern) once the binaries are embedded rather than npm-installed; the
+`embedded-postgres` package currently versions as `-beta` only — pin it.
 
 ### 2. Prisma engines + migrations at boot
 
-- Set `binaryTargets` in the generator block (currently unset in
-  [schema.prisma](../apps/api/prisma/schema.prisma)) so the **query engine** ships
-  for all six targets; embed the right engine per build as a SEA asset.
-- Apply migrations on startup **without the Prisma CLI** (the CLI/schema-engine is
-  not in the bundle). The Docker stack uses
-  [bootstrap-prisma-migrations.mjs](../scripts/bootstrap-prisma-migrations.mjs);
-  the native build needs the equivalent that applies the tracked migration SQL
-  with the bundled query engine against the freshly-`initdb`'d cluster, then runs
-  the first-run default-workspace bootstrap (`AUTO_CREATE_DEFAULT_WORKSPACE`).
+- **Done:** `binaryTargets` is set in the generator block
+  ([schema.prisma](../apps/api/prisma/schema.prisma)) so the **query engine** is
+  generated for all six targets up front; SEA embeds the right engine per build.
+- **Done:** migrations apply on startup **without the Prisma CLI**
+  ([apply-migrations.ts](../apps/api/src/lib/apply-migrations.ts), wired in
+  [server.ts](../apps/api/src/server.ts) before the env module / Prisma load).
+  The checked-in history is **not replayable from empty** — the earliest
+  migration assumes pre-history auth tables, the same baseline gap the Docker CLI
+  bootstrap recovers from with `db push` + baseline. So the applier follows
+  Prisma's **baseline** workflow: a fresh cluster is materialized from a checked-in
+  full-schema snapshot ([prisma/baseline.sql](../apps/api/prisma/baseline.sql),
+  regenerated by `npm run prisma:baseline` — kept in sync by a drift test) and
+  every migration is baseline-marked; an existing database forward-applies only
+  new migrations. The normal first-run default-workspace bootstrap
+  (`AUTO_CREATE_DEFAULT_WORKSPACE`) then runs unchanged.
 
 ### 3. Serving the web on one port (new core feature) — **done**
 
@@ -196,7 +219,7 @@ A `build-sea` for the full stack, modeled on the bridge's SEA build script but l
    per-target Postgres(.br), the Prisma query engine, the migrations SQL, and
    (Windows) WinSW.
 4. Copy the per-target official Node binary (checksum-verified), `postject` the
-   blob, sign (macOS codesign/rcodesign; Windows via the existing CI split).
+   blob, sign (Windows via the existing CI split).
 5. Emit `SHA256SUMS` and per-platform artifacts under
    `apps/server/release/sea/<version>/`.
 
@@ -204,42 +227,195 @@ Binary size will be larger than the bridge (~140–150 MB) because of Postgres +
 web bundle — budget ~200–250 MB uncompressed, with `.gz` transfer copies as the
 bridge already does.
 
+### SEA-build prerequisites (discovered — must be solved before step 2 works)
+
+A feasibility pass (esbuild-bundling `apps/server` + running the single file)
+turned up three concrete blockers the bridge never hit, because the bridge has no
+Prisma, no Postgres, and no web bundle. None are cross-OS testable in the Linux
+devcontainer; they want real-hardware verification once unblocked.
+
+1. ~~**Prisma can't go inside the JS bundle.**~~ **Resolved (BYO-Postgres binary
+   builds and runs).** The build (`apps/server/scripts/build-sea.mjs`) marks
+   `@prisma/client` + `.prisma/client` esbuild-**external**, zips the generated
+   client (engine pruned to the host target) into a `prisma-client.zip` SEA
+   **asset** (and the web bundle into `web.zip`); the runtime
+   (`apps/server/src/sea-assets.ts`) extracts them to `<dataDir>/runtime` on first
+   run. **Key extra discovery:** a SEA's *embedded* `require()` only loads
+   built-in modules and ignores `NODE_PATH`, so the bundle's
+   `require('@prisma/client')` must go through a `createRequire()` bound to the
+   extracted dir — the build banner installs a disk-require shim that
+   `prepareSeaRuntime` points at the extraction dir. No `PRISMA_QUERY_ENGINE_LIBRARY`
+   needed (the engine sits next to the extracted client). **Verified:** a single
+   138 MB `printstream` binary serves the SPA + API **and** auto-pairs the in-box
+   bridge on one port against a BYO `DATABASE_URL` (`bootstrap` 200, `GET /` →
+   `<title>PrintStream</title>`, `auto-paired bridge … into workspace`).
+2. ~~**Node SEA is CommonJS-only, but the API uses top-level `await`.**~~
+   **Resolved.** The two `await mkdir(...)` in `routes/library.ts` are now
+   `mkdirSync`, and `app.ts`'s `await registerPrivateModules(app)` moved into an
+   exported `finalizeApp()` (private modules + SPA fallback + error handler) that
+   `index.ts` awaits before `listen()` — preserving route order. The server now
+   esbuild-bundles to CJS cleanly (verified), and the full stack still boots with
+   the private cloud module mounted.
+3. ~~**`embedded-postgres` resolves its binaries from `node_modules`.**~~
+   **Resolved — the binary runs its own embedded PostgreSQL.** Rather than
+   reimplement the supervisor, an esbuild **plugin** (`build-sea.mjs`) swaps
+   `embedded-postgres`'s `binary.js` `getBinaries()` to read the binary dir from
+   `EMBEDDED_POSTGRES_BIN_DIR`, reusing all of its initdb/start/stop lifecycle.
+   The host's `@embedded-postgres/<platform>/native` (~60 MB) is embedded as
+   `postgres.zip` and the migration history + `baseline.sql` as `migrations.zip`;
+   `sea-assets.ts` extracts both on first run (recreating the lib symlinks npm
+   can't pack, from the shipped `pg-symlinks.json`) and sets
+   `EMBEDDED_POSTGRES_BIN_DIR` + `PRINTSTREAM_MIGRATIONS_DIR`/`PRINTSTREAM_BASELINE_SQL`
+   (which `apply-migrations` now honors). **Verified:** the 160 MB binary with
+   **no external database** runs `initdb`, applies the baseline + 23 migrations,
+   creates the default workspace, serves the SPA + API, and auto-pairs the in-box
+   bridge — and a restart reuses the cluster (`Database is up to date`).
+
+~~Recommended order: (2) → (1) → (3).~~ **All three resolved**, and the build is
+now **cross-target-structured**: `build-sea.mjs` takes `--target <key>` (linux-x64,
+linux-arm64, win32-x64; default the host), downloads the
+pinned Node for the target (checksum-verified) and a host Node of the same version
+for blob generation (the blob is version-specific), and selects the per-target
+Prisma engine + `@embedded-postgres/<key>` Postgres asset. The build **self-fetches** each target's portable PostgreSQL via `npm pack` (the
+`@embedded-postgres/<key>` packages have os/cpu guards that block a normal
+cross-platform `npm install`), so a single Linux host cross-builds every target.
+**Verified by building, from this Linux/arm64 box:** `linux-arm64` (runs the full
+embedded stack end-to-end) and `linux-x64` (x86-64 ELF). The guided first-run (`setup` / bare launch) **installs the app as a
+background OS service** (self-elevating: UAC on Windows, osascript/pkexec on
+macOS/Linux), **starts the notification-area tray**, and opens the browser — it
+no longer runs the stack in a foreground terminal window. The public release
+workflow (`.github/workflows/server-packages.yml`)
+**publishes to GitHub Releases with Windows Authenticode signing**, **content-
+addressed like the bridge — no semver versions**. Every push to the OSS repo's
+`main` (i.e. each export snapshot) computes a release fingerprint
+(`scripts/server-release-fingerprint.sh`); if a `server-<fp12>` Release already
+exists the build is skipped, otherwise a Linux `build` job cross-builds all
+targets (stripping Node's Windows signature post-injection so the `.exe` is
+re-signable), a `windows-latest` `sign-windows` job Authenticode-signs the `.exe`
+via Azure Trusted Signing (auto-skipped until `TRUSTED_SIGNING_*` is configured),
+and a `release` job overlays the signed `.exe` and attaches every target to a new
+Release whose tag *is* the fingerprint (the release action creates it — no manual
+tagging). The job is gated to `github.repository == 'PrintStreamApp/printstream'`
+so it no-ops in the private monorepo.
+
+Signing matches the bridge: the Windows `.exe` is Authenticode-signed (Azure
+Trusted Signing); Linux is unsigned, as on the bridge.
+
+What remains needs maintainer action / hardware, not new design:
+
+- **Repo config** — add the Azure Trusted Signing variables/secret to the public
+  repo and grant the service principal the signer role (reuse the bridge's). The
+  release then fires automatically on the next export push; no trigger to wire.
+- **run** the non-host artifacts on real Windows / x64-Linux hardware
+  (the guided service-install + tray flow is Windows-only behavior that
+  cannot be exercised on the Linux build host).
+- **self-update** (reuse the bridge's driver against the signed Release assets).
+  The tray's "Update" item is already wired but stays hidden until the status
+  file reports `updateAvailable`, which the self-updater will set.
+The build *mechanics* are also unified: the shared SEA harness lives in public
+`packages/sea-runtime/scripts/build-harness.mjs` (exported as
+`@printstream/sea-runtime/build`) — the per-target Node download table,
+checksum-verified Node acquisition, SEA blob generation, postject injection, and
+the Windows signing step. Both the bridge's private build script and the
+server's public build script import it; each keeps only what differs (which entry
+to bundle, which assets to embed, the release identity).
+
 ## Distribution, signing, updates
 
 - **Versioned, unlike the bridge.** The app *is* the server, so use **semver tags
   + GitHub Releases** on the public repo — not the bridge's content-addressed
   lockstep model.
-- **CI:** a new public workflow builds the six targets, reusing the existing macOS
-  rcodesign + Windows Azure Trusted Signing stages, and uploads to GitHub Releases.
+- **CI:** a new public workflow builds the Linux + Windows targets, reusing the
+  existing Windows Azure Trusted Signing stage, and uploads to GitHub Releases.
   (Signing secrets stay maintainer-only; an unsigned community build still works
-  with the usual Gatekeeper/SmartScreen friction.)
+  with the usual SmartScreen friction.)
 - **Updates (phase 2):** in-place self-update reusing the self-update driver
   mechanics, with the trust source swapped from the cloud manifest to signed
   GitHub release assets. Phase 1: an "update available" check only.
 
 ## Phased roadmap
 
-1. **Foundations (core, public, no SEA yet):**
-   - ~~`SERVE_WEB_DIR` static + SPA serving in the API (§3).~~ **Done** —
-     the Compose stack is single-container; the SEA build will reuse it.
-   - `binaryTargets` in the Prisma generator (§2).
-   - Boot-time migration applier usable against an arbitrary fresh cluster (§2).
+1. **Foundations (core, public, no SEA yet):** **Done.**
+   - ~~`SERVE_WEB_DIR` static + SPA serving in the API (§3).~~ — the Compose stack
+     is single-container; the SEA build will reuse it.
+   - ~~`binaryTargets` in the Prisma generator (§2).~~
+   - ~~Boot-time migration applier usable against an arbitrary fresh cluster (§2),
+     via a checked-in baseline snapshot + forward apply.~~
    These are independently useful (single-container Compose) and low-risk.
-2. **Embedded Postgres (§1):** spawn/supervise per-platform Postgres against a data
-   dir; `DATABASE_URL` BYO fallback; lifecycle + single-instance lock.
+2. **Embedded Postgres (§1):** **Done (foundations).** spawn/supervise
+   per-platform Postgres against a data dir; `EMBEDDED_POSTGRES` switch with
+   `DATABASE_URL` BYO fallback; lifecycle + `postmaster.pid` single-instance
+   guard. Remaining for SEA: brotli-embed the binaries as assets (vs the npm
+   package) and the Unix-socket/peer-auth hardening.
 3. **Extract `packages/sea-runtime`:** move generic plumbing out of
    `apps/bridge/src/private/sea/`; re-point the bridge at it with no behavior
-   change (validates the seam).
-4. **Full-stack SEA entry + service install:** new public `sea-entry` that boots
-   DB → migrate → managed bridge → API + web on one port; `setup` / service
-   install / uninstall / tray via `packages/sea-runtime`.
+   change (validates the seam). **Done.** The public package exists and is
+   fully self-contained (node built-ins only — no `@printstream/shared`, no bridge
+   imports) and now owns:
+   - the dotenv config-file helper and the single-instance lock;
+   - the full per-OS **service controller** subsystem (`ServiceSpec` +
+     systemd/launchd/WinSW), parameterized by the spec and — for systemd's
+     `Documentation=` and WinSW's binary — by an optional `documentationUrl` and
+     an injected `resolveWinswAsset`;
+   - the **per-OS path layout** primitives, parameterized by a
+     `StandaloneAppIdentity` (appId / display name / launchd labels). The bridge's
+     `paths.ts` is now a thin wrapper that pins the bridge identity and composes
+     its own domain files, so every other bridge module imports paths unchanged;
+   - the **control channel** (named pipe / Unix socket client + server), with the
+     server generalized over a `ControlProvider` interface (the bridge's
+     `LocalStatusProvider` satisfies it structurally);
+   - the **full tray subsystem** — assets + per-OS provider scripts (`icons`,
+     Windows/macOS/Linux generators) *and* the orchestrators (`runner`,
+     `launcher`, `autostart`), parameterized by the `StandaloneAppIdentity`. The
+     bridge keeps three ~10-line wrappers that bind its identity (the same
+     thin-wrapper pattern as `paths.ts`), so every tray call site is unchanged and
+     the generated launcher/autostart entries are byte-identical.
+
+   The bridge re-points to `@printstream/sea-runtime` with byte-identical output;
+   `npm run validate` (all 257 test files), the moved/new unit tests, and the
+   public-build-without-`private/` check all pass. The package is **fully
+   self-contained** (node built-ins only — no `STANDALONE_*` identity, no
+   `@printstream/shared`). Genuinely cloud-specific code stays in the bridge by
+   design: the `printstream.app` defaults, `migrate-docker`, ffmpeg, the bridge
+   update driver, connect-code deep links, and `status-types`.
+
+   **Verify cross-OS on real hardware before the app reuses it:** the tray /
+   service / launcher paths are typecheck-only here (Linux devcontainer).
+4. **Full-stack SEA entry + service install:** **In progress.** New public
+   `apps/server` workspace with the `sea-entry` CLI. Its `run` command composes
+   the server identity + per-OS data-dir layout (via `packages/sea-runtime`) with
+   the foundations engine: it sets the single-box environment (embedded Postgres
+   under the data dir, library/plugins dirs, `SERVE_WEB_DIR`) and then imports
+   `@printstream/api/server`, which brings up embedded Postgres → CLI-free migrate
+   → **API + web on one port**. Verified end-to-end from source on Linux
+   (`printstream run` → `initdb` + baseline 23 migrations + default workspace +
+   HTTP 200; `status` reports liveness via a status file cleared on clean exit).
+   The `service install/uninstall/start/stop/status` commands build the server's
+   `ServiceSpec` and dispatch to the generic sea-runtime controllers.
+
+   The **in-box managed bridge** is also done: `run` starts the bridge runtime
+   **in the same process** as the API (the bridge is an outbound client, so no
+   second port), in managed-bridge mode — it pre-creates the provisioning token,
+   sets the bridge env (`BRIDGE_SERVER_URL=http://localhost:<port>`, the shared
+   `MANAGED_BRIDGE_TOKEN_FILE`, library/state under the data dir, mirroring the
+   Docker `bridge` service), and `@printstream/bridge` exposes a `./runtime`
+   export for the in-process boot. Verified end-to-end on Linux: the bridge dials
+   the API over loopback, the API **auto-pairs it into the default workspace**,
+   and `bridge-state.json` (its identity) persists. `MANAGED_BRIDGE=false` turns
+   it off for a remote-bridge setup.
+
+   **Remaining for the binary:** **web-bundle + ffmpeg + Postgres + Prisma-engine
+   asset extraction** at first run, the guided `setup` (open browser) and **tray**
+   (its provider scripts are still bridge-menu-shaped and need generalizing), and
+   the actual **SEA build script** (esbuild → blob → postject → embed assets) —
+   mostly Phase 5, and wants real-hardware verification.
 5. **CI + signing + GitHub Releases**, then **self-update** (phase 2).
 
 ## Risks & open questions
 
-- **Postgres arm64 / Raspberry Pi:** need a real `linux-arm64` portable Postgres
-  (no x64-emulation borrow like ffmpeg's `win32-arm64`). Confirm a maintained
-  source before committing.
+- ~~**Postgres arm64 / Raspberry Pi:** need a real `linux-arm64` portable
+  Postgres.~~ **Resolved** — `embedded-postgres` ships a real `linux-arm64` (and
+  `linux-arm`) build; no emulation borrow.
 - **Binary size:** ~200–250 MB. Acceptable for a desktop app; verify the `.gz`
   transfer copies and embedded-asset brotli ratios.
 - **Data-dir migrations & backups:** an embedded DB makes the data dir precious.

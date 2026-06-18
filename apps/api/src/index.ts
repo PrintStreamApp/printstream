@@ -4,7 +4,7 @@
  * even before any client connects.
  */
 import { createServer } from 'node:http'
-import { app } from './app.js'
+import { app, finalizeApp } from './app.js'
 import { env } from './lib/env.js'
 import { attachWebSocketServer } from './lib/ws-server.js'
 import { attachBridgeSessionServer } from './lib/bridge-session-server.js'
@@ -39,9 +39,18 @@ if (isManagedBridgeMode()) {
   }
 }
 
-httpServer.listen(env.API_PORT, () => {
-  console.log(`printstream API listening on http://localhost:${env.API_PORT}`)
-  void (async () => {
+// Finish wiring (private modules + SPA fallback + error handler) before we start
+// accepting requests, then listen. `finalizeApp` replaces what used to be a
+// top-level await in `app.ts` (forbidden in a CommonJS SEA bundle).
+void finalizeApp()
+  .catch((error) => {
+    console.error('Failed to finalize app wiring', error)
+    process.exit(1)
+  })
+  .then(() => {
+    httpServer.listen(env.API_PORT, () => {
+      console.log(`printstream API listening on http://localhost:${env.API_PORT}`)
+      void (async () => {
     try {
       await ensureDefaultWorkspace()
     } catch (error) {
@@ -102,8 +111,9 @@ httpServer.listen(env.API_PORT, () => {
     } catch (error) {
       console.error('Failed to start app update checks', error)
     }
-  })()
-})
+      })()
+    })
+  })
 
 function shutdown(signal: NodeJS.Signals) {
   console.log(`Received ${signal}, shutting down`)

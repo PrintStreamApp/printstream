@@ -31,6 +31,7 @@ import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { env } from '../../lib/env.js'
 import { printerManager } from '../../lib/printer-manager.js'
+import { assertTenantOwnsPrinter, requireTenantOwnedConnectedPrinter } from '../../lib/printer-access.js'
 import { listPrinterDirectory, uploadFileToPrinter } from '../../lib/printer-ftp.js'
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
 import { requireRouteParam } from '../../lib/request-helpers.js'
@@ -106,7 +107,10 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
     }
 
     const broadcast = (printerId: string, state: UploadState): void => {
-      const tenantId = printerManager.getTenantId(printerId) ?? null
+      // A null tenantId fans out to every connected client across all tenants, so skip
+      // the broadcast rather than leak when the printer's tenant can't be resolved.
+      const tenantId = printerManager.getTenantId(printerId)
+      if (!tenantId) return
       context.ws.broadcast({
         type: 'plugin.event',
         pluginName: 'firmware-updates',
@@ -426,15 +430,18 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
     })
 
     context.router.get('/updates/:printerId', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-      const report = await buildReport(requireRouteParam(request.params.printerId, 'printerId'))
+      const printerId = requireRouteParam(request.params.printerId, 'printerId')
+      await assertTenantOwnsPrinter(printerId)
+      const report = await buildReport(printerId)
       if (!report) throw notFound('Printer not found')
       response.json(report)
     })
 
     context.router.post('/updates/:printerId/upload', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
-      const printer = printerManager.getPrinter(printerId)
-      if (!printer) throw notFound('Printer not connected')
+      // Firmware upload is a safety-relevant SD write — gate on tenant ownership, not
+      // just the bare printer id from the manager.
+      const printer = await requireTenantOwnedConnectedPrinter(printerId)
 
       const status = printerManager.getStatus(printerId)
       if (status?.sdCardPresent === false) {
@@ -473,6 +480,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
 
     context.router.post('/updates/:printerId/upload/cancel', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
+      await assertTenantOwnsPrinter(printerId)
       const printerName = printerManager.getPrinter(printerId)?.name ?? printerId
       const state = stateFor(printerId)
       if (!isActiveUploadState(state)) {
@@ -498,7 +506,9 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
     })
 
     context.router.get('/updates/:printerId/upload/status', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-      response.json(await reconcileUploadState(requireRouteParam(request.params.printerId, 'printerId')))
+      const printerId = requireRouteParam(request.params.printerId, 'printerId')
+      await assertTenantOwnsPrinter(printerId)
+      response.json(await reconcileUploadState(printerId))
     })
   }
 }

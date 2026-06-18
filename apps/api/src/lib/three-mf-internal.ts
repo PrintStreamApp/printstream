@@ -145,6 +145,17 @@ export function escapeXmlAttribute(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+/**
+ * Object-level `model_settings.config` `<metadata>` keys that are STRUCTURAL (identity/placement),
+ * not per-object PROCESS overrides. Used to tell the two apart when reading object overrides back
+ * (so they don't surface in the editor's per-object gear) and when rewriting them (so a structural
+ * key is never stripped/replaced as if it were an override). `module` is BambuStudio's cut/assembly
+ * module name; `source_file` the import origin; `name`/`extruder` the object name + base filament.
+ */
+export const OBJECT_STRUCTURAL_METADATA_KEYS: ReadonlySet<string> = new Set([
+  'name', 'extruder', 'source_file', 'module'
+])
+
 export function readZipEntryBuffer(zipFile: ZipFile, entry: Entry, signal?: AbortSignal): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     throwIfAborted(signal)

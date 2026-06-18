@@ -277,6 +277,10 @@ export class SlicerClient {
     signal: AbortSignal
   }): Promise<{ headers: Headers }> {
     const requestBody = Readable.toWeb(createReadStream(input.sourcePath)) as unknown as BodyInit
+    // Bound the slice (the long call) by SLICING_REQUEST_TIMEOUT_MS combined with the caller's
+    // cancel signal — otherwise a slicer that stalls mid-stream leaves the job slicing forever,
+    // holding a concurrency slot. The timeout aborts both the fetch and the body pipeline below.
+    const signal = AbortSignal.any([input.signal, AbortSignal.timeout(env.SLICING_REQUEST_TIMEOUT_MS)])
     const requestInit: RequestInit & { duplex: 'half' } = {
       method: 'POST',
       headers: {
@@ -287,10 +291,10 @@ export class SlicerClient {
       },
       body: requestBody,
       duplex: 'half',
-      signal: input.signal
+      signal
     }
     const response = await fetch(input.url, requestInit).catch((error: unknown) => {
-      throw normalizeSlicerServiceTransportError(error, input.signal)
+      throw normalizeSlicerServiceTransportError(error, signal)
     })
 
     if (!response.ok) {
@@ -311,10 +315,10 @@ export class SlicerClient {
       Readable.fromWeb(response.body as unknown as NodeReadableStream),
       createWriteStream(input.outputPath)
     ).catch((error: unknown) => {
-      if (input.signal.aborted) {
-        throw buildAbortError(input.signal)
+      if (signal.aborted) {
+        throw buildAbortError(signal)
       }
-      throw normalizeSlicerServiceTransportError(error, input.signal)
+      throw normalizeSlicerServiceTransportError(error, signal)
     })
 
     return { headers: response.headers }

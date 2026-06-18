@@ -678,6 +678,14 @@ export function createThreeMfPartObject(
 }
 
 /** Release geometry/material GPU resources for an object and its descendants. */
+/** Dispose a material AND any textures it holds — `Material.dispose()` does not free `.map` etc. */
+export function disposeMaterial(material: THREE.Material): void {
+  for (const value of Object.values(material as unknown as Record<string, unknown>)) {
+    if (value && (value as THREE.Texture).isTexture) (value as THREE.Texture).dispose()
+  }
+  material.dispose()
+}
+
 export function disposeObject3D(object: THREE.Object3D): void {
   object.traverse((child) => {
     const disposable = child as THREE.Object3D & {
@@ -686,9 +694,9 @@ export function disposeObject3D(object: THREE.Object3D): void {
     }
     disposable.geometry?.dispose()
     if (Array.isArray(disposable.material)) {
-      disposable.material.forEach((material) => material.dispose())
-    } else {
-      disposable.material?.dispose()
+      disposable.material.forEach(disposeMaterial)
+    } else if (disposable.material) {
+      disposeMaterial(disposable.material)
     }
   })
 }

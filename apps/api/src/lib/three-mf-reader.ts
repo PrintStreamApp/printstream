@@ -51,7 +51,7 @@ import {
 } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import { env } from './env.js'
-import { readEntry } from './three-mf-internal.js'
+import { OBJECT_STRUCTURAL_METADATA_KEYS, readEntry } from './three-mf-internal.js'
 
 // Re-export the shared index parser surface that other api modules import from this reader.
 export { buildThreeMfIndex, buildDefaultPickFilePath, extractPlateType, normalizeColor, parseAttrs } from '@printstream/shared/three-mf'
@@ -103,6 +103,8 @@ export interface ThreeMfSceneInstancePart {
   componentObjectId: number
   transform: number[]
   subtype: string | null
+  /** Per-part PROCESS overrides saved in the 3MF, so the editor can re-seed its per-part gear. */
+  processOverrides?: Record<string, string>
 }
 
 export interface ThreeMfSceneInstance {
@@ -118,6 +120,8 @@ export interface ThreeMfSceneInstance {
   printable?: boolean
   /** Manual brim ears (object-local mm + radius), parsed from brim_ear_points.txt. */
   brimEars?: Array<{ x: number; y: number; z: number; radius: number }>
+  /** Per-object PROCESS overrides (object-level model_settings metadata), keyed by setting key. */
+  processOverrides?: Record<string, string>
   parts: ThreeMfSceneInstancePart[]
 }
 
@@ -191,6 +195,8 @@ interface ThreeMfModelSettingsPartMetadata {
   sourceFile: string | null
   extruderId: number | null
   subtype: string | null
+  /** Per-part PROCESS overrides (part-level `<metadata>` minus structural keys), for re-hydration. */
+  processOverrides?: Record<string, string>
 }
 
 interface ThreeMfModelSettingsPlateScene {
@@ -448,7 +454,8 @@ export async function readSceneManifest(
         entryPath: component.entryPath,
         componentObjectId: component.objectId,
         transform: [...component.transform],
-        subtype
+        subtype,
+        ...(metadata?.processOverrides ? { processOverrides: metadata.processOverrides } : {})
       })
       if (isModifier) continue
       if (instanceName == null) instanceName = metadata?.name ?? null
@@ -459,10 +466,15 @@ export async function readSceneManifest(
     }
 
     if (instanceParts.length > 0) {
+      // The instance's display name is the OBJECT's name (what a rename writes); fall back to the
+      // first part's name only when the object carries none (some generic 3MFs).
+      const objectName = modelSettingsScene.objectNamesById.get(platedInstance.objectId) ?? null
+      const processOverrides = modelSettingsScene.objectProcessOverridesById.get(platedInstance.objectId)
       instances.push({
         objectId: platedInstance.objectId,
         instanceId: platedInstance.instanceId,
-        name: instanceName,
+        name: objectName ?? instanceName,
+        ...(processOverrides ? { processOverrides } : {}),
         transform: placement,
         filamentId: instanceFilamentId,
         filamentName: instanceFilament?.filamentName ?? null,
@@ -677,10 +689,19 @@ export const BRIM_EAR_POINTS_ENTRY = 'Metadata/brim_ear_points.txt'
  * (brim ears, layer-height profiles) reference objects by that 1-based ordinal.
  */
 export function parseRootModelObjectIdOrder(xml: string): number[] {
+  // Brim-ear ordinals are over the PLACED root objects (those with a build <item>), in document
+  // order — NOT every <object>. A multi-solid import injects component mesh objects that aren't
+  // build-placed; counting them would shift the ordinal and map ears to the wrong object.
+  const buildItemIds = new Set<number>()
+  const buildBlock = xml.match(/<build\b[^>]*>[\s\S]*?<\/build>/)?.[0] ?? ''
+  for (const item of buildBlock.matchAll(/<item\b([^>]*?)\/?>/g)) {
+    const id = Number.parseInt(parseAttrs(item[1] ?? '').objectid ?? '', 10)
+    if (Number.isInteger(id) && id > 0) buildItemIds.add(id)
+  }
   const ids: number[] = []
   for (const match of xml.matchAll(/<object\b([^>]*)>/g)) {
     const id = Number.parseInt(parseAttrs(match[1] ?? '').id ?? '', 10)
-    if (Number.isInteger(id) && id > 0) ids.push(id)
+    if (Number.isInteger(id) && id > 0 && buildItemIds.has(id)) ids.push(id)
   }
   return ids
 }
@@ -753,9 +774,14 @@ function parseRootBuildItemPrintable(xml: string): Map<number, boolean[]> {
 export function parseModelSettingsScene(xml: string): {
   plates: ThreeMfModelSettingsPlateScene[]
   partsByObjectId: Map<number, Map<number, ThreeMfModelSettingsPartMetadata>>
+  /** Object-level display name per object id (what a rename writes; the instance's name). */
+  objectNamesById: Map<number, string>
+  objectProcessOverridesById: Map<number, Record<string, string>>
 } {
   const plates: ThreeMfModelSettingsPlateScene[] = []
   const partsByObjectId = new Map<number, Map<number, ThreeMfModelSettingsPartMetadata>>()
+  const objectNamesById = new Map<number, string>()
+  const objectProcessOverridesById = new Map<number, Record<string, string>>()
 
   const objectBlocks = xml.match(/<object\b[^>]*>[\s\S]*?<\/object>/g) ?? []
   for (const block of objectBlocks) {
@@ -764,19 +790,44 @@ export function parseModelSettingsScene(xml: string): {
     if (!Number.isInteger(objectId) || objectId <= 0) continue
 
     const objectName = readModelSettingsMetadataString(block, 'name')
+    if (objectName != null) objectNamesById.set(objectId, objectName)
     const objectExtruderId = readModelSettingsMetadataInt(block, 'extruder')
+
+    // Per-object PROCESS overrides are object-level `<metadata>` (BEFORE the first `<part>`),
+    // alongside name/extruder. Everything that isn't one of those structural keys is a process
+    // override the editor should re-seed into its per-object gear on reopen.
+    const objectHead = (() => {
+      const firstPart = block.search(/<part\b/)
+      return firstPart >= 0 ? block.slice(0, firstPart) : block
+    })()
+    const overrides: Record<string, string> = {}
+    for (const meta of objectHead.matchAll(/<metadata\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g)) {
+      const key = meta[1]
+      const value = meta[2]
+      if (key == null || value == null || OBJECT_STRUCTURAL_METADATA_KEYS.has(key)) continue
+      overrides[key] = decodeXmlAttributeValue(value)
+    }
+    if (Object.keys(overrides).length > 0) objectProcessOverridesById.set(objectId, overrides)
     const partMap = new Map<number, ThreeMfModelSettingsPartMetadata>()
     for (const match of block.matchAll(/<part\b([^>]*)>[\s\S]*?<\/part>/g)) {
       const partBlock = match[0]
       const partAttrs = parseAttrs(match[1] ?? '')
       const partId = Number.parseInt(partAttrs.id ?? '', 10)
       if (!Number.isInteger(partId) || partId <= 0) continue
+      const partOverrides: Record<string, string> = {}
+      for (const meta of partBlock.matchAll(/<metadata\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g)) {
+        const key = meta[1]
+        const value = meta[2]
+        if (key == null || value == null || OBJECT_STRUCTURAL_METADATA_KEYS.has(key)) continue
+        partOverrides[key] = decodeXmlAttributeValue(value)
+      }
       partMap.set(partId, {
         id: partId,
         name: readModelSettingsMetadataString(partBlock, 'name') ?? objectName,
         sourceFile: readModelSettingsMetadataString(partBlock, 'source_file'),
         extruderId: readModelSettingsMetadataInt(partBlock, 'extruder') ?? objectExtruderId,
-        subtype: readThreeMfPartSubtype(partBlock, partAttrs)
+        subtype: readThreeMfPartSubtype(partBlock, partAttrs),
+        ...(Object.keys(partOverrides).length > 0 ? { processOverrides: partOverrides } : {})
       })
     }
     if (partMap.size > 0) partsByObjectId.set(objectId, partMap)
@@ -810,7 +861,7 @@ export function parseModelSettingsScene(xml: string): {
   }
 
   plates.sort((left, right) => left.index - right.index)
-  return { plates, partsByObjectId }
+  return { plates, partsByObjectId, objectNamesById, objectProcessOverridesById }
 }
 
 export function extractSceneBed(

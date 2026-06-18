@@ -26,6 +26,7 @@ COPY apps/api/package.json apps/api/package.json
 COPY apps/bridge/package.json apps/bridge/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/bridge-runtime/package.json packages/bridge-runtime/package.json
+COPY packages/sea-runtime/package.json packages/sea-runtime/package.json
 COPY packages/shared/package.json packages/shared/package.json
 COPY packages/shared/src packages/shared/src
 RUN npm ci
@@ -50,6 +51,7 @@ RUN printf '{"revision":"%s","published":"%s"}\n' "$PRINTSTREAM_IMAGE_REVISION" 
 RUN DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder" npm run db:generate
 RUN npm run build --workspace @printstream/shared \
   && npm run build --workspace @printstream/bridge-runtime \
+  && npm run build --workspace @printstream/sea-runtime \
   && npm run build --workspace @printstream/web \
   && npm run build --workspace @printstream/api \
   && npm run build --workspace @printstream/bridge

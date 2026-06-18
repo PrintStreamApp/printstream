@@ -127,11 +127,11 @@ assembled by `three-mf-reader.ts` from a locally-resolved file.
   `@printstream/shared/three-mf`, consumed by both `apps/api/src/lib/three-mf-reader.ts` and
   `apps/bridge/src/library-3mf.ts`. Changing the index shape means editing that parser once,
   updating the shared schema, and bumping `THREE_MF_INDEX_PARSER_VERSION` — see
-  `apps/api/src/lib/CLAUDE.md` and `apps/bridge/CLAUDE.md`. (The full scene parse —
+  the API development notes and the bridge development notes. (The full scene parse —
   `three-mf-reader.ts`'s `readSceneManifest` — and all 3MF *writing*
   (`three-mf-scene-builder.ts`, `three-mf-output.ts`) live only in the api modules.)
 - **Nozzle-id mapping** in the slicer's `output-metadata.ts` must stay byte-for-byte —
-  see `apps/slicer/CLAUDE.md`.
+  see the slicer development notes.
 - The editor reflects new state through scene re-render, not optimistic UI guesses.
 
 ## Known god files / target decomposition (roadmap)

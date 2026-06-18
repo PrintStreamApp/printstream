@@ -10,6 +10,9 @@
     "email": "noreply@printstream.local"
   },
   "main": "dist/index.js",
+  "exports": {
+    "./runtime": "./dist/runtime.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "bundle:docker": "node scripts/bundle-docker.mjs",
@@ -19,6 +22,7 @@
   },
   "dependencies": {
     "@printstream/bridge-runtime": "0.1.0",
+    "@printstream/sea-runtime": "0.1.0",
     "@printstream/shared": "0.1.0",
     "dotenv": "^16.4.7",
     "mqtt": "^5.10.1",

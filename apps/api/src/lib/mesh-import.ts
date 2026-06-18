@@ -3,6 +3,8 @@
  * builder can inject as a new `<object><mesh>` and the editor can render. Output is intentionally
  * minimal — flat `positions` (3 floats/vertex) and `indices` (3 ints/triangle) plus an axis-aligned
  * bounding box — so it maps 1:1 onto 3MF `<vertices>`/`<triangles>` and onto a Three.js geometry.
+ * A multi-solid STEP additionally carries its individual named solids as `parts`, so the editor
+ * imports it as one object with many parts (rather than collapsing the assembly into one blob).
  *
  * STEP tessellation uses `occt-import-js` (OpenCASCADE compiled to WASM); the ~7 MB module is loaded
  * lazily on first STEP import so STL-only installs never pay for it. The tessellation quality is
@@ -23,6 +25,20 @@ export interface ImportedMesh {
   /** Flat triangle vertex indices, 3 per triangle. */
   indices: number[]
   bounds: ImportedMeshBounds
+  /**
+   * Individual named solids when the source held more than one (a multi-solid STEP
+   * assembly). Each part is a self-contained mesh in the same coordinate space as the
+   * merged geometry above, so the editor can render and the 3MF builder can bake them
+   * as separate parts of one object. Absent (undefined) for single-solid STEP and STL,
+   * where the merged mesh is the whole import.
+   */
+  parts?: ImportedMeshPart[]
+}
+
+/** One named solid from a multi-solid import (a STEP assembly's part). */
+export interface ImportedMeshPart {
+  name: string
+  mesh: ImportedMesh
 }
 
 const MAX_IMPORT_TRIANGLES = 5_000_000
@@ -130,7 +146,12 @@ export const STEP_TESSELLATION: OcctTriangulationParams = {
   angularDeflection: 0.5
 }
 
-/** Tessellate a STEP file to a merged triangle mesh via OpenCASCADE (WASM), loaded lazily. */
+/**
+ * Tessellate a STEP file via OpenCASCADE (WASM), loaded lazily. OCCT returns one mesh per solid;
+ * we keep each as a named {@link ImportedMeshPart} (so a multi-solid assembly imports as one object
+ * with many parts, matching BambuStudio) AND a merged mesh (used for bounds, triangle count, and the
+ * single-mesh render/bake path). Only when more than one solid is present is `parts` populated.
+ */
 export async function tessellateStepMesh(buffer: Buffer): Promise<ImportedMesh> {
   const { default: occtimportjs } = await import('occt-import-js')
   if (!occtInstancePromise) occtInstancePromise = occtimportjs()
@@ -138,23 +159,46 @@ export async function tessellateStepMesh(buffer: Buffer): Promise<ImportedMesh> 
   const result = occt.ReadStepFile(new Uint8Array(buffer), STEP_TESSELLATION)
   if (!result.success || result.meshes.length === 0) throw new Error('STEP file could not be tessellated')
 
+  const parts: ImportedMeshPart[] = result.meshes
+    .map((mesh, index) => ({ name: (mesh.name ?? '').trim() || `Part ${index + 1}`, mesh: occtMeshToImportedMesh(mesh) }))
+    .filter((part) => part.mesh.indices.length > 0)
+  if (parts.length === 0) throw new Error('STEP file produced no geometry')
+
+  const merged = mergeImportedMeshes(parts.map((part) => part.mesh))
+  return parts.length > 1 ? { ...merged, parts } : merged
+}
+
+/** Convert a single OCCT mesh (positions + index arrays) into an {@link ImportedMesh}. */
+function occtMeshToImportedMesh(mesh: { attributes: { position: { array: number[] } }; index: { array: number[] } }): ImportedMesh {
+  const positions: number[] = []
+  const accumulator = new BoundsAccumulator()
+  const source = mesh.attributes.position.array
+  for (let i = 0; i < source.length; i += 3) {
+    const x = source[i] ?? 0
+    const y = source[i + 1] ?? 0
+    const z = source[i + 2] ?? 0
+    positions.push(x, y, z)
+    accumulator.add(x, y, z)
+  }
+  return { positions, indices: [...mesh.index.array], bounds: accumulator.bounds() }
+}
+
+/** Concatenate meshes into one (re-basing each mesh's indices), recomputing the combined bounds. */
+function mergeImportedMeshes(meshes: ImportedMesh[]): ImportedMesh {
   const positions: number[] = []
   const indices: number[] = []
   const accumulator = new BoundsAccumulator()
-  for (const mesh of result.meshes) {
-    const meshPositions = mesh.attributes.position.array
-    const meshIndices = mesh.index.array
+  for (const mesh of meshes) {
     const base = positions.length / 3
-    for (let i = 0; i < meshPositions.length; i += 3) {
-      const x = meshPositions[i] ?? 0
-      const y = meshPositions[i + 1] ?? 0
-      const z = meshPositions[i + 2] ?? 0
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+      const x = mesh.positions[i] ?? 0
+      const y = mesh.positions[i + 1] ?? 0
+      const z = mesh.positions[i + 2] ?? 0
       positions.push(x, y, z)
       accumulator.add(x, y, z)
     }
-    for (const index of meshIndices) indices.push(base + index)
+    for (const index of mesh.indices) indices.push(base + index)
   }
-  if (indices.length === 0) throw new Error('STEP file produced no geometry')
   return { positions, indices, bounds: accumulator.bounds() }
 }
 

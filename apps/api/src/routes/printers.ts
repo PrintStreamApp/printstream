@@ -68,6 +68,7 @@ import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
 import { serializePrinterNozzleDiameters, toPrinterDto } from '../lib/printer-record.js'
 import { printerManager } from '../lib/printer-manager.js'
+import { assertTenantOwnsPrinter, requireTenantOwnedConnectedPrinter } from '../lib/printer-access.js'
 import { buildPlateGcodeFileHint, extractObservedPrintPlateIndex } from '@printstream/shared'
 import { syncBridgePrinterConfig } from '../lib/bridge-printer-config.js'
 import { printerDiscovery } from '../lib/printer-discovery.js'
@@ -580,7 +581,7 @@ printersRouter.get('/:id/pressure-advance-profiles', requireRequestPermission(PR
 })
 
 printersRouter.get('/:id/active-print-objects', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
 
   const status = printerManager.getStatus(printer.id)
@@ -971,12 +972,14 @@ function lightNodeLabel(node: Extract<ReturnType<typeof printerCommandSchema.par
  * mode. We prefer PrintStream-owned local assets, then a persisted exact
  * printer archive path when one has been observed for the active job.
  */
-printersRouter.get('/:id/cover/status', requireRequestPermission(PRINTERS_VIEW_PERMISSION), (request, response) => {
-  response.json(getCoverLoadState(requireRouteParam(request.params.id, 'Printer id')))
+printersRouter.get('/:id/cover/status', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
+  const printerId = requireRouteParam(request.params.id, 'Printer id')
+  await assertTenantOwnsPrinter(printerId)
+  response.json(getCoverLoadState(printerId))
 })
 
 printersRouter.get('/:id/cover', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found')
   const requestStartedAt = Date.now()
   let resolveDurationMs: number | null = null
@@ -1258,7 +1261,7 @@ const RECURSIVE_SKIP_DIRS: ReadonlySet<string> = new Set([
 
 /** GET /api/printers/:id/storage?path=/&recursive=1 — list files+folders. */
 printersRouter.get('/:id/storage', requireRequestPermission(PRINTER_STORAGE_VIEW_PERMISSION), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const dirPath = normalizePrinterPath(request.query.path)
   const recursive = request.query.recursive === '1' || request.query.recursive === 'true'
@@ -1283,8 +1286,7 @@ printersRouter.post(
   assertPrinterMutationsAllowed(request)
   const printerId = typeof request.params.id === 'string' ? request.params.id : request.params.id?.[0]
   if (!printerId) throw badRequest('Printer id is required')
-  const printer = printerManager.getPrinter(printerId)
-  if (!printer) throw notFound('Printer not found or not connected')
+  const printer = await requireTenantOwnedConnectedPrinter(printerId)
   if (!request.file) throw badRequest('File is required')
 
   const dirPath = normalizePrinterPath(request.query.path)
@@ -1317,7 +1319,7 @@ printersRouter.post(
 
 /** Best-effort preview image for a printer-stored model or timelapse file. */
 printersRouter.get('/:id/storage/thumbnail', async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const filePath = normalizePrinterPath(request.query.path)
   const extension = path.extname(filePath).toLowerCase()
@@ -1362,7 +1364,7 @@ printersRouter.get('/:id/storage/thumbnail', async (request, response) => {
 
 /** Download a printer-stored file without copying it into the library first. */
 printersRouter.get('/:id/storage/download', requireRequestPermission(PRINTER_STORAGE_DOWNLOAD_PERMISSION), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const filePath = normalizePrinterPath(request.query.path)
   if (filePath === '/') throw badRequest('Invalid path')
@@ -1422,7 +1424,7 @@ function resolvePrinterStorageDownloadContentType(filePath: string): string {
 
 /** Plate index for a 3MF already stored on the printer. */
 printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORAGE_VIEW_MODELS_SCOPE), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const filePath = normalizePrinterPath(request.query.path)
   const signal = requestAbortSignal(request, response)
@@ -1460,7 +1462,7 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
 
 /** DELETE /api/printers/:id/storage?path=/x.3mf&type=file — remove a file or empty directory. */
 printersRouter.delete('/:id/storage', requireRequestPermission(PRINTERS_MANAGE_STORAGE_EDIT_SCOPE), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const targetPath = normalizePrinterPath(request.query.path)
   if (targetPath === '/') throw badRequest('Cannot delete root')
@@ -1491,7 +1493,7 @@ printersRouter.delete('/:id/storage', requireRequestPermission(PRINTERS_MANAGE_S
 })
 
 printersRouter.post('/:id/storage/delete-jobs', requireRequestPermission(PRINTERS_MANAGE_STORAGE_EDIT_SCOPE), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const parsed = startPrinterStorageDeleteJobSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid delete payload')
@@ -1523,7 +1525,7 @@ printersRouter.post('/:id/storage/delete-jobs', requireRequestPermission(PRINTER
 
 /** POST /api/printers/:id/storage/rename — rename or move a file/folder. */
 printersRouter.post('/:id/storage/rename', requireRequestPermission(PRINTERS_MANAGE_STORAGE_EDIT_SCOPE), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const fromPath = normalizePrinterPath((request.body as { from?: unknown })?.from)
   const toPath = normalizePrinterPath((request.body as { to?: unknown })?.to)
@@ -1555,7 +1557,7 @@ printersRouter.post('/:id/storage/rename', requireRequestPermission(PRINTERS_MAN
  * the `project_file` MQTT command pointing at the existing path.
  */
 printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPATCH_PRINTER_STORAGE_SCOPE), async (request, response) => {
-  const printer = printerManager.getPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const parsed = printerStoragePrintSchema.safeParse(request.body)
   if (!parsed.success) {
@@ -1607,6 +1609,11 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
     },
     printerStatus
   )
+  // Printing a file already on the printer's SD is still a print start, so it must
+  // honor plugin print guards (e.g. plate-clearing) like dispatch and reprint do —
+  // otherwise this route is a hole that prints onto an uncleared plate.
+  const blocked = printGuards.evaluate({ printerId: printer.id, source: 'reprint' })
+  if (blocked) throw conflict(blocked.reason ?? 'Print blocked by a plugin')
   printDispatcher.assertNoActiveDispatchForPrinter(printer.id)
   const trackedJobId = await startTrackedPrintJob({
     printerId: printer.id,

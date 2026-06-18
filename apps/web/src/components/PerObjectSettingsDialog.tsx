@@ -31,13 +31,15 @@ export interface PerObjectSettingsDialogProps {
   /** Object ids that will be printed; toggling controls which objects the slice includes. */
   printSelection: Set<number>
   onTogglePrint: (objectId: number) => void
+  /** Apply-button wording for the inner per-object dialog (project editor vs one-off slice). */
+  applyScope?: 'project' | 'slice'
 }
 
 /** Stable empty-overrides reference so the editor's resolve effect doesn't re-fetch every render. */
 const EMPTY_OVERRIDES: ProcessSettingOverrides = {}
 
 export default function PerObjectSettingsDialog(props: PerObjectSettingsDialogProps): JSX.Element {
-  const { open, onClose, objects, slicerTargetId, processProfileId, processProfileName, sourceFileId, globalOverrides, visibilityContext, value, onChange, printSelection, onTogglePrint } = props
+  const { open, onClose, objects, slicerTargetId, processProfileId, processProfileName, sourceFileId, globalOverrides, visibilityContext, value, onChange, printSelection, onTogglePrint, applyScope } = props
   const [editingObjectId, setEditingObjectId] = useState<number | null>(null)
   const editingObject = objects.find((object) => object.id === editingObjectId) ?? null
   // Stabilize the per-object overrides reference; `value[id] ?? {}` would otherwise be a fresh
@@ -129,6 +131,7 @@ export default function PerObjectSettingsDialog(props: PerObjectSettingsDialogPr
         allowedKeys={PER_OBJECT_PROCESS_KEYS}
         baseOverlay={globalOverrides}
         titlePrefix="Object settings"
+        applyScope={applyScope}
         onApply={(overrides) => applyObjectOverrides(editingObject.id, overrides)}
       />
     )}

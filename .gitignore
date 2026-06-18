@@ -26,6 +26,8 @@ apps/bridge/data/
 apps/bridge/apps/bridge/data/
 apps/bridge/release/
 apps/bridge/.cache/
+apps/server/release/
+apps/server/.cache/
 docs/current-work-status.md
 *.db
 *.db-journal
@@ -36,10 +38,6 @@ docs/current-work-status.md
 # .devcontainer/compose.yml is tracked.
 /compose.yml
 /nginx.conf
-
-# Local Claude Code session state (transcripts, memory, runtime locks)
-.claude/projects/
-.claude/scheduled_tasks.lock
 
 # Project-scoped MCP config: holds a per-install localhost token (Integrated
 # Browser MCP), so it's developer-local, not shared/committed.

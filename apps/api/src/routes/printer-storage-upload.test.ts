@@ -10,10 +10,11 @@ import { printersRouter } from './printers.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
 import { HttpError } from '../lib/http-error.js'
 import { printerManager } from '../lib/printer-manager.js'
-import { rootPrisma } from '../lib/prisma.js'
+import { prisma, rootPrisma } from '../lib/prisma.js'
 
 const TEST_TENANT = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
 const originalPrinterFindUnique = rootPrisma.printer.findUnique
+const originalScopedPrinterFindUnique = prisma.printer.findUnique
 const originalBridgeIsConnected = bridgeSessionManager.isConnected
 const originalBridgeRequestRpc = bridgeSessionManager.requestRpc
 
@@ -33,6 +34,7 @@ const printer: Printer = {
 
 afterEach(() => {
   rootPrisma.printer.findUnique = originalPrinterFindUnique
+  prisma.printer.findUnique = originalScopedPrinterFindUnique
   bridgeSessionManager.isConnected = originalBridgeIsConnected
   bridgeSessionManager.requestRpc = originalBridgeRequestRpc
   mock.restoreAll()
@@ -40,6 +42,7 @@ afterEach(() => {
 
 test('printer storage upload stores the file in the requested printer directory', async () => {
   rootPrisma.printer.findUnique = ((async () => ({ bridgeId: 'bridge-1' })) as unknown) as typeof rootPrisma.printer.findUnique
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
   bridgeSessionManager.isConnected = (() => true) as typeof bridgeSessionManager.isConnected
   bridgeSessionManager.requestRpc = (async (_bridgeId, method) => {
     assert.equal(method, 'storage.upload')

@@ -5,7 +5,7 @@
  * file asks for confirmation before replacing it (the server archives the
  * replaced content as a version).
  */
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { Box, Button, FormControl, FormHelperText, FormLabel, IconButton, Input, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
 import FolderOpenRoundedIcon from '@mui/icons-material/FolderOpenRounded'
 import GridViewRoundedIcon from '@mui/icons-material/GridViewRounded'
@@ -79,6 +79,10 @@ export function LibraryDestinationDialog({
   const { confirm } = usePromptDialog()
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(initialFolderId)
   const [outputFileName, setOutputFileName] = useState(fileNameField?.initialValue ?? '')
+  // Pre-select the suggested name the first time the field is focused (autoFocus drives that on
+  // open) so the user can type a new name straight over it. Doing it on focus rather than in a
+  // mount effect avoids racing Joy's modal focus management, which would clear an early select().
+  const fileNameSelectedRef = useRef(false)
   const [viewMode, setViewMode] = useState<LibraryViewMode>('list')
   const childFolders = useMemo(
     () => folders.filter((folder) => folder.parentId === currentFolderId),
@@ -158,6 +162,11 @@ export function LibraryDestinationDialog({
                 <FormLabel>{fileNameField.label}</FormLabel>
                 <Input
                   autoFocus
+                  onFocus={(event) => {
+                    if (fileNameSelectedRef.current) return
+                    fileNameSelectedRef.current = true
+                    event.currentTarget.select()
+                  }}
                   value={outputFileName}
                   onChange={(event) => setOutputFileName(event.target.value)}
                   endDecorator={fileNameField.extension ? (

@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, filterModelSettingsObjectsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
-import { applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, serializeBrimEarPoints } from './three-mf-scene-builder.js'
-import { parseBrimEarPoints, parseCustomGcodeToolChanges } from './three-mf-reader.js'
+import { applyPartProcessOverrides, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, serializeBrimEarPoints } from './three-mf-scene-builder.js'
+import { parseBrimEarPoints, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
 import type { SceneEdit } from '@printstream/shared'
 
 const sliceInfoXml = `
@@ -494,6 +494,47 @@ test('applyObjectProcessOverridesXml overrides a pre-existing object metadata va
   const out = applyObjectProcessOverridesXml(xml, { '3': { layer_height: '0.08' } })
   assert.match(out, /<metadata key="layer_height" value="0.08"\/>/)
   assert.doesNotMatch(out, /value="0.2"/)
+})
+
+test('applyObjectProcessOverridesXml does not touch a part\'s per-volume metadata of the same key', () => {
+  const xml = '<config><object id="3"><metadata key="name" value="Box"/><metadata key="wall_loops" value="2"/><part id="3"><metadata key="wall_loops" value="9"/></part></object></config>'
+  const out = applyObjectProcessOverridesXml(xml, { '3': { wall_loops: '5' } })
+  // Object-level becomes 5; the part's per-volume wall_loops="9" survives untouched.
+  assert.match(out, /<part id="3"><metadata key="wall_loops" value="9"\/><\/part>/)
+  const head = out.slice(0, out.indexOf('<part'))
+  assert.match(head, /<metadata key="wall_loops" value="5"\/>/)
+})
+
+test('applyObjectProcessOverridesXml with an empty map clears object-level overrides but keeps structural metadata', () => {
+  const xml = '<config><object id="3"><metadata key="name" value="Box"/><metadata key="module" value="m"/><metadata key="wall_loops" value="5"/></object></config>'
+  const out = applyObjectProcessOverridesXml(xml, { '3': {} })
+  assert.doesNotMatch(out, /wall_loops/) // cleared
+  assert.match(out, /<metadata key="name" value="Box"\/>/) // structural kept
+  assert.match(out, /<metadata key="module" value="m"\/>/) // structural kept
+})
+
+test('parseModelSettingsScene reads object process overrides but not structural metadata (name/extruder/module)', () => {
+  const xml = '<config><object id="3"><metadata key="name" value="Box"/><metadata key="extruder" value="2"/><metadata key="module" value="cut"/><metadata key="wall_loops" value="5"/><part id="3"><metadata key="layer_height" value="0.1"/></part></object></config>'
+  const { objectProcessOverridesById, objectNamesById } = parseModelSettingsScene(xml)
+  const overrides = objectProcessOverridesById.get(3) ?? {}
+  assert.equal(overrides.wall_loops, '5')
+  assert.equal(overrides.name, undefined)
+  assert.equal(overrides.extruder, undefined)
+  assert.equal(overrides.module, undefined) // Bambu cut/assembly module, not a process override
+  assert.equal(overrides.layer_height, undefined) // part-level, not object-level
+  assert.equal(objectNamesById.get(3), 'Box')
+})
+
+test('applyPartProcessOverrides sets a part\'s process metadata without touching the object or siblings', () => {
+  const xml = '<config><object id="3"><metadata key="name" value="Asm"/><metadata key="wall_loops" value="2"/><part id="3"><metadata key="name" value="A"/></part><part id="4"><metadata key="name" value="B"/></part></object></config>'
+  const out = applyPartProcessOverrides(xml, [{ objectId: 3, componentObjectId: 4, overrides: { wall_loops: '6' } }])
+  // Part 4 gains the override; its name (structural) stays; part 3 and the object head are untouched.
+  const part4 = /<part id="4">[\s\S]*?<\/part>/.exec(out)?.[0] ?? ''
+  assert.match(part4, /<metadata key="wall_loops" value="6"\/>/)
+  assert.match(part4, /<metadata key="name" value="B"\/>/)
+  assert.doesNotMatch(/<part id="3">[\s\S]*?<\/part>/.exec(out)?.[0] ?? '', /wall_loops/)
+  // The object-level wall_loops="2" is unchanged (per-part is separate from the object's).
+  assert.match(out.slice(0, out.indexOf('<part')), /<metadata key="wall_loops" value="2"\/>/)
 })
 
 test('createObjectCustomizedThreeMf filters objects and injects per-object overrides in one pass', async () => {
@@ -1111,6 +1152,23 @@ test('brim ear points serialize to Bambu object ordinals and parse back by objec
   assert.equal(serializeBrimEarPoints([{ objectId: 3, points: [] }], ARRANGE_MODEL_XML), '')
 })
 
+test('brim ear ordinals count only build-placed roots, not injected import component objects', () => {
+  // A multi-solid import: component mesh objects (50, 51) precede the placed root (52); only the
+  // root has a build <item>. The root's ordinal must be 1 — the components must not shift it.
+  const model = [
+    '<model><resources>',
+    '<object id="50" type="model"><mesh/></object>',
+    '<object id="51" type="model"><mesh/></object>',
+    '<object id="52" type="model"><components><component objectid="50"/><component objectid="51"/></components></object>',
+    '</resources><build>',
+    '<item objectid="52" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>',
+    '</build></model>'
+  ].join('')
+  const out = serializeBrimEarPoints([{ objectId: 52, points: [{ x: 0, y: 0, z: 0, radius: 3 }] }], model)
+  assert.equal(out, 'brim_points_format_version=0\nobject_id=1|0.000000 0.000000 0.000000 3.000000\n')
+  assert.deepEqual(parseBrimEarPoints(out, model).get(52), [{ x: 0, y: 0, z: 0, radius: 3 }])
+})
+
 test('writeArrangedThreeMf writes brim ears and readSceneManifest exposes them', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-ears-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
@@ -1355,6 +1413,111 @@ test('buildEditedThreeMf creates a new-project 3MF with an injected imported mes
     // A minimal valid 3MF carries the OPC content-types part.
     const contentTypes = (await readEntry(outputPath, '[Content_Types].xml')).toString('utf8')
     assert.match(contentTypes, /3dmodel/)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('buildEditedThreeMf bakes a multi-solid import as one object with many normal parts', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-multipart-'))
+  const outputPath = path.join(tempDir, 'assembly.3mf')
+  try {
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    const mesh = { ...quad(0), parts: [
+      { name: 'Cylinder', mesh: quad(0) },
+      { name: 'Hole modifier 1', mesh: quad(5) }
+    ] }
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 1 }
+      ],
+      // The second solid takes its own material; the first inherits the object's (filament 1).
+      importPartFilaments: [{ importId: 'imp-1', partIndex: 1, filamentId: 3 }]
+    }
+    await buildEditedThreeMf(null, outputPath, edit, [{ importId: 'imp-1', name: 'CHM Cylinder', mesh, parts: mesh.parts }])
+
+    const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    // One root object that references both solids as components (no mesh of its own).
+    const componentIds = [...modelXml.matchAll(/<component objectid="(\d+)"/g)].map((m) => m[1])
+    assert.equal(componentIds.length, 2)
+    // Both solids exist as mesh objects.
+    assert.equal((modelXml.match(/<mesh>/g) ?? []).length, 2)
+    // Exactly one build item — the assembly places as a single object.
+    assert.equal((modelXml.match(/<item objectid=/g) ?? []).length, 1)
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const partNames = [...settingsXml.matchAll(/<part id="\d+" subtype="normal_part">\s*<metadata key="name" value="([^"]+)"/g)].map((m) => m[1])
+    assert.deepEqual(partNames, ['Cylinder', 'Hole modifier 1'])
+    // Each solid keeps its own material: first inherits the object filament (1), second is 3.
+    const extruders = [...settingsXml.matchAll(/<part\b[\s\S]*?<metadata key="extruder" value="(\d+)"/g)].map((m) => m[1])
+    assert.deepEqual(extruders, ['1', '3'])
+
+    // The scene reader sees one instance made of two parts.
+    const scene = await readSceneManifest(outputPath, 1)
+    assert.equal(scene.instances.length, 1)
+    assert.equal(scene.instances[0]?.parts.length, 2)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('per-object process overrides on a fresh import re-key onto the baked object and persist', async () => {
+  // Mirrors the editor save path: a fresh import carries a synthetic (negative) object identity
+  // as a meshReplacements entry; the override authored against that id must land on the baked
+  // object_id in the saved model_settings.config.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-overrides-'))
+  const outputPath = path.join(tempDir, 'new-project.3mf')
+  const customizedPath = path.join(tempDir, 'customized.3mf')
+  try {
+    const mesh = {
+      positions: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } }
+    }
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      // The editor renames the imported object and emits a meshReplacements entry so its
+      // overrides re-key onto the baked object — both must survive a save (not just a slice).
+      objectNames: [{ importId: 'imp-1', name: 'Spacer 2' }],
+      meshReplacements: [{ objectId: -1, importId: 'imp-1' }]
+    }
+    const { replacedObjectIds } = await buildEditedThreeMf(null, outputPath, edit, [{ importId: 'imp-1', name: 'Spacer', mesh }])
+    const baked = replacedObjectIds.find((entry) => entry.originalObjectId === -1)
+    assert.ok(baked, 'the fresh import should report a synthetic→baked id mapping')
+
+    // The rename is baked by buildEditedThreeMf itself.
+    const bakedSettings = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const bakedBlock = new RegExp(`<object id="${baked!.bakedObjectId}"[^>]*>[\\s\\S]*?</object>`).exec(bakedSettings)?.[0] ?? ''
+    assert.match(bakedBlock, /<metadata key="name" value="Spacer 2"\/>/)
+    // ...and the scene reader surfaces the renamed OBJECT name (not the import's part name) so the
+    // rename round-trips into the editor on reopen.
+    const reopened = await readSceneManifest(outputPath, 1)
+    assert.equal(reopened.instances[0]?.name, 'Spacer 2')
+
+    const rekeyed = rekeyReplacedObjectOverrides({ '-1': { wall_loops: '5' } }, replacedObjectIds)
+    assert.deepEqual(rekeyed, { [String(baked!.bakedObjectId)]: { wall_loops: '5' } })
+
+    await createObjectCustomizedThreeMf(outputPath, customizedPath, 0, { objectProcessOverrides: rekeyed })
+    const settingsXml = (await readEntry(customizedPath, 'Metadata/model_settings.config')).toString('utf8')
+    const objectBlock = new RegExp(`<object id="${baked!.bakedObjectId}"[^>]*>[\\s\\S]*?</object>`).exec(settingsXml)?.[0] ?? ''
+    assert.match(objectBlock, /<metadata key="wall_loops" value="5"\/>/)
+    // And the rename survives the override pass.
+    assert.match(objectBlock, /<metadata key="name" value="Spacer 2"\/>/)
+    // The scene reader surfaces the saved per-object override so the editor can re-seed its gear.
+    const reopenedWithOverrides = await readSceneManifest(customizedPath, 1)
+    assert.equal(reopenedWithOverrides.instances[0]?.processOverrides?.wall_loops, '5')
+    // ...and never mistakes the object name/extruder for a process override.
+    assert.equal(reopenedWithOverrides.instances[0]?.processOverrides?.name, undefined)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -1759,6 +1922,53 @@ test('readSceneManifest keeps support/modifier parts and tags their subtype', as
     // The instance carries both parts (including the blocker) with their subtype.
     assert.equal(scene.instances.length, 1)
     assert.ok(scene.instances[0]!.parts.some((part) => part.subtype === 'support_blocker'))
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('readSceneManifest re-hydrates per-part process overrides (minus structural keys) onto the instance part', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-partproc-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  try {
+    const modelXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<model xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">',
+      '  <resources>',
+      '    <object id="3" type="model"><components>',
+      '      <component p:path="/3D/Objects/object_3.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>',
+      '      <component p:path="/3D/Objects/object_3.model" objectid="4" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>',
+      '    </components></object>',
+      '  </resources>',
+      '  <build><item objectid="3" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/></build>',
+      '</model>'
+    ].join('\n')
+    const modelSettingsXml = [
+      '<config>',
+      '  <object id="3"><metadata key="name" value="Widget"/>',
+      // Part 1 carries a per-part process override (wall_loops) alongside structural keys (name/extruder).
+      '    <part id="1" subtype="normal_part"><metadata key="name" value="Body"/><metadata key="extruder" value="1"/><metadata key="wall_loops" value="6"/></part>',
+      // Part 4 has only structural metadata, so it should expose no processOverrides.
+      '    <part id="4" subtype="normal_part"><metadata key="name" value="Lid"/></part>',
+      '  </object>',
+      '  <plate>',
+      '    <metadata key="plater_id" value="1"/>',
+      '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/></model_instance>',
+      '  </plate>',
+      '</config>'
+    ].join('\n')
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(modelXml, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(modelSettingsXml, 'utf8')]
+    ])
+
+    const scene = await readSceneManifest(sourcePath, 1)
+    const parts = scene.instances[0]!.parts
+    const body = parts.find((part) => part.componentObjectId === 1)
+    const lid = parts.find((part) => part.componentObjectId === 4)
+    // The process override comes back; structural name/extruder are NOT treated as overrides.
+    assert.deepEqual(body!.processOverrides, { wall_loops: '6' })
+    assert.equal(lid!.processOverrides, undefined)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

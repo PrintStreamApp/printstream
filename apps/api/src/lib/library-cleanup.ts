@@ -21,9 +21,12 @@
  * Cleanup runs once at startup (after a short delay so it doesn't
  * fight the boot sequence) and then on a fixed 24h interval.
  */
+import path from 'node:path'
+import { readdir, rm, stat } from 'node:fs/promises'
 import { env } from './env.js'
 import { PUBLIC_DEMO_TENANT_SLUG } from '@printstream/shared'
 import { deleteLibraryFileBytes, pruneBridgeLibraryDerivedCache } from './bridge-library-files.js'
+import { libraryDir } from './library-paths.js'
 import { pruneCoverCache } from './cover-cache.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { deletePrintJobSnapshot } from './print-job-snapshots.js'
@@ -35,6 +38,10 @@ const PRINT_JOB_THUMBNAIL_RETENTION_DAYS = env.PRINT_JOB_THUMBNAIL_RETENTION_DAY
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 const ONE_HOUR_MS = 60 * 60 * 1000
 const DEMO_TRANSIENT_RETENTION_MS = 12 * ONE_HOUR_MS
+// An upload session untouched for this long is treated as abandoned. Keyed off
+// the session file's mtime (rewritten on every chunk), so this is inactivity,
+// not wall-clock age — a multi-hour large upload over a slow link is safe.
+const UPLOAD_SESSION_RETENTION_MS = 24 * ONE_HOUR_MS
 
 let timer: NodeJS.Timeout | null = null
 let startupTimer: NodeJS.Timeout | null = null
@@ -152,6 +159,46 @@ export async function pruneUnreferencedSlicedOutputs(
   return { removed }
 }
 
+/**
+ * Reap abandoned chunked-upload sessions. The chunked-upload flow
+ * (`POST /api/library/uploads` + `/chunks`) stages bytes into
+ * `<libraryDir>/.uploads/<id>.part` alongside a `<id>.json` session file, and
+ * only deletes them when the client calls `/complete` or `DELETE /uploads/:id`.
+ * A closed tab or dropped connection between chunks leaves both files behind,
+ * each up to LIBRARY_MAX_UPLOAD_BYTES — unbounded disk growth on a busy install
+ * (the same volume the embedded Postgres and bridge use). Expiry is keyed off
+ * the session file's mtime, which the route rewrites on every received chunk, so
+ * a slow-but-still-active upload is never reaped mid-flight.
+ */
+export async function pruneAbandonedUploadSessions(): Promise<{ removed: number }> {
+  const uploadDir = path.join(libraryDir, '.uploads')
+  const cutoff = Date.now() - UPLOAD_SESSION_RETENTION_MS
+  let entries: string[]
+  try {
+    entries = await readdir(uploadDir)
+  } catch {
+    return { removed: 0 } // .uploads not created yet (no chunked upload has run).
+  }
+  let removed = 0
+  for (const entry of entries) {
+    if (!entry.endsWith('.part') && !entry.endsWith('.json')) continue
+    const fullPath = path.join(uploadDir, entry)
+    let mtimeMs: number
+    try {
+      mtimeMs = (await stat(fullPath)).mtimeMs
+    } catch {
+      continue // raced with a concurrent delete; skip.
+    }
+    if (mtimeMs > cutoff) continue
+    await rm(fullPath, { force: true }).catch(() => undefined)
+    if (entry.endsWith('.part')) removed += 1
+  }
+  if (removed > 0) {
+    console.log(`[library-cleanup] reaped ${removed} abandoned upload session${removed === 1 ? '' : 's'}`)
+  }
+  return { removed }
+}
+
 export async function prunePrintJobThumbnails(): Promise<{ removed: number }> {
   const cutoff = new Date(Date.now() - PRINT_JOB_THUMBNAIL_RETENTION_DAYS * ONE_DAY_MS)
   const stale = await rootPrisma.printJob.findMany({
@@ -207,10 +254,11 @@ export async function prunePrintJobSnapshots(): Promise<{ removed: number }> {
 }
 
 export async function runArtifactMaintenance(): Promise<void> {
-  const [hiddenFiles, slicedOutputs, recycledFiles, jobThumbnails, jobSnapshots, coverCache, bridgeDerivedCache] = await Promise.all([
+  const [hiddenFiles, slicedOutputs, recycledFiles, uploadSessions, jobThumbnails, jobSnapshots, coverCache, bridgeDerivedCache] = await Promise.all([
     pruneHiddenLibraryFiles(),
     pruneUnreferencedSlicedOutputs(),
     pruneRecycledLibraryFiles(),
+    pruneAbandonedUploadSessions(),
     prunePrintJobThumbnails(),
     prunePrintJobSnapshots(),
     pruneCoverCache(),
@@ -230,6 +278,7 @@ export async function runArtifactMaintenance(): Promise<void> {
     hiddenFiles.removed === 0
     && slicedOutputs.removed === 0
     && recycledFiles.removed === 0
+    && uploadSessions.removed === 0
     && jobThumbnails.removed === 0
     && jobSnapshots.removed === 0
     && coverCache.removedCoverFiles === 0

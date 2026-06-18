@@ -1,0 +1,28 @@
+{
+  "name": "@printstream/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/sea-entry.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/sea-entry.ts",
+    "start": "node dist/sea-entry.js",
+    "package:sea": "node scripts/build-sea.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@printstream/api": "0.1.0",
+    "@printstream/sea-runtime": "0.1.0",
+    "yauzl": "^3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.14",
+    "@types/yauzl": "^2.10.3",
+    "esbuild": "^0.25.5",
+    "postject": "^1.0.0-alpha.6",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3",
+    "yazl": "^3.3.1"
+  }
+}

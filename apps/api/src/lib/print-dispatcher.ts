@@ -30,6 +30,7 @@ import { readLibraryProjectFilamentChips } from './library-three-mf.js'
 import { prisma, rootPrisma } from './prisma.js'
 import { printerManager } from './printer-manager.js'
 import {
+  deletePrinterFile,
   uploadBridgeLibraryFileToPrinterPath,
   uploadBridgeLibraryPlateToPrinterPath,
   uploadFileToPrinter
@@ -80,6 +81,8 @@ interface DispatchJobState {
   startedAt: Date | null
   finishedAt: Date | null
   cancelRequested: boolean
+  /** Aborts the in-flight FTPS upload when the job is cancelled mid-transfer. Runtime-only. */
+  abortController: AbortController | null
 }
 
 interface EnqueueLibraryPrintInput extends PrintFromLibrary {
@@ -117,8 +120,15 @@ const BAMBU_STUDIO_SEND_DIALOG_DEFAULTS = {
 class PrintDispatcher {
   private readonly jobs = new Map<string, DispatchJobState>()
   private readonly printerQueues = new Map<string, Promise<void>>()
+  // Printers with a dispatch being prepared but not yet inserted into `this.jobs`.
+  // The active-dispatch check runs before several awaits (replica copy, 3MF parse),
+  // so without a synchronous reservation two concurrent dispatches could both pass
+  // the check during that window and double-print. Reserved synchronously, released
+  // once the job is registered (or on failure).
+  private readonly reservedPrinterIds = new Set<string>()
 
   hasActiveDispatchForPrinter(printerId: string): boolean {
+    if (this.reservedPrinterIds.has(printerId)) return true
     return Array.from(this.jobs.values()).some((job) => job.printerId === printerId && ACTIVE_DISPATCH_STATUSES.includes(job.status))
   }
 
@@ -183,6 +193,24 @@ class PrintDispatcher {
     this.assertNoActiveDispatchForPrinter(printer.id)
     const blocked = printGuards.evaluate({ printerId: printer.id, source: 'dispatch' })
     if (blocked) throw new Error(blocked.reason ?? 'Print blocked by a plugin')
+    if (!snapshot.ownerBridgeId) throw new Error('Library snapshots must be bridge-backed')
+    // Reserve the printer now — no await has run since the active-dispatch check, so
+    // this closes the prep-window race. Release once the job is registered or fails.
+    this.reservedPrinterIds.add(printer.id)
+    try {
+      return await this.prepareAndEnqueueSnapshotJob(input, printer, snapshot, fileName)
+    } finally {
+      this.reservedPrinterIds.delete(printer.id)
+    }
+  }
+
+  private async prepareAndEnqueueSnapshotJob(
+    input: EnqueueSnapshotPrintInput,
+    printer: NonNullable<Awaited<ReturnType<typeof prisma.printer.findFirst>>>,
+    snapshot: EnqueueSnapshotPrintInput['snapshot'],
+    fileName: string
+  ): Promise<PrintDispatchJob> {
+    if (!printer.bridgeId) throw new Error('Printer bridge assignment is required')
     if (!snapshot.ownerBridgeId) throw new Error('Library snapshots must be bridge-backed')
     const bridgeLibraryPath = await ensureLibraryFileReplica({
       tenantId: snapshot.tenantId,
@@ -263,7 +291,8 @@ class PrintDispatcher {
       updatedAt: now,
       startedAt: null,
       finishedAt: null,
-      cancelRequested: false
+      cancelRequested: false,
+      abortController: null
     }
     this.jobs.set(job.id, job)
     this.enqueueForPrinter(job)
@@ -295,6 +324,9 @@ class PrintDispatcher {
       })
       this.finish(job, 'cancelled', job.status === 'failed' ? 'Cancelled after failed dispatch' : 'Cancelled before upload')
     } else {
+      // Mid-upload: abort the in-flight FTPS transfer instead of letting it run to
+      // completion. runJob's cancellation handling then deletes any landed bytes.
+      job.abortController?.abort()
       this.touch(job, 'Cancellation requested')
     }
     return toDto(job)
@@ -341,16 +373,20 @@ class PrintDispatcher {
 
     job.status = 'uploading'
     job.startedAt = new Date()
+    job.abortController = new AbortController()
     this.touch(job, 'Uploading to printer storage')
 
     try {
       const artifact = await preparePrintArtifact(job)
       try {
-        await this.uploadArtifactWithRetry(job, printer, artifact)
+        await this.uploadArtifactWithRetry(job, printer, artifact, job.abortController.signal)
       } finally {
         await artifact.cleanup()
       }
       if (job.cancelRequested) {
+        // The upload finished before the cancel landed: the bytes are on the printer's
+        // SD but no print was started, so delete them rather than leaking the file.
+        await this.cleanupUploadedArtifact(job, printer)
         await cancelTrackedPrintJobRecord({
           printerId: job.printerId,
           jobId: job.id,
@@ -385,8 +421,38 @@ class PrintDispatcher {
       }
       this.finish(job, 'sent', 'Start command sent')
     } catch (error) {
+      if (job.cancelRequested) {
+        // The upload was aborted by a cancel mid-transfer. Any partial bytes that
+        // reached the SD are orphaned, so best-effort delete them, then close out
+        // the job as cancelled rather than failed.
+        await this.cleanupUploadedArtifact(job, printer)
+        await cancelTrackedPrintJobRecord({
+          printerId: job.printerId,
+          jobId: job.id,
+          jobName: job.jobName,
+          metadata: this.buildPendingStartMetadata(job),
+          startedAt: job.startedAt ?? job.createdAt
+        }).catch(() => undefined)
+        this.finish(job, 'cancelled', 'Cancelled during upload; print was not started')
+        return
+      }
       console.error(`[dispatch] job ${job.id} failed for printer ${job.printerId}`, (error as Error).message)
       this.finish(job, 'failed', 'Dispatch failed', (error as Error).message)
+    } finally {
+      job.abortController = null
+    }
+  }
+
+  /**
+   * Best-effort removal of an upload's bytes from the printer SD after a cancel. The
+   * file may be fully written (cancel landed post-upload) or partially written (cancel
+   * aborted the transfer); either way it was never started, so it should not linger.
+   */
+  private async cleanupUploadedArtifact(job: DispatchJobState, printer: NonNullable<ReturnType<typeof printerManager.getPrinter>>): Promise<void> {
+    try {
+      await deletePrinterFile(printer, `/${job.remoteName}`)
+    } catch (error) {
+      console.warn(`[dispatch] failed to remove cancelled upload ${job.remoteName} from printer ${job.printerId}`, (error as Error).message)
     }
   }
 
@@ -419,7 +485,7 @@ class PrintDispatcher {
     job.updatedAt = new Date()
   }
 
-  private async uploadArtifactWithRetry(job: DispatchJobState, printer: NonNullable<ReturnType<typeof printerManager.getPrinter>>, artifact: PrintArtifact): Promise<void> {
+  private async uploadArtifactWithRetry(job: DispatchJobState, printer: NonNullable<ReturnType<typeof printerManager.getPrinter>>, artifact: PrintArtifact, signal: AbortSignal): Promise<void> {
     let lastError: Error | null = null
     for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt += 1) {
       if (job.cancelRequested) throw new Error('Upload cancelled')
@@ -439,7 +505,8 @@ class PrintDispatcher {
             `/${artifact.remoteName}`,
             (bytesSent, totalBytes) => {
               this.updateUploadProgress(job, bytesSent, totalBytes)
-            }
+            },
+            signal
           )
           const uploadedSizeBytes = upload.sizeBytes ?? job.uploadTotalBytes ?? artifact.sizeBytes
           if (uploadedSizeBytes != null) {
@@ -449,7 +516,7 @@ class PrintDispatcher {
         } else if (job.bridgeLibraryPath) {
           const upload = await uploadBridgeLibraryFileToPrinterPath(printer, job.bridgeLibraryPath, `/${artifact.remoteName}`, (bytesSent, totalBytes) => {
             this.updateUploadProgress(job, bytesSent, totalBytes)
-          })
+          }, signal)
           const uploadedSizeBytes = upload.sizeBytes ?? job.uploadTotalBytes ?? artifact.sizeBytes
           if (uploadedSizeBytes != null) {
             job.fileSizeBytes = uploadedSizeBytes
@@ -459,7 +526,7 @@ class PrintDispatcher {
           if (!artifact.localPath) throw new Error('Upload artifact missing local source path')
           await uploadFileToPrinter(printer, artifact.localPath, artifact.remoteName, (bytesSent) => {
             this.updateUploadProgress(job, bytesSent, artifact.sizeBytes)
-          })
+          }, { signal })
         }
         if (!bridgeBackedUpload && artifact.sizeBytes != null) {
           this.updateUploadProgress(job, artifact.sizeBytes, artifact.sizeBytes)

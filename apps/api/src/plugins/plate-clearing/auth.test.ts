@@ -14,7 +14,13 @@ import {
 import { PrinterEventBus } from '../../lib/printer-events.js'
 import type { RequestAuthContext } from '../../lib/auth-context.js'
 import { HttpError } from '../../lib/http-error.js'
+import { prisma } from '../../lib/prisma.js'
 import { plateClearingPlugin } from './index.js'
+
+// Per-printer routes authorize through the tenant-scoped singleton prisma; report the
+// test printer as owned so the gate passes (the fake context.prisma only covers the
+// plugin's own queries).
+const originalScopedPrinterFindUnique = prisma.printer.findUnique
 
 test('plate-clearing state requires authentication once auth is enabled', async () => {
   await withPlateClearingApp({
@@ -154,6 +160,8 @@ async function withPlateClearingApp(
     }
   } as never)
 
+  prisma.printer.findUnique = ((async () => ({ id: 'printer-1' })) as unknown) as typeof prisma.printer.findUnique
+
   const server = await listen(app)
   const address = server.address() as AddressInfo
   const baseUrl = `http://127.0.0.1:${address.port}`
@@ -161,6 +169,7 @@ async function withPlateClearingApp(
     await run({ baseUrl })
   } finally {
     await close(server)
+    prisma.printer.findUnique = originalScopedPrinterFindUnique
   }
 }
 

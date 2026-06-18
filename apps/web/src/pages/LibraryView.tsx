@@ -444,6 +444,10 @@ export function LibraryView() {
   // via the versioned resource routes) instead of the file's current content.
   const [previewVersion, setPreviewVersion] = useState<LibraryFileVersion | null>(null)
   const [sliceTarget, setSliceTarget] = useState<LibraryFile | null>(null)
+  // True when the open editor is a brand-new project (backed by a hidden scaffold), so the
+  // editor saves via "Save as new" (prompting for name + destination) rather than overwriting
+  // the throwaway scaffold. Set from the scaffold flow's `onDiscard` presence.
+  const [sliceTargetIsNewProject, setSliceTargetIsNewProject] = useState(false)
   // How the slice/editor dialog was opened: 'library' (the Edit action — slice/save
   // focused) or 'print' (the Print action — slice-then-print focused, matching the
   // PrintersView print dialog's 3MF flow).
@@ -762,6 +766,7 @@ export function LibraryView() {
     setSliceTarget(null)
     setSliceFlow('library')
     setSliceVersionId(null)
+    setSliceTargetIsNewProject(false)
     const cleanup = sliceTargetCleanupRef.current
     sliceTargetCleanupRef.current = null
     cleanup?.()
@@ -774,6 +779,8 @@ export function LibraryView() {
     try {
       const { file: full } = await apiFetch<{ file: LibraryFile }>(`/api/library/${file.id}`)
       sliceTargetCleanupRef.current = opts?.onDiscard ?? null
+      // A new-project scaffold is the only caller that passes an onDiscard cleanup.
+      setSliceTargetIsNewProject(Boolean(opts?.onDiscard))
       setSliceVersionId(null)
       setSliceFlow('library')
       setSliceTarget(full)
@@ -1812,6 +1819,7 @@ export function LibraryView() {
         <SliceFileModal
           file={sliceTarget}
           flow={sliceFlow}
+          isNewProject={sliceTargetIsNewProject}
           versionId={sliceVersionId}
           folders={allFolders}
           currentFolderId={currentFolderId}
@@ -1992,6 +2000,11 @@ export interface SliceSettingsController {
   onAddFilament: () => void
   onRemoveFilament: (projectFilamentId: number) => void
   /**
+   * Whether a material is assigned to any object/part (the 3D editor supplies live usage).
+   * When it returns true the material can't be removed — BambuStudio parity. Absent → not gated.
+   */
+  filamentInUse?: (projectFilamentId: number) => boolean
+  /**
    * Point-in-time snapshot of the material-edit state + a restore fn, so the editor's
    * undo/redo can revert add/remove of materials alongside the scene (the material state
    * lives here, in the slice controller, not in the editor's scene state).
@@ -2016,6 +2029,8 @@ export interface SliceMaterialsSnapshot {
   filamentMaterialOptionIds: Record<number, string>
   filamentToolheadIds: Record<number, string>
   filamentMaterialTypeFilters: Record<number, string>
+  /** Per-object process overrides, so the editor's undo/redo can revert a gear edit. */
+  objectProcessOverrides: Record<string, Record<string, string | string[]>>
 }
 
 /**
@@ -2043,7 +2058,7 @@ export function SliceSettingsPanel({ controller, mode }: { controller: SliceSett
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
     setPrinterMaterialPickerFilamentId, handleMaterialOptionChange,
-    onAddFilament, onRemoveFilament
+    onAddFilament, onRemoveFilament, filamentInUse
   } = controller
   const showPlateSection = mode === 'simple'
   const showPerObjectRow = mode === 'simple'
@@ -2378,22 +2393,31 @@ export function SliceSettingsPanel({ controller, mode }: { controller: SliceSett
                       Choose from printer
                     </Button>
                   )}
-                  {showMaterialEditing && (
-                    <Tooltip title={projectFilaments.length <= 1 ? 'A project needs at least one material' : 'Remove material'}>
-                      <span>
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="danger"
-                          disabled={projectFilaments.length <= 1}
-                          onClick={() => onRemoveFilament(filament.projectFilamentId)}
-                          aria-label={`Remove material ${filamentIndex + 1}`}
-                        >
-                          <DeleteRoundedIcon fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                  )}
+                  {showMaterialEditing && (() => {
+                    const inUse = filamentInUse?.(filament.projectFilamentId) ?? false
+                    const removeDisabled = projectFilaments.length <= 1 || inUse
+                    const removeTitle = projectFilaments.length <= 1
+                      ? 'A project needs at least one material'
+                      : inUse
+                        ? 'This material is used by an object — reassign it before removing'
+                        : 'Remove material'
+                    return (
+                      <Tooltip title={removeTitle}>
+                        <span>
+                          <IconButton
+                            size="sm"
+                            variant="plain"
+                            color="danger"
+                            disabled={removeDisabled}
+                            onClick={() => onRemoveFilament(filament.projectFilamentId)}
+                            aria-label={`Remove material ${filamentIndex + 1}`}
+                          >
+                            <DeleteRoundedIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    )
+                  })()}
                 </Stack>
               </Stack>
               <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ flexWrap: 'wrap' }}>
@@ -2497,6 +2521,7 @@ export function SliceSettingsPanel({ controller, mode }: { controller: SliceSett
 export function SliceFileModal({
   file,
   versionId = null,
+  isNewProject = false,
   folders = [],
   currentFolderId = null,
   bridgeId = null,
@@ -2519,6 +2544,8 @@ export function SliceFileModal({
   file: LibraryFile
   /** Slice an archived version of `file` instead of its current content. */
   versionId?: string | null
+  /** The editor target is a brand-new project (hidden scaffold) → save prompts for name/location. */
+  isNewProject?: boolean
   folders?: LibraryFolder[]
   currentFolderId?: string | null
   bridgeId?: string | null
@@ -2599,6 +2626,10 @@ export function SliceFileModal({
       return result
     },
     enabled: shouldLoadSlicingProfiles,
+    // The slicer's preset catalogue is effectively static per image, so keep it fresh for a few
+    // minutes: reopening the editor reuses the cached profiles instead of refetching the whole
+    // catalogue (which otherwise also blocks the plate/geometry load gated behind it).
+    staleTime: 5 * 60_000,
     retry: 5,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000)
   })
@@ -2615,7 +2646,10 @@ export function SliceFileModal({
   const platesQuery = useQuery({
     queryKey: ['library-plates', file.id, versionId ?? 'current', 'slice-defaults'],
     queryFn: ({ signal }) => apiFetch<ThreeMfIndex>(`${resourceBasePath}/plates`, { signal }),
-    enabled: !waitingForSlicingProfiles,
+    // The 3MF index doesn't depend on slicer profiles, so fetch it in PARALLEL with the (slow)
+    // profile catalogue instead of after it — the plate/object list and per-object UI become
+    // available sooner. Applying baked slice defaults still waits for both (see the
+    // `appliedBakedDefaultsRef` effect, which gates on `waitingForSlicingProfiles`).
     staleTime: 60_000
   })
   const bakedIndex = platesQuery.data ?? null
@@ -3031,8 +3065,9 @@ export function SliceFileModal({
     filamentColors,
     filamentMaterialOptionIds,
     filamentToolheadIds,
-    filamentMaterialTypeFilters
-  }), [removedFilamentIds, profileEditedFilamentIds, addedFilaments, addedFilamentSourceIndex, filamentColors, filamentMaterialOptionIds, filamentToolheadIds, filamentMaterialTypeFilters])
+    filamentMaterialTypeFilters,
+    objectProcessOverrides
+  }), [removedFilamentIds, profileEditedFilamentIds, addedFilaments, addedFilamentSourceIndex, filamentColors, filamentMaterialOptionIds, filamentToolheadIds, filamentMaterialTypeFilters, objectProcessOverrides])
   const restoreMaterials = useCallback((snapshot: SliceMaterialsSnapshot) => {
     setRemovedFilamentIds(new Set(snapshot.removedFilamentIds))
     setProfileEditedFilamentIds(new Set(snapshot.profileEditedFilamentIds ?? []))
@@ -3042,6 +3077,7 @@ export function SliceFileModal({
     setFilamentMaterialOptionIds(snapshot.filamentMaterialOptionIds)
     setFilamentToolheadIds(snapshot.filamentToolheadIds)
     setFilamentMaterialTypeFilters(snapshot.filamentMaterialTypeFilters)
+    setObjectProcessOverrides(snapshot.objectProcessOverrides ?? {})
   }, [])
   const suggestedOutputFileName = useMemo(() => {
     if (!requiresSinglePlate && plateMode !== 'single') return buildSlicedOutputFileName(file.name)
@@ -3295,6 +3331,11 @@ export function SliceFileModal({
   const editorSlotContext = {
     fileId: file.id,
     baseVersionId: versionId ?? null,
+    isNewProject,
+    // The library context the new file should default into when saved (so the save dialog can
+    // browse folders and the save lands on the right bridge).
+    bridgeId,
+    folderId: currentFolderId,
     currentEdit: sceneEdit,
     onApply: setSceneEdit,
     onSlice: handleEditorSlice,
@@ -3382,6 +3423,7 @@ export function SliceFileModal({
             onChange={setObjectProcessOverrides}
             printSelection={selectedSliceObjectIds}
             onTogglePrint={toggleSliceObject}
+            applyScope={editorOnly ? 'project' : 'slice'}
           />
         </Suspense>
       )}
@@ -3397,6 +3439,7 @@ export function SliceFileModal({
             initialOverrides={processSettingOverrides}
             visibilityContext={{ printerModel: targetMode === 'manualProfile' ? manualPrinterModel : (selectedPrinter?.model ?? '') }}
             profileOptions={compatibleProcessProfiles.map((profile) => ({ id: profile.id, name: formatSlicingProfileDisplayName(profile) }))}
+            applyScope={editorOnly ? 'project' : 'slice'}
             onProfileChange={(profileId, carryOverrides) => {
               processProfileSelectionTouchedRef.current = true
               setProcessProfileId(profileId)

@@ -224,10 +224,13 @@ export function createViewCube(
           material?: THREE.Material | THREE.Material[]
         }
         disposable.geometry?.dispose()
-        if (Array.isArray(disposable.material)) {
-          disposable.material.forEach((material) => material.dispose())
-        } else {
-          disposable.material?.dispose()
+        const materials = Array.isArray(disposable.material) ? disposable.material : disposable.material ? [disposable.material] : []
+        for (const material of materials) {
+          // Free the face CanvasTextures too — Material.dispose() doesn't release `.map`.
+          for (const value of Object.values(material as unknown as Record<string, unknown>)) {
+            if (value && (value as THREE.Texture).isTexture) (value as THREE.Texture).dispose()
+          }
+          material.dispose()
         }
       })
       renderer.dispose()

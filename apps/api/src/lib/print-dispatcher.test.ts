@@ -154,6 +154,44 @@ test('active dispatch guard ignores completed dispatch rows for the same printer
   }
 })
 
+test('active dispatch guard honors a synchronous printer reservation (TOCTOU window)', () => {
+  // A dispatch reserves the printer synchronously before its prep awaits and before the
+  // job lands in `this.jobs`; the guard must already report the printer as busy so a
+  // concurrent dispatch can't slip through that window and double-print.
+  const reserved = (printDispatcher as unknown as { reservedPrinterIds: Set<string> }).reservedPrinterIds
+  reserved.add('printer-9')
+  try {
+    assert.equal(printDispatcher.hasActiveDispatchForPrinter('printer-9'), true)
+    assert.throws(
+      () => printDispatcher.assertNoActiveDispatchForPrinter('printer-9'),
+      (error: unknown) => error instanceof HttpError && error.statusCode === 409
+    )
+  } finally {
+    reserved.delete('printer-9')
+  }
+  // Releasing the reservation clears the guard.
+  assert.equal(printDispatcher.hasActiveDispatchForPrinter('printer-9'), false)
+})
+
+test('cancel aborts an in-flight upload and flags the job without finishing it', async () => {
+  const jobs = dispatchJobs()
+  const controller = new AbortController()
+  const fixture = buildDispatchFixture({ id: 'dispatch-uploading', printerId: 'printer-cancel', status: 'uploading' })
+  ;(fixture as unknown as { abortController: AbortController }).abortController = controller
+  jobs.set('dispatch-uploading', fixture)
+  try {
+    const result = await printDispatcher.cancel('tenant-1', 'dispatch-uploading')
+    // The transfer's AbortSignal fires so the FTPS upload stops mid-stream...
+    assert.equal(controller.signal.aborted, true)
+    // ...and the job is flagged, but stays 'uploading' until runJob observes the abort
+    // and performs the SD cleanup + cancelled finish.
+    assert.equal(result?.cancelRequested, true)
+    assert.equal(result?.status, 'uploading')
+  } finally {
+    jobs.delete('dispatch-uploading')
+  }
+})
+
 test('cancel marks a failed dispatch as cancelled and closes its tracked history row', async () => {
   const jobs = dispatchJobs()
 

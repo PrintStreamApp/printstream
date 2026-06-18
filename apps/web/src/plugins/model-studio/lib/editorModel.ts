@@ -39,12 +39,15 @@ export type EditorInstanceSource =
       importId: string
       meshUrl: string
       /**
-       * Set when this import is a "Replace with…" stand-in for an in-project object: the
-       * original Bambu `object_id` it replaced. Its geometry now comes from the import, but
-       * the original object's identity is retained for the slicer — {@link buildSceneEdit}
-       * emits a `meshReplacements` entry so that object's per-object PROCESS overrides (and
-       * its name) follow onto the baked replacement. The editor also keeps the per-object
-       * settings UI attached to this id.
+       * The stable object identity for this import-backed instance, used so per-object
+       * PROCESS overrides (and per-part filament) can be authored against it before any save
+       * and re-keyed onto the baked object at slice/save time (via {@link collectMeshReplacements}).
+       * Two cases:
+       * - **Fresh import**: a synthetic NEGATIVE id from {@link nextSyntheticObjectId} (the
+       *   object has no baked id yet).
+       * - **"Replace with…"**: the replaced in-project object's real Bambu `object_id`, so its
+       *   existing per-object overrides and name follow onto the replacement.
+       * Either way the editor keeps the per-object settings UI attached to this id.
        */
       replacedObjectId?: number
     }
@@ -72,6 +75,15 @@ export interface EditorInstance {
   rotation: THREE.Euler
   /** Per-axis scale. */
   scale: THREE.Vector3
+  /**
+   * Exact plate-local 12-element transform, kept ONLY when the source matrix can't be reproduced
+   * by the editor's T·S·R (translate·scale·rotate) decomposition — i.e. a foreign object that is
+   * both rotated and non-uniformly scaled (its linear part shears relative to T·S·R). While set,
+   * the object renders and re-emits this matrix verbatim (no shear), so an unedited round-trip is
+   * exact; the first transform edit bakes it down to the editor's T·S·R and clears this. Absent
+   * for everything else (the common case), which behaves exactly as before.
+   */
+  exactMatrix?: number[]
   filamentId: number | null
   /**
    * Whether this instance prints (BambuStudio's per-object "Printable" toggle). A
@@ -172,6 +184,13 @@ export interface EditorState {
    * {@link buildSceneEdit} as `SceneEdit.addedParts`.
    */
   addedParts?: Record<number, EditorAddedPart[]>
+  /**
+   * Per-PART process overrides made this session (process settings on one part of an object,
+   * separate from the object's overall overrides), keyed by {@link supportPaintKey}
+   * (`objectId:componentObjectId`). Each value is the desired override map for that part; an empty
+   * map clears it. Cloned by {@link cloneEditorState}; emitted as `SceneEdit.partProcessOverrides`.
+   */
+  partProcessOverrides?: Record<string, Record<string, string>>
 }
 
 /** A new volume added inside an object this session (Bambu "Add negative part/..."). */
@@ -241,18 +260,82 @@ export function nextInstanceKey(): string {
   return `instance-${Date.now()}-${keyCounter}`
 }
 
-function decomposeInstanceTransform(transform: number[]): {
+let syntheticObjectIdCounter = 0
+/**
+ * Allocate a stable, NEGATIVE object id for a freshly-imported object. A not-yet-saved import
+ * has no baked 3MF object id, so this synthetic id stands in as the object's identity: it lets
+ * the editor author per-object process overrides and per-part filament against the import
+ * immediately (no save first), and is re-keyed onto the baked object id at slice/save time via
+ * the {@link collectMeshReplacements} seam. Negative so it can never collide with a real
+ * (positive) baked object id.
+ */
+export function nextSyntheticObjectId(): number {
+  syntheticObjectIdCounter += 1
+  return -syntheticObjectIdCounter
+}
+
+/**
+ * Decompose a 3MF transform into the editor's T·S·R convention (scale applied OUTSIDE the
+ * rotation — `world = translate · scale · rotate`), which is how the editor renders (outer
+ * group carries scale, inner rotor carries rotation) AND how it re-emits the matrix
+ * ({@link instanceTransformMatrix}). three.js' `Matrix4.decompose` assumes T·R·S (scale inside
+ * rotation) and pulls scale from the matrix's COLUMN lengths; for a rotated, non-uniformly
+ * scaled object that disagrees with the editor's render, so an unedited round-trip silently
+ * sheared the object. Here scale comes from the linear part's ROW lengths and the rotation is
+ * the row-normalized remainder, so `T·S·R` exactly reproduces a matrix the editor itself wrote.
+ * For every other case (no rotation, uniform scale, or rotation-only) this equals three.js'
+ * decomposition.
+ */
+export function decomposeInstanceTransform(transform: number[]): {
   position: THREE.Vector3
   rotation: THREE.Euler
   scale: THREE.Vector3
 } {
-  const matrix = createThreeMfMatrix(transform)
-  const position = new THREE.Vector3()
-  const quaternion = new THREE.Quaternion()
-  const scale = new THREE.Vector3()
-  matrix.decompose(position, quaternion, scale)
-  const rotation = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ')
-  return { position, rotation, scale }
+  const m = createThreeMfMatrix(transform).elements // column-major; A[r][c] = m[c*4 + r]
+  const position = new THREE.Vector3(m[12] ?? 0, m[13] ?? 0, m[14] ?? 0)
+  // Row-length scales (A = S·R ⇒ |row r| = S_r).
+  let sx = Math.hypot(m[0] ?? 0, m[4] ?? 0, m[8] ?? 0)
+  const sy = Math.hypot(m[1] ?? 0, m[5] ?? 0, m[9] ?? 0)
+  const sz = Math.hypot(m[2] ?? 0, m[6] ?? 0, m[10] ?? 0)
+  // Keep the rotation proper (det +1): if the linear part is left-handed, flip one scale axis.
+  const det =
+    (m[0] ?? 0) * ((m[5] ?? 0) * (m[10] ?? 0) - (m[9] ?? 0) * (m[6] ?? 0))
+    - (m[4] ?? 0) * ((m[1] ?? 0) * (m[10] ?? 0) - (m[9] ?? 0) * (m[2] ?? 0))
+    + (m[8] ?? 0) * ((m[1] ?? 0) * (m[6] ?? 0) - (m[5] ?? 0) * (m[2] ?? 0))
+  if (det < 0) sx = -sx
+  const rx = sx || 1, ry = sy || 1, rz = sz || 1
+  // R = diag(1/S) · A (divide each row by its scale), then read Euler XYZ from it.
+  const rot = new THREE.Matrix4().set(
+    (m[0] ?? 0) / rx, (m[4] ?? 0) / rx, (m[8] ?? 0) / rx, 0,
+    (m[1] ?? 0) / ry, (m[5] ?? 0) / ry, (m[9] ?? 0) / ry, 0,
+    (m[2] ?? 0) / rz, (m[6] ?? 0) / rz, (m[10] ?? 0) / rz, 0,
+    0, 0, 0, 1
+  )
+  const rotation = new THREE.Euler().setFromRotationMatrix(rot, 'XYZ')
+  return { position, rotation, scale: new THREE.Vector3(sx || 1, sy || 1, sz || 1) }
+}
+
+/** The editor's render/emit composition: world = T · S · R (matches {@link instanceTransformMatrix}). */
+function composeTSRMatrix(position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3): THREE.Matrix4 {
+  return new THREE.Matrix4()
+    .makeTranslation(position.x, position.y, position.z)
+    .multiply(new THREE.Matrix4().makeScale(scale.x, scale.y, scale.z))
+    .multiply(new THREE.Matrix4().makeRotationFromEuler(rotation))
+}
+
+/**
+ * The exact transform to keep ONLY when T·S·R can't reproduce the source (a foreign object that's
+ * both rotated and non-uniformly scaled shears relative to T·S·R). Returns the 12-element source so
+ * the editor can render/emit it verbatim; undefined when T·S·R is exact (the common case).
+ */
+export function exactTransformIfShearing(transform: number[]): number[] | undefined {
+  const { position, rotation, scale } = decomposeInstanceTransform(transform)
+  const source = createThreeMfMatrix(transform).elements
+  const recomposed = composeTSRMatrix(position, rotation, scale).elements
+  for (let i = 0; i < 16; i++) {
+    if (Math.abs((source[i] ?? 0) - (recomposed[i] ?? 0)) > 1e-6) return [...transform]
+  }
+  return undefined
 }
 
 /** Per-part filament/name/color keyed by `entryPath::componentObjectId`, derived from the
@@ -263,6 +346,7 @@ const partInfoKey = (entryPath: string, componentObjectId: number) => `${entryPa
 
 function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: PartInfoLookup): EditorInstance {
   const { position, rotation, scale } = decomposeInstanceTransform(instance.transform)
+  const exactMatrix = exactTransformIfShearing(instance.transform)
   return {
     key: nextInstanceKey(),
     source: { kind: 'object' },
@@ -272,6 +356,7 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
     position,
     rotation,
     scale,
+    ...(exactMatrix ? { exactMatrix } : {}),
     filamentId: instance.filamentId,
     // Seed from the parsed 3MF so a project saved with non-printable objects reopens
     // with them still greyed out; absent (older parse / new object) means printable.
@@ -374,7 +459,34 @@ export function seedEditorState(
     plates.push({ index: 1, name: null, plateType: null, bed: { ...DEFAULT_BED }, instances: [], primeTower: null })
   }
 
-  return { plates: reindexPlates(plates) }
+  const partProcessOverrides = collectPartProcessOverridesFromScenes(scenesByPlate)
+  return {
+    plates: reindexPlates(plates),
+    ...(Object.keys(partProcessOverrides).length > 0 ? { partProcessOverrides } : {})
+  }
+}
+
+/**
+ * Re-hydrate per-part PROCESS overrides from saved scenes, keyed by
+ * {@link supportPaintKey} (`objectId:componentObjectId`). Mirrors the object-level
+ * re-hydration: the editor's per-part gear shows what the 3MF already carries so a
+ * reopened project keeps its part-scoped settings instead of starting blank.
+ */
+export function collectPartProcessOverridesFromScenes(
+  scenesByPlate: Map<number, LibraryThreeMfScene>
+): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {}
+  for (const scene of scenesByPlate.values()) {
+    for (const instance of scene.instances) {
+      for (const part of instance.parts) {
+        if (!part.processOverrides || Object.keys(part.processOverrides).length === 0) continue
+        const key = supportPaintKey(instance.objectId, part.componentObjectId)
+        if (out[key]) continue
+        out[key] = { ...part.processOverrides }
+      }
+    }
+  }
+  return out
 }
 
 /**
@@ -436,13 +548,32 @@ export function instanceFromCatalog(entry: EditorCatalogEntry): EditorInstance {
 
 /**
  * Build an import-backed instance from a freshly staged foreign model, placed at
- * the plate centre with identity rotation/scale. Its geometry is rendered from the
- * staged binary STL (no in-project `parts`); on apply it emits an `importId`.
+ * the plate centre with identity rotation/scale. A single-solid import renders from
+ * one staged binary STL and carries no `parts`; a multi-solid import (a STEP assembly)
+ * carries one part per solid (rendered from a per-solid STL, listed nested, and baked
+ * as one object with many parts). On apply it emits an `importId`.
  */
 export function instanceFromStagedImport(staged: StagedImport): EditorInstance {
+  // `staged.parts` always lists ≥1 solid; only treat it as multi-part when there is
+  // more than one (a single-solid import keeps the simpler one-mesh render path).
+  const parts: EditorInstancePart[] = staged.parts.length > 1
+    ? staged.parts.map((part, index) => ({
+        // For an unsaved import, parts have no baked 3MF ids yet: `entryPath` marks the
+        // import and `componentObjectId` is the solid's index (a stable client key).
+        entryPath: `import:${staged.importId}`,
+        componentObjectId: index,
+        transform: IDENTITY_PART_TRANSFORM.slice(),
+        filamentId: null,
+        name: part.name,
+        color: null,
+        subtype: null
+      }))
+    : []
   return {
     key: nextInstanceKey(),
-    source: { kind: 'import', importId: staged.importId, meshUrl: importMeshUrl(staged.importId) },
+    // A synthetic object identity so the import's per-object process + per-part filament are
+    // editable immediately, before any save (see {@link EditorInstanceSource}).
+    source: { kind: 'import', importId: staged.importId, meshUrl: importMeshUrl(staged.importId), replacedObjectId: nextSyntheticObjectId() },
     objectId: 0,
     instanceId: 0,
     name: staged.name,
@@ -452,9 +583,12 @@ export function instanceFromStagedImport(staged: StagedImport): EditorInstance {
     filamentId: null,
     printable: true,
     color: null,
-    parts: []
+    parts
   }
 }
+
+/** Identity 12-element (column-major 3x3 + translation) part transform. */
+const IDENTITY_PART_TRANSFORM = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
 
 /**
  * Replace an instance's geometry with a freshly staged foreign model while keeping the
@@ -478,7 +612,9 @@ export function replaceInstanceGeometry(
     kind: 'import',
     importId: staged.importId,
     meshUrl: importMeshUrl(staged.importId),
-    ...(replacedObjectId != null ? { replacedObjectId } : {})
+    // Keep the replaced object's identity; for an import without one, keep a fresh synthetic id
+    // so the replacement is still per-object editable before a save.
+    replacedObjectId: replacedObjectId ?? (next.source.kind === 'import' ? next.source.replacedObjectId : undefined)
   }
   next.position.copy(source.position)
   next.rotation.copy(source.rotation)
@@ -600,7 +736,11 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
         position: { x: instance.position.x, y: instance.position.y, z: instance.position.z },
         rotation: { x: instance.rotation.x, y: instance.rotation.y, z: instance.rotation.z },
         scale: { x: instance.scale.x, y: instance.scale.y, z: instance.scale.z },
-        ...(instanceNeedsMatrix(instance) ? { matrix: instanceTransformMatrix(instance) } : {}),
+        // An unedited shearing object emits its exact matrix verbatim (so it round-trips without
+        // deforming); otherwise emit a full matrix only when T·S·R can't be reproduced from TRS.
+        ...(instance.exactMatrix
+          ? { matrix: instance.exactMatrix }
+          : instanceNeedsMatrix(instance) ? { matrix: instanceTransformMatrix(instance) } : {}),
         filamentId: instance.filamentId,
         // Only emit when skipped; undefined means printable (the contract default), so
         // unchanged projects don't carry a redundant flag on every instance.
@@ -608,6 +748,8 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
       }))
     ),
     partFilaments: collectPartFilaments(state),
+    partProcessOverrides: collectPartProcessOverrides(state),
+    importPartFilaments: collectImportPartFilaments(state),
     supportPaint: collectPartPaint(state, state.supportPaint),
     seamPaint: collectPartPaint(state, state.seamPaint),
     colorPaint: collectPartPaint(state, state.colorPaint),
@@ -747,6 +889,27 @@ function collectPartPaint(
   return out.length > 0 ? out : undefined
 }
 
+/** Per-part process overrides for parts whose object is still placed (keyed objectId:componentId). */
+function collectPartProcessOverrides(state: EditorState): SceneEdit['partProcessOverrides'] {
+  if (!state.partProcessOverrides) return undefined
+  const placedObjectIds = new Set<number>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
+    }
+  }
+  const out: NonNullable<SceneEdit['partProcessOverrides']> = []
+  for (const [key, overrides] of Object.entries(state.partProcessOverrides)) {
+    const [objectIdRaw, componentRaw] = key.split(':')
+    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
+    const componentObjectId = Number.parseInt(componentRaw ?? '', 10)
+    if (!Number.isInteger(objectId) || !Number.isInteger(componentObjectId)) continue
+    if (!placedObjectIds.has(objectId) || Object.keys(overrides).length === 0) continue
+    out.push({ objectId, componentObjectId, overrides })
+  }
+  return out.length > 0 ? out : undefined
+}
+
 /**
  * Collect per-object display-name overrides for objects the user renamed. Deduped by
  * object reference (objectId for in-project objects, importId for staged imports) since
@@ -790,6 +953,27 @@ function collectPartFilaments(state: EditorState): SceneEdit['partFilaments'] {
   return byKey.size > 0 ? [...byKey.values()] : undefined
 }
 
+/**
+ * Distinct per-part filament assignments for multi-solid imports, keyed by importId + the
+ * solid's 0-based index (the part's `componentObjectId`, set at import time). Filament is shared
+ * by every copy of the import, so we dedupe by importId+partIndex; the bake writes each part's
+ * `extruder` directly (the import has no baked part ids yet, so it can't use `partFilaments`).
+ */
+function collectImportPartFilaments(state: EditorState): SceneEdit['importPartFilaments'] {
+  const byKey = new Map<string, { importId: string; partIndex: number; filamentId: number }>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind !== 'import' || instance.parts.length <= 1) continue
+      const importId = instance.source.importId
+      for (const part of instance.parts) {
+        if (part.filamentId == null) continue
+        byKey.set(`${importId}:${part.componentObjectId}`, { importId, partIndex: part.componentObjectId, filamentId: part.filamentId })
+      }
+    }
+  }
+  return byKey.size > 0 ? [...byKey.values()] : undefined
+}
+
 /** Count total instances across all plates (for summary chips). */
 export function countInstances(edit: SceneEdit): number {
   return edit.instances.length
@@ -823,6 +1007,7 @@ export function cloneEditorState(state: EditorState): EditorState {
         position: instance.position.clone(),
         rotation: instance.rotation.clone(),
         scale: instance.scale.clone(),
+        ...(instance.exactMatrix ? { exactMatrix: [...instance.exactMatrix] } : {}),
         filamentId: instance.filamentId,
         printable: instance.printable,
         ...(instance.brimEars ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) } : {}),
@@ -859,6 +1044,13 @@ export function cloneEditorState(state: EditorState): EditorState {
       ? {
         colorPaint: Object.fromEntries(
           Object.entries(state.colorPaint).map(([key, codes]) => [key, { ...codes }])
+        )
+      }
+      : {}),
+    ...(state.partProcessOverrides
+      ? {
+        partProcessOverrides: Object.fromEntries(
+          Object.entries(state.partProcessOverrides).map(([key, overrides]) => [key, { ...overrides }])
         )
       }
       : {}),

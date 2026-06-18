@@ -8,15 +8,12 @@ services:
       PROMPT_COMMAND: 'history -a; history -c; history -r'
     volumes:
       - printstream-config-data:/home/node/.config
-      - printstream-claude-data:/home/node/.claude
       - printstream-vscode-server:/home/node/.vscode-server/extensions
       - printstream-bash-history:/commandhistory
       - ${HOME}/.ssh:/home/node/.ssh:ro
 volumes:
   printstream-config-data:
-    name: ${DEVCONTAINER_CONFIG_VOLUME:-printstream-config}
-  printstream-claude-data:
-    name: ${DEVCONTAINER_CLAUDE_DATA_VOLUME:-printstream-claude-data}
+    name: ${DEVCONTAINER_CONFIG_VOLUME:-printstream-config-data}
   printstream-vscode-server:
     name: ${DEVCONTAINER_VSCODE_SERVER_VOLUME:-printstream-vscode-server}
   printstream-bash-history:

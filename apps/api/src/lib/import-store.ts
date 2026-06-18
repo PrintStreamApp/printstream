@@ -29,12 +29,22 @@ const store = new MemoryLruCache<string, StagedImportRecord>({
 })
 
 function toSummary(record: StagedImportRecord): StagedImport {
+  // A multi-solid import lists its named solids; a single-solid one lists itself as one
+  // part named after the import, so the editor always has a uniform `parts` array.
+  const parts = record.mesh.parts && record.mesh.parts.length > 1
+    ? record.mesh.parts.map((part) => ({
+        name: part.name,
+        triangleCount: Math.floor(part.mesh.indices.length / 3),
+        bounds: part.mesh.bounds
+      }))
+    : [{ name: record.name, triangleCount: Math.floor(record.mesh.indices.length / 3), bounds: record.mesh.bounds }]
   return {
     importId: record.importId,
     name: record.name,
     format: record.format,
     triangleCount: Math.floor(record.mesh.indices.length / 3),
-    bounds: record.mesh.bounds
+    bounds: record.mesh.bounds,
+    parts
   }
 }
 
@@ -80,7 +90,8 @@ export function resolveSceneEditImports(tenantId: string, edit: SceneEdit): Impo
   for (const importId of importIds) {
     const record = getStagedImport(importId, tenantId)
     if (!record) throw badRequest('An imported model is no longer available. Re-add it and try again.')
-    resolved.push({ importId: record.importId, name: record.name, mesh: record.mesh })
+    const parts = record.mesh.parts && record.mesh.parts.length > 1 ? record.mesh.parts : undefined
+    resolved.push({ importId: record.importId, name: record.name, mesh: record.mesh, parts })
   }
   return resolved
 }

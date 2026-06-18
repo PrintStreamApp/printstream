@@ -1,7 +1,7 @@
 process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { mkdtempSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
@@ -11,7 +11,7 @@ import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 const testRoot = mkdtempSync(path.join(tmpdir(), 'bambu-library-cleanup-test-'))
 process.env.LIBRARY_DIR = path.join(testRoot, 'library')
 
-const { pruneHiddenLibraryFiles, prunePrintJobSnapshots, prunePrintJobThumbnails } = await import('./library-cleanup.js')
+const { pruneAbandonedUploadSessions, pruneHiddenLibraryFiles, prunePrintJobSnapshots, prunePrintJobThumbnails } = await import('./library-cleanup.js')
 const { rootPrisma } = await import('./prisma.js')
 const { resolveLibraryPath } = await import('./library-paths.js')
 const { getPrintJobThumbnailDir } = await import('./print-job-thumbnails.js')
@@ -240,4 +240,38 @@ test('pruneRecycledLibraryFiles hard-deletes expired bin entries with their vers
   assert.equal(result.removed, 1)
   assert.deepEqual(deletedIds, ['recycled-1'])
   assert.deepEqual(deletedBytes, ['recycled-1.3mf', 'recycled-1.v1.3mf'])
+})
+
+test('pruneAbandonedUploadSessions reaps stale .part/.json but keeps recently-touched sessions', async () => {
+  const uploadDir = path.join(process.env.LIBRARY_DIR!, '.uploads')
+  await mkdir(uploadDir, { recursive: true })
+
+  // An abandoned session whose files were last touched > 24h ago.
+  const stalePart = path.join(uploadDir, 'stale.part')
+  const staleMeta = path.join(uploadDir, 'stale.json')
+  await writeFile(stalePart, Buffer.from('partial bytes'))
+  await writeFile(staleMeta, JSON.stringify({ id: 'stale' }))
+  const old = new Date(Date.now() - (25 * 60 * 60 * 1000))
+  await utimes(stalePart, old, old)
+  await utimes(staleMeta, old, old)
+
+  // An in-flight session touched just now (its .json is rewritten on every chunk).
+  const activePart = path.join(uploadDir, 'active.part')
+  const activeMeta = path.join(uploadDir, 'active.json')
+  await writeFile(activePart, Buffer.from('still uploading'))
+  await writeFile(activeMeta, JSON.stringify({ id: 'active' }))
+
+  const result = await pruneAbandonedUploadSessions()
+
+  assert.equal(result.removed, 1) // counted per .part removed
+  await assert.rejects(stat(stalePart), /ENOENT/)
+  await assert.rejects(stat(staleMeta), /ENOENT/)
+  // The active session is untouched.
+  assert.ok((await stat(activePart)).isFile())
+  assert.ok((await stat(activeMeta)).isFile())
+})
+
+test('pruneAbandonedUploadSessions is a no-op when the .uploads dir does not exist', async () => {
+  const result = await pruneAbandonedUploadSessions()
+  assert.equal(result.removed, 0)
 })

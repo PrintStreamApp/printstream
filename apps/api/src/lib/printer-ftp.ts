@@ -57,10 +57,10 @@ export async function uploadFileToPrinter(
 	localPath: string,
 	remoteFilename: string,
 	onProgress?: (bytesSent: number) => void,
-	_options: PrinterFtpOptions = {}
+	options: PrinterFtpOptions = {}
 ): Promise<string> {
 	await requireBridgeId(printer.id)
-	const uploaded = await uploadFileToPrinterPath(printer, localPath, `/${remoteFilename.replace(/^\/+/, '')}`, onProgress)
+	const uploaded = await uploadFileToPrinterPath(printer, localPath, `/${remoteFilename.replace(/^\/+/, '')}`, onProgress, options)
 	return uploaded.replace(/^\/+/, '')
 }
 
@@ -69,7 +69,7 @@ export async function uploadFileToPrinterPath(
 	localPath: string,
 	remotePath: string,
 	onProgress?: (bytesSent: number) => void,
-	_options: PrinterFtpOptions = {}
+	options: PrinterFtpOptions = {}
 ): Promise<string> {
 	const bridgeId = await requireBridgeId(printer.id)
 	const fileBuffer = await readFile(localPath)
@@ -83,7 +83,7 @@ export async function uploadFileToPrinterPath(
 		printer,
 		remotePath,
 		fileBase64: fileBuffer.toString('base64')
-	}, undefined, {
+	}, options.signal, {
 		timeoutMs: BRIDGE_STORAGE_UPLOAD_TIMEOUT_MS,
 		...(onProgress ? { onProgress: (bytesSent: number) => onProgress(bytesSent) } : {})
 	}))
@@ -95,14 +95,15 @@ export async function uploadBridgeLibraryFileToPrinterPath(
 	printer: Printer,
 	storedPath: string,
 	remotePath: string,
-	onProgress?: BridgeUploadProgressCallback
+	onProgress?: BridgeUploadProgressCallback,
+	signal?: AbortSignal
 ): Promise<BridgeUploadResult> {
 	const bridgeId = await requireBridgeId(printer.id)
 	const result = bridgeStorageUploadResultSchema.parse(await requestBridgeRpc(bridgeId, 'storage.uploadLibraryFile', {
 		printer,
 		remotePath,
 		storedPath
-	}, undefined, {
+	}, signal, {
 		timeoutMs: BRIDGE_STORAGE_UPLOAD_TIMEOUT_MS,
 		...(onProgress ? { onProgress } : {})
 	}))
@@ -116,7 +117,8 @@ export async function uploadBridgeLibraryPlateToPrinterPath(
 	storedPath: string,
 	plate: number,
 	remotePath: string,
-	onProgress?: BridgeUploadProgressCallback
+	onProgress?: BridgeUploadProgressCallback,
+	signal?: AbortSignal
 ): Promise<BridgeUploadResult> {
 	const bridgeId = await requireBridgeId(printer.id)
 	const params = bridgeStorageUploadLibraryPlateParamsSchema.parse({
@@ -127,7 +129,7 @@ export async function uploadBridgeLibraryPlateToPrinterPath(
 	})
 	// Plate extraction plus printer upload can legitimately take longer than the
 	// default RPC deadline, even when the source 3MF only contains one plate.
-	const result = bridgeStorageUploadResultSchema.parse(await requestBridgeRpc(bridgeId, 'storage.uploadLibraryPlateFile', params, undefined, {
+	const result = bridgeStorageUploadResultSchema.parse(await requestBridgeRpc(bridgeId, 'storage.uploadLibraryPlateFile', params, signal, {
 		timeoutMs: BRIDGE_STORAGE_UPLOAD_TIMEOUT_MS,
 		...(onProgress ? { onProgress } : {})
 	}))

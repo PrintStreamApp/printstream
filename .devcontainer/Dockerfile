@@ -62,17 +62,15 @@ RUN set -eux; \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Persist bash history to a named volume mounted at /commandhistory so it
-# survives devcontainer rebuilds. The volume is declared in compose.persist.yml.
+# Pre-create /home/node/.vscode-server owned by node. This MUST live in the
+# image, not in fix-volume-perms.sh (postCreateCommand): the persist overlay
+# mounts a named volume at the SUB-path .vscode-server/extensions, so Docker
+# auto-creates the parent .vscode-server as root. VS Code then installs its
+# server (mkdir .vscode-server/bin) *before* postCreate runs, so a postCreate
+# chown is too late — it fails with "permission denied". Creating the parent
+# (and the extensions mountpoint) node-owned here makes the bin install work
+# and lets the fresh volume initialize with node ownership. Do not fold this
+# back into the generic volume-perms script.
 RUN set -eux; \
-    mkdir -p /commandhistory; \
-    touch /commandhistory/.bash_history; \
-    chown -R node:node /commandhistory; \
-    printf '\n# Persist bash history across devcontainer rebuilds.\nexport HISTFILE=/commandhistory/.bash_history\nexport PROMPT_COMMAND="history -a; ${PROMPT_COMMAND:-}"\n' >> /home/node/.bashrc
-
-# Pre-create the persisted home directories (Claude data + VS Code Server
-# extensions) so the named volumes mounted there inherit node ownership
-# instead of coming up owned by root.
-RUN set -eux; \
-    mkdir -p /home/node/.claude /home/node/.vscode-server/extensions /home/node/.printstream-slicer; \
-    chown -R node:node /home/node/.claude /home/node/.vscode-server /home/node/.printstream-slicer
+    mkdir -p /home/node/.vscode-server/extensions; \
+    chown -R node:node /home/node/.vscode-server

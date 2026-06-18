@@ -24,10 +24,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    # No host `ports:` here. The workspace reaches the db over the compose network
-    # as `db:5432`; publishing to the host is a single-stack convenience that lives
-    # in compose.localhost.yml so the shared-host (nginx) variant can't collide with
-    # another stack's published 5432.
     volumes:
       - postgres-dev-data:/var/lib/postgresql/data
 
@@ -46,9 +42,6 @@ services:
       # Persists the in-workspace slicer's BambuStudio AppImage + generated profile caches
       # (opt-in: PRINTSTREAM_DEV_SLICER=workspace) so they survive rebuilds and download once.
       - slicer-dev-data:/home/node/.printstream-slicer
-    # Host port publishing and reverse-proxy wiring are environment-specific and
-    # live in overlays: compose.localhost.yml (default; publishes 4000/5173) and
-    # compose.nginx.yml (shared-nginx server). See devcontainer.json.
 
 volumes:
   postgres-dev-data:

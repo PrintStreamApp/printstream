@@ -333,6 +333,15 @@ async function captureRtspSnapshot(url: string, signal?: AbortSignal): Promise<B
     const chunks: Buffer[] = []
     for await (const chunk of stdout) {
       chunks.push(chunk)
+      // `-frames:v 1` should make ffmpeg exit after one frame, but some RTSP sources
+      // hold the pipe open afterwards. As soon as we have a complete JPEG, kill ffmpeg
+      // and return rather than draining stdout to EOF — otherwise a misbehaving camera
+      // pins the process (and its RTSP/TLS connection) for the full 15s process timeout.
+      const assembled = Buffer.concat(chunks)
+      if (isCompleteJpeg(assembled)) {
+        if (!process.killed) process.kill('SIGKILL')
+        return assembled
+      }
     }
     const frame = Buffer.concat(chunks)
     if (frame.length < 2 || frame[0] !== JPEG_SOI || frame[1] !== JPEG_SOI2) {
@@ -340,6 +349,13 @@ async function captureRtspSnapshot(url: string, signal?: AbortSignal): Promise<B
     }
     return frame
   }, signal)
+}
+
+/** A complete single-frame JPEG: starts with the SOI marker and ends with EOI. */
+function isCompleteJpeg(frame: Buffer): boolean {
+  return frame.length >= 4
+    && frame[0] === JPEG_SOI && frame[1] === JPEG_SOI2
+    && frame[frame.length - 2] === JPEG_SOI && frame[frame.length - 1] === JPEG_EOI
 }
 
 function createCombinedAbortSignal(...signals: Array<AbortSignal | undefined>): {

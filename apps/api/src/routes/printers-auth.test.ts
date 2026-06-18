@@ -317,6 +317,7 @@ test('printer cover serves persisted job thumbnails before printer storage looku
     throw new Error('Printer storage should not be queried when a persisted thumbnail is available')
   }) as unknown) as typeof rootPrisma.printer.findUnique
   mock.method(printerManagerPrototype, 'getPrinter', () => printer)
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
   mock.method(printerManagerPrototype, 'getStatus', () => ({
     jobName: 'Remote Job',
     gcodeFile: '/cache/remote-job.gcode.3mf',
@@ -566,6 +567,7 @@ test('printer storage browse requires authentication once auth is enabled', asyn
 
 test('printer storage browse allows the current parent storage-view permission', async () => {
   mock.method(printerManagerPrototype, 'getPrinter', () => printer)
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
   rootPrisma.printer.findUnique = ((async () => ({ bridgeId: 'bridge-1' })) as unknown) as typeof rootPrisma.printer.findUnique
   mock.method(bridgeSessionManager, 'isConnected', () => true)
   mock.method(bridgeSessionManager, 'startRpcRequest', (_bridgeId: string, method: string) => {
@@ -1288,6 +1290,7 @@ test('printer settings commands require the current parent printer-manage permis
 
 test('print-from-storage allows the current parent print-dispatch permission', async () => {
   mock.method(printerManagerPrototype, 'getPrinter', () => printer)
+  prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
   mock.method(printerManagerPrototype, 'publishCommand', () => true)
   rootPrisma.printer.findUnique = ((async () => ({ tenantId: TEST_TENANT.id })) as unknown) as typeof rootPrisma.printer.findUnique
   rootPrisma.printJob.findUnique = ((async () => null) as unknown) as typeof rootPrisma.printJob.findUnique
@@ -1352,6 +1355,7 @@ test('resolvePrinterStorageJobName uses the file name for a single-plate 3MF ins
 test('print-from-storage maps auto print modes onto the printer command payload', async () => {
   const autoPrinter: Printer = { ...printer, model: 'H2D' }
   mock.method(printerManagerPrototype, 'getPrinter', () => autoPrinter)
+  prisma.printer.findUnique = ((async () => ({ id: autoPrinter.id })) as unknown) as typeof prisma.printer.findUnique
   const publishCommand = mock.method(printerManagerPrototype, 'publishCommand', () => true)
   rootPrisma.printer.findUnique = ((async () => ({ tenantId: TEST_TENANT.id })) as unknown) as typeof rootPrisma.printer.findUnique
   rootPrisma.printJob.findUnique = ((async () => null) as unknown) as typeof rootPrisma.printJob.findUnique
@@ -1428,6 +1432,7 @@ test('print-from-storage maps auto print modes onto the printer command payload'
 test('print-from-storage includes explicit AMS mappings in the printer command payload', async () => {
   const mappedPrinter: Printer = { ...printer, model: 'H2D' }
   mock.method(printerManagerPrototype, 'getPrinter', () => mappedPrinter)
+  prisma.printer.findUnique = ((async () => ({ id: mappedPrinter.id })) as unknown) as typeof prisma.printer.findUnique
   const publishCommand = mock.method(printerManagerPrototype, 'publishCommand', () => true)
   rootPrisma.printer.findUnique = ((async () => ({ tenantId: TEST_TENANT.id })) as unknown) as typeof rootPrisma.printer.findUnique
   rootPrisma.printJob.findUnique = ((async () => null) as unknown) as typeof rootPrisma.printJob.findUnique
@@ -1472,6 +1477,7 @@ test('print-from-storage includes explicit AMS mappings in the printer command p
 test('print-from-storage uses the printer-reported first-layer inspection default when omitted', async () => {
   const firstLayerPrinter: Printer = { ...printer, model: 'X1C' }
   mock.method(printerManagerPrototype, 'getPrinter', () => firstLayerPrinter)
+  prisma.printer.findUnique = ((async () => ({ id: firstLayerPrinter.id })) as unknown) as typeof prisma.printer.findUnique
   mock.method(printerManagerPrototype, 'getStatus', () => ({
     printOptions: {
       aiMonitoring: { supported: false, enabled: null, sensitivity: null },

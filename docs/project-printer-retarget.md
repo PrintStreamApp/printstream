@@ -107,11 +107,11 @@ When BambuStudio releases a new version we want to support:
 
 1. **Bump the pin** in `apps/slicer/docker/slicer-targets.mjs` (`version` + `downloadUrl`; add a new
    target entry, or update an existing one).
-2. **Update licensing/version mirrors** (per `apps/slicer/CLAUDE.md`): the table in
+2. **Update licensing/version mirrors** (per the slicer development notes): the table in
    `apps/slicer/THIRD-PARTY-SLICERS.md` and the mirror list in
    `apps/web/src/pages/OpenSourceLicensesPage.tsx`.
 3. **Regenerate the slicer profiles** — in dev, re-bootstrap the in-workspace slicer (delete
-   `~/.printstream-slicer` and `npm run dev`, or re-run the generator per `apps/slicer/CLAUDE.md`);
+   `~/.printstream-slicer` and `npm run dev`, or re-run the generator per the slicer development notes);
    for staging/live, republish the ghcr image via the public repo's CI. This regenerates
    `machine_full/` from the new AppImage, so new machines and new machine fields appear automatically.
 4. **Verify the retarget** (below) for at least one single-extruder→multi-extruder switch.

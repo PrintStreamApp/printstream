@@ -13,7 +13,7 @@
  * schema omits.
  */
 import { createWriteStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
 import type { BridgeLibraryThreeMfIndex } from '@printstream/shared'
 import { MemoryLruCache } from '@printstream/shared'
 import {
@@ -28,6 +28,11 @@ import { env } from './env.js'
 
 interface CacheEntry {
   mtimeMs: number
+  // Cache validity pairs mtime with size: an in-place overwrite (reused stored path,
+  // or a same-name collision) can land with an unchanged mtimeMs on coarse-mtime
+  // filesystems or sub-millisecond rewrites, which would otherwise serve the previous
+  // file's index. Size changing is a cheap, reliable tiebreak (mirrors the API side).
+  size: number
   parserVersion: number
   index: BridgeLibraryThreeMfIndex
 }
@@ -51,7 +56,7 @@ const MINIMAL_THREE_MF_MODEL_XML = [
 export async function readBridgeLibraryThreeMfIndex(filePath: string): Promise<BridgeLibraryThreeMfIndex> {
   const info = await stat(filePath)
   const cached = cache.get(filePath)
-  if (cached && cached.mtimeMs === info.mtimeMs && cached.parserVersion === THREE_MF_PARSER_CACHE_VERSION) return cached.index
+  if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size && cached.parserVersion === THREE_MF_PARSER_CACHE_VERSION) return cached.index
 
   let xml: string | null = null
   try {
@@ -76,7 +81,7 @@ export async function readBridgeLibraryThreeMfIndex(filePath: string): Promise<B
 
   const thumbnailPlateFiles = await readPlateThumbnailFiles(filePath).catch(() => new Map<number, string>())
   const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles)
-  cache.set(filePath, { mtimeMs: info.mtimeMs, parserVersion: THREE_MF_PARSER_CACHE_VERSION, index })
+  cache.set(filePath, { mtimeMs: info.mtimeMs, size: info.size, parserVersion: THREE_MF_PARSER_CACHE_VERSION, index })
   return index
 }
 
@@ -110,8 +115,10 @@ export function createSinglePlateBridgeThreeMf(sourcePath: string, outputPath: s
         settled = true
         sourceZip.close()
         if (error) {
+          // Drop the partially-written slim 3MF so a failed slim never leaves a
+          // truncated archive at outputPath for a caller to mistake for success.
           output.destroy()
-          reject(error)
+          rm(outputPath, { force: true }).catch(() => undefined).finally(() => reject(error))
         } else {
           resolve()
         }

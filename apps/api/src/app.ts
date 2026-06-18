@@ -137,20 +137,38 @@ app.use('/api/admin/plugins', adminPluginsRouter)
 app.use('/api/plugin-catalog', pluginCatalogRouter)
 app.use('/api/plugins', pluginRegistry.router)
 
-// First-party private modules (closed-source cloud surface) mount their own
-// routes here. The directory is absent in public builds; this is a no-op then.
-await registerPrivateModules(app)
+let finalized = false
 
-// Single-container topology: when SERVE_WEB_DIR is set, serve the built web SPA
-// on this same port so one image fronts both the API and the app (no separate
-// nginx). No-op otherwise. Mounted last so `/api` and private routes always win.
-installWebApp(app, env.SERVE_WEB_DIR)
+/**
+ * Completes app wiring that must run *after* the `/api` routes and *before* the
+ * SPA fallback + error handler: it discovers and mounts the first-party private
+ * modules (async, since they are loaded by a filesystem scan), then mounts the
+ * web SPA and the error handler last so `/api` and private routes always win.
+ *
+ * This is split out of module load (rather than a top-level `await`) so the API
+ * can compile into a CommonJS SEA bundle, which forbids top-level await. The
+ * process entry (`index.ts`) awaits it before `listen()`, so it always completes
+ * before any request is served; it is idempotent.
+ */
+export async function finalizeApp(): Promise<void> {
+  if (finalized) return
+  finalized = true
 
-app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
-  if (error instanceof HttpError) {
-    response.status(error.statusCode).json({ error: error.message })
-    return
-  }
-  console.error(error)
-  response.status(500).json({ error: 'Internal server error' })
-})
+  // First-party private modules (closed-source cloud surface) mount their own
+  // routes here. The directory is absent in public builds; this is a no-op then.
+  await registerPrivateModules(app)
+
+  // Single-container topology: when SERVE_WEB_DIR is set, serve the built web SPA
+  // on this same port so one image fronts both the API and the app (no separate
+  // nginx). No-op otherwise. Mounted last so `/api` and private routes always win.
+  installWebApp(app, env.SERVE_WEB_DIR)
+
+  app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    if (error instanceof HttpError) {
+      response.status(error.statusCode).json({ error: error.message })
+      return
+    }
+    console.error(error)
+    response.status(500).json({ error: 'Internal server error' })
+  })
+}

@@ -333,8 +333,17 @@ async function uploadFileToPrinterPathWithClient(
   }
 
   try {
-    await client.uploadFrom(stream, remoteFilename)
-    clearCachedPrinterLists(printer)
+    try {
+      await client.uploadFrom(stream, remoteFilename)
+      clearCachedPrinterLists(printer)
+    } catch (error) {
+      // Best-effort: drop the partially-written remote file so a failed or aborted
+      // upload doesn't leave a truncated archive on the printer's SD card (a later
+      // reprint/storage-print of that name would dispatch a corrupt 3MF). The remove
+      // itself may fail if the connection is what dropped — that's fine.
+      await client.remove(remoteFilename).catch(() => undefined)
+      throw error
+    }
   } finally {
     if (onProgress) client.trackProgress()
   }
