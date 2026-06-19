@@ -126,8 +126,17 @@ void finalizeApp()
     })
   })
 
+let shuttingDown = false
 function shutdown(signal: NodeJS.Signals) {
-  console.log(`Received ${signal}, shutting down`)
+  // A second Ctrl-C/SIGINT means the user is done waiting for graceful teardown — exit NOW instead
+  // of re-running the handler (the previous behaviour, which just re-printed and reset the timer, so
+  // `npm run dev` appeared to hang through repeated Ctrl-C).
+  if (shuttingDown) {
+    console.warn('Received a second signal; forcing immediate exit')
+    process.exit(1)
+  }
+  shuttingDown = true
+  console.log(`Received ${signal}, shutting down (press Ctrl-C again to force-quit)`)
   stopLibraryCleanup()
   stopPrintJobRecorder()
   stopActivePrintObjectCache()
@@ -139,13 +148,15 @@ function shutdown(signal: NodeJS.Signals) {
   void Promise.allSettled([printerManager.stop(), pluginRegistry.shutdown()]).finally(() => {
     httpServer.close(() => process.exit(0))
   })
-  // Hard-exit fallback in case a stray handle still keeps the loop alive
-  // (e.g. an MQTT reconnect timer). 5s is long enough for clean teardown
-  // but short enough that dev restarts feel snappy.
+  // Hard-exit fallback for a stray handle that outlives graceful teardown — most often a connected
+  // printer's MQTT disconnect that never settles, or embedded Postgres. Short in dev so `npm run dev`
+  // Ctrl-C feels instant; longer in production to let in-flight requests drain. (`unref` so an
+  // already-idle loop still exits early; a second Ctrl-C bypasses this entirely.)
+  const forceExitMs = env.NODE_ENV === 'production' ? 5_000 : 1_500
   setTimeout(() => {
     console.warn('Shutdown timeout exceeded; forcing exit')
     process.exit(0)
-  }, 5_000).unref()
+  }, forceExitMs).unref()
 }
 
 process.on('SIGINT', shutdown)

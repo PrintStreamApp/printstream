@@ -23,7 +23,12 @@ import { fetchModelBytes } from './modelFetch'
  */
 export function importMeshUrl(importId: string, partIndex?: number): string {
   const base = buildApiUrl(`/api/editor/imports/${encodeURIComponent(importId)}/mesh`)
-  return partIndex == null ? base : `${base}?part=${encodeURIComponent(String(partIndex))}`
+  if (partIndex == null) return base
+  // buildApiUrl may already have added a query (e.g. ?tenant=…), so use the right separator —
+  // a second `?` makes the server read `part` as part of the tenant value, so every solid would
+  // wrongly fetch the full merged mesh (7× the bytes → the "model download stalled" the user hit).
+  const separator = base.includes('?') ? '&' : '?'
+  return `${base}${separator}part=${encodeURIComponent(String(partIndex))}`
 }
 
 function tenantHeaders(): Record<string, string> {

@@ -23,6 +23,7 @@ import { stat } from 'node:fs/promises'
 import {
   MemoryLruCache,
   createAbortError,
+  isProcessSettingKey,
   throwIfAborted,
   type BridgeLibraryThreeMfFilament,
   type BridgeLibraryThreeMfIndex,
@@ -51,7 +52,7 @@ import {
 } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import { env } from './env.js'
-import { OBJECT_STRUCTURAL_METADATA_KEYS, readEntry } from './three-mf-internal.js'
+import { readEntry } from './three-mf-internal.js'
 
 // Re-export the shared index parser surface that other api modules import from this reader.
 export { buildThreeMfIndex, buildDefaultPickFilePath, extractPlateType, normalizeColor, parseAttrs } from '@printstream/shared/three-mf'
@@ -288,6 +289,22 @@ const cache = new MemoryLruCache<string, CacheEntry>({
   ttlMs: THREE_MF_PARSER_CACHE_TTL_MS,
   enabled: env.NODE_ENV !== 'development'
 })
+
+// Scene manifests are re-requested per plate (one /scene per plate on open) and again whenever the
+// slice target printer changes (overrideModel is in the key). Each call re-decodes + re-parses the
+// full root model XML, so without a cache opening an N-plate project is O(N x full-parse) and a
+// printer switch re-pays it. Cache the parsed scene keyed by file+plate+overrideModel, invalidated
+// by mtime + parser version exactly like the index cache above.
+interface SceneCacheEntry {
+  mtimeMs: number
+  parserVersion: number
+  scene: ThreeMfScene
+}
+const sceneCache = new MemoryLruCache<string, SceneCacheEntry>({
+  maxEntries: THREE_MF_PARSER_CACHE_MAX_ENTRIES,
+  ttlMs: THREE_MF_PARSER_CACHE_TTL_MS,
+  enabled: env.NODE_ENV !== 'development'
+})
 export async function readPlateIndex(filePath: string, signal?: AbortSignal): Promise<ThreeMfIndex> {
   throwIfAborted(signal)
   const info = await stat(filePath)
@@ -377,6 +394,13 @@ export async function readSceneManifest(
   overrideModel?: PrinterModel | null
 ): Promise<ThreeMfScene> {
   throwIfAborted(signal)
+
+  const info = await stat(filePath)
+  const sceneCacheKey = `${filePath}:${plateIndex}:${overrideModel ?? ''}`
+  const cachedScene = sceneCache.get(sceneCacheKey)
+  if (cachedScene && cachedScene.mtimeMs === info.mtimeMs && cachedScene.parserVersion === THREE_MF_PARSER_CACHE_VERSION) {
+    return cachedScene.scene
+  }
 
   const [rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, customGcodeText] = await Promise.all([
     readEntry(filePath, '3D/3dmodel.model', signal, 64 * 1024 * 1024).then((buffer) => buffer.toString('utf8')),
@@ -490,7 +514,7 @@ export async function readSceneManifest(
   }
 
   const filamentChanges = parseCustomGcodeToolChanges(customGcodeText, plate.index)
-  return {
+  const scene: ThreeMfScene = {
     plateIndex: plate.index,
     plateName: plate.name,
     bed,
@@ -502,6 +526,8 @@ export async function readSceneManifest(
       ? { projectFilaments: projectFilaments.map((filament) => ({ id: filament.id, color: filament.color ?? null })) }
       : {})
   }
+  sceneCache.set(sceneCacheKey, { mtimeMs: info.mtimeMs, parserVersion: THREE_MF_PARSER_CACHE_VERSION, scene })
+  return scene
 }
 
 /**
@@ -804,7 +830,9 @@ export function parseModelSettingsScene(xml: string): {
     for (const meta of objectHead.matchAll(/<metadata\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g)) {
       const key = meta[1]
       const value = meta[2]
-      if (key == null || value == null || OBJECT_STRUCTURAL_METADATA_KEYS.has(key)) continue
+      // Allowlist real process settings only — a 3MF object/part also carries identity/placement
+      // metadata (source_object_id, source_offset_*, matrix, …) that must NOT be read as overrides.
+      if (key == null || value == null || !isProcessSettingKey(key)) continue
       overrides[key] = decodeXmlAttributeValue(value)
     }
     if (Object.keys(overrides).length > 0) objectProcessOverridesById.set(objectId, overrides)
@@ -818,7 +846,8 @@ export function parseModelSettingsScene(xml: string): {
       for (const meta of partBlock.matchAll(/<metadata\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g)) {
         const key = meta[1]
         const value = meta[2]
-        if (key == null || value == null || OBJECT_STRUCTURAL_METADATA_KEYS.has(key)) continue
+        // Allowlist real process settings only (see the object-head read above).
+        if (key == null || value == null || !isProcessSettingKey(key)) continue
         partOverrides[key] = decodeXmlAttributeValue(value)
       }
       partMap.set(partId, {

@@ -1438,7 +1438,9 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
         { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 1 }
       ],
       // The second solid takes its own material; the first inherits the object's (filament 1).
-      importPartFilaments: [{ importId: 'imp-1', partIndex: 1, filamentId: 3 }]
+      importPartFilaments: [{ importId: 'imp-1', partIndex: 1, filamentId: 3 }],
+      // Per-part process override set on the (still unsaved) import's second solid.
+      importPartProcessOverrides: [{ importId: 'imp-1', partIndex: 1, overrides: { sparse_infill_density: '99%' } }]
     }
     await buildEditedThreeMf(null, outputPath, edit, [{ importId: 'imp-1', name: 'CHM Cylinder', mesh, parts: mesh.parts }])
 
@@ -1462,6 +1464,113 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
     const scene = await readSceneManifest(outputPath, 1)
     assert.equal(scene.instances.length, 1)
     assert.equal(scene.instances[0]?.parts.length, 2)
+    // The import's per-part process override baked onto the second solid (and re-hydrates).
+    assert.deepEqual(scene.instances[0]?.parts[1]?.processOverrides, { sparse_infill_density: '99%' })
+    assert.equal(scene.instances[0]?.parts[0]?.processOverrides, undefined)
+
+    // Re-open + re-save flow: the baked import is now an in-project object. Editing a part's
+    // process settings and saving again must persist — and the parts must keep their names.
+    const bakedObjectId = scene.instances[0]!.objectId
+    const bakedParts = scene.instances[0]!.parts
+    assert.ok(bakedParts.every((part) => part.componentObjectId > 0), 'parts have baked component ids')
+    const reEdit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: bakedObjectId, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      partProcessOverrides: [
+        { objectId: bakedObjectId, componentObjectId: bakedParts[1]!.componentObjectId, overrides: { sparse_infill_density: '99%' } }
+      ]
+    }
+    const reOutput = path.join(tempDir, 'reedited.3mf')
+    await buildEditedThreeMf(outputPath, reOutput, reEdit, [])
+    const reScene = await readSceneManifest(reOutput, 1)
+    const reParts = reScene.instances[0]?.parts ?? []
+    // The same parts survive the re-save (component ids preserved).
+    assert.deepEqual(reParts.map((part) => part.componentObjectId), bakedParts.map((part) => part.componentObjectId))
+    // The per-part process override persisted onto the matching part.
+    const overridden = reParts.find((part) => part.componentObjectId === bakedParts[1]!.componentObjectId)
+    assert.deepEqual(overridden?.processOverrides, { sparse_infill_density: '99%' })
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('buildEditedThreeMf stamps p:UUID on injected nodes for a production-extension project, but not for a core 3MF', async () => {
+  // Bambu Studio's GUI rejects a saved project ("The file does not contain any geometry data") when a
+  // requiredextensions="p" model has editor-injected objects/components without a p:UUID — its parser
+  // tolerates the absence but the GUI volume builder drops UUID-less nodes (the CLI slices it fine,
+  // which is why this only showed up on GUI open). A core 3MF (no production extension) must NOT gain
+  // spurious UUIDs.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-uuid-'))
+  const prodSource = path.join(tempDir, 'prod.3mf')
+  const prodOutput = path.join(tempDir, 'prod-edited.3mf')
+  const coreSource = path.join(tempDir, 'core.3mf')
+  const coreOutput = path.join(tempDir, 'core-edited.3mf')
+  try {
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    const multiMesh = { ...quad(0), parts: [{ name: 'A', mesh: quad(0) }, { name: 'B', mesh: quad(5) }] }
+    const uuidRe = /p:UUID="[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"/
+    const importEdit = (importId: string): SceneEdit => ({
+      plates: [{ index: 1 }],
+      instances: [{ importId, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }]
+    })
+
+    // --- Production-extension base: injected nodes MUST get a p:UUID ---
+    const prodModelXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">',
+      '  <resources>',
+      '    <object id="3" p:UUID="00000003-0000-0000-0000-000000000003" type="model"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="1" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object>',
+      '  </resources>',
+      '  <build><item objectid="3" p:UUID="00000003-0000-0000-0000-0000000000aa" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/></build>',
+      '</model>'
+    ].join('\n')
+    await writeZipFixture(prodSource, [
+      ['3D/3dmodel.model', Buffer.from(prodModelXml, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from('<?xml version="1.0" encoding="UTF-8"?>\n<config>\n  <object id="3"><metadata key="name" value="Base"/></object>\n</config>', 'utf8')]
+    ])
+    await buildEditedThreeMf(prodSource, prodOutput, importEdit('imp-1'), [{ importId: 'imp-1', name: 'Import', mesh: multiMesh, parts: multiMesh.parts }])
+    const prodXml = (await readEntry(prodOutput, '3D/3dmodel.model')).toString('utf8')
+    // Split-part layout (production extension): the import's solids move to a /3D/Objects sub-model,
+    // so the root model keeps only the small assembly object (components -> p:path) and has NO inline
+    // import <mesh>. (base object 3 is swept as unreferenced.)
+    assert.ok(!prodXml.includes('<mesh>'), 'root model carries no inline import mesh (solids split out)')
+    const rootObjects = [...prodXml.matchAll(/<object id="(\d+)"([^>]*)>/g)]
+    assert.equal(rootObjects.length, 1, 'root has exactly the assembly object')
+    assert.match(rootObjects[0]![2]!, uuidRe, 'assembly object carries a p:UUID')
+    // Components reference the split-out part file by p:path and carry a p:UUID.
+    const components = prodXml.match(/<component\b[^>]*\/>/g) ?? []
+    assert.equal(components.length, 2, 'assembly references both solids')
+    const partPath = components[0]!.match(/p:path="([^"]+)"/)?.[1]
+    assert.ok(partPath != null && /^\/3D\/Objects\/.+\.model$/.test(partPath), 'components use a /3D/Objects p:path')
+    for (const componentTag of components) assert.match(componentTag, uuidRe, 'component carries a p:UUID')
+    assert.match(prodXml, /<item objectid="\d+" p:UUID="[0-9a-f-]{36}" transform=/, 'build item carries a p:UUID')
+    // The part file exists with both solids (each a mesh + p:UUID) and is declared in the sub-model rels.
+    const partEntryName = partPath!.replace(/^\//, '')
+    const partXml = (await readEntry(prodOutput, partEntryName)).toString('utf8')
+    assert.equal((partXml.match(/<mesh>/g) ?? []).length, 2, 'both solids live in the part file')
+    for (const objTag of partXml.match(/<object\b[^>]*>/g) ?? []) assert.match(objTag, uuidRe, 'part-file solid carries a p:UUID')
+    const relsXml = (await readEntry(prodOutput, '3D/_rels/3dmodel.model.rels')).toString('utf8')
+    assert.ok(relsXml.includes(`Target="/${partEntryName}"`), 'part file is declared in the sub-model rels')
+    // Round-trip: the reader follows p:path into the part file and re-hydrates the two solids.
+    const reScene = await readSceneManifest(prodOutput, 1)
+    assert.equal(reScene.instances.length, 1, 're-hydrates one instance')
+    assert.equal(reScene.instances[0]?.parts.length, 2, 'both solids re-hydrate from the part file')
+
+    // --- Core (non-production) base: NO spurious p:UUID ---
+    await writeZipFixture(coreSource, [
+      ['3D/3dmodel.model', Buffer.from(ARRANGE_MODEL_XML, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(ARRANGE_MODEL_SETTINGS_XML, 'utf8')]
+    ])
+    await buildEditedThreeMf(coreSource, coreOutput, importEdit('imp-2'), [{ importId: 'imp-2', name: 'Plain', mesh: quad(0) }])
+    const coreXml = (await readEntry(coreOutput, '3D/3dmodel.model')).toString('utf8')
+    assert.equal(coreXml.includes('p:UUID='), false, 'a core 3MF must not gain injected p:UUIDs')
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -1946,10 +2055,12 @@ test('readSceneManifest re-hydrates per-part process overrides (minus structural
     const modelSettingsXml = [
       '<config>',
       '  <object id="3"><metadata key="name" value="Widget"/>',
-      // Part 1 carries a per-part process override (wall_loops) alongside structural keys (name/extruder).
-      '    <part id="1" subtype="normal_part"><metadata key="name" value="Body"/><metadata key="extruder" value="1"/><metadata key="wall_loops" value="6"/></part>',
-      // Part 4 has only structural metadata, so it should expose no processOverrides.
-      '    <part id="4" subtype="normal_part"><metadata key="name" value="Lid"/></part>',
+      // Part 1 carries a real process override (wall_loops) alongside structural keys (name/extruder)
+      // AND Bambu identity/placement metadata (source_object_id, source_offset_x, matrix) that must
+      // NOT be mistaken for process overrides.
+      '    <part id="1" subtype="normal_part"><metadata key="name" value="Body"/><metadata key="extruder" value="1"/><metadata key="source_object_id" value="0"/><metadata key="source_offset_x" value="12.5"/><metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/><metadata key="wall_loops" value="6"/></part>',
+      // Part 4 has only structural/placement metadata, so it should expose no processOverrides.
+      '    <part id="4" subtype="normal_part"><metadata key="name" value="Lid"/><metadata key="source_offset_y" value="3"/></part>',
       '  </object>',
       '  <plate>',
       '    <metadata key="plater_id" value="1"/>',

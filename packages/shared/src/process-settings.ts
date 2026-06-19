@@ -73,6 +73,21 @@ export interface ProcessSettingsCatalog {
 
 export { processSettingsCatalog }
 
+/**
+ * Every recognized process-setting key (the catalog's options). Use this as an ALLOWLIST when
+ * reading per-object/per-part overrides out of a 3MF's `model_settings.config`: a `<part>`/`<object>`
+ * carries process settings (e.g. `sparse_infill_density`) intermixed with identity/placement metadata
+ * (`name`, `extruder`, `source_object_id`, `source_offset_x`, `matrix`, …). Treating "everything that
+ * isn't a known structural key" as a process override wrongly pulls that placement metadata in. Only
+ * keys in this set are process overrides.
+ */
+export const PROCESS_SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(processSettingsCatalog.options))
+
+/** True when `key` is a recognized process setting (vs. identity/placement part metadata). */
+export function isProcessSettingKey(key: string): boolean {
+  return PROCESS_SETTING_KEYS.has(key)
+}
+
 /** A serialized config value: a scalar string, or a vector of scalar strings. */
 export type ProcessConfigValue = string | string[]
 export type ProcessConfig = Record<string, ProcessConfigValue>

@@ -92,6 +92,19 @@ Bambu object_id). The editor-arranged path now applies them via `createObjectCus
 after the bake (previously skipped whenever a `sceneEdit` was present); the original object's
 name also travels onto the replacement via `objectNames` (importId-keyed).
 
+**Imported-object 3MF structure (Production Extension).** When the base project uses the 3MF
+Production Extension (`requiredextensions="p"` — what BambuStudio writes), the bake emits every
+injected `<object>`/`<component>`/build `<item>` with a `p:UUID`, and a multi-solid import's solids
+are written to a **separate `3D/Objects/printstream_object_<id>.model` sub-model** referenced by
+`p:path` from a small root `<components>` assembly object (declared in `3D/_rels/3dmodel.model.rels`).
+This mirrors BambuStudio's own split-model layout, and both parts are load-bearing: BambuStudio's
+**GUI** rejects a saved import that is inline-in-root or UUID-less with "The file does not contain any
+geometry data" (the CLI tolerates it, which is why it only shows up on GUI open), and per-object part
+files let the editor fetch/parse only the objects a plate shows instead of the whole root model.
+`readSceneManifest` resolves `p:path` sub-models, so save→reopen re-hydrates the assembly's solids as
+its parts. Projects WITHOUT the production extension (fresh/core 3MFs) keep the simpler inline-mesh
+form (no UUIDs needed — the GUI accepts inline geometry in a non-production document).
+
 The process-settings catalog behind those dialogs
 (`packages/shared/src/generated/process-settings.generated.ts`) is generated —
 not hand-edited — by `scripts/dev/generate-process-settings.mjs`, which

@@ -71,7 +71,12 @@ export const wsResourceChangedEventSchema = z.object({
     'plugins',
     'plugin.settings',
     'print-dispatch',
-    'slicing'
+    'slicing',
+    // The slicer PROFILE catalogue (machines/processes/filaments). Emitted only when profiles
+    // actually change (custom profile create/delete), NOT on slice progress — so the slow profiles
+    // query is not refetched sub-second for the duration of a slice. Distinct from 'slicing', which
+    // fires on every job state/progress change and invalidates only the jobs list.
+    'slicing.profiles'
   ]),
   printerId: z.string().optional(),
   pluginName: z.string().optional()

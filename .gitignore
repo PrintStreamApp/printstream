@@ -42,3 +42,6 @@ docs/current-work-status.md
 # Project-scoped MCP config: holds a per-install localhost token (Integrated
 # Browser MCP), so it's developer-local, not shared/committed.
 /.mcp.json
+
+# TypeScript incremental build info (per-package, kept out of git/CI)
+*.tsbuildinfo

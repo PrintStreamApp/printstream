@@ -400,6 +400,19 @@ export const sceneEditImportPartFilamentSchema = z.object({
 })
 export type SceneEditImportPartFilament = z.infer<typeof sceneEditImportPartFilamentSchema>
 
+/**
+ * Per-part PROCESS overrides for a multi-solid import, keyed by import + 0-based solid index —
+ * an unsaved import has no baked 3MF part ids yet, so its parts can't use
+ * {@link sceneEditPartProcessOverrideSchema} (which keys by baked object/part id). Applied while
+ * the import's solids are baked into one object.
+ */
+export const sceneEditImportPartProcessOverrideSchema = z.object({
+  importId: z.string().trim().min(1),
+  partIndex: z.number().int().nonnegative(),
+  overrides: processSettingOverridesSchema
+})
+export type SceneEditImportPartProcessOverride = z.infer<typeof sceneEditImportPartProcessOverrideSchema>
+
 export const sceneEditSchema = z.object({
   plates: z.array(sceneEditPlateSchema).min(1),
   instances: z.array(sceneEditInstanceSchema),
@@ -413,6 +426,8 @@ export const sceneEditSchema = z.object({
   partProcessOverrides: z.array(sceneEditPartProcessOverrideSchema).optional(),
   /** Optional per-part filament for multi-solid imports, keyed by import + solid index. */
   importPartFilaments: z.array(sceneEditImportPartFilamentSchema).max(400).optional(),
+  /** Optional per-part process overrides for multi-solid imports, keyed by import + solid index. */
+  importPartProcessOverrides: z.array(sceneEditImportPartProcessOverrideSchema).max(400).optional(),
   /** Optional per-part support-paint maps (parts painted with the support brush). */
   supportPaint: z.array(sceneEditPartPaintSchema).optional(),
   /** Optional per-part seam-paint maps (parts painted with the seam brush). */

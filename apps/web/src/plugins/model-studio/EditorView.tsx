@@ -12,7 +12,7 @@
  * the `SceneEdit` instance — the backend recomposes M = T * R(eulerXYZ) * S. Values
  * stay plate-local (plate origin is never baked in).
  */
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ComponentProps, Fragment, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Box,
@@ -109,7 +109,6 @@ import type {
   ThreeMfIndex
 } from '@printstream/shared'
 import { PER_OBJECT_PROCESS_KEYS } from '@printstream/shared'
-import ProcessSettingsDialog from '../../components/ProcessSettingsDialog'
 import { apiFetch } from '../../lib/apiClient'
 import { resolveProjectFilamentColorName } from '../../lib/filamentColor'
 import { buildApiUrl } from '../../lib/apiUrl'
@@ -212,6 +211,19 @@ const MEASURE_SNAP_PX = 14
  * icon-above-caption buttons on desktop.
  */
 const TOOL_PANEL_TOP = { xs: 52, sm: 56 } as const
+
+// Code-split the heavy process-settings catalog (validation + full settings catalogue) out of the
+// editor chunk; it loads only when a settings dialog is first opened. A LOCAL Suspense wrapper means
+// that first open suspends just the dialog, not the whole editor (which sits under an ancestor
+// Suspense via the slot's lazy load). Matches LibraryView's treatment of the same component.
+const ProcessSettingsDialogImpl = lazy(() => import('../../components/ProcessSettingsDialog'))
+function ProcessSettingsDialog(props: ComponentProps<typeof ProcessSettingsDialogImpl>) {
+  return (
+    <Suspense fallback={null}>
+      <ProcessSettingsDialogImpl {...props} />
+    </Suspense>
+  )
+}
 
 /** Scene-object name for the brim-ear disc markers (children of an instance's rotor). */
 const BRIM_EAR_MARKER_NAME = 'brimEarMarker'
@@ -353,6 +365,35 @@ interface EditorViewProps {
 type GeometryCache = Map<string, Promise<Map<number, THREE.BufferGeometry>>>
 /** Cache of decoded imported STL geometry keyed by `importId` (promise, as above). */
 type ImportGeometryCache = Map<string, Promise<THREE.BufferGeometry>>
+
+/**
+ * Per-session geometry caches are unbounded by default and only freed at editor unmount, so a long
+ * session over a big multi-plate project accumulates every parsed BufferGeometry (each solid can be
+ * 1MB+) for the whole session — GC/GPU pressure that eventually loses the WebGL context. Cap them
+ * (LRU: a hit refreshes recency via {@link touchCacheEntry}) and dispose the evicted geometry, which
+ * is safe because the live plate uses per-instance CLONES of these cached originals, not the
+ * originals themselves.
+ */
+// Generous enough to hold a large plate's objects (each part-file object is its own key) plus a few
+// neighbouring plates, so eviction targets genuinely cold geometry from earlier plate visits rather
+// than thrashing within one build. (Disposing-then-cloning is still safe — clone copies CPU arrays —
+// so even an undersized cap degrades to re-upload, never a crash.)
+const GEOMETRY_CACHE_MAX_ENTRIES = 128
+/** Move a hit entry to the most-recently-used end so eviction drops genuinely cold geometry. */
+function touchCacheEntry<V>(cache: Map<string, V>, key: string, value: V): void {
+  cache.delete(key)
+  cache.set(key, value)
+}
+/** Evict least-recently-used entries past the cap, disposing the geometry each resolves to. */
+function evictGeometryCache<V>(cache: Map<string, Promise<V>>, max: number, dispose: (value: V) => void): void {
+  while (cache.size > max) {
+    const oldestKey = cache.keys().next().value as string | undefined
+    if (oldestKey === undefined) break
+    const evicted = cache.get(oldestKey)
+    cache.delete(oldestKey)
+    evicted?.then(dispose).catch(() => undefined)
+  }
+}
 
 /**
  * `TransformControls` (the three-stdlib fork) is an `Object3D`, so its `.d.ts`
@@ -986,7 +1027,7 @@ interface SelectedTransform {
   scalePct: { x: number; y: number; z: number }
 }
 
-export default function EditorView({
+function EditorView({
   baseFileId,
   isNewProject: isNewProjectScaffold = false,
   baseVersionId = null,
@@ -1266,6 +1307,10 @@ export default function EditorView({
   const [rotationReadout, setRotationReadout] = useState<number | null>(null)
   // Per-plate thumbnail data URLs, keyed by plate index (live plate-strip previews).
   const [plateThumbnails, setPlateThumbnails] = useState<Record<number, string>>({})
+  // Live (client-rendered) thumbnails keyed by plate index — only set for plates the user
+  // has opened/edited. Read via a ref at save time to know which plates to re-render.
+  const plateThumbnailsRef = useRef(plateThumbnails)
+  plateThumbnailsRef.current = plateThumbnails
 
   // The editable state mutates outside React (gizmo drags write into Three.js
   // groups); a ref keeps the latest pointers available to the render loop and to
@@ -1463,6 +1508,20 @@ export default function EditorView({
     [platesQuery.data]
   )
 
+  // Plates whose source 3MF carries an embedded PNG thumbnail. The plate strip shows that
+  // cheap image for plates the user hasn't opened, so a large multi-plate project no longer
+  // has to fetch + render every plate's geometry up front just to fill the selector.
+  const platesWithEmbeddedThumbnail = useMemo(
+    () => new Set((platesQuery.data?.plates ?? []).filter((plate) => plate.hasThumbnail).map((plate) => plate.index)),
+    [platesQuery.data]
+  )
+  const embeddedPlateThumbnailUrl = useCallback(
+    (plateIndex: number): string | null => (
+      platesWithEmbeddedThumbnail.has(plateIndex) ? `${resourceBase}/thumbnail?plate=${plateIndex}` : null
+    ),
+    [platesWithEmbeddedThumbnail, resourceBase]
+  )
+
   // The plate the editor will open on: the host's pre-selected plate when it exists,
   // otherwise the first plate. Its scene loads FIRST so the user is never kept waiting on
   // plates they can't see; the rest stream in behind it (#28).
@@ -1508,11 +1567,20 @@ export default function EditorView({
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
       const scenes = new Map<number, LibraryThreeMfScene>()
-      await Promise.all(
-        restPlateIndices.map(async (plateIndex) => {
+      // Bound the fan-out: a naive Promise.all over all rest plates fires N simultaneous /scene
+      // requests on open, each forcing a full server-side root-model parse — an N-wide spike right
+      // when the editor is mounting. A small worker pool turns that burst into a throttled trickle
+      // (each plate's parse is cheap and now server-cached, so re-selecting one is free).
+      const REST_SCENE_CONCURRENCY = 3
+      const queue = [...restPlateIndices]
+      const worker = async () => {
+        for (;;) {
+          const plateIndex = queue.shift()
+          if (plateIndex === undefined) return
           scenes.set(plateIndex, await fetchPlateScene(plateIndex, signal))
-        })
-      )
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(REST_SCENE_CONCURRENCY, restPlateIndices.length) }, worker))
       return scenes
     }
   })
@@ -1849,7 +1917,10 @@ export default function EditorView({
   const fetchGeometry = useCallback((entryPath: string) => {
     const cache = geometryCacheRef.current
     const existing = cache.get(entryPath)
-    if (existing) return existing
+    if (existing) {
+      touchCacheEntry(cache, entryPath, existing)
+      return existing
+    }
     const promise = (async () => {
       // Stall-guarded read: a wedged transport that commits a response then hangs mid-body
       // must fail loudly (so the viewport shows an error/retry) rather than freeze the build.
@@ -1860,6 +1931,7 @@ export default function EditorView({
       return parseThreeMfModelEntry(xmlText)
     })()
     cache.set(entryPath, promise)
+    evictGeometryCache(cache, GEOMETRY_CACHE_MAX_ENTRIES, (map) => { for (const geometry of map.values()) geometry.dispose() })
     // A failed load must not poison the cache for the next attempt.
     promise.catch(() => {
       if (cache.get(entryPath) === promise) cache.delete(entryPath)
@@ -1872,12 +1944,16 @@ export default function EditorView({
     // A multi-solid import fetches each solid separately; cache them under distinct keys.
     const cacheKey = partIndex == null ? importId : `${importId}#${partIndex}`
     const existing = cache.get(cacheKey)
-    if (existing) return existing
+    if (existing) {
+      touchCacheEntry(cache, cacheKey, existing)
+      return existing
+    }
     const promise = (async () => {
       const buffer = await fetchImportMesh(importId, partIndex)
       return parseStlGeometry(buffer)
     })()
     cache.set(cacheKey, promise)
+    evictGeometryCache(cache, GEOMETRY_CACHE_MAX_ENTRIES, (geometry) => geometry.dispose())
     promise.catch(() => {
       if (cache.get(cacheKey) === promise) cache.delete(cacheKey)
     })
@@ -1903,7 +1979,11 @@ export default function EditorView({
       // Prefer the live material color for this object's filament; fall back to the
       // color baked into the source scene.
       const meshFilamentId = resolveColorFilamentId(instance.filamentId)
-      const meshColor = (meshFilamentId != null && filamentColors?.[meshFilamentId]) || instance.color
+      // Colours are read via the ref (not the `filamentColors` prop) so buildInstanceGroup is stable
+      // w.r.t. colour edits — a swatch change recolours in place (see the recolor effect) instead of
+      // re-running this whole builder and rebuilding the plate. Each coloured mesh is tagged with its
+      // resolved filament id + a static fallback so that effect can recompute its live colour.
+      const meshColor = (meshFilamentId != null && filamentColorsRef.current?.[meshFilamentId]) || instance.color
       // Full geometry->world transform (the placement applied to the group below) so the
       // shared part builder computes bed clearance — and thus picks the same material and
       // edge outlines as the read-only preview.
@@ -1926,10 +2006,13 @@ export default function EditorView({
           )
           for (const { part, geometry } of partGeometries) {
             const partFilamentId = resolveColorFilamentId(part.filamentId)
-            const partColor = (partFilamentId != null && filamentColors?.[partFilamentId]) || part.color || meshColor
+            const partColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || part.color || meshColor
             const partGroup = createThreeMfPartObject(geometry, { color: partColor, clearanceTransform: placement })
             const partMesh = partGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
-            if (partMesh) applyFilamentChangeBands(partMesh.material as THREE.Material, filamentChangeUniformsRef.current)
+            if (partMesh) {
+              applyFilamentChangeBands(partMesh.material as THREE.Material, filamentChangeUniformsRef.current)
+              partMesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: part.color || instance.color }
+            }
             rotor.add(partGroup)
           }
         } else {
@@ -1937,7 +2020,10 @@ export default function EditorView({
           const geometry = await fetchImportGeometry(importId)
           const importGroup = createThreeMfPartObject(geometry, { color: meshColor, clearanceTransform: placement })
           const importMesh = importGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
-          if (importMesh) applyFilamentChangeBands(importMesh.material as THREE.Material, filamentChangeUniformsRef.current)
+          if (importMesh) {
+            applyFilamentChangeBands(importMesh.material as THREE.Material, filamentChangeUniformsRef.current)
+            importMesh.userData.recolor = { filamentId: meshFilamentId, fallbackColor: instance.color }
+          }
           rotor.add(importGroup)
         }
       } else {
@@ -1956,7 +2042,7 @@ export default function EditorView({
           // Each part can use a different filament than the object; colour it by its
           // own filament so multi-material objects render correctly.
           const partFilamentId = resolveColorFilamentId(part.filamentId)
-          const partColor = (partFilamentId != null && filamentColors?.[partFilamentId]) || part.color || meshColor
+          const partColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || part.color || meshColor
           const partGroup = createThreeMfPartObject(geometry, {
             color: partColor,
             transform: partTransform,
@@ -1972,6 +2058,7 @@ export default function EditorView({
             )
             if (paintableMesh) {
               applyFilamentChangeBands(paintableMesh.material as THREE.Material, filamentChangeUniformsRef.current)
+              paintableMesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: part.color || instance.color }
               paintableMesh.userData.supportPaintPart = {
                 objectId: instance.objectId,
                 componentObjectId: part.componentObjectId
@@ -2018,7 +2105,7 @@ export default function EditorView({
       }
       return group
     },
-    [colorPaintStateColor, fetchGeometry, fetchImportGeometry, filamentColors, resolveColorFilamentId]
+    [colorPaintStateColor, fetchGeometry, fetchImportGeometry, resolveColorFilamentId]
   )
 
   // ---- Triangle painting (support + seam brushes) -------------------------------
@@ -2088,6 +2175,33 @@ export default function EditorView({
   }, [effectivePaintCodes, setMeshPaintOverlay])
   const refreshPaintOverlaysRef = useRef(refreshPaintOverlays)
   refreshPaintOverlaysRef.current = refreshPaintOverlays
+
+  // Live recolour WITHOUT a plate rebuild. buildInstanceGroup now reads colours via refs (stable
+  // w.r.t. colour), so a filament swatch edit no longer tears down + rebuilds the whole active plate
+  // (the jank-2/SCALE-5 hot path — recolouring fired the full build effect on every picker tick).
+  // Instead, walk the live groups and update each tagged part mesh's material colour + emissive lift
+  // in place, and re-tint colour-paint overlays (whose tint follows the filament's live colour).
+  // Modifier/added-part volumes carry no `recolor` tag (fixed subtype colour) so they're untouched.
+  useEffect(() => {
+    for (const group of groupByKeyRef.current.values()) {
+      group.traverse((node) => {
+        const mesh = node as THREE.Mesh
+        if (!mesh.isMesh) return
+        const recolor = mesh.userData.recolor as { filamentId: number | null; fallbackColor?: string } | undefined
+        if (recolor) {
+          const live = recolor.filamentId != null ? filamentColors?.[recolor.filamentId] : undefined
+          const hex = live || recolor.fallbackColor || '#D3DDE7'
+          const material = mesh.material as THREE.MeshStandardMaterial
+          material.color.set(hex)
+          if (material.emissive) material.emissive.set(hex).multiplyScalar(0.12)
+        }
+        if (mesh.userData.supportPaintPart) {
+          // Only the colour channel's tint depends on filament colours; supports/seam use fixed palettes.
+          setMeshPaintOverlay(mesh, 'color', effectivePaintCodes(mesh, 'color'))
+        }
+      })
+    }
+  }, [filamentColors, setMeshPaintOverlay, effectivePaintCodes])
 
   /**
    * Apply one dab of the ACTIVE channel's selected tool at a world-space hit on a
@@ -2668,7 +2782,12 @@ export default function EditorView({
       if (!primary || gizmoModeRef.current !== 'translate') return
       for (const key of extraSelectedKeysRef.current) {
         const group = groupByKeyRef.current.get(key)
-        if (group) gizmoCoDrag.push({ group, dx: group.position.x - primary.position.x, dy: group.position.y - primary.position.y })
+        if (group) {
+          // Bake a shearing co-dragged object first so its exactMatrix is cleared (the gizmo co-move
+          // would otherwise be discarded on save) and group.position is valid to offset from.
+          bakeExactMatrixRef.current(group)
+          gizmoCoDrag.push({ group, dx: group.position.x - primary.position.x, dy: group.position.y - primary.position.y })
+        }
       }
     }
 
@@ -2773,7 +2892,22 @@ export default function EditorView({
         .filter((entry) => entry !== grabbedKey)
         .map((entry) => groupByKeyRef.current.get(entry))
         .filter((entry): entry is THREE.Group => Boolean(entry))
-        .map((entry) => ({ group: entry, offsetX: entry.position.x - dragPoint.x, offsetY: entry.position.y - dragPoint.y }))
+        .map((entry) => {
+          // Bake a shearing co-dragged object to editable T·S·R first: it clears exactMatrix (so the
+          // co-move actually persists on save) AND restores a valid group.position to offset from.
+          bakeExactMatrixRef.current(entry)
+          return { group: entry, offsetX: entry.position.x - dragPoint.x, offsetY: entry.position.y - dragPoint.y }
+        })
+    }
+    /**
+     * Start a body-drag of `group`: bake a shearing object to editable T·S·R first so its exactMatrix
+     * is cleared (otherwise buildSceneEdit re-emits the stale pre-drag matrix and the move is silently
+     * lost on save), then capture the grab offset from the now-valid group.position.
+     */
+    const beginBodyDrag = (group: THREE.Group) => {
+      bakeExactMatrixRef.current(group)
+      dragOffset.set(group.position.x - dragPoint.x, group.position.y - dragPoint.y, 0)
+      bodyDragGroup = group
     }
     let towerDragObject: THREE.Object3D | null = null
     // Pointer-down position on empty space; deselect only happens on pointer-up if the
@@ -3016,8 +3150,7 @@ export default function EditorView({
         if (raycaster.ray.intersectPlane(bedPlane, dragPoint)) {
           recordHistoryRef.current?.()
           panelSyncTick = 0
-          dragOffset.set(group.position.x - dragPoint.x, group.position.y - dragPoint.y, 0)
-          bodyDragGroup = group
+          beginBodyDrag(group)
           beginSelectionCoDrag(key)
           orbit.enabled = false
           renderer.domElement.setPointerCapture(event.pointerId)
@@ -3039,8 +3172,7 @@ export default function EditorView({
         if (raycaster.ray.intersectPlane(bedPlane, dragPoint)) {
           recordHistoryRef.current?.()
           panelSyncTick = 0
-          dragOffset.set(group.position.x - dragPoint.x, group.position.y - dragPoint.y, 0)
-          bodyDragGroup = group
+          beginBodyDrag(group)
           orbit.enabled = false
           renderer.domElement.setPointerCapture(event.pointerId)
         }
@@ -3097,8 +3229,7 @@ export default function EditorView({
         if (raycaster.ray.intersectPlane(bedPlane, dragPoint)) {
           recordHistoryRef.current?.()
           panelSyncTick = 0
-          dragOffset.set(group.position.x - dragPoint.x, group.position.y - dragPoint.y, 0)
-          bodyDragGroup = group
+          beginBodyDrag(group)
           if (typeof key === 'string') beginSelectionCoDrag(key)
           orbit.enabled = false
           renderer.domElement.setPointerCapture(event.pointerId)
@@ -3848,44 +3979,6 @@ export default function EditorView({
   }, [activePlateIndex, getThumbnailRenderer])
   regenerateActiveThumbnailRef.current = regenerateActivePlateThumbnail
 
-  /** Build a non-active plate's contents offscreen and snapshot it. */
-  const regeneratePlateThumbnail = useCallback(
-    async (plate: EditorPlate, signal: AbortSignal) => {
-      const group = new THREE.Group()
-      try {
-        for (const instance of plate.instances) {
-          // Background work: take an idle slot before each (synchronous, potentially
-          // heavy) geometry build, and keep deferring while the user is orbiting or
-          // dragging the gizmo so the visible plate's interactions stay smooth.
-          do {
-            await nextIdle()
-          } while (!signal.aborted && interactionActiveRef.current)
-          if (signal.aborted) {
-            disposeObject3D(group)
-            return
-          }
-          const built = await buildInstanceGroup(instance)
-          if (signal.aborted) {
-            if (built) disposeObject3D(built)
-            disposeObject3D(group)
-            return
-          }
-          if (built) group.add(built)
-        }
-        // Model-only group (no bed surface) → a clean, Bambu-style thumbnail.
-        const url = getThumbnailRenderer().render(group, plate.bed)
-        if (!signal.aborted) {
-          setPlateThumbnails((current) => ({ ...current, [plate.index]: url }))
-        }
-      } catch {
-        // Best-effort; ignore.
-      } finally {
-        disposeObject3D(group)
-      }
-    },
-    [buildInstanceGroup, getThumbnailRenderer]
-  )
-
   /**
    * Render a fresh thumbnail for EVERY plate from the current arrangement and return them
    * as base64 PNGs for embedding in a saved 3MF / sliced gcode. The live per-plate regen is
@@ -3899,6 +3992,12 @@ export default function EditorView({
       const renderer = getThumbnailRenderer()
       const out: Array<{ plateIndex: number; png: string }> = []
       for (const plate of current.plates) {
+        if (plate.index <= 0) continue
+        // Only re-render plates the user has actually opened — they have a live thumbnail and
+        // their geometry is already cached, so this is cheap. Unopened plates are skipped: the
+        // bake (embedPlateThumbnails) preserves their original embedded PNG, so a large
+        // multi-plate project never loads every plate's geometry just to save.
+        if (!plateThumbnailsRef.current[plate.index]) continue
         const group = new THREE.Group()
         try {
           for (const instance of plate.instances) {
@@ -3908,7 +4007,7 @@ export default function EditorView({
           const url = renderer.render(group, plate.bed)
           setPlateThumbnails((existing) => ({ ...existing, [plate.index]: url }))
           const png = url.replace(/^data:image\/png;base64,/, '')
-          if (plate.index > 0 && png.length > 0) out.push({ plateIndex: plate.index, png })
+          if (png.length > 0) out.push({ plateIndex: plate.index, png })
         } catch {
           // Best-effort per plate; a failed plate just keeps its previous thumbnail.
         } finally {
@@ -3920,42 +4019,10 @@ export default function EditorView({
     [buildInstanceGroup, getThumbnailRenderer]
   )
 
-  // Regenerate thumbnails for every non-active plate whenever the plate set or any
-  // plate's instances change. The active plate is snapshotted by the plate-rebuild
-  // effect. Runs on plate-set changes only — never per animation frame, and
-  // deliberately NOT on plate switches: rebuilding every other plate's geometry just
-  // because the selection moved froze the UI for a beat, and the outgoing plate's
-  // thumbnail is already current from its live snapshot. The active index is read
-  // through a ref so this effect doesn't refire when it changes.
-  const activePlateIndexRef = useRef(activePlateIndex)
-  activePlateIndexRef.current = activePlateIndex
-  const platesSignature = useMemo(
-    () => state?.plates.map((plate) => `${plate.index}:${plate.instances.map((i) => i.key).join('.')}`).join('|') ?? '',
-    [state]
-  )
-  useEffect(() => {
-    // Held back while the visible plate is still building so its geometry fetches are
-    // never contended by thumbnails of plates the user can't see; the effect refires
-    // when the build settles (viewportBuilding flips) and the abort cancels stale runs.
-    if (!state || viewportBuilding) return
-    const abort = new AbortController()
-    void (async () => {
-      for (const plate of state.plates) {
-        if (plate.index === activePlateIndexRef.current) continue
-        // Skip plates whose scene hasn't streamed in yet — rendering their (empty) seed would
-        // produce a blank thumbnail and hide the loading spinner. They regenerate once filled
-        // (which changes platesSignature and refires this effect).
-        if (pendingScenePlatesRef.current.has(plate.index)) continue
-        if (abort.signal.aborted) return
-        await regeneratePlateThumbnail(plate, abort.signal)
-      }
-    })()
-    return () => abort.abort()
-    // `scenesByPlate` is a dep so the effect refires when a plate's scene streams in (the merge
-    // effect, which runs first, clears it from pendingScenePlatesRef) — including empty plates,
-    // whose instance signature doesn't change but which must still drop their loading spinner.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [platesSignature, viewportBuilding, regeneratePlateThumbnail, scenesByPlate])
+  // Non-active plates no longer render in the background to fill the plate strip — that made
+  // large multi-plate projects fetch + build every plate's geometry up front (very janky).
+  // The strip shows each plate's embedded PNG thumbnail until the user opens it; a plate gets
+  // a live client-rendered thumbnail only once it's the active plate (regenerateActivePlateThumbnail).
 
   // ---- State mutations -------------------------------------------------------
   // Shared band-shader uniforms: every part material reads these, so editing the
@@ -5037,6 +5104,7 @@ export default function EditorView({
                 plates={state.plates}
                 activeIndex={activePlateIndex}
                 thumbnails={plateThumbnails}
+                embeddedThumbnailUrl={embeddedPlateThumbnailUrl}
                 onSelect={(index) => { setSelectedKey(null); setActivePlateIndex(index) }}
                 onAddPlate={handleAddPlate}
                 onRemovePlate={handleRemovePlate}
@@ -6222,6 +6290,7 @@ function PlateThumbnailStrip({
   plates,
   activeIndex,
   thumbnails,
+  embeddedThumbnailUrl,
   onSelect,
   onAddPlate,
   onRemovePlate,
@@ -6231,6 +6300,8 @@ function PlateThumbnailStrip({
   plates: EditorPlate[]
   activeIndex: number
   thumbnails: Record<number, string>
+  /** Embedded PNG URL for a plate's source thumbnail, or null when the 3MF has none. */
+  embeddedThumbnailUrl: (plateIndex: number) => string | null
   onSelect: (index: number) => void
   onAddPlate: () => void
   onRemovePlate: (index: number) => void
@@ -6253,10 +6324,14 @@ function PlateThumbnailStrip({
     <Stack direction="row" spacing={0.75} sx={{ overflowX: 'auto', alignItems: 'stretch' }}>
       {plates.map((plate) => {
         const active = plate.index === activeIndex
-        const thumbnail = thumbnails[plate.index]
-        // No thumbnail yet means the plate is still loading — either its scene is streaming in
-        // (the visible plate loads first; the rest arrive behind it, #28) or its preview is
-        // still being rendered in the background. Either way, show a spinner, not an empty tile.
+        // Prefer a live client-rendered thumbnail (the active plate + any plate the user has
+        // opened/edited reflect the real layout); otherwise fall back to the 3MF's embedded
+        // PNG so unopened plates don't have to be loaded + rendered just to fill the strip.
+        const liveThumbnail = thumbnails[plate.index]
+        const embedded = liveThumbnail ? null : embeddedThumbnailUrl(plate.index)
+        const thumbnail = liveThumbnail ?? embedded
+        // No live render and no embedded PNG means the plate is genuinely still loading
+        // (e.g. a freshly added empty plate before it's opened) — show a spinner.
         const loading = !thumbnail
         const label = plate.name?.trim() || `Plate ${plate.index}`
         return (
@@ -7277,3 +7352,38 @@ function ModelList({
     </List>
   )
 }
+
+/**
+ * Re-render the editor ONLY when its own data changes — never on a parent re-render driven by live
+ * printer-status WS pushes. The host (LibraryView/SliceFileModal) re-renders ~once a second while a
+ * printer is connected (status updates); it rebuilds the borrowed `sliceConfig` and the editor
+ * callbacks by identity each time, which — without this gate — re-rendered the whole editor and
+ * interrupted camera orbit / object drags every second. Once the editor is open it doesn't care about
+ * printer status; the only host-driven thing that legitimately changes is the loaded-materials list,
+ * which lives in `sliceConfig` and is caught by the content compare below.
+ *
+ * Callback identity (onApply/onClose/onSlice/onEditObjectSettings/onSaved) is intentionally ignored:
+ * they're rebuilt every parent render, but the editor invokes them only on real user interactions,
+ * which always follow a data change (so a fresh closure has already been delivered). Internal editor
+ * state changes still re-render normally — React.memo only gates parent-prop-driven re-renders.
+ */
+const EDITOR_DATA_PROP_KEYS = [
+  'baseFileId', 'isNewProject', 'baseVersionId', 'currentEdit', 'initialPlateIndex', 'targetPrinterModel',
+  'folderId', 'bridgeId', 'canSlice', 'sliceDisabledReason', 'slicing', 'objectOverrideCount',
+  'hasPlateObjects', 'canEditSettings'
+] as const
+function editorViewPropsEqual(prev: EditorViewProps, next: EditorViewProps): boolean {
+  for (const key of EDITOR_DATA_PROP_KEYS) {
+    if (!Object.is(prev[key], next[key])) return false
+  }
+  // The borrowed slice controller is a fresh object every parent render; compare it by DATA content
+  // (JSON drops its functions/setters) so material/colour/selection edits DO re-render, but a pure
+  // status tick (identical data, new identity) does not. A serialize failure falls back to re-render.
+  try {
+    return JSON.stringify(prev.sliceConfig) === JSON.stringify(next.sliceConfig)
+  } catch {
+    return false
+  }
+}
+
+export default memo(EditorView, editorViewPropsEqual)

@@ -4,6 +4,11 @@
     "declaration": true,
     "outDir": "./dist",
     "rootDir": "./src",
+    // Incremental: an unchanged-source rebuild emits nothing rather than rewriting dist/, so a
+    // `validate` that doesn't touch this package no longer restarts the dev API/bridge (which watch
+    // dist/**). Buildinfo lives at the package root, outside the watched dist/.
+    "incremental": true,
+    "tsBuildInfoFile": "./.tsbuildinfo",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "verbatimModuleSyntax": false,

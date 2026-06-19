@@ -22,6 +22,7 @@ type ResourceName =
   | 'plugins'
   | 'print-dispatch'
   | 'slicing'
+  | 'slicing.profiles'
   | 'printer.storage'
 
 export function broadcastResourceChange(input: {
@@ -81,6 +82,15 @@ export function broadcastPrintDispatchChanged(tenantId?: string | null): void {
 
 export function broadcastSlicingChanged(tenantId?: string | null): void {
   broadcastResourceChange({ resource: 'slicing', tenantId })
+}
+
+/**
+ * The slicer PROFILE catalogue changed (custom profile create/delete). Distinct from
+ * {@link broadcastSlicingChanged} so a slice's sub-second progress stream does not invalidate the
+ * (slow) profiles query — only profile mutations do.
+ */
+export function broadcastSlicingProfilesChanged(tenantId?: string | null): void {
+  broadcastResourceChange({ resource: 'slicing.profiles', tenantId })
 }
 
 export function broadcastPrinterViewsChanged(tenantId?: string | null): void {

@@ -9,7 +9,7 @@ import { wsEventSchema, type DiscoveredPrinter, type PrinterStatus } from '@prin
 import { applyBridgeDebugCaptureStatus, invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
 import { clearPrinterFtpActivity, markPrinterFtpActivity } from './usePrinterFtpActivity'
 import { markSnapshotUpdated } from './useSnapshotInterest'
-import { invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
+import { invalidateLibraryListQueries } from '../lib/libraryQueryInvalidation'
 import { invalidatePluginRelatedQueries } from '../lib/pluginQueryInvalidation'
 import { workspaceQueryKeys } from '../lib/workspaceScope'
 import { wsClient } from '../lib/wsClient'
@@ -67,7 +67,10 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           void queryClient.invalidateQueries({ queryKey: ['delete-operations'] })
         }
         if (event.resource === 'library') {
-          void invalidateLibraryQueries(queryClient)
+          // List-only: a background library change (another file, a print snapshot, a
+          // bridge re-index) must refresh the grid but NOT refetch an open editor's scene,
+          // which would rebuild the 3D view mid-edit. The editor refreshes on its own save.
+          void invalidateLibraryListQueries(queryClient)
         }
         if (event.resource === 'printer.storage') {
           const storageKey = event.printerId ? ['printer-storage', event.printerId] : ['printer-storage']
@@ -92,7 +95,11 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           void queryClient.invalidateQueries({ queryKey: ['print-dispatch'] })
         }
         if (event.resource === 'slicing') {
+          // Job state/progress only — NOT the profiles catalogue. Slice progress fires sub-second;
+          // refetching the (slow) profiles query on every tick is the slice-time network spam.
           void queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
+        }
+        if (event.resource === 'slicing.profiles') {
           void queryClient.invalidateQueries({ queryKey: ['slicing-profiles'] })
         }
         if (event.resource === 'jobs') {

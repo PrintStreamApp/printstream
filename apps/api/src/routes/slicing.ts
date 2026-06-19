@@ -39,7 +39,7 @@ import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
 import { readEntry } from '../lib/three-mf.js'
 import { enqueueLibraryPrint } from '../lib/library-printing.js'
 import { discardHiddenSlicedOutput, unhideSlicedOutput } from '../lib/library-files.js'
-import { broadcastLibraryChanged, broadcastPrintDispatchChanged, broadcastSlicingChanged } from '../lib/ws-resource-events.js'
+import { broadcastLibraryChanged, broadcastPrintDispatchChanged, broadcastSlicingProfilesChanged } from '../lib/ws-resource-events.js'
 import { createCustomSlicingProfiles, deleteCustomSlicingProfile, listCustomSlicingProfiles, resolveSlicingProfileFiles } from '../lib/slicing-profiles.js'
 
 export const slicingRouter = Router()
@@ -147,7 +147,7 @@ slicingRouter.post('/profiles', requireRequestPermission(SETTINGS_MANAGE_PERMISS
     summary: profiles.length === 1 ? `Uploaded slicing profile ${profile.name}.` : `Uploaded ${profiles.length} slicing profiles.`,
     metadata: { profileCount: profiles.length, profileId: profile.id, profileName: profile.name, profileKind: profile.kind, replacedCount: replaced.length }
   })
-  broadcastSlicingChanged(tenantId)
+  broadcastSlicingProfilesChanged(tenantId)
   response.status(201).json({ profile, replaced })
 })
 
@@ -161,7 +161,7 @@ slicingRouter.delete('/profiles/:id', requireRequestPermission(SETTINGS_MANAGE_P
     summary: 'Deleted a slicing profile.',
     metadata: { profileId }
   })
-  broadcastSlicingChanged(tenantId)
+  broadcastSlicingProfilesChanged(tenantId)
   response.status(204).end()
 })
 

@@ -10,7 +10,10 @@ export function useSlicingJobs(options?: { enabled?: boolean; suppressGlobalErro
     queryKey: workspaceQueryKeys.slicingJobs(workspaceScopeKey),
     queryFn: ({ signal }) => apiFetch<SlicingJobsResponse>('/api/slicing/jobs', { signal }),
     enabled: options?.enabled ?? true,
-    refetchInterval: (query) => query.state.data?.jobs.some(isActiveSlicingJob) ? 2_000 : 10_000,
+    // Job state + progress are pushed over WS (resource.changed:'slicing' invalidates this key on
+    // every transition/progress chunk), so polling is only a safety net for dropped events /
+    // reconnects — a slow interval, not the old sub-second active poll that duplicated the WS stream.
+    refetchInterval: (query) => query.state.data?.jobs.some(isActiveSlicingJob) ? 15_000 : 30_000,
     meta: options?.suppressGlobalErrorToast ? { suppressGlobalErrorToast: true } : undefined
   })
 }

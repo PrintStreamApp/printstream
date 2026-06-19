@@ -101,10 +101,24 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const normalizedQuery = query.trim().toLowerCase()
   const { promptText } = usePromptDialog()
 
+  // Callers pass `visibilityContext` as a fresh object literal each render (e.g. the editor:
+  // `visibilityContext={{ ...perObject.visibilityContext, isGlobalConfig: false }}`), so identity-
+  // keying this memo would recompute it — and the expensive `computeProcessFieldStates` below — on
+  // every parent render while the dialog is open. Content-key it instead (mirrors `baseOverlayKey`).
+  const visibilityContextKey = JSON.stringify(props.visibilityContext ?? null)
   const context: ProcessVisibilityContext = useMemo(
     () => ({ ...defaultProcessVisibilityContext, ...props.visibilityContext }),
-    [props.visibilityContext]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- content-keyed; read live value inside.
+    [visibilityContextKey]
   )
+
+  // Callers pass `baseOverlay`/`initialOverrides` as fresh object literals each render (e.g.
+  // the per-part dialog: `baseOverlay={{ ...globalOverrides, ...objectOverrides }}`). Keying
+  // the load effect on their identity would re-resolve the process config on every parent
+  // re-render — flashing "Loading…" and resetting the form mid-edit. Depend on a stable
+  // content hash instead so it reloads only when the values actually change.
+  const baseOverlayKey = JSON.stringify(baseOverlay ?? null)
+  const initialOverridesKey = JSON.stringify(initialOverrides ?? null)
 
   useEffect(() => {
     if (!open || !processProfileId) return
@@ -143,7 +157,10 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [open, processProfileId, slicerTargetId, sourceFileId, initialOverrides, baseOverlay])
+    // baseOverlay/initialOverrides are read inside but keyed by their JSON content above so
+    // an unstable object identity from the caller doesn't re-fire this on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, processProfileId, slicerTargetId, sourceFileId, initialOverridesKey, baseOverlayKey])
 
   const fieldStates = useMemo(() => computeProcessFieldStates(config, context), [config, context])
   const accessor = useMemo(() => createProcessConfigAccessor(config), [config])

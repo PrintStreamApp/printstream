@@ -750,6 +750,7 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     partFilaments: collectPartFilaments(state),
     partProcessOverrides: collectPartProcessOverrides(state),
     importPartFilaments: collectImportPartFilaments(state),
+    importPartProcessOverrides: collectImportPartProcessOverrides(state),
     supportPaint: collectPartPaint(state, state.supportPaint),
     seamPaint: collectPartPaint(state, state.seamPaint),
     colorPaint: collectPartPaint(state, state.colorPaint),
@@ -959,6 +960,37 @@ function collectPartFilaments(state: EditorState): SceneEdit['partFilaments'] {
  * by every copy of the import, so we dedupe by importId+partIndex; the bake writes each part's
  * `extruder` directly (the import has no baked part ids yet, so it can't use `partFilaments`).
  */
+/**
+ * Per-part PROCESS overrides for multi-solid imports, keyed by import + 0-based solid index.
+ * The per-part gear keys overrides by the instance's objectId, which for an unsaved import is its
+ * synthetic `replacedObjectId`; map that back to the importId so the bake can apply them while the
+ * import's solids are baked into one object. In-project objects are handled by
+ * {@link collectPartProcessOverrides}; this only emits the import-backed ones.
+ */
+function collectImportPartProcessOverrides(state: EditorState): SceneEdit['importPartProcessOverrides'] {
+  if (!state.partProcessOverrides) return undefined
+  const importByObjectId = new Map<number, string>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
+        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
+      }
+    }
+  }
+  if (importByObjectId.size === 0) return undefined
+  const out: NonNullable<SceneEdit['importPartProcessOverrides']> = []
+  for (const [key, overrides] of Object.entries(state.partProcessOverrides)) {
+    const [objectIdRaw, partRaw] = key.split(':')
+    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
+    const partIndex = Number.parseInt(partRaw ?? '', 10)
+    if (!Number.isInteger(objectId) || !Number.isInteger(partIndex)) continue
+    const importId = importByObjectId.get(objectId)
+    if (!importId || Object.keys(overrides).length === 0) continue
+    out.push({ importId, partIndex, overrides })
+  }
+  return out.length > 0 ? out : undefined
+}
+
 function collectImportPartFilaments(state: EditorState): SceneEdit['importPartFilaments'] {
   const byKey = new Map<string, { importId: string; partIndex: number; filamentId: number }>()
   for (const plate of state.plates) {

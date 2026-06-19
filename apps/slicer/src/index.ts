@@ -170,9 +170,32 @@ app.post('/slice', async (request, response) => {
   const outputPath = path.join(workDir, outputFileName)
   const outputLines: SlicingOutputLine[] = []
   activeSliceOutput.set(parsed.data.jobId, outputLines)
-  // Abort the CLI if the API client cancels (the request connection closes before we respond).
+  // Abort the CLI if the API client genuinely disconnects before we finish responding (a real
+  // cancel frees the slot; the CLI would otherwise run to completion unwatched).
+  //
+  // This MUST listen on the response, not the request: `pipeline(request, …)` below destroys the
+  // request stream when the upload completes normally, which emits 'close' on it *while the slice
+  // is still running*. Listening on `request` therefore self-cancelled every slice (the handler
+  // saw the request close with no response yet and killed the CLI). The response only emits
+  // 'close' before `writableFinished` on an actual client disconnect.
   const cliAbort = new AbortController()
-  request.on('close', () => { if (!response.writableEnded) cliAbort.abort() })
+  // Register cleanup EAGERLY (before any await): on a genuine cancel/disconnect the response 'close'
+  // fires while we're still slicing, so a cleanup listener added later (e.g. in `finally`) would be
+  // installed after 'close' already emitted and never run — leaking the work dir + activeSliceOutput
+  // on every cancel/timeout until the shared volume fills. One listener covers cancel, error, and
+  // success: `writableFinished` is false only on a real client disconnect (so we abort the CLI then),
+  // and cleanup always runs once the response closes for any reason.
+  let workDirCleaned = false
+  const cleanupWorkDir = () => {
+    if (workDirCleaned) return
+    workDirCleaned = true
+    activeSliceOutput.delete(parsed.data.jobId)
+    void rm(workDir, { recursive: true, force: true }).catch(() => undefined)
+  }
+  response.on('close', () => {
+    if (!response.writableFinished) cliAbort.abort()
+    cleanupWorkDir()
+  })
   try {
     appendStructuredOutput(outputLines, 'system', 'Receiving slicing input')
     await Promise.all([
@@ -253,7 +276,15 @@ app.post('/slice', async (request, response) => {
     if (metadata) {
       response.setHeader('X-PrintStream-Metadata', Buffer.from(JSON.stringify(metadata), 'utf8').toString('base64url'))
     }
-    createReadStream(outputPath).pipe(response)
+    // `.pipe()` does not forward source errors, and an unhandled 'error' on the read stream would
+    // throw and crash the whole slicer process (taking down every other in-flight slice). After the
+    // headers are flushed we can't send a 500, so destroy the response to fail just this request.
+    const outputStream = createReadStream(outputPath)
+    outputStream.on('error', (error) => {
+      console.error(`[slice ${parsed.data.jobId}] output stream error: ${(error as Error).message}`)
+      response.destroy(error)
+    })
+    outputStream.pipe(response)
   } catch (error) {
     console.error(`[slice ${parsed.data.jobId}] failed: ${(error as Error).message}`)
     const tail = outputLines
@@ -269,12 +300,8 @@ app.post('/slice', async (request, response) => {
       output: outputLines
     })
   } finally {
-    // 'close' (not 'finish') so the work dir is cleaned on a cancelled/aborted request too,
-    // not only on a fully-streamed response.
-    response.on('close', () => {
-      activeSliceOutput.delete(parsed.data.jobId)
-      void rm(workDir, { recursive: true, force: true })
-    })
+    // Work-dir + activeSliceOutput cleanup is registered eagerly on the response 'close' listener
+    // above (it must precede any await so a mid-slice cancel still triggers it). Nothing to do here.
   }
 })
 

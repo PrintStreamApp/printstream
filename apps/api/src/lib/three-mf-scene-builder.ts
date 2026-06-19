@@ -14,12 +14,36 @@
  * this module except the public three-mf barrel.
  */
 import { createWriteStream } from 'node:fs'
-import { type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPlateFilamentChanges } from '@printstream/shared'
+import { randomUUID } from 'node:crypto'
+import { isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPlateFilamentChanges } from '@printstream/shared'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import type { ImportedMesh } from './mesh-import.js'
-import { OBJECT_STRUCTURAL_METADATA_KEYS, escapeXmlAttribute, readEntry, readZipEntryBuffer } from './three-mf-internal.js'
+import { escapeXmlAttribute, readEntry, readZipEntryBuffer } from './three-mf-internal.js'
 import { BRIM_EAR_POINTS_ENTRY, CUSTOM_GCODE_PER_LAYER_ENTRY, extractPlateType, extractSceneBed, LOGICAL_PART_PLATE_GAP, normalizeColor, parseAttrs, parseModelSettingsScene, parseRootModelComponents, parseRootModelObjectIdOrder } from './three-mf-reader.js'
+
+/**
+ * Does the base model use the 3MF Production Extension? BambuStudio always saves with it
+ * (`requiredextensions="p"`, every object/component carrying a `p:UUID`). When it is in force, the
+ * Bambu Studio **GUI** load path requires a `p:UUID` on every `<object>`/`<component>` — its parser
+ * tolerates the absence, but the GUI drops UUID-less nodes during volume building, so a project we
+ * saved with UUID-less injected objects loads as ZERO model objects and the GUI reports
+ * "The file does not contain any geometry data." (The CLI slicer tolerates it, which is why slicing
+ * worked while opening in the GUI did not.) So when the source is a production-extension project we
+ * must stamp a UUID on every editor-injected node.
+ */
+function modelUsesProductionExtension(modelXml: string): boolean {
+  return modelXml.includes(' p:UUID="') || /requiredextensions\s*=\s*"[^"]*\bp\b[^"]*"/.test(modelXml)
+}
+
+/**
+ * ` p:UUID="…"` for an editor-injected node when the project uses the production extension, else `''`.
+ * Any unique UUID satisfies the GUI; we mint fresh v4 UUIDs for injected nodes (the source's own
+ * UUIDs are copied through untouched). v4 is deliberate: it never ends with BambuStudio's
+ * `OBJECT_UUID_SUFFIX`, so it cannot trip BS's backup-restore path that reinterprets the UUID's hex
+ * prefix as an object id.
+ */
+const productionUuidAttr = (gen: (() => string) | null): string => (gen ? ` p:UUID="${gen()}"` : '')
 
 /**
  * Compose a 12-element 3MF transform (column-major 3x3 followed by translation) from a decomposed
@@ -150,7 +174,7 @@ function formatThreeMfTransformValue(value: number): string {
   return Object.is(rounded, -0) ? '0' : String(rounded)
 }
 
-function renderArrangedBuildItems(arranged: ArrangedInstance[]): string {
+function renderArrangedBuildItems(arranged: ArrangedInstance[], genUuid: (() => string) | null): string {
   // Emit items grouped by object so each object's items appear in instance-id order, which is how
   // {@link parseRootBuildItemTransforms} indexes them back to instances.
   const byObject = new Map<number, ArrangedInstance[]>()
@@ -166,7 +190,7 @@ function renderArrangedBuildItems(arranged: ArrangedInstance[]): string {
       // BambuStudio's per-object "Printable" toggle: a skipped instance is kept in the 3MF
       // (re-enableable) but marked printable="0", which greys it and excludes it from the slice.
       const printable = instance.printable === false ? '0' : '1'
-      lines.push(`    <item objectid="${instance.objectId}" transform="${transform}" printable="${printable}"/>`)
+      lines.push(`    <item objectid="${instance.objectId}"${productionUuidAttr(genUuid)} transform="${transform}" printable="${printable}"/>`)
     }
   }
   return lines.join('\n')
@@ -258,6 +282,31 @@ const THREE_MF_RELS_XML = [
   '</Relationships>'
 ].join('\n')
 
+/** Sub-model relationships file: lists the `/3D/Objects/…model` part files the root model references. */
+const THREE_MF_MODEL_RELS_ENTRY = '3D/_rels/3dmodel.model.rels'
+const THREE_MF_3DMODEL_REL_TYPE = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel'
+
+/**
+ * Append a `<Relationship>` for each split-out import part file to the sub-model rels XML (or build a
+ * fresh one when the source had none). Each part file MUST be declared here or BambuStudio won't load
+ * it. Ids are derived from the part path so re-runs are stable and never collide with the source's.
+ */
+function appendImportPartRelationships(baseRelsXml: string | null, partFiles: ImportedPartFileEntry[]): string {
+  const relationships = partFiles.map((entry) => {
+    const id = `rel-${entry.name.replace(/[^a-zA-Z0-9]+/g, '-')}`
+    return `  <Relationship Target="/${entry.name}" Id="${id}" Type="${THREE_MF_3DMODEL_REL_TYPE}"/>`
+  })
+  if (baseRelsXml && /<\/Relationships>/.test(baseRelsXml)) {
+    return baseRelsXml.replace(/<\/Relationships>/, `${relationships.join('\n')}\n</Relationships>`)
+  }
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    ...relationships,
+    '</Relationships>'
+  ].join('\n')
+}
+
 function formatMeshCoordinate(value: number): string {
   const rounded = Math.round(value * 1e5) / 1e5
   return Object.is(rounded, -0) ? '0' : String(rounded)
@@ -276,7 +325,7 @@ function maxThreeMfObjectId(...xmls: string[]): number {
 }
 
 /** Render an imported mesh as a self-contained `<object><mesh>` for `3D/3dmodel.model` resources. */
-function renderImportedMeshObjectXml(objectId: number, mesh: ImportedMesh): string {
+function renderImportedMeshObjectXml(objectId: number, mesh: ImportedMesh, genUuid: (() => string) | null): string {
   const vertices: string[] = []
   for (let i = 0; i < mesh.positions.length; i += 3) {
     vertices.push(`     <vertex x="${formatMeshCoordinate(mesh.positions[i] ?? 0)}" y="${formatMeshCoordinate(mesh.positions[i + 1] ?? 0)}" z="${formatMeshCoordinate(mesh.positions[i + 2] ?? 0)}"/>`)
@@ -286,7 +335,7 @@ function renderImportedMeshObjectXml(objectId: number, mesh: ImportedMesh): stri
     triangles.push(`     <triangle v1="${mesh.indices[i] ?? 0}" v2="${mesh.indices[i + 1] ?? 0}" v3="${mesh.indices[i + 2] ?? 0}"/>`)
   }
   return [
-    `  <object id="${objectId}" type="model">`,
+    `  <object id="${objectId}"${productionUuidAttr(genUuid)} type="model">`,
     '   <mesh>',
     '    <vertices>',
     vertices.join('\n'),
@@ -319,18 +368,57 @@ function renderImportedModelSettingsObjectXml(objectId: number, name: string, ex
 
 /**
  * Render a multi-solid import's ROOT object: a `<components>` object (no mesh of its own) that
- * references each solid's already-emitted mesh object by an identity transform. This is the object
- * a build item places, so the whole assembly moves/clones as one — exactly how BambuStudio loads a
- * multi-part STEP. (3MF requires an object be mesh XOR components; the solids carry the meshes.)
+ * references each solid's mesh object by an identity transform. This is the object a build item
+ * places, so the whole assembly moves/clones as one — exactly how BambuStudio loads a multi-part
+ * STEP. (3MF requires an object be mesh XOR components; the solids carry the meshes.)
+ *
+ * When `partPath` is set the solids live in a separate `/3D/Objects/…model` sub-model (the
+ * Production-Extension "split" layout BambuStudio writes); each component then carries `p:path` so
+ * the reader resolves the solid in that part file. When null the solids are inline in the root model
+ * (same-file lookup) — the fallback for non-production projects.
  */
-function renderImportedComponentsObjectXml(objectId: number, componentObjectIds: number[]): string {
+function renderImportedComponentsObjectXml(
+  objectId: number,
+  componentObjectIds: number[],
+  genUuid: (() => string) | null,
+  partPath: string | null = null
+): string {
+  const pathAttr = partPath ? ` p:path="${escapeXmlAttribute(partPath)}"` : ''
   return [
-    `  <object id="${objectId}" type="model">`,
+    `  <object id="${objectId}"${productionUuidAttr(genUuid)} type="model">`,
     '   <components>',
-    ...componentObjectIds.map((id) => `    <component objectid="${id}" transform="${IDENTITY_THREE_MF_TRANSFORM}"/>`),
+    ...componentObjectIds.map((id) => `    <component${pathAttr} objectid="${id}"${productionUuidAttr(genUuid)} transform="${IDENTITY_THREE_MF_TRANSFORM}"/>`),
     '   </components>',
     '  </object>'
   ].join('\n')
+}
+
+/**
+ * Wrap imported solid mesh objects in a standalone Production-Extension sub-model
+ * (`/3D/Objects/…model`). BambuStudio splits every object into its own such part file and references
+ * it via `p:path`; emitting large imported meshes here (instead of inline in the 13MB root model)
+ * lets the editor fetch/parse only the objects a plate actually shows, and produces a byte-layout
+ * that matches BambuStudio's own. Mirrors the header BS writes (confirmed to open in the GUI).
+ */
+function renderImportedPartFileModel(meshObjectXmls: string[]): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">',
+    ' <metadata name="BambuStudio:3mfVersion">1</metadata>',
+    ' <resources>',
+    ...meshObjectXmls,
+    ' </resources>',
+    ' <build/>',
+    '</model>',
+    ''
+  ].join('\n')
+}
+
+/** A sub-model part file produced for a split-out import, plus its `3D/_rels` relationship target. */
+interface ImportedPartFileEntry {
+  /** ZIP entry path, e.g. `3D/Objects/printstream_object_157.model` (no leading slash). */
+  name: string
+  content: string
 }
 
 /**
@@ -342,7 +430,7 @@ function renderImportedComponentsObjectXml(objectId: number, componentObjectIds:
 function renderImportedMultiPartModelSettingsXml(
   objectId: number,
   name: string,
-  parts: Array<{ componentObjectId: number; name: string; extruder: number | null }>
+  parts: Array<{ componentObjectId: number; name: string; extruder: number | null; processOverrides?: Record<string, string | string[]> }>
 ): string {
   return [
     `  <object id="${objectId}">`,
@@ -351,6 +439,9 @@ function renderImportedMultiPartModelSettingsXml(
       `    <part id="${part.componentObjectId}" subtype="normal_part">`,
       `      <metadata key="name" value="${escapeXmlAttribute(part.name)}"/>`,
       ...(part.extruder != null ? [`      <metadata key="extruder" value="${part.extruder}"/>`] : []),
+      // Per-part process overrides set on the unsaved import, baked into the part's metadata.
+      ...Object.entries(part.processOverrides ?? {}).map(([key, value]) =>
+        `      <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(Array.isArray(value) ? value.join(';') : value)}"/>`),
       '    </part>'
     ]),
     '  </object>'
@@ -411,11 +502,19 @@ function buildEditedThreeMfDocuments(
   projectSettingsJson: string | null,
   edit: SceneEdit,
   imports: ImportedObjectInput[]
-): { modelXml: string; modelSettingsXml: string; importIdToObjectId: ReadonlyMap<string, number> } {
+): { modelXml: string; modelSettingsXml: string; importIdToObjectId: ReadonlyMap<string, number>; partFileEntries: ImportedPartFileEntry[] } {
   let nextObjectId = maxThreeMfObjectId(baseModelXml, baseModelSettingsXml) + 1
+  // When the source is a Production-Extension project, BambuStudio's GUI requires a p:UUID on every
+  // injected object/component/build-item (see modelUsesProductionExtension); a fresh/core 3MF needs
+  // none. Null disables UUID emission for the non-production case.
+  const genUuid: (() => string) | null = modelUsesProductionExtension(baseModelXml) ? () => randomUUID() : null
   const importIdToObjectId = new Map<string, number>()
   const meshObjects: string[] = []
   const settingsObjects: string[] = []
+  // Split-out sub-model part files for imported objects (Production-Extension layout). Populated only
+  // for production-extension projects; each entry is written to the ZIP and declared in
+  // 3D/_rels/3dmodel.model.rels by buildEditedThreeMf.
+  const partFileEntries: ImportedPartFileEntry[] = []
   // Imports consumed as added PART volumes become components of an existing object:
   // they get a mesh object resource but no standalone model_settings object entry and
   // are never placed by build items.
@@ -436,6 +535,13 @@ function buildEditedThreeMfDocuments(
     if (!byPart) { byPart = new Map(); importPartFilament.set(entry.importId, byPart) }
     byPart.set(entry.partIndex, entry.filamentId)
   }
+  // Per-part PROCESS overrides for multi-solid imports: importId -> (solid index -> overrides).
+  const importPartProcess = new Map<string, Map<number, Record<string, string | string[]>>>()
+  for (const entry of edit.importPartProcessOverrides ?? []) {
+    let byPart = importPartProcess.get(entry.importId)
+    if (!byPart) { byPart = new Map(); importPartProcess.set(entry.importId, byPart) }
+    byPart.set(entry.partIndex, entry.overrides)
+  }
   const toExtruder = (filamentId: number | null): number | null =>
     filamentId != null ? filamentToExtruder.get(filamentId) ?? filamentId : null
   for (const imported of imports) {
@@ -454,8 +560,20 @@ function buildEditedThreeMfDocuments(
         return id
       })
       const partFilaments = importPartFilament.get(imported.importId)
-      multiParts.forEach((part, i) => meshObjects.push(renderImportedMeshObjectXml(componentIds[i]!, part.mesh)))
-      meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds))
+      const partProcess = importPartProcess.get(imported.importId)
+      const solidMeshXmls = multiParts.map((part, i) => renderImportedMeshObjectXml(componentIds[i]!, part.mesh, genUuid))
+      if (genUuid) {
+        // Production extension: emit the solids as a separate /3D/Objects sub-model and reference
+        // them by p:path — so a plate fetches/parses only this import's part file, not the whole
+        // root model, and the layout matches BambuStudio's. The root keeps just the small assembly.
+        const partFilePath = `3D/Objects/printstream_object_${objectId}.model`
+        partFileEntries.push({ name: partFilePath, content: renderImportedPartFileModel(solidMeshXmls) })
+        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid, `/${partFilePath}`))
+      } else {
+        // Non-production project: keep the solids inline in the root model (same-file components).
+        meshObjects.push(...solidMeshXmls)
+        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid))
+      }
       settingsObjects.push(renderImportedMultiPartModelSettingsXml(
         objectId,
         imported.name,
@@ -463,11 +581,13 @@ function buildEditedThreeMfDocuments(
         multiParts.map((part, i) => ({
           componentObjectId: componentIds[i]!,
           name: part.name,
-          extruder: toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder
+          extruder: toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder,
+          // Per-part process overrides set on the unsaved import (keyed by solid index).
+          processOverrides: partProcess?.get(i)
         }))
       ))
     } else {
-      meshObjects.push(renderImportedMeshObjectXml(objectId, imported.mesh))
+      meshObjects.push(renderImportedMeshObjectXml(objectId, imported.mesh, genUuid))
       if (!isPartImport) {
         settingsObjects.push(renderImportedModelSettingsObjectXml(objectId, imported.name, objectExtruder))
       }
@@ -496,7 +616,7 @@ function buildEditedThreeMfDocuments(
   const arranged = assignArrangedInstances(resolved, origins)
 
   let modelXml = injectResourcesObjects(baseModelXml, meshObjects.join('\n'))
-  modelXml = replaceThreeMfBuildSection(modelXml, renderArrangedBuildItems(arranged))
+  modelXml = replaceThreeMfBuildSection(modelXml, renderArrangedBuildItems(arranged, genUuid))
 
   let modelSettingsXml = injectModelSettingsObjects(baseModelSettingsXml, settingsObjects.join('\n'))
   modelSettingsXml = replaceModelSettingsPlates(modelSettingsXml, renderArrangedModelSettingsPlates(arranged, edit.plates))
@@ -508,7 +628,7 @@ function buildEditedThreeMfDocuments(
       const id = nextObjectId
       nextObjectId += 1
       return id
-    })
+    }, genUuid)
     modelXml = applied.modelXml
     modelSettingsXml = applied.modelSettingsXml
   }
@@ -552,7 +672,7 @@ function buildEditedThreeMfDocuments(
     modelSettingsXml = remapPartExtruders(modelSettingsXml, oldIndexToNewId)
   }
 
-  return { modelXml, modelSettingsXml, importIdToObjectId }
+  return { modelXml, modelSettingsXml, importIdToObjectId, partFileEntries }
 }
 
 const IDENTITY_THREE_MF_TRANSFORM = '1 0 0 0 1 0 0 0 1 0 0 0'
@@ -572,7 +692,8 @@ function applyAddedParts(
   modelSettingsXml: string,
   addedParts: NonNullable<SceneEdit['addedParts']>,
   importIdToObjectId: ReadonlyMap<string, number>,
-  allocateObjectId: () => number
+  allocateObjectId: () => number,
+  genUuid: (() => string) | null
 ): { modelXml: string; modelSettingsXml: string } {
   for (const part of addedParts) {
     const partObjectId = importIdToObjectId.get(part.importId)
@@ -585,7 +706,7 @@ function applyAddedParts(
       throw new Error(`Scene edit adds a part to a missing object ${part.objectId}`)
     }
     const transform = part.matrix.map(formatThreeMfTransformValue).join(' ')
-    const componentXml = `    <component objectid="${partObjectId}" transform="${transform}"/>`
+    const componentXml = `    <component objectid="${partObjectId}"${productionUuidAttr(genUuid)} transform="${transform}"/>`
     const body = parentMatch[2]!
     if (/<components\b/.test(body)) {
       const nextBody = body.replace(/<\/components>/, `${componentXml}\n   </components>`)
@@ -596,13 +717,13 @@ function applyAddedParts(
       const meshMatch = body.match(/<mesh\b[\s\S]*?<\/mesh>/)
       if (!meshMatch) throw new Error(`Object ${part.objectId} has an unreadable mesh`)
       const meshObjectXml = [
-        `  <object id="${meshObjectId}" type="model">`,
+        `  <object id="${meshObjectId}"${productionUuidAttr(genUuid)} type="model">`,
         `   ${meshMatch[0]}`,
         '  </object>'
       ].join('\n')
       const nextBody = body.replace(/<mesh\b[\s\S]*?<\/mesh>/, [
         '<components>',
-        `    <component objectid="${meshObjectId}" transform="${IDENTITY_THREE_MF_TRANSFORM}"/>`,
+        `    <component objectid="${meshObjectId}"${productionUuidAttr(genUuid)} transform="${IDENTITY_THREE_MF_TRANSFORM}"/>`,
         componentXml,
         '   </components>'
       ].join('\n'))
@@ -729,9 +850,10 @@ export function applyPartProcessOverrides(modelSettingsXml: string, overrides: S
       const partId = Number.parseInt(parseAttrs(partAttrs).id ?? '', 10)
       const partOverrides = parts.get(partId)
       if (!partOverrides) return partBlock
-      // Drop existing part-level process overrides (keep structural metadata like name/extruder).
+      // Drop existing part-level PROCESS overrides only; keep everything else (name/extruder AND
+      // identity/placement metadata like source_object_id, source_offset_*, matrix).
       const stripped = partBody.replace(/[ \t]*<metadata\s+key="([^"]+)"\s+value="[^"]*"\s*\/>\n?/g, (line, key: string) =>
-        OBJECT_STRUCTURAL_METADATA_KEYS.has(key) ? line : '')
+        isProcessSettingKey(key) ? '' : line)
       const injected = Object.entries(partOverrides).map(([key, value]) => {
         const serialized = Array.isArray(value) ? value.join(';') : value
         return `\n      <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(serialized)}"/>`
@@ -1037,8 +1159,14 @@ export async function buildEditedThreeMf(
   let baseModelSettingsXml = NEW_PROJECT_MODEL_SETTINGS_XML
   let projectSettingsJson: string | null = null
   let baseCustomGcodeXml: string | null = null
+  // The sub-model relationships file (Production-Extension projects). Split-out imported part files
+  // are appended here so BambuStudio loads them; null when the source has none (we create one then).
+  let baseModelRelsXml: string | null = null
   if (baseSourcePath) {
     baseModelXml = (await readEntry(baseSourcePath, '3D/3dmodel.model', undefined, 256 * 1024 * 1024)).toString('utf8')
+    baseModelRelsXml = await readEntry(baseSourcePath, THREE_MF_MODEL_RELS_ENTRY, undefined, 4 * 1024 * 1024)
+      .then((buffer) => buffer.toString('utf8'))
+      .catch(() => null)
     baseModelSettingsXml = await readEntry(baseSourcePath, 'Metadata/model_settings.config', undefined, 64 * 1024 * 1024)
       .then((buffer) => buffer.toString('utf8'))
       .catch(() => NEW_PROJECT_MODEL_SETTINGS_XML)
@@ -1149,6 +1277,17 @@ export async function buildEditedThreeMf(
         'Metadata/project_settings.config',
         (xml) => projectSettingsTransforms.reduce((acc, transform) => transform(acc), xml)
       )
+    }
+    // Split-out imported sub-models: write each part file and declare it in the sub-model rels so
+    // BambuStudio loads them (transform the existing rels, or add a fresh one if the source had none).
+    if (documents.partFileEntries.length > 0) {
+      for (const partFile of documents.partFileEntries) extraEntries.push(partFile)
+      const updatedModelRels = appendImportPartRelationships(baseModelRelsXml, documents.partFileEntries)
+      if (baseModelRelsXml !== null) {
+        transforms.set(THREE_MF_MODEL_RELS_ENTRY, () => updatedModelRels)
+      } else {
+        extraEntries.push({ name: THREE_MF_MODEL_RELS_ENTRY, content: updatedModelRels })
+      }
     }
     await rewriteThreeMfEntries(baseSourcePath, outputPath, transforms, extraEntries)
     return { replacedObjectIds }

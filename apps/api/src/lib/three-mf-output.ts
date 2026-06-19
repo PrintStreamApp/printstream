@@ -13,11 +13,11 @@
  */
 import { createWriteStream } from 'node:fs'
 import { rename } from 'node:fs/promises'
-import { type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBounds } from '@printstream/shared'
+import { isProcessSettingKey, type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBounds } from '@printstream/shared'
 import { PNG } from 'pngjs'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
-import { OBJECT_STRUCTURAL_METADATA_KEYS, escapeXmlAttribute, readEntry, readZipEntryBuffer, rewriteModelSettingsThreeMf } from './three-mf-internal.js'
+import { escapeXmlAttribute, readEntry, readZipEntryBuffer, rewriteModelSettingsThreeMf } from './three-mf-internal.js'
 import { buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex, type ThreeMfPlateObject } from './three-mf-reader.js'
 
 const ACTIVE_PRINT_PREVIEW_MAX_GCODE_BYTES = 128 * 1024 * 1024
@@ -331,9 +331,9 @@ export function applyObjectProcessOverridesXml(xml: string, overridesByObjectId:
     const firstPart = body.search(/<part\b/)
     const head = firstPart >= 0 ? body.slice(0, firstPart) : body
     const tail = firstPart >= 0 ? body.slice(firstPart) : ''
-    // Drop existing object-level process overrides (keep structural metadata like name/extruder).
+    // Drop existing object-level PROCESS overrides only; keep all other object-head metadata.
     const strippedHead = head.replace(/[ \t]*<metadata\s+key="([^"]+)"\s+value="[^"]*"\s*\/>\n?/g, (line, key: string) =>
-      OBJECT_STRUCTURAL_METADATA_KEYS.has(key) ? line : '')
+      isProcessSettingKey(key) ? '' : line)
     const injected = Object.entries(overrides).map(([key, value]) => {
       const serialized = Array.isArray(value) ? value.join(';') : value
       return `\n    <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(serialized)}"/>`

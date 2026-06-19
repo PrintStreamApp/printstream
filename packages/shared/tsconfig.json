@@ -5,6 +5,12 @@
     "rootDir": "./src",
     "declaration": true,
     "composite": false,
+    // Incremental so an unchanged-source rebuild (e.g. `npm run validate`'s typecheck step) emits
+    // nothing instead of rewriting all of dist/ — the dev API/bridge `tsx watch` watch dist/** and
+    // would otherwise restart on every validate. Buildinfo lives at the package root, NOT in dist/,
+    // so it can never itself trip the dist watcher.
+    "incremental": true,
+    "tsBuildInfoFile": "./.tsbuildinfo",
     "module": "ESNext",
     "moduleResolution": "Bundler"
   },

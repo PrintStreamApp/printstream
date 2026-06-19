@@ -12,8 +12,19 @@ import path from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
+import { Agent } from 'undici'
 import { env } from './env.js'
 import type { ResolvedSlicingProfileFile } from './slicing-profiles.js'
+
+/**
+ * Dispatcher for the long-running `/slice` POST only. The slicer sends no response headers until the
+ * whole CLI slice finishes, so undici's default 300s `headersTimeout` (and `bodyTimeout`) would abort
+ * a legitimately long multi-plate/multi-material slice with an opaque `UND_ERR_HEADERS_TIMEOUT` after
+ * the CPU was already spent. Disabling both (0) hands the time ceiling entirely to the caller's
+ * `AbortSignal` (SLICING_REQUEST_TIMEOUT_MS), which is the intended bound. Scoped to this request so
+ * the rest of the API's HTTP egress keeps undici's safety timeouts.
+ */
+const sliceRequestDispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 })
 
 export interface SlicerCapabilities {
   configured: boolean
@@ -281,7 +292,7 @@ export class SlicerClient {
     // cancel signal — otherwise a slicer that stalls mid-stream leaves the job slicing forever,
     // holding a concurrency slot. The timeout aborts both the fetch and the body pipeline below.
     const signal = AbortSignal.any([input.signal, AbortSignal.timeout(env.SLICING_REQUEST_TIMEOUT_MS)])
-    const requestInit: RequestInit & { duplex: 'half' } = {
+    const requestInit: RequestInit & { duplex: 'half'; dispatcher: Agent } = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/octet-stream',
@@ -291,6 +302,8 @@ export class SlicerClient {
       },
       body: requestBody,
       duplex: 'half',
+      // Disable undici's header/body timeouts for the slice; the AbortSignal above is the real ceiling.
+      dispatcher: sliceRequestDispatcher,
       signal
     }
     const response = await fetch(input.url, requestInit).catch((error: unknown) => {

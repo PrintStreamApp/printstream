@@ -146,7 +146,7 @@ import {
   type SliceMaterialOption
 } from '../lib/sliceProfileMatching'
 import { getSlotRemainingState, estimateRemainGrams } from '../lib/slotRemaining'
-import { invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
+import { invalidateLibraryListQueries, invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
 import {
@@ -2662,6 +2662,25 @@ export function SliceFileModal({
   // was reopened after the profiles query had cached. Treat the whole load+retry window as waiting;
   // excluding the terminal error state preserves the existing error / empty-defaults handling.
   const waitingForSlicingProfiles = shouldLoadSlicingProfiles && profiles.length === 0 && !slicingProfilesQuery.isError
+  // Self-heal the profiles catalogue when the slicer recovers. The profiles query throws + retries
+  // (×5) on an empty/restarting response, then settles into an error; previously a slice-progress WS
+  // tick (`slicing`) would re-invalidate it and recover once the slicer came back, but that path now
+  // only fires on actual profile mutations (`slicing.profiles`) to stop the per-tick refetch spam. So
+  // recover here instead: on the slicer's unhealthy→healthy transition, refetch if the catalogue is
+  // errored or empty — the editor un-strands itself without the user reopening, and a healthy slicer
+  // with profiles already loaded triggers nothing.
+  const slicerHealthy = Boolean(capabilities?.healthy)
+  const prevSlicerHealthyRef = useRef(slicerHealthy)
+  const profilesRefetch = slicingProfilesQuery.refetch
+  const profilesIsError = slicingProfilesQuery.isError
+  const profilesEmpty = profiles.length === 0
+  useEffect(() => {
+    const wasHealthy = prevSlicerHealthyRef.current
+    prevSlicerHealthyRef.current = slicerHealthy
+    if (slicerHealthy && !wasHealthy && (profilesIsError || profilesEmpty)) {
+      void profilesRefetch()
+    }
+  }, [slicerHealthy, profilesIsError, profilesEmpty, profilesRefetch])
   const platesQuery = useQuery({
     queryKey: ['library-plates', file.id, versionId ?? 'current', 'slice-defaults'],
     queryFn: ({ signal }) => apiFetch<ThreeMfIndex>(`${resourceBasePath}/plates`, { signal }),
@@ -2990,11 +3009,18 @@ export function SliceFileModal({
   )
   // The print/slice dialog targets one plate, so it lists, validates, and maps only
   // the materials that plate actually uses — a project can carry materials for other
-  // plates, and surfacing them all here just invites mis-mapping. `desiredFilaments`
+  // plates, and surfacing them all there just invites mis-mapping. `desiredFilaments`
   // still rewrites the full ordered set so other plates are never dropped.
+  //
+  // The full 3D EDITOR is different: like BambuStudio it must show EVERY project material
+  // at all times (you assign materials to parts across plates, and the 3D preview colours
+  // objects by their own filament regardless of the active plate). Filtering to the active
+  // plate's used set there hides materials and, worse, drops an object's filament from the
+  // colour set so it renders black. So only narrow to the plate in the print/slim flow.
+  const isFullProjectEditor = flow === 'library' && file.kind === '3mf'
   const visibleProjectFilaments = useMemo(
-    () => projectFilaments.filter((filament) => filament.usedOnSelectedPlate),
-    [projectFilaments]
+    () => isFullProjectEditor ? projectFilaments : projectFilaments.filter((filament) => filament.usedOnSelectedPlate),
+    [projectFilaments, isFullProjectEditor]
   )
   const filamentCountChanged = removedFilamentIds.size > 0 || addedFilaments.length > 0
   // A material PROFILE change (e.g. PLA -> PETG) must persist its new `filament_settings_id`,
@@ -3798,7 +3824,10 @@ export function SliceResultModal({
       setSaved(true)
       setSaveDestinationOpen(false)
       toast.success(`Saved ${formatLibraryFileName(response.file.name)} to the library`)
-      await invalidateLibraryQueries(queryClient)
+      // The sliced output is a brand-new library file; the open editor's own source scene is
+      // unchanged, so invalidate only the LIST (not editor scene caches, which would force a
+      // mid-edit viewport rebuild). The editor's own save uses the full variant.
+      await invalidateLibraryListQueries(queryClient)
     },
     onError: (error: unknown) => {
       toast.error(error instanceof Error ? error.message : 'Unable to save the sliced file.')
