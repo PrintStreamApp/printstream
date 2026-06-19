@@ -2,6 +2,8 @@
 
 **Manage your Bambu Lab printers — one or a whole farm — from any device.**
 
+[![PrintStream — live dashboard of your Bambu Lab printers](https://printstream.app/marketing/printers.jpg)](https://printstream.app)
+
 PrintStream is a self-hosted web app for monitoring and controlling Bambu Lab printers. Open it on your phone, tablet, or desktop, see every printer live, and send prints from a shared file library. It's built phone-first, installs like an app (PWA), and runs on your own hardware.
 
 > Smaller, simpler, and more touch-friendly than the alternatives. Self-hosted and plugin-extensible.
