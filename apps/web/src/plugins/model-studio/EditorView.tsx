@@ -1558,29 +1558,46 @@ export default function EditorView({
   // from it on the same `scenesByPlate` change would have the second overwrite the first
   // (which is exactly how late-loaded plates briefly shipped empty).
   useEffect(() => {
-    const current = stateRef.current
-    if (scenesByPlate.size === 0 || !current) return
-    let changed = false
-    const plates = current.plates.map((plate) => {
+    const snapshot = stateRef.current
+    if (scenesByPlate.size === 0 || !snapshot) return
+    // Decide what to change from a snapshot (so the pending-ref mutation happens exactly
+    // once, not inside the updater where StrictMode would double-invoke it), then apply
+    // via a FUNCTIONAL updater that maps over the latest `prev`. Other effects keyed on
+    // the same `scenesByPlate` change also setState in this flush; if each spread a stale
+    // `stateRef.current` snapshot, the last writer would clobber the others (this is how
+    // late-loaded plates ended up empty — the per-part re-hydrate effect overwrote the
+    // plate fill). Composing over `prev` makes the writes additive.
+    const filledPlates = new Map<number, EditorPlate>()
+    const nextBeds = new Map<number, EditorPlate['bed']>()
+    for (const plate of snapshot.plates) {
       const scene = scenesByPlate.get(plate.index)
-      if (!scene) return plate
+      if (!scene) continue
       if (pendingScenePlatesRef.current.has(plate.index)) {
         pendingScenePlatesRef.current.delete(plate.index)
         if (plate.instances.length === 0) {
-          changed = true
-          return fillPlateFromScene(plate, scene)
+          filledPlates.set(plate.index, fillPlateFromScene(plate, scene))
+          continue
         }
       }
       const nextBed = {
         minX: scene.bed.minX, maxX: scene.bed.maxX, minY: scene.bed.minY, maxY: scene.bed.maxY,
         excludeAreas: scene.bed.excludeAreas
       }
-      if (bedsEqual(plate.bed, nextBed)) return plate
-      changed = true
-      return { ...plate, bed: nextBed }
+      if (!bedsEqual(plate.bed, nextBed)) nextBeds.set(plate.index, nextBed)
+    }
+    if (filledPlates.size === 0 && nextBeds.size === 0) return
+    setState((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        plates: prev.plates.map((plate) => {
+          const filled = filledPlates.get(plate.index)
+          if (filled) return filled
+          const bed = nextBeds.get(plate.index)
+          return bed ? { ...plate, bed } : plate
+        })
+      }
     })
-    if (!changed) return
-    setState({ ...current, plates })
     setRebuildToken((token) => token + 1)
   }, [scenesByPlate])
 
@@ -1628,7 +1645,12 @@ export default function EditorView({
       }
     }
     if (Object.keys(additions).length === 0) return
-    setState({ ...current, partProcessOverrides: { ...(current.partProcessOverrides ?? {}), ...additions } })
+    // Functional updater so this composes with the plate-fill effect that also runs on
+    // this `scenesByPlate` change — a `{ ...stateRef.current }` spread here would clobber
+    // the freshly-filled plates with the pre-fill snapshot.
+    setState((prev) => prev
+      ? { ...prev, partProcessOverrides: { ...(prev.partProcessOverrides ?? {}), ...additions } }
+      : prev)
   }, [scenesByPlate])
 
   const activePlate = useMemo(

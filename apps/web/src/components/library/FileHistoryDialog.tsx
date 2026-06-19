@@ -104,6 +104,22 @@ export function FileHistoryDialog({
       toast.error(error.message || 'Failed to restore version')
     }
   })
+  // Deleting the current version reverts the file to the most recent prior version, which
+  // becomes the new current. Keyed on the file id (the current version isn't a version row).
+  const deleteCurrentVersion = useMutation({
+    mutationFn: async () => {
+      await apiFetch(`/api/library/${file.id}/current-version`, { method: 'DELETE' })
+    },
+    onSuccess: async () => {
+      await invalidateLibraryQueries(queryClient)
+      await queryClient.invalidateQueries({ queryKey: ['library-file-versions', file.id] })
+      onRestored()
+      toast.success('Current version deleted')
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete current version')
+    }
+  })
 
   return (
     <Modal open onClose={onClose}>
@@ -225,6 +241,31 @@ export function FileHistoryDialog({
                                   color: 'danger'
                                 })
                                 if (confirmed) deleteVersion.mutate(version.versionId!)
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          )}
+                          {/* Deleting the current version reverts to the most recent prior
+                              version; only offered when there is one to fall back to. */}
+                          {canManageLibrary && version.isCurrent && historyQuery.data.versions.some((entry) => !entry.isCurrent) && (
+                            <Button
+                              size="sm"
+                              variant="soft"
+                              color="danger"
+                              loading={deleteCurrentVersion.isPending}
+                              startDecorator={<DeleteOutlineRoundedIcon />}
+                              onClick={async () => {
+                                const fallback = Math.max(
+                                  ...historyQuery.data.versions.filter((entry) => !entry.isCurrent).map((entry) => entry.versionNumber)
+                                )
+                                const confirmed = await confirm({
+                                  title: 'Delete current version?',
+                                  description: `Delete the current version (${version.versionNumber}) of “${formatLibraryFileName(file.name)}”? The file will revert to version ${fallback}. This cannot be undone.`,
+                                  confirmLabel: 'Delete current version',
+                                  color: 'danger'
+                                })
+                                if (confirmed) deleteCurrentVersion.mutate()
                               }}
                             >
                               Delete

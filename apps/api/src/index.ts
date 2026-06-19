@@ -48,6 +48,17 @@ void finalizeApp()
     process.exit(1)
   })
   .then(() => {
+    // Surface a clear message on a bind failure (esp. EADDRINUSE) instead of letting it
+    // bubble up as an uncaught 'error' event — which crashes silently in the native GUI
+    // build and as a bare stack trace on the CLI.
+    httpServer.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`Cannot start: port ${env.API_PORT} is already in use. Stop whatever is using it, or set API_PORT/PORT to a free port.`)
+      } else {
+        console.error('HTTP server error', error)
+      }
+      process.exit(1)
+    })
     httpServer.listen(env.API_PORT, () => {
       console.log(`printstream API listening on http://localhost:${env.API_PORT}`)
       void (async () => {

@@ -1669,6 +1669,38 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
 // hundreds of KB when several materials are mapped. Node's default 16KB header cap rejects
 // that with HTTP 431, so raise the limit for this internal API→slicer call.
 const SLICE_MAX_HEADER_BYTES = 2 * 1024 * 1024
+
+/**
+ * Remove leftover per-job scratch dirs under SLICER_WORK_DIR at startup. Each slice
+ * normally rm's its own work dir when the response closes, but a slicer crash/restart
+ * mid-slice orphans the dir — over time those fill the (shared) work volume. At boot no
+ * slice is in flight, so every job dir is an orphan and safe to delete. The persistent
+ * BambuStudio home/data dirs (which live under the work dir in the default layout) are
+ * preserved.
+ */
+async function sweepStaleWorkDirs(): Promise<void> {
+  const workDir = path.resolve(env.SLICER_WORK_DIR)
+  const keep = new Set<string>()
+  for (const persistentDir of [env.SLICER_BAMBUSTUDIO_HOME_DIR, env.SLICER_BAMBUSTUDIO_DATA_DIR]) {
+    const resolved = path.resolve(persistentDir)
+    if (path.dirname(resolved) === workDir) keep.add(path.basename(resolved))
+  }
+  let entries: string[]
+  try {
+    entries = await readdir(workDir)
+  } catch {
+    return // work dir not created yet
+  }
+  let removed = 0
+  for (const entry of entries) {
+    if (keep.has(entry)) continue
+    await rm(path.join(workDir, entry), { recursive: true, force: true }).catch(() => undefined)
+    removed += 1
+  }
+  if (removed > 0) console.log(`[slicer] swept ${removed} stale work dir${removed === 1 ? '' : 's'} at startup`)
+}
+
+void sweepStaleWorkDirs()
 http.createServer({ maxHeaderSize: SLICE_MAX_HEADER_BYTES }, app).listen(env.SLICER_PORT, () => {
   console.log(`PrintStream slicer listening on ${env.SLICER_PORT}`)
 })

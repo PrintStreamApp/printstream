@@ -545,7 +545,14 @@ export function LibraryView() {
   const slicingCapabilitiesQuery = useQuery({
     queryKey: ['slicing-capabilities'],
     queryFn: ({ signal }) => apiFetch<SlicingCapabilities>('/api/slicing/capabilities', { signal }),
-    enabled: authBootstrapQuery.isSuccess ? (canUploadLibrary && canViewLibrary) : false
+    enabled: authBootstrapQuery.isSuccess ? (canUploadLibrary && canViewLibrary) : false,
+    // When the slicer is configured but not yet healthy (e.g. restarting), keep polling so
+    // the editor/slice UI recovers on its own — the user just waits instead of hitting a
+    // dead-end "reopen the editor" error.
+    refetchInterval: (query) => {
+      const data = query.state.data
+      return data?.configured && !data.healthy ? 4000 : false
+    }
   })
 
   const allFolders = useMemo(() => foldersQuery.data?.folders ?? [], [foldersQuery.data])
@@ -1905,6 +1912,8 @@ export interface SliceSettingsController {
     hasCapabilities: boolean
     capabilitiesError: string | null
     configured: boolean
+    /** Slicer is installed but not currently healthy (e.g. restarting) — show a wait, not an error. */
+    slicerRestarting: boolean
     slicerDataReady: boolean
     profilesError: string | null
   }
@@ -2075,7 +2084,15 @@ export function SliceSettingsPanel({ controller, mode }: { controller: SliceSett
       {!slicerStatus.capabilitiesLoading && slicerStatus.capabilitiesError && (
         <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{slicerStatus.capabilitiesError}</Alert>
       )}
-      {!slicerStatus.capabilitiesLoading && !slicerStatus.capabilitiesError && !slicerStatus.configured && (
+      {/* Slicer is installed but starting/restarting — keep the user waiting (the
+          capabilities query polls and recovers) rather than showing a dead-end error. */}
+      {!slicerStatus.capabilitiesLoading && !slicerStatus.capabilitiesError && slicerStatus.slicerRestarting && (
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 2 }}>
+          <CircularProgress size="sm" />
+          <Typography level="body-sm" textColor="text.secondary">Waiting for the slicer to start…</Typography>
+        </Stack>
+      )}
+      {!slicerStatus.capabilitiesLoading && !slicerStatus.capabilitiesError && !slicerStatus.slicerRestarting && !slicerStatus.configured && (
         <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
           The slicer service is not reachable or no slicer versions are installed.
         </Alert>
@@ -2086,7 +2103,9 @@ export function SliceSettingsPanel({ controller, mode }: { controller: SliceSett
           <Typography level="body-sm" textColor="text.secondary">Loading slicer data…</Typography>
         </Stack>
       )}
-      {slicerStatus.profilesError && (
+      {/* When the slicer is restarting, the profile-load failure is transient — show the
+          wait above instead of the "reopen the editor" error. */}
+      {slicerStatus.profilesError && !slicerStatus.slicerRestarting && (
         <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{slicerStatus.profilesError}</Alert>
       )}
       {slicerStatus.slicerDataReady && (<>
@@ -3232,6 +3251,7 @@ export function SliceFileModal({
       hasCapabilities: capabilities != null,
       capabilitiesError,
       configured,
+      slicerRestarting: Boolean(capabilities?.configured && !capabilities.healthy),
       slicerDataReady,
       profilesError: slicingProfilesQuery.isError
         ? (slicingProfilesQuery.error instanceof Error ? slicingProfilesQuery.error.message : 'Failed to load slicer profiles for this version.')

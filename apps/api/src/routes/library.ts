@@ -921,6 +921,75 @@ libraryRouter.delete('/versions/:versionId', requireRequestPermission(LIBRARY_MA
   response.status(204).end()
 })
 
+/**
+ * Delete the CURRENT version of a file and fall back to the most recent archived
+ * version, which becomes the new current. The current version isn't a `libraryFileVersion`
+ * row (it lives on the `libraryFile`), so deleting it means repointing the file at the
+ * previous version's bytes, dropping that version row (it's now the current), and
+ * discarding the old current's bytes. Refuses when there's no prior version to fall back
+ * to (a file must always have a current version).
+ */
+libraryRouter.delete('/:id/current-version', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
+  const fileId = requireRouteParam(request.params.id, 'File id')
+  const current = await prisma.libraryFile.findUnique({ where: { id: fileId } }) as LibraryFileRow | null
+  if (!current) throw notFound('File not found')
+  assertDemoLibraryFileMutationAllowed(request, current)
+
+  const prev = await prisma.libraryFileVersion.findFirst({
+    where: { libraryFileId: current.id },
+    orderBy: { versionNumber: 'desc' }
+  }) as LibraryFileVersionRow | null
+  if (!prev) throw conflict('Cannot delete the only version of a file.')
+
+  const oldStoredPath = current.storedPath
+  const oldOwnerBridgeId = current.ownerBridgeId ?? null
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const file = await tx.libraryFile.update({
+      where: { id: current.id },
+      data: {
+        // The previous version's bytes become the current content verbatim — the file
+        // now *is* that version (number and all), not a new "restored from" copy.
+        storedPath: prev.storedPath,
+        ownerBridgeId: prev.ownerBridgeId,
+        sizeBytes: prev.sizeBytes,
+        kind: prev.kind,
+        thumbnailPath: prev.thumbnailPath,
+        uploadedAt: prev.uploadedAt,
+        currentVersionNumber: prev.versionNumber,
+        snapshotKey: null,
+        restoredFromVersionNumber: prev.restoredFromVersionNumber ?? null,
+        createdById: prev.createdById ?? null,
+        createdByName: prev.createdByName ?? null
+      }
+    })
+    await tx.libraryFileVersion.delete({ where: { id: prev.id } })
+    return file
+  })
+
+  // The old current's bytes are now unreferenced (the file points at the previous
+  // version's path). Drop them unless still shared by the new current or another version.
+  if (oldOwnerBridgeId) {
+    const sharedByCurrent = updated.storedPath === oldStoredPath && (updated.ownerBridgeId ?? null) === oldOwnerBridgeId
+    const sharedByVersion = await prisma.libraryFileVersion.count({
+      where: { ownerBridgeId: oldOwnerBridgeId, storedPath: oldStoredPath }
+    })
+    if (!sharedByCurrent && sharedByVersion === 0) {
+      await deleteLibraryFileBytes({ ownerBridgeId: oldOwnerBridgeId, storedPath: oldStoredPath })
+        .catch((error) => console.warn(`[library] failed to delete bytes for deleted current version of ${current.id}: ${(error as Error).message}`))
+    }
+  }
+
+  annotateRequestAuditLog(request, {
+    action: 'delete-current-version',
+    resource: 'library file',
+    summary: `Deleted current version ${current.currentVersionNumber} of ${current.name}; reverted to version ${prev.versionNumber}.`,
+    metadata: { fileId: current.id, fileName: current.name, deletedVersionNumber: current.currentVersionNumber, revertedToVersionNumber: prev.versionNumber }
+  })
+  broadcastLibraryChanged()
+  response.json({ file: await toDto(updated) })
+})
+
 libraryRouter.get('/versions/:versionId/download', requireRequestPermission(LIBRARY_DOWNLOAD_PERMISSION), async (request, response) => {
   const versionId = requireRouteParam(request.params.versionId, 'Version id')
   const row = await prisma.libraryFileVersion.findUnique({ where: { id: versionId } }) as LibraryFileVersionRow | null

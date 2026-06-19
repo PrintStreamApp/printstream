@@ -105,6 +105,10 @@ services:
     #   context: .
     #   dockerfile: apps/slicer/Dockerfile
     restart: unless-stopped
+    # Run an init (tini) as PID 1. BambuStudio's CLI spawns Xvfb/mkdir children that
+    # become zombies when a slice is cancelled; node-as-PID-1 never reaps them and they
+    # accumulate until the slicer can't start new slices or serve profiles. tini reaps.
+    init: true
     environment:
       SLICER_PORT: 4010
       SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}

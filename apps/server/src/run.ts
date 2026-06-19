@@ -9,11 +9,38 @@
  * the API (which captures its environment at load time).
  */
 import { rmSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { resolveServerPaths } from './app-identity.js'
 import { applyConfigFile, applyServerEnvDefaults, ensureServerDirs, resolvePort } from './config.js'
 import { ensureProvisionToken, isManagedBridgeEnabled, startInBoxBridge } from './in-box-bridge.js'
 import { prepareSeaRuntime } from './sea-assets.js'
 import { writeRunningStatus } from './status.js'
+
+/**
+ * Fail fast with a clear message when the serving port is already taken. The API binds
+ * the port in-process via a dynamic import whose `listen` error is emitted asynchronously
+ * (not a rejected promise), so without this it surfaces as an uncaught crash — an ugly
+ * stack trace on the CLI and *nothing at all* in the tray/GUI. Checking up front turns
+ * that into a friendly error the CLI/tray error paths can show, before the heavy embedded
+ * Postgres boot and before a "running" status file is written.
+ */
+export async function assertPortAvailable(port: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const tester = createServer()
+    tester.once('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        reject(new Error(
+          `Port ${port} is already in use — another PrintStream instance or another app is using it. ` +
+          'Stop it, or set a different PORT in the server config, then try again.'
+        ))
+        return
+      }
+      reject(error)
+    })
+    tester.once('listening', () => tester.close(() => resolve()))
+    tester.listen(port)
+  })
+}
 
 export async function runServer(): Promise<void> {
   const paths = resolveServerPaths()
@@ -33,6 +60,8 @@ export async function runServer(): Promise<void> {
   }
 
   const port = resolvePort()
+  // Refuse to boot onto a taken port (clear message instead of a silent/ugly crash).
+  await assertPortAvailable(port)
   writeRunningStatus(paths, port)
   // Clear the status file on clean exit so `status` cannot report a recycled PID
   // as still running. A hard kill leaves a stale file (reclaimed on next start),
