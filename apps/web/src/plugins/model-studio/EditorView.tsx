@@ -22,6 +22,7 @@ import {
   Checkbox,
   Chip,
   CircularProgress,
+  LinearProgress,
   DialogActions,
   Drawer,
   Dropdown,
@@ -130,8 +131,6 @@ import {
   disposeObject3D,
   getGeometryTrianglePaint,
   isModifierVolumeSubtype,
-  parseStlGeometry,
-  parseThreeMfModelEntry,
   type SupportPaintCodes,
   type TrianglePaintChannel
 } from './lib/threeMfScene'
@@ -190,7 +189,8 @@ import {
   stageImportFromFile,
   stageImportFromLibrary
 } from './lib/editorImports'
-import { fetchModelText } from './lib/modelFetch'
+import { fetchModelBytes } from './lib/modelFetch'
+import { parseStlGeometryAsync, parseThreeMfModelEntryAsync } from './lib/meshParseClient'
 import {
   collectWorldTriangles,
   cutTriangleSoup,
@@ -1251,6 +1251,10 @@ function EditorView({
   // plate's models are rather than staring at an indeterminate spinner. Null until the build
   // effect knows the instance count (or when there's nothing to build).
   const [buildProgress, setBuildProgress] = useState<{ done: number; total: number } | null>(null)
+  // True while the current build appends models to the LIVE plate one-by-one (a plate switch or
+  // the first open) rather than swapping in a finished plate atomically. Drives the lighter,
+  // non-blocking progress chip so the models are clearly visible as they pop in.
+  const [buildIncremental, setBuildIncremental] = useState(false)
   const [placementWarnings, setPlacementWarnings] = useState<PlacementWarning[]>([])
   const placementWarningsSetterRef = useRef(setPlacementWarnings)
   // Dismissing the warnings panel hides the CURRENT set of issues (keyed by the same
@@ -1924,11 +1928,13 @@ function EditorView({
     const promise = (async () => {
       // Stall-guarded read: a wedged transport that commits a response then hangs mid-body
       // must fail loudly (so the viewport shows an error/retry) rather than freeze the build.
-      const xmlText = await fetchModelText(
+      const bytes = await fetchModelBytes(
         buildApiUrl(`${resourceBase}/scene-entry?path=${encodeURIComponent(entryPath)}`),
         { credentials: 'include' }
       )
-      return parseThreeMfModelEntry(xmlText)
+      // Parse + process off the main thread (worker pool) so a huge object (50MB+ of mesh XML)
+      // doesn't freeze the editor while it builds — falls back to a main-thread parse on worker error.
+      return parseThreeMfModelEntryAsync(bytes)
     })()
     cache.set(entryPath, promise)
     evictGeometryCache(cache, GEOMETRY_CACHE_MAX_ENTRIES, (map) => { for (const geometry of map.values()) geometry.dispose() })
@@ -1950,7 +1956,8 @@ function EditorView({
     }
     const promise = (async () => {
       const buffer = await fetchImportMesh(importId, partIndex)
-      return parseStlGeometry(buffer)
+      // Parse off the main thread (worker pool); falls back to a main-thread parse on worker error.
+      return parseStlGeometryAsync(new Uint8Array(buffer))
     })()
     cache.set(cacheKey, promise)
     evictGeometryCache(cache, GEOMETRY_CACHE_MAX_ENTRIES, (geometry) => geometry.dispose())
@@ -1978,7 +1985,7 @@ function EditorView({
       group.userData.rotor = rotor
       // Prefer the live material color for this object's filament; fall back to the
       // color baked into the source scene.
-      const meshFilamentId = resolveColorFilamentId(instance.filamentId)
+      const meshFilamentId = resolveColorFilamentIdRef.current(instance.filamentId)
       // Colours are read via the ref (not the `filamentColors` prop) so buildInstanceGroup is stable
       // w.r.t. colour edits — a swatch change recolours in place (see the recolor effect) instead of
       // re-running this whole builder and rebuilding the plate. Each coloured mesh is tagged with its
@@ -2005,7 +2012,7 @@ function EditorView({
             instance.parts.map(async (part, index) => ({ part, geometry: await fetchImportGeometry(importId, index) }))
           )
           for (const { part, geometry } of partGeometries) {
-            const partFilamentId = resolveColorFilamentId(part.filamentId)
+            const partFilamentId = resolveColorFilamentIdRef.current(part.filamentId)
             const partColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || part.color || meshColor
             const partGroup = createThreeMfPartObject(geometry, { color: partColor, clearanceTransform: placement })
             const partMesh = partGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
@@ -2041,7 +2048,7 @@ function EditorView({
           const partTransform = createThreeMfMatrix(part.transform)
           // Each part can use a different filament than the object; colour it by its
           // own filament so multi-material objects render correctly.
-          const partFilamentId = resolveColorFilamentId(part.filamentId)
+          const partFilamentId = resolveColorFilamentIdRef.current(part.filamentId)
           const partColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || part.color || meshColor
           const partGroup = createThreeMfPartObject(geometry, {
             color: partColor,
@@ -2105,7 +2112,10 @@ function EditorView({
       }
       return group
     },
-    [colorPaintStateColor, fetchGeometry, fetchImportGeometry, resolveColorFilamentId]
+    // resolveColorFilamentId is read via its ref (not a dep) so a late filament/slice-config
+    // settle on open doesn't recreate this builder and trigger a redundant second plate rebuild
+    // — colours are applied/refreshed by the dedicated recolor effect, not by rebuilding geometry.
+    [colorPaintStateColor, fetchGeometry, fetchImportGeometry]
   )
 
   // ---- Triangle painting (support + seam brushes) -------------------------------
@@ -3636,47 +3646,93 @@ function EditorView({
       frameDefaultViewRef.current?.()
     }
 
-    // Build the new plate's contents in a DETACHED staging group, then swap it onto the live
-    // plateRoot atomically once complete. Keeping the visible plate intact until the
-    // replacement is ready lets us yield between objects — so the progress overlay actually
-    // animates and the UI stays responsive — without the half-built flicker that clearing
-    // plateRoot up front caused when a rebuild was superseded mid-flight (slice-config/filament
-    // settling on open, a rapid plate switch). A superseded build just discards its staged
-    // group; the visible plate is never touched.
-    void (async () => {
-      const staging = new THREE.Group()
-      const bedSurface = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas })
-      // Tagged so the thumbnail renderer hides it (Bambu-style model-only thumbnails).
-      bedSurface.userData.isBedSurface = true
-      staging.add(bedSurface)
-      const stagedGroups = new Map<string, THREE.Group>()
-      let stagedTower: THREE.Object3D | null = null
+    // Render strategy turns on whether the live plate is EMPTY:
+    //  - A genuine plate switch clears it (just below), and the first open starts empty: build
+    //    straight onto the live plateRoot and reveal each model as it finishes, so loading reads
+    //    as steady progress instead of one late pop-in — and we never hold two plates' geometry
+    //    at once (lower peak memory on a switch).
+    //  - When the plate already has content (same-plate add/remove/duplicate, or a settling
+    //    rebuild on open) build into a DETACHED staging group and swap it in atomically once
+    //    complete. That path never flashes the plate empty when a build is superseded mid-flight
+    //    (slice-config/filament settling, a rapid switch); a superseded staged build just discards
+    //    its group and the visible plate is untouched.
+    if (isPlateSwitch) {
+      // Empty the previous plate from the live view immediately rather than leaving its models up
+      // while the new plate loads: detach the gizmo and dispose the old meshes. The destination
+      // plate's empty bed is added just below; models then populate onto it.
+      transformRef.current?.detach()
+      disposeObject3D(plateRoot)
+      plateRoot.clear()
+      groupByKeyRef.current.clear()
+      primeTowerObjRef.current = null
+    }
+    const incremental = groupByKeyRef.current.size === 0
+    setBuildIncremental(incremental)
+    // Publish the load count SYNCHRONOUSLY (before the async build's first paint/prefetch) so the
+    // progress bar shows the real total from the first frame — otherwise a partly-loaded plate reads
+    // as finished while the count is still null. Count per-PART (the actual download units, mirroring
+    // the prefetch fan-out below), not per-object, so a single multi-solid assembly still shows
+    // granular progress instead of a stuck "1 of 1". The prefetch bumps `done` as each part settles.
+    const totalLoadUnits = activePlate.instances.reduce((sum, instance) => sum + (
+      instance.source.kind === 'import'
+        ? (instance.parts.length > 1 ? instance.parts.length : 1)
+        : instance.parts.length
+    ), 0)
+    setBuildProgress(totalLoadUnits > 0 ? { done: 0, total: totalLoadUnits } : null)
+    if (incremental && !plateRoot.children.some((child) => child.userData?.isBedSurface)) {
+      // Show the destination plate's empty bed straight away; models append onto it as they build.
+      const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas })
+      liveBed.userData.isBedSurface = true
+      plateRoot.add(liveBed)
+    }
 
-      // Paint once before the (potentially heavy) geometry work so the loading overlay shows
+    void (async () => {
+      // Incremental: add straight to the live plateRoot (already bearing its bed). Atomic: assemble
+      // in a detached staging group (with its own bed) and swap it in at the end.
+      const staging = incremental ? null : new THREE.Group()
+      const target = staging ?? plateRoot
+      if (staging) {
+        const bedSurface = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas })
+        // Tagged so the thumbnail renderer hides it (Bambu-style model-only thumbnails).
+        bedSurface.userData.isBedSurface = true
+        staging.add(bedSurface)
+      }
+      const builtGroups = new Map<string, THREE.Group>()
+      let builtTower: THREE.Object3D | null = null
+      // Only the detached staging group is ours to discard on cancel; live (incremental) models
+      // already on plateRoot are reconciled by the next build's swap/clear or by scene teardown.
+      const discardStaging = () => { if (staging) disposeObject3D(staging) }
+
+      // Paint once before the (potentially heavy) geometry work so the loading indicator shows
       // immediately rather than after the first object's synchronous build.
       await nextPaint()
-      if (cancelled) { disposeObject3D(staging); return }
+      if (cancelled) { discardStaging(); return }
 
-      // Warm the geometry caches for EVERYTHING on the plate up front: the instance loop below
-      // stays sequential (deterministic scene order, per-object bed rest), but all entry/import
-      // downloads now run concurrently instead of one round-trip at a time — the dominant cost
-      // for bridge-owned files with many parts.
+      // Advance the progress bar as each part download settles (success OR failure), so the
+      // indicator reflects real download progress — even for one big multi-part assembly. Guarded on
+      // `cancelled` so a superseded build never writes progress for a plate the user left.
+      let loadedUnits = 0
+      const bumpLoaded = () => {
+        if (cancelled) return
+        loadedUnits += 1
+        setBuildProgress(totalLoadUnits > 0 ? { done: loadedUnits, total: totalLoadUnits } : null)
+      }
+      // Warm the geometry caches for everything on the plate up front. fetchModelBytes caps how
+      // many downloads actually run at once, so firing them all here just front-runs the sequential
+      // build below without oversubscribing the connection pool (which used to trip the stall guard).
       for (const instance of activePlate.instances) {
         if (instance.source.kind === 'import') {
           const importId = instance.source.importId
           if (instance.parts.length > 1) {
-            instance.parts.forEach((_part, index) => fetchImportGeometry(importId, index).catch(() => {}))
+            instance.parts.forEach((_part, index) => fetchImportGeometry(importId, index).then(bumpLoaded, bumpLoaded))
           } else {
-            fetchImportGeometry(importId).catch(() => {})
+            fetchImportGeometry(importId).then(bumpLoaded, bumpLoaded)
           }
         } else {
-          for (const part of instance.parts) fetchGeometry(part.entryPath).catch(() => {})
+          for (const part of instance.parts) fetchGeometry(part.entryPath).then(bumpLoaded, bumpLoaded)
         }
       }
       const instances = activePlate.instances
-      // Drive the overlay's "Loading models… (done/total)" readout. Start at 0 so the count is
-      // visible immediately while geometry warms; each built instance bumps it.
-      setBuildProgress(instances.length > 0 ? { done: 0, total: instances.length } : null)
       let lastPaintAt = performance.now()
       for (let instanceIndex = 0; instanceIndex < instances.length; instanceIndex += 1) {
         const instance = instances[instanceIndex]!
@@ -3684,35 +3740,37 @@ function EditorView({
           const group = await buildInstanceGroup(instance)
           if (cancelled) {
             if (group) disposeObject3D(group)
-            disposeObject3D(staging)
+            discardStaging()
             return
           }
-          setBuildProgress({ done: instanceIndex + 1, total: instances.length })
           if (group) {
-            // Rest every object on the bed as it's built and persist the corrected z into
-            // state (in place, like writeBack — no re-render). Objects must sit on the bed for
-            // slicing, and this guarantees nothing is ever displayed floating/sunk — so a later
-            // move/scale never "snaps" it to the bed (the long-standing jump bug).
+            // Rest every object on the bed as it's built and persist the corrected z into state
+            // (in place, like writeBack — no re-render). Objects must sit on the bed for slicing,
+            // and this guarantees nothing is ever displayed floating/sunk — so a later move/scale
+            // never "snaps" it to the bed (the long-standing jump bug).
             restObjectOnBed(group)
             instance.position.z = group.position.z
             setObjectPrintedStyle(group, isInstancePrintedRef.current(instance))
-            staging.add(group)
-            stagedGroups.set(instance.key, group)
+            target.add(group)
+            builtGroups.set(instance.key, group)
+            // Incremental: register each model live as it lands so a superseding rebuild sees the
+            // plate is non-empty and takes the atomic-swap path (no duplicate, no empty flash).
+            if (incremental) groupByKeyRef.current.set(instance.key, group)
           }
         } catch (error) {
-          if (cancelled || abort.signal.aborted) { disposeObject3D(staging); return }
+          if (cancelled || abort.signal.aborted) { discardStaging(); return }
           setViewerError(error instanceof Error ? error.message : 'Unable to load model geometry.')
         }
-        // Yield so the progress overlay paints and input stays responsive while a multi-object
-        // plate builds. Throttled to ~frame cadence so a quick plate isn't slowed by needless
-        // waits; the staged group is off-screen, so this never reveals a half-built scene.
+        // Yield so the view paints (each model appears as it lands in incremental mode) and input
+        // stays responsive while a multi-object plate builds. Throttled to ~frame cadence so a
+        // quick plate isn't slowed by needless waits.
         if (instanceIndex < instances.length - 1 && performance.now() - lastPaintAt > 24) {
           await nextPaint()
-          if (cancelled) { disposeObject3D(staging); return }
+          if (cancelled) { discardStaging(); return }
           lastPaintAt = performance.now()
         }
       }
-      if (cancelled) { disposeObject3D(staging); return }
+      if (cancelled) { discardStaging(); return }
       // Now that the plate's models are present, size the prime tower to the print height (its
       // depth depends on height) and place it on the bed — but only when the plate actually
       // prints more than one filament, since that's the only time a purge/prime tower is
@@ -3721,26 +3779,30 @@ function EditorView({
       if (activePlate.primeTower && activePlateFilamentCountRef.current >= 2) {
         const bounds = new THREE.Box3()
         let printHeight = 0
-        for (const group of stagedGroups.values()) {
+        for (const group of builtGroups.values()) {
           bounds.setFromObject(group)
           if (!bounds.isEmpty()) printHeight = Math.max(printHeight, bounds.max.z)
         }
-        stagedTower = createPrimeTowerObject(activePlate.primeTower, activePlateFilamentCountRef.current, printHeight || 30)
-        staging.add(stagedTower)
+        builtTower = createPrimeTowerObject(activePlate.primeTower, activePlateFilamentCountRef.current, printHeight || 30)
+        target.add(builtTower)
       }
 
-      // ---- Atomic swap: replace the visible plate with the freshly built one in one frame. ----
-      transformRef.current?.detach()
-      disposeObject3D(plateRoot)
-      plateRoot.clear()
-      while (staging.children.length > 0) plateRoot.add(staging.children[0]!)
-      groupByKeyRef.current.clear()
-      for (const [key, group] of stagedGroups) groupByKeyRef.current.set(key, group)
-      primeTowerObjRef.current = stagedTower
+      if (staging) {
+        // ---- Atomic swap: replace the visible plate with the freshly built one in one frame. ----
+        transformRef.current?.detach()
+        disposeObject3D(plateRoot)
+        plateRoot.clear()
+        while (staging.children.length > 0) plateRoot.add(staging.children[0]!)
+        groupByKeyRef.current.clear()
+        for (const [key, group] of builtGroups) groupByKeyRef.current.set(key, group)
+      }
+      // Incremental builds are already live (groupByKeyRef was populated as each model landed).
+      primeTowerObjRef.current = builtTower
       // Re-attach the gizmo to the selected instance if it is on this plate.
       reattachGizmo()
       // All of this plate's models are now in the scene.
       setBuildProgress(null)
+      setBuildIncremental(false)
       setViewportBuilding(false)
       // Snapshot this plate now that its contents are present.
       regenerateActivePlateThumbnail()
@@ -3754,6 +3816,7 @@ function EditorView({
       // The next effect run sets it true again synchronously, so there's no flicker.
       setViewportBuilding(false)
       setBuildProgress(null)
+      setBuildIncremental(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlateIndex, activeInstanceKeys, buildInstanceGroup, sceneReady, rebuildToken])
@@ -5039,6 +5102,13 @@ function EditorView({
   // Disable scene-manipulation controls until the plate has finished (re)building — acting on a
   // half-loaded scene (e.g. auto-arrange before the models are in) is undefined.
   const controlsBusy = loading || viewportBuilding || !sceneReady
+  // The in-viewport loading overlay shows while models build AND during the brief pre-build window
+  // after the viewport mounts but before the scene/canvas is ready — otherwise the first open shows
+  // an empty bed with no sign of loading until the models suddenly appear. Pre-build is treated as
+  // incremental (the plate starts empty), so it gets the top bar + centred message rather than the
+  // same-plate dimming rebuild.
+  const showBuildOverlay = viewportBuilding || !sceneReady
+  const buildOverlayIncremental = buildIncremental || !sceneReady
   const loadError = platesQuery.error instanceof Error
     ? platesQuery.error.message
     : initialSceneQuery.error instanceof Error
@@ -5136,7 +5206,57 @@ function EditorView({
                   whenever the inline value is cleared, keeping the canvas non-scrolling every time.
                 */}
                 <Box ref={setViewerContainer} sx={{ position: 'absolute', inset: 0, touchAction: 'none', '& canvas': { touchAction: 'none' } }} />
-                {viewportBuilding && (
+                {showBuildOverlay && buildOverlayIncremental && (
+                  // Incremental / first load: a progress bar pinned to the top edge PLUS a centred
+                  // spinner + count over a light scrim. The centre carries the "still loading"
+                  // message clearly (a bare top bar was too easy to miss), while the light dim still
+                  // lets each model show as it lands. The bar/count are part-based, so even a single
+                  // multi-solid assembly shows real progress.
+                  <>
+                    <LinearProgress
+                      determinate={!!buildProgress && buildProgress.total > 1}
+                      value={buildProgress && buildProgress.total > 1 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}
+                      thickness={4}
+                      sx={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        zIndex: 3,
+                        pointerEvents: 'none',
+                        '--LinearProgress-radius': '0px'
+                      }}
+                    />
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        inset: 0,
+                        zIndex: 2,
+                        pointerEvents: 'none',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 1.25,
+                        bgcolor: 'rgba(13, 19, 34, 0.4)'
+                      }}
+                    >
+                      <CircularProgress
+                        size="md"
+                        determinate={!!buildProgress && buildProgress.total > 1}
+                        value={buildProgress && buildProgress.total > 1 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}
+                      />
+                      <Typography level="body-sm" textColor="common.white">
+                        {buildProgress && buildProgress.total > 1
+                          ? `Loading models… ${buildProgress.done} of ${buildProgress.total}`
+                          : 'Loading models…'}
+                      </Typography>
+                    </Box>
+                  </>
+                )}
+                {showBuildOverlay && !buildOverlayIncremental && (
+                  // Atomic rebuild: the previous plate is still visible, so dim it more to signal
+                  // work while the replacement is assembled off-screen.
                   <Box
                     sx={{
                       position: 'absolute',
@@ -5153,11 +5273,7 @@ function EditorView({
                   >
                     {buildProgress && buildProgress.total > 1 ? (
                       <>
-                        <CircularProgress
-                          size="md"
-                          determinate
-                          value={Math.round((buildProgress.done / buildProgress.total) * 100)}
-                        />
+                        <CircularProgress size="md" determinate value={Math.round((buildProgress.done / buildProgress.total) * 100)} />
                         <Typography level="body-sm" textColor="common.white">
                           Loading models… ({buildProgress.done}/{buildProgress.total})
                         </Typography>

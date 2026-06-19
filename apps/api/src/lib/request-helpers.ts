@@ -1,24 +1,25 @@
 /**
  * Shared request-derived helpers for routes and plugins.
  */
-import { gzip } from 'node:zlib'
-import { promisify } from 'node:util'
+import { createGzip } from 'node:zlib'
+import { pipeline } from 'node:stream/promises'
+import { Readable } from 'node:stream'
 import type { NextFunction, Request, Response } from 'express'
 import type { Multer } from 'multer'
 import { MulterError } from 'multer'
 import { badRequest } from './http-error.js'
 
-const gzipAsync = promisify(gzip)
-
 /**
  * Send a model/mesh buffer, gzip-compressing it when the client advertises gzip support.
  *
  * Library model entries are multi-megabyte XML (and import/preview meshes can be large binary
- * STL); they compress several-fold, which both cuts transfer time and — importantly — keeps a
- * single response from exceeding the in-flight buffer of size-limited proxies, which can
- * otherwise stall a large body mid-stream and hang the editor's geometry load. Tiny payloads
- * skip compression (the gzip framing isn't worth it), and clients that don't advertise gzip
- * still receive the raw bytes.
+ * STL). The gzip body is **streamed in chunks** (chunked transfer-encoding) rather than buffered
+ * into a single `res.send()`: a large single-buffer response is truncated mid-stream by the Vite
+ * dev proxy (and other size-limited proxies) — the browser receives most of the body, waits for a
+ * tail that never arrives, and the editor's geometry load hangs ("model download stalled"). Many
+ * small chunks pass through cleanly, and streaming also keeps peak memory flat for a 50MB+ entry.
+ * Tiny payloads skip compression (the gzip framing isn't worth it), and clients that don't
+ * advertise gzip still receive the raw bytes.
  */
 export async function sendModelBuffer(
   request: Request,
@@ -31,7 +32,13 @@ export async function sendModelBuffer(
   const acceptsGzip = /\bgzip\b/i.test(request.headers['accept-encoding'] ?? '')
   if (acceptsGzip && buffer.length >= 4096) {
     response.setHeader('Content-Encoding', 'gzip')
-    response.send(await gzipAsync(buffer))
+    try {
+      await pipeline(Readable.from([buffer]), createGzip(), response)
+    } catch (error) {
+      // A client disconnect mid-stream (the editor superseded the load or navigated away) is
+      // expected once we've started writing; only surface a genuine error if nothing was sent.
+      if (!response.headersSent && !response.writableEnded) throw error
+    }
     return
   }
   response.send(buffer)

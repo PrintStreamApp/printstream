@@ -127,16 +127,22 @@ void finalizeApp()
   })
 
 let shuttingDown = false
+let shutdownStartedAt = 0
 function shutdown(signal: NodeJS.Signals) {
-  // A second Ctrl-C/SIGINT means the user is done waiting for graceful teardown — exit NOW instead
-  // of re-running the handler (the previous behaviour, which just re-printed and reset the timer, so
-  // `npm run dev` appeared to hang through repeated Ctrl-C).
   if (shuttingDown) {
-    console.warn('Received a second signal; forcing immediate exit')
+    // ONE Ctrl-C delivers two signals in quick succession under the dev runner: the terminal
+    // SIGINTs the whole process group, then `concurrently` SIGTERMs its children. Exit immediately
+    // (keeping dev Ctrl-C snappy), but DON'T print the "forcing immediate exit" notice for that
+    // near-instant doubled signal — it's the same Ctrl-C, not the user impatiently pressing again.
+    // A repeat that arrives well later is a genuine second Ctrl-C and gets the notice.
+    if (Date.now() - shutdownStartedAt > 1_000) {
+      console.warn(`Received ${signal} again; forcing immediate exit`)
+    }
     process.exit(1)
   }
   shuttingDown = true
-  console.log(`Received ${signal}, shutting down (press Ctrl-C again to force-quit)`)
+  shutdownStartedAt = Date.now()
+  console.log(`Received ${signal}, shutting down (Ctrl-C again to force-quit)`)
   stopLibraryCleanup()
   stopPrintJobRecorder()
   stopActivePrintObjectCache()
