@@ -272,13 +272,15 @@ export type ObjectProcessOverrides = Record<string, Record<string, string | stri
  * plate and/or injects per-object process overrides, in a single copy pass while leaving geometry
  * verbatim.
  *
- * Object selection is enforced by marking the deselected objects' `<build><item>` entries
- * `printable="0"` in `3D/3dmodel.model` — NOT by removing their `<model_instance>` blocks from
- * `model_settings.config`. The BambuStudio CLI re-derives each plate's membership from build-item
- * geometry and slices only the printable instances; it ignores missing instance metadata, so
- * editing `model_settings.config` alone would still slice every object on the plate. This mirrors
- * the editor's per-object "Printable" toggle. Scoped to `plate`'s object set so objects on other
- * plates are never touched. Per-object process overrides are applied to `model_settings.config`.
+ * Object selection is expressed by marking the deselected objects' `<build><item>` entries
+ * `printable="0"` in `3D/3dmodel.model` (the same marker the 3D editor's Printable toggle writes).
+ * That flag is NOT itself honored by the BambuStudio CLI — the slicer service reads it back and
+ * passes the matching `identify_id`s to the CLI's `--skip-objects` flag, which is what actually
+ * excludes them (see `apps/slicer/src/skip-objects.ts`). Removing the `<model_instance>` blocks
+ * instead does nothing (the CLI re-derives plate membership from build-item geometry), and physically
+ * deleting objects corrupts the `<assemble>` cross-references. Scoped to `plate`'s object set so
+ * objects on other plates are never touched. Per-object process overrides are applied to
+ * `model_settings.config`.
  */
 export async function createObjectCustomizedThreeMf(
   sourcePath: string,
@@ -393,10 +395,10 @@ export function plateObjectIdsFromModelSettingsXml(xml: string, plate: number): 
 /**
  * Mark the `<build><item>` entries of `unprintableObjectIds` as `printable="0"` in a
  * `3D/3dmodel.model` XML string (replacing an existing `printable` attribute or inserting one),
- * leaving every other build item and the rest of the document untouched. This is the slice-time
- * exclusion BambuStudio's CLI actually honors — it gathers a plate's printable instances from the
- * build items' `printable` flag — mirroring the editor's per-object "Printable" toggle. Build-item
- * `objectid`s are Bambu `object_id` values, matching {@link plateObjectIdsFromModelSettingsXml}.
+ * leaving every other build item and the rest of the document untouched. This is the same marker the
+ * editor's per-object "Printable" toggle writes; the slicer service translates it into BambuStudio's
+ * `--skip-objects` CLI flag at slice time (the CLI ignores the flag itself). Build-item `objectid`s
+ * are Bambu `object_id` values, matching {@link plateObjectIdsFromModelSettingsXml}.
  */
 export function setBuildItemsUnprintableXml(modelXml: string, unprintableObjectIds: Set<number>): string {
   if (unprintableObjectIds.size === 0) return modelXml

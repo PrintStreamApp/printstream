@@ -163,7 +163,7 @@ export async function startEmbeddedPostgresIfEnabled(
     // 0700 socket perms: only the cluster's own service user can connect over the
     // Unix socket, so the well-known embedded superuser password is not reachable
     // by other local users on a shared host (defense-in-depth with the 0700 data
-    // dir set in apps/server's ensureServerDirs).
+    // dir the native self-hosted build creates at startup).
     ? ['-c', 'listen_addresses=', '-c', `unix_socket_directories=${dataDir}`, '-c', 'unix_socket_permissions=0700']
     : ['-c', 'listen_addresses=127.0.0.1']
 

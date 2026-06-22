@@ -32,10 +32,12 @@ import yazl from 'yazl'
 import { env } from './env.js'
 import { terminateSlicerChild } from './terminate-child.js'
 import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
-import { openZip, readZipEntryBuffer } from './zip-io.js'
+import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
 import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
 import { selectCliProfileFiles } from './cli-profile-selection.js'
 import { assertSupportedEmbeddedMachineSwitch, shouldUseEstimateModeMachineSwitch } from './machine-switch-guard.js'
+import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
+import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
 import { formatSlicePresetIncompatibilityError } from './slice-error.js'
 import { mergeInheritedMachineProfile, repairEstimateModeProjectSettings } from './machine-switch-repair.js'
 import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
@@ -395,10 +397,14 @@ async function runCli(input: {
     ),
     input.inputPath
   )
+  // Per-object selection: objects the user deselected (print/slice dialog or editor Printable
+  // toggle) arrive as build items marked printable="0". The CLI only honors that via --skip-objects
+  // (by identify_id), so translate it here. Empty when nothing is excluded.
+  const skipObjectArgs = buildSkipObjectsArgs(await deriveSkipObjectIdentifyIds(input.inputPath))
   const inputArgIndex = templateArgs.indexOf(input.inputPath)
   const args = inputArgIndex >= 0
-    ? [...templateArgs.slice(0, inputArgIndex), ...machineSwitchArgs, ...profileArgs, ...templateArgs.slice(inputArgIndex)]
-    : [...templateArgs, ...machineSwitchArgs, ...profileArgs]
+    ? [...templateArgs.slice(0, inputArgIndex), ...machineSwitchArgs, ...profileArgs, ...skipObjectArgs, ...templateArgs.slice(inputArgIndex)]
+    : [...templateArgs, ...machineSwitchArgs, ...profileArgs, ...skipObjectArgs]
 
   await executeCli({
     slicerTarget: input.slicerTarget,
@@ -613,7 +619,44 @@ async function exportRepairedMachineSwitchProject(input: MachineSwitchExportInpu
   }
   await readFile(repairedOutputPath)
   appendStructuredOutput(input.outputLines, 'system', `Normalized project size: ${repairedInfo.size} bytes`)
+  await recenterRepairedProjectForLargerBed(repairedOutputPath, path.join(workDir, 'input.3mf'), input)
   return repairedOutputPath
+}
+
+/**
+ * After the machine-switch repair, shift each plate's objects onto the (larger) target bed so a
+ * multi-plate project's non-first plates don't fall outside their plate region (CLI exit 206 /
+ * CLI_NO_SUITABLE_OBJECTS). The repaired project already targets the new machine but keeps the source
+ * layout, because BambuStudio's CLI only re-centers on a switch it treats as "forced" (an
+ * incompatible process), not the normal compatible-process switch this flow performs. We apply
+ * BambuStudio's own `translate_models` shift ourselves (see {@link recenterBuildItemsXml}), reading
+ * the source bed from the original upload and the target bed from the merged machine profile. A no-op
+ * for a same/smaller target bed.
+ */
+async function recenterRepairedProjectForLargerBed(repairedPath: string, sourcePath: string, input: MachineSwitchExportInput): Promise<void> {
+  const sourceSettings = await readThreeMfProjectSettings(sourcePath).catch(() => null)
+  const sourceBed = sourceSettings ? bedSizeFromPrintableArea(sourceSettings.printable_area) : null
+  const machineProfile = await readMergedMachineProfile(input.slicerTarget.profileDir, input.machineSwitchProfileName).catch(() => null)
+  const targetBed = machineProfile ? bedSizeFromPrintableArea(machineProfile.printable_area) : null
+  if (!sourceBed || !targetBed) return
+  // Only onto a larger bed (source smaller in at least one dim, not smaller in either) — BambuStudio's
+  // `shrink_to_new_bed==1` centering. A smaller target is a different case (objects may not fit) we leave alone.
+  const larger = targetBed.width > sourceBed.width || targetBed.depth > sourceBed.depth
+  const notSmaller = targetBed.width >= sourceBed.width && targetBed.depth >= sourceBed.depth
+  if (!larger || !notSmaller) return
+  const settingsXml = await readZipEntryText(repairedPath, 'Metadata/model_settings.config').catch(() => '')
+  const { objectPlateIndex, plateCount } = buildObjectPlateIndex(settingsXml)
+  if (objectPlateIndex.size === 0) return
+  const recenteredPath = `${repairedPath}.recenter`
+  await rewriteThreeMfProjectSettings(
+    repairedPath,
+    recenteredPath,
+    (settings) => settings,
+    undefined,
+    (modelXml) => recenterBuildItemsXml(modelXml, objectPlateIndex, plateCount, sourceBed, targetBed)
+  )
+  await rename(recenteredPath, repairedPath)
+  appendStructuredOutput(input.outputLines, 'system', `Re-centered objects onto ${targetBed.width}x${targetBed.depth} bed`)
 }
 
 async function getSupportedCliFlags(
@@ -1178,7 +1221,8 @@ async function rewriteThreeMfProjectSettings(
   inputPath: string,
   outputPath: string,
   transform: (settings: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>,
-  modelSettingsTransform?: (modelSettingsXml: string) => string
+  modelSettingsTransform?: (modelSettingsXml: string) => string,
+  model3dTransform?: (modelXml: string) => string
 ): Promise<boolean> {
   const sourceZip = await openZip(inputPath)
   const outputZip = new yazl.ZipFile()
@@ -1231,6 +1275,20 @@ async function rewriteThreeMfProjectSettings(
           (buffer) => {
             outputZip.addBuffer(
               Buffer.from(modelSettingsTransform(buffer.toString('utf8')), 'utf8'),
+              entry.fileName,
+              { mtime: entry.getLastModDate() }
+            )
+            sourceZip.readEntry()
+          },
+          (error) => finish(error as Error)
+        )
+        return
+      }
+      if (model3dTransform && entry.fileName === '3D/3dmodel.model') {
+        readZipEntryBuffer(sourceZip, entry).then(
+          (buffer) => {
+            outputZip.addBuffer(
+              Buffer.from(model3dTransform(buffer.toString('utf8')), 'utf8'),
               entry.fileName,
               { mtime: entry.getLastModDate() }
             )

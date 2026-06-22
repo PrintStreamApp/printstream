@@ -32,3 +32,31 @@ export async function readZipEntryBuffer(zipFile: ZipFile, entry: Entry): Promis
     })
   })
 }
+
+/** Read a single named entry from a 3MF (ZIP) file on disk as UTF-8 text. Rejects if absent. */
+export async function readZipEntryText(filePath: string, entryName: string): Promise<string> {
+  const zipFile = await openZip(filePath)
+  return await new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (error?: Error, value?: string) => {
+      if (settled) return
+      settled = true
+      zipFile.close()
+      if (error) reject(error)
+      else resolve(value ?? '')
+    }
+    zipFile.on('error', finish)
+    zipFile.on('end', () => finish(new Error(`Entry not found: ${entryName}`)))
+    zipFile.on('entry', (entry: Entry) => {
+      if (entry.fileName !== entryName) {
+        zipFile.readEntry()
+        return
+      }
+      readZipEntryBuffer(zipFile, entry).then(
+        (buffer) => finish(undefined, buffer.toString('utf8')),
+        (error) => finish(error instanceof Error ? error : new Error(String(error)))
+      )
+    })
+    zipFile.readEntry()
+  })
+}

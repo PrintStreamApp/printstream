@@ -40,10 +40,9 @@ The product now operates in two workspace modes:
 | `apps/api` | Express HTTP routes, bridge session server, printer manager, WS broadcaster, Prisma persistence, plugin host. |
 | `apps/bridge` | Outbound LAN runtime for SSDP discovery plus bridged MQTT/FTPS/camera transport. |
 | `apps/slicer` | Standalone runtime that wraps the BambuStudio CLI to slice 3MFs on request from the API. |
-| `apps/server` | Native single-file (Node SEA) packaging of the self-hosted OSS app: boots embedded PostgreSQL + the API/web + an in-box managed bridge on one port. See [docs/native-self-hosted-packaging.md](docs/native-self-hosted-packaging.md). |
 | `packages/shared` | Zod schemas, DTOs, WS + bridge event contracts, notification types, error helpers. |
 | `packages/bridge-runtime` | Shared LAN transport library (MQTT, FTPS, camera, SSDP discovery, transport arbitration) used by both `apps/api` and `apps/bridge`. |
-| `packages/sea-runtime` | Generic, app-agnostic Node SEA plumbing (service install, paths, control channel, tray, build harness) shared by the cloud bridge and the `apps/server` builds. |
+| `packages/sea-runtime` | Generic, app-agnostic Node SEA plumbing (service install, paths, control channel, tray, build harness) for standalone single-executable packaging. |
 | `apps/api/prisma` | PostgreSQL schema + migrations. |
 
 ## Live data flow

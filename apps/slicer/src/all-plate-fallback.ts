@@ -10,7 +10,7 @@ import { createWriteStream } from 'node:fs'
 import { rm, rename } from 'node:fs/promises'
 import { type Entry } from 'yauzl'
 import yazl from 'yazl'
-import { openZip, readZipEntryBuffer } from './zip-io.js'
+import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
 
 const DIRECT_ALL_PLATE_MODELS = new Set(['H2D', 'H2DPRO', 'H2C'])
 
@@ -411,29 +411,3 @@ async function writeZip(filePath: string, entries: Array<{ name: string; buffer:
   })
 }
 
-async function readZipEntryText(filePath: string, entryName: string): Promise<string> {
-  const zipFile = await openZip(filePath)
-  return await new Promise((resolve, reject) => {
-    let settled = false
-    const finish = (error?: Error, value?: string) => {
-      if (settled) return
-      settled = true
-      zipFile.close()
-      if (error) reject(error)
-      else resolve(value ?? '')
-    }
-    zipFile.on('error', finish)
-    zipFile.on('end', () => finish(new Error(`Entry not found: ${entryName}`)))
-    zipFile.on('entry', (entry: Entry) => {
-      if (entry.fileName !== entryName) {
-        zipFile.readEntry()
-        return
-      }
-      readZipEntryBuffer(zipFile, entry).then(
-        (buffer) => finish(undefined, buffer.toString('utf8')),
-        (error) => finish(error as Error)
-      )
-    })
-    zipFile.readEntry()
-  })
-}

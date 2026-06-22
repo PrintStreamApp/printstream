@@ -1,10 +1,9 @@
 # Operations: backup, restore, monitoring, incidents
 
-Operational runbook for **self-hosted** PrintStream — the Docker Compose stack
-and the native single-file build. (Cloud-specific procedures live in the
+Operational runbook for **self-hosted** PrintStream — the Docker Compose stack. (Cloud-specific procedures live in the
 maintainer's internal operations notes.)
 
-The embedded/Compose Postgres holds all workspace, printer, job, and auth data;
+The Postgres database holds all workspace, printer, job, and auth data;
 the library volume holds uploaded model/gcode files. **Both must be backed up** —
 a model file's bytes are not reconstructible from the database alone.
 
@@ -17,13 +16,6 @@ a model file's bytes are not reconstructible from the database alone.
 | `printstream-postgres-data` | The entire application database | Critical |
 | `printstream-data` | Library files, plugins, bridge release artifacts, snapshots | Critical (model bytes) |
 | `printstream-bridge-data` | A bundled bridge's identity + library files | Important |
-
-### Native build
-
-Everything lives under the data dir (default `/var/lib/printstream`, or
-`PRINTSTREAM_DATA_DIR`): the embedded Postgres cluster (`db/`), the library, and
-plugins. Back up the **whole data dir** (it is created `0700` and is as sensitive
-as a credential — see `docs/native-self-hosted-packaging.md`).
 
 ## Backup
 
@@ -92,7 +84,7 @@ printer's history.
 
 1. **Is it up and ready?** `curl -fsS http://<host>/api/health/ready`. A 503 means
    the DB is unreachable — check the `db` container/cluster and disk space.
-2. **Logs:** `docker compose logs --tail=200 api` (or the native service log).
+2. **Logs:** `docker compose logs --tail=200 api`.
    Grab the `requestId` from the user's error and grep for it.
 3. **Bridge offline / printers not updating:** check `printstream_bridges_connected`
    and the bridge container logs; a bridge reconnects on its own once its link is

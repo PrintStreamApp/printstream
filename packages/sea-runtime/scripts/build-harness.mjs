@@ -2,10 +2,10 @@
  * Shared Node SEA (single-file executable) build harness — the app-agnostic
  * mechanics every PrintStream SEA build needs: the per-target Node download
  * table, checksum-verified Node acquisition, SEA blob generation + postject
- * injection, and the Windows signing step. Both the cloud bridge's
- * private build script (`apps/bridge/scripts/private/build-sea.mjs`) and the
- * public server build script (`apps/server/scripts/build-sea.mjs`) import from
- * here so the two builds stay in lockstep.
+ * injection, and the Windows signing step. The standalone SEA build scripts for
+ * the cloud bridge and the native self-hosted app both import from here so the
+ * two builds stay in lockstep. (Those build scripts are cloud/paid distributions
+ * outside the open-source snapshot; this shared harness stays public.)
  *
  * What stays in each app's build script is what differs: which entry to bundle,
  * which assets to embed (ffmpeg/WinSW vs Prisma/Postgres/web), the release

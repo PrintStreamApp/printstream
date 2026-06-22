@@ -125,8 +125,7 @@ Forward path:
   Objects-list toggle.
 - `buildSceneEdit` emits `printable: false` only for skipped instances.
 - `buildEditedThreeMf` (`three-mf-scene-builder.ts`) writes `printable="0"` on the build `<item>` —
-  BambuStudio's native attribute, which the CLI honours (excludes from slice) and which is
-  retained in the saved 3MF.
+  BambuStudio's native attribute, retained in the saved 3MF so the object can be re-enabled.
 
 Round-trip (reopen): `readSceneManifest` parses `<item printable="0">` back onto the scene
 instance (`parseRootBuildItemPrintable`), so the editor seeds `EditorInstance.printable`
@@ -134,12 +133,22 @@ and a reopened project keeps its greyed objects. This read path is **API-only** 
 does not parse build items (the shared parser only builds the index); the scene is always
 assembled by `three-mf-reader.ts` from a locally-resolved file.
 
-The slice dialog's per-plate object selection reaches the CLI the **same way**:
-`createObjectCustomizedThreeMf` (`three-mf-output.ts`) marks the deselected objects' build
-`<item>`s `printable="0"` for the target plate before slicing. Removing an object's
-`<model_instance>` from `model_settings.config` does **not** exclude it — the CLI re-derives
-each plate's membership from build-item geometry and gathers only the `printable` instances, so
-the `printable` flag (not the instance metadata) is what drops an object from the slice.
+### How `printable="0"` actually excludes an object from the slice
+
+The BambuStudio **CLI ignores the build-item `printable` flag** when slicing (and ignores
+`<model_instance>` removal — it re-derives plate membership from build-item geometry; physically
+deleting objects corrupts the `<assemble>` cross-references). The only mechanism the engine honors
+is the `--skip-objects "<identify_id,…>"` command-line flag, keyed on each instance's `identify_id`
+(stored as `loaded_id` by the loader). So `printable="0"` is purely an **in-3MF marker of intent**;
+the slicer service is what enforces it: before invoking the CLI, `apps/slicer/src/skip-objects.ts`
+(`deriveSkipObjectIdentifyIds`) reads the build items marked `printable="0"`, maps each `objectid`
+to its `model_settings` `identify_id`, and appends `--skip-objects`.
+
+This drives the **slice/print dialog's per-object selection**: `createObjectCustomizedThreeMf`
+(`three-mf-output.ts`) marks the deselected objects `printable="0"` on the target plate, and real
+Bambu source projects carry the `identify_id`s the mapping needs. The editor's per-*instance*
+Printable toggle writes the same marker, but its rebuilt 3MF omits `identify_id`s and skips per
+instance rather than per object — so routing it through `--skip-objects` is a separate follow-up.
 
 ## Invariants
 

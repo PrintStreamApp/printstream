@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/sea-runtime && npm run build --workspace @printstream/api && npm run build --workspace @printstream/server && npm run build --workspace @printstream/bridge && npm run build --workspace @printstream/slicer && npm run build --workspace @printstream/web",
+    "build": "npm run build --workspace @printstream/shared && npm run build --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/sea-runtime && npm run build --workspace @printstream/api && npm run build --workspace @printstream/bridge && npm run build --workspace @printstream/slicer && npm run build --workspace @printstream/web",
     "capture:printer-media": "tsx scripts/dev/capture-live-printer-media.ts",
     "db:generate": "npm run prisma:generate --workspace @printstream/api",
     "db:migrate": "npm run prisma:migrate:dev --workspace @printstream/api --",
@@ -22,7 +22,7 @@
     "lint": "eslint .",
     "notices": "node scripts/dev/generate-third-party-notices.mjs",
     "test": "NODE_ENV=test node scripts/dev/run-tests.mjs",
-    "typecheck": "npm run typecheck --workspace @printstream/shared && npm run build --workspace @printstream/shared && npm run typecheck --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/bridge-runtime && npm run typecheck --workspace @printstream/sea-runtime && npm run build --workspace @printstream/sea-runtime && npm run typecheck --workspace @printstream/api && npm run build --workspace @printstream/api && npm run typecheck --workspace @printstream/server && npm run typecheck --workspace @printstream/bridge && npm run typecheck --workspace @printstream/slicer && npm run typecheck --workspace @printstream/web",
+    "typecheck": "npm run typecheck --workspace @printstream/shared && npm run build --workspace @printstream/shared && npm run typecheck --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/bridge-runtime && npm run typecheck --workspace @printstream/sea-runtime && npm run build --workspace @printstream/sea-runtime && npm run typecheck --workspace @printstream/api && npm run build --workspace @printstream/api && npm run typecheck --workspace @printstream/bridge && npm run typecheck --workspace @printstream/slicer && npm run typecheck --workspace @printstream/web",
     "validate": "npm run lint && npm run test && npm run typecheck && npm run prisma:validate --workspace @printstream/api"
   },
   "devDependencies": {

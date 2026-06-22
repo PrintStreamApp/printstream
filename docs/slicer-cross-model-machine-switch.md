@@ -60,8 +60,18 @@ The path runs three steps in `runEstimateModeMachineSwitch`:
    empty `extruder_ams_count` slots), pulling the missing fields from the merged
    machine profile (`mergeInheritedMachineProfile`). The result is written to
    `machine-switch-repaired.3mf`.
-3. **Final slice** — `--slice` the repaired 3MF with no profile args; its machine
-   identity is now embedded and self-consistent.
+2b. **Re-center onto a larger bed** — `recenterRepairedProjectForLargerBed`
+   ([apps/slicer/src/recenter-plates.ts](../apps/slicer/src/recenter-plates.ts)).
+   BambuStudio's CLI only auto-recenters objects (`translate_models`) on a switch it
+   treats as *forced* — i.e. an **incompatible** process — not the compatible-process
+   switch this flow performs. So on a switch to a **larger** bed the objects keep the
+   source bed's per-plate global offsets, and a multi-plate project's non-first plates
+   fall outside their plate region → `CLI_NO_SUITABLE_OBJECTS` (exit 206). We apply
+   BambuStudio's own per-plate shift ourselves (derived from `compute_origin_using_new_size`
+   + `translate_models`, `GAP = 1/5`), reading the source bed from the original upload and
+   the target bed from the merged machine profile. A no-op for a same/smaller target bed.
+3. **Final slice** — `--slice` the re-centered repaired 3MF with no profile args; its
+   machine identity is now embedded and self-consistent.
 
 ## Why the split exists
 

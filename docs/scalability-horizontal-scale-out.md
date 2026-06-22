@@ -32,11 +32,12 @@ Two things make it more than "add a load balancer":
 
    These need an **ownership/affinity layer**, not just pub/sub.
 
-A hard invariant throughout: **the OSS self-hosted build (`apps/server`, the Node SEA
-single binary) runs API + web + in-box bridge + Postgres in one process.** Every change
-here must keep a zero-infrastructure, single-process mode as the default. Scale-out is a
-cloud-only capability layered behind an abstraction whose default implementation is
-exactly today's in-process behavior.
+A hard invariant throughout: **the self-hosted build runs API + web + in-box bridge +
+Postgres as a single-node deployment** (the open-source Docker Compose stack, and the
+native single binary that runs them in one process). Every change here must keep a
+zero-infrastructure, single-process mode as the default. Scale-out is a cloud-only
+capability layered behind an abstraction whose default implementation is exactly today's
+in-process behavior.
 
 ## Coupling-point inventory
 

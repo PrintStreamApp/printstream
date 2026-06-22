@@ -562,8 +562,9 @@ export const createSlicingJobSchema = z.object({
   /**
    * Object ids (Bambu `object_id` from the source 3MF's `model_settings.config`) to keep when
    * slicing. Omitted ⇒ slice every object. Only honored for a single-plate slice (`plate > 0`):
-   * objects on the target plate that are not listed have their build items marked unprintable
-   * (`printable="0"`) before slicing, which is how BambuStudio's CLI excludes them.
+   * objects on the target plate that are not listed get their build items marked `printable="0"`,
+   * which the slicer service translates into BambuStudio's `--skip-objects` CLI flag (the only
+   * mechanism the engine actually honors).
    */
   selectedObjectIds: z.array(z.number().int().nonnegative()).optional(),
   /**
