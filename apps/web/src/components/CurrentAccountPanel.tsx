@@ -16,7 +16,6 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../lib/apiClient'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { isPlatformWorkspacePath } from '../lib/workspaceRoute'
-import { writePlatformWorkspaceContext } from '../lib/workspaceContext'
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
 import { mobileSectionNavReserveSpace, sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
@@ -57,7 +56,6 @@ export function CurrentAccountPanel({
       body: { tenantId: null }
     }),
     onSuccess: async () => {
-      writePlatformWorkspaceContext()
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['auth-bootstrap'] }),
         queryClient.invalidateQueries({ queryKey: ['auth-self-profile'] }),

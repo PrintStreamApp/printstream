@@ -134,6 +134,13 @@ and a reopened project keeps its greyed objects. This read path is **API-only** 
 does not parse build items (the shared parser only builds the index); the scene is always
 assembled by `three-mf-reader.ts` from a locally-resolved file.
 
+The slice dialog's per-plate object selection reaches the CLI the **same way**:
+`createObjectCustomizedThreeMf` (`three-mf-output.ts`) marks the deselected objects' build
+`<item>`s `printable="0"` for the target plate before slicing. Removing an object's
+`<model_instance>` from `model_settings.config` does **not** exclude it — the CLI re-derives
+each plate's membership from build-item geometry and gathers only the `printable` instances, so
+the `printable` flag (not the instance metadata) is what drops an object from the slice.
+
 ## Invariants
 
 - **Shared 3MF index parser.** The parsed *index* shape is produced by one shared module,

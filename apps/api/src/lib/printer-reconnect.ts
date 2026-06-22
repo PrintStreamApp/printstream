@@ -16,9 +16,9 @@ export type PrinterReconnectResult = 'updated-host' | 'reconnecting'
 
 interface PrinterReconnectDeps {
   discovery: {
-    get(serial: string): { host: string } | undefined
+    get(serial: string): { host: string; bridgeId?: string } | undefined
   }
-  reconcileHost: (discovered: { serial: string; host: string }) => Promise<boolean>
+  reconcileHost: (discovered: { serial: string; host: string; bridgeId: string }) => Promise<boolean>
   manager: {
     reconnect(printerId: string): boolean
   }
@@ -35,8 +35,14 @@ export async function reconnectPrinter(
   deps: PrinterReconnectDeps = defaultDeps
 ): Promise<PrinterReconnectResult> {
   const discovered = deps.discovery.get(printer.serial)
-  if (discovered && discovered.host !== printer.host) {
-    const updated = await deps.reconcileHost({ serial: printer.serial, host: discovered.host })
+  // Only refresh the saved host from a discovery entry we can attribute to a
+  // specific bridge — the host update is scoped to that bridge's own printers.
+  if (discovered && discovered.bridgeId && discovered.host !== printer.host) {
+    const updated = await deps.reconcileHost({
+      serial: printer.serial,
+      host: discovered.host,
+      bridgeId: discovered.bridgeId
+    })
     if (updated) return 'updated-host'
   }
 

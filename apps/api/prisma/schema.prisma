@@ -28,8 +28,10 @@ model Tenant {
   printers           Printer[]
   bridges            Bridge[]
   jobs               PrintJob[]
+  dispatchJobs       DispatchJob[]
   libraryFiles       LibraryFile[]
   libraryFileVersions LibraryFileVersion[]
+  libraryDownloadLinks LibraryDownloadLink[]
   libraryFolders     LibraryFolder[]
   libraryFileReplicas LibraryFileReplica[]
   printerViews       PrinterView[]
@@ -67,6 +69,7 @@ model Printer {
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   bridge     Bridge?  @relation(fields: [bridgeId], references: [id], onDelete: SetNull)
   jobs       PrintJob[]
+  dispatchJobs DispatchJob[]
   startedOrderPrints OrderPrint[] @relation("OrderPrintStartedPrinter")
 
   @@unique([tenantId, serial])
@@ -142,6 +145,37 @@ model PrintJob {
   @@index([tenantId, printerId, taskId])
   @@index([tenantId, finishedAt, printerId])
   @@index([tenantId, fileId])
+}
+
+/// Durable journal of the print-dispatch lifecycle (queued -> uploading -> start
+/// command -> sent/failed/cancelled). The live executor still runs in-process; this
+/// row is written through on each transition so a restart can (a) reconcile orphaned
+/// pre-start dispatches and (b) eventually be the cluster-wide source of truth for the
+/// per-printer "one print starting at a time" guard. `startCommandAttemptedAt` is the
+/// safety boundary: rows with it NULL provably never published a start (safe to clean
+/// up); rows with it set may have started a real print and must be left to the
+/// status recorder (see the dispatcher's rob-1 restart contract).
+model DispatchJob {
+  id                     String    @id
+  tenantId               String
+  printerId              String
+  status                 String    @default("queued")
+  jobName                String
+  fileName               String
+  /// Printer-SD file name the upload targets; used to clean orphaned bytes on reconnect.
+  remoteName             String
+  error                  String?
+  /// Set immediately before the MQTT start command is published — the rob-1 boundary.
+  startCommandAttemptedAt DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  finishedAt             DateTime?
+
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  printer                Printer   @relation(fields: [printerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, printerId, status])
+  @@index([printerId, status])
 }
 
 model TenantStats {
@@ -263,6 +297,13 @@ model LibraryFile {
   // Set when the current content was produced by restoring an older
   // version; holds that source version's number.
   restoredFromVersionNumber Int?
+  // Cached 3MF-derived display data (plateCount + plate-type/nozzle/filament/
+  // compatible-model chips) so the library listing never re-inspects a file.
+  // `derivedChipsJson` is the serialized chip bundle; `derivedChipsVersion` is the
+  // parser version it was built with, so a parser bump invalidates it. Lazily
+  // populated on inspect; null until first computed.
+  derivedChipsJson    String?
+  derivedChipsVersion Int?
 
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ownerBridge   Bridge?  @relation("LibraryFileOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
@@ -270,6 +311,7 @@ model LibraryFile {
   replicas      LibraryFileReplica[]
   jobs          PrintJob[]
   versions      LibraryFileVersion[]
+  downloadLinks LibraryDownloadLink[]
   orderTemplatePrints OrderTemplatePrint[]
   orderPrints   OrderPrint[]
 
@@ -306,6 +348,30 @@ model LibraryFileVersion {
 
   @@unique([libraryFileId, versionNumber])
   @@index([tenantId, libraryFileId, versionNumber])
+}
+
+/**
+ * Short-lived, unauthenticated download grant for a single library file.
+ * Minted on demand (e.g. the "Open in Bambu Studio" desktop deep link) so an
+ * external client with no browser session can fetch one file for a brief
+ * window. Only the SHA-256 hash of the opaque token is stored; the raw token
+ * lives only in the URL handed to the client. Rows are pruned opportunistically
+ * once `expiresAt` passes.
+ */
+model LibraryDownloadLink {
+  id            String   @id @default(cuid())
+  tenantId      String
+  libraryFileId String
+  tokenHash     String   @unique
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  createdById   String?
+
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  libraryFile   LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([libraryFileId])
 }
 
 /**

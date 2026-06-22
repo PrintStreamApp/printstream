@@ -95,7 +95,7 @@ One executable supervises everything; one TCP port faces the user.
 > **Foundations status (Phases 1–2):** the database groundwork below is
 > **implemented and Linux-verified** ahead of any SEA packaging — Prisma
 > `binaryTargets`, a CLI-free boot migration applier, and an embedded-Postgres
-> supervisor with a BYO fallback. The SEA entry, `packages/sea-runtime`
+> supervisor. The SEA entry, `packages/sea-runtime`
 > extraction, CI/signing, and self-update remain pending (Phases 3–5).
 
 ### 1. Database — embedded PostgreSQL (decided)
@@ -122,9 +122,10 @@ is what keeps this maintainable.
   socket support is unreliable — it binds a **loopback port chosen free at
   startup**. `EMBEDDED_POSTGRES_PORT` pins a fixed loopback port if a self-hoster
   wants one. The API connects via the `DATABASE_URL` it returns.
-- **BYO-Postgres fallback:** the `EMBEDDED_POSTGRES` switch gates the cluster
-  (off by default — Docker, cloud, and self-hosters who run their own Postgres
-  set `DATABASE_URL` and leave the switch off).
+- **Embedded vs external:** the `EMBEDDED_POSTGRES` switch gates the cluster. The
+  native single-file build **always turns it on** — it has no bring-your-own /
+  external-database option. Only the Docker and cloud deployments leave it off and
+  connect to their own operator-managed `DATABASE_URL`.
 - **Single-instance guard:** Postgres' own `postmaster.pid` is the lock — a
   second app instance on the same data dir refuses with a clear error (stale
   pidfiles from a crash are ignored). Clean shutdown drains the API first, then
@@ -234,7 +235,7 @@ turned up three concrete blockers the bridge never hit, because the bridge has n
 Prisma, no Postgres, and no web bundle. None are cross-OS testable in the Linux
 devcontainer; they want real-hardware verification once unblocked.
 
-1. ~~**Prisma can't go inside the JS bundle.**~~ **Resolved (BYO-Postgres binary
+1. ~~**Prisma can't go inside the JS bundle.**~~ **Resolved (the bundled binary
    builds and runs).** The build (`apps/server/scripts/build-sea.mjs`) marks
    `@prisma/client` + `.prisma/client` esbuild-**external**, zips the generated
    client (engine pruned to the host target) into a `prisma-client.zip` SEA
@@ -247,7 +248,8 @@ devcontainer; they want real-hardware verification once unblocked.
    `prepareSeaRuntime` points at the extraction dir. No `PRISMA_QUERY_ENGINE_LIBRARY`
    needed (the engine sits next to the extracted client). **Verified:** a single
    138 MB `printstream` binary serves the SPA + API **and** auto-pairs the in-box
-   bridge on one port against a BYO `DATABASE_URL` (`bootstrap` 200, `GET /` →
+   bridge on one port against an external `DATABASE_URL` (this milestone predated
+   the embedded cluster in item 3) (`bootstrap` 200, `GET /` →
    `<title>PrintStream</title>`, `auto-paired bridge … into workspace`).
 2. ~~**Node SEA is CommonJS-only, but the API uses top-level `await`.**~~
    **Resolved.** The two `await mkdir(...)` in `routes/library.ts` are now
@@ -343,8 +345,8 @@ to bundle, which assets to embed, the release identity).
      via a checked-in baseline snapshot + forward apply.~~
    These are independently useful (single-container Compose) and low-risk.
 2. **Embedded Postgres (§1):** **Done (foundations).** spawn/supervise
-   per-platform Postgres against a data dir; `EMBEDDED_POSTGRES` switch with
-   `DATABASE_URL` BYO fallback; lifecycle + `postmaster.pid` single-instance
+   per-platform Postgres against a data dir; `EMBEDDED_POSTGRES` switch (always on
+   for the native build); lifecycle + `postmaster.pid` single-instance
    guard. Remaining for SEA: brotli-embed the binaries as assets (vs the npm
    package) and the Unix-socket/peer-auth hardening.
 3. **Extract `packages/sea-runtime`:** move generic plumbing out of
@@ -418,9 +420,10 @@ to bundle, which assets to embed, the release identity).
   `linux-arm`) build; no emulation borrow.
 - **Binary size:** ~200–250 MB. Acceptable for a desktop app; verify the `.gz`
   transfer copies and embedded-asset brotli ratios.
-- **Data-dir migrations & backups:** an embedded DB makes the data dir precious.
-  Document backup/restore and a clean upgrade path (migrations run forward on
-  start; no destructive `db push`).
+- ~~**Data-dir migrations & backups:** an embedded DB makes the data dir
+  precious. Document backup/restore and a clean upgrade path.~~ **Resolved** —
+  the backup/restore runbook (native data-dir backup + the migrations-run-forward
+  upgrade contract) is in [docs/operations.md](operations.md).
 - **Extraction scope creep:** keep `packages/sea-runtime` free of any
   printer/bridge/API domain logic — it is service + packaging plumbing only.
 - **Public CI without secrets:** the export must produce a repo whose workflow
@@ -437,7 +440,6 @@ exercise Linux; verify on real hardware before shipping a target:
 - `service install` + reboot persistence; data-dir survives restart.
 - Printer discovery via the in-box managed bridge (SSDP) + a real print.
 - Camera streaming (embedded ffmpeg).
-- BYO-Postgres mode (`DATABASE_URL` set) bypasses the embedded cluster.
 - `service uninstall` leaves the data dir intact (backup); reinstall reattaches.
 - Crash-loop rollback (phase 2) and `tray` install/run across login.
 ```

@@ -83,6 +83,28 @@ export default defineConfig(({ command, mode }) => {
     server: {
       port: 5173,
       host: true,
+      // Enforce a CSP in dev so the resource directives (notably img/media/connect
+      // for camera frames + proxied MJPEG) are exercised here, matching the policy
+      // the API serves in production (apps/api/src/lib/content-security-policy.ts).
+      // Dev needs the HMR relaxations the prod policy omits: 'unsafe-eval' for the
+      // module runtime/react-refresh and ws: for the HMR socket. Camera-relevant
+      // directives stay strict so a real camera test is meaningful.
+      headers: {
+        'Content-Security-Policy': [
+          "default-src 'self'",
+          "base-uri 'self'",
+          "frame-ancestors 'none'",
+          "object-src 'none'",
+          "form-action 'self'",
+          "img-src 'self' data: blob:",
+          "media-src 'self' data: blob:",
+          "font-src 'self' data:",
+          "style-src 'self' 'unsafe-inline'",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+          "connect-src 'self' ws: wss:",
+          "worker-src 'self' blob:"
+        ].join('; ')
+      },
       // When the dev server runs from source behind a TLS-terminating reverse proxy
       // (e.g. dev.printstream.example.com via nginx + Cloudflare), Vite's host check would
       // reject the proxied Host and its HMR client would dial the wrong origin/port.

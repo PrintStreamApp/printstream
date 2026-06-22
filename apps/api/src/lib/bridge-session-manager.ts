@@ -57,6 +57,18 @@ class BridgeSessionManager {
     })
   }
 
+  /**
+   * Whether `connection` is the currently-registered session for `bridgeId`.
+   * A closing socket uses this to tell a genuine disconnect from a reconnect/
+   * duplicate that a newer session has already replaced — in the latter case the
+   * bridge id now belongs to the live session and its teardown must be skipped.
+   */
+  isActiveConnection(bridgeId: string, connection?: BridgeConnection): boolean {
+    const current = this.connections.get(bridgeId)
+    if (!current) return false
+    return !connection || current.connection === connection
+  }
+
   unregisterConnection(bridgeId: string, connection?: BridgeConnection): void {
     const current = this.connections.get(bridgeId)
     if (connection && current && current.connection !== connection) {
@@ -76,6 +88,11 @@ class BridgeSessionManager {
 
   isConnected(bridgeId: string): boolean {
     return this.connections.has(bridgeId)
+  }
+
+  /** Number of bridges with a live session right now (for metrics/diagnostics). */
+  size(): number {
+    return this.connections.size
   }
 
   setTenantId(bridgeId: string, tenantId: string | null): boolean {

@@ -19,7 +19,8 @@
  *   for reproducible failures.
  *
  * Flags / env (flags win): `--list`, `--reporter=<r>` / NODE_TEST_REPORTER (default dot),
- * `--concurrency=<n>` / NODE_TEST_CONCURRENCY (default ~half the cores — also the memory lever).
+ * `--concurrency=<n>` / NODE_TEST_CONCURRENCY (default ~half the cores — also the memory lever),
+ * `--test-timeout=<ms>` / NODE_TEST_TIMEOUT (default 60000 — per-test hang guard).
  * Remaining args are path-substring filters.
  */
 import { spawn } from 'node:child_process'
@@ -35,7 +36,15 @@ const listOnly = rawArgs.includes('--list')
 const reporter = readFlag('--reporter=') ?? process.env.NODE_TEST_REPORTER ?? 'dot'
 const defaultConcurrency = Math.max(2, Math.ceil(os.availableParallelism() / 2))
 const concurrency = resolvePositiveInt(readFlag('--concurrency=') ?? process.env.NODE_TEST_CONCURRENCY, defaultConcurrency)
-const filters = rawArgs.filter((arg) => arg !== '--list' && !arg.startsWith('--reporter=') && !arg.startsWith('--concurrency='))
+// Per-test timeout (ms). node:test defaults to Infinity, so a single hung test
+// (a never-resolving await, a wedged server handle) stalls the whole run/CI
+// forever. Bound it; a timeout fails that test with a normal node:test diagnostic
+// (unlike --test-force-exit, which would lose the failure summary).
+const testTimeoutMs = resolvePositiveInt(readFlag('--test-timeout=') ?? process.env.NODE_TEST_TIMEOUT, 60_000)
+const filters = rawArgs.filter((arg) => arg !== '--list'
+  && !arg.startsWith('--reporter=')
+  && !arg.startsWith('--concurrency=')
+  && !arg.startsWith('--test-timeout='))
 
 // Cap on how many files we re-run individually to pinpoint failures. A broad failure (e.g. the DB is
 // down) would otherwise trigger dozens of slow isolation runs; past this we just list the failures.
@@ -141,7 +150,7 @@ function runTest(files, { quiet = false } = {}) {
   return new Promise((resolve) => {
     const child = spawn(
       'node',
-      ['--import', 'tsx', '--test', `--test-concurrency=${concurrency}`, `--test-reporter=${reporter}`, ...files],
+      ['--import', 'tsx', '--test', `--test-concurrency=${concurrency}`, `--test-timeout=${testTimeoutMs}`, `--test-reporter=${reporter}`, ...files],
       {
         cwd: workspaceRoot,
         env: { ...process.env, TSX_TSCONFIG_PATH: path.join(workspaceRoot, 'tsconfig.test.json') },

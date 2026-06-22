@@ -30,6 +30,8 @@ import {
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import { env } from './env.js'
+import { terminateSlicerChild } from './terminate-child.js'
+import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
 import { openZip, readZipEntryBuffer } from './zip-io.js'
 import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
 import { selectCliProfileFiles } from './cli-profile-selection.js'
@@ -712,6 +714,10 @@ async function executeCli(input: {
       let stderrCombined = ''
       let stdoutCombined = ''
       const child = spawn(input.slicerTarget.cliPath, args, {
+        // `detached` makes the child its own process-group leader so termination can
+        // signal the whole group — BambuStudio spawns helper processes under Xvfb
+        // that a bare child.kill() would orphan.
+        detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
@@ -722,16 +728,18 @@ async function executeCli(input: {
           XDG_DATA_HOME: input.bambuDataDir
         }
       })
+      // Cancels the SIGTERM->SIGKILL escalation once the child actually exits.
+      let cancelTermination: (() => void) | null = null
       const timeout = setTimeout(() => {
-        console.warn(`[slicer:executeCli] timed out after ${env.SLICER_TIMEOUT_MS}ms; sending SIGTERM`)
-        child.kill('SIGTERM')
+        console.warn(`[slicer:executeCli] timed out after ${env.SLICER_TIMEOUT_MS}ms; terminating CLI`)
+        cancelTermination = terminateSlicerChild(child)
         reject(new Error('Slicer CLI timed out'))
       }, env.SLICER_TIMEOUT_MS)
       // Client cancel: kill the CLI so it stops occupying a slicer slot (otherwise it runs to
       // completion and the next queued job waits on a zombie).
       const onAbort = () => {
-        console.warn('[slicer:executeCli] client cancelled; sending SIGTERM')
-        child.kill('SIGTERM')
+        console.warn('[slicer:executeCli] client cancelled; terminating CLI')
+        cancelTermination = terminateSlicerChild(child)
         clearTimeout(timeout)
         reject(new Error('Slicing cancelled'))
       }
@@ -739,16 +747,19 @@ async function executeCli(input: {
         if (input.signal.aborted) { onAbort(); return }
         input.signal.addEventListener('abort', onAbort, { once: true })
       }
-      const cleanupAbort = () => input.signal?.removeEventListener('abort', onAbort)
+      const cleanupAbort = () => {
+        cancelTermination?.()
+        input.signal?.removeEventListener('abort', onAbort)
+      }
 
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
       child.stdout.on('data', (chunk: string) => {
-        stdoutCombined += chunk
+        stdoutCombined = appendCappedTail(stdoutCombined, chunk)
         appendOutput(input.outputLines, 'stdout', chunk)
       })
       child.stderr.on('data', (chunk: string) => {
-        stderrCombined += chunk
+        stderrCombined = appendCappedTail(stderrCombined, chunk)
         appendOutput(input.outputLines, 'stderr', chunk)
       })
       child.on('error', (error) => {
@@ -1488,18 +1499,6 @@ async function isRegularFile(filePath: string): Promise<boolean> {
   }
 }
 
-function appendOutput(outputLines: SlicingOutputLine[], stream: 'stdout' | 'stderr', chunk: string): void {
-  for (const line of chunk.split(/\r?\n/)) {
-    const text = line.trimEnd()
-    if (!text) continue
-    appendStructuredOutput(outputLines, stream, text)
-  }
-}
-
-function appendStructuredOutput(outputLines: SlicingOutputLine[], stream: SlicingOutputLine['stream'], text: string): void {
-  outputLines.push({ stream, text, createdAt: new Date().toISOString() })
-}
-
 function buildOutputLinesHeader(outputLines: SlicingOutputLine[]): string {
   const latestSystemLines = outputLines.filter((line) => line.stream === 'system').slice(-20)
   const fallbackLines = outputLines.slice(-8)
@@ -1730,4 +1729,12 @@ async function sweepStaleWorkDirs(): Promise<void> {
 void sweepStaleWorkDirs()
 http.createServer({ maxHeaderSize: SLICE_MAX_HEADER_BYTES }, app).listen(env.SLICER_PORT, () => {
   console.log(`PrintStream slicer listening on ${env.SLICER_PORT}`)
+  if (!env.SLICER_SERVICE_TOKEN) {
+    // The slicer spawns native CLI binaries on uploaded input. With no token it
+    // accepts any caller, so it MUST stay on a private/loopback-only network
+    // (the default compose keeps it on an internal network). Warn loudly so an
+    // operator who widens the bind doesn't unknowingly expose an unauthenticated
+    // code-execution service — set SLICER_SERVICE_TOKEN to require auth.
+    console.warn('[slicer] SLICER_SERVICE_TOKEN is not set: running WITHOUT authentication. Keep this service on a private/loopback-only network, or set SLICER_SERVICE_TOKEN to require a bearer token.')
+  }
 })

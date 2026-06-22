@@ -49,6 +49,14 @@ function positiveIntEnv(defaultValue: number) {
   }, z.coerce.number().int().positive().default(defaultValue))
 }
 
+function optionalPositiveIntEnv() {
+  return z.preprocess((value) => {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? undefined : trimmed
+  }, z.coerce.number().int().positive().optional())
+}
+
 function booleanEnv(defaultValue: boolean) {
   return z.preprocess((value) => {
     if (typeof value !== 'string') return value
@@ -65,11 +73,29 @@ const envSchema = z.object({
   // for `EMBEDDED_POSTGRES` / `EMBEDDED_POSTGRES_DATA_DIR` / `EMBEDDED_POSTGRES_PORT`,
   // which are read pre-env and so are intentionally not parsed here).
   DATABASE_URL: z.string().min(1).default('postgresql://postgres:postgres@db:5432/printstream?schema=public'),
+  // Prisma connection-pool tuning. Unset → Prisma's default (num_cpus*2+1),
+  // which is sized to CPU count, not concurrency. Set CONNECTION_LIMIT to match
+  // expected load against the Postgres max_connections budget; POOL_TIMEOUT is
+  // the seconds a query waits for a free connection before erroring. Appended to
+  // DATABASE_URL as query params (see prisma.ts).
+  DATABASE_CONNECTION_LIMIT: optionalPositiveIntEnv(),
+  DATABASE_POOL_TIMEOUT: optionalPositiveIntEnv(),
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
   AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES: positiveIntEnv(15),
   AUTO_CREATE_DEFAULT_WORKSPACE: booleanEnv(true),
   DEFAULT_WORKSPACE_SLUG: z.string().default('default'),
   DEFAULT_WORKSPACE_NAME: z.string().default('My Workspace'),
+  // Master key for encrypting stored secrets at rest (e.g. OAuth client secrets)
+  // via `secret-encryption.ts`. Any non-empty string works (it is hashed to a
+  // 32-byte AES key). When unset, secrets are stored as-is — set it in production.
+  SECRETS_KEY: optionalStringEnv(),
+  // How long durable audit-log rows are retained before scheduled maintenance
+  // prunes them. Default 1 year; raise for stricter compliance retention.
+  AUDIT_LOG_RETENTION_DAYS: positiveIntEnv(365),
+  // Enforce the Content-Security-Policy (`Content-Security-Policy`) vs report-only
+  // (`Content-Security-Policy-Report-Only`, the safe default). Flip to true once a
+  // deployment has confirmed report-only shows no violations.
+  CSP_ENFORCE: booleanEnv(false),
   CLOUDFLARE_EMAIL_ACCOUNT_ID: optionalStringEnv(),
   CLOUDFLARE_EMAIL_API_TOKEN: optionalStringEnv(),
   CLOUDFLARE_EMAIL_FROM_EMAIL: z.preprocess((value) => {
@@ -177,6 +203,12 @@ const envSchema = z.object({
    * override for a fork that publishes its own GHCR image.
    */
   PRINTSTREAM_UPDATE_CHECK_IMAGE: z.string().default('printstreamapp/printstream'),
+  // Observability: when enabled, an OpenTelemetry meter provider exposes a
+  // Prometheus `/metrics` endpoint on `METRICS_PORT` for an internal scraper.
+  // Off by default so the OSS/self-hosted build runs no telemetry stack unless
+  // an operator opts in. The port is internal — do not proxy it publicly.
+  METRICS_ENABLED: booleanEnv(false),
+  METRICS_PORT: positiveIntEnv(9464),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development')
 })
 

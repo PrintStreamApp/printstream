@@ -171,7 +171,7 @@ test('requestPressureAdvanceProfiles sends the existing query command and resolv
         }
       ]
     }
-  })
+  }, 'bridge-1')
 
   await assert.doesNotReject(async () => {
     assert.deepEqual(await pending, [
@@ -224,14 +224,36 @@ test('ingestBridgeReport reuses the API parser pipeline for bridged status', () 
     print: {
       mc_percent: 42
     }
-  })
+  }, 'bridge-1')
 
   assert.equal(printerManager.getStatus(printer.id)?.online, true)
   assert.equal(printerManager.getStatus(printer.id)?.progressPercent, 42)
+  // markBridgeDisconnected's offline behavior (now grace-debounced) is covered in
+  // printer-manager.offline-grace.test.ts.
+})
 
-  printerManager.markBridgeDisconnected('bridge-1')
+test('ingestBridgeReport ignores a report from a bridge that does not own the printer', () => {
+  printerManager.add(printer, 'tenant-1', 'bridge-1')
 
-  assert.equal(printerManager.getStatus(printer.id)?.online, false)
+  const statusEvents: string[] = []
+  const onStatus = (status: { printerId: string }) => {
+    statusEvents.push(status.printerId)
+  }
+  printerEvents.on('status', onStatus)
+
+  try {
+    // A different bridge (e.g. another tenant's) reports for this printer id.
+    printerManager.ingestBridgeReport(
+      printer.id,
+      { print: { gcode_state: 'RUNNING', subtask_name: 'Spoofed', mc_percent: 73 } },
+      'bridge-attacker'
+    )
+
+    assert.equal(statusEvents.length, 0)
+    assert.notEqual(printerManager.getStatus(printer.id)?.progressPercent, 73)
+  } finally {
+    printerEvents.off('status', onStatus)
+  }
 })
 
 test('ingestBridgeReport emits job.started when a printer first reports pre-print activity', () => {
@@ -250,7 +272,7 @@ test('ingestBridgeReport emits job.started when a printer first reports pre-prin
         subtask_name: 'Early start plate',
         mc_print_sub_stage: 14
       }
-    })
+    }, 'bridge-1')
 
     assert.equal(printerManager.getStatus(printer.id)?.stage, 'preparing')
     assert.deepEqual(startedEvents.map((event) => ({ printerId: event.printer.id, jobName: event.jobName })), [
@@ -263,7 +285,7 @@ test('ingestBridgeReport emits job.started when a printer first reports pre-prin
         subtask_name: 'Early start plate',
         mc_percent: 1
       }
-    })
+    }, 'bridge-1')
 
     assert.equal(startedEvents.length, 1)
   } finally {
@@ -312,7 +334,7 @@ test('ingestBridgeReport suppresses status emits when the report carries no new 
         subtask_name: 'Stable plate',
         mc_percent: 25
       }
-    })
+    }, 'bridge-1')
     assert.equal(statusEvents.length, 1)
 
     // Identical report: only observedAt would change, so no new emit should fire.
@@ -322,7 +344,7 @@ test('ingestBridgeReport suppresses status emits when the report carries no new 
         subtask_name: 'Stable plate',
         mc_percent: 25
       }
-    })
+    }, 'bridge-1')
     assert.equal(statusEvents.length, 1)
 
     // A real change re-emits.
@@ -332,7 +354,7 @@ test('ingestBridgeReport suppresses status emits when the report carries no new 
         subtask_name: 'Stable plate',
         mc_percent: 26
       }
-    })
+    }, 'bridge-1')
     assert.equal(statusEvents.length, 2)
   } finally {
     printerEvents.off('status', onStatus)

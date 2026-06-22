@@ -24,8 +24,8 @@ function makeDiscoveredPrinter(overrides: Partial<{
 }
 
 test('same-host rediscovery hints an offline adopted printer to reconnect', async () => {
-  const reconcileCalls: Array<{ serial: string; host: string }> = []
-  const recoveryCalls: string[] = []
+  const reconcileCalls: Array<{ serial: string; host: string; bridgeId: string }> = []
+  const recoveryCalls: Array<{ serial: string; bridgeId: string }> = []
   let now = 1_000
 
   const discovery = new PrinterDiscovery({
@@ -34,23 +34,24 @@ test('same-host rediscovery hints an offline adopted printer to reconnect', asyn
       reconcileCalls.push(discovered)
       return false
     },
-    recoverOfflinePrinter(serial) {
-      recoveryCalls.push(serial)
+    recoverOfflinePrinter(serial, bridgeId) {
+      recoveryCalls.push({ serial, bridgeId })
       return true
     }
   })
 
   discovery.setBridgePrinters('bridge-1', [makeDiscoveredPrinter({ lastSeenAt: new Date(now).toISOString() })])
-  assert.deepEqual(reconcileCalls, [{ serial: 'SERIAL123', host: '192.168.1.30' }])
+  // Discovery threads the observing bridge through so downstream writes/hints stay scoped to it.
+  assert.deepEqual(reconcileCalls, [{ serial: 'SERIAL123', host: '192.168.1.30', bridgeId: 'bridge-1' }])
   assert.deepEqual(recoveryCalls, [])
 
   now += 1_000
   discovery.setBridgePrinters('bridge-1', [makeDiscoveredPrinter({ lastSeenAt: new Date(now).toISOString() })])
-  assert.deepEqual(recoveryCalls, ['SERIAL123'])
+  assert.deepEqual(recoveryCalls, [{ serial: 'SERIAL123', bridgeId: 'bridge-1' }])
 
   now += 1_000
   discovery.setBridgePrinters('bridge-1', [makeDiscoveredPrinter({ lastSeenAt: new Date(now).toISOString() })])
-  assert.deepEqual(recoveryCalls, ['SERIAL123'])
+  assert.deepEqual(recoveryCalls, [{ serial: 'SERIAL123', bridgeId: 'bridge-1' }])
 })
 
 test('tenant-specific discovery dismissal hides entries only for that tenant', () => {

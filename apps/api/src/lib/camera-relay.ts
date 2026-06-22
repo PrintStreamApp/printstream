@@ -27,6 +27,16 @@ interface CameraClientSubscription {
 export class CameraRelay {
   /** Reverse index: client -> printer ID -> unsubscribe callback. */
   private readonly clientSubs = new Map<WebSocket, Map<string, CameraClientSubscription>>()
+  /** Per-printer fixed 36-byte header, so it isn't re-padded/allocated per send. */
+  private readonly headerCache = new Map<string, Buffer>()
+  /**
+   * Built header+JPEG packet, reused across all viewers of one frame. The hub
+   * fans the *same* frame Buffer to every viewer, so without this the full JPEG
+   * is re-concatenated once per viewer per frame. Keyed by the frame Buffer in a
+   * WeakMap, so the cached packet is collected when the frame is (no manual
+   * eviction); `ws` never mutates the send buffer, so sharing it is safe.
+   */
+  private readonly packetByFrame = new WeakMap<Buffer, Map<string, Buffer>>()
 
   subscribe(client: WebSocket, printerId: string): void {
     let subs = this.clientSubs.get(client)
@@ -139,7 +149,21 @@ export class CameraRelay {
   }
 
   private framePacket(printerId: string, frame: Buffer): Buffer {
-    const header = Buffer.from(printerId.padEnd(PRINTER_ID_LENGTH, ' '), 'ascii')
-    return Buffer.concat([header, frame])
+    let byPrinter = this.packetByFrame.get(frame)
+    if (!byPrinter) {
+      byPrinter = new Map()
+      this.packetByFrame.set(frame, byPrinter)
+    }
+    const existing = byPrinter.get(printerId)
+    if (existing) return existing
+
+    let header = this.headerCache.get(printerId)
+    if (!header) {
+      header = Buffer.from(printerId.padEnd(PRINTER_ID_LENGTH, ' '), 'ascii')
+      this.headerCache.set(printerId, header)
+    }
+    const packet = Buffer.concat([header, frame])
+    byPrinter.set(printerId, packet)
+    return packet
   }
 }

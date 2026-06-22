@@ -203,6 +203,13 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
       body: 'IBM Plex Sans, sans-serif',
       display: 'Space Grotesk, sans-serif'
     },
+    // Thin the weights a notch for IBM Plex Sans, which reads heavier than the old
+    // system fallback: medium (titles/medium UI) 500 -> 400, and bold (buttons/bold
+    // text, Joy's `lg`) 600 -> 500. Still one step of contrast between them.
+    fontWeight: {
+      md: 400,
+      lg: 500
+    },
     components: ({
       JoyButton: {
         styleOverrides: {

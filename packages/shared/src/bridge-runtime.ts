@@ -124,6 +124,28 @@ export const bridgeHeartbeatMessageSchema = z.object({
   type: z.literal('bridge.heartbeat')
 })
 
+/**
+ * A point-in-time reading of bridge-local metrics. The bridge ships plain
+ * numbers (no telemetry runtime of its own); the API re-exposes them on its
+ * Prometheus endpoint labelled by bridge/tenant. Gauges are instantaneous;
+ * `apiReconnectsTotal` is cumulative since the bridge process started (it may
+ * reset to 0 on bridge restart — Prometheus handles counter resets).
+ */
+export const bridgeMetricsSnapshotSchema = z.object({
+  printersMonitored: z.number().int().nonnegative(),
+  printersConnected: z.number().int().nonnegative(),
+  eventLoopLagSeconds: z.number().nonnegative(),
+  memoryRssBytes: z.number().nonnegative(),
+  apiReconnectsTotal: z.number().int().nonnegative()
+})
+
+export type BridgeMetricsSnapshot = z.infer<typeof bridgeMetricsSnapshotSchema>
+
+export const bridgeMetricsMessageSchema = z.object({
+  type: z.literal('bridge.metrics'),
+  metrics: bridgeMetricsSnapshotSchema
+})
+
 export const bridgePrinterStatusMessageSchema = z.object({
   type: z.literal('bridge.printer.status'),
   printer: printerStatusSchema
@@ -651,6 +673,8 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   plates: z.array(bridgeLibraryThreeMfPlateSchema),
   projectFilaments: z.array(bridgeLibraryThreeMfProjectFilamentSchema),
   compatiblePrinterModels: z.array(printerModelSchema),
+  /** Project filaments designated as support material (`support_filament`/`support_interface_filament`/`filament_is_support`). */
+  supportFilamentIds: z.array(z.number().int().positive()).default([]),
   printerProfileName: z.string().nullable().default(null),
   processProfileName: z.string().nullable().default(null)
 })
@@ -708,7 +732,8 @@ export const bridgeRuntimeInboundMessageSchema = z.discriminatedUnion('type', [
   bridgePrinterOfflineMessageSchema,
   bridgePrinterRemovedMessageSchema,
   bridgeDebugCaptureStatusMessageSchema,
-  bridgePrinterConnectionMessageSchema
+  bridgePrinterConnectionMessageSchema,
+  bridgeMetricsMessageSchema
 ])
 
 export type BridgeRuntimeInboundMessage = z.infer<typeof bridgeRuntimeInboundMessageSchema>

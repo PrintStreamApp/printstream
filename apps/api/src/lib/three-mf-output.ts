@@ -17,7 +17,7 @@ import { isProcessSettingKey, type PrinterActivePrintObject, type PrinterActiveP
 import { PNG } from 'pngjs'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
-import { escapeXmlAttribute, readEntry, readZipEntryBuffer, rewriteModelSettingsThreeMf } from './three-mf-internal.js'
+import { escapeXmlAttribute, readEntry, readZipEntryBuffer, rewriteThreeMfEntries } from './three-mf-internal.js'
 import { buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex, type ThreeMfPlateObject } from './three-mf-reader.js'
 
 const ACTIVE_PRINT_PREVIEW_MAX_GCODE_BYTES = 128 * 1024 * 1024
@@ -247,10 +247,10 @@ function filterModelSettingsXml(xml: string, selectedPlate: number): string {
 }
 
 /**
- * Create a 3MF copy where the target plate keeps only the selected objects. Every archive entry
- * is copied verbatim (geometry included) except `Metadata/model_settings.config`, whose target
- * `<plate>` has the `<model_instance>` blocks of unselected objects removed, so the slicer places
- * only the chosen objects on that plate. Other plates are left untouched.
+ * Create a 3MF copy where the target plate keeps only the selected objects. Geometry and all other
+ * entries are copied verbatim; the deselected objects' `<build><item>` entries are marked
+ * `printable="0"` so the slicer drops them from that plate (see {@link createObjectCustomizedThreeMf}
+ * for why instance-metadata removal alone does not exclude an object).
  *
  * Object ids are Bambu `object_id` values (see {@link parseModelSettingsPlates}). Intended for
  * single-plate slices; callers must pass `plate > 0` and a non-empty selection.
@@ -261,8 +261,7 @@ export function createObjectFilteredThreeMf(
   plate: number,
   selectedObjectIds: number[]
 ): Promise<void> {
-  const selected = new Set(selectedObjectIds)
-  return rewriteModelSettingsThreeMf(sourcePath, outputPath, (xml) => filterModelSettingsObjectsXml(xml, plate, selected))
+  return createObjectCustomizedThreeMf(sourcePath, outputPath, plate, { selectedObjectIds })
 }
 
 /** Per-object process overrides keyed by Bambu `object_id` (string), each a sparse key→value map. */
@@ -270,10 +269,18 @@ export type ObjectProcessOverrides = Record<string, Record<string, string | stri
 
 /**
  * Create a 3MF copy customized for slicing: optionally drops unselected objects from the target
- * plate and/or injects per-object process overrides, applying both edits to
- * `Metadata/model_settings.config` in a single copy pass while leaving geometry verbatim.
+ * plate and/or injects per-object process overrides, in a single copy pass while leaving geometry
+ * verbatim.
+ *
+ * Object selection is enforced by marking the deselected objects' `<build><item>` entries
+ * `printable="0"` in `3D/3dmodel.model` — NOT by removing their `<model_instance>` blocks from
+ * `model_settings.config`. The BambuStudio CLI re-derives each plate's membership from build-item
+ * geometry and slices only the printable instances; it ignores missing instance metadata, so
+ * editing `model_settings.config` alone would still slice every object on the plate. This mirrors
+ * the editor's per-object "Printable" toggle. Scoped to `plate`'s object set so objects on other
+ * plates are never touched. Per-object process overrides are applied to `model_settings.config`.
  */
-export function createObjectCustomizedThreeMf(
+export async function createObjectCustomizedThreeMf(
   sourcePath: string,
   outputPath: string,
   plate: number,
@@ -281,12 +288,34 @@ export function createObjectCustomizedThreeMf(
 ): Promise<void> {
   const selected = options.selectedObjectIds ? new Set(options.selectedObjectIds) : null
   const overrides = options.objectProcessOverrides
-  return rewriteModelSettingsThreeMf(sourcePath, outputPath, (xml) => {
-    let out = xml
-    if (selected) out = filterModelSettingsObjectsXml(out, plate, selected)
-    if (overrides && Object.keys(overrides).length > 0) out = applyObjectProcessOverridesXml(out, overrides)
-    return out
-  })
+  const hasOverrides = Boolean(overrides && Object.keys(overrides).length > 0)
+
+  // Translate the "keep these objects" selection into the build items to mark unprintable, using the
+  // target plate's object set from model_settings so objects on other plates are untouched.
+  let unprintableObjectIds: Set<number> | null = null
+  if (selected && plate > 0) {
+    // A missing/unreadable model_settings.config is benign here: there are then no per-plate
+    // model_instances to map a selection against, so we slice all objects (the prior behavior). A
+    // genuinely corrupt archive is not silently dropped — the rewriteThreeMfEntries pass below
+    // re-opens the same file and surfaces the error, failing the job.
+    const modelSettingsXml = await readEntry(sourcePath, 'Metadata/model_settings.config')
+      .then((buffer) => buffer.toString('utf8'))
+      .catch(() => null)
+    if (modelSettingsXml) {
+      const plateObjectIds = plateObjectIdsFromModelSettingsXml(modelSettingsXml, plate)
+      unprintableObjectIds = new Set([...plateObjectIds].filter((id) => !selected.has(id)))
+    }
+  }
+
+  const transforms: Record<string, (xml: string) => string> = {}
+  if (hasOverrides) {
+    transforms['Metadata/model_settings.config'] = (xml) => applyObjectProcessOverridesXml(xml, overrides!)
+  }
+  if (unprintableObjectIds && unprintableObjectIds.size > 0) {
+    const ids = unprintableObjectIds
+    transforms['3D/3dmodel.model'] = (xml) => setBuildItemsUnprintableXml(xml, ids)
+  }
+  await rewriteThreeMfEntries(sourcePath, outputPath, transforms)
 }
 
 /**
@@ -343,18 +372,43 @@ export function applyObjectProcessOverridesXml(xml: string, overridesByObjectId:
 }
 
 /**
- * Remove the `<model_instance>` blocks of unselected objects from the target plate in a
- * `model_settings.config` XML string, leaving other plates intact.
+ * Collect the Bambu `object_id`s placed on `plate` from a `model_settings.config` XML string (one
+ * id per object, even with multiple instances). Used to turn a "keep these" object selection into
+ * the complementary "make these unprintable" set scoped to a single plate.
  */
-export function filterModelSettingsObjectsXml(xml: string, plate: number, selectedObjectIds: Set<number>): string {
-  return xml.replace(/<plate\b[^>]*>[\s\S]*?<\/plate>/g, (block) => {
+export function plateObjectIdsFromModelSettingsXml(xml: string, plate: number): Set<number> {
+  const ids = new Set<number>()
+  for (const plateMatch of xml.matchAll(/<plate\b[^>]*>[\s\S]*?<\/plate>/g)) {
+    const block = plateMatch[0]
     const plateId = Number(/<metadata\s+key="plater_id"\s+value="(\d+)"\s*\/>/.exec(block)?.[1])
-    if (plateId !== plate) return block
-    return block.replace(/[ \t]*<model_instance\b[^>]*>[\s\S]*?<\/model_instance>\n?/g, (instanceBlock) => {
-      const objectId = Number(/<metadata\s+key="object_id"\s+value="(\d+)"\s*\/>/.exec(instanceBlock)?.[1])
-      return selectedObjectIds.has(objectId) ? instanceBlock : ''
+    if (plateId !== plate) continue
+    for (const instanceMatch of block.matchAll(/<model_instance\b[^>]*>[\s\S]*?<\/model_instance>/g)) {
+      const objectId = Number(/<metadata\s+key="object_id"\s+value="(\d+)"\s*\/>/.exec(instanceMatch[0])?.[1])
+      if (Number.isInteger(objectId)) ids.add(objectId)
+    }
+  }
+  return ids
+}
+
+/**
+ * Mark the `<build><item>` entries of `unprintableObjectIds` as `printable="0"` in a
+ * `3D/3dmodel.model` XML string (replacing an existing `printable` attribute or inserting one),
+ * leaving every other build item and the rest of the document untouched. This is the slice-time
+ * exclusion BambuStudio's CLI actually honors — it gathers a plate's printable instances from the
+ * build items' `printable` flag — mirroring the editor's per-object "Printable" toggle. Build-item
+ * `objectid`s are Bambu `object_id` values, matching {@link plateObjectIdsFromModelSettingsXml}.
+ */
+export function setBuildItemsUnprintableXml(modelXml: string, unprintableObjectIds: Set<number>): string {
+  if (unprintableObjectIds.size === 0) return modelXml
+  return modelXml.replace(/<build\b[^>]*>[\s\S]*?<\/build>/g, (buildBlock) =>
+    buildBlock.replace(/<item\b[^>]*\/>/g, (item) => {
+      const objectId = Number(/\bobjectid="(\d+)"/.exec(item)?.[1])
+      if (!Number.isInteger(objectId) || !unprintableObjectIds.has(objectId)) return item
+      return /\bprintable="[^"]*"/.test(item)
+        ? item.replace(/\bprintable="[^"]*"/, 'printable="0"')
+        : item.replace(/\s*\/>$/, ' printable="0"/>')
     })
-  })
+  )
 }
 
 /**

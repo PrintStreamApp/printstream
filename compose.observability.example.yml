@@ -1,0 +1,61 @@
+# Optional observability overlay: Prometheus + Grafana scraping the API's
+# OpenTelemetry metrics endpoint. Entirely self-hosted — no SaaS, no data leaves
+# your hardware.
+#
+# Usage (layered on top of your real compose.yml):
+#   cp prometheus.example.yml prometheus.yml
+#   docker compose -f compose.yml -f compose.observability.yml up -d
+#
+# This switches METRICS_ENABLED on for the `api` service and stands up
+# Prometheus (scraping api:9464 over the internal network) and Grafana
+# (add Prometheus at http://prometheus:9090 as a data source on first login).
+#
+# Security: the metrics port (9464) is NEVER published to the host — only
+# Prometheus, on the internal Docker network, reaches it. Grafana's UI binds to
+# 127.0.0.1 by default; keep it behind your own auth/proxy or a private network,
+# and change the default admin password below.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  # Merge: enable metrics on the existing api service from compose.yml.
+  api:
+    environment:
+      METRICS_ENABLED: "true"
+      METRICS_PORT: "9464"
+
+  prometheus:
+    logging: *default-logging
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - printstream-prometheus-data:/prometheus
+    # No host port by default — Grafana reaches Prometheus over the internal
+    # network. Uncomment to inspect Prometheus directly (keep it private).
+    # ports:
+    #   - "127.0.0.1:9090:9090"
+
+  grafana:
+    logging: *default-logging
+    image: grafana/grafana-oss:latest
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    ports:
+      - "${GRAFANA_BIND_HOST:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - printstream-grafana-data:/var/lib/grafana
+
+volumes:
+  printstream-prometheus-data:
+  printstream-grafana-data:

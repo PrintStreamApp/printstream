@@ -34,6 +34,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   onSearchChange,
   searchPlaceholder,
   searchAriaLabel,
+  searchEndDecorator,
   filtersButton,
   pageSizeValue,
   pageSizeOptions,
@@ -56,6 +57,8 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   onSearchChange: (value: string) => void
   searchPlaceholder: string
   searchAriaLabel: string
+  /** Optional control rendered at the right end of the search field (e.g. a scope toggle). */
+  searchEndDecorator?: ReactNode
   filtersButton?: ReactNode
   pageSizeValue: TPageSize
   pageSizeOptions: ReadonlyArray<PageSizeOption<TPageSize>>
@@ -98,6 +101,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder={searchPlaceholder}
           startDecorator={<SearchRoundedIcon />}
+          endDecorator={searchEndDecorator}
           slotProps={{ input: { 'aria-label': searchAriaLabel } }}
           sx={{ minWidth: 0, gridColumn: { md: hasFiltersButton ? 'span 3' : '1 / span 4' } }}
         />

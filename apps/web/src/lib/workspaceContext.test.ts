@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readWorkspaceContextHeader, readWorkspaceContextHint, writePlatformWorkspaceContext, writeTenantWorkspaceContext } from './workspaceContext'
+import { readWorkspaceContextHeader, readWorkspaceContextHint } from './workspaceContext'
 
 test('readWorkspaceContextHint uses tenant slugs from workspace routes', () => {
   withBrowserPath('/workspaces/Alpha/printers', () => {
@@ -18,13 +18,11 @@ test('readWorkspaceContextHint uses platform only from platform routes', () => {
 
 test('readWorkspaceContextHeader sends a neutral hint outside explicit workspace routes', () => {
   withBrowserPath('/workspaces', () => {
-    writeTenantWorkspaceContext('alpha')
     assert.equal(readWorkspaceContextHint(), null)
     assert.equal(readWorkspaceContextHeader(), 'none')
   })
 
   withBrowserPath('/auth', () => {
-    writePlatformWorkspaceContext()
     assert.equal(readWorkspaceContextHint(), null)
     assert.equal(readWorkspaceContextHeader(), 'none')
   })

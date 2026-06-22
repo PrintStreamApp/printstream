@@ -6,9 +6,15 @@
 import { createServer } from 'node:http'
 import { app, finalizeApp } from './app.js'
 import { env } from './lib/env.js'
-import { attachWebSocketServer } from './lib/ws-server.js'
+import { installProcessCrashHandlers } from './lib/process-crash-handlers.js'
+import { runShutdownHooks } from './lib/shutdown-hooks.js'
+import { attachWebSocketServer, wsBroadcaster } from './lib/ws-server.js'
 import { attachBridgeSessionServer } from './lib/bridge-session-server.js'
+import { bridgeSessionManager } from './lib/bridge-session-manager.js'
+import { initMetrics } from './lib/metrics.js'
 import { printerManager } from './lib/printer-manager.js'
+import { printDispatcher } from './lib/print-dispatcher.js'
+import { deleteOperationDispatcher } from './lib/delete-operation-dispatcher.js'
 import { startHmsCodeService } from './lib/hms-codes.js'
 import { startLibraryCleanup, stopLibraryCleanup } from './lib/library-cleanup.js'
 import { startAppUpdateChecks } from './lib/app-update-check.js'
@@ -18,6 +24,7 @@ import { loadInstalledExternalPlugins } from './plugin/installer.js'
 import { loadNotificationTemplates } from './lib/notification-templates.js'
 import { startNotificationSnapshotPrecapture } from './lib/notification-snapshots.js'
 import { startPrintJobRecorder, stopPrintJobRecorder } from './lib/print-job-recorder.js'
+import { startDispatchReconcile, stopDispatchReconcile } from './lib/dispatch-reconcile.js'
 import {
   startActivePrintObjectCache,
   stopActivePrintObjectCache
@@ -63,6 +70,16 @@ void finalizeApp()
       console.log(`printstream API listening on http://localhost:${env.API_PORT}`)
       void (async () => {
     try {
+      // Opt-in (METRICS_ENABLED); a no-op otherwise. Gauges read live counts
+      // from the WS broadcaster and bridge session manager on each scrape.
+      await initMetrics({
+        wsClients: () => wsBroadcaster.size(),
+        bridgesConnected: () => bridgeSessionManager.size()
+      })
+    } catch (error) {
+      console.error('Failed to initialize metrics', error)
+    }
+    try {
       await ensureDefaultWorkspace()
     } catch (error) {
       console.error('Failed to ensure default workspace', error)
@@ -80,6 +97,11 @@ void finalizeApp()
     } catch (error) {
       console.error('Failed to start print job recorder', error)
     }
+    // Reconcile dispatches a prior server life left in flight, and arm reconnect-time
+    // cleanup of any SD bytes they orphaned. Non-fatal if it fails.
+    void startDispatchReconcile().catch((error) => {
+      console.error('Failed to start dispatch reconcile', error)
+    })
     try {
       startActivePrintObjectCache()
     } catch (error) {
@@ -145,15 +167,20 @@ function shutdown(signal: NodeJS.Signals) {
   console.log(`Received ${signal}, shutting down (Ctrl-C again to force-quit)`)
   stopLibraryCleanup()
   stopPrintJobRecorder()
+  stopDispatchReconcile()
   stopActivePrintObjectCache()
   // `httpServer.close()` only stops accepting new connections — it waits
   // for active sockets (WS clients, keep-alives) to drain, which can hang
   // tsx/nodemon restarts indefinitely. Force-drop them so the process
   // exits promptly.
   httpServer.closeAllConnections?.()
-  void Promise.allSettled([printerManager.stop(), pluginRegistry.shutdown()]).finally(() => {
-    httpServer.close(() => process.exit(0))
-  })
+  void Promise.allSettled([printDispatcher.stop(), deleteOperationDispatcher.waitForIdle(), printerManager.stop(), pluginRegistry.shutdown()])
+    // Drain boot-stage teardown (e.g. stopping the embedded Postgres cluster,
+    // registered by server.ts) before exiting, within the force-exit budget below.
+    .then(runShutdownHooks)
+    .finally(() => {
+      httpServer.close(() => process.exit(0))
+    })
   // Hard-exit fallback for a stray handle that outlives graceful teardown — most often a connected
   // printer's MQTT disconnect that never settles, or embedded Postgres. Short in dev so `npm run dev`
   // Ctrl-C feels instant; longer in production to let in-flight requests drain. (`unref` so an
@@ -167,3 +194,7 @@ function shutdown(signal: NodeJS.Signals) {
 
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
+
+// Log otherwise-silent fatal faults (and exit for a clean restart) so a crash is
+// diagnosable instead of the process vanishing with only Node's default output.
+installProcessCrashHandlers()

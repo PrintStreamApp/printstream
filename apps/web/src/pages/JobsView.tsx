@@ -74,7 +74,7 @@ import { buildTenantWorkspacePath } from '../lib/workspaceRoute'
 import { useBufferedCoverImage } from '../hooks/useBufferedCoverImage'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { useSlicingJobs } from '../hooks/useSlicingJobs'
-import { PrintModal } from './LibraryView'
+import { PrintModal } from '../components/library/PrintModal'
 
 interface LiveJob {
   jobId: string

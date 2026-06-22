@@ -6,12 +6,15 @@
  * shared snapshot cache on a fast cadence and broadcasts a WS event so every
  * interested client can reuse the same cached frame.
  *
- * In addition, the hub keeps a slow background poll running for every online
- * camera-capable printer even when no web client is watching. That keeps the
- * shared snapshot cache reasonably fresh, so a user returning to the app after
- * an extended absence sees a recent frame instead of a stale one. The
- * background cadence is much slower than the watched cadence and is staggered
- * across printers to avoid a synchronized burst of camera reads.
+ * In addition, the hub keeps a slow background poll running for printers that
+ * were *viewed recently* (within `BACKGROUND_RETENTION_MS`), even after the last
+ * client stops watching. That keeps the shared snapshot cache fresh for a user
+ * who steps away briefly and returns, without doing fleet-wide work for printers
+ * nobody is watching: a printer that has never been viewed (or was last viewed
+ * beyond the retention window) is not background-polled at all, so steady-state
+ * camera reads track *viewer demand*, not printer inventory. The background
+ * cadence is much slower than the watched cadence and is staggered across
+ * printers to avoid a synchronized burst of camera reads.
  */
 import type { WebSocket } from 'ws'
 import type { Printer, PrinterStatus } from '@printstream/shared'
@@ -22,13 +25,21 @@ import { printerManager } from './printer-manager.js'
 
 /** Refresh cadence while at least one web client is watching a printer tile. */
 const SNAPSHOT_INTERVAL_MS = 3_000
-/** Background refresh cadence for online camera-capable printers with no viewers. */
+/** Background refresh cadence for recently-viewed printers with no current viewers. */
 const IDLE_SNAPSHOT_INTERVAL_MS = 20_000
+/**
+ * How long after the last viewer leaves the hub keeps background-polling a
+ * printer. Past this window an unwatched printer goes fully idle (no camera
+ * reads) until someone watches it again, so background work decays with demand.
+ */
+const BACKGROUND_RETENTION_MS = 5 * 60_000
 
 interface WatchEntry {
   clients: Set<WebSocket>
-  /** Keep a slow background poll running for this printer when no client watches. */
+  /** This printer is online + camera-capable, so background polling is permitted. */
   background: boolean
+  /** Epoch ms a client last watched this printer (0 = never); drives demand decay. */
+  lastWatchedAt: number
   timer: NodeJS.Timeout | null
   inFlight: Promise<void> | null
 }
@@ -42,6 +53,8 @@ type PrinterEventSubscriber = Pick<PrinterEventBus, 'on' | 'off'>
 export interface CameraSnapshotHubOptions {
   snapshotIntervalMs?: number
   idleSnapshotIntervalMs?: number
+  /** Window after the last viewer leaves during which background polling continues. */
+  backgroundRetentionMs?: number
   refreshSnapshot?: (printer: Printer) => Promise<unknown>
   getPrinter?: (printerId: string) => Printer | undefined
   supportsCamera?: (model: Printer['model']) => boolean
@@ -58,6 +71,7 @@ export class CameraSnapshotHub {
 
   private readonly snapshotIntervalMs: number
   private readonly idleSnapshotIntervalMs: number
+  private readonly backgroundRetentionMs: number
   private readonly refreshSnapshot: (printer: Printer) => Promise<unknown>
   private readonly getPrinter: (printerId: string) => Printer | undefined
   private readonly supportsCamera: (model: Printer['model']) => boolean
@@ -74,6 +88,7 @@ export class CameraSnapshotHub {
   ) {
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? SNAPSHOT_INTERVAL_MS
     this.idleSnapshotIntervalMs = options.idleSnapshotIntervalMs ?? IDLE_SNAPSHOT_INTERVAL_MS
+    this.backgroundRetentionMs = options.backgroundRetentionMs ?? BACKGROUND_RETENTION_MS
     this.refreshSnapshot = options.refreshSnapshot ?? refreshSharedCameraSnapshot
     this.getPrinter = options.getPrinter ?? ((printerId) => printerManager.getPrinter(printerId))
     this.supportsCamera = options.supportsCamera ?? supportsChamberCamera
@@ -120,13 +135,14 @@ export class CameraSnapshotHub {
 
     let entry = this.watches.get(printerId)
     if (!entry) {
-      entry = { clients: new Set(), background: false, timer: null, inFlight: null }
+      entry = { clients: new Set(), background: false, lastWatchedAt: 0, timer: null, inFlight: null }
       this.watches.set(printerId, entry)
     }
 
     if (entry.clients.has(client)) return
     const wasIdle = entry.clients.size === 0
     entry.clients.add(client)
+    entry.lastWatchedAt = this.getNow()
 
     let printerIds = this.clientWatches.get(client)
     if (!printerIds) {
@@ -155,12 +171,15 @@ export class CameraSnapshotHub {
 
     if (entry.clients.size > 0) return
 
-    if (entry.background) {
-      // Last viewer left, but keep a slow background poll alive.
+    // Anchor the decay window at the moment the last viewer leaves.
+    entry.lastWatchedAt = this.getNow()
+    if (this.isBackgroundEligible(entry)) {
+      // Last viewer left, but keep a slow background poll alive for the
+      // retention window so a quick return still sees a fresh frame.
       this.scheduleNext(printerId, entry)
     } else {
       this.clearTimer(entry)
-      this.watches.delete(printerId)
+      if (!entry.background) this.watches.delete(printerId)
     }
   }
 
@@ -190,14 +209,16 @@ export class CameraSnapshotHub {
   private enableBackground(printerId: string): void {
     let entry = this.watches.get(printerId)
     if (!entry) {
-      entry = { clients: new Set(), background: true, timer: null, inFlight: null }
+      // Online + camera-capable, but not yet viewed: mark it background-eligible
+      // without scheduling a poll. Background polling only starts once a client
+      // has watched it (demand-decayed), so steady-state work tracks viewers.
+      entry = { clients: new Set(), background: true, lastWatchedAt: 0, timer: null, inFlight: null }
       this.watches.set(printerId, entry)
-      this.scheduleNext(printerId, entry, true)
       return
     }
     if (entry.background) return
     entry.background = true
-    if (entry.clients.size === 0 && !entry.timer && !entry.inFlight) {
+    if (entry.clients.size === 0 && !entry.timer && !entry.inFlight && this.isBackgroundEligible(entry)) {
       this.scheduleNext(printerId, entry, true)
     }
   }
@@ -212,16 +233,28 @@ export class CameraSnapshotHub {
     }
   }
 
+  /**
+   * Background polling is eligible only for a printer that is background-flagged
+   * (online + camera-capable) AND was viewed within the retention window. This
+   * is the demand-decay gate: an online printer nobody has watched recently is
+   * not polled at all.
+   */
+  private isBackgroundEligible(entry: WatchEntry): boolean {
+    return entry.background
+      && entry.lastWatchedAt > 0
+      && (this.getNow() - entry.lastWatchedAt) <= this.backgroundRetentionMs
+  }
+
   private isActive(entry: WatchEntry): boolean {
-    return entry.clients.size > 0 || entry.background
+    return entry.clients.size > 0 || this.isBackgroundEligible(entry)
   }
 
   private refreshAndSchedule(printerId: string, entry: WatchEntry, immediate = false): void {
     this.clearTimer(entry)
-    if (!this.isActive(entry)) return
+    if (!this.started || !this.isActive(entry)) return
 
     const run = () => {
-      if (!this.isActive(entry)) return
+      if (!this.started || !this.isActive(entry)) return
       if (entry.inFlight) return
 
       const printer = this.getPrinter(printerId)
@@ -256,7 +289,9 @@ export class CameraSnapshotHub {
 
   private scheduleNext(printerId: string, entry: WatchEntry, stagger = false): void {
     this.clearTimer(entry)
-    if (!this.isActive(entry)) return
+    // Bail once stopped so an in-flight refresh's `.finally` can't resurrect a
+    // timer on an entry the hub already cleared in stop().
+    if (!this.started || !this.isActive(entry)) return
 
     entry.timer = setTimeout(() => {
       entry.timer = null

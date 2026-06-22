@@ -532,8 +532,13 @@ export class PluginRegistry {
   async unregister(name: string): Promise<void> {
     const entry = this.registered.get(name)
     if (!entry) return
-    if (entry.enabled) {
+    // Tear down what is actually wired (`active`), not `enabled` — a plugin can
+    // be active without being platform-`enabled` (e.g. a tenant-surface plugin),
+    // and gating on `enabled` would leak its subscriptions/connections. Matches
+    // `uninstall`, which also keys teardown on `active`.
+    if (entry.active) {
       await this.deactivate(entry)
+      entry.active = false
     }
     this.registered.delete(name)
     const prefix = `plugin:${name}:`

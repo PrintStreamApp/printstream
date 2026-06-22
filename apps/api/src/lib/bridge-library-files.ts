@@ -24,6 +24,14 @@ import { readEntry, readPlateIndex } from './three-mf.js'
 const bridgeLibraryCacheDir = path.join(libraryDir, '_bridge-cache')
 const bridgeLibraryDerivedCacheDir = path.join(libraryDir, '_bridge-derived-cache')
 const BRIDGE_LIBRARY_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024
+/**
+ * Per-chunk RPC timeout for library byte transfers (store/read). The default
+ * 15s RPC timeout assumes a fast control-message round-trip, but a 4 MiB chunk
+ * over a constrained cloud->bridge uplink (residential upload) can legitimately
+ * take far longer; chunk RPCs emit no progress frames to reset the timer, so the
+ * default aborts the whole copy mid-transfer. 120s covers ~0.3 Mbps per chunk.
+ */
+const BRIDGE_LIBRARY_CHUNK_RPC_TIMEOUT_MS = 120_000
 const BRIDGE_LIBRARY_DERIVED_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /**
  * Version for the on-disk derived 3MF index cache. Derived from the shared parser version
@@ -38,6 +46,10 @@ type CachedBridgeThreeMfIndex = {
   index: BridgeLibraryThreeMfIndex
 }
 
+// LRU-capped (Map preserves insertion order): without a bound this grew one
+// permanent entry per distinct library file ever inspected, for the process
+// lifetime. Mirrors the count cap in cover-cache.ts.
+const BRIDGE_THREE_MF_INDEX_CACHE_MAX = 256
 const bridgeThreeMfIndexCache = new Map<string, CachedBridgeThreeMfIndex>()
 
 export async function storeBridgeLibraryFile(
@@ -108,10 +120,17 @@ export async function readBridgeLibraryFile(bridgeId: string, storedPath: string
   }
 }
 
-export async function inspectBridgeLibraryThreeMf(input: {
+/**
+ * Read a bridge library file's 3MF index from the in-memory or on-disk derived
+ * cache **without** falling back to the `library.inspect3mf` RPC. Returns null on
+ * a cache miss. Used by the library *list* path so rendering a folder never blocks
+ * on a per-file RPC storm; cold entries are warmed in the background (see
+ * {@link warmBridgeLibraryThreeMfIndex}).
+ */
+export async function readBridgeLibraryThreeMfIndexFromCache(input: {
   ownerBridgeId?: string | null
   storedPath: string
-}, signal?: AbortSignal): Promise<BridgeLibraryThreeMfIndex> {
+}, signal?: AbortSignal): Promise<BridgeLibraryThreeMfIndex | null> {
   const bridgeId = requireLibraryOwnerBridgeId(input.ownerBridgeId)
   try {
     const cachedIndex = await readCachedBridgeLibraryThreeMfIndex(bridgeId, input.storedPath, signal)
@@ -119,9 +138,17 @@ export async function inspectBridgeLibraryThreeMf(input: {
   } catch (error) {
     if ((error as Error).name === 'AbortError') throw error
   }
-  const derivedIndex = await readCachedBridgeLibraryDerivedIndex(bridgeId, input.storedPath)
-  if (derivedIndex) return derivedIndex
+  return await readCachedBridgeLibraryDerivedIndex(bridgeId, input.storedPath)
+}
 
+export async function inspectBridgeLibraryThreeMf(input: {
+  ownerBridgeId?: string | null
+  storedPath: string
+}, signal?: AbortSignal): Promise<BridgeLibraryThreeMfIndex> {
+  const cached = await readBridgeLibraryThreeMfIndexFromCache(input, signal)
+  if (cached) return cached
+
+  const bridgeId = requireLibraryOwnerBridgeId(input.ownerBridgeId)
   const result = bridgeLibraryInspect3mfResultSchema.parse(await requestBridgeLibraryRpc(
     bridgeId,
     'library.inspect3mf',
@@ -432,14 +459,24 @@ async function readCachedBridgeLibraryThreeMfIndex(
   const info = await stat(cachePath)
   const cached = bridgeThreeMfIndexCache.get(cachePath)
   if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+    // LRU bump: re-insert so a fresh hit becomes most-recently-used.
+    bridgeThreeMfIndexCache.delete(cachePath)
+    bridgeThreeMfIndexCache.set(cachePath, cached)
     return cached.index
   }
   const index = await readPlateIndex(cachePath, signal)
+  bridgeThreeMfIndexCache.delete(cachePath)
   bridgeThreeMfIndexCache.set(cachePath, {
     mtimeMs: info.mtimeMs,
     size: info.size,
     index
   })
+  // Evict least-recently-used entries beyond the cap (oldest insertion first).
+  while (bridgeThreeMfIndexCache.size > BRIDGE_THREE_MF_INDEX_CACHE_MAX) {
+    const oldest = bridgeThreeMfIndexCache.keys().next().value
+    if (oldest === undefined) break
+    bridgeThreeMfIndexCache.delete(oldest)
+  }
   return index
 }
 
@@ -542,14 +579,14 @@ async function pruneDerivedCacheDirectory(dirPath: string, maxAgeMs: number): Pr
 }
 
 async function beginBridgeLibraryWrite(bridgeId: string, storedPath: string): Promise<void> {
-  await requestBridgeLibraryRpc(bridgeId, 'library.storeStart', { storedPath })
+  await requestBridgeLibraryRpc(bridgeId, 'library.storeStart', { storedPath }, undefined, BRIDGE_LIBRARY_CHUNK_RPC_TIMEOUT_MS)
 }
 
 async function appendBridgeLibraryChunk(bridgeId: string, storedPath: string, chunk: Buffer): Promise<void> {
   await requestBridgeLibraryRpc(bridgeId, 'library.storeChunk', {
     storedPath,
     chunkBase64: chunk.toString('base64')
-  })
+  }, undefined, BRIDGE_LIBRARY_CHUNK_RPC_TIMEOUT_MS)
 }
 
 async function requestBridgeLibraryChunk(bridgeId: string, storedPath: string, offset: number, signal?: AbortSignal) {
@@ -561,7 +598,8 @@ async function requestBridgeLibraryChunk(bridgeId: string, storedPath: string, o
       offset,
       maxBytes: BRIDGE_LIBRARY_TRANSFER_CHUNK_BYTES
     },
-    signal
+    signal,
+    BRIDGE_LIBRARY_CHUNK_RPC_TIMEOUT_MS
   ))
 }
 
@@ -637,14 +675,15 @@ async function requestBridgeLibraryRpc(
   bridgeId: string,
   method: string,
   params: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs?: number
 ): Promise<unknown> {
   if (!bridgeSessionManager.isConnected(bridgeId)) {
     throw new Error(bridgeUnavailableMessage())
   }
 
-  if (!signal) return await bridgeSessionManager.requestRpc(bridgeId, method, params)
-  const { requestId, promise: rpcPromise } = bridgeSessionManager.startRpcRequest(bridgeId, method, params)
+  if (!signal) return await bridgeSessionManager.requestRpc(bridgeId, method, params, { timeoutMs })
+  const { requestId, promise: rpcPromise } = bridgeSessionManager.startRpcRequest(bridgeId, method, params, { timeoutMs })
   if (signal.aborted) throw createAbortError('Aborted')
 
   return await new Promise<unknown>((resolve, reject) => {

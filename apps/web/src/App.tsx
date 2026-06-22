@@ -24,7 +24,6 @@ import {
   TENANTS_MANAGE_PERMISSION,
   PUBLIC_DEMO_TENANT_SLUG,
   DEFAULT_APP_LANDING_PAGE,
-  appLandingPageSettingSchema,
   extractErrorMessage,
   type AppLandingPageSetting,
   type AppThemeSetting,
@@ -36,6 +35,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AppShell, type ShellTab } from './components/AppShell'
+import {
+  DEVICE_APP_THEME_OVERRIDE_KEY,
+  DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX,
+  DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY,
+  parseNullableAppLandingPageSetting,
+  parseNullableAppThemeSetting,
+  parseNullableBoolean,
+  tenantScopedRoutePath
+} from './appShellHelpers'
 import { marketingModule, platformAdminModule } from './lib/privateModules'
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner'
 import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
@@ -69,7 +77,7 @@ import { completeSplashScreen } from './lib/splashScreen'
 import { toast } from './lib/toast'
 import { resolveShellIdentity } from './lib/authUi'
 import { countAccessibleWorkspaceChoices, countSwitchableWorkspaceChoices, listAccessibleTenantWorkspaces } from './lib/workspaceAccess'
-import { clearWorkspaceContextHint, readWorkspaceContextHint, writePlatformWorkspaceContext, writeTenantWorkspaceContext } from './lib/workspaceContext'
+import { readWorkspaceContextHint } from './lib/workspaceContext'
 import { JobsView } from './pages/JobsView'
 import { LibraryView } from './pages/LibraryView'
 import { PrintersView } from './pages/PrintersView'
@@ -104,9 +112,6 @@ const baseCoreTabs: ReadonlyArray<ShellTab> = [
   }
 ]
 
-const DEVICE_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override'
-const DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX = 'printstream.general.landingPage.override'
-const DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY = 'bambu.general.unconstrainedWidth.override'
 const webRuntimeStartedAt = new Date().toISOString()
 
 interface DevHealthResponse {
@@ -292,7 +297,6 @@ export function App() {
       body: { tenantId }
     }),
     onSuccess: async (_data, variables) => {
-      writeTenantWorkspaceContext(variables.tenantSlug)
       const nextRoute = buildTenantWorkspacePath(variables.tenantSlug, variables.routePath)
       if (nextRoute !== currentRoute) {
         navigate(nextRoute, { replace: true })
@@ -307,13 +311,11 @@ export function App() {
     }),
     onSuccess: async (_data, variables) => {
       if (variables.tenantId == null) {
-        writePlatformWorkspaceContext()
         if (variables.routePath !== currentRoute) {
           navigate(variables.routePath, { replace: true })
         }
         await invalidateWorkspaceShellQueries()
       } else if (variables.tenantSlug) {
-        writeTenantWorkspaceContext(variables.tenantSlug)
         const nextRoute = buildTenantWorkspacePath(variables.tenantSlug, variables.routePath)
         if (nextRoute !== currentRoute) {
           navigate(nextRoute, { replace: true })
@@ -322,7 +324,10 @@ export function App() {
       }
     }
   })
-  const allPluginRoutes = webPluginRegistry.routes()
+  // The plugin registry is static for the page's lifetime, but routes() allocates
+  // a fresh array of fresh objects each call. Memoize it so the downstream tab
+  // memo chain (pluginRoutes -> pluginTabs -> tabs) isn't invalidated every render.
+  const allPluginRoutes = useMemo(() => webPluginRegistry.routes(), [])
   const currentPluginSurface = inPlatformMode ? 'platform' : 'tenant'
   const apiPluginsByName = useMemo(
     () => new Map((pluginStateQuery.data?.plugins ?? []).map((plugin) => [plugin.name, plugin] as const)),
@@ -652,19 +657,6 @@ export function App() {
     completeSplashScreen()
   }, [])
 
-  useEffect(() => {
-    if (!authBootstrapReady) return
-    if (!routeTenantSlug && !routePlatformWorkspace) {
-      clearWorkspaceContextHint()
-      return
-    }
-    if (authBootstrapQuery.data?.tenant?.slug) {
-      writeTenantWorkspaceContext(authBootstrapQuery.data.tenant.slug)
-      return
-    }
-    writePlatformWorkspaceContext()
-  }, [authBootstrapQuery.data?.tenant?.slug, authBootstrapReady, routePlatformWorkspace, routeTenantSlug])
-
   const sharedUnconstrainedWidth = generalSettingsQuery.data?.unconstrainedWidth ?? false
   const sharedAppTheme = generalSettingsQuery.data?.appTheme ?? 'default'
   const effectiveUnconstrainedWidth = deviceUnconstrainedWidthOverride ?? sharedUnconstrainedWidth
@@ -933,7 +925,7 @@ export function App() {
                     {hasTenantContext && canManageSettings && <BridgeUpdateBanner />}
                     {hasTenantContext && canManageSettings && <BridgeDebugCaptureBanner />}
                     {hasTenantContext && <LibraryUploadPanel />}
-                    <RouteErrorBoundary>
+                    <RouteErrorBoundary resetKey={location.pathname}>
                       <Routes>
                 <Route path="/" element={rootRouteElement} />
                 {marketingRoutes
@@ -1093,47 +1085,11 @@ export function App() {
   )
 }
 
-function tenantScopedRoutePath(path: string): string {
-  return path === '/' ? '/workspaces/:tenantSlug' : `/workspaces/:tenantSlug${path}`
-}
-
-function parseNullableBoolean(raw: string): boolean | null {
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return typeof parsed === 'boolean' || parsed === null ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function parseNullableAppThemeSetting(raw: string): AppThemeSetting | null {
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed === 'default' || parsed === 'aurora' || parsed === null ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function parseNullableAppLandingPageSetting(raw: string): AppLandingPageSetting | null {
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed === null) {
-      return null
-    }
-
-    const result = appLandingPageSettingSchema.safeParse(parsed)
-    return result.success ? result.data : null
-  } catch {
-    return null
-  }
-}
-
 interface RouteErrorBoundaryState {
   error: Error | null
 }
 
-class RouteErrorBoundary extends Component<{ children: ReactNode }, RouteErrorBoundaryState> {
+class RouteErrorBoundary extends Component<{ children: ReactNode; resetKey: string }, RouteErrorBoundaryState> {
   override state: RouteErrorBoundaryState = { error: null }
 
   static getDerivedStateFromError(error: Error): RouteErrorBoundaryState {
@@ -1143,6 +1099,14 @@ class RouteErrorBoundary extends Component<{ children: ReactNode }, RouteErrorBo
   override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Route render failed', error, errorInfo)
     toast.error(extractErrorMessage(error, 'This screen crashed while rendering'))
+  }
+
+  override componentDidUpdate(previousProps: { resetKey: string }) {
+    // Clear the caught error when the route changes, so navigating away from a
+    // crashed screen recovers instead of leaving the error UI stuck in place.
+    if (this.state.error && previousProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null })
+    }
   }
 
   private reset = () => {

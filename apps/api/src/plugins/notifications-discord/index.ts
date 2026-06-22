@@ -23,6 +23,9 @@ import { requireRequestTenantId } from '../../lib/request-helpers.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
 import { env } from '../../lib/env.js'
 
+/** Bound outbound webhook POSTs so a slow/unreachable host can't wedge delivery. */
+const OUTBOUND_TIMEOUT_MS = 10_000
+
 const COLOUR_BY_LEVEL: Record<NotificationLevel, number> = {
   info: 0x3498db,
   success: 0x2ecc71,
@@ -104,7 +107,8 @@ export const notificationsDiscordPlugin: ApiPlugin = {
         const res = await fetch(webhookUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS)
         })
         if (!res.ok) {
           throw new Error(`Discord webhook responded ${res.status}`)

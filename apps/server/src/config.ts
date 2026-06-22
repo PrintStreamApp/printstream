@@ -5,7 +5,7 @@
  * single-box defaults — embedded Postgres under the data dir, library/plugins
  * dirs, and the web bundle — when the operator has not set them.
  */
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, chmodSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readConfigFileValues } from '@printstream/sea-runtime'
@@ -28,11 +28,13 @@ export async function applyConfigFile(paths: ServerPaths): Promise<void> {
 /**
  * Fills in the single-box environment for the API boot. Must run before
  * `@printstream/api/server` is imported, since the API captures env at load.
- * Only sets a var when it is still unset, so an operator can override any of it
- * (e.g. set `EMBEDDED_POSTGRES=false` + `DATABASE_URL` to bring their own DB).
+ * Operator config wins for everything overridable here — except the database:
+ * the native single-file build always runs its own embedded Postgres cluster.
+ * (Running against an external / bring-your-own database is a Docker or cloud
+ * topology, not a native-build option.)
  */
 export function applyServerEnvDefaults(paths: ServerPaths): void {
-  setDefault('EMBEDDED_POSTGRES', 'true')
+  forceEmbeddedPostgres()
   setDefault('PRINTSTREAM_DATA_DIR', paths.dataDir)
   setDefault('EMBEDDED_POSTGRES_DATA_DIR', paths.dbDir)
   setDefault('LIBRARY_DIR', paths.libraryDir)
@@ -80,8 +82,39 @@ export function ensureServerDirs(paths: ServerPaths): void {
   for (const dir of [paths.dataDir, paths.dbDir, paths.libraryDir, paths.pluginsDir, paths.bridgeReleasesDir, paths.logsDir]) {
     mkdirSync(dir, { recursive: true })
   }
+  // Restrict the data root (and the embedded-Postgres cluster dir) to the owning
+  // user so another local user on a shared host can't traverse in to reach the
+  // DB socket / files or the stored tenant data. 0700 on dataDir covers every
+  // child by directory traversal; dbDir is set too in case it lives elsewhere.
+  // Best-effort: on Windows POSIX modes are largely advisory, and a perms failure
+  // must not block startup.
+  for (const dir of [paths.dataDir, paths.dbDir]) {
+    try {
+      chmodSync(dir, 0o700)
+    } catch {
+      // Ignore — directory may be on a filesystem that doesn't honor chmod.
+    }
+  }
 }
 
 function setDefault(key: string, value: string): void {
   if (process.env[key] === undefined) process.env[key] = value
+}
+
+/**
+ * The native build always uses its embedded Postgres cluster; there is no
+ * bring-your-own-database option here (that is a Docker or cloud topology). Force
+ * the switch on, and if an operator left a now-unsupported `EMBEDDED_POSTGRES`
+ * opt-out in their config, tell them it is being ignored rather than silently
+ * overriding it.
+ */
+function forceEmbeddedPostgres(): void {
+  const requested = (process.env.EMBEDDED_POSTGRES ?? '').trim().toLowerCase()
+  if (requested === '0' || requested === 'false' || requested === 'no') {
+    console.warn(
+      '[printstream] EMBEDDED_POSTGRES=false is no longer supported by the native build; ' +
+        'starting the embedded PostgreSQL cluster instead. Use the Docker deployment to run against an external database.'
+    )
+  }
+  process.env.EMBEDDED_POSTGRES = 'true'
 }

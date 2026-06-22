@@ -18,9 +18,15 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:baseline": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > prisma/baseline.sql",
+    "test-fleet:bootstrap": "tsx src/test-fleet/bootstrap.ts",
     "db:reset-auth": "tsx scripts/dev/reset-auth.ts"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-prometheus": "^0.219.0",
+    "@opentelemetry/resources": "^2.8.0",
+    "@opentelemetry/sdk-metrics": "^2.8.0",
+    "@opentelemetry/semantic-conventions": "^1.41.1",
     "@printstream/bridge-runtime": "0.1.0",
     "@printstream/shared": "0.1.0",
     "@prisma/client": "^6.5.0",

@@ -66,7 +66,7 @@ import {
 } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
-import { serializePrinterNozzleDiameters, toPrinterDto } from '../lib/printer-record.js'
+import { serializePrinterNozzleDiameters, toPrinterDto, toPublicPrinterDto } from '../lib/printer-record.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { assertTenantOwnsPrinter, requireTenantOwnedConnectedPrinter } from '../lib/printer-access.js'
 import { buildPlateGcodeFileHint, extractObservedPrintPlateIndex } from '@printstream/shared'
@@ -393,7 +393,7 @@ printersRouter.post('/', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), a
       bridgeId: created.bridgeId
     }
   })
-  response.status(201).json({ printer: dto })
+  response.status(201).json({ printer: toPublicPrinterDto(created) })
 })
 
 printersRouter.patch('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
@@ -441,7 +441,7 @@ printersRouter.patch('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSION
       changedFields
     }
   })
-  response.json({ printer: dto })
+  response.json({ printer: toPublicPrinterDto(updated) })
 })
 
 printersRouter.delete('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
@@ -1429,14 +1429,14 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
   const filePath = normalizePrinterPath(request.query.path)
   const signal = requestAbortSignal(request, response)
   if (path.extname(filePath).toLowerCase() !== '.3mf') {
-    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], printerProfileName: null, processProfileName: null } satisfies ThreeMfIndex)
+    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies ThreeMfIndex)
     return
   }
 
   try {
     const index = await readPrinterStorageThreeMfIndex(printer, filePath, signal)
     if (!index) {
-      response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], printerProfileName: null, processProfileName: null } satisfies ThreeMfIndex)
+      response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies ThreeMfIndex)
       return
     }
     response.json({
@@ -1451,6 +1451,7 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
       })),
       projectFilaments: index.projectFilaments,
       compatiblePrinterModels: index.compatiblePrinterModels,
+      supportFilamentIds: index.supportFilamentIds,
       printerProfileName: index.printerProfileName,
       processProfileName: index.processProfileName
     } satisfies ThreeMfIndex)

@@ -1,0 +1,16 @@
+# Example Prometheus scrape config for PrintStream.
+#
+# Copy this file to `prometheus.yml` next to your `compose.yml`; the
+# observability overlay (compose.observability.example.yml) mounts it into the
+# Prometheus container. Adjust the target if you run the API outside Docker or
+# on a different METRICS_PORT.
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: printstream-api
+    static_configs:
+      # The API's OpenTelemetry Prometheus endpoint (METRICS_PORT, internal
+      # network only). `api` is the Compose service name.
+      - targets: ['api:9464']

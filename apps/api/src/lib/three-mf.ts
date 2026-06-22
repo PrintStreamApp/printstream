@@ -49,8 +49,9 @@ export {
   createObjectFilteredThreeMf,
   createSinglePlateThreeMf,
   embedPlateThumbnails,
-  filterModelSettingsObjectsXml,
+  plateObjectIdsFromModelSettingsXml,
   readPlateObjectsWithPreview,
-  rekeyReplacedObjectOverrides
+  rekeyReplacedObjectOverrides,
+  setBuildItemsUnprintableXml
 } from './three-mf-output.js'
 export type { ObjectProcessOverrides } from './three-mf-output.js'

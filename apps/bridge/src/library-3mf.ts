@@ -262,7 +262,7 @@ function readEntry(filePath: string, entryPath: string, maxBytes = 8 * 1024 * 10
           finish(new Error(`Entry too large: ${entryPath}`), null)
           return
         }
-        readZipEntryBuffer(zipFile, entry).then(
+        readZipEntryBuffer(zipFile, entry, maxBytes).then(
           (buffer) => finish(null, buffer),
           (error) => finish(error, null)
         )
@@ -272,7 +272,7 @@ function readEntry(filePath: string, entryPath: string, maxBytes = 8 * 1024 * 10
   })
 }
 
-function readZipEntryBuffer(zipFile: ZipFile, entry: Entry): Promise<Buffer> {
+function readZipEntryBuffer(zipFile: ZipFile, entry: Entry, maxBytes = Number.POSITIVE_INFINITY): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     zipFile.openReadStream(entry, (error, stream) => {
       if (error || !stream) {
@@ -280,7 +280,18 @@ function readZipEntryBuffer(zipFile: ZipFile, entry: Entry): Promise<Buffer> {
         return
       }
       const chunks: Buffer[] = []
-      stream.on('data', (chunk: Buffer) => chunks.push(chunk))
+      // Running decoded-byte guard: defense-in-depth against a zip whose central
+      // directory under-declares uncompressedSize. Abort the inflate on overrun.
+      let received = 0
+      stream.on('data', (chunk: Buffer) => {
+        received += chunk.byteLength
+        if (received > maxBytes) {
+          stream.destroy()
+          reject(new Error('Entry exceeds the maximum decoded size'))
+          return
+        }
+        chunks.push(chunk)
+      })
       stream.on('end', () => resolve(Buffer.concat(chunks)))
       stream.on('error', reject)
     })

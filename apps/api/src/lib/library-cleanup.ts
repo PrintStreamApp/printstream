@@ -26,8 +26,10 @@ import { readdir, rm, stat } from 'node:fs/promises'
 import { env } from './env.js'
 import { PUBLIC_DEMO_TENANT_SLUG } from '@printstream/shared'
 import { deleteLibraryFileBytes, pruneBridgeLibraryDerivedCache } from './bridge-library-files.js'
+import { bridgeSessionManager } from './bridge-session-manager.js'
 import { libraryDir } from './library-paths.js'
 import { pruneCoverCache } from './cover-cache.js'
+import { pruneAuditLogs } from './audit-logs.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { deletePrintJobSnapshot } from './print-job-snapshots.js'
 import { rootPrisma } from './prisma.js'
@@ -38,6 +40,8 @@ const PRINT_JOB_THUMBNAIL_RETENTION_DAYS = env.PRINT_JOB_THUMBNAIL_RETENTION_DAY
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 const ONE_HOUR_MS = 60 * 60 * 1000
 const DEMO_TRANSIENT_RETENTION_MS = 12 * ONE_HOUR_MS
+/** Reap anonymous bridge registrations that never connected after this long. */
+const DORMANT_BRIDGE_RETENTION_MS = 7 * ONE_DAY_MS
 // An upload session untouched for this long is treated as abandoned. Keyed off
 // the session file's mtime (rewritten on every chunk), so this is inactivity,
 // not wall-clock age — a multi-hour large upload over a slow link is safe.
@@ -96,8 +100,12 @@ function isHiddenLibraryFileExpired(
  * history (cascade), and the bytes for the current content and every version.
  */
 export async function pruneRecycledLibraryFiles(
-  deps: { deleteLibraryFileBytes: typeof deleteLibraryFileBytes } = { deleteLibraryFileBytes }
+  deps: {
+    deleteLibraryFileBytes: typeof deleteLibraryFileBytes
+    isBridgeConnected?: (bridgeId: string) => boolean
+  } = { deleteLibraryFileBytes }
 ): Promise<{ removed: number }> {
+  const isBridgeConnected = deps.isBridgeConnected ?? ((bridgeId: string) => bridgeSessionManager.isConnected(bridgeId))
   const cutoff = new Date(Date.now() - env.LIBRARY_RECYCLE_RETENTION_DAYS * ONE_DAY_MS)
   const stale = await rootPrisma.libraryFile.findMany({
     where: { deletedAt: { lt: cutoff } },
@@ -109,8 +117,20 @@ export async function pruneRecycledLibraryFiles(
     }
   })
   let removed = 0
+  let deferredOffline = 0
   for (const row of stale) {
-    await rootPrisma.libraryFile.delete({ where: { id: row.id } })
+    // Delete the bytes BEFORE the DB row (matching the other prune passes), and
+    // skip the entry entirely when its owning bridge is offline: bridge-owned
+    // bytes can only be removed while that bridge is connected, and deleting the
+    // row first (the old order) would orphan the bytes permanently with no row
+    // left to retry. Leaving the row lets a later run delete it once the bridge
+    // is back. Local files (no ownerBridgeId) are always eligible.
+    const bridgeIds = [row.ownerBridgeId, ...row.versions.map((version) => version.ownerBridgeId)]
+      .filter((id): id is string => id != null)
+    if (bridgeIds.some((id) => !isBridgeConnected(id))) {
+      deferredOffline += 1
+      continue
+    }
     await deps.deleteLibraryFileBytes(row).catch((err) => {
       console.warn(`[library-cleanup] failed to delete bytes for ${row.id}`, (err as Error).message)
     })
@@ -119,10 +139,14 @@ export async function pruneRecycledLibraryFiles(
         console.warn(`[library-cleanup] failed to delete bytes for ${row.id} (version)`, (err as Error).message)
       })
     }
+    await rootPrisma.libraryFile.delete({ where: { id: row.id } })
     removed += 1
   }
   if (removed > 0) {
     console.log(`[library-cleanup] emptied ${removed} expired recycle bin file${removed === 1 ? '' : 's'}`)
+  }
+  if (deferredOffline > 0) {
+    console.log(`[library-cleanup] deferred ${deferredOffline} expired recycle bin file${deferredOffline === 1 ? '' : 's'} (owning bridge offline)`)
   }
   return { removed }
 }
@@ -253,8 +277,29 @@ export async function prunePrintJobSnapshots(): Promise<{ removed: number }> {
   return { removed }
 }
 
+/**
+ * Hard-delete dormant bridge registrations that were created but never connected.
+ * POST /api/bridge-runtime/register is unauthenticated (it backs the connect-code
+ * pairing flow), so an anonymous/empty call persists a Bridge row with
+ * tenantId=null and a fresh unique connect code; without a reaper these
+ * accumulate (table + connectCode-uniqueness bloat). A bridge that actually
+ * connects sets lastSeenAt on its first heartbeat, so this only reaps rows that
+ * registered and went nowhere past the retention window. A legitimate-but-
+ * unpaired bridge re-registers automatically on its next reconnect if reaped.
+ */
+export async function pruneDormantBridges(): Promise<{ removed: number }> {
+  const cutoff = new Date(Date.now() - DORMANT_BRIDGE_RETENTION_MS)
+  const result = await rootPrisma.bridge.deleteMany({
+    where: { tenantId: null, lastSeenAt: null, createdAt: { lt: cutoff } }
+  })
+  if (result.count > 0) {
+    console.log(`[library-cleanup] pruned ${result.count} dormant bridge registration${result.count === 1 ? '' : 's'}`)
+  }
+  return { removed: result.count }
+}
+
 export async function runArtifactMaintenance(): Promise<void> {
-  const [hiddenFiles, slicedOutputs, recycledFiles, uploadSessions, jobThumbnails, jobSnapshots, coverCache, bridgeDerivedCache] = await Promise.all([
+  const [hiddenFiles, slicedOutputs, recycledFiles, uploadSessions, jobThumbnails, jobSnapshots, coverCache, bridgeDerivedCache, auditLogs, dormantBridges] = await Promise.all([
     pruneHiddenLibraryFiles(),
     pruneUnreferencedSlicedOutputs(),
     pruneRecycledLibraryFiles(),
@@ -262,8 +307,15 @@ export async function runArtifactMaintenance(): Promise<void> {
     prunePrintJobThumbnails(),
     prunePrintJobSnapshots(),
     pruneCoverCache(),
-    pruneBridgeLibraryDerivedCache()
+    pruneBridgeLibraryDerivedCache(),
+    pruneAuditLogs(),
+    pruneDormantBridges()
   ])
+  void dormantBridges
+
+  if (auditLogs.removed > 0) {
+    console.log(`[library-cleanup] pruned ${auditLogs.removed} expired audit-log row${auditLogs.removed === 1 ? '' : 's'}`)
+  }
 
   const removedCoverArtifacts = coverCache.removedCoverFiles
   if (removedCoverArtifacts > 0) {

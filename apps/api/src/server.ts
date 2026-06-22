@@ -9,7 +9,8 @@
  * once the database URL is settled. See `embedded-postgres.ts` for the ordering
  * rationale.
  *
- * When `EMBEDDED_POSTGRES` is disabled (Docker, cloud, BYO Postgres) this is a
+ * When `EMBEDDED_POSTGRES` is disabled (the Docker and cloud deployments, which
+ * connect to an external `DATABASE_URL`) this is a
  * thin pass-through to `index.ts` with no behavior change: migrations there are
  * still applied by the Docker entrypoint's CLI bootstrap before the process
  * starts. Only the embedded path applies migrations here, against the freshly
@@ -22,6 +23,11 @@ async function main(): Promise<void> {
 
   if (embedded) {
     process.env.DATABASE_URL = embedded.databaseUrl
+    // Stop the embedded cluster as part of graceful shutdown. Registered before
+    // index.ts (and its signal handlers) loads, so a SIGTERM during startup can't
+    // race past it. The registry is env-free, so importing it here is pre-env safe.
+    const { registerShutdownHook } = await import('./lib/shutdown-hooks.js')
+    registerShutdownHook(() => embedded.stop())
     // The CLI-free applier provisions a fresh cluster from the baseline snapshot
     // and forward-applies any new migrations — the Docker stack's CLI bootstrap
     // is not in this bundle. (Dynamic import so nothing DB-related loads before

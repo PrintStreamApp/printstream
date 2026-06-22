@@ -77,6 +77,14 @@ export async function recoverBridgePrinterAssignments(input: {
   })
 
   for (const printer of recoveredPrinters) {
+    // Log a transfer that takes a printer off a *different* (disconnected) sibling
+    // bridge — this is the path that, on a spoofed/over-broad discovery snapshot,
+    // can flap ownership of a temporarily-offline sibling's printer. Logging keeps
+    // the reassignment auditable/diagnosable. (Reachability-gating the transfer is
+    // deferred: it intersects the bridge-replacement re-pairing flow — rob-2.)
+    if (printer.bridgeId && printer.bridgeId !== input.bridgeId) {
+      console.warn(`[bridge-recovery] reassigned printer ${printer.id} (serial ${printer.serial}) from bridge ${printer.bridgeId} to ${input.bridgeId} after rediscovery`)
+    }
     printerManager.update(toPrinterDto({ ...printer, bridgeId: input.bridgeId }), input.tenantId, input.bridgeId)
   }
 

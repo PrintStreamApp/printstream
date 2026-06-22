@@ -27,14 +27,14 @@ interface DiscoveryEntry {
 
 interface PrinterDiscoveryDeps {
   now: () => number
-  reconcileHost: (discovered: { serial: string; host: string }) => Promise<boolean>
-  recoverOfflinePrinter: (serial: string) => boolean
+  reconcileHost: (discovered: { serial: string; host: string; bridgeId: string }) => Promise<boolean>
+  recoverOfflinePrinter: (serial: string, bridgeId: string) => boolean
 }
 
 const defaultDeps: PrinterDiscoveryDeps = {
   now: () => Date.now(),
   reconcileHost: reconcileAdoptedPrinterHost,
-  recoverOfflinePrinter: (serial) => printerManager.hintOnline(serial)
+  recoverOfflinePrinter: (serial, bridgeId) => printerManager.hintOnline(serial, bridgeId)
 }
 
 export class PrinterDiscovery {
@@ -69,7 +69,7 @@ export class PrinterDiscovery {
         this.recoveryHints.delete(entry.serial)
         this.reconcileAdoptedPrinter(entry)
       } else {
-        this.maybeRecoverOfflinePrinter(entry.serial, now)
+        this.maybeRecoverOfflinePrinter(entry.serial, entry.bridgeId, now)
       }
 
       if (!previousEntry || this.entryChanged(previousEntry, entry)) {
@@ -170,7 +170,7 @@ export class PrinterDiscovery {
   private reconcileAdoptedPrinter(entry: DiscoveryEntry): void {
     if (this.reconcileTasks.has(entry.serial)) return
 
-    const task = this.deps.reconcileHost({ serial: entry.serial, host: entry.host })
+    const task = this.deps.reconcileHost({ serial: entry.serial, host: entry.host, bridgeId: entry.bridgeId })
       .then(() => undefined)
       .catch((error) => {
         console.warn(
@@ -187,11 +187,11 @@ export class PrinterDiscovery {
     this.reconcileTasks.set(entry.serial, task)
   }
 
-  private maybeRecoverOfflinePrinter(serial: string, now: number): void {
+  private maybeRecoverOfflinePrinter(serial: string, bridgeId: string, now: number): void {
     const lastHintAt = this.recoveryHints.get(serial)
     if (lastHintAt !== undefined && now - lastHintAt < RECOVERY_HINT_COOLDOWN_MS) return
 
-    if (this.deps.recoverOfflinePrinter(serial)) {
+    if (this.deps.recoverOfflinePrinter(serial, bridgeId)) {
       this.recoveryHints.set(serial, now)
       return
     }

@@ -19,8 +19,11 @@ import {
   defaultPrinterViewSort,
   formatBytes,
   formatNozzleDiameterLabel,
+  normalizeFallbackPlateLabel,
   normalizeNozzleDiameter,
   normalizePlateType,
+  printerCardContentSettingsSchema,
+  printerViewModelFilterSchema,
   resolvePrinterNozzleDiameters,
   type AmsSlot,
   type AmsUnit,
@@ -992,4 +995,124 @@ export function formatLocalUploadPhase(phase: ChunkedLibraryUploadPhase): string
 
 export function collectDistinctLibraryFilterValues(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right))
+}
+
+export function shouldPreferTrackedActiveJobName(liveJobName: string | null, trackedJobName: string | null): boolean {
+  if (!liveJobName || !trackedJobName || liveJobName === trackedJobName) return false
+  const splitIndex = liveJobName.lastIndexOf(' - ')
+  const livePlateLabel = splitIndex > 0 ? liveJobName.slice(splitIndex + 3).trim() : liveJobName.trim()
+  return normalizeFallbackPlateLabel(livePlateLabel) !== livePlateLabel
+}
+
+export function externalSpoolLabel(amsId: ExternalSpool['amsId'], spoolCount: number): string {
+  if (spoolCount > 1) {
+    return amsId === 255 ? 'Ext-R' : 'Ext-L'
+  }
+  return 'Ext'
+}
+
+export function printerCardAmsGridColumns(cardsPerRow: number): number {
+  if (cardsPerRow === 1) return 8
+  if (cardsPerRow === 2) return 4
+  return 4
+}
+
+export function amsUnitSlotSpan(unit: AmsUnit): number {
+  return Math.max(1, Math.min(4, unit.slots.length))
+}
+
+export function parseStoredBoolean(raw: string): boolean | null {
+  if (raw === 'true') return true
+  if (raw === 'false') return false
+  return null
+}
+
+export function parseStoredOptionalString(raw: string): string | null {
+  const value = raw.trim()
+  return value && value !== 'null' ? value : null
+}
+
+export function serializeStoredOptionalString(value: string | null): string {
+  return value ?? ''
+}
+
+export function parseStoredStringArray(raw: string): string[] | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return null
+    return parsed.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '')
+  } catch {
+    return null
+  }
+}
+
+export function parsePrinterModelFilter(raw: string): PrinterModel[] | null {
+  try {
+    const result = printerViewModelFilterSchema.safeParse(JSON.parse(raw) as unknown)
+    return result.success ? result.data : null
+  } catch {
+    return null
+  }
+}
+
+export function parsePrinterViewSort(raw: string): PrinterViewSort | null {
+  if (!raw) return null
+  return decodePrinterViewSort(raw)
+}
+
+export function parsePrinterCardContentSettings(raw: string): PrinterCardContentSettings | null {
+  try {
+    const result = printerCardContentSettingsSchema.safeParse(JSON.parse(raw) as unknown)
+    return result.success ? result.data : null
+  } catch {
+    return null
+  }
+}
+
+export function printerNozzles(status: PrinterStatus | undefined): PrinterStatus['nozzles'] {
+  if (!status) return []
+  if (status.nozzles.length > 0) return status.nozzles
+  if (status.nozzleTemp == null && status.nozzleTarget == null) return []
+  return [{ extruderId: 0, diameter: null, typeCode: null, material: null, flow: null, currentTemp: status.nozzleTemp, targetTemp: status.nozzleTarget }]
+}
+
+export function formatNozzleMaterial(material: PrinterStatus['nozzles'][number]['material']): string | null {
+  switch (material) {
+    case 'stainless-steel':
+      return 'Stainless steel'
+    case 'hardened-steel':
+      return 'Hardened steel'
+    case 'tungsten-carbide':
+      return 'Tungsten carbide'
+    default:
+      return null
+  }
+}
+
+export function formatNozzleFlow(flow: PrinterStatus['nozzles'][number]['flow']): string | null {
+  switch (flow) {
+    case 'standard':
+      return 'Standard flow'
+    case 'high':
+      return 'High flow'
+    case 'tpu-high':
+      return 'TPU high flow'
+    default:
+      return null
+  }
+}
+
+export function formatNozzleHardwareSummary(nozzle: PrinterStatus['nozzles'][number]): string | null {
+  const parts: string[] = []
+  const diameterLabel = formatNozzleDiameterLabel(nozzle.diameter)
+  if (diameterLabel) parts.push(diameterLabel)
+
+  const materialLabel = formatNozzleMaterial(nozzle.material)
+  if (materialLabel) parts.push(materialLabel)
+
+  const flowLabel = formatNozzleFlow(nozzle.flow)
+  if (flowLabel) parts.push(flowLabel)
+
+  if (parts.length === 0 && nozzle.typeCode) parts.push(nozzle.typeCode)
+  return parts.length > 0 ? parts.join(' · ') : null
 }

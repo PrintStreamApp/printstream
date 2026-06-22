@@ -83,11 +83,20 @@ test('plate-clearing marks the plate uncleared when a print fails', async () => 
 })
 
 async function registerPlateClearingPlugin(initialSettings: Record<string, string>) {
-  const settings = new Map(Object.entries(initialSettings))
+  // The plugin stores all state per-tenant via `forTenant`; printer-1 is tenant-1.
+  const tenant1 = new Map(Object.entries(initialSettings))
+  const tenantSettings = new Map<string, Map<string, string>>([['tenant-1', tenant1]])
   const events = new PrinterEventBus()
 
+  const makeStore = (map: Map<string, string>) => ({
+    async get(key: string) { return map.get(key) ?? null },
+    async set(key: string, value: string) { map.set(key, value) },
+    async delete(key: string) { map.delete(key) },
+    forTenant() { throw new Error('nested forTenant not supported') }
+  })
+
   Object.defineProperty(rootPrisma.printer, 'findMany', {
-    value: async () => [{ id: 'printer-1' }],
+    value: async () => [{ id: 'printer-1', tenantId: 'tenant-1' }],
     configurable: true
   })
 
@@ -104,17 +113,12 @@ async function registerPlateClearingPlugin(initialSettings: Record<string, strin
     isEnabledForTenant: () => true,
     router: express.Router(),
     settings: {
-      async get(key: string) {
-        return settings.get(key) ?? null
-      },
-      async set(key: string, value: string) {
-        settings.set(key, value)
-      },
-      async delete(key: string) {
-        settings.delete(key)
-      },
-      forTenant() {
-        throw new Error('Tenant-scoped settings are not used in this plugin test')
+      // Platform-global store is unused by this plugin now.
+      ...makeStore(new Map<string, string>()),
+      forTenant(tenantId: string) {
+        let map = tenantSettings.get(tenantId)
+        if (!map) { map = new Map(); tenantSettings.set(tenantId, map) }
+        return makeStore(map)
       }
     },
     onShutdown() {},
@@ -126,5 +130,6 @@ async function registerPlateClearingPlugin(initialSettings: Record<string, strin
     }
   } as never)
 
-  return { events, settings }
+  // `settings` is tenant-1's store, where this printer's state lives.
+  return { events, settings: tenant1, tenantSettings }
 }

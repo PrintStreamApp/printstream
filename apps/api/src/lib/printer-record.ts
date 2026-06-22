@@ -58,6 +58,11 @@ export function serializePrinterNozzleDiameters(value: readonly PrinterNozzleDia
   return JSON.stringify(normalized)
 }
 
+/**
+ * Server-internal printer DTO that carries the real LAN access code. Use this for
+ * transport/manager paths. Never send the result to the browser — use
+ * `toPublicPrinterDto` for anything that reaches an HTTP/WS response.
+ */
 export function toPrinterDto(row: PrinterRowLike): Printer {
   return {
     id: row.id,
@@ -72,5 +77,20 @@ export function toPrinterDto(row: PrinterRowLike): Printer {
     position: row.position,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString()
+  }
+}
+
+/**
+ * Browser-facing printer DTO. Blanks the `accessCode` (the printer's LAN
+ * credential) and reports only whether one is configured, so the secret never
+ * leaves the server. The edit form treats access code as write-only: it shows a
+ * blank field and only submits a new code when the operator types one. Every
+ * HTTP/WS response that returns a printer must go through this, not `toPrinterDto`.
+ */
+export function toPublicPrinterDto(row: PrinterRowLike): Printer {
+  return {
+    ...toPrinterDto(row),
+    accessCode: '',
+    accessCodeConfigured: row.accessCode.length > 0
   }
 }

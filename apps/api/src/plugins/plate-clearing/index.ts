@@ -35,7 +35,7 @@ import { printerManager } from '../../lib/printer-manager.js'
 import { assertTenantOwnsPrinter } from '../../lib/printer-access.js'
 import { resolvePrintJobIdByTaskId } from '../../lib/print-job-recorder.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
-import { requireRouteParam } from '../../lib/request-helpers.js'
+import { requireRequestTenantId, requireRouteParam } from '../../lib/request-helpers.js'
 import { broadcastPluginSettingsChanged } from '../../lib/ws-resource-events.js'
 import { rootPrisma } from '../../lib/prisma.js'
 
@@ -51,27 +51,27 @@ export const plateClearingPlugin: ApiPlugin = {
   version: '0.1.0',
   description: 'Block new prints until the build plate has been confirmed cleared.',
   async register(context) {
-    const isEnabledForPrinter = (printerId: string): boolean => {
-      const tenantId = printerManager.getTenantId(printerId) ?? null
-      return context.isEnabledForTenant?.(tenantId) ?? true
-    }
+    // All plugin state is per-tenant: configuration (`clearLastJobOnClear`) and
+    // per-printer clear state live in `context.settings.forTenant(tenantId)`, never
+    // the platform-global store — otherwise one tenant's toggle would change every
+    // tenant's. The printer's tenant is resolved via `printerManager.getTenantId`.
+    const tenantStore = (tenantId: string) => context.settings.forTenant(tenantId)
 
-    /** Settings helpers (persisted, survives restart). */
+    /** Settings helpers (persisted per tenant, survive restart). */
     const stateKey = (printerId: string) => `${STATE_KEY_PREFIX}${printerId}`
-    const isCleared = async (printerId: string): Promise<boolean> => {
-      const value = await context.settings.get(stateKey(printerId))
+    const isCleared = async (tenantId: string, printerId: string): Promise<boolean> => {
+      const value = await tenantStore(tenantId).get(stateKey(printerId))
       // Default to cleared so installing the plugin does not retroactively
       // block prints on printers whose previous job we never observed.
       return value == null ? true : value !== 'false'
     }
-    const setCleared = async (printerId: string, cleared: boolean): Promise<void> => {
-      await context.settings.set(stateKey(printerId), cleared ? 'true' : 'false')
+    const setCleared = async (tenantId: string, printerId: string, cleared: boolean): Promise<void> => {
+      await tenantStore(tenantId).set(stateKey(printerId), cleared ? 'true' : 'false')
     }
-    const loadClearLastJobOnClear = async (): Promise<boolean> => {
-      const value = await context.settings.get(CLEAR_LAST_JOB_ON_CLEAR_KEY)
+    const loadClearLastJobOnClear = async (tenantId: string): Promise<boolean> => {
+      const value = await tenantStore(tenantId).get(CLEAR_LAST_JOB_ON_CLEAR_KEY)
       return value == null ? true : value !== 'false'
     }
-    let clearLastJobOnClear = await loadClearLastJobOnClear()
 
     // --- print guard --------------------------------------------------
     context.registerPrintGuard((decision) => {
@@ -85,18 +85,19 @@ export const plateClearingPlugin: ApiPlugin = {
       }
       return true
     })
-    /** Cache mirroring `Setting` rows so the guard can stay sync. */
+    /** Cache mirroring `Setting` rows so the guard can stay sync (keyed by unique printerId). */
     const clearedCache = new Map<string, boolean>()
-    const refreshCache = async (printerId: string): Promise<void> => {
-      clearedCache.set(printerId, await isCleared(printerId))
+    const refreshCache = async (tenantId: string, printerId: string): Promise<void> => {
+      clearedCache.set(printerId, await isCleared(tenantId, printerId))
     }
 
     // --- event listeners ---------------------------------------------
     const onJobFinished = async (event: { printer: { id: string } }) => {
       try {
-        if (!isEnabledForPrinter(event.printer.id)) return
-        await setCleared(event.printer.id, false)
-        await refreshCache(event.printer.id)
+        const tenantId = printerManager.getTenantId(event.printer.id)
+        if (!tenantId || !(context.isEnabledForTenant?.(tenantId) ?? true)) return
+        await setCleared(tenantId, event.printer.id, false)
+        await refreshCache(tenantId, event.printer.id)
         broadcast(event.printer.id, false)
       } catch (error) {
         // A silently-dropped rejection here would leave the clear gate stuck
@@ -130,27 +131,29 @@ export const plateClearingPlugin: ApiPlugin = {
     // before the first event. Use rootPrisma because this runs at
     // plugin activation time, outside any per-tenant request context.
     {
-      const printers = await rootPrisma.printer.findMany({ select: { id: true } })
-      for (const row of printers) await refreshCache(row.id)
+      const printers = await rootPrisma.printer.findMany({ select: { id: true, tenantId: true } })
+      for (const row of printers) await refreshCache(row.tenantId, row.id)
     }
 
     // --- HTTP routes -------------------------------------------------
-    context.router.get('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), (_request, response) => {
-      response.json({ clearLastJobOnClear })
+    context.router.get('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+      const tenantId = requireRequestTenantId(request)
+      response.json({ clearLastJobOnClear: await loadClearLastJobOnClear(tenantId) })
     })
 
     context.router.put('/settings', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+      const tenantId = requireRequestTenantId(request)
       const parsed = plateClearingSettingsSchema.safeParse(request.body)
       if (!parsed.success) {
         response.status(400).json({ error: 'clearLastJobOnClear must be a boolean' })
         return
       }
 
-      clearLastJobOnClear = parsed.data.clearLastJobOnClear
+      const clearLastJobOnClear = parsed.data.clearLastJobOnClear
       if (clearLastJobOnClear) {
-        await context.settings.delete(CLEAR_LAST_JOB_ON_CLEAR_KEY)
+        await tenantStore(tenantId).delete(CLEAR_LAST_JOB_ON_CLEAR_KEY)
       } else {
-        await context.settings.set(CLEAR_LAST_JOB_ON_CLEAR_KEY, 'false')
+        await tenantStore(tenantId).set(CLEAR_LAST_JOB_ON_CLEAR_KEY, 'false')
       }
       annotateRequestAuditLog(request, {
         action: 'update-plate-clearing-settings',
@@ -160,16 +163,17 @@ export const plateClearingPlugin: ApiPlugin = {
           clearLastJobOnClear
         }
       })
-      broadcastPluginSettingsChanged(context.pluginName)
+      broadcastPluginSettingsChanged(context.pluginName, tenantId)
       response.json({ clearLastJobOnClear })
     })
 
-    context.router.get('/state', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (_request, response) => {
+    context.router.get('/state', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
+      const tenantId = requireRequestTenantId(request)
       const printers = await context.prisma.printer.findMany({ select: { id: true } })
       const states = await Promise.all(
         printers.map(async (printer) => ({
           printerId: printer.id,
-          cleared: await isCleared(printer.id)
+          cleared: await isCleared(tenantId, printer.id)
         }))
       )
       response.json({ printers: states })
@@ -178,11 +182,12 @@ export const plateClearingPlugin: ApiPlugin = {
     context.router.post('/state/:printerId/clear', requireRequestPermission(PRINTERS_CLEAR_PLATE_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
       await assertTenantOwnsPrinter(printerId)
+      const tenantId = requireRequestTenantId(request)
       const printerName = printerManager.getPrinter(printerId)?.name ?? printerId
       const relatedJobId = await resolvePrintJobIdByTaskId(printerId, printerManager.getStatus(printerId)?.taskId ?? null)
-      await setCleared(printerId, true)
-      await refreshCache(printerId)
-      if (clearLastJobOnClear) {
+      await setCleared(tenantId, printerId, true)
+      await refreshCache(tenantId, printerId)
+      if (await loadClearLastJobOnClear(tenantId)) {
         printerManager.clearLastJobName(printerId)
       }
       annotateRequestAuditLog(request, {
@@ -202,9 +207,10 @@ export const plateClearingPlugin: ApiPlugin = {
     context.router.post('/state/:printerId/needs-clear', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
       await assertTenantOwnsPrinter(printerId)
+      const tenantId = requireRequestTenantId(request)
       const printerName = printerManager.getPrinter(printerId)?.name ?? printerId
-      await setCleared(printerId, false)
-      await refreshCache(printerId)
+      await setCleared(tenantId, printerId, false)
+      await refreshCache(tenantId, printerId)
       annotateRequestAuditLog(request, {
         action: 'mark-plate-needs-clear',
         resource: 'printer plate',

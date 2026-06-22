@@ -86,6 +86,37 @@ test('printer list only returns printers for the active tenant', async () => {
   assert.deepEqual(requestedWhere, { tenantId: 'tenant-1' })
 })
 
+test('printer list redacts the LAN access code (never sends the secret to the browser)', async () => {
+  prisma.printer.findMany = ((async () => [{
+    id: 'printer-1',
+    tenantId: 'tenant-1',
+    name: 'Printer 1',
+    host: '192.168.1.10',
+    serial: 'SERIAL123',
+    accessCode: 'super-secret-code',
+    model: 'P1S',
+    bridgeId: 'bridge-1',
+    currentPlateType: null,
+    currentNozzleDiameters: null,
+    position: 0,
+    createdAt: new Date('2026-06-20T00:00:00.000Z'),
+    updatedAt: new Date('2026-06-20T00:00:00.000Z')
+  }]) as unknown) as typeof prisma.printer.findMany
+
+  await withPrintersApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [PRINTERS_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/printers`)
+    assert.equal(response.status, 200)
+    const body = await response.json() as { printers: Array<{ accessCode: string; accessCodeConfigured?: boolean }> }
+    assert.equal(body.printers[0]?.accessCode, '')
+    assert.equal(body.printers[0]?.accessCodeConfigured, true)
+  }, TEST_TENANT)
+})
+
 test('printer stats are resolved by the current printer serial and include live activity', async () => {
   let requestedWhere: unknown = null
   prisma.printer.findFirst = ((async (args: { where?: unknown; select?: unknown }) => {

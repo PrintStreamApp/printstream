@@ -3,7 +3,7 @@
  *
  * This is the dependency-free base of the three-mf family: low-level ZIP I/O
  * ({@link readEntry}, {@link readZipEntryBuffer}), abort-signal helpers, XML/regex
- * escaping, and the generic copy-with-transform pass {@link rewriteModelSettingsThreeMf}.
+ * escaping, and the generic copy-with-transform pass {@link rewriteThreeMfEntries}.
  * Everything here is mechanical (no 3MF domain knowledge) so the reader, scene-builder,
  * and output modules can share it without forming an import cycle. Dependencies flow
  * one way: output/scene-builder -> reader -> internal.
@@ -55,7 +55,7 @@ export function readEntry(
           finish(new Error(`Entry too large: ${entryPath}`), null)
           return
         }
-        readZipEntryBuffer(zipFile, entry, signal).then(
+        readZipEntryBuffer(zipFile, entry, signal, maxBytes).then(
           (buffer) => finish(null, buffer),
           (error) => finish(error, null)
         )
@@ -66,15 +66,15 @@ export function readEntry(
 }
 
 /**
- * Copies every archive entry verbatim except `entryName` (default
- * `Metadata/model_settings.config`), which is passed through `transform`. Shared by the
- * object-filter / per-object-override rewrites and the machine-retarget project_settings rewrite.
+ * Copies every archive entry verbatim except those named in `transforms`, each of which is read as
+ * UTF-8 text and passed through its transform. Generalizes the single-entry rewrite so one copy pass
+ * can edit several entries at once (e.g. `Metadata/model_settings.config` AND `3D/3dmodel.model` for
+ * slice-time object customization). An empty `transforms` map produces a verbatim copy.
  */
-export function rewriteModelSettingsThreeMf(
+export function rewriteThreeMfEntries(
   sourcePath: string,
   outputPath: string,
-  transform: (xml: string) => string,
-  entryName = 'Metadata/model_settings.config'
+  transforms: Record<string, (xml: string) => string>
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     yauzl.open(sourcePath, { lazyEntries: true }, (openError, sourceZip) => {
@@ -107,7 +107,8 @@ export function rewriteModelSettingsThreeMf(
       sourceZip.on('error', finish)
       sourceZip.on('end', () => outputZip.end())
       sourceZip.on('entry', (entry: Entry) => {
-        if (entry.fileName === entryName) {
+        const transform = transforms[entry.fileName]
+        if (transform) {
           readZipEntryBuffer(sourceZip, entry).then(
             (buffer) => {
               outputZip.addBuffer(Buffer.from(transform(buffer.toString('utf8')), 'utf8'), entry.fileName, { mtime: entry.getLastModDate() })
@@ -137,6 +138,20 @@ export function rewriteModelSettingsThreeMf(
   })
 }
 
+/**
+ * Copies every archive entry verbatim except `entryName` (default
+ * `Metadata/model_settings.config`), which is passed through `transform`. Thin single-entry wrapper
+ * over {@link rewriteThreeMfEntries}; used by the machine-retarget project_settings rewrite.
+ */
+export function rewriteModelSettingsThreeMf(
+  sourcePath: string,
+  outputPath: string,
+  transform: (xml: string) => string,
+  entryName = 'Metadata/model_settings.config'
+): Promise<void> {
+  return rewriteThreeMfEntries(sourcePath, outputPath, { [entryName]: transform })
+}
+
 export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -156,7 +171,7 @@ export const OBJECT_STRUCTURAL_METADATA_KEYS: ReadonlySet<string> = new Set([
   'name', 'extruder', 'source_file', 'module'
 ])
 
-export function readZipEntryBuffer(zipFile: ZipFile, entry: Entry, signal?: AbortSignal): Promise<Buffer> {
+export function readZipEntryBuffer(zipFile: ZipFile, entry: Entry, signal?: AbortSignal, maxBytes = Number.POSITIVE_INFINITY): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     throwIfAborted(signal)
     zipFile.openReadStream(entry, (error, stream) => {
@@ -178,7 +193,19 @@ export function readZipEntryBuffer(zipFile: ZipFile, entry: Entry, signal?: Abor
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       const chunks: Buffer[] = []
-      stream.on('data', (chunk: Buffer) => chunks.push(chunk))
+      // Running decoded-byte guard: defense-in-depth against a zip whose central
+      // directory under-declares uncompressedSize (the pre-stream check at the
+      // caller trusts that field). Abort the inflate the moment it overruns.
+      let received = 0
+      stream.on('data', (chunk: Buffer) => {
+        received += chunk.byteLength
+        if (received > maxBytes) {
+          stream.destroy()
+          finish(new Error('Entry exceeds the maximum decoded size'))
+          return
+        }
+        chunks.push(chunk)
+      })
       stream.on('end', () => finish(null, Buffer.concat(chunks)))
       stream.on('error', (caught) => finish(caught))
     })

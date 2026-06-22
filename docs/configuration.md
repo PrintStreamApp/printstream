@@ -7,6 +7,8 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `API_PORT` | `4000` | API HTTP port. |
 | `NODE_ENV` | `development` | Runtime mode (`development` / `production` / `test`). The Compose stacks set `production`. |
 | `DATABASE_URL` | `postgresql://postgres:postgres@db:5432/printstream?schema=public` | Prisma PostgreSQL URL. The default expects the repo's Compose/devcontainer `db` service; use `localhost` or another host only if you run Postgres outside Compose. |
+| `DATABASE_CONNECTION_LIMIT` | *(Prisma default: CPUs×2+1)* | Prisma connection-pool size for this process. Set it to match expected concurrency against the Postgres `max_connections` budget; the CPU-count default can bottleneck a busy single-process multi-tenant API. Appended to `DATABASE_URL` as `connection_limit`. |
+| `DATABASE_POOL_TIMEOUT` | *(Prisma default: 10s)* | Seconds a query waits for a free pooled connection before erroring (P2024). Appended to `DATABASE_URL` as `pool_timeout`. |
 | `DB_WAIT_TIMEOUT_MS` | `60000` | Max time `npm run dev:db` waits for Postgres to accept connections before failing. |
 | `DB_WAIT_RETRY_MS` | `1000` | Poll interval `npm run dev:db` uses while waiting for Postgres. |
 | `CLIENT_ORIGIN` | `http://localhost:5173` | Comma-separated list of allowed browser origins. |
@@ -20,6 +22,9 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `BRIDGE_RELEASES_DIR` | `./data/releases` | Standalone bridges only: directory for staged self-update binaries. Docker bridges keep no release state (the image is the unit of update). |
 | `BRIDGE_UPDATE_PUBLIC_KEY` | official PrintStream key | Optional Ed25519 public key override for verifying signed standalone updates. Normal bridge installs should leave this unset. Compose `.env` files may use a one-line PEM with `\n` escapes when overriding. |
 | API `BRIDGE_RELEASES_DIR` | `./data/bridge-releases` | API-container directory containing signed bridge release JSON fragments and the standalone binary assets served to bridges. |
+| `SECRETS_KEY` | *(unset)* | Master key for encrypting sensitive stored settings at rest (currently OAuth client secrets) via AES-256-GCM. Any non-empty string works (it is hashed to a 32-byte key). When unset, those settings are stored unencrypted and a warning is logged — **set this in production**. Existing plaintext values keep working and are re-encrypted on next write. Treat it as a secret; rotating it makes previously-encrypted values unreadable (re-enter them). |
+| `AUDIT_LOG_RETENTION_DAYS` | `365` | How long durable audit-log rows are retained before scheduled maintenance prunes them. Raise for stricter compliance retention. |
+| `CSP_ENFORCE` | `false` | When `true`, the Content-Security-Policy is enforced (`Content-Security-Policy`); when `false` it is sent report-only (`Content-Security-Policy-Report-Only`). Roll out report-only first, confirm no violations in the browser console, then set `true`. |
 | `CLOUDFLARE_EMAIL_ACCOUNT_ID` | *(unset)* | Cloudflare account ID for Email Sending. Required for local-auth one-time email codes outside demo mode. |
 | `CLOUDFLARE_EMAIL_API_TOKEN` | *(unset)* | Cloudflare API token with Email Sending permission. Treat this as a secret and rotate it if exposed. |
 | `CLOUDFLARE_EMAIL_FROM_EMAIL` | *(unset)* | Verified sender address for Cloudflare Email Sending. |
@@ -49,5 +54,7 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `PUBLIC_BASE_URL` | *(unset)* | Absolute URL used for notification media embeds (e.g. camera snapshots). |
 | `MQTT_DEBUG_LOGS` | `false` | Set to `true` or `1` to log raw MQTT publish/receive traffic for protocol debugging. |
 | `CAMERA_DEBUG_LOGS` | `false` | Set to `true` or `1` to re-enable verbose RTSP camera readiness logs such as `snapshot ready` and `first frame`. |
-| `NTFY_TOPIC_URL` | *(unset)* | Default ntfy topic for the notifications-ntfy plugin. |
+| `METRICS_ENABLED` | `false` | When `true`, expose a Prometheus `/metrics` endpoint (OpenTelemetry) on `METRICS_PORT` for an internal scraper. Off by default — the app runs no telemetry stack unless you opt in. See `docs/observability.md`. |
+| `METRICS_PORT` | `9464` | Port the Prometheus metrics endpoint binds when `METRICS_ENABLED` is set. **Internal only** — keep it on a private interface/network; do not proxy it publicly. |
+| `NTFY_TOPIC_URL` | *(unset)* | Fallback ntfy topic for the notifications-ntfy plugin when a tenant has not configured its own. Honored **only** in single-box managed-bridge self-hosting (`MANAGED_BRIDGE`); ignored in multi-tenant mode, where one shared topic would leak every un-configured tenant's notifications to a single operator topic. |
 | `VITE_API_BASE_URL` | *(unset)* | Build-time API base URL for the web app. Leave blank in dev (the Vite proxy handles `/api`) and for the combined Docker image (the web is served same-origin by the API). Only set it when building the web SPA to be hosted separately from the API. |

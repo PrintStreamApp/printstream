@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
 import { createWriteStream } from 'node:fs'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -10,8 +10,13 @@ import type { CreateSlicingJob, SlicingOutputLine } from '@printstream/shared'
 import yazl from 'yazl'
 import { readPrintJobThumbnail, savePrintJobThumbnail } from './print-job-thumbnails.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
-import { SlicingJobs, type PersistSlicedArtifact } from './slicing-jobs.js'
+import { SlicingJobs, resolveSlicingSourcePath, type PersistSlicedArtifact, type ResolveSlicingSource } from './slicing-jobs.js'
 import { readEntry } from './three-mf.js'
+
+// These suites slice from fixture paths that don't exist on disk and mock the
+// slicer, so use the persisted path as-is rather than re-resolving from the DB.
+// (Re-resolution itself is covered by the resolveSlicingSourcePath tests.)
+const passthroughResolveSource: ResolveSlicingSource = async ({ sourcePath }) => sourcePath
 
 const originalIsConfigured = slicerClient.isConfigured
 const originalRun = slicerClient.run
@@ -31,8 +36,21 @@ afterEach(() => {
   console.debug = originalConsoleDebug
 })
 
+test('resolveSlicingSourcePath returns the persisted path when it still exists', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-source-'))
+  try {
+    const sourcePath = path.join(dir, 'source.3mf')
+    await writeFile(sourcePath, Buffer.from('3mf bytes'))
+    const resolved = await resolveSlicingSourcePath({ sourceFileId: 'file-1', sourcePath })
+    // The cached copy exists, so it is used as-is without any library re-fetch.
+    assert.equal(resolved, sourcePath)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('slicing jobs surface live slicer output before the run finishes', async () => {
-  const jobs = new SlicingJobs()
+  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource })
   let releaseRun: (() => void) | undefined
   const runReleased = new Promise<void>((resolve) => {
     releaseRun = resolve
@@ -76,7 +94,7 @@ test('slicing jobs surface live slicer output before the run finishes', async ()
 })
 
 test('slicing jobs log lifecycle changes and CLI output lines', async () => {
-  const jobs = new SlicingJobs()
+  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource })
   const logged: string[] = []
   let releaseRun: (() => void) | undefined
   const runReleased = new Promise<void>((resolve) => {
@@ -122,7 +140,7 @@ test('slicing jobs log lifecycle changes and CLI output lines', async () => {
 })
 
 test('slicing jobs emit elapsed-time heartbeats when live output is unavailable', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 20 })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 20, resolveSource: passthroughResolveSource })
   let releaseRun: (() => void) | undefined
   const runReleased = new Promise<void>((resolve) => {
     releaseRun = resolve
@@ -165,7 +183,8 @@ test('slicing jobs reload persisted history after restart', async () => {
     progressPollIntervalMs: 10,
     progressHeartbeatIntervalMs: 10,
     persistState: true,
-    stateFilePath
+    stateFilePath,
+    resolveSource: passthroughResolveSource
   }
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
@@ -212,6 +231,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
   const jobs = new SlicingJobs({
     progressPollIntervalMs: 10,
     progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource,
     persistArtifact: async (input) => {
       persistedInputs.push({ hidden: input.hidden, folderId: input.folderId, fileName: input.fileName })
       return {
@@ -280,6 +300,7 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
   const jobs = new SlicingJobs({
     progressPollIntervalMs: 10,
     progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource,
     persistArtifact: async (input) => ({
       file: {
       id: 'output-file-1',
@@ -357,7 +378,7 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
 })
 
 test('slicing jobs retry without incompatible builtin profiles after compatibility failures', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000 })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
   const runProfileCounts: number[] = []
   const runProfileKinds: string[][] = []
   const runJobIds: string[] = []
@@ -405,7 +426,7 @@ test('slicing jobs retry without incompatible builtin profiles after compatibili
 })
 
 test('slicing jobs retry when compatibility fallback matches generated builtin:machine profile file names', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000 })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
   const runProfileKinds: string[][] = []
   const runJobIds: string[] = []
 
@@ -450,7 +471,7 @@ test('slicing jobs retry when compatibility fallback matches generated builtin:m
 })
 
 test('slicing jobs preserve manual machine/profile selections on retry after builtin machine removal', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000 })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
   const runJobIds: string[] = []
   const runMachineProfileIds: string[] = []
   const runProcessProfileIds: Array<string | null | undefined> = []
@@ -506,7 +527,7 @@ test('slicing jobs preserve manual machine/profile selections on retry after bui
 })
 
 test('slicing jobs rewrite project settings and retry when compatibility fallback matches process_full profiles', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000 })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
   const runSourcePaths: string[] = []
   const runJobIds: string[] = []
   const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-test-'))
@@ -565,7 +586,7 @@ test('slicing jobs rewrite project settings and retry when compatibility fallbac
 })
 
 test('slicing jobs retry incompatible built-in machine profiles per job without caching across subsequent jobs', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000 })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
   const runProfileKinds: string[][] = []
   const runJobIds: string[] = []
 
@@ -630,7 +651,7 @@ test('slicing jobs retry incompatible built-in machine profiles per job without 
 })
 
 test('slicing jobs do not proactively rewrite process profiles on subsequent jobs', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000 })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
   const runSourcePaths: string[] = []
   const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-test-'))
   const firstSourcePath = path.join(tempDir, 'first.3mf')

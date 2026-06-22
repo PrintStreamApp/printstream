@@ -6,18 +6,37 @@
  * helper so this plugin only owns delivery semantics.
  *
  * Configuration is tenant-scoped: each tenant stores its own topic URL
- * via `context.settings.forTenant(tenantId)`. Falls back to the
- * `NTFY_TOPIC_URL` env var when no per-tenant setting exists.
- * Notifications are only delivered when the owning tenant has a topic
- * configured.
+ * via `context.settings.forTenant(tenantId)`. The server-wide
+ * `NTFY_TOPIC_URL` env is honored as a fallback ONLY in single-box
+ * managed-bridge self-hosting (see `globalTopicFallback`); in a
+ * multi-tenant cloud it is ignored, since one shared topic would leak
+ * every un-configured tenant's notifications to a single operator topic.
+ * Notifications are only delivered when a topic resolves for the tenant.
  */
 import type { ApiPlugin } from '../../plugin/types.js'
 import { SETTINGS_MANAGE_PERMISSION } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { env } from '../../lib/env.js'
+import { badRequest } from '../../lib/http-error.js'
+import { assertSafeOutboundUrl } from '../../lib/outbound-url-guard.js'
+import { isManagedBridgeMode } from '../../lib/managed-bridge.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { requireRequestTenantId } from '../../lib/request-helpers.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
+
+/** Bound outbound webhook POSTs so a slow/unreachable host can't wedge delivery. */
+const OUTBOUND_TIMEOUT_MS = 10_000
+
+/**
+ * The server-wide `NTFY_TOPIC_URL` is a single shared topic. Honor it as a
+ * fallback only in single-box managed-bridge self-hosting; in a multi-tenant
+ * cloud it would silently fan every un-configured tenant's printer/job/error
+ * text to one operator topic (a cross-tenant leak), so there delivery is
+ * per-tenant only and requires an explicit topicUrl setting.
+ */
+function globalTopicFallback(): string | null {
+  return isManagedBridgeMode() ? (env.NTFY_TOPIC_URL ?? null) : null
+}
 
 const PRIORITY_BY_LEVEL: Record<string, string> = {
   info: 'default',
@@ -34,7 +53,7 @@ export const notificationsNtfyPlugin: ApiPlugin = {
     context.router.get('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
       const tenantId = requireRequestTenantId(request)
       const tenantSettings = context.settings.forTenant(tenantId)
-      const topicUrl = (await tenantSettings.get('topicUrl')) ?? env.NTFY_TOPIC_URL ?? null
+      const topicUrl = (await tenantSettings.get('topicUrl')) ?? globalTopicFallback()
       response.json({ enabled: Boolean(topicUrl), topicConfigured: Boolean(topicUrl) })
     })
 
@@ -54,6 +73,14 @@ export const notificationsNtfyPlugin: ApiPlugin = {
         response.json({ topicConfigured: false })
         return
       }
+      // The API POSTs to this URL on every printer event, so validate it as a
+      // safe outbound target (no loopback/link-local/metadata SSRF). http is
+      // allowed for self-hosted LAN ntfy instances.
+      try {
+        assertSafeOutboundUrl(value, { allowHttp: true })
+      } catch (error) {
+        throw badRequest(error instanceof Error ? error.message : 'Invalid ntfy topic URL.')
+      }
       await tenantSettings.set('topicUrl', value)
       annotateRequestAuditLog(request, {
         action: 'update-ntfy-topic',
@@ -69,8 +96,16 @@ export const notificationsNtfyPlugin: ApiPlugin = {
       async (message) => {
         if (!message.tenantId) return
         const tenantSettings = context.settings.forTenant(message.tenantId)
-        const topicUrl = (await tenantSettings.get('topicUrl')) ?? env.NTFY_TOPIC_URL ?? null
+        const topicUrl = (await tenantSettings.get('topicUrl')) ?? globalTopicFallback()
         if (!topicUrl) return
+        // Re-check at delivery: the env fallback is operator-supplied and a stored
+        // value could predate this guard. Skip (don't throw) on an unsafe target.
+        try {
+          assertSafeOutboundUrl(topicUrl, { allowHttp: true })
+        } catch (error) {
+          context.logger.warn('skipping ntfy delivery to an unsafe topic URL', error)
+          return
+        }
         const headers: Record<string, string> = {
           'Content-Type': 'text/plain',
           'X-Title': message.title,
@@ -86,7 +121,7 @@ export const notificationsNtfyPlugin: ApiPlugin = {
           headers['X-Attach'] = message.imageUrl
           headers['X-Filename'] = 'snapshot.jpg'
         }
-        const res = await fetch(topicUrl, { method: 'POST', headers, body: message.body })
+        const res = await fetch(topicUrl, { method: 'POST', headers, body: message.body, signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS) })
         if (!res.ok) {
           // Surface delivery failures through the onError warn below. The topic
           // URL is a secret, so only the status code is included.

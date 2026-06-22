@@ -9,6 +9,7 @@
  */
 import type { AuditActorType, AuditLogEntry, LogLevel, PermissionScope } from '@printstream/shared'
 import type { NextFunction, Request, Response } from 'express'
+import { env } from './env.js'
 import { rootPrisma } from './prisma.js'
 import { broadcastLogsChanged } from './ws-resource-events.js'
 
@@ -210,6 +211,17 @@ export async function clearAuditLogs(input?: { tenantId?: string | null }): Prom
   })
 }
 
+/**
+ * Deletes audit-log rows older than `AUDIT_LOG_RETENTION_DAYS`. Platform-wide
+ * (all tenants) scheduled maintenance, so it uses rootPrisma; the `createdAt`
+ * index keeps the delete cheap. Without this the table grew unbounded.
+ */
+export async function pruneAuditLogs(): Promise<{ removed: number }> {
+  const cutoff = new Date(Date.now() - env.AUDIT_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000)
+  const { count } = await rootPrisma.auditLog.deleteMany({ where: { createdAt: { lt: cutoff } } })
+  return { removed: count }
+}
+
 export async function getRelatedAuditLogsForPrintJobs(
   jobs: RelatedPrintJobAuditInput[],
   tenantId: string
@@ -277,9 +289,15 @@ export async function getRelatedAuditLogsForPrintJobs(
   return results
 }
 
-function shouldSkipAuditLog(path: string, statusCode: number): boolean {
+/** Matches the per-chunk upload endpoint, e.g. `/api/library/uploads/<id>/chunks`. */
+const UPLOAD_CHUNK_PATH = /^\/api\/library\/uploads\/[^/]+\/chunks$/
+
+export function shouldSkipAuditLog(path: string, statusCode: number): boolean {
   if (path === '/api/health') return true
   if (path === '/api/logs' && statusCode === 204) return false
+  // A large upload PUTs dozens of 16 MiB chunks, each an audited mutation — pure
+  // noise. The upload is still audited once at POST /uploads/:id/complete.
+  if (UPLOAD_CHUNK_PATH.test(path)) return true
   return false
 }
 

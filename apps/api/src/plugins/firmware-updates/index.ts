@@ -34,8 +34,16 @@ import { printerManager } from '../../lib/printer-manager.js'
 import { assertTenantOwnsPrinter, requireTenantOwnedConnectedPrinter } from '../../lib/printer-access.js'
 import { listPrinterDirectory, uploadFileToPrinter } from '../../lib/printer-ftp.js'
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
+import { assertSafeOutboundUrl } from '../../lib/outbound-url-guard.js'
 import { requireRouteParam } from '../../lib/request-helpers.js'
 import { FirmwareSource, compareVersions, type FirmwareVersion } from './firmware-source.js'
+
+/**
+ * Firmware binaries are downloaded server-side and staged on the printer SD card,
+ * so the source URL (scraped from Bambu's download page) is pinned to Bambu's own
+ * hosts/CDN over https — never an arbitrary, attacker-influenced URL.
+ */
+const FIRMWARE_ALLOWED_HOSTS = ['bblmw.com', 'bambulab.com'] as const
 
 type UploadStatus = 'idle' | 'preparing' | 'downloading' | 'uploading' | 'complete' | 'cancelled' | 'error'
 const DEFAULT_FIRMWARE_VERSION_REFRESH_TIMEOUT_MS = 1_500
@@ -239,6 +247,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
         printerId,
         printerName: printer.name,
         model: printer.model,
+        online: status?.online ?? false,
         currentVersion,
         sdCardPresent: status?.sdCardPresent ?? null,
         latestVersion: latest?.version ?? null,
@@ -288,7 +297,9 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
       signal?: AbortSignal
     ): Promise<string> => {
       throwIfAborted(signal)
-      const filename = path.basename(new URL(target.downloadUrl).pathname) || `firmware_${target.version}.bin`
+      // Pin the download to Bambu's CDN over https before fetching the bytes.
+      const downloadUrl = assertSafeOutboundUrl(target.downloadUrl, { allowedHosts: FIRMWARE_ALLOWED_HOSTS })
+      const filename = path.basename(downloadUrl.pathname) || `firmware_${target.version}.bin`
       const cachePath = path.join(cacheDir, filename)
       try {
         await stat(cachePath)
@@ -305,7 +316,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
         // best-effort
       }
       try {
-        const response = await fetch(target.downloadUrl, { signal })
+        const response = await fetch(downloadUrl, { signal })
         if (!response.ok || !response.body) {
           throw new Error(`Firmware download failed (${response.status})`)
         }
@@ -517,6 +528,8 @@ interface UpdateReport {
   printerId: string
   printerName: string
   model: string
+  /** Whether the printer is currently reachable — firmware can only be uploaded when online. */
+  online: boolean
   currentVersion: string | null
   sdCardPresent: boolean | null
   latestVersion: string | null

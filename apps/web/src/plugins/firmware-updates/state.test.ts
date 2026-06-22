@@ -31,6 +31,7 @@ const sampleUpdate: UpdateReport = {
   printerId: 'printer-1',
   printerName: 'Printer 1',
   model: 'P1S',
+  online: true,
   currentVersion: '01.09.00.00',
   sdCardPresent: true,
   latestVersion: '01.10.00.00',

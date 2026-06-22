@@ -20,7 +20,8 @@ import type {
   PrinterStatus,
   SlicingCapabilities,
   SlicingProfileSummary,
-  ThreeMfIndex
+  ThreeMfIndex,
+  ThreeMfPlate
 } from '@printstream/shared'
 import { formatNozzleLabel, getPrinterControlCapabilities, printerModelSchema } from '@printstream/shared'
 import {
@@ -605,6 +606,20 @@ export function buildInitialFilamentToolheadSelection(file: LibraryFile, bakedIn
   return selections
 }
 
+/**
+ * Whether a plate carries real slice metadata. An UNSLICED plate's filament list
+ * is only a geometry estimate built from each object's `extruder` metadata, which
+ * captures the base extruder but NOT colour-PAINTED filaments — so it must not be
+ * trusted to narrow a project's material/mapping list (it would hide a painted
+ * secondary colour). A SLICED plate's `slice_info` records exact per-plate usage.
+ */
+export function plateHasSliceData(plate: ThreeMfPlate | null | undefined): boolean {
+  if (!plate) return false
+  return plate.weight != null
+    || plate.prediction != null
+    || plate.filaments.some((filament) => filament.usedGrams != null)
+}
+
 export function buildSliceDialogProjectFilaments(
   file: LibraryFile,
   bakedIndex: ThreeMfIndex | null,
@@ -615,13 +630,20 @@ export function buildSliceDialogProjectFilaments(
     // flag which ones the currently-selected plate actually uses (material/color
     // edits affect the 3D preview regardless of the active plate).
     const selectedPlateData = bakedIndex.plates.find((plate) => plate.index === selectedPlate)
-    const usedOnPlate = new Set(selectedPlateData?.filaments.map((filament) => filament.id) ?? [])
+    // Only trust the plate's filament list to flag per-plate usage when the plate is
+    // actually sliced. An UNSLICED plate's list is a geometry estimate from object
+    // extruder ids that misses colour-PAINTED filaments, so narrowing to it would
+    // wrongly drop a painted secondary colour (e.g. black on a white base) from the
+    // print/slice material list. With no trustworthy per-plate data, treat every
+    // project material as in use.
+    const usedOnPlate = new Set(
+      plateHasSliceData(selectedPlateData) ? selectedPlateData!.filaments.map((filament) => filament.id) : []
+    )
     return bakedIndex.projectFilaments.map((filament) => ({
       projectFilamentId: filament.id,
       label: filament.filamentName ?? filament.filamentType ?? `Filament ${filament.id}`,
       color: filament.color,
       nozzleId: filament.nozzleId ?? null,
-      // With no per-plate filament data, treat every material as in use.
       usedOnSelectedPlate: usedOnPlate.size === 0 ? true : usedOnPlate.has(filament.id)
     }))
   }

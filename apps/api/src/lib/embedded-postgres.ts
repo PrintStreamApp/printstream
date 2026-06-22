@@ -6,9 +6,10 @@
  * cluster under a local data directory (portable binaries shipped by the
  * `embedded-postgres` package, which has a real `linux-arm64` build for the
  * Raspberry Pi target) and hands back the `DATABASE_URL` the rest of the app
- * connects through. When it is disabled (the default — Docker, cloud, and
- * bring-your-own-Postgres installs) this is a no-op and the operator-provided
- * `DATABASE_URL` is used unchanged.
+ * connects through. When it is disabled (the default — the Docker and cloud
+ * deployments, which connect to an operator-managed external database) this is a
+ * no-op and the operator-provided `DATABASE_URL` is used unchanged. The native
+ * single-file build always enables it (it has no external-database option).
  *
  * ## Transport (no port to collide with)
  *
@@ -159,7 +160,11 @@ export async function startEmbeddedPostgresIfEnabled(
   const port = config.explicitPort ?? (useSocket ? SOCKET_PORT : await findFreeLoopbackPort())
   const host = useSocket ? dataDir : '127.0.0.1'
   const postgresFlags = useSocket
-    ? ['-c', 'listen_addresses=', '-c', `unix_socket_directories=${dataDir}`]
+    // 0700 socket perms: only the cluster's own service user can connect over the
+    // Unix socket, so the well-known embedded superuser password is not reachable
+    // by other local users on a shared host (defense-in-depth with the 0700 data
+    // dir set in apps/server's ensureServerDirs).
+    ? ['-c', 'listen_addresses=', '-c', `unix_socket_directories=${dataDir}`, '-c', 'unix_socket_permissions=0700']
     : ['-c', 'listen_addresses=127.0.0.1']
 
   // Imported here (not at module load) so the platform binary package is only

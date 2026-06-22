@@ -7,8 +7,11 @@ import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import helmet from 'helmet'
 import { env } from './lib/env.js'
+import { buildContentSecurityPolicy } from './lib/content-security-policy.js'
 import { installAuthContext } from './lib/auth-context.js'
 import { installTenantContext } from './lib/tenant-context.js'
+import { installRequestContext, getCorrelationId } from './lib/request-context.js'
+import { isMetricsEnabled, recordHttpRequest } from './lib/metrics.js'
 import { HttpError } from './lib/http-error.js'
 import { authRouter } from './routes/auth.js'
 import { healthRouter } from './routes/health.js'
@@ -57,6 +60,31 @@ if (env.TRUST_PROXY) {
   }
 }
 
+// Establish the per-request correlation id first, so every log line emitted
+// while handling a request (including rate-limit/auth/tenant failures) shares
+// one id and the `X-Request-Id` response header is always set.
+app.use(installRequestContext())
+
+// Record HTTP request duration when metrics are enabled. The finish listener is
+// only attached in that case, so the disabled path stays zero-overhead. Routes
+// are labelled by their matched pattern (`/api/printers/:id`) to bound series
+// cardinality; unmatched requests collapse to a single `unmatched` label.
+app.use((request: Request, response: Response, next: NextFunction) => {
+  if (isMetricsEnabled()) {
+    const startedAt = performance.now()
+    response.on('finish', () => {
+      const route = `${request.baseUrl ?? ''}${request.route?.path ?? ''}` || 'unmatched'
+      recordHttpRequest({
+        method: request.method,
+        route,
+        statusCode: response.statusCode,
+        durationMs: performance.now() - startedAt
+      })
+    })
+  }
+  next()
+})
+
 const allowedOrigins = new Set(
   env.CLIENT_ORIGIN.split(',').map((value) => value.trim()).filter(Boolean)
 )
@@ -75,10 +103,19 @@ app.use(
     exposedHeaders: ['Retry-After', 'RateLimit-Limit', 'RateLimit-Remaining', 'RateLimit-Reset']
   })
 )
-// Helmet defaults are conservative; relax CSP because we proxy MJPEG and
-// stream binary data that the strict default would block.
+// Helmet's other protections stay on; we set our own CSP below (helmet's strict
+// default would block the proxied MJPEG / blob: camera frames).
 app.use(helmet({ crossOriginResourcePolicy: false, contentSecurityPolicy: false }))
-const skipHealthChecks = (request: Request) => request.originalUrl === '/api/health' || request.originalUrl === '/api/health/'
+// Content-Security-Policy for the served SPA — restores XSS defense-in-depth while
+// allowing the camera/stream resource paths. Report-only by default (safe); set
+// CSP_ENFORCE=true to enforce. See content-security-policy.ts.
+const cspHeaderName = env.CSP_ENFORCE ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only'
+const cspHeaderValue = buildContentSecurityPolicy()
+app.use((_request: Request, response: Response, next: NextFunction) => {
+  response.setHeader(cspHeaderName, cspHeaderValue)
+  next()
+})
+const skipHealthChecks = (request: Request) => request.originalUrl.startsWith('/api/health')
 app.use('/api', createRateLimitMiddleware({
   name: 'api-preauth',
   windowMs: 60_000,
@@ -164,11 +201,12 @@ export async function finalizeApp(): Promise<void> {
   installWebApp(app, env.SERVE_WEB_DIR)
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    const requestId = getCorrelationId()
     if (error instanceof HttpError) {
-      response.status(error.statusCode).json({ error: error.message })
+      response.status(error.statusCode).json({ error: error.message, requestId })
       return
     }
     console.error(error)
-    response.status(500).json({ error: 'Internal server error' })
+    response.status(500).json({ error: 'Internal server error', requestId })
   })
 }

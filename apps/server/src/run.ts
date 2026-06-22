@@ -1,9 +1,10 @@
 /**
  * The `run` command: boot the whole self-hosted stack in one process on one port.
  *
- * Almost all the heavy lifting already lives in `@printstream/api/server`, which
- * (with `EMBEDDED_POSTGRES` enabled) starts an embedded Postgres cluster, applies
- * migrations CLI-free, and serves the SPA + `/api` + `/ws` on a single port. This
+ * Almost all the heavy lifting already lives in `@printstream/api/server`: it
+ * starts the embedded Postgres cluster (always enabled for the native build),
+ * applies migrations CLI-free, and serves the SPA + `/api` + `/ws` on a single
+ * port. This
  * command's job is to point that boot at the server's per-OS data dir and config
  * before importing it — so it must set every env var first and only then pull in
  * the API (which captures its environment at load time).

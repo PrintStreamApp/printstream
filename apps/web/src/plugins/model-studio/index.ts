@@ -6,7 +6,8 @@
  *
  * The plugin extends four surfaces:
  * - A `library.fileActions` slot that core library rows render inside the
- *   kebab menu to add a preview action with an icon.
+ *   kebab menu to add a preview action and an "Open in Bambu Studio" action
+ *   (a `bambustudio://` desktop deep link) for importable models.
  * - A `library.overlays` slot that lets host surfaces (the library page, the
  *   slice dialog, and the slice results dialog) show the preview dialog without
  *   changing the current URL.
@@ -24,6 +25,7 @@
 import type { WebPlugin } from '../../plugin/types'
 import { registerMeshThumbnailProvider, registerSceneThumbnailProvider } from '../../lib/modelThumbnailRegistry'
 import { LibraryCreateAction } from './LibraryCreateAction'
+import { LibraryOpenInBambuStudioAction } from './LibraryOpenInBambuStudioAction'
 import { LibraryPreviewAction } from './LibraryPreviewAction'
 import { PreviewOverlay } from './PreviewOverlay'
 import { SlicingEditorAction } from './SlicingEditorAction'
@@ -34,6 +36,7 @@ export const modelStudioPlugin: WebPlugin = {
   description: '3D studio for library files: a multi-plate 3MF project editor with painting, supports, and per-layer filament changes, plus STL, STEP, plated 3MF, and G-code previews.',
   slots: [
     { name: 'library.fileActions', component: LibraryPreviewAction },
+    { name: 'library.fileActions', component: LibraryOpenInBambuStudioAction },
     { name: 'library.overlays', component: PreviewOverlay },
     { name: 'slicing.editor', component: SlicingEditorAction },
     { name: 'library.create', component: LibraryCreateAction }

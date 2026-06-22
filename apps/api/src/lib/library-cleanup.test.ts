@@ -21,7 +21,8 @@ const { getPrintJobSnapshotDir } = await import('./print-job-snapshots.js')
 // delegate into its mock), replacing the per-test try/finally restore blocks.
 restorePrismaMethodsAfterEach([
   [rootPrisma, 'libraryFile'],
-  [rootPrisma, 'printJob']
+  [rootPrisma, 'printJob'],
+  [rootPrisma, 'bridge']
 ])
 
 after(async () => {
@@ -206,6 +207,31 @@ test('pruneUnreferencedSlicedOutputs removes only stale slice-origin hidden rows
   assert.equal(where.origin, 'slice')
 })
 
+test('pruneDormantBridges reaps only never-connected, unpaired, expired registrations', async () => {
+  const { pruneDormantBridges } = await import('./library-cleanup.js')
+  const originalBridge = rootPrisma.bridge
+  let capturedWhere: Record<string, unknown> | undefined
+  Object.defineProperty(rootPrisma, 'bridge', {
+    configurable: true,
+    value: {
+      ...originalBridge,
+      deleteMany: async (args: { where: Record<string, unknown> }) => {
+        capturedWhere = args.where
+        return { count: 3 }
+      }
+    }
+  })
+
+  const result = await pruneDormantBridges()
+
+  assert.equal(result.removed, 3)
+  // Only anonymous (tenantId null) bridges that never connected (lastSeenAt null)
+  // and are older than the retention window are eligible.
+  assert.equal(capturedWhere?.tenantId, null)
+  assert.equal(capturedWhere?.lastSeenAt, null)
+  assert.ok((capturedWhere?.createdAt as { lt?: Date })?.lt instanceof Date)
+})
+
 test('pruneRecycledLibraryFiles hard-deletes expired bin entries with their version bytes', async () => {
   const { pruneRecycledLibraryFiles } = await import('./library-cleanup.js')
   const originalLibraryFile = rootPrisma.libraryFile
@@ -234,12 +260,49 @@ test('pruneRecycledLibraryFiles hard-deletes expired bin entries with their vers
   const result = await pruneRecycledLibraryFiles({
     deleteLibraryFileBytes: async (input: { storedPath: string }) => {
       deletedBytes.push(input.storedPath)
-    }
+    },
+    isBridgeConnected: () => true
   })
 
   assert.equal(result.removed, 1)
   assert.deepEqual(deletedIds, ['recycled-1'])
   assert.deepEqual(deletedBytes, ['recycled-1.3mf', 'recycled-1.v1.3mf'])
+})
+
+test('pruneRecycledLibraryFiles defers an entry whose owning bridge is offline (keeps the row to retry)', async () => {
+  const { pruneRecycledLibraryFiles } = await import('./library-cleanup.js')
+  const originalLibraryFile = rootPrisma.libraryFile
+  const deletedIds: string[] = []
+  const deletedBytes: string[] = []
+  Object.defineProperty(rootPrisma, 'libraryFile', {
+    configurable: true,
+    value: {
+      ...originalLibraryFile,
+      findMany: async () => [{
+        id: 'recycled-offline',
+        ownerBridgeId: 'bridge-offline',
+        storedPath: 'recycled-offline.3mf',
+        versions: [{ ownerBridgeId: 'bridge-offline', storedPath: 'recycled-offline.v1.3mf' }]
+      }],
+      delete: async (args: { where: { id: string } }) => {
+        deletedIds.push(args.where.id)
+        return { id: args.where.id }
+      }
+    }
+  })
+
+  const result = await pruneRecycledLibraryFiles({
+    deleteLibraryFileBytes: async (input: { storedPath: string }) => {
+      deletedBytes.push(input.storedPath)
+    },
+    isBridgeConnected: () => false
+  })
+
+  // The owning bridge is offline, so neither the bytes nor the DB row are
+  // touched — the row survives for a later run once the bridge reconnects.
+  assert.equal(result.removed, 0)
+  assert.deepEqual(deletedIds, [])
+  assert.deepEqual(deletedBytes, [])
 })
 
 test('pruneAbandonedUploadSessions reaps stale .part/.json but keeps recently-touched sessions', async () => {

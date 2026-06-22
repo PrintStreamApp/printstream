@@ -7,7 +7,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { PNG } from 'pngjs'
 import yazl from 'yazl'
-import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, filterModelSettingsObjectsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
+import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
 import { applyPartProcessOverrides, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, serializeBrimEarPoints } from './three-mf-scene-builder.js'
 import { parseBrimEarPoints, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
 import type { SceneEdit } from '@printstream/shared'
@@ -44,6 +44,21 @@ test('buildThreeMfIndex distinguishes A1 mini from A1 (mini must not classify as
   assert.deepEqual(buildThreeMfIndex(null, miniSettings, new Map()).compatiblePrinterModels, ['A1mini'])
   const a1Settings = JSON.stringify({ printer_model: ['Bambu Lab A1'] })
   assert.deepEqual(buildThreeMfIndex(null, a1Settings, new Map()).compatiblePrinterModels, ['A1'])
+})
+
+test('buildThreeMfIndex surfaces project support filament ids', () => {
+  // White ABS (filament 3) is the support material: set as the interface support filament and
+  // flagged `filament_is_support`. `support_filament: '0'` is the "use default" sentinel and must
+  // be ignored. The remove-guard relies on these so a support-only material is not droppable.
+  const settings = JSON.stringify({
+    support_filament: '0',
+    support_interface_filament: '3',
+    filament_is_support: ['0', '0', '1', '0'],
+    enable_support: '1'
+  })
+  assert.deepEqual(buildThreeMfIndex(null, settings, new Map()).supportFilamentIds, [3])
+  // Nothing designated as support -> empty.
+  assert.deepEqual(buildThreeMfIndex(null, JSON.stringify({ support_filament: '0' }), new Map()).supportFilamentIds, [])
 })
 
 test('buildThreeMfIndex backfills unsliced plate nozzle sizes from project settings', () => {
@@ -385,6 +400,23 @@ const OBJECT_MODEL_SETTINGS_XML = [
   '</config>'
 ].join('\n')
 
+// Companion 3D/3dmodel.model for the model_settings fixture above: build items for objects 3 and 11
+// (the build-item objectid is the model_settings object_id). Slice-time object exclusion rides on
+// these items' `printable` flag, not on model_instance removal.
+const OBJECT_MODEL_3DMODEL_XML = [
+  '<?xml version="1.0" encoding="UTF-8"?>',
+  '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">',
+  '  <resources>',
+  '    <object id="3" type="model"><mesh/></object>',
+  '    <object id="11" type="model"><mesh/></object>',
+  '  </resources>',
+  '  <build>',
+  '    <item objectid="3" transform="1 0 0 0 1 0 0 0 1 -40 0 0" printable="1"/>',
+  '    <item objectid="11" transform="1 0 0 0 1 0 0 0 1 40 0 0" printable="1"/>',
+  '  </build>',
+  '</model>'
+].join('\n')
+
 test('readPlateIndex exposes plate objects (by object_id) for unsliced model-settings 3MFs', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-objects-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
@@ -403,32 +435,44 @@ test('readPlateIndex exposes plate objects (by object_id) for unsliced model-set
   }
 })
 
-test('filterModelSettingsObjectsXml drops unselected object instances from the target plate only', () => {
-  const filtered = filterModelSettingsObjectsXml(OBJECT_MODEL_SETTINGS_XML, 1, new Set([3]))
-  assert.match(filtered, /object_id"\s+value="3"/)
-  assert.doesNotMatch(filtered, /object_id"\s+value="11"/)
-  // The object definitions themselves are left intact.
-  assert.match(filtered, /<object id="11">/)
+test('plateObjectIdsFromModelSettingsXml reads the target plate object ids only', () => {
+  assert.deepEqual([...plateObjectIdsFromModelSettingsXml(OBJECT_MODEL_SETTINGS_XML, 1)], [3, 11])
+  assert.deepEqual([...plateObjectIdsFromModelSettingsXml(OBJECT_MODEL_SETTINGS_XML, 2)], [])
 })
 
-test('createObjectFilteredThreeMf copies geometry verbatim while filtering plate objects', async () => {
+test('setBuildItemsUnprintableXml marks only the listed build items printable="0"', () => {
+  const out = setBuildItemsUnprintableXml(OBJECT_MODEL_3DMODEL_XML, new Set([11]))
+  assert.match(out, /<item objectid="3"[^>]*printable="1"/)
+  assert.match(out, /<item objectid="11"[^>]*printable="0"/)
+  // An empty set is a no-op.
+  assert.equal(setBuildItemsUnprintableXml(OBJECT_MODEL_3DMODEL_XML, new Set()), OBJECT_MODEL_3DMODEL_XML)
+})
+
+test('setBuildItemsUnprintableXml inserts printable="0" when the build item has no flag', () => {
+  const xml = '<model><build><item objectid="7" transform="1 0 0 0 1 0 0 0 1 0 0 0"/></build></model>'
+  assert.match(setBuildItemsUnprintableXml(xml, new Set([7])), /<item objectid="7"[^>]*printable="0"\/>/)
+})
+
+test('createObjectFilteredThreeMf excludes unselected objects via build-item printable, keeping instances', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-objfilter-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
   const outputPath = path.join(tempDir, 'filtered.3mf')
-  const geometry = Buffer.from('<model>geometry payload</model>', 'utf8')
   try {
     await writeZipFixture(sourcePath, [
       ['Metadata/model_settings.config', Buffer.from(OBJECT_MODEL_SETTINGS_XML, 'utf8')],
-      ['3D/3dmodel.model', geometry]
+      ['3D/3dmodel.model', Buffer.from(OBJECT_MODEL_3DMODEL_XML, 'utf8')]
     ])
 
     await createObjectFilteredThreeMf(sourcePath, outputPath, 1, [3])
 
-    const rewritten = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
-    assert.match(rewritten, /object_id"\s+value="3"/)
-    assert.doesNotMatch(rewritten, /object_id"\s+value="11"/)
-    // Geometry entry is preserved untouched.
-    assert.deepEqual(await readEntry(outputPath, '3D/3dmodel.model'), geometry)
+    // Object 3 stays printable; the deselected object 11 is marked printable="0".
+    const model = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    assert.match(model, /<item objectid="3"[^>]*printable="1"/)
+    assert.match(model, /<item objectid="11"[^>]*printable="0"/)
+    // Instance metadata is left intact for both objects (BambuStudio's native "unprintable" state).
+    const settings = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    assert.match(settings, /object_id"\s+value="3"/)
+    assert.match(settings, /object_id"\s+value="11"/)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -537,26 +581,30 @@ test('applyPartProcessOverrides sets a part\'s process metadata without touching
   assert.match(out.slice(0, out.indexOf('<part')), /<metadata key="wall_loops" value="2"\/>/)
 })
 
-test('createObjectCustomizedThreeMf filters objects and injects per-object overrides in one pass', async () => {
+test('createObjectCustomizedThreeMf excludes deselected objects and injects per-object overrides in one pass', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-objcustom-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
   const outputPath = path.join(tempDir, 'custom.3mf')
-  const geometry = Buffer.from('<model>geometry payload</model>', 'utf8')
   try {
     await writeZipFixture(sourcePath, [
       ['Metadata/model_settings.config', Buffer.from(OBJECT_MODEL_SETTINGS_XML, 'utf8')],
-      ['3D/3dmodel.model', geometry]
+      ['3D/3dmodel.model', Buffer.from(OBJECT_MODEL_3DMODEL_XML, 'utf8')]
     ])
 
+    // Keep only object 3; deselect 11. Override targets the kept object 3.
     await createObjectCustomizedThreeMf(sourcePath, outputPath, 1, {
-      selectedObjectIds: [3, 11],
-      objectProcessOverrides: { '11': { sparse_infill_density: '35%' } }
+      selectedObjectIds: [3],
+      objectProcessOverrides: { '3': { sparse_infill_density: '35%' } }
     })
 
+    // Selection: the deselected object 11's build item is marked unprintable; object 3 stays printable.
+    const model = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    assert.match(model, /<item objectid="3"[^>]*printable="1"/)
+    assert.match(model, /<item objectid="11"[^>]*printable="0"/)
+    // Overrides: object 3 gains the per-object metadata in model_settings.
     const rewritten = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
-    const object11 = /<object id="11">[\s\S]*?<\/object>/.exec(rewritten)?.[0] ?? ''
-    assert.match(object11, /<metadata key="sparse_infill_density" value="35%"\/>/)
-    assert.deepEqual(await readEntry(outputPath, '3D/3dmodel.model'), geometry)
+    const object3 = /<object id="3">[\s\S]*?<\/object>/.exec(rewritten)?.[0] ?? ''
+    assert.match(object3, /<metadata key="sparse_infill_density" value="35%"\/>/)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

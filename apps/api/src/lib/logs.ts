@@ -8,6 +8,7 @@
  */
 import type { SystemLogEntry } from '@printstream/shared'
 import { getCurrentTenant } from './tenant-context.js'
+import { getCorrelationId } from './request-context.js'
 
 const MAX_ENTRIES = 1000
 const buffer: SystemLogEntry[] = []
@@ -25,7 +26,7 @@ function record(level: SystemLogEntry['level'], args: unknown[]): void {
       }
     })
     .join(' ')
-  buffer.push({ kind: 'system', timestamp: new Date().toISOString(), level, message, tenantId: tenant?.id ?? null })
+  buffer.push({ kind: 'system', timestamp: new Date().toISOString(), level, message, tenantId: tenant?.id ?? null, correlationId: getCorrelationId() })
   if (buffer.length > MAX_ENTRIES) buffer.shift()
 }
 

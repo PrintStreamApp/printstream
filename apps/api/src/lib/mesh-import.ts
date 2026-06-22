@@ -43,6 +43,20 @@ export interface ImportedMeshPart {
 
 const MAX_IMPORT_TRIANGLES = 5_000_000
 
+/**
+ * Reject a mesh whose triangle count exceeds the import budget. The STL parsers
+ * cap their input directly; STEP is tessellated by OCCT (WASM) with no inherent
+ * output bound, so its produced triangle count must be checked here before the
+ * JS-side positions/indices amplification — otherwise a small STEP file can
+ * tessellate into a multi-gigabyte mesh and exhaust the process (an authenticated
+ * memory-exhaustion vector via /imports and /:id/mesh).
+ */
+export function assertImportTriangleBudget(triangleCount: number): void {
+  if (triangleCount > MAX_IMPORT_TRIANGLES) {
+    throw new Error('Model is too large to import')
+  }
+}
+
 /** Detect the import format from a file name extension. Returns null for unsupported types. */
 export function detectImportFormat(fileName: string): StagedImportFormat | null {
   const lower = fileName.toLowerCase()
@@ -158,6 +172,10 @@ export async function tessellateStepMesh(buffer: Buffer): Promise<ImportedMesh> 
   const occt = await occtInstancePromise
   const result = occt.ReadStepFile(new Uint8Array(buffer), STEP_TESSELLATION)
   if (!result.success || result.meshes.length === 0) throw new Error('STEP file could not be tessellated')
+
+  // Bound the tessellated output before amplifying it into JS arrays below.
+  const totalTriangles = result.meshes.reduce((sum, mesh) => sum + Math.floor((mesh.index?.array?.length ?? 0) / 3), 0)
+  assertImportTriangleBudget(totalTriangles)
 
   const parts: ImportedMeshPart[] = result.meshes
     .map((mesh, index) => ({ name: (mesh.name ?? '').trim() || `Part ${index + 1}`, mesh: occtMeshToImportedMesh(mesh) }))

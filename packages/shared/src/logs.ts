@@ -11,7 +11,12 @@ export const systemLogEntrySchema = z.object({
   timestamp: z.string().datetime(),
   level: logLevelSchema,
   message: z.string(),
-  tenantId: z.string().nullable()
+  tenantId: z.string().nullable(),
+  // Correlation (request) id shared by every line emitted while handling one
+  // request, so scattered log lines for a single operation can be grouped.
+  // Null when the line was emitted outside any request context (startup,
+  // background tasks, MQTT/event callbacks).
+  correlationId: z.string().nullable()
 })
 
 export type SystemLogEntry = z.infer<typeof systemLogEntrySchema>

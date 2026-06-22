@@ -24,6 +24,7 @@ import { z } from 'zod'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import {
+  assertCanManageScopedAuthUser,
   buildCurrentAuthUserWhere,
   buildManageableAuthUserWhere,
   buildScopedAuthUserInclude,
@@ -215,6 +216,8 @@ export function registerAuthLocalProviderManagementRoutes(
       include: buildScopedAuthUserInclude()
     })
     if (!user) throw notFound('Auth user not found.')
+    // A delegated manager may only invite users they could otherwise manage.
+    assertCanManageScopedAuthUser(request.auth, user)
     if (readScopedAuthUserLoginDisabled(user)) {
       throw conflict('Disabled users cannot receive a sign-in invite.')
     }
@@ -246,8 +249,12 @@ export function registerAuthLocalProviderManagementRoutes(
 
   context.router.get('/users/:userId/passkeys', requireAuthenticatedRequestPermission(AUTH_PASSKEYS_VIEW_PERMISSION), async (request, response) => {
     const userId = requireRouteParam(request.params.userId, 'userId')
-    const user = await context.prisma.authUser.findFirst({ where: buildManageableAuthUserWhere(userId) })
+    const user = await context.prisma.authUser.findFirst({
+      where: buildManageableAuthUserWhere(userId),
+      include: buildScopedAuthUserInclude()
+    })
     if (!user) throw notFound('Auth user not found.')
+    assertCanManageScopedAuthUser(request.auth, user)
 
     const passkeys = await context.prisma.authPasskeyCredential.findMany({
       where: { userId },
@@ -268,8 +275,12 @@ export function registerAuthLocalProviderManagementRoutes(
     const parsed = updateAuthUserPasskeyRequestSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid passkey update payload.')
 
-    const user = await context.prisma.authUser.findFirst({ where: buildManageableAuthUserWhere(userId) })
+    const user = await context.prisma.authUser.findFirst({
+      where: buildManageableAuthUserWhere(userId),
+      include: buildScopedAuthUserInclude()
+    })
     if (!user) throw notFound('Auth user not found.')
+    assertCanManageScopedAuthUser(request.auth, user)
 
     const passkey = await context.prisma.authPasskeyCredential.findFirst({
       where: {
@@ -304,8 +315,12 @@ export function registerAuthLocalProviderManagementRoutes(
   context.router.post('/users/:userId/passkeys/:passkeyId/revoke', requireAuthenticatedRequestPermission(AUTH_PASSKEYS_REVOKE_PERMISSION), async (request, response) => {
     const userId = requireRouteParam(request.params.userId, 'userId')
     const passkeyId = requireRouteParam(request.params.passkeyId, 'passkeyId')
-    const user = await context.prisma.authUser.findFirst({ where: buildManageableAuthUserWhere(userId) })
+    const user = await context.prisma.authUser.findFirst({
+      where: buildManageableAuthUserWhere(userId),
+      include: buildScopedAuthUserInclude()
+    })
     if (!user) throw notFound('Auth user not found.')
+    assertCanManageScopedAuthUser(request.auth, user)
 
     const passkey = await context.prisma.authPasskeyCredential.findFirst({
       where: {

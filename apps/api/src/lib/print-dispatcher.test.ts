@@ -277,6 +277,48 @@ test('cancel marks a failed dispatch as cancelled and closes its tracked history
   }
 })
 
+test('stop() cancels queued jobs, aborts in-flight uploads, and leaves sent prints running', async () => {
+  const jobs = dispatchJobs()
+  const saved = new Map(jobs)
+  jobs.clear()
+
+  stubPrisma(rootPrisma.printJob, 'findUnique', async () => ({
+    startedAt: new Date('2026-05-10T10:00:00.000Z'),
+    finishedAt: null,
+    printerId: 'printer-1',
+    jobName: 'Queued cube',
+    tenantId: 'tenant-1',
+    sourceType: 'library',
+    fileId: 'file-1',
+    plate: 1
+  }))
+  stubPrisma(rootPrisma.printJob, 'update', async (input: { where: { id: string } }) => ({ id: input.where.id }))
+  stubPrisma(rootPrisma.printer, 'findUnique', async () => ({ tenantId: 'tenant-1' }))
+
+  const controller = new AbortController()
+  const uploading = buildDispatchFixture({ id: 'stop-uploading', printerId: 'printer-up', status: 'uploading' })
+  ;(uploading as unknown as { abortController: AbortController }).abortController = controller
+
+  jobs.set('stop-queued', buildDispatchFixture({ id: 'stop-queued', printerId: 'printer-q', status: 'queued' }))
+  jobs.set('stop-uploading', uploading)
+  jobs.set('stop-sent', buildDispatchFixture({ id: 'stop-sent', printerId: 'printer-s', status: 'sent' }))
+
+  try {
+    await printDispatcher.stop()
+
+    // Queued job is cancelled outright.
+    assert.equal(jobs.get('stop-queued')?.status, 'cancelled')
+    // In-flight upload is aborted (runJob then performs the SD cleanup + cancelled finish).
+    assert.equal(controller.signal.aborted, true)
+    assert.equal(jobs.get('stop-uploading')?.cancelRequested, true)
+    // A print already sent to the printer is the live print — left untouched.
+    assert.equal(jobs.get('stop-sent')?.status, 'sent')
+  } finally {
+    jobs.clear()
+    for (const [key, value] of saved) jobs.set(key, value)
+  }
+})
+
 test('getRemotePrintTarget appends the plate label for multi-plate 3MFs', () => {
   const target = getRemotePrintTarget('Best_Shot_Golf.gcode.3mf', '3mf', 4, 'Plate 4', { isMultiPlate: true })
   assert.equal(target.subtaskName, 'Best_Shot_Golf - Plate 4')

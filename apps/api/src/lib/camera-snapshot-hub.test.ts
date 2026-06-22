@@ -83,7 +83,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void>
   }
 }
 
-test('background poll refreshes online camera-capable printers with no viewers', async () => {
+test('an online camera printer is not background-polled until it has been viewed', async () => {
   const printers = new Map([['p1', makePrinter('p1')]])
   const { hub, refreshCounts } = createHarness({
     printers,
@@ -92,8 +92,34 @@ test('background poll refreshes online camera-capable printers with no viewers',
 
   hub.start()
   try {
-    await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 2)
-    assert.ok((refreshCounts.get('p1') ?? 0) >= 2)
+    // Online + camera-capable, but nobody has watched it: demand-decay means no
+    // camera reads happen at all (work tracks viewers, not inventory).
+    await delay(80)
+    assert.equal(refreshCounts.get('p1'), undefined)
+  } finally {
+    hub.stop()
+  }
+})
+
+test('background polling decays after the retention window with no viewers', async () => {
+  const printers = new Map([['p1', makePrinter('p1')]])
+  const { hub, refreshCounts } = createHarness({
+    printers,
+    initialStatuses: [statusFor('p1', true)],
+    overrides: { idleSnapshotIntervalMs: 15, backgroundRetentionMs: 40 }
+  })
+
+  hub.start()
+  try {
+    const client = fakeClient()
+    hub.watch(client, 'p1')
+    await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 1)
+    hub.unwatch(client, 'p1')
+    // Background polling continues only within the 40ms window, then stops.
+    await delay(150)
+    const settled = refreshCounts.get('p1') ?? 0
+    await delay(80)
+    assert.equal(refreshCounts.get('p1'), settled)
   } finally {
     hub.stop()
   }
@@ -120,18 +146,24 @@ test('background poll ignores offline and non-camera printers', async () => {
   }
 })
 
-test('a printer coming online later begins background polling', async () => {
+test('a printer coming online is not polled until viewed, then background-polls', async () => {
   const printers = new Map([['p1', makePrinter('p1')]])
   const { hub, events, refreshCounts } = createHarness({ printers })
 
   hub.start()
   try {
+    events.emit('status', statusFor('p1', true))
     await delay(50)
+    // Online but never viewed → no background poll.
     assert.equal(refreshCounts.get('p1'), undefined)
 
-    events.emit('status', statusFor('p1', true))
+    const client = fakeClient()
+    hub.watch(client, 'p1')
     await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 1)
-    assert.ok((refreshCounts.get('p1') ?? 0) >= 1)
+    const afterWatch = refreshCounts.get('p1') ?? 0
+    hub.unwatch(client, 'p1')
+    // Recently viewed + still online → background polling now continues.
+    await waitFor(() => (refreshCounts.get('p1') ?? 0) > afterWatch)
   } finally {
     hub.stop()
   }
@@ -146,7 +178,13 @@ test('a printer going offline stops background polling', async () => {
 
   hub.start()
   try {
+    // View then leave so background polling is active (default 5-min retention).
+    const client = fakeClient()
+    hub.watch(client, 'p1')
     await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 1)
+    hub.unwatch(client, 'p1')
+    await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 2)
+
     events.emit('status', statusFor('p1', false))
     const countAtOffline = refreshCounts.get('p1') ?? 0
     await delay(80)
@@ -165,7 +203,12 @@ test('printer.removed stops background polling', async () => {
 
   hub.start()
   try {
+    const client = fakeClient()
+    hub.watch(client, 'p1')
     await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 1)
+    hub.unwatch(client, 'p1')
+    await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 2)
+
     events.emit('printer.removed', { printerId: 'p1', tenantId: 't1' })
     const countAtRemoval = refreshCounts.get('p1') ?? 0
     await delay(80)
@@ -228,6 +271,8 @@ test('stop() detaches event listeners and clears timers', async () => {
   })
 
   hub.start()
+  const client = fakeClient()
+  hub.watch(client, 'p1')
   await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 1)
   hub.stop()
 

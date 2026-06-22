@@ -5,7 +5,7 @@
  * loading them into memory.
  */
 import { createReadStream, mkdirSync } from 'node:fs'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { appendFile, copyFile, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import express, { Router } from 'express'
@@ -27,6 +27,7 @@ import {
   printerModelSchema,
   printFromLibrarySchema,
   startLibraryDeleteJobSchema,
+  type LibraryDownloadLinkResponse,
   type LibraryFile,
   type LibraryFolder,
   type LibraryFileVersion as LibraryFileVersionDto,
@@ -44,11 +45,17 @@ import {
   resolveLibraryFileToLocalPath,
   storeBridgeLibraryFile
 } from '../lib/bridge-library-files.js'
+import {
+  parseDerivedChips,
+  warmLibraryFileDerivedChips,
+  type DerivedChips
+} from '../lib/library-derived-chips.js'
 import { env } from '../lib/env.js'
 import { requestHasDemoModeRestrictions } from '../lib/demo-mode.js'
-import { prisma } from '../lib/prisma.js'
+import { prisma, rootPrisma } from '../lib/prisma.js'
 import { isUniqueConstraintError } from '../lib/prisma-errors.js'
 import { badRequest, conflict, forbidden, HttpError, notFound } from '../lib/http-error.js'
+import { createKeyedMutex } from '../lib/keyed-mutex.js'
 import { assertLibraryPrintCompatibilityForIndex } from '../lib/print-filament-compatibility.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { requireTenantOwnedConnectedPrinter } from '../lib/printer-access.js'
@@ -115,6 +122,18 @@ const MAX_UPLOAD_BYTES = (() => {
   return env.LIBRARY_MAX_UPLOAD_BYTES
 })()
 const CHUNK_UPLOAD_BYTES = 16 * 1024 * 1024
+
+/**
+ * Lifetime of a minted download link. Long enough for a desktop app to launch
+ * and fetch the file (incl. a HEAD-then-GET or a retry), short enough to bound
+ * the exposure of the unauthenticated URL.
+ */
+const DOWNLOAD_LINK_TTL_MS = 10 * 60 * 1000
+
+/** Only the SHA-256 hash of a download-link token is persisted; never the raw token. */
+function hashDownloadLinkToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
 const DEMO_LIBRARY_UPLOAD_MAX_BYTES = 15 * 1024 * 1024
 const DEMO_LIBRARY_UPLOAD_MESSAGE = 'In the public demo, uploads must be temporary files no larger than 15 MB.'
 const DEMO_LIBRARY_MUTATION_MESSAGE = 'Curated demo library files are read-only in the public demo.'
@@ -244,6 +263,11 @@ function sessionPaths(uploadId: string): { dataPath: string; metaPath: string } 
   }
 }
 
+// Serialize chunk appends per upload session: two in-flight chunks for one
+// uploadId must not both read the same receivedBytes, pass the offset check, and
+// interleave their bytes into the staged file (which would silently corrupt it).
+const uploadChunkMutex = createKeyedMutex()
+
 async function readUploadSession(uploadId: string): Promise<LibraryUploadSession | null> {
   try {
     const { metaPath } = sessionPaths(uploadId)
@@ -307,19 +331,90 @@ async function createLibraryFileFromUpload(input: {
 
 export const libraryRouter = Router()
 
+/**
+ * Per-listing file cap for the browse/flat library endpoints. A single folder (or
+ * an all-folders search) returns at most this many file rows; past it the response
+ * sets `truncated` so the UI can prompt the user to narrow rather than the server
+ * silently dropping rows or one request ballooning memory/JSON in a large
+ * multi-tenant process. Folders are never capped (they are few). We fetch
+ * LIMIT + 1 to detect overflow without a second COUNT query. Mirrors the bounded
+ * bridge SD-card listing pattern (`limit`/`truncated`).
+ */
+export const LIBRARY_BROWSE_FILE_LIMIT = 1000
+
+/**
+ * Apply the per-listing file cap. Given the LIMIT + 1 rows fetched to probe for
+ * overflow, return at most `limit` rows plus the `truncated` flag and the applied
+ * `fileLimit` (null when not truncated, so the payload only advertises a cap when
+ * one was actually hit). Pure so the overflow rule is unit-testable.
+ */
+export function capLibraryFileRows<T>(
+  rows: readonly T[],
+  limit: number
+): { rows: T[]; truncated: boolean; fileLimit: number | null } {
+  const truncated = rows.length > limit
+  return {
+    rows: truncated ? rows.slice(0, limit) : [...rows],
+    truncated,
+    fileLimit: truncated ? limit : null
+  }
+}
+
+/** Max distinct ids honoured by the flat listing's resolve-by-id mode (`?ids=`). */
+const LIBRARY_FILE_IDS_QUERY_LIMIT = 1000
+
+/**
+ * Parse the flat listing's optional `ids` query into a de-duplicated, bounded id
+ * list. Returns `null` when no `ids` param was supplied (normal capped listing),
+ * or the id array (possibly empty) when it was — so an explicit `?ids=` with no
+ * ids resolves to "no files" rather than falling through to the full library.
+ */
+export function parseLibraryFileIdsQuery(value: unknown): string[] | null {
+  if (typeof value !== 'string') return null
+  const ids = [...new Set(value.split(',').map((id) => id.trim()).filter(Boolean))]
+  return ids.slice(0, LIBRARY_FILE_IDS_QUERY_LIMIT)
+}
+
 libraryRouter.get('/', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const folderId = parseFolderQuery(request.query.folderId)
   const tenantId = request.tenant?.id ?? null
+  const requestedIds = parseLibraryFileIdsQuery(request.query.ids)
   // Hidden files (transient one-off prints) are intentionally excluded
   // from the library UI. They’re still reachable by id for re-dispatch.
   const where: Record<string, unknown> = visibleLibraryFilesWhere({ ownerBridgeId: { not: null } })
   if (tenantId) where.tenantId = tenantId
   if (folderId !== undefined) where.folderId = folderId
-  const rows = await prisma.libraryFile.findMany({
+
+  // Resolve-by-id mode: callers that only need specific files (e.g. the orders
+  // view resolving the files its templates/orders reference) pass `ids` and get
+  // exactly those visible files back, unbounded by the recency cap. This avoids
+  // loading the whole library just to look a handful of referenced rows up.
+  if (requestedIds) {
+    if (requestedIds.length === 0) {
+      response.json({ files: [], truncated: false, fileLimit: null })
+      return
+    }
+    where.id = { in: requestedIds }
+    const rows = await prisma.libraryFile.findMany({ where, orderBy: { uploadedAt: 'desc' } })
+    response.json({
+      files: await Promise.all(rows.map((row) => toDto(row, { cacheOnly: true }))),
+      truncated: false,
+      fileLimit: null
+    })
+    return
+  }
+
+  const fetched = await prisma.libraryFile.findMany({
     where,
-    orderBy: { uploadedAt: 'desc' }
+    orderBy: { uploadedAt: 'desc' },
+    take: LIBRARY_BROWSE_FILE_LIMIT + 1
   })
-  response.json({ files: await Promise.all(rows.map((row) => toDto(row))) })
+  const capped = capLibraryFileRows(fetched, LIBRARY_BROWSE_FILE_LIMIT)
+  response.json({
+    files: await Promise.all(capped.rows.map((row) => toDto(row, { cacheOnly: true }))),
+    truncated: capped.truncated,
+    fileLimit: capped.fileLimit
+  })
 })
 
 /**
@@ -333,6 +428,12 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
   const folderId = parseFolderQuery(request.query.folderId) ?? null
   const bridgeId = parseBridgeQuery(request.query.bridgeId)
   const tenantId = request.tenant?.id ?? null
+  // Optional all-directories search: when present, match files/folders by name across the WHOLE
+  // active bridge (ignoring folderId/parentId) instead of listing one folder. Drives the library
+  // search box's "All folders" scope; absent => the normal single-folder listing.
+  const search = typeof request.query.search === 'string' ? request.query.search.trim() : ''
+  const searching = search.length > 0
+  const nameContains = { contains: search, mode: 'insensitive' as const }
   const bridges = (await prisma.bridge.findMany({
     where: tenantId ? { tenantId } : undefined,
     orderBy: { createdAt: 'asc' },
@@ -377,15 +478,16 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
   const [fileRows, folderRows] = await Promise.all([
     prisma.libraryFile.findMany({
       where: visibleLibraryFilesWhere({
-        folderId,
+        ...(searching ? { name: nameContains } : { folderId }),
         ownerBridgeId: activeBridgeId,
         ...(tenantId ? { tenantId } : {})
       }),
-      orderBy: { uploadedAt: 'desc' }
+      orderBy: { uploadedAt: 'desc' },
+      take: LIBRARY_BROWSE_FILE_LIMIT + 1
     }),
     prisma.libraryFolder.findMany({
       where: {
-        parentId: folderId,
+        ...(searching ? { name: nameContains } : { parentId: folderId }),
         ownerBridgeId: activeBridgeId,
         ...(tenantId ? { tenantId } : {})
       },
@@ -393,13 +495,17 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
     })
   ])
 
+  const capped = capLibraryFileRows(fileRows, LIBRARY_BROWSE_FILE_LIMIT)
+
   response.json(libraryBrowseResponseSchema.parse({
     mode: 'bridge-subtree',
     readOnly: false,
     activeBridgeId,
     bridgeEntries: bridges,
     folders: folderRows.map(toFolderDto),
-    files: await Promise.all(fileRows.map((row) => toDto(row)))
+    files: await Promise.all(capped.rows.map((row) => toDto(row, { cacheOnly: true }))),
+    truncated: capped.truncated,
+    fileLimit: capped.fileLimit
   }))
 })
 
@@ -728,26 +834,32 @@ libraryRouter.post(
   uploadChunkBody,
   async (request, response) => {
     const uploadId = requireRouteParam(request.params.uploadId, 'Upload id')
-    const session = await readUploadSession(uploadId)
-    if (!session) throw notFound('Upload session not found')
     const tenantId = requireRequestTenantId(request)
-    if (session.tenantId !== tenantId) throw notFound('Upload session not found')
     const chunk = Buffer.isBuffer(request.body) ? request.body : null
     if (!chunk || chunk.byteLength === 0) throw badRequest('Upload chunk is empty')
     if (chunk.byteLength > CHUNK_UPLOAD_BYTES) throw badRequest('Upload chunk is too large')
     const offsetHeader = request.header('X-Upload-Offset')
-    const offset = offsetHeader == null ? session.receivedBytes : Number(offsetHeader)
-    if (!Number.isSafeInteger(offset) || offset !== session.receivedBytes) {
-      throw conflict(`Upload offset mismatch. Resume at byte ${session.receivedBytes}.`)
-    }
-    if (session.receivedBytes + chunk.byteLength > session.sizeBytes) {
-      throw badRequest('Upload chunk exceeds declared file size')
-    }
-    const { dataPath } = sessionPaths(uploadId)
-    await appendFile(dataPath, chunk)
-    session.receivedBytes += chunk.byteLength
-    await writeUploadSession(session)
-    response.json({ uploadedBytes: session.receivedBytes, complete: session.receivedBytes === session.sizeBytes })
+    // The read offset-check append write-back is one critical section per
+    // upload; run it under the per-uploadId mutex so concurrent chunks for the
+    // same session can't race.
+    const result = await uploadChunkMutex.run(uploadId, async () => {
+      const session = await readUploadSession(uploadId)
+      if (!session) throw notFound('Upload session not found')
+      if (session.tenantId !== tenantId) throw notFound('Upload session not found')
+      const offset = offsetHeader == null ? session.receivedBytes : Number(offsetHeader)
+      if (!Number.isSafeInteger(offset) || offset !== session.receivedBytes) {
+        throw conflict(`Upload offset mismatch. Resume at byte ${session.receivedBytes}.`)
+      }
+      if (session.receivedBytes + chunk.byteLength > session.sizeBytes) {
+        throw badRequest('Upload chunk exceeds declared file size')
+      }
+      const { dataPath } = sessionPaths(uploadId)
+      await appendFile(dataPath, chunk)
+      session.receivedBytes += chunk.byteLength
+      await writeUploadSession(session)
+      return { uploadedBytes: session.receivedBytes, complete: session.receivedBytes === session.sizeBytes }
+    })
+    response.json(result)
   }
 )
 
@@ -1121,6 +1233,68 @@ libraryRouter.get('/:id/download', requireRequestPermission(LIBRARY_DOWNLOAD_PER
       sizeBytes: row.sizeBytes
     }
   })
+  await sendLibraryFileDownload(response, row)
+})
+
+/**
+ * Mint a short-lived, unauthenticated download link for a single library file.
+ * Used by external desktop integrations (e.g. the web "Open in Bambu Studio"
+ * action) where the target app fetches the URL itself with no browser session,
+ * so the session-gated `/:id/download` route above cannot be used. The opaque
+ * token is the only credential; we persist only its hash and a short TTL.
+ */
+libraryRouter.post('/:id/download-link', requireRequestPermission(LIBRARY_DOWNLOAD_PERMISSION), async (request, response) => {
+  const fileId = requireRouteParam(request.params.id, 'File id')
+  const row = await prisma.libraryFile.findUnique({ where: { id: fileId } }) as LibraryFileRow | null
+  if (!row) throw notFound('File not found')
+
+  const now = Date.now()
+  // Opportunistic prune keeps the table small without a dedicated cleanup job.
+  await prisma.libraryDownloadLink.deleteMany({ where: { expiresAt: { lte: new Date(now) } } }).catch(() => {})
+
+  const token = randomBytes(32).toString('base64url')
+  const expiresAt = new Date(now + DOWNLOAD_LINK_TTL_MS)
+  const attribution = await resolveRequestActorAttribution(request)
+  await prisma.libraryDownloadLink.create({
+    data: {
+      tenantId: row.tenantId,
+      libraryFileId: row.id,
+      tokenHash: hashDownloadLinkToken(token),
+      expiresAt,
+      createdById: attribution.createdById
+    }
+  })
+
+  annotateRequestAuditLog(request, {
+    action: 'download-link',
+    resource: 'library file',
+    summary: `Created a temporary download link for ${row.name}.`,
+    metadata: { fileId: row.id, fileName: row.name, expiresAt: expiresAt.toISOString() }
+  })
+
+  const base = env.PUBLIC_BASE_URL?.replace(/\/$/, '') || `${request.protocol}://${request.get('host')}`
+  const url = `${base}/api/library/download-links/${token}/${encodeURIComponent(row.name)}`
+  response.json({ url, expiresAt: expiresAt.toISOString() } satisfies LibraryDownloadLinkResponse)
+})
+
+/**
+ * Redeem a download link minted above. Intentionally has NO permission gate:
+ * the unguessable token IS the authorization, scoped to one file for a short
+ * window. The request carries no auth/tenant context, so the lookup uses
+ * `rootPrisma` (a deliberate platform-wide read) and re-scopes the file load to
+ * the token's own tenant. The trailing filename segment is informational so the
+ * downloaded temp file keeps the correct extension; only the token is checked.
+ */
+libraryRouter.get('/download-links/:token{/:filename}', async (request, response) => {
+  const token = requireRouteParam(request.params.token, 'Download token')
+  const link = await rootPrisma.libraryDownloadLink.findUnique({
+    where: { tokenHash: hashDownloadLinkToken(token) }
+  })
+  if (!link || link.expiresAt.getTime() <= Date.now()) throw notFound('Download link not found or expired')
+  const row = await rootPrisma.libraryFile.findFirst({
+    where: { id: link.libraryFileId, tenantId: link.tenantId }
+  }) as LibraryFileRow | null
+  if (!row) throw notFound('File not found')
   await sendLibraryFileDownload(response, row)
 })
 
@@ -1623,28 +1797,36 @@ async function toDto(row: {
   folderId: string | null
   createdByName?: string | null
   restoredFromVersionNumber?: number | null
-}): Promise<LibraryFile> {
-  let compatiblePrinterModels: LibraryFile['compatiblePrinterModels'] = []
-  let plateTypeChips: LibraryFile['plateTypeChips'] = []
-  let nozzleSizeChips: LibraryFile['nozzleSizeChips'] = []
-  let projectFilamentChips: LibraryFile['projectFilamentChips'] = []
-  let plateCount = 0
+  derivedChipsJson?: string | null
+  derivedChipsVersion?: number | null
+}, options: { cacheOnly?: boolean } = {}): Promise<LibraryFile> {
+  let chips: DerivedChips = { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [] }
   if (row.kind === '3mf' || row.kind === 'gcode') {
     try {
-      const index = await readLibraryThreeMfIndex(row)
-      compatiblePrinterModels = index.compatiblePrinterModels
-      plateTypeChips = collectPlateTypeChips(index)
-      nozzleSizeChips = collectNozzleSizeChips(index)
-      projectFilamentChips = collectProjectFilamentChips(index)
-      plateCount = index.plates.length
+      // List path (`cacheOnly`): read the chips persisted on the row — O(1), no
+      // parse, no bridge RPC. On a miss/stale row, return empty chips now and warm
+      // (inspect + derive + persist) in the background so the next listing is
+      // served from the row. Single-file/upload paths derive fresh inline.
+      const cached = parseDerivedChips(row.derivedChipsJson, row.derivedChipsVersion)
+      if (options.cacheOnly) {
+        if (cached) {
+          chips = cached
+        } else {
+          warmLibraryFileDerivedChips(row, {
+            deriveChips: async (file) => deriveChips(await readLibraryThreeMfIndex(file)),
+            persist: async (fileId, json, version) => {
+              await prisma.libraryFile.update({ where: { id: fileId }, data: { derivedChipsJson: json, derivedChipsVersion: version } })
+            }
+          })
+        }
+      } else {
+        chips = deriveChips(await readLibraryThreeMfIndex(row))
+      }
     } catch {
-      compatiblePrinterModels = []
-      plateTypeChips = []
-      nozzleSizeChips = []
-      projectFilamentChips = []
-      plateCount = 0
+      chips = { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [] }
     }
   }
+  const { compatiblePrinterModels, plateTypeChips, nozzleSizeChips, projectFilamentChips, plateCount } = chips
   return {
     id: row.id,
     name: row.name,
@@ -1778,7 +1960,7 @@ async function sendLibraryFilePlates(
 ): Promise<void> {
   if (sendNotModifiedIfLibraryFileFresh(request, response, row, 'plates')) return
   if (row.kind !== '3mf' && row.kind !== 'gcode') {
-    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], printerProfileName: null, processProfileName: null } satisfies LibraryThreeMfIndexDto)
+    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies LibraryThreeMfIndexDto)
     return
   }
   const signal = requestAbortSignal(request, response)
@@ -1798,12 +1980,13 @@ async function sendLibraryFilePlates(
       })),
       projectFilaments: index.projectFilaments,
       compatiblePrinterModels: index.compatiblePrinterModels,
+      supportFilamentIds: index.supportFilamentIds,
       printerProfileName: index.printerProfileName,
       processProfileName: index.processProfileName
     } satisfies LibraryThreeMfIndexDto)
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
-    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], printerProfileName: null, processProfileName: null } satisfies LibraryThreeMfIndexDto)
+    response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies LibraryThreeMfIndexDto)
   }
 }
 
@@ -1910,8 +2093,10 @@ async function sendLibraryFilePlateGcode(
 
   try {
     const buffer = await readEntry(onDisk, entryPath, signal, 256 * 1024 * 1024)
-    response.setHeader('Content-Type', 'text/plain; charset=utf-8')
-    response.send(buffer)
+    // Route through sendModelBuffer (gzip + chunk-stream) like the other large
+    // library payloads — gcode compresses ~5-10x and the chunked send avoids the
+    // Vite-dev-proxy tail-truncation a bare response.send() of a big body hits.
+    await sendModelBuffer(request, response, buffer, 'text/plain; charset=utf-8')
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
     throw notFound('Plate G-code missing')
@@ -1946,6 +2131,17 @@ async function resolveLibraryFilePreviewAsset(
     throw conflict('This 3MF contains multiple embedded STL or STEP sources, and source selection is not available yet')
   }
   return assets[0] ?? null
+}
+
+/** Derive the cached library chip bundle from a parsed 3MF index. */
+function deriveChips(index: ParsedThreeMfIndex): DerivedChips {
+  return {
+    plateCount: index.plates.length,
+    compatiblePrinterModels: index.compatiblePrinterModels,
+    plateTypeChips: collectPlateTypeChips(index),
+    nozzleSizeChips: collectNozzleSizeChips(index),
+    projectFilamentChips: collectProjectFilamentChips(index)
+  }
 }
 
 function collectPlateTypeChips(index: {

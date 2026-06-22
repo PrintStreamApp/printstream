@@ -12,6 +12,7 @@ type GroupRecord = {
   id: string
   key: string | null
   name: string
+  permissions: string[]
 }
 
 type UserRecord = {
@@ -40,8 +41,8 @@ type UserPasskeyRecord = {
 test('auth-local provider management routes issue invites and manage admin-visible passkeys', async () => {
   const createdAt = new Date('2026-05-02T00:00:00.000Z')
   const groups: GroupRecord[] = [
-    { id: 'group-admin', key: 'admin', name: 'Admin' },
-    { id: 'group-viewer', key: 'viewer', name: 'Viewer' }
+    { id: 'group-admin', key: 'admin', name: 'Admin', permissions: ['auth.users.edit', 'auth.passkeys.view', 'auth.passkeys.edit', 'auth.passkeys.revoke', 'printers.view'] },
+    { id: 'group-viewer', key: 'viewer', name: 'Viewer', permissions: ['printers.view'] }
   ]
   const users: UserRecord[] = [
     {
@@ -153,7 +154,9 @@ test('auth-local provider management routes issue invites and manage admin-visib
     auth: {
       authEnabled: true,
       actor: { type: 'user', userId: 'admin-user' },
-      permissions: ['auth.users.edit', 'auth.passkeys.view', 'auth.passkeys.edit', 'auth.passkeys.revoke'],
+      // A legitimate manager: holds every permission the target viewer has, plus
+      // the auth-management permissions for the routes themselves.
+      permissions: ['auth.users.edit', 'auth.passkeys.view', 'auth.passkeys.edit', 'auth.passkeys.revoke', 'printers.view'],
       runtimePolicy: { demoMode: true }
     }
   })
@@ -209,10 +212,65 @@ test('auth-local provider management routes issue invites and manage admin-visib
   }
 })
 
+test('auth-local provider management denies managing a user whose permissions the actor does not hold', async () => {
+  const createdAt = new Date('2026-05-02T00:00:00.000Z')
+  // The target is a higher-privilege admin; the acting "manager" holds only the
+  // coarse passkey/invite permissions, not the target's printers.* authority.
+  const groups: GroupRecord[] = [
+    { id: 'group-admin', key: 'admin', name: 'Admin', permissions: ['printers.view', 'printers.manage', 'auth.passkeys.revoke'] }
+  ]
+  const users: UserRecord[] = [
+    { id: 'target-admin', email: 'admin@example.com', displayName: 'Admin', loginDisabled: false, groupIds: ['group-admin'], passkeyCount: 1, createdAt, updatedAt: createdAt }
+  ]
+
+  const app = buildTestApp({
+    prisma: {
+      authUser: {
+        async findFirst(input: { where: { id: string } }) {
+          const user = users.find((entry) => entry.id === input.where.id)
+          return user ? materializeUser(user, groups) : null
+        }
+      },
+      authPasskeyCredential: {
+        // The hierarchy guard must fire before any passkey lookup.
+        async findFirst() { throw new Error('reached passkey lookup despite hierarchy denial') },
+        async findMany() { throw new Error('reached passkey lookup despite hierarchy denial') }
+      }
+    },
+    auth: {
+      authEnabled: true,
+      actor: { type: 'user', userId: 'lesser-manager' },
+      permissions: ['auth.passkeys.view', 'auth.passkeys.revoke', 'auth.users.edit'],
+      runtimePolicy: { demoMode: true }
+    }
+  })
+
+  const server = await listen(app)
+  const address = server.address() as AddressInfo
+  const baseUrl = `http://127.0.0.1:${address.port}/api/plugins/auth-local`
+
+  try {
+    const revoke = await fetch(`${baseUrl}/users/target-admin/passkeys/passkey-x/revoke`, { method: 'POST' })
+    assert.equal(revoke.status, 403)
+
+    const list = await fetch(`${baseUrl}/users/target-admin/passkeys`)
+    assert.equal(list.status, 403)
+
+    const invite = await fetch(`${baseUrl}/users/target-admin/invite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    })
+    assert.equal(invite.status, 403)
+  } finally {
+    await close(server)
+  }
+})
+
 test('auth-local provider management routes verify a current-user email change before updating the account', async () => {
   const createdAt = new Date('2026-05-02T00:00:00.000Z')
   const groups: GroupRecord[] = [
-    { id: 'group-viewer', key: 'viewer', name: 'Viewer' }
+    { id: 'group-viewer', key: 'viewer', name: 'Viewer', permissions: ['printers.view'] }
   ]
   const users: UserRecord[] = [
     {

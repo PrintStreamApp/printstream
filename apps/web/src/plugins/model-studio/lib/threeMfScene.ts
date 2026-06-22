@@ -22,6 +22,7 @@ import * as THREE from 'three'
 import { STLLoader, mergeVertices, toCreasedNormals } from 'three-stdlib'
 import type { LibraryThreeMfScene } from '@printstream/shared'
 import { buildApiUrl } from '../../../lib/apiUrl'
+import { fetchModelText } from './modelFetch'
 import { buildTrianglePaintOverlay, SUPPORT_PAINT_COLORS } from './supportPaint'
 
 export const THREE_MF_VERTEX_WELD_TOLERANCE = 5e-2
@@ -716,9 +717,10 @@ export async function buildThreeMfMeshGroup(
   const entryPaths = [...new Set(scene.parts.map((part) => part.entryPath))]
   const modelMaps = new Map<string, Map<number, THREE.BufferGeometry>>()
   await Promise.all(entryPaths.map(async (entryPath) => {
-    const response = await fetch(buildApiUrl(`/api/library/${fileId}/scene-entry?path=${encodeURIComponent(entryPath)}`), { credentials: 'include', signal })
-    if (!response.ok) throw new Error(`Unable to load scene model ${entryPath}.`)
-    modelMaps.set(entryPath, parseThreeMfModelEntry(await response.text()))
+    // Stall-guarded fetch (web->API->bridge can wedge mid-body): match the
+    // editor/preview scene-entry loads rather than a bare fetch().text().
+    const xml = await fetchModelText(buildApiUrl(`/api/library/${fileId}/scene-entry?path=${encodeURIComponent(entryPath)}`), { credentials: 'include', signal })
+    modelMaps.set(entryPath, parseThreeMfModelEntry(xml))
   }))
 
   let placedPartCount = 0

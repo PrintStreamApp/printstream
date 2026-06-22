@@ -11,6 +11,8 @@ export interface UpdateReport {
   printerId: string
   printerName: string
   model: string
+  /** Whether the printer is currently reachable — firmware can only be uploaded when online. */
+  online: boolean
   currentVersion: string | null
   sdCardPresent: boolean | null
   latestVersion: string | null

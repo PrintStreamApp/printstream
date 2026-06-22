@@ -7,7 +7,9 @@
  */
 import { Prisma, type AuthUser } from '@prisma/client'
 import type { AuthGroupSummary } from '@printstream/shared'
-import { conflict } from './http-error.js'
+import { permissionsAreManageableByActor } from './auth-capabilities.js'
+import type { RequestAuthContext } from './auth-context.js'
+import { conflict, forbidden } from './http-error.js'
 import { prisma } from './prisma.js'
 import { getCurrentTenant } from './tenant-context.js'
 
@@ -94,6 +96,31 @@ export function buildCurrentAuthUserWhere(id: string, tenantId = getCurrentTenan
 
 export function readScopedAuthUserLoginDisabled(user: { tenantMemberships?: Array<{ loginDisabled: boolean }> }): boolean {
   return user.tenantMemberships?.[0]?.loginDisabled ?? false
+}
+
+/** Effective permissions a scoped auth user holds via its (tenant-scoped) groups. */
+export function readScopedAuthUserGrantedPermissions(user: ScopedAuthUserRow): string[] {
+  return Array.from(new Set(user.memberships.flatMap((membership) => membership.group.permissions)))
+}
+
+/**
+ * Whether the requesting actor may manage this user under the management-hierarchy
+ * rule: the actor must hold every permission the target user has. Delegates to
+ * `permissionsAreManageableByActor`, which short-circuits to `true` when auth is
+ * not using explicit permissions (auth disabled).
+ */
+export function canManageScopedAuthUser(auth: RequestAuthContext, user: ScopedAuthUserRow): boolean {
+  return permissionsAreManageableByActor(auth, readScopedAuthUserGrantedPermissions(user))
+}
+
+/**
+ * Throws 403 when the actor may not manage the target user. Use in provider
+ * plugins (passkeys, invites) so they enforce the same hierarchy as the core
+ * auth-management routes rather than only a coarse per-action permission.
+ */
+export function assertCanManageScopedAuthUser(auth: RequestAuthContext, user: ScopedAuthUserRow): void {
+  if (canManageScopedAuthUser(auth, user)) return
+  throw forbidden('You cannot manage a user with permissions you do not have.')
 }
 
 export function buildEnabledTenantMembershipWhere(tenantId: string): Prisma.AuthTenantMembershipWhereInput {

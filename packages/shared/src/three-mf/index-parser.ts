@@ -31,7 +31,7 @@ import type {
  * Version of the parsed-index logic. Both apps key their caches on this (the bridge's in-memory LRU
  * and the API's derived-index cache), so bumping it once invalidates stale indexes everywhere.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 9
+export const THREE_MF_INDEX_PARSER_VERSION = 10
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -89,6 +89,20 @@ export function buildThreeMfIndex(
   // enabled project-wide we therefore surface its dedicated support filament(s) on every plate
   // (see the per-plate loop). Sliced projects carry the authoritative list in slice_info.
   const projectSupport = parseProjectDedicatedSupport(projectSettingsJson)
+  // Project-level filaments designated as support material: the `support_filament` /
+  // `support_interface_filament` process settings plus any filament flagged
+  // `filament_is_support`. Surfaced so consumers (e.g. the editor's remove-guard) know a
+  // material is in use as support even though no object's geometry references it directly.
+  const projectSupportConfig = parseProjectSupportConfig(projectSettingsJson)
+  const supportFilamentIds = [
+    ...new Set(
+      [
+        projectSupportConfig.supportFilamentId,
+        projectSupportConfig.supportInterfaceFilamentId,
+        ...projectSupport.filamentIds
+      ].filter((id): id is number => id != null && id > 0)
+    )
+  ].sort((left, right) => left - right)
   const usingSliceInfo = parsedPlates.length > 0
 
   for (const filament of projectFilaments) {
@@ -158,7 +172,7 @@ export function buildThreeMfIndex(
     }
   }
 
-  return { plates, projectFilaments, compatiblePrinterModels, ...bakedProfiles }
+  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, ...bakedProfiles }
 }
 
 export function defaultPlate(): BridgeLibraryThreeMfPlate {

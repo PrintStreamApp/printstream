@@ -89,6 +89,24 @@ CREATE TABLE "PrintJob" (
 );
 
 -- CreateTable
+CREATE TABLE "DispatchJob" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "printerId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'queued',
+    "jobName" TEXT NOT NULL,
+    "fileName" TEXT NOT NULL,
+    "remoteName" TEXT NOT NULL,
+    "error" TEXT,
+    "startCommandAttemptedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "finishedAt" TIMESTAMP(3),
+
+    CONSTRAINT "DispatchJob_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "TenantStats" (
     "tenantId" TEXT NOT NULL,
     "totalPrints" INTEGER NOT NULL DEFAULT 0,
@@ -193,6 +211,8 @@ CREATE TABLE "LibraryFile" (
     "createdById" TEXT,
     "createdByName" TEXT,
     "restoredFromVersionNumber" INTEGER,
+    "derivedChipsJson" TEXT,
+    "derivedChipsVersion" INTEGER,
 
     CONSTRAINT "LibraryFile_pkey" PRIMARY KEY ("id")
 );
@@ -217,6 +237,19 @@ CREATE TABLE "LibraryFileVersion" (
     "restoredFromVersionNumber" INTEGER,
 
     CONSTRAINT "LibraryFileVersion_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "LibraryDownloadLink" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "libraryFileId" TEXT NOT NULL,
+    "tokenHash" TEXT NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdById" TEXT,
+
+    CONSTRAINT "LibraryDownloadLink_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -584,6 +617,12 @@ CREATE INDEX "PrintJob_tenantId_finishedAt_printerId_idx" ON "PrintJob"("tenantI
 CREATE INDEX "PrintJob_tenantId_fileId_idx" ON "PrintJob"("tenantId", "fileId");
 
 -- CreateIndex
+CREATE INDEX "DispatchJob_tenantId_printerId_status_idx" ON "DispatchJob"("tenantId", "printerId", "status");
+
+-- CreateIndex
+CREATE INDEX "DispatchJob_printerId_status_idx" ON "DispatchJob"("printerId", "status");
+
+-- CreateIndex
 CREATE INDEX "PrinterStats_tenantId_updatedAt_idx" ON "PrinterStats"("tenantId", "updatedAt");
 
 -- CreateIndex
@@ -612,6 +651,15 @@ CREATE INDEX "LibraryFileVersion_tenantId_libraryFileId_versionNumber_idx" ON "L
 
 -- CreateIndex
 CREATE UNIQUE INDEX "LibraryFileVersion_libraryFileId_versionNumber_key" ON "LibraryFileVersion"("libraryFileId", "versionNumber");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "LibraryDownloadLink_tokenHash_key" ON "LibraryDownloadLink"("tokenHash");
+
+-- CreateIndex
+CREATE INDEX "LibraryDownloadLink_expiresAt_idx" ON "LibraryDownloadLink"("expiresAt");
+
+-- CreateIndex
+CREATE INDEX "LibraryDownloadLink_libraryFileId_idx" ON "LibraryDownloadLink"("libraryFileId");
 
 -- CreateIndex
 CREATE INDEX "LibraryFolder_tenantId_ownerBridgeId_parentId_idx" ON "LibraryFolder"("tenantId", "ownerBridgeId", "parentId");
@@ -788,6 +836,12 @@ ALTER TABLE "PrintJob" ADD CONSTRAINT "PrintJob_printerId_fkey" FOREIGN KEY ("pr
 ALTER TABLE "PrintJob" ADD CONSTRAINT "PrintJob_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "LibraryFile"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "DispatchJob" ADD CONSTRAINT "DispatchJob_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DispatchJob" ADD CONSTRAINT "DispatchJob_printerId_fkey" FOREIGN KEY ("printerId") REFERENCES "Printer"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "TenantStats" ADD CONSTRAINT "TenantStats_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -807,6 +861,12 @@ ALTER TABLE "LibraryFileVersion" ADD CONSTRAINT "LibraryFileVersion_tenantId_fke
 
 -- AddForeignKey
 ALTER TABLE "LibraryFileVersion" ADD CONSTRAINT "LibraryFileVersion_libraryFileId_fkey" FOREIGN KEY ("libraryFileId") REFERENCES "LibraryFile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "LibraryDownloadLink" ADD CONSTRAINT "LibraryDownloadLink_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "LibraryDownloadLink" ADD CONSTRAINT "LibraryDownloadLink_libraryFileId_fkey" FOREIGN KEY ("libraryFileId") REFERENCES "LibraryFile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "LibraryFolder" ADD CONSTRAINT "LibraryFolder_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

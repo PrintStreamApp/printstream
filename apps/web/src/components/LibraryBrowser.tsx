@@ -1255,7 +1255,13 @@ function FileUnavailableOverlay({ reason, iconSize }: { reason: string; iconSize
           backgroundColor: 'rgba(7, 10, 16, 0.55)'
         }}
       >
-        <LinkOffRoundedIcon sx={{ fontSize: iconSize }} />
+        {/* Plain `style`, not `sx`: this is an @mui/material SvgIcon (icons-material) in a Joy app.
+            Joy (@mui/system v5) and material/x-charts (@mui/system v9) coexist and share a single
+            emotion ThemeContext that Joy fills with its own theme, so a Material component's `sx` is
+            processed by Material's v9 styleFunctionSx against a theme it can't read -> crash in
+            createEmptyBreakpointObject. `style` sets the size directly and sidesteps sx entirely.
+            (The proper fix is aligning the @mui major versions; until then avoid sx on Material icons.) */}
+        <LinkOffRoundedIcon style={{ fontSize: iconSize }} />
       </Box>
     </Tooltip>
   )

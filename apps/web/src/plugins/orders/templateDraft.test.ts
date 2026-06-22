@@ -54,7 +54,10 @@ test('groupTemplateItems combines template rows from the same file and notes int
     }
   ])
 
-  assert.deepEqual(grouped, [
+  // Each grouped item carries a stable client id (used as the React list key);
+  // assert it exists, then compare the rest.
+  assert.equal(grouped.every((item) => typeof item.id === 'string' && item.id.length > 0), true)
+  assert.deepEqual(grouped.map(({ id: _id, ...rest }) => rest), [
     {
       libraryFileId: 'file-1',
       libraryFileName: 'alpha.gcode.3mf',
@@ -76,6 +79,7 @@ test('groupTemplateItems combines template rows from the same file and notes int
 test('flattenTemplateDraftItems drops zero quantities and preserves shared notes per file group', () => {
   const flattened = flattenTemplateDraftItems([
     {
+      id: 'item-1',
       libraryFileId: 'file-1',
       libraryFileName: 'alpha.gcode.3mf',
       notes: 'Front panel',

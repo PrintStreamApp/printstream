@@ -22,15 +22,15 @@
  *   then mark every checked-in migration as applied (baseline). Nothing replays.
  * - **Existing database** (has history): forward-apply only migrations not yet
  *   recorded — the upgrade path, where a newly-added migration is a clean delta.
- * - **Schema present but no history** (a BYO database provisioned out-of-band):
- *   baseline-mark without re-running the snapshot, so existing tables are left
- *   intact.
+ * - **Schema present but no history** (e.g. a cluster restored from a dump or
+ *   otherwise provisioned out-of-band): baseline-mark without re-running the
+ *   snapshot, so existing tables are left intact.
  *
  * Each step records a Prisma-compatible row (same table shape, same sha256
- * checksum) so a bring-your-own-Postgres database stays compatible with later
- * `prisma migrate deploy`. It has **no** destructive `db push` / failed-state
- * recovery branches: the BYO escape hatch is documented as "point at a clean or
- * already-migrated database"; messy-database recovery stays a Docker-only concern.
+ * checksum) so the embedded database stays compatible with the Docker stack's
+ * later `prisma migrate deploy`. It has **no** destructive `db push` /
+ * failed-state recovery branches — it expects a clean or already-migrated
+ * cluster; messy-database recovery stays a Docker-only concern.
  *
  * SQL is executed via node-postgres' simple query protocol (a single string with
  * no bind params), which runs multi-statement files and handles the dollar-quoted

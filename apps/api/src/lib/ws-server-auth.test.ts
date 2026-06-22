@@ -136,10 +136,11 @@ test('websocket replay only sends printer statuses for the selected tenant conte
     }
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
-  mock.method(printerManagerPrototype, 'snapshots', () => [
-    { printerId: 'printer-1', online: true, stage: 'printing' },
-    { printerId: 'printer-2', online: true, stage: 'printing' }
-  ] as never)
+  // Replay looks each tenant printer up by id (getStatus), not by scanning all
+  // snapshots — so only printer-1 (the tenant's printer per the findMany stub)
+  // is ever requested here.
+  mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
+    ({ printerId, online: true, stage: 'printing' }) as never)
 
   const server = createServer()
   const attached = attachWebSocketServer(server)
@@ -179,10 +180,11 @@ test('websocket replay honors the tenant query parameter for browser tab isolati
     }
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
-  mock.method(printerManagerPrototype, 'snapshots', () => [
-    { printerId: 'printer-1', online: true, stage: 'printing' },
-    { printerId: 'printer-2', online: true, stage: 'printing' }
-  ] as never)
+  // Replay looks each tenant printer up by id (getStatus), not by scanning all
+  // snapshots — so only printer-1 (the tenant's printer per the findMany stub)
+  // is ever requested here.
+  mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
+    ({ printerId, online: true, stage: 'printing' }) as never)
 
   const server = createServer()
   const attached = attachWebSocketServer(server)
@@ -343,10 +345,11 @@ test('websocket replay binds tenant-scoped user sessions to their session tenant
     }
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
-  mock.method(printerManagerPrototype, 'snapshots', () => [
-    { printerId: 'printer-1', online: true, stage: 'printing' },
-    { printerId: 'printer-2', online: true, stage: 'printing' }
-  ] as never)
+  // Replay looks each tenant printer up by id (getStatus), not by scanning all
+  // snapshots — so only printer-1 (the tenant's printer per the findMany stub)
+  // is ever requested here.
+  mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
+    ({ printerId, online: true, stage: 'printing' }) as never)
 
   const server = createServer()
   const attached = attachWebSocketServer(server)

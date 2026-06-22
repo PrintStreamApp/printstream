@@ -91,6 +91,20 @@ export class BridgePrinterMonitor {
     }
   }
 
+  /** Number of printers this bridge is monitoring (for metrics/diagnostics). */
+  monitoredCount(): number {
+    return this.printers.size
+  }
+
+  /** Number of monitored printers with a live MQTT connection right now. */
+  connectedCount(): number {
+    let count = 0
+    for (const entry of this.printers.values()) {
+      if (entry.client?.connected) count += 1
+    }
+    return count
+  }
+
   private upsertPrinter(printer: Printer): void {
     const existing = this.printers.get(printer.id)
     if (existing) {

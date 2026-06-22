@@ -18,6 +18,7 @@
     "db:wait": "node --env-file=.env scripts/dev/wait-for-db.mjs",
     "dev": "node scripts/dev/run-dev.mjs",
     "dev:db": "npm run db:wait && node scripts/bootstrap-prisma-migrations.mjs",
+    "test-fleet": "npm run test-fleet:bootstrap --workspace @printstream/api && BRIDGE_NAME='PrintStream Test Fleet Bridge' BRIDGE_STATE_FILE=../../data/test-fleet-bridge-state.json BRIDGE_LIBRARY_DIR=../../data/test-fleet-library npm run dev:test-fleet --workspace @printstream/bridge",
     "export:web-icons": "node scripts/dev/export-web-icons.mjs",
     "lint": "eslint .",
     "notices": "node scripts/dev/generate-third-party-notices.mjs",

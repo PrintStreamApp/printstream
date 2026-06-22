@@ -26,6 +26,9 @@ import { resolveSceneEditImports } from './import-store.js'
 import type { ResolvedSlicingProfileFile } from './slicing-profiles.js'
 import { withTenantRequestContext, type RequestTenantSummary } from './tenant-context.js'
 import { broadcastSlicingChanged } from './ws-resource-events.js'
+import { recordSliceJob } from './metrics.js'
+import { prisma } from './prisma.js'
+import { resolveLibraryFileToLocalPath } from './bridge-library-files.js'
 
 const DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS = 750
 const DEFAULT_SLICING_PROGRESS_HEARTBEAT_INTERVAL_MS = 10_000
@@ -91,6 +94,35 @@ interface PersistedSlicingJobState {
 
 export type PersistSlicedArtifact = typeof persistLibraryFileFromLocalPath
 export type PersistSlicingHistoryThumbnail = typeof persistHistoryThumbnailFromLibrary
+export type ResolveSlicingSource = (input: { sourceFileId: string; sourcePath: string }) => Promise<string>
+
+/**
+ * Resolve the local path to slice from. Prefers the persisted local/_bridge-cache
+ * copy while it still exists (the common case — no behavior change); otherwise
+ * re-resolves and re-fetches from the current library file, so a job that
+ * outlived an API restart (fresh volume) or a source delete/replace doesn't fail
+ * with an opaque ENOENT. Throws a clear, requeue-able message when the source can
+ * no longer be resolved. Runs inside the job's tenant context (run() wraps it),
+ * so the tenant-scoped client applies.
+ */
+export async function resolveSlicingSourcePath(input: { sourceFileId: string; sourcePath: string }): Promise<string> {
+  try {
+    await stat(input.sourcePath)
+    return input.sourcePath
+  } catch {
+    // The cached copy is gone; re-resolve from the library file below.
+  }
+  const row = await prisma.libraryFile.findUnique({
+    where: { id: input.sourceFileId },
+    select: { ownerBridgeId: true, storedPath: true }
+  })
+  if (!row) throw new Error('Slicing source is no longer available; re-slice it from the library.')
+  try {
+    return await resolveLibraryFileToLocalPath(row)
+  } catch {
+    throw new Error('Slicing source could not be retrieved from its bridge; try again once the bridge is online.')
+  }
+}
 
 export class SlicingJobs {
   private readonly jobs = new Map<string, SlicingJobState>()
@@ -99,6 +131,7 @@ export class SlicingJobs {
   private readonly persistencePath: string | null
   private readonly persistArtifact: PersistSlicedArtifact
   private readonly persistThumbnail: PersistSlicingHistoryThumbnail
+  private readonly resolveSource: ResolveSlicingSource
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private persistPromise: Promise<void> = Promise.resolve()
 
@@ -109,11 +142,13 @@ export class SlicingJobs {
     stateFilePath?: string
     persistArtifact?: PersistSlicedArtifact
     persistThumbnail?: PersistSlicingHistoryThumbnail
+    resolveSource?: ResolveSlicingSource
   }) {
     this.progressPollIntervalMs = options?.progressPollIntervalMs ?? DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS
     this.progressHeartbeatIntervalMs = options?.progressHeartbeatIntervalMs ?? DEFAULT_SLICING_PROGRESS_HEARTBEAT_INTERVAL_MS
     this.persistArtifact = options?.persistArtifact ?? persistLibraryFileFromLocalPath
     this.persistThumbnail = options?.persistThumbnail ?? persistHistoryThumbnailFromLibrary
+    this.resolveSource = options?.resolveSource ?? resolveSlicingSourcePath
 
     const persistState = options?.persistState ?? env.NODE_ENV !== 'test'
     this.persistencePath = persistState ? (options?.stateFilePath ?? DEFAULT_SLICING_STATE_FILE) : null
@@ -387,17 +422,21 @@ export class SlicingJobs {
   private async runSlicerJob(job: SlicingJobState, signal: AbortSignal) {
     let profileFiles = job.profileFiles
     let request = job.request
-    let sourcePath = job.sourcePath
+    // Re-resolve the source instead of blindly trusting the persisted path: a
+    // job re-driven after a restart (or a source delete/replace) may hold a
+    // _bridge-cache path that no longer exists. resolveSource re-fetches on
+    // demand and fails with a clear message if the source is truly gone.
+    let sourcePath = await this.resolveSource({ sourceFileId: job.sourceFileId, sourcePath: job.sourcePath })
     const rewrittenSourcePaths: string[] = []
     const rewrittenKinds = new Set<ResolvedSlicingProfileFile['kind']>()
     let retryAttempt = 0
 
     try {
       // Slice-time object customization: when the caller deselected objects and/or set per-object
-      // process overrides on a single plate, produce a customized copy of the source 3MF (drop
-      // unselected objects, inject per-object metadata) and slice that instead. Tracked in
-      // rewrittenSourcePaths so the finally block cleans it up. A failure here fails the job rather
-      // than silently ignoring the customization.
+      // process overrides on a single plate, produce a customized copy of the source 3MF (mark
+      // unselected objects' build items unprintable so the slicer drops them, inject per-object
+      // metadata) and slice that instead. Tracked in rewrittenSourcePaths so the finally block
+      // cleans it up. A failure here fails the job rather than silently ignoring the customization.
       // Interactive 3D editor arrangement: when the caller edited the plate layout, regenerate the
       // source 3MF's build items and plate/instance metadata so the moved/rotated/scaled/added/
       // removed models (across multiple plates) are sliced. The edit is authoritative over the
@@ -556,6 +595,10 @@ export class SlicingJobs {
     job.status = status
     job.error = status === 'failed' ? message : null
     job.finishedAt = new Date()
+    recordSliceJob({
+      outcome: status === 'ready' ? 'success' : status,
+      durationMs: job.finishedAt.getTime() - (job.startedAt ?? job.createdAt).getTime()
+    })
     this.touch(job, message)
     this.logJobEvent(job, status === 'failed' ? 'error' : 'info', `${status}: ${message}`)
     this.recomputeQueuePositions()

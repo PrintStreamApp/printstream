@@ -6,6 +6,18 @@
  * immediately while the API process serializes dispatches per printer.
  * Queued jobs can be cancelled; uploading jobs honor cancellation before
  * publishing the MQTT start command.
+ *
+ * Restart contract (durability): dispatch jobs and the per-printer queues are
+ * in-memory only. On a *graceful* shutdown (deploy/SIGTERM), `stop()` drains
+ * in-flight work — queued jobs are cancelled and in-flight uploads aborted so
+ * any landed SD bytes are deleted and the tracked PrintJob record is cancelled.
+ * Jobs already 'sent' are left alone: the SD file is the live print, which keeps
+ * running and reconciles via the print-job recorder on the next status. An
+ * *ungraceful* crash (OOM/SIGKILL) skips `stop()`, so a job caught mid-upload
+ * can still leak a partial SD file and leave a taskId-less 'unknown' PrintJob
+ * row; that row self-heals only if a later terminal status arrives. A boot-time
+ * reconcile for that crash case is intentionally deferred (it must not fail a
+ * print that actually started — see `print-dispatch-jobs:rob-1`).
  */
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
@@ -16,7 +28,6 @@ import {
   bridgeUpdateStatusSchema,
   getPrinterPrintStartOptions,
   formatBytes,
-  isDirectPrintableFileName,
   type PrintDispatchJob,
   type PrintFromLibrary,
   type PrintNozzleOffsetCalibrationMode,
@@ -37,12 +48,14 @@ import {
 } from './printer-ftp.js'
 import { createSinglePlateThreeMf, readEntry } from './three-mf.js'
 import { printGuards } from './print-guards.js'
-import { ensureLibraryFileSnapshot, type SnapshotLibraryFile } from './print-file-snapshots.js'
+import { type SnapshotLibraryFile } from './print-file-snapshots.js'
 import { registerPendingDispatchedPrintSource } from './dispatched-print-source-cache.js'
 import type { PendingPrintJobSource } from './pending-print-job-source.js'
 import { normalizeExactPrinterFilePath } from './printer-file-path.js'
 import { cancelTrackedPrintJobRecord, startTrackedPrintJob } from './print-job-recorder.js'
 import { ensureLibraryFileReplica, resolveLibraryFileToLocalPath } from './bridge-library-files.js'
+import { recordPrintDispatch } from './metrics.js'
+import { markDispatchStartAttempted, recordDispatchEnqueued, recordDispatchStatus } from './dispatch-journal.js'
 
 type DispatchStatus = PrintDispatchJob['status']
 const MAX_UPLOAD_ATTEMPTS = 3
@@ -89,10 +102,6 @@ interface EnqueueLibraryPrintInput extends PrintFromLibrary {
   plateName?: string | null
   /** Whether the source 3MF contains more than one plate. Defaults to true. */
   isMultiPlate?: boolean
-}
-
-interface TenantScopedEnqueueLibraryPrintInput extends EnqueueLibraryPrintInput {
-  tenantId: string
 }
 
 interface EnqueueSnapshotPrintInput extends Omit<EnqueueLibraryPrintInput, 'fileId'> {
@@ -160,22 +169,6 @@ class PrintDispatcher {
     if (this.hasActiveDispatchForPrinter(printerId)) {
       throw conflict(ACTIVE_DISPATCH_CONFLICT_MESSAGE)
     }
-  }
-
-  async enqueueLibraryPrint(input: TenantScopedEnqueueLibraryPrintInput): Promise<PrintDispatchJob> {
-    const [file, printer] = await Promise.all([
-      prisma.libraryFile.findFirst({ where: { id: input.fileId, tenantId: input.tenantId } }),
-      prisma.printer.findFirst({ where: { id: input.printerId, tenantId: input.tenantId } })
-    ])
-    if (!file) throw new Error('File not found')
-    if (!isDirectPrintableFileName(file.name)) throw new Error('Only .gcode or .gcode.3mf files can be printed directly')
-    const snapshot = await ensureLibraryFileSnapshot(file.id)
-    return this.enqueueSnapshotPrint({
-      ...input,
-      fileName: file.name,
-      snapshot,
-      printerId: printer?.id ?? input.printerId
-    }, printer)
   }
 
   async enqueueSnapshotPrint(
@@ -295,6 +288,16 @@ class PrintDispatcher {
       abortController: null
     }
     this.jobs.set(job.id, job)
+    // Durable journal (best-effort): lets a restart reconcile this dispatch if it dies
+    // before the print starts. See dispatch-journal.ts.
+    void recordDispatchEnqueued({
+      id: job.id,
+      tenantId: job.tenantId,
+      printerId: job.printerId,
+      jobName: job.jobName,
+      fileName: job.fileName,
+      remoteName: job.remoteName
+    })
     this.enqueueForPrinter(job)
     this.pruneOldJobs()
     return toDto(job)
@@ -315,14 +318,7 @@ class PrintDispatcher {
     }
     job.cancelRequested = true
     if (job.status === 'queued' || job.status === 'failed') {
-      await cancelTrackedPrintJobRecord({
-        jobId: job.id,
-        printerId: job.printerId,
-        jobName: job.jobName,
-        metadata: this.buildPendingStartMetadata(job),
-        startedAt: job.startedAt ?? job.createdAt
-      })
-      this.finish(job, 'cancelled', job.status === 'failed' ? 'Cancelled after failed dispatch' : 'Cancelled before upload')
+      await this.cancelIdleJob(job, job.status === 'failed' ? 'Cancelled after failed dispatch' : 'Cancelled before upload')
     } else {
       // Mid-upload: abort the in-flight FTPS transfer instead of letting it run to
       // completion. runJob's cancellation handling then deletes any landed bytes.
@@ -330,6 +326,42 @@ class PrintDispatcher {
       this.touch(job, 'Cancellation requested')
     }
     return toDto(job)
+  }
+
+  /**
+   * Cancel a job that has not begun (or finished) an upload: best-effort cancel
+   * its tracked PrintJob record, then mark the dispatch cancelled. Shared by the
+   * user-initiated `cancel()` and shutdown `stop()`. Caller sets cancelRequested.
+   */
+  private async cancelIdleJob(job: DispatchJobState, message: string): Promise<void> {
+    await cancelTrackedPrintJobRecord({
+      jobId: job.id,
+      printerId: job.printerId,
+      jobName: job.jobName,
+      metadata: this.buildPendingStartMetadata(job),
+      startedAt: job.startedAt ?? job.createdAt
+    }).catch(() => undefined)
+    this.finish(job, 'cancelled', message)
+  }
+
+  /**
+   * Graceful-shutdown drain. Cancels queued jobs and aborts in-flight uploads
+   * (runJob then deletes any landed SD bytes and cancels the tracked record),
+   * leaving 'sent' jobs — the live prints — untouched. Awaits the per-printer
+   * queues so that cleanup runs within the caller's shutdown budget. Best-effort:
+   * an exceeded budget force-exits, which is still better than abandoning silently.
+   */
+  async stop(): Promise<void> {
+    for (const job of this.jobs.values()) {
+      if (job.status === 'queued') {
+        job.cancelRequested = true
+        await this.cancelIdleJob(job, 'Cancelled: server shutting down before upload')
+      } else if (job.status === 'uploading') {
+        job.cancelRequested = true
+        job.abortController?.abort()
+      }
+    }
+    await Promise.allSettled(Array.from(this.printerQueues.values()))
   }
 
   retry(tenantId: string, jobId: string): PrintDispatchJob | null {
@@ -347,6 +379,9 @@ class PrintDispatcher {
     job.finishedAt = null
     job.cancelRequested = false
     job.updatedAt = new Date()
+    // Re-arm the journal row: back to queued and clear the rob-1 start boundary so the
+    // retry's own start attempt re-establishes it.
+    void recordDispatchStatus(job.id, 'queued', { error: null, finishedAt: null, clearStartAttempt: true })
     this.enqueueForPrinter(job)
     return toDto(job)
   }
@@ -375,6 +410,7 @@ class PrintDispatcher {
     job.startedAt = new Date()
     job.abortController = new AbortController()
     this.touch(job, 'Uploading to printer storage')
+    void recordDispatchStatus(job.id, 'uploading')
 
     try {
       const artifact = await preparePrintArtifact(job)
@@ -399,6 +435,17 @@ class PrintDispatcher {
       }
 
       this.touch(job, 'Sending start command')
+      try {
+        // Durably cross the rob-1 boundary BEFORE publishing: once this commits, a
+        // later crash treats the dispatch as "may have started" and never auto-cleans
+        // its SD bytes. If it can't be recorded, abort before publish — a safe,
+        // retryable failure beats risking a post-crash cleanup of a real print.
+        await markDispatchStartAttempted(job.id)
+      } catch (error) {
+        console.error(`[dispatch] could not record start boundary for job ${job.id}; aborting before publish`, (error as Error).message)
+        this.finish(job, 'failed', 'Could not record dispatch state before start', (error as Error).message)
+        return
+      }
       const printPayload = buildPrintStartPayload(job)
       await registerPendingDispatchedPrintSource({
         printerId: job.printerId,
@@ -467,6 +514,11 @@ class PrintDispatcher {
     job.error = error
     job.finishedAt = new Date()
     job.updatedAt = job.finishedAt
+    void recordDispatchStatus(job.id, status, { error, finishedAt: job.finishedAt })
+    recordPrintDispatch({
+      outcome: status === 'sent' ? 'success' : status === 'cancelled' ? 'cancelled' : 'failed',
+      durationMs: job.finishedAt.getTime() - (job.startedAt ?? job.createdAt).getTime()
+    })
   }
 
   private updateUploadProgress(job: DispatchJobState, bytesSent: number, totalBytes: number | null): void {

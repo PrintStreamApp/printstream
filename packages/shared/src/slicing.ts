@@ -247,12 +247,21 @@ export type SceneEditObjectName = z.infer<typeof sceneEditObjectNameSchema>
  * map have their paint removed. Parts the user never painted are omitted entirely,
  * leaving the source mesh untouched byte-for-byte.
  */
+/**
+ * Upper bound on a single triangle's paint code length. A sub-triangle split code grows with
+ * subdivision depth (the brush splits to {@link MAX_SPLIT_DEPTH}=12 near painted boundaries), so
+ * codes routinely run into the hundreds — and occasionally low thousands — of hex chars; the old
+ * 64-char cap silently rejected any deeply-painted part on save. This is a generous sanity guard
+ * only (the 4MB JSON body limit is the real DoS bound); it must stay well above anything the
+ * editor's encoder or a source 3MF can legitimately produce so a save never fails on valid paint.
+ */
+export const MAX_PAINT_CODE_LENGTH = 100_000
 export const sceneEditPartPaintSchema = z.object({
   objectId: z.number().int().positive(),
   componentObjectId: z.number().int().positive(),
   triangles: z.record(
     z.string().regex(/^(0|[1-9]\d{0,8})$/),
-    z.string().regex(/^[0-9A-Fa-f]{1,64}$/)
+    z.string().regex(/^[0-9A-Fa-f]+$/).max(MAX_PAINT_CODE_LENGTH)
   )
 })
 export type SceneEditPartPaint = z.infer<typeof sceneEditPartPaintSchema>
@@ -553,7 +562,8 @@ export const createSlicingJobSchema = z.object({
   /**
    * Object ids (Bambu `object_id` from the source 3MF's `model_settings.config`) to keep when
    * slicing. Omitted ⇒ slice every object. Only honored for a single-plate slice (`plate > 0`):
-   * instances on the target plate whose object is not listed are removed before slicing.
+   * objects on the target plate that are not listed have their build items marked unprintable
+   * (`printable="0"`) before slicing, which is how BambuStudio's CLI excludes them.
    */
   selectedObjectIds: z.array(z.number().int().nonnegative()).optional(),
   /**

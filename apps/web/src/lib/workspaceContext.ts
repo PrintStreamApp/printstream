@@ -1,6 +1,5 @@
 import { isPlatformWorkspacePath, parseWorkspacePathname } from './workspaceRoute'
 
-const WORKSPACE_CONTEXT_KEY = 'bambu.workspaceContext'
 const PLATFORM_CONTEXT_VALUE = 'platform'
 const NO_WORKSPACE_CONTEXT_VALUE = 'none'
 
@@ -21,21 +20,4 @@ export function readWorkspaceContextHeader(): string | null {
   const hint = readWorkspaceContextHint()
   if (!hint) return null
   return hint.type === 'platform' ? PLATFORM_CONTEXT_VALUE : hint.slug
-}
-
-export function writePlatformWorkspaceContext(): void {
-  if (typeof window === 'undefined') return
-  window.sessionStorage.setItem(WORKSPACE_CONTEXT_KEY, PLATFORM_CONTEXT_VALUE)
-}
-
-export function writeTenantWorkspaceContext(slug: string): void {
-  if (typeof window === 'undefined') return
-  const normalized = slug.trim().toLowerCase()
-  if (!normalized) return
-  window.sessionStorage.setItem(WORKSPACE_CONTEXT_KEY, normalized)
-}
-
-export function clearWorkspaceContextHint(): void {
-  if (typeof window === 'undefined') return
-  window.sessionStorage.removeItem(WORKSPACE_CONTEXT_KEY)
 }

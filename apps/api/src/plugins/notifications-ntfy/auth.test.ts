@@ -69,6 +69,24 @@ test('ntfy settings can be read and updated by settings managers', async () => {
   })
 })
 
+test('ntfy rejects an SSRF topic URL (cloud metadata / loopback)', async () => {
+  await withNtfyApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [SETTINGS_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async ({ baseUrl }) => {
+    for (const topicUrl of ['http://169.254.169.254/latest/meta-data/', 'http://localhost:8080/x', 'ftp://ntfy.sh/x']) {
+      const response = await fetch(`${baseUrl}/api/plugins/notifications-ntfy/topic`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topicUrl })
+      })
+      assert.equal(response.status, 400, `expected ${topicUrl} to be rejected`)
+    }
+  })
+})
+
 async function withNtfyApp(
   auth: RequestAuthContext,
   run: (context: { baseUrl: string }) => Promise<void>

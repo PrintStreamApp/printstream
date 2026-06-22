@@ -17,6 +17,14 @@ import { shouldSuppressGlobalErrorToast, shouldSuppressPassiveAuthQueryError } f
 import { extractDisabledPluginNameFromErrorMessage } from './lib/pluginSettings'
 import { completeSplashScreen, setSplashScreenProgress } from './lib/splashScreen'
 import { toast } from './lib/toast'
+// Self-hosted brand fonts (no Google Fonts CDN dependency). Weights mirror the
+// theme: IBM Plex Sans 400/500/600 (body + UI), Space Grotesk 400/500/700 (display).
+import '@fontsource/ibm-plex-sans/400.css'
+import '@fontsource/ibm-plex-sans/500.css'
+import '@fontsource/ibm-plex-sans/600.css'
+import '@fontsource/space-grotesk/400.css'
+import '@fontsource/space-grotesk/500.css'
+import '@fontsource/space-grotesk/700.css'
 import './index.css'
 
 const browserEnv = getBrowserEnv()

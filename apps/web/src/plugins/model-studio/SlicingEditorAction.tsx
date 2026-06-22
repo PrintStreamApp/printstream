@@ -15,7 +15,7 @@ import { Suspense, lazy, useState } from 'react'
 import { Button } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import type { SceneEdit } from '@printstream/shared'
-import type { SliceSettingsController } from '../../pages/LibraryView'
+import type { SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 
 const EditorView = lazy(() => import('./EditorView'))
 

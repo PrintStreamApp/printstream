@@ -107,6 +107,7 @@ import {
   readBridgeLibraryThumbnail
 } from './library-3mf.js'
 import { BridgePrinterMonitor } from './printer-monitor.js'
+import { collectBridgeMetrics, recordApiReconnect } from './bridge-metrics.js'
 import { clearBridgeState, readBridgeState, writeBridgeState, type BridgeState } from './state-store.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -216,7 +217,11 @@ export class BridgeRuntimeClient {
     // recovery server-side — a synchronized 5s beat is a thundering herd). The
     // delay resets to the base once a connection has held for a while.
     let reconnectDelayMs = RECONNECT_DELAY_MS
+    let attempt = 0
     for (;;) {
+      // Every iteration past the first is a reconnect of the bridge -> API link.
+      if (attempt > 0) recordApiReconnect()
+      attempt += 1
       const attemptStartedAt = Date.now()
       try {
         await this.runOnce()
@@ -390,6 +395,16 @@ export class BridgeRuntimeClient {
         heartbeatTimer = setInterval(() => {
           if (socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'bridge.heartbeat' }))
+            // Piggyback a bridge-local metrics snapshot on the heartbeat cadence.
+            // The API only retains it when its own metrics are enabled; otherwise
+            // it is a tiny, ignored message.
+            socket.send(JSON.stringify({
+              type: 'bridge.metrics',
+              metrics: collectBridgeMetrics({
+                printersMonitored: printerMonitor.monitoredCount(),
+                printersConnected: printerMonitor.connectedCount()
+              })
+            }))
           }
         }, registration.heartbeatIntervalSeconds * 1000)
       })

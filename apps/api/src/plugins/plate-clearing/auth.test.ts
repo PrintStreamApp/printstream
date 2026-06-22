@@ -115,6 +115,7 @@ async function withPlateClearingApp(
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
+    request.tenant = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
     next()
   })
 
@@ -128,7 +129,13 @@ async function withPlateClearingApp(
     response.status(500).json({ error: 'Internal server error' })
   })
 
-  const settings = new Map<string, string>()
+  const tenantSettings = new Map<string, Map<string, string>>()
+  const makeStore = (map: Map<string, string>) => ({
+    async get(key: string) { return map.get(key) ?? null },
+    async set(key: string, value: string) { map.set(key, value) },
+    async delete(key: string) { map.delete(key) },
+    forTenant() { throw new Error('nested forTenant not supported') }
+  })
   await plateClearingPlugin.register({
     pluginName: 'plate-clearing',
     logger: { info() {}, warn() {}, error() {} },
@@ -141,14 +148,11 @@ async function withPlateClearingApp(
     ws: { broadcast() {} },
     router,
     settings: {
-      async get(key: string) {
-        return settings.get(key) ?? null
-      },
-      async set(key: string, value: string) {
-        settings.set(key, value)
-      },
-      async delete(key: string) {
-        settings.delete(key)
+      ...makeStore(new Map<string, string>()),
+      forTenant(tenantId: string) {
+        let map = tenantSettings.get(tenantId)
+        if (!map) { map = new Map(); tenantSettings.set(tenantId, map) }
+        return makeStore(map)
       }
     },
     onShutdown() {},

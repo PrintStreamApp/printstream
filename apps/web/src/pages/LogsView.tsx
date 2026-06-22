@@ -78,6 +78,7 @@ export function LogsPanel({ embedded = false, surface = 'tenant' }: { embedded?:
             || formatDateTime(entry.timestamp).toLowerCase().includes(normalizedQuery)
           : entry.message.toLowerCase().includes(normalizedQuery)
             || entry.level.toLowerCase().includes(normalizedQuery)
+            || (entry.correlationId ?? '').toLowerCase().includes(normalizedQuery)
             || formatDateTime(entry.timestamp).toLowerCase().includes(normalizedQuery)
       })
       .sort((left, right) => compareEntries(left, right, sortKey, sortDirection))
@@ -288,9 +289,7 @@ export function LogsPanel({ embedded = false, surface = 'tenant' }: { embedded?:
                         </Typography>
                       </Stack>
                     ) : (
-                      <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                        {entry.message}
-                      </Typography>
+                      <SystemMessage entry={entry} />
                     )}
                   </Stack>
                 ))}
@@ -361,9 +360,7 @@ export function LogsPanel({ embedded = false, surface = 'tenant' }: { embedded?:
                             </Typography>
                           </Stack>
                         ) : (
-                          <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                            {entry.message}
-                          </Typography>
+                          <SystemMessage entry={entry} />
                         )}
                       </td>
                     </tr>
@@ -406,6 +403,21 @@ function compareEntries(left: LogEntry, right: LogEntry, sortKey: LogSortKey, so
     default:
       return left.timestamp.localeCompare(right.timestamp) * direction
   }
+}
+
+function SystemMessage({ entry }: { entry: Extract<LogEntry, { kind: 'system' }> }) {
+  return (
+    <Stack spacing={0.25}>
+      <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {entry.message}
+      </Typography>
+      {entry.correlationId && (
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ wordBreak: 'break-all' }}>
+          req {entry.correlationId}
+        </Typography>
+      )}
+    </Stack>
+  )
 }
 
 function levelColor(level: LogLevel): 'neutral' | 'warning' | 'danger' | 'primary' {

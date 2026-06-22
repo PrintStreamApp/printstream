@@ -35,7 +35,17 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
 
     const removeListener = wsClient.onJson((raw) => {
       const parsed = wsEventSchema.safeParse(raw)
-      if (!parsed.success) return
+      if (!parsed.success) {
+        // A parse failure here means the WS contract drifted (server sent an
+        // event/field this client cannot decode). Silent in production, but
+        // surface it in dev so contract drift is observable rather than a
+        // mysteriously-missing update.
+        if (import.meta.env.DEV) {
+          const eventType = (raw as { type?: unknown } | null)?.type
+          console.warn('[ws] dropped unparseable event', { type: eventType, issues: parsed.error.issues.slice(0, 5) })
+        }
+        return
+      }
 
       const event = parsed.data
       if (event.type === 'printer.status') {

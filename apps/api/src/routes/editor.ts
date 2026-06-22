@@ -132,7 +132,14 @@ editorRouter.post(
   async (request, response) => {
     const tenantId = requireRequestTenantId(request)
     const parsed = saveArrangedThreeMfSchema.safeParse(request.body)
-    if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid save request')
+    if (!parsed.success) {
+      // A bare "Invalid" tells the user nothing; name the failing field so a malformed save is
+      // actionable (and log the full issue list against the requestId for deeper debugging).
+      const issue = parsed.error.issues[0]
+      const where = issue?.path.length ? ` (at ${issue.path.join('.')})` : ''
+      console.warn('[editor] save validation failed:', JSON.stringify(parsed.error.issues))
+      throw badRequest(`Invalid save request: ${issue?.message ?? 'validation failed'}${where}`)
+    }
     const { baseFileId, baseVersionId, mode, sceneEdit, retarget, slicerTargetId, objectProcessOverrides } = parsed.data
 
     const baseFile = baseFileId

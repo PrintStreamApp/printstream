@@ -80,8 +80,16 @@ function plate(index: number, filamentIds: number[]): ThreeMfIndex['plates'][num
     plateType: null,
     nozzleSizes: [],
     filaments: filamentIds.map(plateFilament),
-    objects: []
+    objects: [],
+    // Mark the plate sliced so its filament list is trusted for per-plate narrowing.
+    weight: 10,
+    prediction: 100
   }
+}
+
+/** A plate with no slice metadata — its filament list is only a geometry estimate. */
+function unslicedPlate(index: number, filamentIds: number[]): ThreeMfIndex['plates'][number] {
+  return { ...plate(index, filamentIds), weight: null, prediction: null }
 }
 
 function bakedIndex(overrides: Partial<ThreeMfIndex> = {}): ThreeMfIndex {
@@ -89,6 +97,7 @@ function bakedIndex(overrides: Partial<ThreeMfIndex> = {}): ThreeMfIndex {
     plates: [plate(1, [1]), plate(2, [1, 2, 3])],
     projectFilaments: [projectFilament(1), projectFilament(2), projectFilament(3), projectFilament(4)],
     compatiblePrinterModels: [],
+    supportFilamentIds: [],
     printerProfileName: null,
     processProfileName: null,
     ...overrides
@@ -109,6 +118,22 @@ test('flags only the selected plate\'s materials as used', () => {
   assert.deepEqual(
     onPlateTwo.map((f) => [f.projectFilamentId, f.usedOnSelectedPlate]),
     [[1, true], [2, true], [3, true], [4, false]]
+  )
+})
+
+test('does not narrow to an UNSLICED plate (its geometry estimate misses colour-painted filaments)', () => {
+  // Regression for an unsliced colour-painted project (white base id 1 + painted
+  // black id 2): the plate records only the base extruder, so narrowing to it would
+  // hide black from the print/slice material list. An unsliced plate must surface
+  // the full project palette instead.
+  const index = bakedIndex({
+    plates: [unslicedPlate(1, [1])],
+    projectFilaments: [projectFilament(1), projectFilament(2)]
+  })
+  const result = buildSliceDialogProjectFilaments(emptyFile, index, 1)
+  assert.deepEqual(
+    result.map((f) => [f.projectFilamentId, f.usedOnSelectedPlate]),
+    [[1, true], [2, true]]
   )
 })
 

@@ -40,6 +40,7 @@ import { createUserSession, readRequestCookie, setAuthSessionCookie, setCookieHe
 import type { AnyPrismaClient } from '../../lib/prisma.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { env } from '../../lib/env.js'
+import { encryptSecret, decryptSecret } from '../../lib/secret-encryption.js'
 import { badRequest, conflict, forbidden } from '../../lib/http-error.js'
 import { clearTenantContextCookie, getCurrentTenant, setTenantContextCookie } from '../../lib/tenant-context.js'
 import { getSettingScopePrefix } from '../../lib/tenant-settings.js'
@@ -50,7 +51,11 @@ const DEFAULT_SCOPES = ['openid', 'profile', 'email']
 const OAUTH_STATE_COOKIE_NAME = 'printstream_oauth_state'
 const OAUTH_VERIFIER_COOKIE_NAME = 'printstream_oauth_verifier'
 const OAUTH_REDIRECT_COOKIE_NAME = 'printstream_oauth_redirect'
-const OAUTH_NONCE_COOKIE_NAME = 'printstream_oauth_nonce'
+// NOTE: This is an OAuth2 code flow (PKCE + state) that reads identity from the
+// userinfo endpoint — it does NOT validate an OIDC id_token. No `nonce` is sent
+// or stored, because nothing verifies an id_token's nonce; CSRF/code-injection
+// is covered by `state` + PKCE. To become full OIDC, validate the id_token
+// (JWKS signature + iss/aud/exp + nonce) and reintroduce the nonce here.
 const OAUTH_FLOW_MAX_AGE_SECONDS = 10 * 60
 
 interface OidcDiscoveryDocument {
@@ -201,7 +206,6 @@ export function createAuthOauthPlugin(overrides: Partial<AuthOauthPluginDeps> = 
           const redirectTo = sanitizeRedirectPath(typeof request.query.redirectTo === 'string' ? request.query.redirectTo : null)
           const discovery = await discoverOidcConfiguration(deps.fetch, config.issuerUrl)
           const state = crypto.randomBytes(24).toString('base64url')
-          const nonce = crypto.randomBytes(24).toString('base64url')
           const verifier = crypto.randomBytes(48).toString('base64url')
           const challenge = crypto.createHash('sha256').update(verifier).digest('base64url')
           const callbackUrl = buildCallbackUrl(request)
@@ -212,13 +216,11 @@ export function createAuthOauthPlugin(overrides: Partial<AuthOauthPluginDeps> = 
           authorizationUrl.searchParams.set('redirect_uri', callbackUrl)
           authorizationUrl.searchParams.set('scope', config.scopes.join(' '))
           authorizationUrl.searchParams.set('state', state)
-          authorizationUrl.searchParams.set('nonce', nonce)
           authorizationUrl.searchParams.set('code_challenge', challenge)
           authorizationUrl.searchParams.set('code_challenge_method', 'S256')
 
           setCookieHeader(response, OAUTH_STATE_COOKIE_NAME, state, OAUTH_FLOW_MAX_AGE_SECONDS)
           setCookieHeader(response, OAUTH_VERIFIER_COOKIE_NAME, verifier, OAUTH_FLOW_MAX_AGE_SECONDS)
-          setCookieHeader(response, OAUTH_NONCE_COOKIE_NAME, nonce, OAUTH_FLOW_MAX_AGE_SECONDS)
           setCookieHeader(response, OAUTH_REDIRECT_COOKIE_NAME, redirectTo, OAUTH_FLOW_MAX_AGE_SECONDS)
 
           response.redirect(302, authorizationUrl.toString())
@@ -308,14 +310,24 @@ async function readOauthConfig(settings: { get(key: string): Promise<string | nu
   ])
 
   const normalizedScopes = parseStoredScopes(scopes)
+  // The client secret is encrypted at rest; decrypt for use (legacy plaintext rows
+  // pass through unchanged). A decrypt failure must not crash the auth bootstrap.
+  let decryptedClientSecret: string | null = null
+  if (clientSecret) {
+    try {
+      decryptedClientSecret = decryptSecret(clientSecret).trim() || null
+    } catch (error) {
+      console.error('[auth-oauth] failed to decrypt stored client secret', error instanceof Error ? error.message : error)
+    }
+  }
 
   return {
     displayName: displayName?.trim() || DEFAULT_DISPLAY_NAME,
     issuerUrl: issuerUrl?.trim() || null,
     clientId: clientId?.trim() || null,
-    clientSecret: clientSecret?.trim() || null,
+    clientSecret: decryptedClientSecret,
     scopes: normalizedScopes,
-    configured: Boolean(issuerUrl?.trim() && clientId?.trim() && clientSecret?.trim())
+    configured: Boolean(issuerUrl?.trim() && clientId?.trim() && decryptedClientSecret)
   }
 }
 
@@ -323,11 +335,13 @@ async function writeOauthConfig(
   settings: { set(key: string, value: string): Promise<void> },
   input: UpdateAuthOauthProviderConfigRequest
 ): Promise<void> {
+  const clientSecret = input.clientSecret?.trim() ?? ''
   await Promise.all([
     settings.set(scopedOauthSettingKey('displayName'), input.displayName.trim()),
     settings.set(scopedOauthSettingKey('issuerUrl'), input.issuerUrl.trim()),
     settings.set(scopedOauthSettingKey('clientId'), input.clientId.trim()),
-    settings.set(scopedOauthSettingKey('clientSecret'), input.clientSecret?.trim() ?? ''),
+    // Encrypt the client secret at rest (no-op pass-through when SECRETS_KEY is unset).
+    settings.set(scopedOauthSettingKey('clientSecret'), clientSecret ? encryptSecret(clientSecret) : ''),
     settings.set(scopedOauthSettingKey('scopes'), JSON.stringify(normalizeScopes(input.scopes)))
   ])
 }
@@ -659,5 +673,4 @@ function clearOauthFlowCookies(response: Response): void {
   setCookieHeader(response, OAUTH_STATE_COOKIE_NAME, '', 0)
   setCookieHeader(response, OAUTH_VERIFIER_COOKIE_NAME, '', 0)
   setCookieHeader(response, OAUTH_REDIRECT_COOKIE_NAME, '', 0)
-  setCookieHeader(response, OAUTH_NONCE_COOKIE_NAME, '', 0)
 }

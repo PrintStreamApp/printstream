@@ -432,6 +432,11 @@ function FirmwareUpdateDetailsDialog({
                   </Alert>
                 )}
 
+                {update && !update.online && (
+                  <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+                    This printer is offline. Connect it before uploading firmware.
+                  </Alert>
+                )}
                 {sdMissing && (
                   <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
                     No SD card detected. Insert one before uploading firmware.
@@ -487,7 +492,7 @@ function FirmwareUpdateDetailsDialog({
           ) : canManagePrinters ? (
             <Button
               color={isDowngrade ? 'warning' : 'primary'}
-              disabled={!update || !installable || sdMissing || cancelUpload.isPending || !selectedVersion}
+              disabled={!update || !update.online || !installable || sdMissing || cancelUpload.isPending || !selectedVersion}
               loading={startUpload.isPending}
               onClick={() => {
                 if (selectedVersion) startUpload.mutate(selectedVersion)

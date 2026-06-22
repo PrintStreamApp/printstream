@@ -34,7 +34,7 @@ export const SERVER_DATA_DIR_ENV = 'PRINTSTREAM_DATA_DIR'
 export interface ServerPaths {
   /** Root for config, the database cluster, library, plugins, and the web bundle. */
   dataDir: string
-  /** dotenv-format config read at startup (PORT, BYO DATABASE_URL, ...). */
+  /** dotenv-format config read at startup (PORT, CLIENT_ORIGIN, ...). */
   configFile: string
   /** Embedded PostgreSQL cluster directory. */
   dbDir: string

@@ -2,9 +2,10 @@
  * WebSocket fan-out.
  *
  * One persistent server attached to the same HTTP server as Express.
- * Every connected client receives the same broadcast stream. Per-client
- * subscriptions can be added later if traffic warrants it; for now,
- * broadcast volume is bounded by the number of printers, not clients.
+ * Connections are indexed by tenant so a tenant-scoped broadcast (the hot
+ * path — every printer status delta) touches only that tenant's sockets
+ * rather than scanning every connected client. Platform-wide broadcasts
+ * (tenantId === null) still walk the full client map, but those are rare.
  *
  * Camera frames are delivered over binary WS messages to subscribed
  * clients. See {@link CameraRelay} for the shared-socket multiplexing
@@ -14,7 +15,9 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Request } from 'express'
-import { CAMERA_VIEW_PERMISSION, printerModelSchema, resolvePermissionScope, type PrinterStatus, type WsEvent } from '@printstream/shared'
+import { CAMERA_VIEW_PERMISSION, printerModelSchema, printerStatusSchema, resolvePermissionScope, type PrinterStatus, type WsEvent } from '@printstream/shared'
+import { env } from './env.js'
+import { recordWsEventBroadcast } from './metrics.js'
 import { authUsesExplicitPermissions, createAnonymousAuthContext, type RequestAuthContext } from './auth-context.js'
 import { authProviderRegistry } from './auth-registry.js'
 import { prisma, rootPrisma } from './prisma.js'
@@ -54,21 +57,53 @@ export interface AttachedWebSocketServer {
   close(): Promise<void>
 }
 
-class Broadcaster implements WsBroadcaster {
+export class Broadcaster implements WsBroadcaster {
   private readonly clients = new Map<WebSocket, WsClientContext>()
+  // Secondary index: tenantId -> that tenant's sockets. Lets a tenant-scoped
+  // broadcast (the per-status-delta hot path) be O(that tenant's connections)
+  // instead of O(all connected clients). Sockets whose context has no tenant are
+  // never indexed here (they never receive tenant-scoped events) and are reached
+  // only via the full `clients` map on platform-wide (tenantId === null) sends.
+  private readonly clientsByTenant = new Map<string, Set<WebSocket>>()
 
   add(socket: WebSocket, context: WsClientContext): void {
     this.clients.set(socket, context)
-    socket.once('close', () => this.clients.delete(socket))
+    const tenantId = context.tenant?.id
+    if (tenantId != null) {
+      let tenantSockets = this.clientsByTenant.get(tenantId)
+      if (!tenantSockets) {
+        tenantSockets = new Set()
+        this.clientsByTenant.set(tenantId, tenantSockets)
+      }
+      tenantSockets.add(socket)
+    }
+    socket.once('close', () => this.remove(socket))
+  }
+
+  private remove(socket: WebSocket): void {
+    const context = this.clients.get(socket)
+    this.clients.delete(socket)
+    const tenantId = context?.tenant?.id
+    if (tenantId == null) return
+    const tenantSockets = this.clientsByTenant.get(tenantId)
+    if (!tenantSockets) return
+    tenantSockets.delete(socket)
+    if (tenantSockets.size === 0) this.clientsByTenant.delete(tenantId)
   }
 
   broadcast(event: WsEvent, tenantId: string | null): void {
+    recordWsEventBroadcast(event.type)
     const payload = JSON.stringify(event)
-    for (const [socket, context] of this.clients) {
-      if (tenantId != null && context.tenant?.id !== tenantId) continue
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(payload)
+    if (tenantId != null) {
+      const tenantSockets = this.clientsByTenant.get(tenantId)
+      if (!tenantSockets) return
+      for (const socket of tenantSockets) {
+        if (socket.readyState === WebSocket.OPEN) socket.send(payload)
       }
+      return
+    }
+    for (const socket of this.clients.keys()) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(payload)
     }
   }
 
@@ -109,6 +144,31 @@ class Broadcaster implements WsBroadcaster {
 }
 
 export const wsBroadcaster = new Broadcaster()
+
+/** Liveness flag the heartbeat sweep tracks on each client socket. */
+type HeartbeatSocket = WebSocket & { isAlive?: boolean }
+
+/**
+ * One heartbeat pass over the connected client sockets: terminate any that did
+ * not pong since the previous sweep (half-open / vanished), then ping the rest
+ * and mark them pending. A `pong` (wired on connection) flips `isAlive` back on.
+ * Extracted from the interval so the reap rule is unit-testable.
+ */
+export function sweepWebSocketHeartbeat(clients: Iterable<WebSocket>): void {
+  for (const socket of clients) {
+    const liveSocket = socket as HeartbeatSocket
+    if (liveSocket.isAlive === false) {
+      socket.terminate()
+      continue
+    }
+    liveSocket.isAlive = false
+    try {
+      socket.ping()
+    } catch {
+      // Ping on an already-broken socket throws; the next sweep terminates it.
+    }
+  }
+}
 
 export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServer {
   const wss = new WebSocketServer({ noServer: true })
@@ -152,6 +212,11 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
     const desiredCameraSubscriptions = new Set<string>()
     const desiredSnapshotWatches = new Set<string>()
     wsBroadcaster.add(socket, context)
+    // Heartbeat liveness: a pong (or any inbound frame) marks the socket alive;
+    // the sweep below terminates any that miss a round-trip.
+    const liveSocket = socket as WebSocket & { isAlive?: boolean }
+    liveSocket.isAlive = true
+    socket.on('pong', () => { liveSocket.isAlive = true })
     socket.send(JSON.stringify({ type: 'hello', serverTime: new Date().toISOString() }))
     // Replay current cached snapshots so the new client doesn't have to
     // wait for the next MQTT delta to render anything.
@@ -209,6 +274,14 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
     })
   })
 
+  // Reap half-open client sockets (a browser that vanished without a close frame,
+  // a dropped network) so they don't linger in `clients`, leak memory, and keep
+  // receiving broadcasts forever. Each sweep terminates any socket that missed the
+  // previous ping's pong, then pings the rest. `unref` so it never blocks exit.
+  const HEARTBEAT_INTERVAL_MS = 30_000
+  const heartbeat = setInterval(() => sweepWebSocketHeartbeat(wss.clients), HEARTBEAT_INTERVAL_MS)
+  heartbeat.unref()
+
   const handleStatus = (status: PrinterStatus) => {
     void broadcastStatus(status)
   }
@@ -239,6 +312,7 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
     if (closed) return
     closed = true
 
+    clearInterval(heartbeat)
     server.off('upgrade', handleUpgrade)
     printerEvents.off('status', handleStatus)
     printerEvents.off('printer.removed', handlePrinterRemoved)
@@ -367,8 +441,11 @@ async function replayStatusesForTenant(socket: WebSocket, tenant: RequestTenantS
   const visiblePrinterIds = await listTenantPrinterIds(tenant?.id ?? null)
   if (visiblePrinterIds.size === 0) return
 
-  for (const status of printerManager.snapshots()) {
-    if (!visiblePrinterIds.has(status.printerId)) continue
+  // Look up each of the tenant's printers by id rather than scanning every
+  // managed printer in the process — keeps replay O(tenant printers) on connect.
+  for (const printerId of visiblePrinterIds) {
+    const status = printerManager.getStatus(printerId)
+    if (!status) continue
     if (socket.readyState !== WebSocket.OPEN) return
     socket.send(JSON.stringify({ type: 'printer.status', status }))
   }
@@ -388,6 +465,19 @@ async function replayPrinterFtpActivityForTenant(socket: WebSocket, tenant: Requ
 async function broadcastStatus(status: PrinterStatus): Promise<void> {
   const tenantId = await readPrinterTenantId(status.printerId)
   if (!tenantId) return
+  // The WS contract is compile-time only on this hot path; in non-production
+  // validate the payload before sending so the producer fails loudly on drift
+  // (a field shape the client schema would silently drop) instead of leaving
+  // the consumer to discard it. Skipped in production to avoid per-status cost.
+  if (env.NODE_ENV !== 'production') {
+    const result = printerStatusSchema.safeParse(status)
+    if (!result.success) {
+      console.error('[ws] broadcasting a printer.status that fails printerStatusSchema', {
+        printerId: status.printerId,
+        issues: result.error.issues.slice(0, 5)
+      })
+    }
+  }
   wsBroadcaster.broadcast({ type: 'printer.status', status }, tenantId)
 }
 

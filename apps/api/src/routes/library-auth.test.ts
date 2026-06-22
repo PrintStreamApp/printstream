@@ -1,6 +1,7 @@
 process.env.NODE_ENV = 'test'
 
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { afterEach, test } from 'node:test'
@@ -10,6 +11,7 @@ import type { Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
+  LIBRARY_DOWNLOAD_PERMISSION,
   LIBRARY_MANAGE_PERMISSION,
   LIBRARY_UPLOAD_PERMISSION,
   LIBRARY_VIEW_PERMISSION,
@@ -18,8 +20,8 @@ import {
 import yazl from 'yazl'
 import { libraryRouter } from './library.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
-import { prisma } from '../lib/prisma.js'
-import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
+import { prisma, rootPrisma } from '../lib/prisma.js'
+import { restorePrismaMethodsAfterEach, usePrismaStubs } from '../test-utils/prisma-stubs.js'
 import { HttpError } from '../lib/http-error.js'
 
 const p = prisma as unknown as Record<string, Record<string, unknown>>
@@ -69,7 +71,28 @@ test('library list allows actors with library view permission', async () => {
     const response = await fetch(`${baseUrl}/api/library`)
 
     assert.equal(response.status, 200)
-    assert.deepEqual(await response.json(), { files: [] })
+    assert.deepEqual(await response.json(), { files: [], truncated: false, fileLimit: null })
+  })
+})
+
+test('library list resolves specific files by id when ?ids is supplied', async () => {
+  let capturedWhere: { id?: { in?: string[] } } | undefined
+  prisma.libraryFile.findMany = ((async (args: { where?: { id?: { in?: string[] } } }) => {
+    capturedWhere = args.where
+    return []
+  }) as unknown) as typeof prisma.libraryFile.findMany
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library?ids=file-1,file-2,file-1`)
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { files: [], truncated: false, fileLimit: null })
+    assert.deepEqual(capturedWhere?.id, { in: ['file-1', 'file-2'] }, 'dedupes and filters by the requested ids')
   })
 })
 
@@ -96,7 +119,9 @@ test('library browse returns a read-only bridge root when no bridge is selected'
       activeBridgeId: null,
       bridgeEntries: [],
       folders: [],
-      files: []
+      files: [],
+      truncated: false,
+      fileLimit: null
     })
     assert.deepEqual(bridgeFindManyArgs, {
       where: { tenantId: 'tenant-1' },
@@ -158,7 +183,9 @@ test('library browse collapses to the sole bridge subtree when only one bridge e
         { id: 'bridge-1', name: 'Bridge One', connected: false }
       ],
       folders: [],
-      files: []
+      files: [],
+      truncated: false,
+      fileLimit: null
     })
   })
 })
@@ -187,7 +214,9 @@ test('library browse returns a read-only bridge root when multiple bridges exist
         { id: 'bridge-2', name: 'Bridge Two', connected: false }
       ],
       folders: [],
-      files: []
+      files: [],
+      truncated: false,
+      fileLimit: null
     })
   })
 })
@@ -218,7 +247,9 @@ test('library browse returns a mutable bridge subtree when a bridge is selected'
         { id: 'bridge-2', name: 'Bridge Two', connected: false }
       ],
       folders: [],
-      files: []
+      files: [],
+      truncated: false,
+      fileLimit: null
     })
   })
 })
@@ -619,6 +650,7 @@ test('library plates responses require private revalidation', async () => {
       plates: [],
       projectFilaments: [],
       compatiblePrinterModels: [],
+      supportFilamentIds: [],
       printerProfileName: null,
       processProfileName: null
     })
@@ -1528,6 +1560,137 @@ test('library mesh is unavailable for non-stl files', async () => {
 
     assert.equal(response.status, 404)
     assert.deepEqual(await response.json(), { error: 'No mesh available' })
+  })
+})
+
+// --- Short-lived download links (the "Open in Bambu Studio" desktop deep link) ---
+
+const downloadLinkStub = usePrismaStubs()
+
+const DOWNLOAD_LINK_FILE_ROW = {
+  id: 'file-1',
+  tenantId: 'tenant-1',
+  ownerBridgeId: null,
+  folderId: null,
+  name: 'Widget.3mf',
+  storedPath: 'Widget.3mf',
+  sizeBytes: 1024,
+  kind: '3mf',
+  hidden: false,
+  snapshotKey: null,
+  currentVersionNumber: 1,
+  uploadedAt: new Date('2026-05-01T00:00:00.000Z')
+}
+
+const ANONYMOUS_AUTH: RequestAuthContext = {
+  authEnabled: true,
+  actor: { type: 'anonymous' },
+  permissions: [],
+  runtimePolicy: { demoMode: false }
+}
+
+test('download link mint requires download permission', async () => {
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/download-link`, { method: 'POST' })
+
+    assert.equal(response.status, 403)
+    assert.deepEqual(await response.json(), { error: 'You do not have permission to perform this action.' })
+  })
+})
+
+test('download link mint returns a self-contained URL whose token is persisted only as a hash', async () => {
+  let createdData: { tokenHash: string; expiresAt: Date; libraryFileId: string; tenantId: string } | null = null
+  downloadLinkStub(prisma.libraryFile, 'findUnique', async () => DOWNLOAD_LINK_FILE_ROW)
+  downloadLinkStub(prisma.libraryDownloadLink, 'deleteMany', async () => ({ count: 0 }))
+  downloadLinkStub(prisma.libraryDownloadLink, 'create', async (args: { data: typeof createdData }) => {
+    createdData = args.data
+    return {}
+  })
+  // Mint resolves actor attribution via rootPrisma; keep it off the real DB.
+  downloadLinkStub(rootPrisma.authUser, 'findUnique', async () => null)
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_DOWNLOAD_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const before = Date.now()
+    const response = await fetch(`${baseUrl}/api/library/file-1/download-link`, { method: 'POST' })
+
+    assert.equal(response.status, 200)
+    const body = await response.json() as { url: string; expiresAt: string }
+    const prefix = `${baseUrl}/api/library/download-links/`
+    assert.ok(body.url.startsWith(prefix), body.url)
+    assert.ok(body.url.endsWith('/Widget.3mf'), body.url)
+
+    const token = body.url.slice(prefix.length, body.url.lastIndexOf('/'))
+    assert.ok(token.length > 0)
+    // The raw token must never be stored — only its SHA-256 hash.
+    assert.equal(createdData?.tokenHash, createHash('sha256').update(token).digest('hex'))
+    assert.notEqual(createdData?.tokenHash, token)
+    assert.equal(createdData?.libraryFileId, 'file-1')
+
+    const expiresAt = new Date(body.expiresAt).getTime()
+    assert.ok(expiresAt > before && expiresAt <= before + 10 * 60 * 1000 + 5000)
+  })
+})
+
+test('download link fetch streams the file for a valid, unexpired token without auth', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'printstream-download-link-'))
+  tempDirs.push(dir)
+  const filePath = path.join(dir, 'Widget.3mf')
+  await writeFile(filePath, 'PK-the-bytes', 'utf8')
+
+  downloadLinkStub(rootPrisma.libraryDownloadLink, 'findUnique', async () => ({
+    id: 'link-1',
+    tenantId: 'tenant-1',
+    libraryFileId: 'file-1',
+    expiresAt: new Date(Date.now() + 60_000)
+  }))
+  downloadLinkStub(rootPrisma.libraryFile, 'findFirst', async () => ({
+    ...DOWNLOAD_LINK_FILE_ROW,
+    storedPath: filePath
+  }))
+
+  await withLibraryApp(ANONYMOUS_AUTH, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/download-links/sometoken/Widget.3mf`)
+
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-disposition') ?? '', /attachment/)
+    assert.equal(await response.text(), 'PK-the-bytes')
+  })
+})
+
+test('download link fetch returns 404 for an expired token', async () => {
+  downloadLinkStub(rootPrisma.libraryDownloadLink, 'findUnique', async () => ({
+    id: 'link-1',
+    tenantId: 'tenant-1',
+    libraryFileId: 'file-1',
+    expiresAt: new Date(Date.now() - 1000)
+  }))
+
+  await withLibraryApp(ANONYMOUS_AUTH, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/download-links/expiredtoken/Widget.3mf`)
+
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), { error: 'Download link not found or expired' })
+  })
+})
+
+test('download link fetch returns 404 for an unknown token', async () => {
+  downloadLinkStub(rootPrisma.libraryDownloadLink, 'findUnique', async () => null)
+
+  await withLibraryApp(ANONYMOUS_AUTH, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/download-links/bogus/Widget.3mf`)
+
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), { error: 'Download link not found or expired' })
   })
 })
 

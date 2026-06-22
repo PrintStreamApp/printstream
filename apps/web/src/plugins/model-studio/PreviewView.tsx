@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Chip, CircularProgress, DialogContent, DialogTitle, Divider, IconButton, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
+import { Alert, Box, Chip, CircularProgress, DialogContent, DialogTitle, Divider, IconButton, LinearProgress, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded'
 import { useQuery } from '@tanstack/react-query'
 import type { LibraryFile, LibraryThreeMfScene, ThreeMfIndex } from '@printstream/shared'
 import * as THREE from 'three'
-import { OrbitControls, STLLoader } from 'three-stdlib'
+import { OrbitControls } from 'three-stdlib'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
@@ -19,10 +19,10 @@ import {
   createPreviewPlateSurface,
   createThreeMfMatrix,
   createThreeMfPartObject,
-  disposeObject3D,
-  parseThreeMfModelEntry
+  disposeObject3D
 } from './lib/threeMfScene'
-import { fetchModelBytes } from './lib/modelFetch'
+import { fetchModelBytes, fetchModelText } from './lib/modelFetch'
+import { parseStlGeometryAsync, parseThreeMfModelEntryAsync } from './lib/meshParseClient'
 import {
   BAMBU_THREE_MF_ISO_UP,
   EDITOR_HOME_VIEW_DIRECTION,
@@ -66,6 +66,10 @@ export function PreviewView(props: Record<string, unknown>) {
     loading: false,
     error: null
   })
+  // Per-part progress for the plated 3MF scene: the bed + camera are shown first, then parts stream
+  // in off the main thread (worker-parsed), so this drives an "N of M" bar like the full editor.
+  // null = no streaming in progress (single-mesh modes never set it).
+  const [sceneProgress, setSceneProgress] = useState<{ done: number; total: number } | null>(null)
   const applyViewPresetRef = useRef<((preset: ViewPreset) => void) | null>(null)
   // Layered G-code preview (sliced-file navigation): the built preview is held in a ref
   // so the layer slider adjusts draw ranges without re-running the heavy viewer effect.
@@ -181,13 +185,24 @@ export function PreviewView(props: Record<string, unknown>) {
     const camera = useOrthographicCamera
       ? new THREE.OrthographicCamera(-initialAspect, initialAspect, 1, -1, 0.1, 5000)
       : new THREE.PerspectiveCamera(45, initialAspect, 0.1, 5000)
+    // Every preview mode renders a Z-up world (the floor grid / plate surface is built for +Z up), so
+    // set camera.up BEFORE the first frame. Previously only the plated modes did this, so an STL/STEP
+    // preview rendered its first frames with three's default Y-up and the floor grid flashed as a
+    // vertical wall until the model finished loading and applyViewPreset('iso') corrected the camera.
+    camera.up.set(BAMBU_THREE_MF_ISO_UP.x, BAMBU_THREE_MF_ISO_UP.y, BAMBU_THREE_MF_ISO_UP.z)
     if (isPlatedPreview) {
-      camera.up.set(BAMBU_THREE_MF_ISO_UP.x, BAMBU_THREE_MF_ISO_UP.y, BAMBU_THREE_MF_ISO_UP.z)
+      camera.position.set(150, 150, 200)
+    } else {
+      // Open mesh previews already pointing down the iso corner so the bed reads as a floor on frame
+      // one; attachObject re-frames to the model bounds (same iso preset) once the mesh loads.
+      const isoDirection = VIEW_PRESET_CONFIG.iso.direction
+      camera.position.set(isoDirection.x * 200, isoDirection.y * 200, isoDirection.z * 200)
     }
-    camera.position.set(150, 150, 200)
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: isPlatedPreview })
-    renderer.setPixelRatio(window.devicePixelRatio || 1)
+    // Cap DPR at 2 (matching the editor / view cube) to bound GPU/battery cost
+    // on high-DPI phones and 4K displays.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
     renderer.shadowMap.enabled = isThreeMfScene
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -355,6 +370,7 @@ export function PreviewView(props: Record<string, unknown>) {
     gcodePreviewRef.current = null
     setGcodeLayerCount(0)
     setGcodeStats(null)
+    setSceneProgress(null)
     if (isMeshPreviewMode(previewMode)) {
       // STL ships verbatim from /download; STEP carries no mesh, so pull the server-tessellated
       // STL from /mesh (same BambuStudio-matched quality as importing the STEP into a project).
@@ -363,25 +379,26 @@ export function PreviewView(props: Record<string, unknown>) {
         : buildApiUrl(`${resourceBase}/download`)
       // Fetch via the stall-guarded, abortable reader so a rapid plate/file switch cancels the
       // download (STLLoader.load uses its own un-abortable XHR, which kept running and wasting
-      // bandwidth/CPU after the viewer moved on).
+      // bandwidth/CPU after the viewer moved on), then tessellate off the main thread via the worker
+      // pool (parseStlGeometryAsync) so a large STL/STEP no longer freezes the UI while it parses.
       void fetchModelBytes(meshUrl, { credentials: 'include', signal: loadAbortController.signal })
-        .then((bytes) => {
-          if (cancelled) return
-          const geometry = new STLLoader().parse(bytes.buffer as ArrayBuffer)
-          geometry.computeVertexNormals()
+        .then((bytes) => parseStlGeometryAsync(bytes))
+        .then((geometry) => {
+          if (cancelled) {
+            geometry.dispose()
+            return
+          }
           const material = new THREE.MeshStandardMaterial({ color: 0x1cab84, metalness: 0.1, roughness: 0.6 })
           attachObject(new THREE.Mesh(geometry, material))
         })
         .catch(handleLoadError)
     } else if (previewMode === 'plate-gcode') {
-      void fetch(buildApiUrl(`${resourceBase}/plate-gcode?plate=${selectedPlate}`), {
+      // Stall-guarded: the gcode body can be large and fans out web->API->bridge,
+      // so a wedged transport mid-body must surface an error instead of spinning.
+      void fetchModelText(buildApiUrl(`${resourceBase}/plate-gcode?plate=${selectedPlate}`), {
         credentials: 'include',
         signal: loadAbortController.signal
       })
-        .then((response) => {
-          if (!response.ok) throw new Error(`Failed to load G-code (HTTP ${response.status})`)
-          return response.text()
-        })
         .then((text) => {
           if (cancelled) return
           const parsed = parseGcodeLayers(text)
@@ -404,8 +421,27 @@ export function PreviewView(props: Record<string, unknown>) {
         return
       }
 
-      void buildThreeMfSceneObject(resourceBase, sceneData, loadAbortController.signal).then(
-        (object) => attachObject(object),
+      // Show the plate (correctly oriented) immediately, then stream the parts in off the main thread
+      // so each model appears as it parses with an "N of M" bar — instead of the whole plate blocking
+      // on one big synchronous DOM parse and popping in at once.
+      const plateGroup = buildPlatePreviewBed(sceneData)
+      attachObject(plateGroup)
+      void streamThreeMfSceneParts(resourceBase, sceneData, plateGroup, loadAbortController.signal, (done, total) => {
+        if (!cancelled) setSceneProgress(done >= total ? null : { done, total })
+      }).then(
+        () => {
+          if (cancelled) return
+          // Re-fit now that the parts are in: the bed-only frame can clip a tall model at the top of
+          // the iso ortho view (the frame radius is computed from the framed object's bounds).
+          if (camera instanceof THREE.OrthographicCamera && previewObject) {
+            const contentBox = new THREE.Box3().setFromObject(previewObject)
+            if (!contentBox.isEmpty()) {
+              platedContentSize = contentBox.getSize(new THREE.Vector3())
+              applyViewPreset('iso')
+              syncViewCubeOrientation()
+            }
+          }
+        },
         handleLoadError
       )
     }
@@ -420,6 +456,7 @@ export function PreviewView(props: Record<string, unknown>) {
     animate()
 
     const onResize = () => {
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
       renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
       if (camera instanceof THREE.PerspectiveCamera) {
         camera.aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
@@ -573,6 +610,37 @@ export function PreviewView(props: Record<string, unknown>) {
                   <CircularProgress size="sm" />
                   <Typography level="body-sm" textColor="neutral.200">Loading 3D preview…</Typography>
                 </Stack>
+              )}
+              {sceneProgress && !viewerState.loading && !viewerState.error && (
+                // Slim top bar while the plate's parts stream in (the bed is already shown beneath).
+                <Sheet
+                  variant="soft"
+                  sx={{
+                    position: 'absolute',
+                    top: 12,
+                    left: 12,
+                    right: 12,
+                    zIndex: 2,
+                    px: 1.5,
+                    py: 0.75,
+                    borderRadius: 'md',
+                    bgcolor: 'rgba(13, 19, 34, 0.72)',
+                    backdropFilter: 'blur(2px)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1.25
+                  }}
+                >
+                  <CircularProgress size="sm" />
+                  <Typography level="body-xs" textColor="neutral.200" sx={{ whiteSpace: 'nowrap' }}>
+                    Loading models… {sceneProgress.done} of {sceneProgress.total}
+                  </Typography>
+                  <LinearProgress
+                    determinate
+                    value={(sceneProgress.done / Math.max(sceneProgress.total, 1)) * 100}
+                    sx={{ flex: 1 }}
+                  />
+                </Sheet>
               )}
               {viewerState.error && !viewerState.loading && (
                 <Alert color="warning" variant="soft" sx={{ position: 'absolute', top: 16, left: 16, right: 16, zIndex: 1 }}>
@@ -883,60 +951,75 @@ function isMeshPreviewMode(mode: PreviewMode): boolean {
   return mode === 'stl' || mode === 'step'
 }
 
-async function buildThreeMfSceneObject(
+/** Build just the plate surface (bed + exclude zones) so it can be shown before any parts load. */
+function buildPlatePreviewBed(scene: LibraryThreeMfScene): THREE.Group {
+  const plateGroup = new THREE.Group()
+  plateGroup.add(createPreviewPlateSurface({
+    width: Math.max(scene.bed.maxX - scene.bed.minX, 1),
+    depth: Math.max(scene.bed.maxY - scene.bed.minY, 1),
+    centerX: (scene.bed.minX + scene.bed.maxX) / 2,
+    centerY: (scene.bed.minY + scene.bed.maxY) / 2,
+    excludeAreas: scene.bed.excludeAreas
+  }))
+  return plateGroup
+}
+
+/**
+ * Stream a plated 3MF scene's parts into an already-attached `plateGroup`, mirroring the editor's
+ * load: each model entry is fetched through the stall-guarded reader and parsed off the main thread
+ * (worker pool, DOM fallback), and parts are added as their entry resolves so they appear
+ * incrementally with progress. Parts share the group's transform, so they land relative to the bed
+ * exactly as a one-shot build would. Throws if no part yields previewable geometry.
+ */
+async function streamThreeMfSceneParts(
   resourceBase: string,
   scene: LibraryThreeMfScene,
-  signal: AbortSignal
-): Promise<THREE.Object3D> {
-  const plateGroup = new THREE.Group()
-  try {
-    const bedWidth = Math.max(scene.bed.maxX - scene.bed.minX, 1)
-    const bedDepth = Math.max(scene.bed.maxY - scene.bed.minY, 1)
-    const bedCenterX = (scene.bed.minX + scene.bed.maxX) / 2
-    const bedCenterY = (scene.bed.minY + scene.bed.maxY) / 2
-    plateGroup.add(createPreviewPlateSurface({
-      width: bedWidth,
-      depth: bedDepth,
-      centerX: bedCenterX,
-      centerY: bedCenterY,
-      excludeAreas: scene.bed.excludeAreas
-    }))
+  plateGroup: THREE.Object3D,
+  signal: AbortSignal,
+  onProgress: (done: number, total: number) => void
+): Promise<void> {
+  const partsByEntry = new Map<string, LibraryThreeMfScene['parts']>()
+  for (const part of scene.parts) {
+    const list = partsByEntry.get(part.entryPath)
+    if (list) list.push(part)
+    else partsByEntry.set(part.entryPath, [part])
+  }
 
-    const entryPaths = [...new Set(scene.parts.map((part) => part.entryPath))]
-    const modelMaps = new Map<string, Map<number, THREE.BufferGeometry>>()
-    await Promise.all(entryPaths.map(async (entryPath) => {
-      const response = await fetch(buildApiUrl(`${resourceBase}/scene-entry?path=${encodeURIComponent(entryPath)}`), { signal })
-      if (!response.ok) {
-        throw new Error(`Unable to load scene model ${entryPath}.`)
+  const total = scene.parts.length
+  let done = 0
+  let placed = 0
+  onProgress(0, total)
+
+  await Promise.all([...partsByEntry.entries()].map(async ([entryPath, parts]) => {
+    const bytes = await fetchModelBytes(
+      buildApiUrl(`${resourceBase}/scene-entry?path=${encodeURIComponent(entryPath)}`),
+      { credentials: 'include', signal }
+    )
+    const modelMap = await parseThreeMfModelEntryAsync(bytes)
+    if (signal.aborted) {
+      // The viewer moved on (plate/file switch) — drop the freshly parsed geometry rather than
+      // attaching it to a group that's about to be disposed.
+      for (const geometry of modelMap.values()) geometry.dispose()
+      return
+    }
+    for (const part of parts) {
+      const geometry = modelMap.get(part.objectId)
+      done += 1
+      if (geometry) {
+        plateGroup.add(createThreeMfPartObject(geometry, {
+          // Parts without an extruder render in the DEFAULT filament, like Bambu Studio.
+          color: part.color ?? scene.projectFilaments?.[0]?.color ?? null,
+          transform: createThreeMfMatrix(part.transform),
+          colorPaintFilaments: scene.projectFilaments ?? null
+        }))
+        placed += 1
       }
-      const xmlText = await response.text()
-      modelMaps.set(entryPath, parseThreeMfModelEntry(xmlText))
-    }))
-
-    let placedPartCount = 0
-    for (const part of scene.parts) {
-      const modelMap = modelMaps.get(part.entryPath)
-      const geometry = modelMap?.get(part.objectId)
-      if (!geometry) continue
-      const partTransform = createThreeMfMatrix(part.transform)
-      plateGroup.add(createThreeMfPartObject(geometry, {
-        // Parts without an extruder render in the DEFAULT filament, like Bambu Studio.
-        color: part.color ?? scene.projectFilaments?.[0]?.color ?? null,
-        transform: partTransform,
-        colorPaintFilaments: scene.projectFilaments ?? null
-      }))
-      placedPartCount += 1
+      onProgress(done, total)
     }
+  }))
 
-    if (placedPartCount === 0) {
-      throw new Error('This plate does not include previewable mesh geometry.')
-    }
-    return plateGroup
-  } catch (error) {
-    // A rejected/aborted scene fetch (e.g. rapid plate/file switch) must not leak the
-    // already-built plate surface + label textures.
-    disposeObject3D(plateGroup)
-    throw error
+  if (placed === 0) {
+    throw new Error('This plate does not include previewable mesh geometry.')
   }
 }
 

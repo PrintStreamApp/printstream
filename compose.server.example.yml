@@ -84,7 +84,8 @@ services:
       # `req.ip` and `req.protocol` reflect the real client.
       TRUST_PROXY: "1"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/api/health"]
+      # Readiness (DB-aware): keeps dependents from starting against a DB-less API.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/api/health/ready"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -160,6 +161,10 @@ volumes:
     name: ${BRIDGE_DATA_VOLUME_NAME:-printstream-bridge-data}
   printstream-provision:
     name: ${PROVISION_VOLUME_NAME:-printstream-provision}
+  # Scratch space for in-progress slices. The slicer now runs unprivileged (USER
+  # node); on upgrade from an older root image, recreate this volume so it is
+  # owned by the new runtime user: `docker compose rm -sf slicer && docker volume
+  # rm <project>_printstream-slicer-work`. It holds only transient slice artifacts.
   printstream-slicer-work:
     name: ${SLICER_WORK_VOLUME_NAME:-printstream-slicer-work}
   printstream-postgres-data:

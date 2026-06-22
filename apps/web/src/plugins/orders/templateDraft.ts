@@ -9,6 +9,12 @@ export interface TemplateDraftPlateQuantity {
 }
 
 export interface TemplateDraftItem {
+  /**
+   * Stable client-generated id, used as the React list key. Insertion and
+   * mid-list deletion are supported, so an array-index key would migrate a row's
+   * local state (file picker, plates query) onto the wrong remaining row.
+   */
+  id: string
   libraryFileId: string
   libraryFileName: string
   notes: string
@@ -16,12 +22,15 @@ export interface TemplateDraftItem {
 }
 
 export interface TemplateDraftVariant {
+  /** Stable client-generated id for the React list key (see TemplateDraftItem). */
+  id: string
   name: string
   items: TemplateDraftItem[]
 }
 
 export function createEmptyTemplateDraftVariant(name = 'Default'): TemplateDraftVariant {
   return {
+    id: crypto.randomUUID(),
     name,
     items: [createEmptyTemplateDraftItem()]
   }
@@ -29,6 +38,7 @@ export function createEmptyTemplateDraftVariant(name = 'Default'): TemplateDraft
 
 export function createEmptyTemplateDraftItem(): TemplateDraftItem {
   return {
+    id: crypto.randomUUID(),
     libraryFileId: '',
     libraryFileName: '',
     notes: '',
@@ -37,7 +47,7 @@ export function createEmptyTemplateDraftItem(): TemplateDraftItem {
 }
 
 export function groupTemplateItems(items: OrderTemplate['items']): TemplateDraftItem[] {
-  const grouped = new Map<string, { item: Omit<TemplateDraftItem, 'plateQuantities'>; plateTotals: Map<number, number> }>()
+  const grouped = new Map<string, { item: Omit<TemplateDraftItem, 'plateQuantities' | 'id'>; plateTotals: Map<number, number> }>()
 
   for (const entry of items) {
     const key = [entry.libraryFileId ?? '', entry.libraryFileName, entry.notes ?? ''].join('\u0000')
@@ -59,6 +69,7 @@ export function groupTemplateItems(items: OrderTemplate['items']): TemplateDraft
   }
 
   return Array.from(grouped.values(), ({ item, plateTotals }) => ({
+    id: crypto.randomUUID(),
     ...item,
     plateQuantities: Array.from(plateTotals.entries())
       .map(([plate, quantity]) => ({ plate, quantity }))
@@ -72,6 +83,7 @@ export function groupTemplateVariants(variants: OrderTemplate['variants']): Temp
   }
 
   return variants.map((variant) => ({
+    id: crypto.randomUUID(),
     name: variant.name,
     items: groupTemplateItems(variant.items)
   }))

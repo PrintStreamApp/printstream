@@ -505,10 +505,23 @@ export function encodeWholeTriangleColorState(filamentId: number): string | null
   return `${(filamentId - 3).toString(16).toUpperCase()}C`
 }
 
+/**
+ * Per-source-triangle meshing cache for {@link buildTrianglePaintOverlay}. Maps a painted source
+ * triangle index to the leaf-sub-triangle vertex data its CURRENT code decoded to. Pass the same
+ * cache across rebuilds of one part+channel so a dab only re-meshes the triangles whose code
+ * changed — decoding + walking the split tree (the expensive part: a full part can expand to
+ * 100k+ leaf sub-triangles at the 0.2mm edge limit, ~100ms to rebuild from scratch every dab) is
+ * skipped for the (overwhelming majority of) untouched triangles. The merge below is then just a
+ * typed-array copy of the cached chunks. Keyed by source-triangle index; entries hold the `code`
+ * they were built for so a changed code invalidates just that one.
+ */
+export type PaintOverlayCache = Map<number, { code: string; positions: Float32Array; colors: Float32Array }>
+
 export function buildTrianglePaintOverlay(
   geometry: THREE.BufferGeometry,
   codes: SupportPaintCodes,
-  options: { palette: PaintPalette; name: string; offsetFactor: number; colorForState?: (state: number) => number | null }
+  options: { palette: PaintPalette; name: string; offsetFactor: number; colorForState?: (state: number) => number | null },
+  cache?: PaintOverlayCache
 ): THREE.Mesh | null {
   if (geometry.index) return null
   const sourcePositions = geometry.getAttribute('position')
@@ -516,10 +529,6 @@ export function buildTrianglePaintOverlay(
   const triangleCount = Math.floor(sourcePositions.count / 3)
   const sourceArray = sourcePositions.array as Float32Array
 
-  // Decode every painted triangle's tree and collect painted leaf sub-triangles.
-  const positions: number[] = []
-  const normals: number[] = []
-  const colors: number[] = []
   const color = new THREE.Color()
   const edgeAB = new THREE.Vector3()
   const edgeAC = new THREE.Vector3()
@@ -529,11 +538,25 @@ export function buildTrianglePaintOverlay(
     if (custom != null) return custom
     return state === 1 ? options.palette.enforcer : state === 2 ? options.palette.blocker : options.palette.mixed
   }
+  // Decode each painted triangle's split tree into lifted, vertex-coloured leaf sub-triangles —
+  // reusing the cached chunk when the triangle's code is unchanged. The overlay is unlit
+  // (MeshBasicMaterial) so it carries position + colour only; no per-vertex normals needed.
+  const chunks: Array<{ positions: Float32Array; colors: Float32Array }> = []
+  let totalFloats = 0
+  const live = cache ? new Set<number>() : null
   for (const key of Object.keys(codes)) {
     const triangle = Number.parseInt(key, 10)
     if (!Number.isInteger(triangle) || triangle < 0 || triangle >= triangleCount) continue
-    const tree = decodePaintTree(codes[triangle]!)
-    if (!tree) continue
+    const code = codes[triangle]!
+    live?.add(triangle)
+    const cached = cache?.get(triangle)
+    if (cached && cached.code === code) {
+      chunks.push(cached)
+      totalFloats += cached.positions.length
+      continue
+    }
+    const tree = decodePaintTree(code)
+    if (!tree) { cache?.delete(triangle); continue }
     const o = triangle * 9
     const vertices: [PaintVec3, PaintVec3, PaintVec3] = [
       { x: sourceArray[o]!, y: sourceArray[o + 1]!, z: sourceArray[o + 2]! },
@@ -544,36 +567,51 @@ export function buildTrianglePaintOverlay(
     edgeAC.set(vertices[2].x - vertices[0].x, vertices[2].y - vertices[0].y, vertices[2].z - vertices[0].z)
     faceNormal.crossVectors(edgeAB, edgeAC)
     if (faceNormal.lengthSq() > 1e-12) faceNormal.normalize()
+    const positions: number[] = []
+    const colors: number[] = []
     walkPaintTree(tree, vertices, (state, leaf) => {
       if (state <= 0) return
       color.setHex(stateColor(state))
       for (const vertex of leaf) {
-        // Lift the overlay slightly off the surface along the face normal: both
-        // viewers render with a logarithmic depth buffer, which writes gl_FragDepth
-        // and so BYPASSES polygonOffset — without the physical lift the overlay
-        // z-fights the base mesh into stripes.
+        // Lift the overlay slightly off the surface along the face normal: both viewers render with
+        // a logarithmic depth buffer, which writes gl_FragDepth and so BYPASSES polygonOffset —
+        // without the physical lift the overlay z-fights the base mesh into stripes.
         positions.push(
           vertex.x + faceNormal.x * PAINT_OVERLAY_LIFT,
           vertex.y + faceNormal.y * PAINT_OVERLAY_LIFT,
           vertex.z + faceNormal.z * PAINT_OVERLAY_LIFT
         )
-        normals.push(faceNormal.x, faceNormal.y, faceNormal.z)
         colors.push(color.r, color.g, color.b)
       }
     })
+    if (positions.length === 0) { cache?.delete(triangle); continue }
+    const chunk = { code, positions: new Float32Array(positions), colors: new Float32Array(colors) }
+    cache?.set(triangle, chunk)
+    chunks.push(chunk)
+    totalFloats += chunk.positions.length
   }
-  if (positions.length === 0) return null
+  // Drop cache entries for triangles that are no longer painted.
+  if (cache && live) for (const tri of cache.keys()) if (!live.has(tri)) cache.delete(tri)
+  if (totalFloats === 0) return null
 
+  // Merge the (cached) chunks into the overlay buffers with bulk typed-array copies.
+  const positions = new Float32Array(totalFloats)
+  const colors = new Float32Array(totalFloats)
+  let offset = 0
+  for (const chunk of chunks) {
+    positions.set(chunk.positions, offset)
+    colors.set(chunk.colors, offset)
+    offset += chunk.positions.length
+  }
   const overlayGeometry = new THREE.BufferGeometry()
-  overlayGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
-  overlayGeometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3))
-  overlayGeometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3))
+  overlayGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  overlayGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
   const overlay = new THREE.Mesh(
     overlayGeometry,
-    new THREE.MeshStandardMaterial({
+    // Unlit: the overlay is a flat paint tint, so skip per-fragment lighting (much cheaper to
+    // render the very dense painted mesh) and the per-vertex normals it would need.
+    new THREE.MeshBasicMaterial({
       vertexColors: true,
-      roughness: 0.55,
-      metalness: 0,
       polygonOffset: true,
       polygonOffsetFactor: options.offsetFactor,
       polygonOffsetUnits: options.offsetFactor
@@ -581,5 +619,8 @@ export function buildTrianglePaintOverlay(
   )
   overlay.name = options.name
   overlay.renderOrder = 1
+  // A visual aid only (and lifted off the surface): exclude it from printable-bounds walks so it
+  // neither skews the selection/rest box nor pays a per-vertex precise-box walk on every drag drop.
+  overlay.userData.isPaintOverlay = true
   return overlay
 }

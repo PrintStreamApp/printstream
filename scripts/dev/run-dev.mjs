@@ -72,39 +72,11 @@ const child = spawn(
   ],
   { stdio: 'inherit', cwd: repoRoot, env: { ...process.env, ...slicerEnv } }
 )
-let stopping = false
-let killTimer
-
-child.on('exit', (code, signal) => {
-  if (killTimer) clearTimeout(killTimer)
-  const exitCode = code ?? (signal ? 1 : 0)
-  // Ctrl-C tears down `concurrently`, all the services, and this process at once over one shared
-  // terminal, so the last "[name] exited" line and the shell's returned prompt race at the TTY. Give
-  // those lines a beat to drain before we exit (and the shell reprints the prompt). We deliberately
-  // do NOT print our own "stopped" marker: with the shared terminal it can't be guaranteed to land
-  // after every service's line, and a premature marker reads worse than none. (Not unref'd: this
-  // timer is what we wait on before exiting.)
-  setTimeout(() => process.exit(exitCode), 250)
-})
-
-// On Ctrl-C, `concurrently` shuts down its children but then LINGERS — and because it shares this
-// process group it keeps the terminal's foreground busy, so the shell never returns the prompt until
-// you press Ctrl-C again. Take ownership of teardown: forward a terminate to `concurrently`, then
-// hard-kill it if it doesn't drain, so ONE Ctrl-C reliably returns the prompt (a second forces it).
-function stop() {
-  if (stopping) {
-    try { child.kill('SIGKILL') } catch { /* already gone */ }
-    process.exit(1)
-  }
-  stopping = true
-  console.log('[dev] stopping services...')
-  try { child.kill('SIGTERM') } catch { /* already gone */ }
-  // Don't let a wedged child (a slow tsx-watch teardown, a qemu slice) hold the terminal.
-  killTimer = setTimeout(() => {
-    try { child.kill('SIGKILL') } catch { /* already gone */ }
-    process.exit(1)
-  }, 3000)
-  killTimer.unref()
-}
-process.on('SIGINT', stop)
-process.on('SIGTERM', stop)
+// Do NOT install a SIGINT/SIGTERM handler here. Ctrl-C already SIGINTs the whole foreground process
+// group, so `concurrently` and every service receive it directly and shut down on their own. If
+// run-dev instead CATCHES the signal (exits normally rather than terminating from it), the
+// `npm run dev` wrapper the shell is waiting on prints a stray blank line before returning the prompt
+// — regardless of how fast we then exit. Letting run-dev terminate with the signal keeps Ctrl-C clean.
+// We only relay concurrently's eventual exit code. (A previous "reliable shutdown" handler added that
+// blank line and a marker that raced the prompt; this is the deliberate revert — see git history.)
+child.on('exit', (code) => process.exit(code ?? 0))

@@ -6,15 +6,8 @@ import { z } from 'zod'
 import {
   amsSlotSchema,
   externalSpoolSchema,
-  printerAmsSettingsSchema,
-  printerAirductModeSchema,
-  printerLightCapabilitiesSchema,
-  printerLightModesSchema,
   printerModelSchema,
-  printerNozzleSchema,
-  printerPrintOptionsSchema,
-  printerSelectableAirductModeSchema,
-  printerStageSchema
+  printerStatusSchema
 } from './printer.js'
 import { permissionSchema } from './permissions.js'
 
@@ -70,7 +63,52 @@ export const homeAssistantAmsUnitSnapshotSchema = z.object({
 })
 export type HomeAssistantAmsUnitSnapshot = z.infer<typeof homeAssistantAmsUnitSnapshotSchema>
 
-export const homeAssistantPrinterSnapshotSchema = z.object({
+/**
+ * The subset of live printer status the HA snapshot mirrors 1:1. Derived from
+ * `printerStatusSchema.pick(...)` (not re-declared) so field types stay in lock-
+ * step with the source contract and can't silently drift. The HA-specific
+ * identity/camera/AMS fields are added via `.extend` below.
+ */
+const homeAssistantPrinterStatusFields = printerStatusSchema.pick({
+  online: true,
+  stage: true,
+  subStage: true,
+  progressPercent: true,
+  currentLayer: true,
+  totalLayers: true,
+  remainingMinutes: true,
+  jobName: true,
+  lastJobName: true,
+  gcodeFile: true,
+  bedTemp: true,
+  bedTarget: true,
+  nozzleTemp: true,
+  nozzleTarget: true,
+  nozzles: true,
+  chamberTemp: true,
+  fanGearSpeed: true,
+  partFanPercent: true,
+  auxFanPercent: true,
+  chamberFanPercent: true,
+  wifiSignalDbm: true,
+  ipAddress: true,
+  doorOpen: true,
+  ductMode: true,
+  ductAvailableModes: true,
+  lightModes: true,
+  lightCapabilities: true,
+  lightOn: true,
+  speedLevel: true,
+  printOptions: true,
+  amsSettings: true,
+  sdCardPresent: true,
+  firmwareVersion: true,
+  deviceError: true,
+  hmsErrors: true,
+  observedAt: true
+})
+
+export const homeAssistantPrinterSnapshotSchema = homeAssistantPrinterStatusFields.extend({
   id: z.string(),
   serial: z.string(),
   name: z.string(),
@@ -81,50 +119,9 @@ export const homeAssistantPrinterSnapshotSchema = z.object({
   cameraSnapshotPath: z.string().nullable(),
   cameraStreamPath: z.string().nullable(),
   coverImagePath: z.string().nullable(),
-  online: z.boolean(),
-  stage: printerStageSchema,
-  subStage: z.string().nullable(),
-  progressPercent: z.number().min(0).max(100).nullable(),
-  currentLayer: z.number().int().nonnegative().nullable(),
-  totalLayers: z.number().int().nonnegative().nullable(),
-  remainingMinutes: z.number().int().nonnegative().nullable(),
-  jobName: z.string().nullable(),
-  lastJobName: z.string().nullable(),
-  gcodeFile: z.string().nullable(),
-  bedTemp: z.number().nullable(),
-  bedTarget: z.number().nullable(),
-  nozzleTemp: z.number().nullable(),
-  nozzleTarget: z.number().nullable(),
-  nozzles: z.array(printerNozzleSchema),
-  chamberTemp: z.number().nullable(),
-  fanGearSpeed: z.number().nullable(),
-  partFanPercent: z.number().nullable(),
-  auxFanPercent: z.number().nullable(),
-  chamberFanPercent: z.number().nullable(),
-  wifiSignalDbm: z.number().nullable(),
-  ipAddress: z.string().nullable(),
-  doorOpen: z.boolean().nullable(),
-  ductMode: printerAirductModeSchema.nullable(),
-  ductAvailableModes: z.array(printerSelectableAirductModeSchema),
-  lightModes: printerLightModesSchema,
-  lightCapabilities: printerLightCapabilitiesSchema,
-  lightOn: z.boolean().nullable(),
-  speedLevel: z.number().int().nullable(),
-  printOptions: printerPrintOptionsSchema,
-  amsSettings: printerAmsSettingsSchema,
-  sdCardPresent: z.boolean().nullable(),
-  firmwareVersion: z.string().nullable(),
-  deviceError: z.object({
-    code: z.string(),
-    message: z.string().nullable()
-  }).nullable(),
-  hmsErrors: z.array(z.object({
-    code: z.string(),
-    message: z.string().nullable()
-  })),
+  // HA-curated AMS/spool summaries (smaller than the full status arrays).
   ams: z.array(homeAssistantAmsUnitSnapshotSchema),
-  externalSpools: z.array(homeAssistantExternalSpoolSummarySchema),
-  observedAt: z.string()
+  externalSpools: z.array(homeAssistantExternalSpoolSummarySchema)
 })
 export type HomeAssistantPrinterSnapshot = z.infer<typeof homeAssistantPrinterSnapshotSchema>
 
