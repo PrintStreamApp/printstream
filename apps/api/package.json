@@ -18,7 +18,6 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:baseline": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > prisma/baseline.sql",
-    "test-fleet:bootstrap": "tsx src/test-fleet/bootstrap.ts",
     "db:reset-auth": "tsx scripts/dev/reset-auth.ts"
   },
   "dependencies": {
