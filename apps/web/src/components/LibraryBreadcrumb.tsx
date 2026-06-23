@@ -1,5 +1,7 @@
-import { useState, type DragEvent } from 'react'
-import { Box, Button, Stack, Typography } from '@mui/joy'
+import { useState, type DragEvent, type ReactNode } from 'react'
+import StarRoundedIcon from '@mui/icons-material/StarRounded'
+import StarBorderRoundedIcon from '@mui/icons-material/StarBorderRounded'
+import { Box, Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy'
 import { LIBRARY_DRAG_MIME, type LibraryDragItem } from './LibraryBrowser'
 import type { LibraryBreadcrumbCrumb } from '../lib/libraryNavigation'
 
@@ -89,6 +91,47 @@ export function LibraryBreadcrumb({
           </Stack>
         )
       })}
+    </Stack>
+  )
+}
+/**
+ * Breadcrumb row for the library pickers — mirrors the library view's header: the folder
+ * breadcrumb on the left (swapped for a static "Favorite Files" label while the favorites
+ * filter is on), with a "favorites only" star toggle at the right end. Pass the picker's
+ * own configured `<LibraryBreadcrumb>` as children (it carries each picker's navigation).
+ */
+export function LibraryBreadcrumbRow({
+  favoritesOnly,
+  onFavoritesOnlyChange,
+  children
+}: {
+  favoritesOnly: boolean
+  onFavoritesOnlyChange: (value: boolean) => void
+  children: ReactNode
+}) {
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        {favoritesOnly ? (
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+            <StarRoundedIcon htmlColor="gold" fontSize="small" />
+            <Typography level="title-sm" noWrap>Favorite Files</Typography>
+          </Stack>
+        ) : children}
+      </Box>
+      <Tooltip title={favoritesOnly ? 'Showing favorites only' : 'Show favorites only'}>
+        <IconButton
+          size="sm"
+          variant={favoritesOnly ? 'solid' : 'plain'}
+          color={favoritesOnly ? 'warning' : 'neutral'}
+          aria-label="Show favorites only"
+          aria-pressed={favoritesOnly}
+          onClick={() => onFavoritesOnlyChange(!favoritesOnly)}
+          sx={{ flexShrink: 0 }}
+        >
+          {favoritesOnly ? <StarRoundedIcon /> : <StarBorderRoundedIcon />}
+        </IconButton>
+      </Tooltip>
     </Stack>
   )
 }

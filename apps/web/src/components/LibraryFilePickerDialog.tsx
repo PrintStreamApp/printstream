@@ -13,7 +13,6 @@
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react'
 import { Alert, Box, Button, CircularProgress, Input, Sheet, Stack, Typography } from '@mui/joy'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
-import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import { useQuery } from '@tanstack/react-query'
 import type { LibraryBrowseResponse, LibraryFile, LibraryFolder } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
@@ -24,8 +23,8 @@ import {
   toBridgeFolderId
 } from '../lib/libraryNavigation'
 import { filterLibraryEntries } from '../lib/libraryDirectory'
-import { EmptyState } from './EmptyState'
-import { LibraryBreadcrumb } from './LibraryBreadcrumb'
+import { LibraryBreadcrumb, LibraryBreadcrumbRow } from './LibraryBreadcrumb'
+import { LibraryPickerEmptyState } from './LibraryPickerEmptyState'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { LibraryBrowser, LibraryToolbar, type LibrarySort, type LibraryViewMode } from './LibraryBrowser'
@@ -123,15 +122,7 @@ export function LibraryFilePickerDialog({
 
   const resolvedEmptyState = emptyState ?? (
     <Box sx={{ flex: 1, minHeight: '100%', display: 'grid', placeItems: 'center' }}>
-      <EmptyState
-        icon={<InventoryRoundedIcon />}
-        title={search ? 'No matching files' : 'No files here'}
-        description={
-          search
-            ? 'Try a different search, or use the breadcrumb to look in another folder.'
-            : 'Open a subfolder or use the breadcrumb to find a file.'
-        }
-      />
+      <LibraryPickerEmptyState favoritesOnly={favoritesOnly} searching={Boolean(search.trim())} />
     </Box>
   )
 
@@ -147,7 +138,9 @@ export function LibraryFilePickerDialog({
 
             {details ?? null}
 
-            <LibraryBreadcrumb crumbs={breadcrumb} onNavigate={navigate} />
+            <LibraryBreadcrumbRow favoritesOnly={favoritesOnly} onFavoritesOnlyChange={setFavoritesOnly}>
+              <LibraryBreadcrumb crumbs={breadcrumb} onNavigate={navigate} />
+            </LibraryBreadcrumbRow>
 
             {/* Search sits on its own row; LibraryToolbar renders a full-width
                 sort/view row beneath it (it is not a sibling-flex control). */}
@@ -166,8 +159,6 @@ export function LibraryFilePickerDialog({
                 onViewModeChange={setViewMode}
                 sort={sort}
                 onSortChange={setSort}
-                favoritesOnly={favoritesOnly}
-                onFavoritesOnlyChange={setFavoritesOnly}
                 rightAlignViewModeOnMobile
               />
             </Stack>

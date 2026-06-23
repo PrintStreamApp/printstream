@@ -62,7 +62,8 @@ import { formatLibraryFileName } from '../../../lib/libraryDisplay'
 import { BackAwareModal as Modal } from '../../../components/BackAwareModal'
 import { DialogSection } from '../../../components/DialogSection'
 import { EmptyState } from '../../../components/EmptyState'
-import { LibraryBreadcrumb } from '../../../components/LibraryBreadcrumb'
+import { LibraryBreadcrumb, LibraryBreadcrumbRow } from '../../../components/LibraryBreadcrumb'
+import { LibraryPickerEmptyState } from '../../../components/LibraryPickerEmptyState'
 import { OverflowTooltipText } from '../../../components/OverflowTooltipText'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../../components/ScrollableDialog'
 import { LibraryBrowser, LibraryFileRow, LibraryToolbar, type LibrarySort, type LibraryViewMode } from '../../../components/LibraryBrowser'
@@ -671,30 +672,30 @@ export function TemplateLibraryFilePickerDialog({
                   </Alert>
                 )}
 
-                <LibraryBreadcrumb
-                  crumbs={breadcrumb}
-                  onNavigate={(folderEntryId) => {
-                    if (folderEntryId === null) {
-                      setCurrentFolderId(null)
-                      setBridgeId(null)
-                      return
-                    }
-                    if (folderEntryId && isBridgeFolderId(folderEntryId)) {
-                      setBridgeId(fromBridgeFolderId(folderEntryId))
-                      setCurrentFolderId(null)
-                      return
-                    }
-                    setCurrentFolderId(folderEntryId)
-                  }}
-                />
+                <LibraryBreadcrumbRow favoritesOnly={favoritesOnly} onFavoritesOnlyChange={setFavoritesOnly}>
+                  <LibraryBreadcrumb
+                    crumbs={breadcrumb}
+                    onNavigate={(folderEntryId) => {
+                      if (folderEntryId === null) {
+                        setCurrentFolderId(null)
+                        setBridgeId(null)
+                        return
+                      }
+                      if (folderEntryId && isBridgeFolderId(folderEntryId)) {
+                        setBridgeId(fromBridgeFolderId(folderEntryId))
+                        setCurrentFolderId(null)
+                        return
+                      }
+                      setCurrentFolderId(folderEntryId)
+                    }}
+                  />
+                </LibraryBreadcrumbRow>
 
                 <LibraryToolbar
                   viewMode={viewMode}
                   onViewModeChange={setViewMode}
                   sort={sort}
                   onSortChange={setSort}
-                  favoritesOnly={favoritesOnly}
-                  onFavoritesOnlyChange={setFavoritesOnly}
                 />
 
                 {pickerError && <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{pickerError.message}</Alert>}
@@ -724,17 +725,21 @@ export function TemplateLibraryFilePickerDialog({
                     : 'Only G-code, G-code 3MF, or project 3MF files can be added to orders.'
                 )}
                 emptyState={
-                  <EmptyState
-                    icon={<FolderOpenRoundedIcon />}
-                    title={bridgeRootMode ? 'No bridges connected' : currentFolderId ? 'This folder is empty' : 'No files in the library yet'}
-                    description={
-                      bridgeRootMode
-                        ? 'Connect a bridge to browse its files.'
-                        : currentFolderId
-                        ? 'Choose another folder or upload a printer-ready file here from the Library page.'
-                        : 'Upload printer-ready files in the Library page, then add them to this template.'
-                    }
-                  />
+                  favoritesOnly
+                    ? <LibraryPickerEmptyState favoritesOnly />
+                    : (
+                        <EmptyState
+                          icon={<FolderOpenRoundedIcon />}
+                          title={bridgeRootMode ? 'No bridges connected' : currentFolderId ? 'This folder is empty' : 'No files in the library yet'}
+                          description={
+                            bridgeRootMode
+                              ? 'Connect a bridge to browse its files.'
+                              : currentFolderId
+                              ? 'Choose another folder or upload a printer-ready file here from the Library page.'
+                              : 'Upload printer-ready files in the Library page, then add them to this template.'
+                          }
+                        />
+                      )
                 }
               />
             </DialogSection>

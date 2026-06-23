@@ -866,7 +866,12 @@ function parseHmsErrors(
       const canonical = formatHmsCode(attr ?? 0, code)
       if (seen.has(canonical)) continue
       seen.add(canonical)
-      entries.push({ code: canonical, message: lookupHmsMessage(canonical, deviceType) })
+      // Hide codes the HMS dictionary has no description for (e.g. 0500-0600-0002-0070):
+      // the printer and Bambu Handy/Studio don't surface them either, so a bare code with
+      // no text is noise. Dropping it here hides it everywhere (status, chips, notifications).
+      const message = lookupHmsMessage(canonical, deviceType)
+      if (!message) continue
+      entries.push({ code: canonical, message })
     }
   }
 

@@ -15,6 +15,14 @@ export default defineConfig(({ command, mode }) => {
   return {
     cacheDir: '.vite',
     envDir: '../..',
+    optimizeDeps: {
+      // The model-studio mesh-parse web worker imports three + three-stdlib. Without
+      // pre-bundling, dev serves their raw ESM graph (hundreds of modules) into the
+      // worker context, which stalls the worker from ever starting here — so the STL/STEP
+      // preview hangs until the worker-task timeout falls back to a slow main-thread
+      // parse. Pre-bundling them makes the worker load one optimized chunk.
+      include: ['three', 'three-stdlib']
+    },
     resolve: command === 'serve'
       ? {
           // Entries are prefix-matched in order, so the `/private` subpath

@@ -12,8 +12,7 @@
 import React, { useEffect, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
 import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded'
 import StarRoundedIcon from '@mui/icons-material/StarRounded'
-import StarBorderRoundedIcon from '@mui/icons-material/StarBorderRounded'
-import { AspectRatio, Box, Checkbox, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy'
+import { AspectRatio, Box, Checkbox, Chip, Stack, Tooltip, Typography } from '@mui/joy'
 import { formatBytes, type LibraryFile, type LibraryFolder } from '@printstream/shared'
 import { buildApiUrl } from '../lib/apiUrl'
 import { getMeshThumbnailProvider, getSceneThumbnailProvider } from '../lib/modelThumbnailRegistry'
@@ -69,20 +68,15 @@ export function LibraryToolbar({
   onViewModeChange,
   sort,
   onSortChange,
-  favoritesOnly,
-  onFavoritesOnlyChange,
   rightAlignViewModeOnMobile = false
 }: {
   viewMode: LibraryViewMode
   onViewModeChange: (mode: LibraryViewMode) => void
   sort: LibrarySort
   onSortChange: (sort: LibrarySort) => void
-  /** When provided, renders a "favorites only" filter toggle ahead of the sort controls. */
-  favoritesOnly?: boolean
-  onFavoritesOnlyChange?: (value: boolean) => void
   rightAlignViewModeOnMobile?: boolean
 }) {
-  const controls = (
+  return (
     <DirectorySortViewControls
       sortValue={sort.key}
       sortOptions={LIBRARY_TOOLBAR_SORT_KEYS.map((key) => ({ value: key, label: SORT_LABELS[key] }))}
@@ -96,25 +90,6 @@ export function LibraryToolbar({
       matchFilterWidthOnDesktop
       rightAlignViewModeOnMobile={rightAlignViewModeOnMobile}
     />
-  )
-  if (onFavoritesOnlyChange === undefined) return controls
-  return (
-    <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
-      <Tooltip title={favoritesOnly ? 'Showing favorites only' : 'Show favorites only'}>
-        <IconButton
-          size="sm"
-          variant={favoritesOnly ? 'solid' : 'soft'}
-          color={favoritesOnly ? 'warning' : 'neutral'}
-          aria-label="Show favorites only"
-          aria-pressed={favoritesOnly}
-          onClick={() => onFavoritesOnlyChange(!favoritesOnly)}
-          sx={{ flexShrink: 0 }}
-        >
-          {favoritesOnly ? <StarRoundedIcon /> : <StarBorderRoundedIcon />}
-        </IconButton>
-      </Tooltip>
-      <Box sx={{ flex: 1, minWidth: 0 }}>{controls}</Box>
-    </Stack>
   )
 }
 

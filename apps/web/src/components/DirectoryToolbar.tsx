@@ -17,7 +17,7 @@ import {
   Select,
   Stack
 } from '@mui/joy'
-import React, { type ReactNode } from 'react'
+import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import {
   DirectorySortViewControls,
@@ -233,9 +233,31 @@ export function DirectoryFiltersMenu({
   clearDisabled?: boolean
   children: ReactNode
 }) {
+  const [open, setOpen] = useState(false)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  // Joy's Menu dismisses on focus-out, which never fires when the panel holds form
+  // controls and the user clicks a non-focusable area — so the dropdown would stay open
+  // until the button is clicked again. Add an explicit outside-pointer close. The
+  // disablePortal Select listboxes render inside the menu, so option clicks count as
+  // inside and keep the panel open.
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [open])
+
   return (
-    <Dropdown>
+    <Dropdown open={open} onOpenChange={(_event, isOpen) => setOpen(isOpen)}>
       <MenuButton
+        ref={buttonRef}
         slots={{ root: Button }}
         slotProps={{ root: {
           size: 'sm',
@@ -249,10 +271,13 @@ export function DirectoryFiltersMenu({
         {activeCount > 0 ? `Filters (${activeCount})` : 'Filters'}
       </MenuButton>
       <Menu
+        ref={menuRef}
         placement="bottom-end"
         // overflow/maxHeight: let nested (disablePortal) Select listboxes overflow the
         // panel rather than being clipped or forcing the whole panel to scroll.
-        sx={{ p: 1.5, minWidth: 260, maxWidth: 'min(340px, 92vw)', overflow: 'visible', maxHeight: 'none' }}
+        // zIndex: the panel must surface above a modal dialog (the print picker), so lift
+        // it to the `tooltip` layer — the default `popup` z-index sits below `modal`.
+        sx={{ p: 1.5, minWidth: 260, maxWidth: 'min(340px, 92vw)', overflow: 'visible', maxHeight: 'none', zIndex: (theme) => theme.zIndex.tooltip }}
       >
         <Stack spacing={1.25} sx={{ minWidth: 0 }}>
           {children}

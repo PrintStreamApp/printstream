@@ -1,8 +1,11 @@
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { Box, Button, Chip, FormControl, FormLabel, Input, ModalClose, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
+import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import { useQuery } from '@tanstack/react-query'
-import { LibraryBreadcrumb } from '../../components/LibraryBreadcrumb'
+import { EmptyState } from '../../components/EmptyState'
+import { LibraryBreadcrumb, LibraryBreadcrumbRow } from '../../components/LibraryBreadcrumb'
+import { LibraryPickerEmptyState } from '../../components/LibraryPickerEmptyState'
 import { isDirectPrintableFileName, isPrinterModelCompatible, type LibraryBrowseResponse, type LibraryFile, type LibraryFolder, type PrinterModel } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { buildLibraryBreadcrumb, isBridgeFolderId, fromBridgeFolderId, toBridgeFolderId } from '../../lib/libraryNavigation'
@@ -10,7 +13,7 @@ import { formatLibraryFileKindLabel } from '../../lib/libraryDisplay'
 import { isUnslicedThreeMfFile } from '../../lib/libraryFileTags'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { DialogSection } from '../../components/DialogSection'
-import { DirectoryFiltersButton, DirectoryFiltersDialog } from '../../components/DirectoryToolbar'
+import { DirectoryFiltersMenu } from '../../components/DirectoryToolbar'
 import { SearchScopeToggle } from '../../components/library/SearchScopeToggle'
 import {
   LibraryBrowser,
@@ -55,7 +58,6 @@ export function LibraryPickerModal({
   const deferredSearch = useDeferredValue(search)
   const [searchAllFolders, setSearchAllFolders] = useState(false)
   const allFolderSearch = searchAllFolders ? deferredSearch.trim() : ''
-  const [filtersDialogOpen, setFiltersDialogOpen] = useState(false)
   const [fileTypeFilter, setFileTypeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
   const [printerModelFilter, setPrinterModelFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
   const [nozzleSizeFilter, setNozzleSizeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
@@ -197,22 +199,24 @@ export function LibraryPickerModal({
 
         <Stack spacing={2} sx={{ width: '100%', minWidth: 0 }}>
           <DialogSection title="Location">
-              <LibraryBreadcrumb
-                crumbs={breadcrumb}
-                onNavigate={(folderEntryId) => {
-                  if (folderEntryId === null) {
-                    setFolderId(null)
-                    setBridgeId(null)
-                    return
-                  }
-                  if (isBridgeFolderId(folderEntryId)) {
-                    setBridgeId(fromBridgeFolderId(folderEntryId))
-                    setFolderId(null)
-                    return
-                  }
-                  setFolderId(folderEntryId)
-                }}
-              />
+              <LibraryBreadcrumbRow favoritesOnly={favoritesOnly} onFavoritesOnlyChange={setFavoritesOnly}>
+                <LibraryBreadcrumb
+                  crumbs={breadcrumb}
+                  onNavigate={(folderEntryId) => {
+                    if (folderEntryId === null) {
+                      setFolderId(null)
+                      setBridgeId(null)
+                      return
+                    }
+                    if (isBridgeFolderId(folderEntryId)) {
+                      setBridgeId(fromBridgeFolderId(folderEntryId))
+                      setFolderId(null)
+                      return
+                    }
+                    setFolderId(folderEntryId)
+                  }}
+                />
+              </LibraryBreadcrumbRow>
           </DialogSection>
 
           <DialogSection title="Files">
@@ -239,11 +243,73 @@ export function LibraryPickerModal({
                       slotProps={{ input: { 'aria-label': 'Search print library' } }}
                       sx={{ minWidth: 0, gridColumn: { md: 'span 3' } }}
                     />
-                    <DirectoryFiltersButton
+                    <DirectoryFiltersMenu
                       activeCount={activeFilterCount}
-                      onClick={() => setFiltersDialogOpen(true)}
+                      onClear={clearMetadataFilters}
+                      clearDisabled={activeFilterCount === 0}
                       disabled={fileTypeOptions.length === 0 && printerModelOptions.length === 0 && nozzleSizeOptions.length === 0 && plateTypeOptions.length === 0}
-                    />
+                    >
+                      <FormControl>
+                        <FormLabel>File type</FormLabel>
+                        <Select<string>
+                          size="sm"
+                          value={fileTypeFilter}
+                          onChange={(_event, value) => setFileTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
+                          disabled={fileTypeOptions.length === 0}
+                          slotProps={{ listbox: { disablePortal: true } }}
+                        >
+                          <Option value={LIBRARY_METADATA_FILTER_ALL}>All file types</Option>
+                          {fileTypeOptions.map((value) => (
+                            <Option key={value} value={value}>{value}</Option>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Printer model</FormLabel>
+                        <Select<string>
+                          size="sm"
+                          value={printerModelFilter}
+                          onChange={(_event, value) => setPrinterModelFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
+                          disabled={printerModelOptions.length === 0}
+                          slotProps={{ listbox: { disablePortal: true } }}
+                        >
+                          <Option value={LIBRARY_METADATA_FILTER_ALL}>All printer models</Option>
+                          {printerModelOptions.map((value) => (
+                            <Option key={value} value={value}>{value}</Option>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Nozzle size</FormLabel>
+                        <Select<string>
+                          size="sm"
+                          value={nozzleSizeFilter}
+                          onChange={(_event, value) => setNozzleSizeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
+                          disabled={nozzleSizeOptions.length === 0}
+                          slotProps={{ listbox: { disablePortal: true } }}
+                        >
+                          <Option value={LIBRARY_METADATA_FILTER_ALL}>All nozzle sizes</Option>
+                          {nozzleSizeOptions.map((value) => (
+                            <Option key={value} value={value}>{value}</Option>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>Plate type</FormLabel>
+                        <Select<string>
+                          size="sm"
+                          value={plateTypeFilter}
+                          onChange={(_event, value) => setPlateTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
+                          disabled={plateTypeOptions.length === 0}
+                          slotProps={{ listbox: { disablePortal: true } }}
+                        >
+                          <Option value={LIBRARY_METADATA_FILTER_ALL}>All plate types</Option>
+                          {plateTypeOptions.map((value) => (
+                            <Option key={value} value={value}>{value}</Option>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    </DirectoryFiltersMenu>
                   </Box>
 
                   {activeFilterCount > 0 && (
@@ -272,8 +338,6 @@ export function LibraryPickerModal({
                   onViewModeChange={setViewMode}
                   sort={sort}
                   onSortChange={setSort}
-                  favoritesOnly={favoritesOnly}
-                  onFavoritesOnlyChange={setFavoritesOnly}
                   rightAlignViewModeOnMobile
                 />
 
@@ -324,87 +388,30 @@ export function LibraryPickerModal({
                       }
                       return null
                     }}
-                    emptyText={
-                      browseQuery.isLoading
-                        ? 'Loading…'
+                    emptyState={
+                      favoritesOnly
+                        ? <LibraryPickerEmptyState favoritesOnly />
                         : deferredSearch.trim()
-                          ? 'No matches found.'
-                          : activeFilterCount > 0
-                            ? 'No files match the current filters.'
-                        : bridgeRootMode
-                          ? 'No bridges connected.'
-                          : canSlice ? 'No printable or slicable files here.' : 'No printable files here.'
+                          ? <LibraryPickerEmptyState searching />
+                          : (
+                              <EmptyState
+                                icon={<Inventory2RoundedIcon />}
+                                title={bridgeRootMode ? 'No bridges connected' : 'No files here'}
+                                description={
+                                  activeFilterCount > 0
+                                    ? 'No files match the current filters.'
+                                    : bridgeRootMode
+                                      ? 'Connect a bridge to browse its files.'
+                                      : canSlice ? 'No printable or slicable files to pick here.' : 'No printable files to pick here.'
+                                }
+                              />
+                            )
                     }
                   />
                 </Box>
               </Stack>
           </DialogSection>
         </Stack>
-
-        <DirectoryFiltersDialog
-          open={filtersDialogOpen}
-          title="Print library filters"
-          onClose={() => setFiltersDialogOpen(false)}
-          onClear={clearMetadataFilters}
-          clearDisabled={activeFilterCount === 0}
-        >
-          <FormControl>
-            <FormLabel>File type</FormLabel>
-            <Select<string>
-              size="sm"
-              value={fileTypeFilter}
-              onChange={(_event, value) => setFileTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-              disabled={fileTypeOptions.length === 0}
-            >
-              <Option value={LIBRARY_METADATA_FILTER_ALL}>All file types</Option>
-              {fileTypeOptions.map((value) => (
-                <Option key={value} value={value}>{value}</Option>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl>
-            <FormLabel>Printer model</FormLabel>
-            <Select<string>
-              size="sm"
-              value={printerModelFilter}
-              onChange={(_event, value) => setPrinterModelFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-              disabled={printerModelOptions.length === 0}
-            >
-              <Option value={LIBRARY_METADATA_FILTER_ALL}>All printer models</Option>
-              {printerModelOptions.map((value) => (
-                <Option key={value} value={value}>{value}</Option>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl>
-            <FormLabel>Nozzle size</FormLabel>
-            <Select<string>
-              size="sm"
-              value={nozzleSizeFilter}
-              onChange={(_event, value) => setNozzleSizeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-              disabled={nozzleSizeOptions.length === 0}
-            >
-              <Option value={LIBRARY_METADATA_FILTER_ALL}>All nozzle sizes</Option>
-              {nozzleSizeOptions.map((value) => (
-                <Option key={value} value={value}>{value}</Option>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl>
-            <FormLabel>Plate type</FormLabel>
-            <Select<string>
-              size="sm"
-              value={plateTypeFilter}
-              onChange={(_event, value) => setPlateTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-              disabled={plateTypeOptions.length === 0}
-            >
-              <Option value={LIBRARY_METADATA_FILTER_ALL}>All plate types</Option>
-              {plateTypeOptions.map((value) => (
-                <Option key={value} value={value}>{value}</Option>
-              ))}
-            </Select>
-          </FormControl>
-        </DirectoryFiltersDialog>
 
         <Stack direction="row" justifyContent="flex-end" sx={{ pt: 1 }}>
           <Button variant="plain" onClick={onClose}>Cancel</Button>
