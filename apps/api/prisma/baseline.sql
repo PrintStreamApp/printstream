@@ -213,8 +213,21 @@ CREATE TABLE "LibraryFile" (
     "restoredFromVersionNumber" INTEGER,
     "derivedChipsJson" TEXT,
     "derivedChipsVersion" INTEGER,
+    "printCount" INTEGER NOT NULL DEFAULT 0,
+    "lastPrintedAt" TIMESTAMP(3),
 
     CONSTRAINT "LibraryFile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "LibraryFileFavorite" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "libraryFileId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "LibraryFileFavorite_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -647,6 +660,21 @@ CREATE INDEX "LibraryFile_tenantId_ownerBridgeId_folderId_name_hidden_upl_idx" O
 CREATE INDEX "LibraryFile_tenantId_deletedAt_idx" ON "LibraryFile"("tenantId", "deletedAt");
 
 -- CreateIndex
+CREATE INDEX "LibraryFile_tenant_bridge_folder_printCount_idx" ON "LibraryFile"("tenantId", "ownerBridgeId", "folderId", "hidden", "printCount");
+
+-- CreateIndex
+CREATE INDEX "LibraryFile_tenant_bridge_folder_lastPrintedAt_idx" ON "LibraryFile"("tenantId", "ownerBridgeId", "folderId", "hidden", "lastPrintedAt");
+
+-- CreateIndex
+CREATE INDEX "LibraryFileFavorite_tenantId_userId_idx" ON "LibraryFileFavorite"("tenantId", "userId");
+
+-- CreateIndex
+CREATE INDEX "LibraryFileFavorite_libraryFileId_idx" ON "LibraryFileFavorite"("libraryFileId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "LibraryFileFavorite_userId_libraryFileId_key" ON "LibraryFileFavorite"("userId", "libraryFileId");
+
+-- CreateIndex
 CREATE INDEX "LibraryFileVersion_tenantId_libraryFileId_versionNumber_idx" ON "LibraryFileVersion"("tenantId", "libraryFileId", "versionNumber");
 
 -- CreateIndex
@@ -855,6 +883,12 @@ ALTER TABLE "LibraryFile" ADD CONSTRAINT "LibraryFile_ownerBridgeId_fkey" FOREIG
 
 -- AddForeignKey
 ALTER TABLE "LibraryFile" ADD CONSTRAINT "LibraryFile_folderId_fkey" FOREIGN KEY ("folderId") REFERENCES "LibraryFolder"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "LibraryFileFavorite" ADD CONSTRAINT "LibraryFileFavorite_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "LibraryFileFavorite" ADD CONSTRAINT "LibraryFileFavorite_libraryFileId_fkey" FOREIGN KEY ("libraryFileId") REFERENCES "LibraryFile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "LibraryFileVersion" ADD CONSTRAINT "LibraryFileVersion_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

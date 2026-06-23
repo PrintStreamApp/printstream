@@ -797,9 +797,26 @@ export const libraryFileSchema = z.object({
   /** Display name of whoever added/replaced/restored the current content. */
   createdByName: z.string().nullable().optional(),
   /** Set when the content was produced by restoring this older version number. */
-  restoredFromVersionNumber: z.number().int().positive().nullable().optional()
+  restoredFromVersionNumber: z.number().int().positive().nullable().optional(),
+  /** Whether the requesting user has starred this file (personal, per-user). */
+  favorite: z.boolean().default(false),
+  /** Times this file has been printed (drives the "most printed" sort). */
+  printCount: z.number().int().nonnegative().default(0),
+  /** ISO timestamp of the most recent print, or null if never printed. */
+  lastPrintedAt: z.string().nullable().default(null)
 })
 export type LibraryFile = z.infer<typeof libraryFileSchema>
+
+/**
+ * Sort keys for the library file listing. `mostPrinted`/`lastPrinted` are backed by
+ * the denormalized `printCount`/`lastPrintedAt` rollup so they order correctly on the
+ * server before the recency cap. Shared so the API and web agree on the param values.
+ */
+export const LIBRARY_SORT_KEYS = ['name', 'date', 'size', 'mostPrinted', 'lastPrinted'] as const
+export const librarySortKeySchema = z.enum(LIBRARY_SORT_KEYS)
+export type LibrarySortKey = z.infer<typeof librarySortKeySchema>
+export const librarySortDirectionSchema = z.enum(['asc', 'desc'])
+export type LibrarySortDirection = z.infer<typeof librarySortDirectionSchema>
 
 export const libraryFileVersionSchema = libraryFileSchema.extend({
   libraryFileId: z.string(),

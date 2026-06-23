@@ -10,6 +10,7 @@ import { appendFile, copyFile, readFile, rm, unlink, writeFile } from 'node:fs/p
 import path from 'node:path'
 import express, { Router } from 'express'
 import type { NextFunction, Request, Response } from 'express'
+import type { Prisma } from '@prisma/client'
 import multer from 'multer'
 import { z } from 'zod'
 import {
@@ -23,6 +24,10 @@ import {
   LIBRARY_MANAGE_PERMISSION,
   LIBRARY_UPLOAD_PERMISSION,
   LIBRARY_VIEW_PERMISSION,
+  librarySortKeySchema,
+  librarySortDirectionSchema,
+  type LibrarySortKey,
+  type LibrarySortDirection,
   PRINTS_DISPATCH_PERMISSION,
   printerModelSchema,
   printFromLibrarySchema,
@@ -72,6 +77,7 @@ import { libraryDir } from '../lib/library-paths.js'
 import { deleteLibraryFolderTree, ensureLibraryFolderPath, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
 import { resolveRequestActorAttribution } from '../lib/actor-attribution.js'
 import { visibleLibraryFilesWhere } from '../lib/library-visibility.js'
+import { getFavoritedFileIds, resolveFavoriteOwnerKey } from '../lib/library-favorites.js'
 
 function resolvePrinterFirstLayerInspectionDefault(
   model: LibraryFile['compatiblePrinterModels'][number],
@@ -378,6 +384,7 @@ export function parseLibraryFileIdsQuery(value: unknown): string[] | null {
 libraryRouter.get('/', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const folderId = parseFolderQuery(request.query.folderId)
   const tenantId = request.tenant?.id ?? null
+  const ownerKey = resolveFavoriteOwnerKey(request)
   const requestedIds = parseLibraryFileIdsQuery(request.query.ids)
   // Hidden files (transient one-off prints) are intentionally excluded
   // from the library UI. They’re still reachable by id for re-dispatch.
@@ -397,7 +404,7 @@ libraryRouter.get('/', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async 
     where.id = { in: requestedIds }
     const rows = await prisma.libraryFile.findMany({ where, orderBy: { uploadedAt: 'desc' } })
     response.json({
-      files: await Promise.all(rows.map((row) => toDto(row, { cacheOnly: true }))),
+      files: await toLibraryFileDtos(rows, ownerKey),
       truncated: false,
       fileLimit: null
     })
@@ -411,7 +418,7 @@ libraryRouter.get('/', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async 
   })
   const capped = capLibraryFileRows(fetched, LIBRARY_BROWSE_FILE_LIMIT)
   response.json({
-    files: await Promise.all(capped.rows.map((row) => toDto(row, { cacheOnly: true }))),
+    files: await toLibraryFileDtos(capped.rows, ownerKey),
     truncated: capped.truncated,
     fileLimit: capped.fileLimit
   })
@@ -428,6 +435,12 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
   const folderId = parseFolderQuery(request.query.folderId) ?? null
   const bridgeId = parseBridgeQuery(request.query.bridgeId)
   const tenantId = request.tenant?.id ?? null
+  const ownerKey = resolveFavoriteOwnerKey(request)
+  // Sort + favorites filter are applied in the DB (before the recency cap) so the
+  // top files / a user's favorites surface correctly even past LIBRARY_BROWSE_FILE_LIMIT.
+  const sortKey = librarySortKeySchema.catch('date').parse(request.query.sort)
+  const sortDir = librarySortDirectionSchema.catch('desc').parse(request.query.dir)
+  const favoritesOnly = request.query.favoritesOnly === 'true' || request.query.favoritesOnly === '1'
   // Optional all-directories search: when present, match files/folders by name across the WHOLE
   // active bridge (ignoring folderId/parentId) instead of listing one folder. Drives the library
   // search box's "All folders" scope; absent => the normal single-folder listing.
@@ -475,24 +488,32 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
   const activeBridge = bridges.find((bridge) => bridge.id === activeBridgeId)
   if (!activeBridge) throw notFound('Bridge not found')
 
+  // Favorites-only and all-folders search are both flat, cross-folder views: they
+  // ignore the current folder scope. Favorites-only additionally shows no folder
+  // rows — just the user's starred files in one flat list across the bridge.
+  const flatList = searching || favoritesOnly
   const [fileRows, folderRows] = await Promise.all([
     prisma.libraryFile.findMany({
       where: visibleLibraryFilesWhere({
-        ...(searching ? { name: nameContains } : { folderId }),
+        ...(searching ? { name: nameContains } : {}),
+        ...(flatList ? {} : { folderId }),
         ownerBridgeId: activeBridgeId,
-        ...(tenantId ? { tenantId } : {})
+        ...(tenantId ? { tenantId } : {}),
+        ...(favoritesOnly ? { favorites: { some: { userId: ownerKey } } } : {})
       }),
-      orderBy: { uploadedAt: 'desc' },
+      orderBy: buildLibraryFileOrderBy(sortKey, sortDir),
       take: LIBRARY_BROWSE_FILE_LIMIT + 1
     }),
-    prisma.libraryFolder.findMany({
-      where: {
-        ...(searching ? { name: nameContains } : { parentId: folderId }),
-        ownerBridgeId: activeBridgeId,
-        ...(tenantId ? { tenantId } : {})
-      },
-      orderBy: { name: 'asc' }
-    })
+    favoritesOnly
+      ? Promise.resolve([] as Awaited<ReturnType<typeof prisma.libraryFolder.findMany>>)
+      : prisma.libraryFolder.findMany({
+          where: {
+            ...(searching ? { name: nameContains } : { parentId: folderId }),
+            ownerBridgeId: activeBridgeId,
+            ...(tenantId ? { tenantId } : {})
+          },
+          orderBy: { name: 'asc' }
+        })
   ])
 
   const capped = capLibraryFileRows(fileRows, LIBRARY_BROWSE_FILE_LIMIT)
@@ -503,7 +524,7 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
     activeBridgeId,
     bridgeEntries: bridges,
     folders: folderRows.map(toFolderDto),
-    files: await Promise.all(capped.rows.map((row) => toDto(row, { cacheOnly: true }))),
+    files: await toLibraryFileDtos(capped.rows, ownerKey),
     truncated: capped.truncated,
     fileLimit: capped.fileLimit
   }))
@@ -1571,6 +1592,41 @@ libraryRouter.patch('/:id', requireRequestPermission(LIBRARY_MANAGE_PERMISSION),
   response.json({ file: await toDto(updated) })
 })
 
+const toggleFavoriteSchema = z.object({ favorite: z.boolean() })
+
+/**
+ * Star / unstar a library file for the current user. Favorites are personal, so
+ * this needs only view access (anyone who can see the file may favorite it for
+ * themselves) and is keyed by the per-user owner key. No workspace-wide broadcast:
+ * a favorite change is visible only to the acting user, who invalidates their own
+ * library queries client-side.
+ */
+libraryRouter.put('/:id/favorite', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const fileId = requireRouteParam(request.params.id, 'File id')
+  const ownerKey = resolveFavoriteOwnerKey(request)
+  const parsed = toggleFavoriteSchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid favorite payload')
+
+  const row = await prisma.libraryFile.findFirst({ where: visibleLibraryFilesWhere({ id: fileId, tenantId }) })
+  if (!row?.ownerBridgeId) throw notFound('File not found')
+
+  if (parsed.data.favorite) {
+    // A favorite has nothing to update, so this is create-or-ignore: a duplicate
+    // (already favorited) is an idempotent no-op. (Plain create — not upsert — so it
+    // takes the tenant-scoping extension's create path, which injects the tenant id.)
+    try {
+      await prisma.libraryFileFavorite.create({ data: { tenantId, userId: ownerKey, libraryFileId: row.id } })
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error
+    }
+  } else {
+    await prisma.libraryFileFavorite.deleteMany({ where: { userId: ownerKey, libraryFileId: row.id } })
+  }
+
+  response.json({ file: await toDto(row, { cacheOnly: true, favorite: parsed.data.favorite }) })
+})
+
 /**
  * Enqueue a library file for printing. The HTTP request returns as soon
  * as the dispatcher accepts the job; the API process performs the slow
@@ -1799,7 +1855,9 @@ async function toDto(row: {
   restoredFromVersionNumber?: number | null
   derivedChipsJson?: string | null
   derivedChipsVersion?: number | null
-}, options: { cacheOnly?: boolean } = {}): Promise<LibraryFile> {
+  printCount?: number | null
+  lastPrintedAt?: Date | null
+}, options: { cacheOnly?: boolean; favorite?: boolean } = {}): Promise<LibraryFile> {
   let chips: DerivedChips = { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [] }
   if (row.kind === '3mf' || row.kind === 'gcode') {
     try {
@@ -1841,7 +1899,46 @@ async function toDto(row: {
     projectFilamentChips,
     plateCount,
     createdByName: row.createdByName ?? null,
-    restoredFromVersionNumber: row.restoredFromVersionNumber ?? null
+    restoredFromVersionNumber: row.restoredFromVersionNumber ?? null,
+    favorite: options.favorite ?? false,
+    printCount: row.printCount ?? 0,
+    lastPrintedAt: row.lastPrintedAt ? row.lastPrintedAt.toISOString() : null
+  }
+}
+
+/**
+ * Map a listing's rows to DTOs, marking which the given user has favorited. Resolves
+ * the user's favorite set in a single query (rather than per-row) to avoid N+1.
+ */
+async function toLibraryFileDtos(
+  rows: Array<Parameters<typeof toDto>[0]>,
+  ownerKey: string
+): Promise<LibraryFile[]> {
+  const favorites = await getFavoritedFileIds(ownerKey, rows.map((row) => row.id))
+  return Promise.all(rows.map((row) => toDto(row, { cacheOnly: true, favorite: favorites.has(row.id) })))
+}
+
+/**
+ * Translate a library sort key/direction into a Prisma `orderBy`. `mostPrinted` /
+ * `lastPrinted` sort on the denormalized rollup columns so the order is applied
+ * server-side before the recency cap. Nulls (never-printed files) sort last.
+ */
+export function buildLibraryFileOrderBy(
+  sortKey: LibrarySortKey,
+  sortDir: LibrarySortDirection
+): Prisma.LibraryFileOrderByWithRelationInput {
+  switch (sortKey) {
+    case 'name':
+      return { name: sortDir }
+    case 'size':
+      return { sizeBytes: sortDir }
+    case 'mostPrinted':
+      return { printCount: sortDir }
+    case 'lastPrinted':
+      return { lastPrintedAt: { sort: sortDir, nulls: 'last' } }
+    case 'date':
+    default:
+      return { uploadedAt: sortDir }
   }
 }
 

@@ -21,7 +21,10 @@ const bridgeBackedFile: LibraryFile = {
   compatiblePrinterModels: [],
   plateTypeChips: [],
   nozzleSizeChips: [],
-  projectFilamentChips: []
+  projectFilamentChips: [],
+  favorite: false,
+  printCount: 0,
+  lastPrintedAt: null
 }
 
 const unslicedThreeMfFile: LibraryFile = {

@@ -284,12 +284,13 @@ export async function createPrintJobStartRecord(input: {
     result: 'unknown' as const
   }
 
+  let created: PrintJobStartRecord
   try {
-    return await rootPrisma.printJob.create({ data })
+    created = await rootPrisma.printJob.create({ data })
   } catch (error) {
     if (!isMissingColumnError(error)) throw error
     console.warn('Recording print history without calibration columns; PrintJob migration is missing')
-    return await rootPrisma.printJob.create({
+    created = await rootPrisma.printJob.create({
       data: {
         ...(input.jobId ? { id: input.jobId } : {}),
         tenantId: data.tenantId,
@@ -306,6 +307,31 @@ export async function createPrintJobStartRecord(input: {
         result: data.result
       }
     })
+  }
+  // Each created job that targets a library file is one print of that file: roll it
+  // into the file's denormalized print-history counters for the library sorts.
+  await bumpLibraryFilePrintStats(data.fileId, data.startedAt)
+  return created
+}
+
+/**
+ * Roll a recorded print into a library file's denormalized print-history counters
+ * (`printCount` / `lastPrintedAt`), which power the "most printed" / "last printed"
+ * library sorts. Best-effort: a deleted file (no row) or a DB still missing the
+ * columns is ignored rather than failing the print recording.
+ */
+async function bumpLibraryFilePrintStats(fileId: string | null | undefined, printedAt: Date): Promise<void> {
+  if (!fileId) return
+  try {
+    await rootPrisma.libraryFile.update({
+      where: { id: fileId },
+      data: { printCount: { increment: 1 }, lastPrintedAt: printedAt }
+    })
+  } catch (error) {
+    if (isMissingColumnError(error)) return
+    // P2025 = record to update not found (file recycled/hard-deleted since dispatch).
+    if ((error as { code?: string }).code === 'P2025') return
+    console.warn('[print-job-recorder] failed to update library file print stats', (error as Error).message)
   }
 }
 
@@ -1029,6 +1055,11 @@ async function activateExternalPrintJob(input: {
         if (nextPrinterFilePath) {
           activeJobPrinterFilePaths.set(input.printerId, nextPrinterFilePath)
         }
+      }
+      if (matchedLibraryFile && matchedLibraryFile.id !== existing.fileId) {
+        // An external print (started off PrintStream) was just attributed to a library
+        // file for the first time — count it toward that file's print history.
+        await bumpLibraryFilePrintStats(matchedLibraryFile.id, new Date())
       }
       if (matchedLibraryFile && (!existing.thumbnailPath || matchedLibraryFile.id !== existing.fileId)) {
         scheduleDelayedThumbnailPersist({

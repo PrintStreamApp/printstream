@@ -26,6 +26,8 @@ import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import DesignServicesRoundedIcon from '@mui/icons-material/DesignServicesRounded'
 import RestoreFromTrashRoundedIcon from '@mui/icons-material/RestoreFromTrashRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
+import StarRoundedIcon from '@mui/icons-material/StarRounded'
+import StarBorderRoundedIcon from '@mui/icons-material/StarBorderRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
@@ -48,7 +50,7 @@ import {
   PRINTS_DISPATCH_PERMISSION,
   isDirectPrintableFileName
 } from '@printstream/shared'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../lib/apiClient'
 import { buildApiUrl } from '../lib/apiUrl'
 import { invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
@@ -66,12 +68,13 @@ import { FileHistoryDialog } from '../components/library/FileHistoryDialog'
 import { NoConnectedBridgesEmptyState } from '../components/NoConnectedBridgesEmptyState'
 import { PaginatedSection } from '../components/PaginationFooter'
 import { usePromptDialog } from '../components/PromptDialogProvider'
-import { DirectoryFiltersButton, DirectoryFiltersDialog, DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
+import { DirectoryFiltersMenu, DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
 import { SearchScopeToggle } from '../components/library/SearchScopeToggle'
 import {
   LIBRARY_DRAG_MIME,
   LibraryBrowser,
   type LibraryDragItem,
+  type LibrarySort,
   type LibraryViewMode
 } from '../components/LibraryBrowser'
 import { PluginSlot } from '../plugin/PluginSlot'
@@ -79,7 +82,7 @@ import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { parseLibraryDragItem } from '../lib/libraryDragItem'
 import { isPreviewOnlyLibraryFile, isUnslicedThreeMfFile } from '../lib/libraryFileTags'
 import { getMeshThumbnailProvider } from '../lib/modelThumbnailRegistry'
-import { buildLibraryBreadcrumb, buildLibraryFolderRoute, fromBridgeFolderId, isBridgeFolderId, toBridgeFolderId } from '../lib/libraryNavigation'
+import { buildLibraryBreadcrumb, buildLibraryFavoritesRoute, buildLibraryFolderRoute, fromBridgeFolderId, isBridgeFolderId, isLibraryFavoritesPath, toBridgeFolderId } from '../lib/libraryNavigation'
 import { buildTenantWorkspacePath } from '../lib/workspaceRoute'
 import { enqueueLibraryUploads, type LibraryUploadDestination } from '../lib/libraryUploadQueue'
 import {
@@ -95,8 +98,10 @@ import { useLibrarySelection } from '../hooks/useLibrarySelection'
 import {
   LIBRARY_METADATA_FILTER_ALL,
   LIBRARY_PAGE_SIZE_OPTIONS,
+  LIBRARY_SORT_KEY,
   LIBRARY_SORT_OPTIONS,
   LIBRARY_VIEW_MODE_KEY,
+  parseLibrarySort,
   parseLibraryViewMode,
   PUBLIC_DEMO_LIBRARY_UPLOAD_NOTICE,
   toHistoryPrintFile,
@@ -130,6 +135,7 @@ type SliceThenPrintTarget = {
 export function LibraryView() {
   const { confirm } = usePromptDialog()
   const navigate = useNavigate()
+  const location = useLocation()
   const { demoMode } = useRuntimePolicy()
   const { tenantSlug, folderId: currentFolderIdParam } = useParams<{ tenantSlug: string; folderId?: string }>()
   const [searchParams] = useSearchParams()
@@ -212,14 +218,25 @@ export function LibraryView() {
   const deferredSearch = useDeferredValue(search)
   const [searchAllFolders, setSearchAllFolders] = useState(false)
   const allFolderSearch = searchAllFolders ? deferredSearch.trim() : ''
+  // Sort + "favorites only" live here (not in useLibraryFilters) because they drive
+  // the browse query: the API applies them before its recency cap, so the top files
+  // / a user's favorites surface even past the cap. The hook still re-sorts the
+  // returned page client-side (and owns the metadata filters).
+  const [sort, setSort] = useLocalStorageState<LibrarySort>(LIBRARY_SORT_KEY, { key: 'name', dir: 'asc' }, parseLibrarySort)
+  // "Favorite Files" is its own route (bookmarkable + in history). Derive the mode
+  // from the path rather than local state; the toggle navigates to/from it.
+  const favoritesOnly = isLibraryFavoritesPath(location.pathname)
 
   const browseQuery = useQuery({
-    queryKey: ['library-browse', currentFolderId ?? 'root', requestedBridgeId ?? 'none', allFolderSearch],
+    queryKey: ['library-browse', currentFolderId ?? 'root', requestedBridgeId ?? 'none', allFolderSearch, sort.key, sort.dir, favoritesOnly],
     queryFn: () => {
       const params = new URLSearchParams()
       if (currentFolderId) params.set('folderId', currentFolderId)
       if (requestedBridgeId) params.set('bridgeId', requestedBridgeId)
       if (allFolderSearch) params.set('search', allFolderSearch)
+      params.set('sort', sort.key)
+      params.set('dir', sort.dir)
+      if (favoritesOnly) params.set('favoritesOnly', 'true')
       const query = params.toString()
       return apiFetch<LibraryBrowseResponse>(`/api/library/browse${query ? `?${query}` : ''}`)
     },
@@ -304,13 +321,9 @@ export function LibraryView() {
     setNozzleSizeFilter,
     plateTypeFilter,
     setPlateTypeFilter,
-    filtersDialogOpen,
-    setFiltersDialogOpen,
     pageSize,
     setPageSize,
     setPage,
-    sort,
-    setSort,
     fileTypeOptions,
     printerModelOptions,
     nozzleSizeOptions,
@@ -324,7 +337,7 @@ export function LibraryView() {
     pagedFiles,
     showingLabel,
     clearMetadataFilters
-  } = useLibraryFilters({ visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch })
+  } = useLibraryFilters({ visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly })
   const {
     selectionMode,
     setSelectionMode,
@@ -540,6 +553,27 @@ export function LibraryView() {
     }
   })
 
+  // Personal favorite star. Optimistically flips the star across loaded browse
+  // pages for instant feedback, then reconciles with the server (which also drops
+  // unfavorited files from the "favorites only" view) once the request settles.
+  const toggleFavorite = useMutation({
+    mutationFn: ({ file, favorite }: { file: LibraryFile; favorite: boolean }) =>
+      apiFetch<{ file: LibraryFile }>(`/api/library/${file.id}/favorite`, { method: 'PUT', body: { favorite } }),
+    onMutate: ({ file, favorite }) => {
+      queryClient.setQueriesData<LibraryBrowseResponse>({ queryKey: ['library-browse'] }, (prev) =>
+        prev ? { ...prev, files: prev.files.map((entry) => (entry.id === file.id ? { ...entry, favorite } : entry)) } : prev
+      )
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update favorite')
+    },
+    onSettled: invalidateAll
+  })
+  const handleToggleFavorite = useCallback(
+    (file: LibraryFile) => toggleFavorite.mutate({ file, favorite: !file.favorite }),
+    [toggleFavorite]
+  )
+
   const moveFile = useMutation({
     mutationFn: ({ id, folderId }: { id: string; folderId: string | null }) =>
       apiFetch(`/api/library/${id}`, { method: 'PATCH', body: { folderId, bridgeId: activeBridgeId } }),
@@ -672,6 +706,24 @@ export function LibraryView() {
           description="Try a different search to find a file or folder in this library view."
         />
       )
+    : favoritesOnly
+      ? (
+          <EmptyState
+            icon={<StarBorderRoundedIcon />}
+            title="No favorite files yet"
+            description="Open any file's ⋮ menu and choose Favorite to keep it here for quick access."
+            action={(
+              <Button
+                size="sm"
+                variant="soft"
+                startDecorator={<FolderOpenRoundedIcon />}
+                onClick={() => navigate(buildLibraryFolderRoute(tenantSlug ?? '', null, activeBridgeId))}
+              >
+                Browse library
+              </Button>
+            )}
+          />
+        )
     : bridgeRootMode
       ? (
           <EmptyState
@@ -863,6 +915,14 @@ export function LibraryView() {
           onAction?.()
           setHistoryTarget(file)
         }}><HistoryRoundedIcon /> History</MenuItem>}
+        {canViewLibrary && (
+          <MenuItem onClick={() => {
+            onAction?.()
+            handleToggleFavorite(file)
+          }}>
+            {file.favorite ? <StarRoundedIcon /> : <StarBorderRoundedIcon />} {file.favorite ? 'Unfavorite' : 'Favorite'}
+          </MenuItem>
+        )}
         {canManageLibrary && <MenuItem onClick={() => {
           onAction?.()
           setRenameTarget(file)
@@ -1116,13 +1176,39 @@ export function LibraryView() {
 
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <LibraryBreadcrumb
-            crumbs={breadcrumb}
-            onNavigate={navigateToFolder}
-            onCrumbDrop={bridgeRootMode ? undefined : handleDropToBreadcrumb}
-            draggedItem={draggedLibraryItem}
-          />
+          {favoritesOnly ? (
+            // Favorites is its own flat, cross-folder view: stand in a static location
+            // label for the folder breadcrumb while it's active.
+            <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+              <StarRoundedIcon htmlColor="gold" fontSize="small" />
+              <Typography level="title-md" noWrap>Favorite Files</Typography>
+            </Stack>
+          ) : (
+            <LibraryBreadcrumb
+              crumbs={breadcrumb}
+              onNavigate={navigateToFolder}
+              onCrumbDrop={bridgeRootMode ? undefined : handleDropToBreadcrumb}
+              draggedItem={draggedLibraryItem}
+            />
+          )}
         </Box>
+        {!bridgeRootMode && (
+          <Tooltip title={favoritesOnly ? 'Showing favorites only' : 'Show favorites only'} variant="soft">
+            <IconButton
+              size="sm"
+              variant={favoritesOnly ? 'solid' : 'plain'}
+              color={favoritesOnly ? 'warning' : 'neutral'}
+              aria-label="Show favorites only"
+              aria-pressed={favoritesOnly}
+              onClick={() => navigate(favoritesOnly
+                ? buildLibraryFolderRoute(tenantSlug ?? '', null, activeBridgeId)
+                : buildLibraryFavoritesRoute(tenantSlug ?? '', activeBridgeId))}
+              sx={{ flexShrink: 0 }}
+            >
+              {favoritesOnly ? <StarRoundedIcon /> : <StarBorderRoundedIcon />}
+            </IconButton>
+          </Tooltip>
+        )}
         {canManageLibrary && !bridgeRootMode && (
           <Tooltip title="Recycle bin" variant="soft">
             <IconButton size="sm" variant="plain" color="neutral" aria-label="Recycle bin" onClick={() => setRecycleBinOpen(true)} sx={{ flexShrink: 0 }}>
@@ -1139,11 +1225,73 @@ export function LibraryView() {
         searchAriaLabel="Search library"
         searchEndDecorator={<SearchScopeToggle allFolders={searchAllFolders} onChange={setSearchAllFolders} />}
         filtersButton={(
-          <DirectoryFiltersButton
+          <DirectoryFiltersMenu
             activeCount={activeMetadataFilterCount}
-            onClick={() => setFiltersDialogOpen(true)}
+            onClear={clearMetadataFilters}
+            clearDisabled={activeMetadataFilterCount === 0}
             disabled={fileTypeOptions.length === 0 && printerModelOptions.length === 0 && nozzleSizeOptions.length === 0 && plateTypeOptions.length === 0}
-          />
+          >
+            <FormControl>
+              <FormLabel>File type</FormLabel>
+              <Select<string>
+                size="sm"
+                value={fileTypeFilter}
+                onChange={(_event, value) => setFileTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
+                disabled={fileTypeOptions.length === 0}
+                slotProps={{ listbox: { disablePortal: true } }}
+              >
+                <Option value={LIBRARY_METADATA_FILTER_ALL}>All file types</Option>
+                {fileTypeOptions.map((value) => (
+                  <Option key={value} value={value}>{value}</Option>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl>
+              <FormLabel>Printer model</FormLabel>
+              <Select<string>
+                size="sm"
+                value={printerModelFilter}
+                onChange={(_event, value) => setPrinterModelFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
+                disabled={printerModelOptions.length === 0}
+                slotProps={{ listbox: { disablePortal: true } }}
+              >
+                <Option value={LIBRARY_METADATA_FILTER_ALL}>All printer models</Option>
+                {printerModelOptions.map((value) => (
+                  <Option key={value} value={value}>{value}</Option>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl>
+              <FormLabel>Nozzle size</FormLabel>
+              <Select<string>
+                size="sm"
+                value={nozzleSizeFilter}
+                onChange={(_event, value) => setNozzleSizeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
+                disabled={nozzleSizeOptions.length === 0}
+                slotProps={{ listbox: { disablePortal: true } }}
+              >
+                <Option value={LIBRARY_METADATA_FILTER_ALL}>All nozzle sizes</Option>
+                {nozzleSizeOptions.map((value) => (
+                  <Option key={value} value={value}>{value}</Option>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl>
+              <FormLabel>Plate type</FormLabel>
+              <Select<string>
+                size="sm"
+                value={plateTypeFilter}
+                onChange={(_event, value) => setPlateTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
+                disabled={plateTypeOptions.length === 0}
+                slotProps={{ listbox: { disablePortal: true } }}
+              >
+                <Option value={LIBRARY_METADATA_FILTER_ALL}>All plate types</Option>
+                {plateTypeOptions.map((value) => (
+                  <Option key={value} value={value}>{value}</Option>
+                ))}
+              </Select>
+            </FormControl>
+          </DirectoryFiltersMenu>
         )}
         pageSizeValue={pageSize}
         pageSizeOptions={LIBRARY_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} per page` }))}
@@ -1306,71 +1454,6 @@ export function LibraryView() {
           onClose={() => setSliceResultTarget(null)}
         />
       )}
-
-      <DirectoryFiltersDialog
-        open={filtersDialogOpen}
-        title="Library filters"
-        onClose={() => setFiltersDialogOpen(false)}
-        onClear={clearMetadataFilters}
-        clearDisabled={activeMetadataFilterCount === 0}
-      >
-        <FormControl>
-          <FormLabel>File type</FormLabel>
-          <Select<string>
-            size="sm"
-            value={fileTypeFilter}
-            onChange={(_event, value) => setFileTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-            disabled={fileTypeOptions.length === 0}
-          >
-            <Option value={LIBRARY_METADATA_FILTER_ALL}>All file types</Option>
-            {fileTypeOptions.map((value) => (
-              <Option key={value} value={value}>{value}</Option>
-            ))}
-          </Select>
-        </FormControl>
-        <FormControl>
-          <FormLabel>Printer model</FormLabel>
-          <Select<string>
-            size="sm"
-            value={printerModelFilter}
-            onChange={(_event, value) => setPrinterModelFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-            disabled={printerModelOptions.length === 0}
-          >
-            <Option value={LIBRARY_METADATA_FILTER_ALL}>All printer models</Option>
-            {printerModelOptions.map((value) => (
-              <Option key={value} value={value}>{value}</Option>
-            ))}
-          </Select>
-        </FormControl>
-        <FormControl>
-          <FormLabel>Nozzle size</FormLabel>
-          <Select<string>
-            size="sm"
-            value={nozzleSizeFilter}
-            onChange={(_event, value) => setNozzleSizeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-            disabled={nozzleSizeOptions.length === 0}
-          >
-            <Option value={LIBRARY_METADATA_FILTER_ALL}>All nozzle sizes</Option>
-            {nozzleSizeOptions.map((value) => (
-              <Option key={value} value={value}>{value}</Option>
-            ))}
-          </Select>
-        </FormControl>
-        <FormControl>
-          <FormLabel>Plate type</FormLabel>
-          <Select<string>
-            size="sm"
-            value={plateTypeFilter}
-            onChange={(_event, value) => setPlateTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-            disabled={plateTypeOptions.length === 0}
-          >
-            <Option value={LIBRARY_METADATA_FILTER_ALL}>All plate types</Option>
-            {plateTypeOptions.map((value) => (
-              <Option key={value} value={value}>{value}</Option>
-            ))}
-          </Select>
-        </FormControl>
-      </DirectoryFiltersDialog>
 
       {canManageLibrary && creatingFolder && (
         <CreateFolderModal

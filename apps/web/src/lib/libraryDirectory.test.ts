@@ -21,7 +21,10 @@ const files: LibraryFile[] = [
     compatiblePrinterModels: [],
     plateTypeChips: [],
     nozzleSizeChips: [],
-    projectFilamentChips: []
+    projectFilamentChips: [],
+    favorite: false,
+    printCount: 5,
+    lastPrintedAt: '2026-06-01T00:00:00.000Z'
   },
   {
     id: 'file-2',
@@ -34,7 +37,10 @@ const files: LibraryFile[] = [
     compatiblePrinterModels: [],
     plateTypeChips: [],
     nozzleSizeChips: [],
-    projectFilamentChips: []
+    projectFilamentChips: [],
+    favorite: true,
+    printCount: 0,
+    lastPrintedAt: null
   },
   {
     id: 'file-3',
@@ -47,7 +53,10 @@ const files: LibraryFile[] = [
     compatiblePrinterModels: [],
     plateTypeChips: [],
     nozzleSizeChips: [],
-    projectFilamentChips: []
+    projectFilamentChips: [],
+    favorite: false,
+    printCount: 2,
+    lastPrintedAt: '2026-06-10T00:00:00.000Z'
   }
 ]
 
@@ -96,6 +105,20 @@ test('sortLibraryEntries orders files by name ascending regardless of upload ord
 
   assert.deepEqual(sorted.files.map((file) => file.id), ['file-1', 'file-3', 'file-2'])
   assert.deepEqual(sorted.folders.map((folder) => folder.id), ['folder-alpha', 'folder-beta', 'folder-gamma'])
+})
+
+test('sortLibraryEntries orders by most printed (descending)', () => {
+  const sorted = sortLibraryEntries(folders, files, { key: 'mostPrinted', dir: 'desc' })
+  assert.deepEqual(sorted.files.map((file) => file.id), ['file-1', 'file-3', 'file-2'])
+})
+
+test('sortLibraryEntries orders by last printed with never-printed files last in both directions', () => {
+  const descending = sortLibraryEntries(folders, files, { key: 'lastPrinted', dir: 'desc' })
+  assert.deepEqual(descending.files.map((file) => file.id), ['file-3', 'file-1', 'file-2'])
+
+  const ascending = sortLibraryEntries(folders, files, { key: 'lastPrinted', dir: 'asc' })
+  // file-2 has never been printed, so it stays last regardless of direction.
+  assert.deepEqual(ascending.files.map((file) => file.id), ['file-1', 'file-3', 'file-2'])
 })
 
 test('sorting then paginating puts the first names on the first page', () => {

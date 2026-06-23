@@ -50,7 +50,9 @@ export const LIBRARY_METADATA_FILTER_ALL = '__all__'
 export const LIBRARY_SORT_OPTIONS = [
   { value: 'name', label: 'Name' },
   { value: 'date', label: 'Date' },
-  { value: 'size', label: 'Size' }
+  { value: 'size', label: 'Size' },
+  { value: 'mostPrinted', label: 'Most printed' },
+  { value: 'lastPrinted', label: 'Last printed' }
 ] as const
 export const VIRTUAL_TRAY_MAIN_ID = 255
 export const VIRTUAL_TRAY_DEPUTY_ID = 254
@@ -105,7 +107,10 @@ export function toHistoryPrintFile(version: LibraryFileVersion): LibraryFile {
     compatiblePrinterModels: version.compatiblePrinterModels,
     plateTypeChips: version.plateTypeChips,
     nozzleSizeChips: version.nozzleSizeChips,
-    projectFilamentChips: version.projectFilamentChips
+    projectFilamentChips: version.projectFilamentChips,
+    favorite: false,
+    printCount: 0,
+    lastPrintedAt: null
   }
 }
 
@@ -144,7 +149,7 @@ export function parseLibrarySort(raw: string): LibrarySort | null {
     const parsed = JSON.parse(raw) as Partial<LibrarySort>
     const key = parsed.key
     const dir = parsed.dir
-    const validKey = key === 'name' || key === 'date' || key === 'size'
+    const validKey = key === 'name' || key === 'date' || key === 'size' || key === 'mostPrinted' || key === 'lastPrinted'
     const validDir = dir === 'asc' || dir === 'desc'
     return validKey && validDir ? { key, dir } : null
   } catch {

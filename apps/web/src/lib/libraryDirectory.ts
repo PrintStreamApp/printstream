@@ -63,12 +63,25 @@ export function filterLibraryEntries(
 }
 
 export interface LibrarySortSpec {
-  key: 'name' | 'date' | 'size'
+  key: 'name' | 'date' | 'size' | 'mostPrinted' | 'lastPrinted'
   dir: 'asc' | 'desc'
 }
 
-/** File comparator behind the library's sort selector. */
+/**
+ * File comparator behind the library's sort selector. Mirrors the server-side
+ * order (see `buildLibraryFileOrderBy` in the API) so the client re-sort agrees
+ * with the order the API already applied before the recency cap. Never-printed
+ * files (null `lastPrintedAt`) always sort last, regardless of direction.
+ */
 export function compareLibraryFiles(a: LibraryFile, b: LibraryFile, sort: LibrarySortSpec): number {
+  if (sort.key === 'lastPrinted') {
+    const aPrinted = a.lastPrintedAt
+    const bPrinted = b.lastPrintedAt
+    if (!aPrinted && !bPrinted) return 0
+    if (!aPrinted) return 1
+    if (!bPrinted) return -1
+    return sort.dir === 'asc' ? aPrinted.localeCompare(bPrinted) : -aPrinted.localeCompare(bPrinted)
+  }
   let cmp = 0
   switch (sort.key) {
     case 'name':
@@ -79,6 +92,9 @@ export function compareLibraryFiles(a: LibraryFile, b: LibraryFile, sort: Librar
       break
     case 'size':
       cmp = a.sizeBytes - b.sizeBytes
+      break
+    case 'mostPrinted':
+      cmp = (a.printCount ?? 0) - (b.printCount ?? 0)
       break
   }
   return sort.dir === 'asc' ? cmp : -cmp

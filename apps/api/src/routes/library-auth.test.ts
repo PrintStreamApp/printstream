@@ -474,7 +474,10 @@ test('library file history lists the current file and older versions', async () 
           projectFilamentChips: [],
           plateCount: 0,
           createdByName: null,
-          restoredFromVersionNumber: null
+          restoredFromVersionNumber: null,
+          favorite: false,
+          printCount: 0,
+          lastPrintedAt: null
         },
         {
           id: 'version-1',
@@ -494,7 +497,10 @@ test('library file history lists the current file and older versions', async () 
           projectFilamentChips: [],
           plateCount: 0,
           createdByName: null,
-          restoredFromVersionNumber: null
+          restoredFromVersionNumber: null,
+          favorite: false,
+          printCount: 0,
+          lastPrintedAt: null
         }
       ]
     })

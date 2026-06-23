@@ -85,3 +85,18 @@ export function buildLibraryFolderRoute(tenantSlug: string, folderId: string | n
   const route = bridgeId ? `${path}?bridge=${encodeURIComponent(bridgeId)}` : path
   return buildTenantWorkspacePath(tenantSlug, route)
 }
+
+/** Static path segment for the "Favorite Files" view (its own route, so it is bookmarkable + in history). */
+export const LIBRARY_FAVORITES_SEGMENT = 'favorites'
+
+/** Route for the favorites view — a flat, cross-folder list of the user's starred files. */
+export function buildLibraryFavoritesRoute(tenantSlug: string, bridgeId: string | null): string {
+  const path = `${LIBRARY_ROUTE}/${LIBRARY_FAVORITES_SEGMENT}`
+  const route = bridgeId ? `${path}?bridge=${encodeURIComponent(bridgeId)}` : path
+  return buildTenantWorkspacePath(tenantSlug, route)
+}
+
+/** Whether a pathname is the favorites view route (`.../library/favorites`). */
+export function isLibraryFavoritesPath(pathname: string): boolean {
+  return new RegExp(`${LIBRARY_ROUTE}/${LIBRARY_FAVORITES_SEGMENT}/?$`).test(pathname)
+}

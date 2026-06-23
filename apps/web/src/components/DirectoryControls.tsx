@@ -8,6 +8,7 @@ import SortRoundedIcon from '@mui/icons-material/SortRounded'
 import { Box, IconButton, Option, Select, Stack, Tooltip } from '@mui/joy'
 import React from 'react'
 import { useMobileViewport } from './useMobileViewport'
+import { ViewModeToggle } from './ViewModeToggle'
 
 export type DirectoryViewMode = 'list' | 'icon'
 export type DirectorySortDirection = 'asc' | 'desc'
@@ -95,30 +96,7 @@ export function DirectorySortViewControls<T extends string>({
               alignItems="center"
               sx={{ minWidth: 0, width: '100%' }}
             >
-              <Tooltip title="List view">
-                <IconButton
-                  size="sm"
-                  variant={viewMode === 'list' ? 'solid' : 'soft'}
-                  color={viewMode === 'list' ? 'primary' : 'neutral'}
-                  aria-label="List view"
-                  aria-pressed={viewMode === 'list'}
-                  onClick={() => onViewModeChange('list')}
-                >
-                  <ListViewIcon />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Icon view">
-                <IconButton
-                  size="sm"
-                  variant={viewMode === 'icon' ? 'solid' : 'soft'}
-                  color={viewMode === 'icon' ? 'primary' : 'neutral'}
-                  aria-label="Icon view"
-                  aria-pressed={viewMode === 'icon'}
-                  onClick={() => onViewModeChange('icon')}
-                >
-                  <IconViewIcon />
-                </IconButton>
-              </Tooltip>
+              <ViewModeToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
             </Stack>
           )}
         </Box>
@@ -190,30 +168,7 @@ export function DirectorySortViewControls<T extends string>({
           </Tooltip>
         </Stack>
         <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center" sx={{ minWidth: 0, width: '100%' }}>
-          <Tooltip title="List view">
-            <IconButton
-              size="sm"
-              variant={viewMode === 'list' ? 'solid' : 'soft'}
-              color={viewMode === 'list' ? 'primary' : 'neutral'}
-              aria-label="List view"
-              aria-pressed={viewMode === 'list'}
-              onClick={() => onViewModeChange('list')}
-            >
-              <ListViewIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Icon view">
-            <IconButton
-              size="sm"
-              variant={viewMode === 'icon' ? 'solid' : 'soft'}
-              color={viewMode === 'icon' ? 'primary' : 'neutral'}
-              aria-label="Icon view"
-              aria-pressed={viewMode === 'icon'}
-              onClick={() => onViewModeChange('icon')}
-            >
-              <IconViewIcon />
-            </IconButton>
-          </Tooltip>
+          <ViewModeToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
         </Stack>
       </Box>
     )
@@ -254,49 +209,8 @@ export function DirectorySortViewControls<T extends string>({
         />
       )}
       {showViewModeToggle && viewMode && onViewModeChange && (
-        <>
-          <Tooltip title="List view">
-            <IconButton
-              size="sm"
-              variant={viewMode === 'list' ? 'solid' : 'soft'}
-              color={viewMode === 'list' ? 'primary' : 'neutral'}
-              aria-label="List view"
-              aria-pressed={viewMode === 'list'}
-              onClick={() => onViewModeChange('list')}
-            >
-              <ListViewIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Icon view">
-            <IconButton
-              size="sm"
-              variant={viewMode === 'icon' ? 'solid' : 'soft'}
-              color={viewMode === 'icon' ? 'primary' : 'neutral'}
-              aria-label="Icon view"
-              aria-pressed={viewMode === 'icon'}
-              onClick={() => onViewModeChange('icon')}
-            >
-              <IconViewIcon />
-            </IconButton>
-          </Tooltip>
-        </>
+        <ViewModeToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
       )}
     </Stack>
-  )
-}
-
-function ListViewIcon() {
-  return (
-    <Box component="svg" viewBox="0 0 24 24" aria-hidden sx={{ width: '1.1em', height: '1.1em', fill: 'currentColor' }}>
-      <path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z" />
-    </Box>
-  )
-}
-
-function IconViewIcon() {
-  return (
-    <Box component="svg" viewBox="0 0 24 24" aria-hidden sx={{ width: '1.1em', height: '1.1em', fill: 'currentColor' }}>
-      <path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z" />
-    </Box>
   )
 }

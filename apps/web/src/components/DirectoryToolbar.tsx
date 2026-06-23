@@ -1,3 +1,4 @@
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import {
@@ -5,9 +6,12 @@ import {
   Button,
   DialogActions,
   DialogTitle,
+  Divider,
+  Dropdown,
   FormControl,
-  IconButton,
   Input,
+  Menu,
+  MenuButton,
   ModalClose,
   Option,
   Select,
@@ -21,6 +25,7 @@ import {
   type DirectorySortOption,
   type DirectoryViewMode
 } from './DirectoryControls'
+import { ViewModeToggle } from './ViewModeToggle'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { useMobileViewport } from './useMobileViewport'
 
@@ -89,7 +94,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
           display: 'grid',
           gridTemplateColumns: {
             xs: hasFiltersButton ? 'minmax(0, 1fr) auto' : 'minmax(0, 1fr)',
-            md: hasFiltersButton ? 'repeat(4, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))'
+            md: 'repeat(4, minmax(0, 1fr))'
           },
           gap: 1,
           alignItems: 'center'
@@ -176,28 +181,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
             </Select>
           </FormControl>
           {showInlineViewModeToggle && viewMode && onViewModeChange && (
-            <>
-              <IconButton
-                size="sm"
-                variant={viewMode === 'list' ? 'solid' : 'soft'}
-                color={viewMode === 'list' ? 'primary' : 'neutral'}
-                aria-label="List view"
-                aria-pressed={viewMode === 'list'}
-                onClick={() => onViewModeChange('list')}
-              >
-                <ListViewIcon />
-              </IconButton>
-              <IconButton
-                size="sm"
-                variant={viewMode === 'icon' ? 'solid' : 'soft'}
-                color={viewMode === 'icon' ? 'primary' : 'neutral'}
-                aria-label="Icon view"
-                aria-pressed={viewMode === 'icon'}
-                onClick={() => onViewModeChange('icon')}
-              >
-                <IconViewIcon />
-              </IconButton>
-            </>
+            <ViewModeToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
           )}
         </Stack>
       </Box>
@@ -225,6 +209,71 @@ export function DirectoryFiltersButton({
     >
       {activeCount > 0 ? `Filters (${activeCount})` : 'Filters'}
     </Button>
+  )
+}
+
+/**
+ * Filters as an inline dropdown panel: a Filters button (with an active-count
+ * badge) that opens a small anchored menu holding the filter controls plus an
+ * optional Clear action — the dropdown alternative to the modal
+ * {@link DirectoryFiltersDialog}. Filter `Select`s passed as children should set
+ * `slotProps={{ listbox: { disablePortal: true } }}` so opening one doesn't
+ * dismiss the panel (a portaled listbox reads as an outside click).
+ */
+export function DirectoryFiltersMenu({
+  activeCount = 0,
+  disabled = false,
+  onClear,
+  clearDisabled = false,
+  children
+}: {
+  activeCount?: number
+  disabled?: boolean
+  onClear?: () => void
+  clearDisabled?: boolean
+  children: ReactNode
+}) {
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: Button }}
+        slotProps={{ root: {
+          size: 'sm',
+          variant: activeCount > 0 ? 'soft' : 'outlined',
+          color: activeCount > 0 ? 'primary' : 'neutral',
+          startDecorator: <TuneRoundedIcon />,
+          endDecorator: <ArrowDropDownIcon />,
+          disabled
+        } }}
+      >
+        {activeCount > 0 ? `Filters (${activeCount})` : 'Filters'}
+      </MenuButton>
+      <Menu
+        placement="bottom-end"
+        // overflow/maxHeight: let nested (disablePortal) Select listboxes overflow the
+        // panel rather than being clipped or forcing the whole panel to scroll.
+        sx={{ p: 1.5, minWidth: 260, maxWidth: 'min(340px, 92vw)', overflow: 'visible', maxHeight: 'none' }}
+      >
+        <Stack spacing={1.25} sx={{ minWidth: 0 }}>
+          {children}
+          {onClear && (
+            <>
+              <Divider sx={{ my: 0.25 }} />
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={onClear}
+                disabled={clearDisabled}
+                sx={{ alignSelf: 'flex-end' }}
+              >
+                Clear filters
+              </Button>
+            </>
+          )}
+        </Stack>
+      </Menu>
+    </Dropdown>
   )
 }
 
@@ -265,21 +314,5 @@ export function DirectoryFiltersDialog({
         </DialogActions>
       </ScrollableModalDialog>
     </Modal>
-  )
-}
-
-function ListViewIcon() {
-  return (
-    <Box component="svg" viewBox="0 0 24 24" aria-hidden sx={{ width: '1.1em', height: '1.1em', fill: 'currentColor' }}>
-      <path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z" />
-    </Box>
-  )
-}
-
-function IconViewIcon() {
-  return (
-    <Box component="svg" viewBox="0 0 24 24" aria-hidden sx={{ width: '1.1em', height: '1.1em', fill: 'currentColor' }}>
-      <path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z" />
-    </Box>
   )
 }

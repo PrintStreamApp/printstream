@@ -11,7 +11,9 @@
  */
 import React, { useEffect, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
 import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded'
-import { AspectRatio, Box, Checkbox, Chip, Stack, Tooltip, Typography } from '@mui/joy'
+import StarRoundedIcon from '@mui/icons-material/StarRounded'
+import StarBorderRoundedIcon from '@mui/icons-material/StarBorderRounded'
+import { AspectRatio, Box, Checkbox, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy'
 import { formatBytes, type LibraryFile, type LibraryFolder } from '@printstream/shared'
 import { buildApiUrl } from '../lib/apiUrl'
 import { getMeshThumbnailProvider, getSceneThumbnailProvider } from '../lib/modelThumbnailRegistry'
@@ -37,7 +39,7 @@ import {
 import { useMobileViewport } from './useMobileViewport'
 
 export type LibraryViewMode = DirectoryViewMode
-export type LibrarySortKey = 'name' | 'date' | 'size'
+export type LibrarySortKey = 'name' | 'date' | 'size' | 'mostPrinted' | 'lastPrinted'
 export type LibrarySortDir = DirectorySortDirection
 
 export interface LibrarySort {
@@ -53,8 +55,13 @@ export type { LibraryDragItem }
 const SORT_LABELS: Record<LibrarySortKey, string> = {
   name: 'Name',
   date: 'Date',
-  size: 'Size'
+  size: 'Size',
+  mostPrinted: 'Most printed',
+  lastPrinted: 'Last printed'
 }
+
+/** All library sort keys, in display order — shared by the main view and the pickers. */
+const LIBRARY_TOOLBAR_SORT_KEYS = ['name', 'date', 'size', 'mostPrinted', 'lastPrinted'] as const
 
 /** Compact view-mode + sort toolbar shared by both consumers. */
 export function LibraryToolbar({
@@ -62,18 +69,23 @@ export function LibraryToolbar({
   onViewModeChange,
   sort,
   onSortChange,
+  favoritesOnly,
+  onFavoritesOnlyChange,
   rightAlignViewModeOnMobile = false
 }: {
   viewMode: LibraryViewMode
   onViewModeChange: (mode: LibraryViewMode) => void
   sort: LibrarySort
   onSortChange: (sort: LibrarySort) => void
+  /** When provided, renders a "favorites only" filter toggle ahead of the sort controls. */
+  favoritesOnly?: boolean
+  onFavoritesOnlyChange?: (value: boolean) => void
   rightAlignViewModeOnMobile?: boolean
 }) {
-  return (
+  const controls = (
     <DirectorySortViewControls
       sortValue={sort.key}
-      sortOptions={(['name', 'date', 'size'] as const).map((key) => ({ value: key, label: SORT_LABELS[key] }))}
+      sortOptions={LIBRARY_TOOLBAR_SORT_KEYS.map((key) => ({ value: key, label: SORT_LABELS[key] }))}
       onSortValueChange={(key) => onSortChange({ ...sort, key })}
       sortDirection={sort.dir}
       onSortDirectionChange={(dir) => onSortChange({ ...sort, dir })}
@@ -84,6 +96,25 @@ export function LibraryToolbar({
       matchFilterWidthOnDesktop
       rightAlignViewModeOnMobile={rightAlignViewModeOnMobile}
     />
+  )
+  if (onFavoritesOnlyChange === undefined) return controls
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
+      <Tooltip title={favoritesOnly ? 'Showing favorites only' : 'Show favorites only'}>
+        <IconButton
+          size="sm"
+          variant={favoritesOnly ? 'solid' : 'soft'}
+          color={favoritesOnly ? 'warning' : 'neutral'}
+          aria-label="Show favorites only"
+          aria-pressed={favoritesOnly}
+          onClick={() => onFavoritesOnlyChange(!favoritesOnly)}
+          sx={{ flexShrink: 0 }}
+        >
+          {favoritesOnly ? <StarRoundedIcon /> : <StarBorderRoundedIcon />}
+        </IconButton>
+      </Tooltip>
+      <Box sx={{ flex: 1, minWidth: 0 }}>{controls}</Box>
+    </Stack>
   )
 }
 
@@ -574,6 +605,7 @@ export function LibraryFileRow({
       <Box sx={{ position: 'relative', width: 56, height: 56, flexShrink: 0 }}>
         <FileThumbnail file={file} size={56} disabled={disableThumbnail} />
         {disabledReason && <FileUnavailableOverlay reason={disabledReason} iconSize={20} />}
+        {file.favorite && <FavoriteStarBadge />}
         <Chip
           size="sm"
           variant="solid"
@@ -613,6 +645,39 @@ export function LibraryFileRow({
       </Stack>
       {!hideMetadataTags && <FileTags file={file} hideFilament />}
       {actions && <ActionSlot>{actions}</ActionSlot>}
+    </Box>
+  )
+}
+
+/**
+ * Read-only "favorited" indicator overlaid on the top-left of a file's thumbnail.
+ * Rendered only for favorited files; favoriting itself happens from the file's
+ * actions menu. Non-interactive — clicks pass through to the row/tile beneath it.
+ */
+function FavoriteStarBadge({ matchActionsButton = false }: { matchActionsButton?: boolean }) {
+  return (
+    <Box
+      role="img"
+      aria-label="Favorited"
+      sx={{
+        position: 'absolute',
+        top: 6,
+        left: 6,
+        zIndex: 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        pointerEvents: 'none',
+        filter: 'drop-shadow(0 1px 2px rgba(7, 10, 16, 0.7))',
+        // In icon/grid mode the kebab is an IconButton (size sm = 2rem) whose glyph is
+        // centered and so inset from the corner; give the star the same square footprint
+        // with a centered icon so the two line up optically instead of hugging the corner.
+        ...(matchActionsButton ? { width: '2rem', height: '2rem' } : {})
+      }}
+    >
+      {/* htmlColor sets the SVG fill directly — a gold-yellow favorite star (no Joy
+          token is a true yellow; `warning` is amber) that won't inherit theme text color. */}
+      <StarRoundedIcon fontSize="small" htmlColor="gold" />
     </Box>
   )
 }
@@ -794,6 +859,8 @@ function FileTile({
         <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
           <FileThumbnail file={file} fill disabled={disableThumbnail} />
           {disabledReason && <FileUnavailableOverlay reason={disabledReason} iconSize={30} />}
+          {/* Favorited indicator (top-left). Hidden in selection mode where the checkbox owns that corner. */}
+          {file.favorite && !selectable && <FavoriteStarBadge matchActionsButton />}
           {selectable && onSelectionToggle && (
             <Checkbox
               checked={selected}

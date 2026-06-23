@@ -190,7 +190,7 @@ export function parseLibrarySort(raw: string): LibrarySort | null {
     const parsed = JSON.parse(raw) as Partial<LibrarySort>
     const key = parsed.key
     const dir = parsed.dir
-    const validKey = key === 'name' || key === 'date' || key === 'size'
+    const validKey = key === 'name' || key === 'date' || key === 'size' || key === 'mostPrinted' || key === 'lastPrinted'
     const validDir = dir === 'asc' || dir === 'desc'
     return validKey && validDir ? { key, dir } : null
   } catch {
@@ -340,7 +340,10 @@ export function jobToLibraryFile(job: PrintJob): LibraryFile {
     compatiblePrinterModels: [],
     plateTypeChips: [],
     nozzleSizeChips: [],
-    projectFilamentChips: []
+    projectFilamentChips: [],
+    favorite: false,
+    printCount: 0,
+    lastPrintedAt: null
   }
 }
 

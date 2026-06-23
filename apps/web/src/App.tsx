@@ -1013,6 +1013,8 @@ export function App() {
                 <Route path="/workspaces/:tenantSlug/printers" element={renderTenantContextElement(<PrintersView />)} />
                 <Route path="/workspaces/:tenantSlug/printers/:printerId" element={renderTenantContextElement(<PrintersView />)} />
                 <Route path="/workspaces/:tenantSlug/library" element={renderTenantContextElement(<LibraryView />)} />
+                {/* Static `favorites` outranks the `:folderId` route below, giving the favorites view its own bookmarkable URL. */}
+                <Route path="/workspaces/:tenantSlug/library/favorites" element={renderTenantContextElement(<LibraryView />)} />
                 <Route path="/workspaces/:tenantSlug/library/:folderId" element={renderTenantContextElement(<LibraryView />)} />
                 <Route path="/workspaces/:tenantSlug/get-started" element={tenantGetStartedRouteElement} />
                 <Route path="/workspaces/:tenantSlug/stats" element={tenantStatsRouteElement} />

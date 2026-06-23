@@ -60,13 +60,15 @@ export function LibraryFilePickerDialog({
   const deferredSearch = useDeferredValue(search)
   const [viewMode, setViewMode] = useState<LibraryViewMode>('list')
   const [sort, setSort] = useState<LibrarySort>({ key: 'name', dir: 'asc' })
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   const browseQuery = useQuery({
-    queryKey: ['library-file-picker-browse', folderId ?? 'root', bridgeId ?? 'none'],
+    queryKey: ['library-file-picker-browse', folderId ?? 'root', bridgeId ?? 'none', favoritesOnly],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
       if (folderId) params.set('folderId', folderId)
       if (bridgeId) params.set('bridgeId', bridgeId)
+      if (favoritesOnly) params.set('favoritesOnly', 'true')
       const qs = params.toString()
       return apiFetch<LibraryBrowseResponse>(`/api/library/browse${qs ? `?${qs}` : ''}`, { signal })
     }
@@ -164,6 +166,8 @@ export function LibraryFilePickerDialog({
                 onViewModeChange={setViewMode}
                 sort={sort}
                 onSortChange={setSort}
+                favoritesOnly={favoritesOnly}
+                onFavoritesOnlyChange={setFavoritesOnly}
                 rightAlignViewModeOnMobile
               />
             </Stack>

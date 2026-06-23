@@ -601,12 +601,14 @@ export function TemplateLibraryFilePickerDialog({
   const [bridgeId, setBridgeId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<LibraryViewMode>('list')
   const [sort, setSort] = useState<LibrarySort>({ key: 'name', dir: 'asc' })
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
   const browseQuery = useQuery<LibraryBrowseResponse>({
-    queryKey: ['library-browse', 'orders-picker', currentFolderId ?? 'root', bridgeId ?? 'none'],
+    queryKey: ['library-browse', 'orders-picker', currentFolderId ?? 'root', bridgeId ?? 'none', favoritesOnly],
     queryFn: () => {
       const params = new URLSearchParams()
       if (currentFolderId) params.set('folderId', currentFolderId)
       if (bridgeId) params.set('bridgeId', bridgeId)
+      if (favoritesOnly) params.set('favoritesOnly', 'true')
       const search = params.toString()
       return apiFetch<LibraryBrowseResponse>(`/api/library/browse${search ? `?${search}` : ''}`)
     },
@@ -691,6 +693,8 @@ export function TemplateLibraryFilePickerDialog({
                   onViewModeChange={setViewMode}
                   sort={sort}
                   onSortChange={setSort}
+                  favoritesOnly={favoritesOnly}
+                  onFavoritesOnlyChange={setFavoritesOnly}
                 />
 
                 {pickerError && <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{pickerError.message}</Alert>}

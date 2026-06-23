@@ -16,7 +16,6 @@
  * it reads `filteredFiles` from this hook's return.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useLocalStorageState } from './useLocalStorageState'
 import { formatLibraryFileKindLabel } from '../lib/libraryDisplay'
 import {
   filterLibraryEntries,
@@ -27,9 +26,7 @@ import {
 import {
   collectDistinctLibraryFilterValues,
   LIBRARY_METADATA_FILTER_ALL,
-  LIBRARY_PAGE_SIZE_OPTIONS,
-  LIBRARY_SORT_KEY,
-  parseLibrarySort
+  LIBRARY_PAGE_SIZE_OPTIONS
 } from '../lib/libraryViewHelpers'
 import type { LibrarySort } from '../components/LibraryBrowser'
 import type { LibraryFile, LibraryFolder } from '@printstream/shared'
@@ -41,6 +38,14 @@ export interface LibraryFiltersParams {
   requestedBridgeId: string | null
   /** Deferred search term (owned by the caller so it can also drive the all-folders browse query). */
   deferredSearch: string
+  /**
+   * Active sort. Owned by the caller because it (and `favoritesOnly`) drive the
+   * browse query so the API orders/filters before its recency cap; the hook still
+   * re-sorts the returned page client-side to keep folders + files interleaved.
+   */
+  sort: LibrarySort
+  /** "Favorites only" toggle. Applied server-side; here it only resets paging. */
+  favoritesOnly: boolean
 }
 
 export interface LibraryFilters {
@@ -57,8 +62,6 @@ export interface LibraryFilters {
   pageSize: (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number]
   setPageSize: (value: (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number]) => void
   setPage: React.Dispatch<React.SetStateAction<number>>
-  sort: LibrarySort
-  setSort: (value: LibrarySort) => void
   fileTypeOptions: string[]
   printerModelOptions: string[]
   nozzleSizeOptions: string[]
@@ -76,7 +79,7 @@ export interface LibraryFilters {
 }
 
 export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters {
-  const { visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch } = params
+  const { visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly } = params
   const [fileTypeFilter, setFileTypeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
   const [printerModelFilter, setPrinterModelFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
   const [nozzleSizeFilter, setNozzleSizeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
@@ -84,11 +87,6 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
   const [filtersDialogOpen, setFiltersDialogOpen] = useState(false)
   const [pageSize, setPageSize] = useState<(typeof LIBRARY_PAGE_SIZE_OPTIONS)[number]>(25)
   const [page, setPage] = useState(1)
-  const [sort, setSort] = useLocalStorageState<LibrarySort>(
-    LIBRARY_SORT_KEY,
-    { key: 'name', dir: 'asc' },
-    parseLibrarySort
-  )
 
   const fileTypeOptions = useMemo(
     () => collectDistinctLibraryFilterValues(visibleFiles.map((file) => formatLibraryFileKindLabel(file.name, file.kind))),
@@ -146,7 +144,7 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
 
   useEffect(() => {
     setPage(1)
-  }, [currentFolderId, deferredSearch, fileTypeFilter, nozzleSizeFilter, pageSize, plateTypeFilter, printerModelFilter, requestedBridgeId])
+  }, [currentFolderId, deferredSearch, favoritesOnly, fileTypeFilter, nozzleSizeFilter, pageSize, plateTypeFilter, printerModelFilter, requestedBridgeId])
 
   useEffect(() => {
     if (fileTypeFilter !== LIBRARY_METADATA_FILTER_ALL && !fileTypeOptions.includes(fileTypeFilter)) {
@@ -199,8 +197,6 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
     pageSize,
     setPageSize,
     setPage,
-    sort,
-    setSort,
     fileTypeOptions,
     printerModelOptions,
     nozzleSizeOptions,

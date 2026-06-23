@@ -34,6 +34,7 @@ model Tenant {
   libraryDownloadLinks LibraryDownloadLink[]
   libraryFolders     LibraryFolder[]
   libraryFileReplicas LibraryFileReplica[]
+  libraryFileFavorites LibraryFileFavorite[]
   printerViews       PrinterView[]
   authMemberships    AuthTenantMembership[]
   authGroups         AuthGroup[]
@@ -304,6 +305,12 @@ model LibraryFile {
   // populated on inspect; null until first computed.
   derivedChipsJson    String?
   derivedChipsVersion Int?
+  // Denormalized print-history rollup, maintained by the print-job recorder when a
+  // print targeting this file is recorded (backfilled from PrintJob on migration).
+  // Powers the "most printed" / "last printed" library sorts server-side so they
+  // order correctly before the recency cap, without a per-listing PrintJob groupBy.
+  printCount    Int      @default(0)
+  lastPrintedAt DateTime?
 
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ownerBridge   Bridge?  @relation("LibraryFileOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
@@ -312,6 +319,7 @@ model LibraryFile {
   jobs          PrintJob[]
   versions      LibraryFileVersion[]
   downloadLinks LibraryDownloadLink[]
+  favorites     LibraryFileFavorite[]
   orderTemplatePrints OrderTemplatePrint[]
   orderPrints   OrderPrint[]
 
@@ -321,6 +329,33 @@ model LibraryFile {
   @@index([tenantId, hidden, uploadedAt])
   @@index([tenantId, ownerBridgeId, folderId, name, hidden, uploadedAt])
   @@index([tenantId, deletedAt])
+  // Backs the most-printed / last-printed sorts within a bridge folder.
+  @@index([tenantId, ownerBridgeId, folderId, hidden, printCount], map: "LibraryFile_tenant_bridge_folder_printCount_idx")
+  @@index([tenantId, ownerBridgeId, folderId, hidden, lastPrintedAt], map: "LibraryFile_tenant_bridge_folder_lastPrintedAt_idx")
+}
+
+/**
+ * Per-user "favorite" star on a library file. Personal (not shared across the
+ * workspace), so the row is keyed by `(userId, libraryFileId)`. `userId` is the
+ * authenticated user id, or a fixed sentinel for no-auth/self-host installs where
+ * the actor is anonymous — a non-null value keeps the unique constraint sound
+ * (Postgres would otherwise allow duplicate NULL-user rows). Intentionally no FK to
+ * AuthUser so favorites work in both auth-enabled (cloud) and no-auth installs;
+ * cleanup rides on the LibraryFile / Tenant cascades.
+ */
+model LibraryFileFavorite {
+  id            String   @id @default(cuid())
+  tenantId      String
+  userId        String
+  libraryFileId String
+  createdAt     DateTime @default(now())
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  libraryFile LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, libraryFileId])
+  @@index([tenantId, userId])
+  @@index([libraryFileId])
 }
 
 model LibraryFileVersion {

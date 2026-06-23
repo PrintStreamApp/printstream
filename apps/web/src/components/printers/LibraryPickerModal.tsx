@@ -72,13 +72,16 @@ export function LibraryPickerModal({
     parseLibrarySort
   )
 
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
+
   const browseQuery = useQuery({
-    queryKey: ['library-browse', 'printer-picker', folderId ?? 'root', bridgeId ?? 'none', allFolderSearch],
+    queryKey: ['library-browse', 'printer-picker', folderId ?? 'root', bridgeId ?? 'none', allFolderSearch, favoritesOnly],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
       if (folderId) params.set('folderId', folderId)
       if (bridgeId) params.set('bridgeId', bridgeId)
       if (allFolderSearch) params.set('search', allFolderSearch)
+      if (favoritesOnly) params.set('favoritesOnly', 'true')
       const query = params.toString()
       return apiFetch<LibraryBrowseResponse>(`/api/library/browse${query ? `?${query}` : ''}`, { signal })
     }
@@ -269,6 +272,8 @@ export function LibraryPickerModal({
                   onViewModeChange={setViewMode}
                   sort={sort}
                   onSortChange={setSort}
+                  favoritesOnly={favoritesOnly}
+                  onFavoritesOnlyChange={setFavoritesOnly}
                   rightAlignViewModeOnMobile
                 />
 

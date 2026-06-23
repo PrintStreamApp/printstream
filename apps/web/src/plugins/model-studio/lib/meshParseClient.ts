@@ -63,6 +63,13 @@ function ensurePool(): Worker[] | null {
   return pool
 }
 
+// A worker that was constructed but never answers (e.g. a dev module-worker whose module
+// silently failed to load, where `onerror` never fires) would otherwise hang the parse
+// forever. Bound each task so the caller can fall back to the main-thread parse. Set well
+// above any real parse time (even large meshes finish in a few seconds) so it only trips on
+// a wedged/never-started worker, not on a slow-but-working one.
+const WORKER_TASK_TIMEOUT_MS = 20_000
+
 function runOnWorker(kind: 'threemf' | 'stl', bytes: Uint8Array): Promise<ParsedMeshEntry[]> {
   const workers = ensurePool()
   if (!workers || workers.length === 0) return Promise.reject(new Error('No mesh parse worker'))
@@ -73,7 +80,13 @@ function runOnWorker(kind: 'threemf' | 'stl', bytes: Uint8Array): Promise<Parsed
   const worker = workers[poolCursor % workers.length]!
   poolCursor += 1
   return new Promise<ParsedMeshEntry[]>((resolve, reject) => {
-    pending.set(id, { resolve, reject })
+    const timer = setTimeout(() => {
+      if (pending.delete(id)) reject(new Error('Mesh parse worker timed out'))
+    }, WORKER_TASK_TIMEOUT_MS)
+    pending.set(id, {
+      resolve: (entries) => { clearTimeout(timer); resolve(entries) },
+      reject: (error) => { clearTimeout(timer); reject(error) }
+    })
     worker.postMessage({ id, kind, buffer: transferable }, [transferable])
   })
 }

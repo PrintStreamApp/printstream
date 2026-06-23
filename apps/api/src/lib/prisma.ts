@@ -61,6 +61,7 @@ export const TENANT_SCOPED_MODELS = new Set([
   'LibraryFileReplica',
   'LibraryDownloadLink',
   'LibraryFolder',
+  'LibraryFileFavorite',
   'PrinterView',
   'AuditLog',
   'AuthServiceAccount',

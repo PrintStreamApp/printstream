@@ -22,6 +22,7 @@ import {
   disposeObject3D
 } from './lib/threeMfScene'
 import { fetchModelBytes, fetchModelText } from './lib/modelFetch'
+import { MESH_PREVIEW_COLOR } from './lib/meshThumbnail'
 import { parseStlGeometryAsync, parseThreeMfModelEntryAsync } from './lib/meshParseClient'
 import {
   BAMBU_THREE_MF_ISO_UP,
@@ -372,11 +373,12 @@ export function PreviewView(props: Record<string, unknown>) {
     setGcodeStats(null)
     setSceneProgress(null)
     if (isMeshPreviewMode(previewMode)) {
-      // STL ships verbatim from /download; STEP carries no mesh, so pull the server-tessellated
-      // STL from /mesh (same BambuStudio-matched quality as importing the STEP into a project).
-      const meshUrl = previewMode === 'step'
-        ? buildApiUrl(`${resourceBase}/mesh`)
-        : buildApiUrl(`${resourceBase}/download`)
+      // Both STL and STEP load from /mesh: it returns STL bytes (STL verbatim, STEP
+      // server-tessellated to BambuStudio-matched quality) through sendModelBuffer, so the
+      // body is chunk-streamed + gzipped — it survives the Vite dev proxy (a raw /download
+      // pipe stalls on large bodies), gets ETag/304 caching, and is gated on view (not
+      // download) permission, which is the right scope for a preview.
+      const meshUrl = buildApiUrl(`${resourceBase}/mesh`)
       // Fetch via the stall-guarded, abortable reader so a rapid plate/file switch cancels the
       // download (STLLoader.load uses its own un-abortable XHR, which kept running and wasting
       // bandwidth/CPU after the viewer moved on), then tessellate off the main thread via the worker
@@ -388,7 +390,7 @@ export function PreviewView(props: Record<string, unknown>) {
             geometry.dispose()
             return
           }
-          const material = new THREE.MeshStandardMaterial({ color: 0x1cab84, metalness: 0.1, roughness: 0.6 })
+          const material = new THREE.MeshStandardMaterial({ color: MESH_PREVIEW_COLOR, metalness: 0.1, roughness: 0.6 })
           attachObject(new THREE.Mesh(geometry, material))
         })
         .catch(handleLoadError)

@@ -1317,6 +1317,9 @@ function jobToLibraryFile(job: PrintJob): LibraryFile {
     compatiblePrinterModels: [],
     plateTypeChips: [],
     nozzleSizeChips: [],
-    projectFilamentChips: job.projectFilamentChips
+    projectFilamentChips: job.projectFilamentChips,
+    favorite: false,
+    printCount: 0,
+    lastPrintedAt: null
   }
 }

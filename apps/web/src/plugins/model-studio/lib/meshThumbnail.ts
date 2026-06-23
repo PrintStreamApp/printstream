@@ -24,6 +24,12 @@ const MAX_CONCURRENT = 3
 const MAX_CACHE_ENTRIES = 240
 
 /**
+ * Mesh color for raw STL/STEP renders. Exported so the interactive 3D preview
+ * (`PreviewView`) shows the same color as these list thumbnails.
+ */
+export const MESH_PREVIEW_COLOR = 0x9db4d0
+
+/**
  * Camera *position* direction (front-left, Z-up) for the snapshot. Unlike the
  * plate thumbnail's 45° iso view, this sits at ~30° elevation: a shallower angle
  * keeps horizontal faces edge-on so a model's flat base reads as a base, not as
@@ -82,7 +88,7 @@ function getRenderer(): StlRenderer {
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 6000)
   camera.up.set(0, 0, 1)
 
-  const material = new THREE.MeshStandardMaterial({ color: 0x9db4d0, metalness: 0.1, roughness: 0.6 })
+  const material = new THREE.MeshStandardMaterial({ color: MESH_PREVIEW_COLOR, metalness: 0.1, roughness: 0.6 })
   const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material)
   scene.add(mesh)
 
