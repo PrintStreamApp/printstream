@@ -12,6 +12,11 @@
  * concurrency-limited so a library page full of STL files doesn't stampede the
  * network or main thread. A single offscreen WebGL renderer is reused for every
  * snapshot.
+ *
+ * Each fresh render is also uploaded (best-effort) to `PUT /api/library/:id/thumbnail`,
+ * which persists it server-side. That makes the render a once-per-file-version cost: the
+ * next view — for this client or any other — is served the stored PNG straight from
+ * `FileThumbnail`'s `<img>`, with no mesh fetch, STEP tessellation, or WebGL render.
  */
 import * as THREE from 'three'
 import type { LibraryFile } from '@printstream/shared'
@@ -151,6 +156,31 @@ function rememberThumbnail(key: string, url: string): void {
 }
 
 /**
+ * Persist a freshly rendered snapshot so later views are served the stored PNG instead
+ * of re-rendering. Best-effort and detached from the caller's signal: a failed (or
+ * raced) upload just means the next viewer renders again. `v=uploadedAt` lets the server
+ * drop a render of a now-superseded version rather than caching stale content.
+ */
+function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
+  void (async () => {
+    try {
+      const png = await (await fetch(dataUrl)).blob()
+      await fetch(
+        buildApiUrl(`/api/library/${encodeURIComponent(file.id)}/thumbnail?v=${encodeURIComponent(file.uploadedAt)}`),
+        {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'image/png', ...tenantHeaders() },
+          body: png
+        }
+      )
+    } catch {
+      // Best-effort cache warming; ignore failures.
+    }
+  })()
+}
+
+/**
  * Render (or return a cached) PNG data URL preview for a raw-mesh (STL/STEP) library
  * file. Resolves to `null` when the preview can't be produced (aborted, fetch/parse
  * failure) so callers fall back to the kind label.
@@ -174,6 +204,7 @@ export async function renderMeshThumbnail(file: LibraryFile, signal?: AbortSigna
       try {
         const url = getRenderer().render(geometry)
         rememberThumbnail(key, url)
+        uploadRenderedThumbnail(file, url)
         return url
       } finally {
         geometry.dispose()

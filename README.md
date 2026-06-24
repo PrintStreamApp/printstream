@@ -52,7 +52,7 @@ docker compose up -d
 
 This pulls the combined app image (`ghcr.io/printstreamapp/printstream`) and the slicer image from GHCR and starts everything.
 
-**On arm64 hosts (Raspberry Pi, ARM NAS):** the app and bridge images are multi-arch and run natively. The optional `slicer` image is amd64-only — it bundles the x86 Bambu Studio CLI — so start the stack without it: `docker compose up -d --scale slicer=0` (or delete the `slicer` service from `compose.yml` to make it permanent). Server-side slicing is then unavailable; everything else works.
+**On arm64 hosts (Raspberry Pi, ARM NAS):** all three images — app, bridge, and the optional `slicer` — are multi-arch and run natively. The slicer bundles the x86 Bambu Studio CLI and runs it under qemu-user emulation on arm64, so server-side slicing works there too (slower than on x86, but functional). If you would rather not pay the emulation cost, start the stack without the slicer (`docker compose up -d --scale slicer=0`) and point `SLICER_SERVICE_URL` at a remote x86 slicer, or leave it unset to disable server-side slicing.
 
 ### Run from source
 

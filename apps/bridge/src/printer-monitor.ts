@@ -105,6 +105,16 @@ export class BridgePrinterMonitor {
     return count
   }
 
+  /**
+   * Whether this printer currently has a live persistent MQTT connection. A
+   * healthy monitor connection is proof the LAN link works, so the periodic LAN
+   * probe skips these printers — opening a second connection to a busy printer
+   * only risks a false "rejected" warning.
+   */
+  isConnected(printerId: string): boolean {
+    return this.printers.get(printerId)?.client?.connected ?? false
+  }
+
   private upsertPrinter(printer: Printer): void {
     const existing = this.printers.get(printer.id)
     if (existing) {

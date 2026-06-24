@@ -304,6 +304,15 @@ class PrinterManager {
     // A frame from the owning bridge proves the printer is reachable again, so
     // cancel any offline pending from a recent (now-recovered) session drop.
     this.cancelPendingBridgePrinterOffline(printerId)
+
+    // Live telemetry is proof the LAN connection works, so any probe-derived
+    // connection warning is stale — clear it. The periodic LAN probe opens a
+    // second short-lived MQTT connection that a busy (e.g. printing) printer can
+    // reject, producing a false warning the next real frame should retire.
+    if (entry.status.connectionWarnings && entry.status.connectionWarnings.length > 0) {
+      this.mergeAndEmit(entry, { connectionWarnings: [] })
+    }
+
     this.resolvePressureAdvanceProfiles(entry, report)
 
     const delta = parseReport(report, entry.printer, entry.status)

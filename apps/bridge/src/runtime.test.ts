@@ -18,19 +18,20 @@ test('createBridgeRegistrationFailure classifies invalid persisted bridge creden
   assert.ok(failure instanceof BridgeRuntimeFailure)
   assert.equal(failure.kind, 'invalid-credentials')
 
-  const cleared: string[] = []
+  const cleared: Array<{ filePath: string; installationId: string }> = []
   assert.equal(
     await recoverBridgeStateFromRegisterFailure(
-      { bridgeId: 'bridge-1', runtimeToken: 'runtime-token' },
+      { installationId: 'install-1', bridgeId: 'bridge-1', runtimeToken: 'runtime-token' },
       failure,
       '/tmp/bridge-state.json',
-      async (filePath) => {
-        cleared.push(filePath)
+      async (filePath, installationId) => {
+        cleared.push({ filePath, installationId })
       }
     ),
     true
   )
-  assert.deepEqual(cleared, ['/tmp/bridge-state.json'])
+  // The durable installationId is preserved so the bridge re-binds, not duplicates.
+  assert.deepEqual(cleared, [{ filePath: '/tmp/bridge-state.json', installationId: 'install-1' }])
 })
 
 test('createBridgeRegistrationFailure summarizes non-json API failures without echoing html', () => {
@@ -58,7 +59,7 @@ test('recoverBridgeStateFromRegisterFailure ignores non-credential failures', as
   let cleared = false
   assert.equal(
     await recoverBridgeStateFromRegisterFailure(
-      { bridgeId: 'bridge-1', runtimeToken: 'runtime-token' },
+      { installationId: 'install-1', bridgeId: 'bridge-1', runtimeToken: 'runtime-token' },
       failure,
       '/tmp/bridge-state.json',
       async () => {

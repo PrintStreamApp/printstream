@@ -39,6 +39,7 @@ CREATE TABLE "Bridge" (
     "name" TEXT NOT NULL,
     "connectCode" TEXT,
     "runtimeTokenHash" TEXT,
+    "installationId" TEXT,
     "version" TEXT,
     "buildRevision" TEXT,
     "sourceFingerprint" TEXT,
@@ -622,6 +623,9 @@ CREATE UNIQUE INDEX "Printer_tenantId_serial_key" ON "Printer"("tenantId", "seri
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Bridge_connectCode_key" ON "Bridge"("connectCode");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Bridge_installationId_key" ON "Bridge"("installationId");
 
 -- CreateIndex
 CREATE INDEX "Bridge_tenantId_createdAt_idx" ON "Bridge"("tenantId", "createdAt");

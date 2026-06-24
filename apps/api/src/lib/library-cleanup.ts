@@ -26,6 +26,7 @@ import { readdir, rm, stat } from 'node:fs/promises'
 import { env } from './env.js'
 import { PUBLIC_DEMO_TENANT_SLUG } from '@printstream/shared'
 import { deleteLibraryFileBytes, pruneBridgeLibraryDerivedCache } from './bridge-library-files.js'
+import { pruneMeshThumbnailCache } from './mesh-thumbnail-cache.js'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import { libraryDir } from './library-paths.js'
 import { pruneCoverCache } from './cover-cache.js'
@@ -299,7 +300,7 @@ export async function pruneDormantBridges(): Promise<{ removed: number }> {
 }
 
 export async function runArtifactMaintenance(): Promise<void> {
-  const [hiddenFiles, slicedOutputs, recycledFiles, uploadSessions, jobThumbnails, jobSnapshots, coverCache, bridgeDerivedCache, auditLogs, dormantBridges] = await Promise.all([
+  const [hiddenFiles, slicedOutputs, recycledFiles, uploadSessions, jobThumbnails, jobSnapshots, coverCache, bridgeDerivedCache, meshThumbnails, auditLogs, dormantBridges] = await Promise.all([
     pruneHiddenLibraryFiles(),
     pruneUnreferencedSlicedOutputs(),
     pruneRecycledLibraryFiles(),
@@ -308,10 +309,15 @@ export async function runArtifactMaintenance(): Promise<void> {
     prunePrintJobSnapshots(),
     pruneCoverCache(),
     pruneBridgeLibraryDerivedCache(),
+    pruneMeshThumbnailCache(),
     pruneAuditLogs(),
     pruneDormantBridges()
   ])
   void dormantBridges
+
+  if (meshThumbnails.removedFiles > 0) {
+    console.log(`[library-cleanup] pruned ${meshThumbnails.removedFiles} mesh thumbnail${meshThumbnails.removedFiles === 1 ? '' : 's'}`)
+  }
 
   if (auditLogs.removed > 0) {
     console.log(`[library-cleanup] pruned ${auditLogs.removed} expired audit-log row${auditLogs.removed === 1 ? '' : 's'}`)

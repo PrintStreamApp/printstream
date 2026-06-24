@@ -108,7 +108,7 @@ import {
 } from './library-3mf.js'
 import { BridgePrinterMonitor } from './printer-monitor.js'
 import { collectBridgeMetrics, recordApiReconnect } from './bridge-metrics.js'
-import { clearBridgeState, readBridgeState, writeBridgeState, type BridgeState } from './state-store.js'
+import { clearBridgeCredentials, loadBridgeState, writeBridgeState, type BridgeState } from './state-store.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -184,6 +184,8 @@ export class BridgeRuntimeClient {
   private restartScheduled = false
   private connectionProbeTimer: ReturnType<typeof setInterval> | null = null
   private connectionProbeInitialTimer: ReturnType<typeof setTimeout> | null = null
+  /** The active connection's printer monitor, so the LAN probe can skip already-connected printers. */
+  private printerMonitor: BridgePrinterMonitor | null = null
   private readonly simulator: BridgeRuntimeSimulator | null
   private readonly updateDriver: BridgeUpdateDriver
   private statusSnapshot: BridgeRuntimeStatusSnapshot = {
@@ -239,10 +241,10 @@ export class BridgeRuntimeClient {
   }
 
   private async runOnce(): Promise<void> {
-    const state = await readBridgeState(env.BRIDGE_STATE_FILE)
+    const state = await loadBridgeState(env.BRIDGE_STATE_FILE)
     this.updateStatus({
       lifecycle: 'registering',
-      bridgeId: state?.bridgeId ?? this.statusSnapshot.bridgeId,
+      bridgeId: state.bridgeId ?? this.statusSnapshot.bridgeId,
       connectCode: null,
       workspaceConnected: false,
       message: `Registering bridge with ${env.BRIDGE_SERVER_URL}.`
@@ -252,12 +254,13 @@ export class BridgeRuntimeClient {
       registration = await this.register(state)
     } catch (error) {
       if (await recoverBridgeStateFromRegisterFailure(state, error, env.BRIDGE_STATE_FILE)) {
-        console.warn('Stored bridge runtime credentials were rejected by the API. Clearing persisted bridge state and retrying registration as a new bridge.')
+        console.warn('Stored bridge runtime credentials were rejected by the API. Dropping them (keeping the install identity) and re-registering so the server re-binds this bridge to its existing record.')
         return
       }
       throw error
     }
     await writeBridgeState(env.BRIDGE_STATE_FILE, {
+      installationId: state.installationId,
       bridgeId: registration.bridge.id,
       runtimeToken: registration.runtimeToken
     })
@@ -298,10 +301,11 @@ export class BridgeRuntimeClient {
     }
   }
 
-  private async register(state: Awaited<ReturnType<typeof readBridgeState>>): Promise<BridgeRuntimeRegistrationResponse> {
+  private async register(state: BridgeState): Promise<BridgeRuntimeRegistrationResponse> {
     const provisionSecret = await this.readManagedBridgeToken()
     const body: BridgeRuntimeRegistrationRequest = {
-      ...(state ? { bridgeId: state.bridgeId, runtimeToken: state.runtimeToken } : {}),
+      installationId: state.installationId,
+      ...(state.bridgeId && state.runtimeToken ? { bridgeId: state.bridgeId, runtimeToken: state.runtimeToken } : {}),
       name: env.BRIDGE_NAME,
       ...(env.BRIDGE_BUILD_REVISION ? { buildRevision: env.BRIDGE_BUILD_REVISION } : {}),
       ...(env.BRIDGE_SOURCE_FINGERPRINT ? { sourceFingerprint: env.BRIDGE_SOURCE_FINGERPRINT } : {}),
@@ -353,6 +357,7 @@ export class BridgeRuntimeClient {
         socket.send(JSON.stringify(message))
       }
     })
+    this.printerMonitor = printerMonitor
     // Push debug-capture status changes (start/stop/auto-stop) to the API so the
     // "capture active" banner stays live. The capture itself runs locally and
     // survives bridge↔API reconnects; only this notifier is per-connection.
@@ -499,6 +504,7 @@ export class BridgeRuntimeClient {
         this.stopAllCameraStreams()
         stopDiscovery()
         printerMonitor.stopAll()
+        this.printerMonitor = null
         this.simulator?.stop()
         console.log(`Bridge websocket disconnected by server. Reconnecting in ${RECONNECT_DELAY_MS / 1000}s.`)
         this.updateStatus({
@@ -514,6 +520,7 @@ export class BridgeRuntimeClient {
         this.stopAllCameraStreams()
         stopDiscovery()
         printerMonitor.stopAll()
+        this.printerMonitor = null
         this.simulator?.stop()
         reject(new BridgeRuntimeFailure(
           'connection-failed',
@@ -1083,6 +1090,11 @@ export class BridgeRuntimeClient {
     if (this.simulator) return
     for (const printer of [...this.configuredPrinters.values()]) {
       if (socket.readyState !== WebSocket.OPEN) return
+      // A live persistent monitor connection already proves the LAN link works,
+      // so skip the probe: opening a second short-lived MQTT connection to a busy
+      // (e.g. printing) printer only risks a spurious "rejected" warning. The
+      // probe is only meaningful for a printer that is failing to connect.
+      if (this.printerMonitor?.isConnected(printer.id)) continue
       try {
         const validation = await validatePrinterLanConnection({
           host: printer.host,
@@ -1279,13 +1291,15 @@ export async function recoverBridgeStateFromRegisterFailure(
   state: BridgeState | null,
   error: unknown,
   stateFilePath: string,
-  clearState: (filePath: string) => Promise<void> = clearBridgeState
+  clearCredentials: (filePath: string, installationId: string) => Promise<void> = clearBridgeCredentials
 ): Promise<boolean> {
   if (!state || !(error instanceof BridgeRuntimeFailure) || error.kind !== 'invalid-credentials') {
     return false
   }
 
-  await clearState(stateFilePath)
+  // Drop only the rejected credentials; keep the durable installationId so the
+  // re-registration re-binds this bridge to its existing record on the server.
+  await clearCredentials(stateFilePath, state.installationId)
   return true
 }
 

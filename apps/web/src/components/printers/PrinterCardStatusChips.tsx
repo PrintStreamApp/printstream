@@ -1,7 +1,7 @@
 /**
  * The conditional status chips that trail the printer name/model in the card header: current
- * stage, pending-dispatch state, HMS error alerts, and the LAN-mode warning. Each chip is gated
- * on live status, so the row is empty for an idle, healthy, cloud-connected printer. Extracted
+ * stage, pending-dispatch state, HMS error alerts, and the connection-issue warning. Each chip is
+ * gated on live status, so the row is empty for an idle, healthy, connected printer. Extracted
  * from PrinterCard to keep the card body render-focused.
  */
 import { Chip, Tooltip } from '@mui/joy'
@@ -66,7 +66,13 @@ export function PrinterCardStatusChips({
           printerSerial={printerSerial}
         />
       )}
-      {isOnline && status?.connectionWarnings && status.connectionWarnings.length > 0 && (
+      {/*
+        A connection probe only flags a problem when the printer is NOT successfully
+        streaming telemetry: a live, online printer (e.g. mid-print) is proof the LAN
+        link works, so we never show this then — it would be a false positive. Surface
+        it only while the printer is offline, where it explains *why* it isn't connecting.
+      */}
+      {!isOnline && status?.connectionWarnings && status.connectionWarnings.length > 0 && (
         <Tooltip
           variant="soft"
           size="sm"
@@ -79,7 +85,7 @@ export function PrinterCardStatusChips({
             startDecorator={<WarningAmberRoundedIcon />}
             sx={{ flexShrink: 0 }}
           >
-            LAN mode
+            Connection issue
           </Chip>
         </Tooltip>
       )}

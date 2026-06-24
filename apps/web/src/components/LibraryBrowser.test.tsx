@@ -5,10 +5,12 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import React from 'react'
 import type { LibraryFile } from '@printstream/shared'
 import { shouldShowLibraryPlateTypeTags } from '../lib/libraryFileTags'
+import { getMeshThumbnailProvider, registerMeshThumbnailProvider } from '../lib/modelThumbnailRegistry'
 import { installJsdomGlobals } from '../test-utils/jsdom'
 import { FileThumbnail } from './LibraryBrowser'
 
 const dom = installJsdomGlobals()
+const originalMeshProvider = getMeshThumbnailProvider()
 
 const bridgeBackedFile: LibraryFile = {
   id: 'file-1',
@@ -37,6 +39,7 @@ const unslicedThreeMfFile: LibraryFile = {
 
 afterEach(() => {
   cleanup()
+  registerMeshThumbnailProvider(originalMeshProvider)
 })
 
 after(() => {
@@ -69,6 +72,31 @@ test('FileThumbnail retries after thumbnails are re-enabled', async () => {
   await waitFor(() => {
     assert.ok(view.getByRole('img', { name: bridgeBackedFile.name }))
   })
+})
+
+test('FileThumbnail for an STL file serves the persisted server thumbnail, rendering on the client only on a miss', async () => {
+  const stlFile: LibraryFile = { ...bridgeBackedFile, id: 'file-stl', name: 'widget.stl', kind: 'stl' }
+  // A registered client renderer stands in for the model-studio plugin's Three.js path.
+  let rendered = 0
+  registerMeshThumbnailProvider(async () => { rendered += 1; return 'data:image/png;base64,Zm9v' })
+
+  const view = render(
+    <CssVarsProvider>
+      <FileThumbnail file={stlFile} size={56} />
+    </CssVarsProvider>
+  )
+
+  // The thumbnail is served from the server (the warm path) — not rendered up front.
+  const img = view.getByRole('img', { name: stlFile.name })
+  assert.match(img.getAttribute('src') ?? '', /\/api\/library\/file-stl\/thumbnail/)
+  assert.equal(rendered, 0)
+
+  // On a cache miss the server thumbnail 404s; the client render is the cold-start fallback.
+  fireEvent.error(img)
+  await waitFor(() => {
+    assert.equal(view.getByRole('img', { name: stlFile.name }).getAttribute('src'), 'data:image/png;base64,Zm9v')
+  })
+  assert.equal(rendered, 1)
 })
 
 test('shouldShowLibraryPlateTypeTags keeps plate chips on gcode AND unsliced 3MF files', () => {

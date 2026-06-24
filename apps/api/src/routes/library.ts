@@ -55,6 +55,12 @@ import {
   warmLibraryFileDerivedChips,
   type DerivedChips
 } from '../lib/library-derived-chips.js'
+import {
+  MESH_THUMBNAIL_MAX_BYTES,
+  isLikelyPng,
+  readMeshThumbnailCache,
+  writeMeshThumbnailCache
+} from '../lib/mesh-thumbnail-cache.js'
 import { env } from '../lib/env.js'
 import { requestHasDemoModeRestrictions } from '../lib/demo-mode.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
@@ -1420,6 +1426,41 @@ libraryRouter.get('/:id/thumbnail', requireRequestPermission(LIBRARY_VIEW_PERMIS
 })
 
 /**
+ * Persist a client-rendered STL/STEP preview PNG so later views (any client/session)
+ * are served the bytes instead of re-fetching the mesh and re-rendering — and, for
+ * STEP, re-tessellating server-side. The web renderer is the only producer; the body
+ * is a raw PNG. `?v=<uploadedAt>` guards against a client that rendered a now-stale
+ * version racing a fresh upload: a mismatch is accepted as a no-op rather than caching
+ * the wrong content. Scoped to viewers (rendering a preview needs no manage rights).
+ */
+libraryRouter.put(
+  '/:id/thumbnail',
+  requireRequestPermission(LIBRARY_VIEW_PERMISSION),
+  express.raw({ type: 'image/png', limit: MESH_THUMBNAIL_MAX_BYTES }),
+  async (request, response) => {
+    const fileId = requireRouteParam(request.params.id, 'File id')
+    const row = await prisma.libraryFile.findUnique({ where: { id: fileId } }) as LibraryFileRow | null
+    if (!row) throw notFound('File not found')
+    if (row.kind !== 'stl' && row.kind !== 'step') throw badRequest('Thumbnails are only uploadable for mesh files')
+
+    const body = request.body
+    if (!Buffer.isBuffer(body) || body.length === 0) throw badRequest('Expected a PNG body')
+    if (!isLikelyPng(body)) throw badRequest('Body is not a PNG')
+
+    // Ignore (don't cache) a render of a superseded version. uploadedAt is the
+    // revision marker the client cache-busts on, so it round-trips it here.
+    const renderedFor = typeof request.query.v === 'string' ? request.query.v : null
+    if (renderedFor !== null && renderedFor !== row.uploadedAt.toISOString()) {
+      response.status(204).end()
+      return
+    }
+
+    await writeMeshThumbnailCache(row, body)
+    response.status(204).end()
+  }
+)
+
+/**
  * Binary STL bytes for a library model file, scoped to viewers (not downloaders) and
  * without an audit-log entry, so the web client can render a 3D preview/thumbnail for
  * files that carry no embedded image. STL is shipped verbatim; STEP is tessellated to
@@ -2092,6 +2133,17 @@ async function sendLibraryFileThumbnail(
   response: Response,
   row: { kind: string; ownerBridgeId?: string | null; storedPath: string; sizeBytes: number; uploadedAt: Date }
 ): Promise<void> {
+  // STL/STEP have no embedded image. The web client renders one with Three.js and
+  // uploads it via PUT /:id/thumbnail; here we serve that persisted render. A miss
+  // (nothing rendered yet) returns 404 so the client falls back to a live render.
+  if (row.kind === 'stl' || row.kind === 'step') {
+    if (sendNotModifiedIfLibraryFileFresh(request, response, row, 'mesh-thumbnail')) return
+    const cached = await readMeshThumbnailCache(row)
+    if (!cached) throw notFound('Thumbnail not rendered yet')
+    response.setHeader('Content-Type', 'image/png')
+    response.send(cached)
+    return
+  }
   if (row.kind !== '3mf' && row.kind !== 'gcode') throw notFound('No thumbnail available')
   const signal = requestAbortSignal(request, response)
   const plateIndex = parsePlateIndexQuery(request.query.plate)

@@ -1321,65 +1321,54 @@ export function FileThumbnail({
   disabled?: boolean
 }) {
   const [failed, setFailed] = useState(false)
-  // BambuStudio renders the MODEL (iso, material colour) into a 3MF/gcode file's embedded plate
-  // PNG — including sliced gcode.3mf files — so the server thumbnail is already the "original
-  // model" image. (The model mesh itself is stripped from sliced outputs via --min-save, so a
-  // client mesh render isn't possible there anyway.)
+  // Every previewable kind resolves to a server thumbnail URL. 3MF/gcode embed a
+  // BambuStudio-rendered plate PNG (iso, material colour — including sliced gcode.3mf,
+  // whose mesh is stripped via --min-save so a client render isn't possible anyway).
+  // STL/STEP carry no embedded image: the model-studio plugin renders one on the client
+  // (Three.js) and uploads it, after which the server serves that persisted PNG here —
+  // so the expensive mesh fetch + render (and, for STEP, server-side tessellation) runs
+  // once per file version instead of on every view.
   // Cache-bust on uploadedAt: saving a new version keeps the same file id (and thus URL),
   // so without this the browser keeps showing the previously-fetched <img> from memory even
-  // though the server now returns a fresh thumbnail for the new arrangement.
-  const serverThumbnailUrl = file.kind === '3mf' || file.kind === 'gcode'
+  // though the server now returns a fresh thumbnail for the new content.
+  const hasServerThumbnail = file.kind === '3mf' || file.kind === 'gcode' || file.kind === 'stl' || file.kind === 'step'
+  const serverThumbnailUrl = hasServerThumbnail
     ? buildApiUrl(`/api/library/${file.id}/thumbnail?v=${encodeURIComponent(file.uploadedAt)}`)
     : null
 
-  // STL/STEP files have no server thumbnail; a plugin may register a client-side
-  // renderer (Three.js lives in the model-studio plugin, not in core). STEP is
-  // tessellated to STL by the server's /mesh endpoint before it reaches the renderer.
+  // Client-side fallback, rendered only after the server thumbnail 404s/errors so most
+  // files never pay the cost (Three.js lives in the model-studio plugin, not in core):
+  //  - STL/STEP: the first-ever view has nothing cached server-side; the mesh provider
+  //    renders the mesh AND uploads the PNG, so the next view is served from the server.
+  //  - 3MF/gcode: a sliced gcode.3mf may carry no embedded plate PNG; render from the scene.
   const meshProvider = file.kind === 'stl' || file.kind === 'step' ? getMeshThumbnailProvider() : null
-  const [meshThumbnailUrl, setMeshThumbnailUrl] = useState<string | null>(null)
-  useEffect(() => {
-    if (disabled || !meshProvider) {
-      setMeshThumbnailUrl(null)
-      return
-    }
-    let cancelled = false
-    const controller = new AbortController()
-    meshProvider(file, controller.signal)
-      .then((url) => { if (!cancelled) setMeshThumbnailUrl(url) })
-      .catch(() => { if (!cancelled) setMeshThumbnailUrl(null) })
-    return () => {
-      cancelled = true
-      controller.abort()
-    }
-    // Re-render only when the underlying file (id/revision) or gating changes.
-  }, [disabled, meshProvider, file, file.id, file.uploadedAt])
-
-  const thumbnailUrl = serverThumbnailUrl ?? meshThumbnailUrl
-
-  // Client-side fallback when the server thumbnail for a 3MF/gcode file is missing (a
-  // sliced gcode.3mf may have no embedded plate PNG). Only rendered after the server
-  // thumbnail fails, so most files never pay the cost.
   const sceneProvider = file.kind === '3mf' || file.kind === 'gcode' ? getSceneThumbnailProvider() : null
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null)
   useEffect(() => { setFallbackUrl(null) }, [file.id, file.uploadedAt])
   useEffect(() => {
-    if (disabled || !failed || !sceneProvider) return
+    if (disabled || !failed) return
     let cancelled = false
     const controller = new AbortController()
-    sceneProvider(file.id, 1, controller.signal)
+    const rendered = meshProvider
+      ? meshProvider(file, controller.signal)
+      : sceneProvider
+        ? sceneProvider(file.id, 1, controller.signal)
+        : null
+    if (!rendered) return
+    rendered
       .then((url) => { if (!cancelled) setFallbackUrl(url) })
       .catch(() => { if (!cancelled) setFallbackUrl(null) })
     return () => { cancelled = true; controller.abort() }
-  }, [disabled, failed, sceneProvider, file, file.id, file.uploadedAt])
+  }, [disabled, failed, meshProvider, sceneProvider, file, file.id, file.uploadedAt])
 
   useEffect(() => {
     if (!disabled) {
       setFailed(false)
     }
-  }, [disabled, thumbnailUrl])
+  }, [disabled, serverThumbnailUrl])
 
   // After the server thumbnail errors, show the client-rendered fallback instead.
-  const displayUrl = failed ? fallbackUrl : thumbnailUrl
+  const displayUrl = failed ? fallbackUrl : serverThumbnailUrl
   const showImage = !disabled && displayUrl !== null
   const kindLabel = formatLibraryFileKindLabel(file.name, file.kind)
   return (

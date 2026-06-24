@@ -84,6 +84,11 @@ model Bridge {
   name       String
   connectCode  String?  @unique
   runtimeTokenHash String?
+  // Durable per-install identity the bridge persists across credential resets, so a
+  // returning physical bridge re-binds to this row (keeping its printers and library)
+  // instead of registering as a duplicate. High-entropy secret; never surfaced to the
+  // browser. Contract: bridgeRuntimeRegistrationRequest in @printstream/shared.
+  installationId String? @unique
   version    String?
   buildRevision String?
   sourceFingerprint String?

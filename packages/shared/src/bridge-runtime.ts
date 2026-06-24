@@ -23,6 +23,16 @@ import {
 export const bridgeRuntimeRegistrationRequestSchema = z.object({
   bridgeId: z.string().trim().min(1).optional(),
   runtimeToken: z.string().trim().min(1).optional(),
+  /**
+   * Durable per-install identity, generated once by the bridge and persisted
+   * across credential resets (unlike `bridgeId`/`runtimeToken`, which the bridge
+   * clears when a server rejects them). Lets the server recognize a returning
+   * physical bridge whose runtime credentials were lost — e.g. after pointing it
+   * at a different database — and re-bind it to its existing record (keeping its
+   * printers and library) instead of minting a duplicate bridge. High-entropy and
+   * treated as a secret: never logged or surfaced to the browser.
+   */
+  installationId: z.string().trim().min(1).max(200).optional(),
   name: z.string().trim().min(1).max(120).optional(),
   version: z.string().trim().min(1).max(64).optional(),
   buildRevision: z.string().trim().min(1).max(120).optional(),

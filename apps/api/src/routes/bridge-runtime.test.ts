@@ -367,6 +367,95 @@ test('bridge runtime register rejects incomplete persisted credentials', async (
   })
 })
 
+test('register re-binds a returning bridge by installation id instead of creating a duplicate', async () => {
+  rootPrisma.bridge.create = ((async () => {
+    throw new Error('a returning bridge must not create a duplicate')
+  }) as unknown) as typeof rootPrisma.bridge.create
+
+  let findWhere: Record<string, unknown> | null = null
+  rootPrisma.bridge.findUnique = ((async (input: { where: Record<string, unknown> }) => {
+    findWhere = input.where
+    return { id: 'bridge-1', tenantId: 'tenant-1' }
+  }) as unknown) as typeof rootPrisma.bridge.findUnique
+
+  let updateWhere: Record<string, unknown> | null = null
+  let updateData: Record<string, unknown> | null = null
+  rootPrisma.bridge.update = ((async (input: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+    updateWhere = input.where
+    updateData = input.data
+    return {
+      id: 'bridge-1',
+      name: 'Workshop Bridge',
+      connectCode: 'connect-123',
+      tenantId: 'tenant-1',
+      version: '0.2.0',
+      releaseFingerprint: RELEASE_FINGERPRINT,
+      protocolVersion: 1,
+      runnerAbiVersion: 'node22-ffmpeg7-v1',
+      updateChannel: 'stable',
+      updateStatus: null,
+      latestAvailableVersion: null,
+      lastUpdateCheckAt: new Date('2026-05-08T21:45:00.000Z'),
+      lastUpdateError: null,
+      lastSeenAt: new Date('2026-05-08T21:45:00.000Z'),
+      createdAt: new Date('2026-05-08T21:00:00.000Z'),
+      updatedAt: new Date('2026-05-08T21:45:00.000Z'),
+      _count: { printers: 2 }
+    }
+  }) as unknown) as typeof rootPrisma.bridge.update
+
+  await withBridgeRuntimeApp(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/bridge-runtime/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // No bridgeId/runtimeToken — the bridge cleared them, but kept its install id.
+      body: JSON.stringify({ installationId: 'install-xyz', name: 'PrintStream Bridge', version: '0.2.0' })
+    })
+
+    assert.equal(response.status, 200)
+    const payload = await response.json()
+    // Re-bound to the existing record (keeping its 2 printers), not a fresh bridge.
+    assert.equal(payload.bridge.id, 'bridge-1')
+    assert.equal(payload.bridge.printerCount, 2)
+    assert.equal(typeof payload.runtimeToken, 'string')
+    assert.deepEqual(findWhere, { installationId: 'install-xyz' })
+    assert.deepEqual(updateWhere, { id: 'bridge-1' })
+    // A fresh runtime token is issued, and the paired name is not overwritten.
+    assert.equal(typeof updateData?.runtimeTokenHash, 'string')
+    assert.equal(updateData?.name, undefined)
+  })
+})
+
+test('register stores the installation id on a brand-new bridge', async () => {
+  rootPrisma.bridge.findUnique = ((async () => null) as unknown) as typeof rootPrisma.bridge.findUnique
+  let createData: Record<string, unknown> | null = null
+  rootPrisma.bridge.create = ((async (input: { data: Record<string, unknown> }) => {
+    createData = input.data
+    return {
+      id: 'bridge-9',
+      name: 'Bench Bridge',
+      connectCode: 'connect-999',
+      tenantId: null,
+      version: '0.1.0',
+      lastSeenAt: new Date('2026-05-08T21:30:00.000Z'),
+      createdAt: new Date('2026-05-08T21:30:00.000Z'),
+      updatedAt: new Date('2026-05-08T21:30:00.000Z'),
+      _count: { printers: 0 }
+    }
+  }) as unknown) as typeof rootPrisma.bridge.create
+
+  await withBridgeRuntimeApp(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/bridge-runtime/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installationId: 'fresh-install', name: 'Bench Bridge', version: '0.1.0' })
+    })
+
+    assert.equal(response.status, 201)
+    assert.equal(createData?.installationId, 'fresh-install')
+  })
+})
+
 async function withBridgeRuntimeApp(run: (baseUrl: string) => Promise<void>): Promise<void> {
   const app = express()
   app.use(express.json())

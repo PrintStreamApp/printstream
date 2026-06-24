@@ -141,6 +141,22 @@ test('BridgePrinterMonitor keeps a fresh report stream alive without recreating 
   }
 })
 
+test('BridgePrinterMonitor.isConnected reflects the live MQTT connection state', () => {
+  const client = new FakeMqttClient()
+  const monitor = new BridgePrinterMonitor(() => {}, (() => client as never) as typeof mqttConnect)
+
+  monitor.updatePrinters([makePrinter()])
+  assert.equal(monitor.isConnected('printer-1'), false, 'not connected before the client opens')
+
+  client.connected = true
+  client.emit('connect')
+  assert.equal(monitor.isConnected('printer-1'), true, 'connected after the client opens')
+
+  client.connected = false
+  assert.equal(monitor.isConnected('printer-1'), false, 'disconnected once the client drops')
+  assert.equal(monitor.isConnected('unknown-printer'), false, 'unknown printers are never connected')
+})
+
 test('BridgePrinterMonitor re-requests pushall on an interval while connected', () => {
   mock.timers.enable({ apis: ['setInterval', 'setTimeout'] })
   try {

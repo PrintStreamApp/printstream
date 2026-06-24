@@ -18,8 +18,11 @@ export type MeshThumbnailProvider = (file: LibraryFile, signal?: AbortSignal) =>
 
 let provider: MeshThumbnailProvider | null = null
 
-/** Register the renderer used to preview raw-mesh (STL/STEP) files. Called once by the model-studio plugin. */
-export function registerMeshThumbnailProvider(fn: MeshThumbnailProvider): void {
+/**
+ * Register the renderer used to preview raw-mesh (STL/STEP) files. Called once by the
+ * model-studio plugin; pass `null` to clear it (used by tests to restore the registry).
+ */
+export function registerMeshThumbnailProvider(fn: MeshThumbnailProvider | null): void {
   provider = fn
 }
 

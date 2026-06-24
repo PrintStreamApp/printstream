@@ -26,36 +26,69 @@ COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/slicer-cli
 RUN chmod +x /usr/local/bin/slicer-cli \
 	&& node /usr/local/bin/install-slicer-targets.mjs /opt/printstream-slicers /usr/local/bin/slicer-cli
 
+# Build an x86-64 sysroot for the arm64 image. BambuStudio is x86-only, so on arm64
+# the slicer runs the same x86-64 CLI under qemu-user (mirroring the dev arm64 path) —
+# the sysroot supplies the x86-64 loader + GTK/WebKit/Mesa libs the AppImage does not
+# bundle. On amd64 this stage produces an empty dir (the runtime installs native libs),
+# so the `COPY --from` below is a harmless no-op there. TARGETARCH is set by buildx.
+FROM base AS x86-sysroot
+ARG TARGETARCH
+ARG DEBIAN_FRONTEND=noninteractive
+COPY apps/slicer/docker/build-x86-sysroot.mjs /usr/local/bin/build-x86-sysroot.mjs
+RUN set -eux; \
+	mkdir -p /opt/printstream-slicer-x86root; \
+	if [ "$TARGETARCH" = "arm64" ]; then \
+		apt-get update; \
+		apt-get install -y --no-install-recommends ca-certificates curl xz-utils; \
+		rm -rf /var/lib/apt/lists/*; \
+		node /usr/local/bin/build-x86-sysroot.mjs /opt/printstream-slicer-x86root /tmp/x86root-cache; \
+		rm -rf /tmp/x86root-cache; \
+	fi
+
 FROM base AS runtime
 ENV NODE_ENV=production
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
-	&& apt-get install -y --no-install-recommends \
-		ca-certificates \
-		gosu \
-		libasound2 \
-		libdbus-1-3 \
-		libegl1 \
-		libfuse2 \
-		libgl1 \
-		libglu1-mesa \
-		libgstreamer-plugins-base1.0-0 \
-		libgstreamer1.0-0 \
-		libglib2.0-0 \
-		libgtk-3-0 \
-		libjavascriptcoregtk-4.1-0 \
-		libmspack0 \
-		libnss3 \
-		libopengl0 \
-		libsoup-3.0-0 \
-		libwebkit2gtk-4.1-0 \
-		libxkbcommon0 \
-		libxss1 \
-		xauth \
-		xvfb \
-	&& ln -sf /lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 /lib/x86_64-linux-gnu/libwebkit2gtk-4.0.so.37 \
-	&& ln -sf /lib/x86_64-linux-gnu/libjavascriptcoregtk-4.1.so.0 /lib/x86_64-linux-gnu/libjavascriptcoregtk-4.0.so.18 \
-	&& rm -rf /var/lib/apt/lists/*
+ARG TARGETARCH
+# amd64: install the native GTK/WebKit/Mesa closure BambuStudio links (the AppImage does
+# not bundle it). arm64: the x86-64 CLI runs under qemu-user against the baked sysroot, so
+# install the emulator + the native tools (Xvfb/gosu) only; the x86-64 libs come from the
+# sysroot copied in below.
+RUN set -eux; \
+	apt-get update; \
+	if [ "$TARGETARCH" = "arm64" ]; then \
+		apt-get install -y --no-install-recommends \
+			ca-certificates gosu qemu-user-static xauth xvfb; \
+	else \
+		apt-get install -y --no-install-recommends \
+			ca-certificates \
+			gosu \
+			libasound2 \
+			libdbus-1-3 \
+			libegl1 \
+			libfuse2 \
+			libgl1 \
+			libglu1-mesa \
+			libgstreamer-plugins-base1.0-0 \
+			libgstreamer1.0-0 \
+			libglib2.0-0 \
+			libgtk-3-0 \
+			libjavascriptcoregtk-4.1-0 \
+			libmspack0 \
+			libnss3 \
+			libopengl0 \
+			libsoup-3.0-0 \
+			libwebkit2gtk-4.1-0 \
+			libxkbcommon0 \
+			libxss1 \
+			xauth \
+			xvfb; \
+		ln -sf /lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 /lib/x86_64-linux-gnu/libwebkit2gtk-4.0.so.37; \
+		ln -sf /lib/x86_64-linux-gnu/libjavascriptcoregtk-4.1.so.0 /lib/x86_64-linux-gnu/libjavascriptcoregtk-4.0.so.18; \
+	fi; \
+	rm -rf /var/lib/apt/lists/*
+# The launcher (bambu-studio-cli.sh) reads SLICER_QEMU_SYSROOT on arm64; harmless on amd64.
+ENV SLICER_QEMU_SYSROOT=/opt/printstream-slicer-x86root
+COPY --from=x86-sysroot /opt/printstream-slicer-x86root /opt/printstream-slicer-x86root
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/shared/package.json packages/shared/package.json

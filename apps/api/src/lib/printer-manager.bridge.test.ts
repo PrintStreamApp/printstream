@@ -232,6 +232,30 @@ test('ingestBridgeReport reuses the API parser pipeline for bridged status', () 
   // printer-manager.offline-grace.test.ts.
 })
 
+test('ingestBridgeReport retires a stale LAN connection warning once telemetry resumes', () => {
+  printerManager.add(printer, 'tenant-1', 'bridge-1')
+
+  // The periodic LAN probe flags a (false) rejection — e.g. a busy printer that
+  // refused the probe's extra MQTT connection.
+  printerManager.ingestBridgeConnectionValidation(printer.id, {
+    ok: false,
+    mqttReachable: true,
+    developerModeEnabled: false,
+    warnings: [{
+      code: 'developerModeDisabled',
+      message: 'The bridge reached the printer, but the printer rejected the LAN connection.'
+    }]
+  }, 'bridge-1')
+  assert.equal(printerManager.getStatus(printer.id)?.connectionWarnings?.length, 1)
+
+  // A real telemetry frame proves the LAN link works, so the warning is retired.
+  printerManager.ingestBridgeReport(printer.id, {
+    print: { gcode_state: 'RUNNING', subtask_name: 'Busy plate', mc_percent: 50 }
+  }, 'bridge-1')
+
+  assert.deepEqual(printerManager.getStatus(printer.id)?.connectionWarnings, [])
+})
+
 test('ingestBridgeReport ignores a report from a bridge that does not own the printer', () => {
   printerManager.add(printer, 'tenant-1', 'bridge-1')
 
