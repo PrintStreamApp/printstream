@@ -2,8 +2,15 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import type { AuthProviderCapabilities } from '@printstream/shared'
 import { authProviderRegistry } from './auth-registry.js'
+import { env } from './env.js'
 import { HttpError } from './http-error.js'
 import { assertAuthProviderCanChangeState, restoreSupportAccessWhenWorkspaceAuthDisabled } from './auth-provider-guard.js'
+
+// Pin the deployment mode: the guard derives `selfHosted` from isSelfHostedDeployment() when a test
+// does not pass it explicitly, and that derivation flips between the private build (cloud modules
+// present -> false) and the public OSS snapshot (stripped -> true). The cases that omit the param
+// exercise the cloud guard behavior, so force self-hosted off for determinism in both builds.
+env.SELF_HOSTED = false
 
 const capabilities: AuthProviderCapabilities = {
   signIn: true,

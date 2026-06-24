@@ -3,11 +3,17 @@ process.env.NODE_ENV = 'test'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { authProviderRegistry } from '../lib/auth-registry.js'
+import { env } from '../lib/env.js'
 import { printGuards } from '../lib/print-guards.js'
 import { prisma } from '../lib/prisma.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { wsBroadcaster } from '../lib/ws-server.js'
 import { PluginRegistry } from './registry.js'
+
+// Pin the deployment mode: buildBootstrap() forwards isSelfHostedDeployment() into runtimePolicy, which
+// derives from whether the cloud private modules are present. The private build has them (false); the
+// public OSS snapshot strips them (true). These assertions expect the cloud shape, so force it.
+env.SELF_HOSTED = false
 
 const originalWsBroadcast = wsBroadcaster.broadcast
 

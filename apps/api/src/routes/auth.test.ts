@@ -41,6 +41,12 @@ import { getCurrentTenant, installTenantContext } from '../lib/tenant-context.js
 import { builtInAuthGroupSeeds, builtInPlatformAuthGroupSeeds } from '../lib/default-auth-groups.js'
 import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 
+// Pin the deployment mode so these cloud-auth assertions are deterministic across both builds. The
+// private monorepo ships the cloud private modules (isSelfHostedDeployment() -> false), but the public
+// OSS snapshot strips them, which would otherwise flip it to true and change platform-scope and
+// provider-guard behavior. This suite exercises the cloud path, so force self-hosted off.
+env.SELF_HOSTED = false
+
 // These three are still read inside individual tests (to detect whether the test stubbed the method),
 // so they stay as named references; the rest are tracked only by restorePrismaMethodsAfterEach below.
 const originalRootAuthTenantMembershipFindMany = rootPrisma.authTenantMembership.findMany
