@@ -16,6 +16,7 @@
  *   attached, and may mount routes at top-level `/api/...` paths.
  */
 import { readdir, stat } from 'node:fs/promises'
+import { readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { Express } from 'express'
@@ -28,6 +29,28 @@ export interface PrivateApiModule {
 /** Resolves `src/private` (or `dist/private` after compilation). */
 function defaultPrivateModulesDir(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../private')
+}
+
+/**
+ * Synchronously reports whether any first-party private (cloud) module is
+ * present. The public open-source export strips `src/private` entirely, so this
+ * doubles as the canonical "is this the cloud build?" signal. Used at startup
+ * (before the async module load) to pick build-exclusive behavior such as the
+ * active auth provider — see `isSelfHostedDeployment`.
+ */
+export function hasPrivateModules(dirOverride?: string): boolean {
+  const modulesDir = dirOverride ?? defaultPrivateModulesDir()
+  try {
+    return readdirSync(modulesDir).some((entry) => {
+      try {
+        return statSync(path.join(modulesDir, entry)).isDirectory()
+      } catch {
+        return false
+      }
+    })
+  } catch {
+    return false
+  }
 }
 
 /**

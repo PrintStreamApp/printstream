@@ -252,7 +252,9 @@ function PrinterCardComponent({
     && isOnline
     && isIdleLikeStage
     && activeJob != null
-  const printerAttentionSummary = getPrinterAttentionSummary(status)
+  const printerAttentionSummary = getPrinterAttentionSummary(status, {
+    includeHmsErrors: contentSettings.hmsErrors
+  })
   const terminalJobSummaryVisible = isOnline
     && !showJobSummary
     && !showDispatchSummary
@@ -631,6 +633,7 @@ function PrinterCardComponent({
             hasActiveJob={Boolean(activeJob)}
             pendingStartWarning={pendingStartWarning}
             isOnline={isOnline}
+            showHmsErrors={contentSettings.hmsErrors}
             printerModel={printer.model}
             printerSerial={printer.serial}
           />
@@ -701,7 +704,7 @@ function PrinterCardComponent({
             camera={cameraSurfaceVisible ? {
               printerId: printer.id,
               printerName: printer.name,
-              showTile: showCameraTile && !showWideCamera,
+              showTile: showCameraTile,
               showWide: showWideCamera,
               openRequestedAt: cameraDialogOpenRequestedAt,
               onDialogClose: () => setCameraDialogOpenRequestedAt(null),

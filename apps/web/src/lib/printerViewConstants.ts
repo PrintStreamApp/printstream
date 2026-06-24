@@ -56,16 +56,24 @@ export function showDemoFileUploadNotice(): void {
   toast.info(PUBLIC_DEMO_FILE_UPLOAD_NOTICE)
 }
 
-export const SINGLE_PRINTER_CARD_CONTENT_SETTINGS: PrinterCardContentSettings = {
+/**
+ * Starting card-content settings for the single-printer view, used as the
+ * default of an overridable workspace preference (the "Edit view" dialog) — not
+ * a hardcoded, non-editable layout. The single-printer card favors the
+ * full-width camera over the thumbnail snapshot, so `fullWidthSnapshot` is on
+ * and `cameraThumbnail` is off by default; every other block is shown.
+ */
+export const DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS: PrinterCardContentSettings = {
   nozzleTemperatures: true,
   bedTemperature: true,
   chamberTemperature: true,
   printSpeed: true,
   printStatus: true,
+  hmsErrors: true,
   doorState: true,
   ductState: true,
   modelThumbnail: true,
-  cameraThumbnail: true,
+  cameraThumbnail: false,
   fullWidthSnapshot: true,
   amsCards: true,
   footerControls: true

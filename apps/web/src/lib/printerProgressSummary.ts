@@ -179,8 +179,14 @@ export function shouldShowLiveSecondaryStageSummary(
   return shouldPreferSecondaryStageLabel(status, secondaryStageLabel)
 }
 
+/**
+ * @param options.includeHmsErrors When false, HMS alerts are omitted from the
+ *   summary (the active view's "HMS errors" card toggle is off); a more serious
+ *   device error still surfaces. Defaults to true.
+ */
 export function getPrinterAttentionSummary(
-  status: AttentionSummaryStatus | undefined
+  status: AttentionSummaryStatus | undefined,
+  options: { includeHmsErrors?: boolean } = {}
 ): PrinterAttentionSummary | null {
   if (status?.deviceError) {
     return {
@@ -189,6 +195,10 @@ export function getPrinterAttentionSummary(
       message: status.deviceError.message,
       count: 1
     }
+  }
+
+  if (options.includeHmsErrors === false) {
+    return null
   }
 
   const firstHmsError = status?.hmsErrors[0]

@@ -12,7 +12,7 @@ const uniquePermissionArraySchema = z.array(permissionSchema).refine(
   'Permissions must be unique.'
 )
 
-export const authMethodSchema = z.enum(['passkey', 'email-code', 'oauth'])
+export const authMethodSchema = z.enum(['passkey', 'email-code', 'oauth', 'password'])
 
 export type AuthMethod = z.infer<typeof authMethodSchema>
 
@@ -90,7 +90,16 @@ export const authRuntimePolicySchema = z.object({
    * the operator manages. Set on self-hosted installs that enable
    * `MANAGED_BRIDGE`; false in cloud and remote-bridge installs.
    */
-  managedBridge: z.boolean().default(false)
+  managedBridge: z.boolean().default(false),
+  /**
+   * Self-hosted (open-source) deployment: the cloud-only private surface
+   * (platform tenant administration, marketing) is absent. The web app uses this
+   * to hide those surfaces even when their modules happen to be present (e.g. a
+   * developer running the full private tree from source with `SELF_HOSTED=true`).
+   * In a real public build the private modules are stripped, so this is also
+   * derived from their absence. False in the hosted cloud deployment.
+   */
+  selfHosted: z.boolean().default(false)
 })
 
 export type AuthRuntimePolicy = z.infer<typeof authRuntimePolicySchema>
@@ -369,6 +378,158 @@ export const emailCodeVerifyResponseSchema = z.object({
 })
 
 export type EmailCodeVerifyResponse = z.infer<typeof emailCodeVerifyResponseSchema>
+
+// ---------------------------------------------------------------------------
+// Password auth (the OSS email/password provider, `auth-password`)
+//
+// A self-hosted alternative to the cloud-only passkey/email-code provider that
+// needs no email infrastructure. Password values are never trimmed (per NIST
+// 800-63B leading/trailing spaces are valid) and never echoed back to clients.
+// ---------------------------------------------------------------------------
+
+export const PASSWORD_MIN_LENGTH = 10
+export const PASSWORD_MAX_LENGTH = 128
+
+/** Policy applied to newly-chosen passwords (set/change), not to sign-in. */
+export const passwordValueSchema = z
+  .string()
+  .min(PASSWORD_MIN_LENGTH, `Use at least ${PASSWORD_MIN_LENGTH} characters.`)
+  .max(PASSWORD_MAX_LENGTH, `Use at most ${PASSWORD_MAX_LENGTH} characters.`)
+
+/**
+ * Bound for passwords submitted at sign-in / current-password checks: only a
+ * non-empty cap (a legacy password set under an older policy must still verify,
+ * and the upper bound guards the hash function against oversized input).
+ */
+const submittedPasswordSchema = z.string().min(1).max(PASSWORD_MAX_LENGTH)
+
+export const passwordPolicySchema = z.object({
+  minLength: z.number().int().positive(),
+  maxLength: z.number().int().positive()
+})
+
+export type PasswordPolicy = z.infer<typeof passwordPolicySchema>
+
+export const PASSWORD_POLICY: PasswordPolicy = {
+  minLength: PASSWORD_MIN_LENGTH,
+  maxLength: PASSWORD_MAX_LENGTH
+}
+
+export const passwordAuthCountsSchema = authManagementCountsSchema.extend({
+  passwordCredentials: z.number().int().nonnegative()
+})
+
+export type PasswordAuthCounts = z.infer<typeof passwordAuthCountsSchema>
+
+export const passwordAuthStatusSchema = z.object({
+  setupRequired: z.boolean(),
+  sessionDuration: authSessionDurationSchema,
+  permissions: z.array(permissionSchema),
+  permissionDefinitions: z.array(permissionDefinitionSchema),
+  initialAdminEmail: z.string().email().nullable().optional(),
+  counts: passwordAuthCountsSchema,
+  policy: passwordPolicySchema
+})
+
+export type PasswordAuthStatus = z.infer<typeof passwordAuthStatusSchema>
+
+export const passwordSignInRequestSchema = z.object({
+  email: z.string().trim().email().max(320),
+  password: submittedPasswordSchema,
+  tenantId: z.string().trim().min(1).optional(),
+  redirectTo: authRedirectPathSchema.optional()
+})
+
+export type PasswordSignInRequest = z.infer<typeof passwordSignInRequestSchema>
+
+export const passwordSignInResponseSchema = z.object({
+  authenticated: z.literal(true),
+  actor: authActorSummarySchema,
+  redirectTo: z.string().nullable().optional()
+})
+
+export type PasswordSignInResponse = z.infer<typeof passwordSignInResponseSchema>
+
+export const bootstrapPasswordAdminRequestSchema = z.object({
+  email: z.string().trim().email().max(320),
+  displayName: z.string().trim().min(1).max(120).nullable().optional(),
+  password: passwordValueSchema
+})
+
+export type BootstrapPasswordAdminRequest = z.infer<typeof bootstrapPasswordAdminRequestSchema>
+
+export const bootstrapPasswordAdminResponseSchema = z.object({
+  user: z.object({
+    id: z.string(),
+    email: z.string().email(),
+    displayName: z.string().nullable(),
+    createdAt: z.string().datetime()
+  }),
+  group: z.object({
+    id: z.string(),
+    key: z.string().nullable(),
+    name: z.string()
+  }),
+  authenticated: z.boolean(),
+  setupRequired: z.boolean()
+})
+
+export type BootstrapPasswordAdminResponse = z.infer<typeof bootstrapPasswordAdminResponseSchema>
+
+export const changeOwnPasswordRequestSchema = z.object({
+  currentPassword: submittedPasswordSchema,
+  newPassword: passwordValueSchema
+})
+
+export type ChangeOwnPasswordRequest = z.infer<typeof changeOwnPasswordRequestSchema>
+
+export const adminSetPasswordRequestSchema = z.object({
+  password: passwordValueSchema
+})
+
+export type AdminSetPasswordRequest = z.infer<typeof adminSetPasswordRequestSchema>
+
+export const accountPasswordStatusSchema = z.object({
+  hasPassword: z.boolean(),
+  mustChangePassword: z.boolean(),
+  lastChangedAt: z.string().datetime().nullable()
+})
+
+export type AccountPasswordStatus = z.infer<typeof accountPasswordStatusSchema>
+
+/**
+ * Optional email password-reset for the password provider. Available only when
+ * an email transport is configured (SMTP in self-hosted, Cloudflare in cloud);
+ * the provider works without it.
+ */
+export const passwordResetAvailabilitySchema = z.object({
+  available: z.boolean()
+})
+
+export type PasswordResetAvailability = z.infer<typeof passwordResetAvailabilitySchema>
+
+export const passwordResetRequestSchema = z.object({
+  email: z.string().trim().email().max(320),
+  tenantId: z.string().trim().min(1).optional()
+})
+
+export type PasswordResetRequest = z.infer<typeof passwordResetRequestSchema>
+
+/** Always-generic response (no account enumeration). */
+export const passwordResetRequestResponseSchema = z.object({
+  delivered: z.boolean()
+})
+
+export type PasswordResetRequestResponse = z.infer<typeof passwordResetRequestResponseSchema>
+
+export const passwordResetVerifyRequestSchema = z.object({
+  email: z.string().trim().email().max(320),
+  code: z.string().trim().min(1).max(128),
+  newPassword: passwordValueSchema,
+  tenantId: z.string().trim().min(1).optional()
+})
+
+export type PasswordResetVerifyRequest = z.infer<typeof passwordResetVerifyRequestSchema>
 
 export const switchTenantRequestSchema = z.object({
   tenantId: z.string().trim().min(1)

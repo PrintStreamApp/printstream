@@ -24,7 +24,7 @@ function buildBootstrap(overrides: Partial<AuthBootstrap> = {}): AuthBootstrap {
       canManagePlugins: false,
       canViewLogs: false
     },
-    runtimePolicy: { demoMode: false, managedBridge: false },
+    runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false },
     ...rest,
     memberTenants,
     availableTenants

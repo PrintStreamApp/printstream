@@ -7,6 +7,7 @@
 import type { AuthBootstrap, AuthMethod, AuthProviderBootstrap, AuthProviderCapabilities } from '@printstream/shared'
 import { getCurrentTenant } from './tenant-context.js'
 import { isManagedBridgeMode } from './managed-bridge.js'
+import { isSelfHostedDeployment } from './deployment-mode.js'
 
 type AuthBootstrapBase = Omit<AuthBootstrap, 'permissions' | 'actor' | 'capabilities'>
 
@@ -71,7 +72,8 @@ class AuthProviderRegistry {
       tenantHasConnectedBridges: false,
       runtimePolicy: {
         demoMode: input.demoMode,
-        managedBridge: isManagedBridgeMode()
+        managedBridge: isManagedBridgeMode(),
+        selfHosted: isSelfHostedDeployment()
       }
     }
   }

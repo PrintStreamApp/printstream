@@ -134,7 +134,8 @@ test('auth bootstrap exposes public demo runtime policy for the reserved demo te
       },
       runtimePolicy: {
         demoMode: true,
-        managedBridge: false
+        managedBridge: false,
+        selfHosted: false
       }
     })
   })
@@ -174,7 +175,7 @@ test('auth bootstrap reports no-auth for a public demo guest even when the demo 
     const payload = await response.json()
     assert.equal(payload.authEnabled, false)
     assert.equal(payload.setupRequired, false)
-    assert.deepEqual(payload.runtimePolicy, { demoMode: true, managedBridge: false })
+    assert.deepEqual(payload.runtimePolicy, { demoMode: true, managedBridge: false, selfHosted: false })
     assert.deepEqual(payload.actor, { type: 'anonymous', isPlatformUser: false })
   })
 })
@@ -480,7 +481,8 @@ test('auth bootstrap includes registered provider metadata', async () => {
       },
       runtimePolicy: {
         demoMode: false,
-        managedBridge: false
+        managedBridge: false,
+        selfHosted: false
       }
     })
   })
@@ -558,7 +560,7 @@ test('tenant auth bootstrap reports platform auth state separately from tenant a
         canManagePlugins: false,
         canViewLogs: false
       },
-      runtimePolicy: { demoMode: false, managedBridge: false }
+      runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false }
     })
   })
 })

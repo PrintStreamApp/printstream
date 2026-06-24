@@ -37,10 +37,11 @@ import { usePlateClearingSync } from '../lib/plateClearing'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildTenantWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspaceRoute'
 import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, filterPrintersForView, sortPrintersForView, parseStoredOptionalString, serializeStoredOptionalString, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings } from '../lib/printersViewHelpers'
-import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
+import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
 import { PrinterCard } from '../components/printers/PrinterCard'
 import { PrinterSortModal, PrinterViewsModal } from '../components/printers/PrinterViewModals'
+import { PrinterCardContentSettingsModal } from '../components/printers/PrinterCardContentSettingsModal'
 import { PrinterFormModal, LocalFilePrintGate, type PrinterFormValues } from '../components/printers/PrinterFormModal'
 import { LibraryPickerModal } from '../components/printers/LibraryPickerModal'
 
@@ -117,6 +118,7 @@ export function PrintersView() {
   const [sortDialogOpen, setSortDialogOpen] = useState(false)
   const [printerViewsDialogOpen, setPrinterViewsDialogOpen] = useState(false)
   const [printerViewsDialogMode, setPrinterViewsDialogMode] = useState<'edit' | 'create'>('edit')
+  const [singleViewSettingsOpen, setSingleViewSettingsOpen] = useState(false)
   const [detailHistorySearch, setDetailHistorySearch] = useState('')
   const deferredDetailHistorySearch = useDeferredValue(detailHistorySearch)
   const [detailHistoryResults, setDetailHistoryResults] = useState<PrintJob['result'][]>(() => [...HISTORY_RESULTS])
@@ -183,6 +185,15 @@ export function PrintersView() {
   const [printerCardContentSettings, setPrinterCardContentSettings] = useLocalStorageState<PrinterCardContentSettings>(
     `bambu.printers.cardContentSettings.${workspacePreferenceScopeKey}`,
     DEFAULT_PRINTER_CARD_CONTENT_SETTINGS,
+    parsePrinterCardContentSettings,
+    JSON.stringify
+  )
+  // The single-printer view shows one full-detail card; its content toggles are
+  // a workspace preference shared across every printer, independent of the
+  // multi-printer Overview/saved-view settings above.
+  const [singlePrinterCardContentSettings, setSinglePrinterCardContentSettings] = useLocalStorageState<PrinterCardContentSettings>(
+    `bambu.printers.singleCardContentSettings.${workspacePreferenceScopeKey}`,
+    DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS,
     parsePrinterCardContentSettings,
     JSON.stringify
   )
@@ -589,7 +600,13 @@ export function PrintersView() {
       )}
 
       {singlePrinterView ? (
-        <Stack spacing={1}>
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="flex-start"
+          justifyContent="space-between"
+          sx={{ flexWrap: 'wrap' }}
+        >
           <NestedViewHeader
             crumbs={[
               { label: 'Printers', onClick: () => navigate(workspacePath('/printers')) },
@@ -599,6 +616,18 @@ export function PrintersView() {
               ? `${selectedPrinter.model} details, live status, controls, storage, and print history.`
               : 'Live status, controls, storage, and print history for this printer.'}
           />
+          {selectedPrinter && (
+            <Button
+              size="sm"
+              variant="soft"
+              color="neutral"
+              startDecorator={<TuneRoundedIcon />}
+              onClick={() => setSingleViewSettingsOpen(true)}
+              sx={{ flex: '0 0 auto' }}
+            >
+              Edit view
+            </Button>
+          )}
         </Stack>
       ) : showNoConnectedBridgesPlaceholder ? (
         <Stack spacing={1}>
@@ -856,7 +885,7 @@ export function PrintersView() {
               dispatchLink={dispatchJobsByPrinter.get(selectedPrinter.id)}
               activeJob={latestActiveJobsByPrinter.get(selectedPrinter.id)}
               latestJob={latestFinishedJobsByPrinter.get(selectedPrinter.id)}
-              contentSettings={SINGLE_PRINTER_CARD_CONTENT_SETTINGS}
+              contentSettings={singlePrinterCardContentSettings}
               cardsPerRow={1}
               demoMode={demoMode}
               canControlPrinter={canControlPrinters}
@@ -1271,6 +1300,18 @@ export function PrintersView() {
           onEditManualOrder={() => {
             setPrinterViewsDialogOpen(false)
             setSortDialogOpen(true)
+          }}
+        />
+      )}
+
+      {singleViewSettingsOpen && (
+        <PrinterCardContentSettingsModal
+          initialSettings={singlePrinterCardContentSettings}
+          defaultSettings={DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS}
+          onClose={() => setSingleViewSettingsOpen(false)}
+          onSave={(settings) => {
+            setSinglePrinterCardContentSettings(settings)
+            setSingleViewSettingsOpen(false)
           }}
         />
       )}

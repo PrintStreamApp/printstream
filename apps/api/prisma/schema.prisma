@@ -520,6 +520,7 @@ model AuthUser {
   tenantMemberships AuthTenantMembership[]
   memberships   AuthUserGroupMembership[]
   passkeys      AuthPasskeyCredential[]
+  passwordCredential AuthPasswordCredential?
   emailCodeTokens AuthEmailCodeToken[]
   sessions      AuthSession[]
   auditLogs     AuditLog[]
@@ -628,6 +629,27 @@ model AuthPasskeyCredential {
   user           AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+// One email/password credential per user, owned by the OSS `auth-password`
+// provider. `passwordHash` is an algorithm-tagged, salted hash (argon2id, or a
+// scrypt fallback) — never a reversible secret. `mustChangePassword` is set when
+// an admin sets/resets the password and cleared on the user's next self-change.
+model AuthPasswordCredential {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  passwordHash        String
+  mustChangePassword  Boolean   @default(false)
+  // One-time email password-reset code (SHA-256 hash) + expiry. Only populated
+  // while a reset is pending and when an email transport is configured; cleared
+  // on use. Reset-by-email is an optional capability — the provider works without it.
+  resetTokenHash      String?
+  resetTokenExpiresAt DateTime?
+  lastChangedAt       DateTime  @default(now())
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user                AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model AuthEmailCodeToken {

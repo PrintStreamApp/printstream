@@ -184,6 +184,13 @@ export function App() {
   const hasTenantContext = authBootstrapQuery.data?.tenant != null
   const actorType = authBootstrapQuery.data?.actor.type ?? 'anonymous'
   const isPlatformUser = authBootstrapQuery.data?.actor.type === 'user' && (authBootstrapQuery.data.actor.isPlatformUser ?? false)
+  // Self-hosted (OSS) deployments hide the cloud-only platform-admin and
+  // marketing surfaces even when their private modules are present (a developer
+  // running the private tree with SELF_HOSTED=true). In a real public build the
+  // modules are already absent, so these stay null regardless.
+  const selfHostedDeployment = authBootstrapQuery.data?.runtimePolicy.selfHosted ?? false
+  const platformAdmin = selfHostedDeployment ? null : platformAdminModule
+  const marketing = selfHostedDeployment ? null : marketingModule
   const canUsePlatformWorkspace = isPlatformUser
   const inPlatformMode = canUsePlatformWorkspace && !hasTenantContext
   const isAuthenticated = actorType !== 'anonymous'
@@ -403,7 +410,7 @@ export function App() {
   const platformTabs = useMemo<ReadonlyArray<ShellTab>>(
     () => inPlatformMode
       ? [
-          ...(platformAdminModule?.navTabs ?? []),
+          ...(platformAdmin?.navTabs ?? []),
           {
             value: '/platform/settings',
             label: 'Settings',
@@ -414,7 +421,7 @@ export function App() {
           }
         ]
       : [],
-    [inPlatformMode]
+    [inPlatformMode, platformAdmin]
   )
   const accountTab = useMemo<ShellTab | null>(
     () => showsAccountTab
@@ -473,9 +480,14 @@ export function App() {
   const runtimePolicy = useMemo(
     () => ({
       demoMode: authBootstrapQuery.data?.runtimePolicy.demoMode ?? false,
-      managedBridge: authBootstrapQuery.data?.runtimePolicy.managedBridge ?? false
+      managedBridge: authBootstrapQuery.data?.runtimePolicy.managedBridge ?? false,
+      selfHosted: authBootstrapQuery.data?.runtimePolicy.selfHosted ?? false
     }),
-    [authBootstrapQuery.data?.runtimePolicy.demoMode, authBootstrapQuery.data?.runtimePolicy.managedBridge]
+    [
+      authBootstrapQuery.data?.runtimePolicy.demoMode,
+      authBootstrapQuery.data?.runtimePolicy.managedBridge,
+      authBootstrapQuery.data?.runtimePolicy.selfHosted
+    ]
   )
   const shellIdentity = useMemo(
     () => authBootstrapQuery.data ? resolveShellIdentity(authBootstrapQuery.data.actor) : null,
@@ -500,8 +512,8 @@ export function App() {
   // Marketing/public routes come from the optional private marketing module.
   // Without it (public open-source builds) none of these flags fire and `/`
   // falls through to the in-app landing redirect.
-  const marketingRoutes = marketingModule?.routes ?? []
-  const isMarketingRoute = routeTenantSlug == null && appPathname === '/' && marketingModule != null
+  const marketingRoutes = marketing?.routes ?? []
+  const isMarketingRoute = routeTenantSlug == null && appPathname === '/' && marketing != null
   const isPublicInfoRoute = routeTenantSlug == null
     && marketingRoutes.some((route) => route.publicChrome && route.path !== '/' && route.path === appPathname)
   // Marketing-module routes (including redirect-only entries like `/demo`)
@@ -731,8 +743,8 @@ export function App() {
   const platformOverviewRouteElement = renderProtectedElement(
     canUsePlatformWorkspace
       ? (inPlatformMode
-          ? platformAdminModule
-            ? <platformAdminModule.OverviewView />
+          ? platformAdmin
+            ? <platformAdmin.OverviewView />
             : <Navigate to="/platform/settings" replace />
           : pendingWorkspaceRoute != null && pendingWorkspaceRoute.targetTenantId == null
             ? <Typography>Opening workspace…</Typography>
@@ -914,7 +926,7 @@ export function App() {
               workspaceChooserPending={workspaceSwitchPending}
               onLogoClick={() => navigate('/')}
               footerTrailing={(isMarketingRoute || isPublicInfoRoute)
-                ? (marketingModule ? <marketingModule.Footer /> : devRuntimeIndicator)
+                ? (marketing ? <marketing.Footer /> : devRuntimeIndicator)
                 : appFooterTrailing}
             >
               {disabledActivePluginRoute ? <Navigate to={inPlatformMode ? '/platform/settings/plugins' : `${tenantSettingsPath}/plugins`} replace /> : null}
@@ -985,7 +997,7 @@ export function App() {
                       : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                   )}
                 />
-                {platformAdminModule ? (
+                {platformAdmin ? (
                   <Route
                     path="/platform/tenants"
                     element={renderProtectedElement(
@@ -993,7 +1005,7 @@ export function App() {
                         ? (
                             inPlatformMode
                               ? (
-                                  <platformAdminModule.TenantsView
+                                  <platformAdmin.TenantsView
                                     canDisableTenants={canDisableTenants}
                                     canManageTenants={canManageTenants}
                                     accessibleTenantIds={tenantDirectoryAccessibleTenantIds}

@@ -150,8 +150,11 @@ export function SettingsView({
   const demoSettingsLocked = authBootstrapQuery.data?.tenant?.slug === 'demo'
   // Managed-bridge installs own a single bundled bridge the operator never
   // manages, so the entire Bridges surface is hidden.
-  const { managedBridge } = useRuntimePolicy()
-  const showsTenantAuthenticationSection = hasTenantContext && showsAuthenticationSection && platformAuthEnabled
+  const { managedBridge, selfHosted } = useRuntimePolicy()
+  // Self-hosted (OSS) is a single-workspace install with no platform auth step,
+  // so the workspace configures its own sign-in directly; the cloud gates the
+  // workspace section on platform auth existing first.
+  const showsTenantAuthenticationSection = hasTenantContext && showsAuthenticationSection && (platformAuthEnabled || selfHosted)
   const showsTenantPluginManager = hasTenantContext && canManageSettings
   const showsTenantNotifications = hasTenantContext && canManageSettings
   const showsTenantLogs = hasTenantContext && canManageSettings
@@ -213,7 +216,9 @@ export function SettingsView({
           {showsTenantAuthenticationSection && (
             <SettingsOverviewCard
               title="Authentication"
-              description="Authentication setup, support access, sessions, and user or role management."
+              description={selfHosted
+                ? 'Authentication setup, sessions, and user or role management.'
+                : 'Authentication setup, support access, sessions, and user or role management.'}
               onAction={() => navigate(settingsPath('/settings/authentication'))}
             />
           )}
@@ -439,7 +444,9 @@ export function SettingsView({
               { label: 'Settings', onClick: () => navigate(settingsPath()) },
               { label: 'Authentication' }
             ]}
-            description="Authentication setup, support access, sessions, and shortcuts into user and role management."
+            description={selfHosted
+              ? 'Authentication setup, sessions, and shortcuts into user and role management.'
+              : 'Authentication setup, support access, sessions, and shortcuts into user and role management.'}
           />
 
           <StaticPluginSlot
@@ -452,7 +459,7 @@ export function SettingsView({
             }}
           />
 
-          {showsAuthSetup && !hasTenantContext && (
+          {showsAuthSetup && (!hasTenantContext || selfHosted) && (
             <StaticPluginSlot
               name="settings.authenticationSetup"
               context={{

@@ -15,6 +15,7 @@
  */
 import type { ComponentType, ReactNode } from 'react'
 import type { ShellTab } from '../components/AppShell'
+import type { WebPlugin } from '../plugin/types'
 
 export interface PublicRouteContext {
   isAuthenticated: boolean
@@ -62,12 +63,26 @@ export interface PrivateWebModule {
   name: string
   marketing?: PrivateMarketingModule
   platformAdmin?: PrivatePlatformAdminModule
+  /**
+   * Built-in web plugins shipped only in the cloud build (e.g. the auth-local
+   * sign-in UI). Registered alongside the public built-ins; absent in OSS.
+   */
+  plugins?: ReadonlyArray<WebPlugin>
 }
 
-const discovered = import.meta.glob('../private/*/index.tsx', { eager: true }) as Record<
-  string,
-  { default?: PrivateWebModule }
->
+// `import.meta.glob` is a Vite build-time transform (the literal call form is
+// required). Under `node --test` (no Vite) it is undefined and throws — guard so
+// importing this module from the plugin host stays test-safe; the result there is
+// simply no private modules, matching a public build.
+let discovered: Record<string, { default?: PrivateWebModule }> = {}
+try {
+  discovered = import.meta.glob('../private/*/index.tsx', { eager: true }) as Record<
+    string,
+    { default?: PrivateWebModule }
+  >
+} catch {
+  discovered = {}
+}
 
 export const privateWebModules: ReadonlyArray<PrivateWebModule> = Object.keys(discovered)
   .sort()
@@ -79,3 +94,7 @@ export const marketingModule: PrivateMarketingModule | null =
 
 export const platformAdminModule: PrivatePlatformAdminModule | null =
   privateWebModules.find((entry) => entry.platformAdmin)?.platformAdmin ?? null
+
+/** Cloud-only built-in web plugins (empty in OSS); registered with the public built-ins. */
+export const privateWebPlugins: ReadonlyArray<WebPlugin> =
+  privateWebModules.flatMap((entry) => entry.plugins ?? [])

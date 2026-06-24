@@ -245,6 +245,7 @@ export function CurrentAccountPanel({
               color="neutral"
               loading={logoutMutation.isPending}
               onClick={() => logoutMutation.mutate()}
+              sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
             >
               Sign out
             </Button>

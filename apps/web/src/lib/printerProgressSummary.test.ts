@@ -112,6 +112,25 @@ test('getPrinterAttentionSummary returns null when the printer has no active att
   }), null)
 })
 
+test('getPrinterAttentionSummary omits HMS alerts when includeHmsErrors is false', () => {
+  assert.equal(getPrinterAttentionSummary({
+    deviceError: null,
+    hmsErrors: [{ code: '0C0003000002001C', message: 'Nozzle issue' }]
+  }, { includeHmsErrors: false }), null)
+})
+
+test('getPrinterAttentionSummary still surfaces a device error when includeHmsErrors is false', () => {
+  assert.deepEqual(getPrinterAttentionSummary({
+    deviceError: { code: '0C008043', message: 'Cancelled by the printer' },
+    hmsErrors: [{ code: '0C0003000002001C', message: 'Nozzle issue' }]
+  }, { includeHmsErrors: false }), {
+    kind: 'deviceError',
+    code: '0C008043',
+    message: 'Cancelled by the printer',
+    count: 1
+  })
+})
+
 test('shouldClearPendingDispatchedPrint clears the starting-soon state when an H2D startup sub-stage appears', () => {
   assert.equal(shouldClearPendingDispatchedPrint({
     online: true,

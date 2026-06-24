@@ -65,6 +65,18 @@ function booleanEnv(defaultValue: boolean) {
   }, z.enum(['0', '1', 'false', 'true']).default(defaultValue ? 'true' : 'false').transform((value) => value === '1' || value === 'true'))
 }
 
+/**
+ * Tri-state boolean: `undefined` when unset (so callers can fall back to a
+ * derived default), otherwise the parsed boolean.
+ */
+function optionalBooleanEnv() {
+  return z.preprocess((value) => {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? undefined : trimmed
+  }, z.enum(['0', '1', 'false', 'true']).optional().transform((value) => (value === undefined ? undefined : value === '1' || value === 'true')))
+}
+
 const envSchema = z.object({
   API_PORT: positiveIntEnv(4000),
   // The connection string the app uses. In the native self-hosted build the
@@ -127,6 +139,16 @@ const envSchema = z.object({
    * installs, which keep the connect-code pairing flow.
    */
   MANAGED_BRIDGE: booleanEnv(false),
+  /**
+   * Forces the deployment to identify as self-hosted (OSS) or cloud, overriding
+   * the build-derived default. Drives which built-in auth provider is active:
+   * self-hosted uses `auth-password` (email/password, no email infra needed),
+   * cloud uses `auth-local` (passkeys + email codes). Leave unset in production:
+   * the default is derived from the presence of the private cloud modules (see
+   * `isSelfHostedDeployment`). Set `SELF_HOSTED=true` when running from source to
+   * exercise the OSS auth path locally.
+   */
+  SELF_HOSTED: optionalBooleanEnv(),
   /**
    * Path to the managed-bridge provisioning token. In managed mode the API
    * generates this token on first start (if absent) and the bundled bridge

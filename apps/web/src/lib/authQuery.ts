@@ -14,6 +14,7 @@ export const authQueryKeys = {
   bootstrapScoped: (authScopeKey: string) => ['auth-bootstrap', authScopeKey] as const,
   managementStatus: (authScopeKey: string) => ['auth-management-status', authScopeKey] as const,
   localStatus: (authScopeKey: string) => ['local-auth-status', authScopeKey] as const,
+  passwordStatus: (authScopeKey: string) => ['password-auth-status', authScopeKey] as const,
   oauthConfig: (authScopeKey: string) => ['auth-oauth-config', authScopeKey] as const,
   groups: (authScopeKey: string) => ['auth-groups', authScopeKey] as const,
   users: (authScopeKey: string) => ['auth-users', authScopeKey] as const,

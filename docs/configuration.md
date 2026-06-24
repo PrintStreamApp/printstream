@@ -30,6 +30,7 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `CLOUDFLARE_EMAIL_FROM_EMAIL` | *(unset)* | Verified sender address for Cloudflare Email Sending. |
 | `CLOUDFLARE_EMAIL_FROM_NAME` | *(unset)* | From display name for Cloudflare Email Sending. |
 | `AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES` | `15` | Expiry window for local-auth one-time email codes. |
+| `SELF_HOSTED` | *(derived from the build)* | Forces the deployment to identify as self-hosted/OSS (`true`) or cloud (`false`), overriding the default (derived from whether the private cloud modules are present). Self-hosted registers the email/password provider (`auth-password`) and hides the cloud platform-admin, marketing, and support-access surfaces; cloud registers passkeys + email codes (`auth-local`) and OIDC SSO (`auth-oauth`). Leave unset in real deployments; set `true` to run the OSS build from the full source tree. |
 | `LIBRARY_DIR` | `./data/library` | Directory where uploaded `.3mf`/`.gcode`/`.stl`/`.step` files are stored. |
 | `LIBRARY_MAX_UPLOAD_BYTES` | `1073741824` | Maximum accepted library upload size in bytes (default 1 GiB). |
 | `LIBRARY_TRANSIENT_RETENTION_DAYS` | `7` | How long hidden transient library uploads are retained before scheduled cleanup removes them. |

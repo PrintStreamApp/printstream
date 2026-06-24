@@ -31,6 +31,21 @@ export async function sendCloudflareEmail(input: CloudflareEmailInput): Promise<
   await createCloudflareEmailSender(config)(input)
 }
 
+/**
+ * Non-throwing capability check: whether Cloudflare Email Sending is fully
+ * configured. Used by the email-transport registry to decide if this transport
+ * can deliver, without the 503 that `sendCloudflareEmail` raises on a missing or
+ * partial config.
+ */
+export function isCloudflareEmailConfigured(): boolean {
+  try {
+    return readCloudflareEmailConfig() != null
+  } catch {
+    // Partial config (some vars set, others missing) — treat as not configured.
+    return false
+  }
+}
+
 export function createCloudflareEmailSender(config: CloudflareEmailConfig, fetchEmail: EmailFetch = fetch) {
   return async function sendEmail(input: CloudflareEmailInput): Promise<void> {
     const fromEmail = input.fromEmail?.trim() || config.fromEmail

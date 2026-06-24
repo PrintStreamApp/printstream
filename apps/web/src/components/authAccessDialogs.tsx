@@ -747,6 +747,7 @@ export function AuthUserManagementDialog({
   canViewUserPasskeys,
   canEditUserPasskeys,
   canRevokeUserPasskeys,
+  canEditUsers = false,
   isOnlyEnabledAdmin,
   sessions,
   sessionsLoading,
@@ -776,6 +777,7 @@ export function AuthUserManagementDialog({
   canViewUserPasskeys: boolean
   canEditUserPasskeys: boolean
   canRevokeUserPasskeys: boolean
+  canEditUsers?: boolean
   isOnlyEnabledAdmin: boolean
   sessions: AuthSessionListResponse['sessions']
   sessionsLoading: boolean
@@ -816,6 +818,10 @@ export function AuthUserManagementDialog({
   const canReviewOrAssignRoles = canViewRoles || canAssignUserRoles
   const canReviewSessions = canViewUserSessions
   const canManagePasskeys = canViewUserPasskeys || canEditUserPasskeys || canRevokeUserPasskeys
+  // Provider credential slots also cover non-passkey credentials (e.g. the
+  // password provider's set/reset), which are gated on user-edit rather than
+  // passkey permissions.
+  const canManageCredentials = canManagePasskeys || canEditUsers
 
   const disableSignInAction = canDisableUserSignIn
     ? (
@@ -957,7 +963,7 @@ export function AuthUserManagementDialog({
               </DialogSection>
             ))}
 
-            {canManagePasskeys && (
+            {canManageCredentials && (
               <StaticPluginSlot
                 name="auth.userManagement.credentials"
                 context={{
@@ -966,7 +972,8 @@ export function AuthUserManagementDialog({
                   mutatingLifecycle,
                   canViewUserPasskeys,
                   canEditUserPasskeys,
-                  canRevokeUserPasskeys
+                  canRevokeUserPasskeys,
+                  canEditUser: canEditUsers
                 }}
               />
             )}

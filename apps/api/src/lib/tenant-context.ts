@@ -6,6 +6,7 @@ import type { NextFunction, Request, Response } from 'express'
 import { readRequestAuthSessionSecretHash, readRequestCookie, setCookieHeader } from './auth-session.js'
 import { prisma } from './prisma.js'
 import { env } from './env.js'
+import { isSelfHostedDeployment } from './deployment-mode.js'
 import { notFound } from './http-error.js'
 import type { RequestAuthActor, RequestAuthContext } from './auth-context.js'
 import { hasSupportAccessBypass, isSupportAccessAllowed } from './support-access.js'
@@ -360,17 +361,33 @@ async function resolveWideOpenRequestContext(request: Pick<Request, 'headers'>):
     }
   }
 
-  const { resolveWideOpenDefaultTenant } = await import('./default-tenant.js')
+  const { resolveWideOpenDefaultTenant, resolveSoleTenant } = await import('./default-tenant.js')
   const wideOpenTenant = await resolveWideOpenDefaultTenant()
-  if (!wideOpenTenant) {
-    return null
+  if (wideOpenTenant) {
+    return {
+      tenant: wideOpenTenant,
+      requestedSlug: wideOpenTenant.slug,
+      platformRequest: false
+    }
   }
 
-  return {
-    tenant: wideOpenTenant,
-    requestedSlug: wideOpenTenant.slug,
-    platformRequest: false
+  // Self-hosted (OSS) is a single-workspace deployment with no separate platform
+  // sign-in. Once the workspace enables auth it is no longer "wide open", but an
+  // anonymous, context-less request (e.g. the `/auth` screen after sign-out)
+  // still needs to land in the sole workspace so its sign-in provider is shown —
+  // otherwise the platform scope has no enabled provider and the screen is empty.
+  if (isSelfHostedDeployment()) {
+    const soleTenant = await resolveSoleTenant()
+    if (soleTenant) {
+      return {
+        tenant: soleTenant,
+        requestedSlug: soleTenant.slug,
+        platformRequest: false
+      }
+    }
   }
+
+  return null
 }
 
 function readActorTenant(actor: RequestAuthActor | undefined): RequestTenantSummary | null {

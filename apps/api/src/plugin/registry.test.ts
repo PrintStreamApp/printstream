@@ -78,7 +78,7 @@ test('plugin auth providers are exposed in bootstrap data only while the plugin 
       memberTenants: [],
       availableTenants: [],
       tenantHasConnectedBridges: false,
-      runtimePolicy: { demoMode: false, managedBridge: false }
+      runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false }
     })
 
     await registry.shutdown()
@@ -92,7 +92,7 @@ test('plugin auth providers are exposed in bootstrap data only while the plugin 
       memberTenants: [],
       availableTenants: [],
       tenantHasConnectedBridges: false,
-      runtimePolicy: { demoMode: false, managedBridge: false }
+      runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false }
     })
   } finally {
     Object.defineProperty(prisma, 'setting', {

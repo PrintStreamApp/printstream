@@ -112,6 +112,26 @@ test('workspace admins cannot disable the last enabled auth provider', async () 
   )
 })
 
+test('self-hosted workspace admins can disable the last enabled auth provider', async () => {
+  authProviderRegistry.register({
+    id: 'auth-password',
+    label: 'Password',
+    enabled: true,
+    methods: ['password'],
+    setupRequired: false,
+    capabilities
+  })
+
+  await assert.doesNotReject(async () => await assertAuthProviderCanChangeState({
+    providerId: 'auth-password',
+    currentEnabled: true,
+    nextEnabled: false,
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    isPlatformUser: false,
+    selfHosted: true
+  }))
+})
+
 test('platform users can disable the last enabled auth provider in a workspace', async () => {
   authProviderRegistry.register({
     id: 'auth-local',
@@ -155,6 +175,25 @@ test('tenant auth providers cannot be enabled until platform auth is enabled', a
       return true
     }
   )
+})
+
+test('self-hosted workspaces can enable tenant auth without platform auth', async () => {
+  authProviderRegistry.register({
+    id: 'auth-password',
+    label: 'Password',
+    enabled: false,
+    methods: ['password'],
+    setupRequired: true,
+    capabilities
+  })
+
+  await assert.doesNotReject(async () => await assertAuthProviderCanChangeState({
+    providerId: 'auth-password',
+    currentEnabled: false,
+    nextEnabled: true,
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    selfHosted: true
+  }))
 })
 
 test('tenant auth providers can be enabled once platform auth is enabled', async () => {

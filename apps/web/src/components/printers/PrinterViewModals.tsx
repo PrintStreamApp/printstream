@@ -7,12 +7,13 @@ import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/Sc
 import { type Printer, type PrinterView, type PrinterViewInput } from '@printstream/shared'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { DialogSection } from '../../components/DialogSection'
+import { PrinterCardContentSettingsFields } from './PrinterCardContentSettingsFields'
 import { CARDS_PER_ROW_OPTIONS, PRINTER_VIEW_SORT_OPTIONS, moveListItem, updateViewCardContentSetting, togglePrinterSelection, buildPrinterModelFilterOptions, buildNozzleDiameterFilterOptions, buildPlateTypeFilterOptions, clonePrinterViewInput, resetPrinterViewInput, normalizePrinterViewInput, encodePrinterViewSort, decodePrinterViewSort } from '../../lib/printersViewHelpers'
 
 /**
- * Printer view configuration modals: reorder printers (PrinterSortModal),
- * create/edit/delete a saved printer view (PrinterViewsModal), and the
- * shared per-card content toggle row (PrinterCardSettingsRow).
+ * Printer view configuration modals: reorder printers (PrinterSortModal) and
+ * create/edit/delete a saved printer view (PrinterViewsModal). The per-card
+ * content toggles render through the shared PrinterCardContentSettingsFields.
  */
 
 export function PrinterSortModal({
@@ -143,39 +144,6 @@ export function PrinterSortModal({
         </Stack>
       </ScrollableModalDialog>
     </Modal>
-  )
-}
-
-export function PrinterCardSettingsRow({
-  title,
-  description,
-  checked,
-  onChange
-}: {
-  title: string
-  description: string
-  checked: boolean
-  onChange: (checked: boolean) => void
-}) {
-  return (
-    <Stack
-      direction="row"
-      spacing={1.5}
-      alignItems="flex-start"
-      onClick={() => onChange(!checked)}
-      sx={{ px: 1.5, py: 1.25, cursor: 'pointer' }}
-    >
-      <Checkbox
-        checked={checked}
-        onClick={(event) => event.stopPropagation()}
-        onChange={(event) => onChange(event.target.checked)}
-        sx={{ mt: 0.25 }}
-      />
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography level="title-sm">{title}</Typography>
-        <Typography level="body-sm" textColor="text.tertiary">{description}</Typography>
-      </Box>
-    </Stack>
   )
 }
 
@@ -463,80 +431,10 @@ export function PrinterViewsModal({
               title="Card content"
               description="Choose which status blocks appear on each printer card."
             >
-              <Stack divider={<ListDivider inset="gutter" />}>
-                <PrinterCardSettingsRow
-                  title="Full-width snapshot"
-                  description="Show the camera snapshot in a full-width row above the progress and status block."
-                  checked={formValues.cardContentSettings.fullWidthSnapshot}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'fullWidthSnapshot', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Model thumbnail"
-                  description="Show the plate preview image for the active print."
-                  checked={formValues.cardContentSettings.modelThumbnail}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'modelThumbnail', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Camera thumbnail"
-                  description="Show the live camera snapshot strip on each printer card."
-                  checked={formValues.cardContentSettings.cameraThumbnail}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'cameraThumbnail', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Print status"
-                  description="Show the active job name, progress, and ETA block alongside the media section."
-                  checked={formValues.cardContentSettings.printStatus}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'printStatus', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Nozzle temps"
-                  description="Show the live nozzle temperature readout on each printer card."
-                  checked={formValues.cardContentSettings.nozzleTemperatures}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'nozzleTemperatures', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Bed temp"
-                  description="Show the heated bed temperature on each printer card."
-                  checked={formValues.cardContentSettings.bedTemperature}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'bedTemperature', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Chamber temp"
-                  description="Show chamber temperature when the printer reports one."
-                  checked={formValues.cardContentSettings.chamberTemperature}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'chamberTemperature', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Print speed"
-                  description="Show the printer speed profile chip on each card."
-                  checked={formValues.cardContentSettings.printSpeed}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'printSpeed', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Door state"
-                  description="Show a door open or closed chip on supported printers."
-                  checked={formValues.cardContentSettings.doorState}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'doorState', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Duct state"
-                  description="Show the reported duct mode chip on supported printers."
-                  checked={formValues.cardContentSettings.ductState}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'ductState', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="AMS cards"
-                  description="Show AMS units and external spool cards on printer cards."
-                  checked={formValues.cardContentSettings.amsCards}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'amsCards', checked)}
-                />
-                <PrinterCardSettingsRow
-                  title="Footer controls"
-                  description="Show the action row with light, print, pause, resume, and stop controls."
-                  checked={formValues.cardContentSettings.footerControls}
-                  onChange={(checked) => updateViewCardContentSetting(setFormValues, 'footerControls', checked)}
-                />
-              </Stack>
+              <PrinterCardContentSettingsFields
+                value={formValues.cardContentSettings}
+                onChange={(key, checked) => updateViewCardContentSetting(setFormValues, key, checked)}
+              />
             </DialogSection>
 
             {error && <Typography color="danger" level="body-sm">{error}</Typography>}

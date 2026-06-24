@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import express from 'express'
-import { registerPrivateModules } from './private-modules.js'
+import { hasPrivateModules, registerPrivateModules } from './private-modules.js'
 
 test('registerPrivateModules is a no-op when the private directory is missing', async () => {
   const app = express()
@@ -38,6 +38,19 @@ test('registerPrivateModules mounts discovered modules', async (t) => {
   const response = await fetch(`http://127.0.0.1:${port}/api/private-sample`)
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { ok: true })
+})
+
+test('hasPrivateModules reflects whether the private directory holds modules', async (t) => {
+  assert.equal(hasPrivateModules(path.join(os.tmpdir(), 'printstream-no-such-dir')), false)
+
+  const empty = await mkdtemp(path.join(os.tmpdir(), 'printstream-private-empty-'))
+  t.after(() => rm(empty, { recursive: true, force: true }))
+  assert.equal(hasPrivateModules(empty), false)
+
+  const populated = await mkdtemp(path.join(os.tmpdir(), 'printstream-private-full-'))
+  t.after(() => rm(populated, { recursive: true, force: true }))
+  await mkdir(path.join(populated, 'cloud'))
+  assert.equal(hasPrivateModules(populated), true)
 })
 
 test('registerPrivateModules rejects modules without a register function', async (t) => {

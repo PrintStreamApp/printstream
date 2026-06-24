@@ -18,6 +18,8 @@ export interface PrinterCardStatusChipsProps {
   hasActiveJob: boolean
   pendingStartWarning: boolean
   isOnline: boolean
+  /** Whether the active view shows HMS health alerts (the per-card "HMS errors" toggle). */
+  showHmsErrors: boolean
   printerModel: PrinterModel
   printerSerial: string
 }
@@ -29,6 +31,7 @@ export function PrinterCardStatusChips({
   hasActiveJob,
   pendingStartWarning,
   isOnline,
+  showHmsErrors,
   printerModel,
   printerSerial
 }: PrinterCardStatusChipsProps) {
@@ -54,7 +57,7 @@ export function PrinterCardStatusChips({
           {pendingStartWarning ? 'Start delayed' : 'Waiting to start'}
         </Chip>
       )}
-      {isOnline && status?.hmsErrors && status.hmsErrors.length > 0 && (
+      {isOnline && showHmsErrors && status?.hmsErrors && status.hmsErrors.length > 0 && (
         <PrinterErrorChip
           chipLabel={status.hmsErrors.length > 1 ? `HMS ${status.hmsErrors.length}` : 'HMS'}
           menuTitle={status.hmsErrors.length > 1 ? `${status.hmsErrors.length} HMS alerts` : 'HMS alert'}

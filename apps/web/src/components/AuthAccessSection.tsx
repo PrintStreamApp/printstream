@@ -66,6 +66,7 @@ import {
 } from '../lib/authUserDirectory'
 import { authQueryKeys, invalidateAuthQueries, platformAuthScopeKey } from '../lib/authQuery'
 import { deriveAuthHealthSignals } from '../lib/authUi'
+import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { type DirectoryViewMode } from './DirectoryControls'
 import { DirectoryFiltersButton, DirectoryFiltersDialog, DirectoryPrimaryToolbar } from './DirectoryToolbar'
@@ -154,6 +155,9 @@ export function AuthAccessSection({
 }: AuthAccessSectionProps) {
   const isMobile = useMobileViewport()
   const queryClient = useQueryClient()
+  // Support access (platform/support users entering a workspace) is a cloud-only
+  // concept; self-hosted (OSS) is single-workspace with no such users.
+  const { selfHosted } = useRuntimePolicy()
   const hasEnabledAuthProvider = authProviders.some((provider) => provider.enabled)
   const hasTenantScopedSettings = authScopeKey !== platformAuthScopeKey
   const capabilities = status?.capabilities
@@ -598,7 +602,7 @@ export function AuthAccessSection({
   const supportAccessDisableWaitingForUsers = hasEnabledAuthProvider
     && supportAccessEnabled
     && usersQuery.isLoading
-  const showSupportControls = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview') && hasTenantScopedSettings
+  const showSupportControls = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview') && hasTenantScopedSettings && !selfHosted
   const showSessionSecurity = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview')
   const showSessionDuration = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview')
   const showAuthHealth = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview') && authHealthSignals.length > 0
@@ -1705,6 +1709,7 @@ export function AuthAccessSection({
           canViewUserPasskeys={canViewUserPasskeys}
           canEditUserPasskeys={canEditUserPasskeys}
           canRevokeUserPasskeys={canRevokeUserPasskeys}
+          canEditUsers={canEditUsers}
           isOnlyEnabledAdmin={enabledAdminUserIds.length === 1 && enabledAdminUserIds[0] === editingUser.id}
           sessions={userSessionsQuery.data?.sessions ?? []}
           sessionsLoading={userSessionsQuery.isLoading}

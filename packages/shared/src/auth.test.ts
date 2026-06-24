@@ -86,7 +86,7 @@ test('authBootstrapSchema preserves mixed provider methods', () => {
       canManagePlugins: true,
       canViewLogs: true
     },
-    runtimePolicy: { demoMode: false, managedBridge: false }
+    runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false }
   }), {
     authEnabled: true,
     platformAuthEnabled: true,
@@ -138,7 +138,7 @@ test('authBootstrapSchema preserves mixed provider methods', () => {
       canManagePlugins: true,
       canViewLogs: true
     },
-    runtimePolicy: { demoMode: false, managedBridge: false }
+    runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false }
   })
 })
 

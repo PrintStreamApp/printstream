@@ -38,6 +38,7 @@ import { installAuditLogCapture } from './lib/audit-logs.js'
 import { installLogCapture } from './lib/logs.js'
 import { createRateLimitMiddleware } from './lib/rate-limit.js'
 import { registerPrivateModules } from './lib/private-modules.js'
+import { isSelfHostedDeployment } from './lib/deployment-mode.js'
 import { installWebApp } from './lib/serve-web.js'
 
 installLogCapture()
@@ -137,6 +138,16 @@ app.use('/api/plugins/auth-local/email-codes', createRateLimitMiddleware({
   windowMs: 15 * 60_000,
   max: 20
 }))
+app.use('/api/plugins/auth-password/sign-in', createRateLimitMiddleware({
+  name: 'auth-password-sign-in',
+  windowMs: 15 * 60_000,
+  max: 20
+}))
+app.use('/api/plugins/auth-password/password-reset', createRateLimitMiddleware({
+  name: 'auth-password-reset',
+  windowMs: 15 * 60_000,
+  max: 20
+}))
 app.use('/api', createRateLimitMiddleware({
   name: 'api-read',
   windowMs: 60_000,
@@ -193,7 +204,11 @@ export async function finalizeApp(): Promise<void> {
 
   // First-party private modules (closed-source cloud surface) mount their own
   // routes here. The directory is absent in public builds; this is a no-op then.
-  await registerPrivateModules(app)
+  // `SELF_HOSTED=true` also skips them so a developer can exercise the OSS build
+  // from the full private tree without the cloud surface mounting.
+  if (!isSelfHostedDeployment()) {
+    await registerPrivateModules(app)
+  }
 
   // Single-container topology: when SERVE_WEB_DIR is set, serve the built web SPA
   // on this same port so one image fronts both the API and the app (no separate
