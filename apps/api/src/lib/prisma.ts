@@ -71,6 +71,8 @@ export const TENANT_SCOPED_MODELS = new Set([
   'Order',
   'OrderVariantSelection',
   'OrderPrint',
+  'FilamentSpool',
+  'FilamentSpoolUsage',
   'TenantStats',
   'PrinterStats'
 ])

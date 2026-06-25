@@ -16,6 +16,7 @@ import { modelStudioPlugin } from '../plugins/model-studio/index.js'
 import { plateClearingPlugin } from '../plugins/plate-clearing/index.js'
 import { firmwareUpdatesPlugin } from '../plugins/firmware-updates/index.js'
 import { ordersPlugin } from '../plugins/orders/index.js'
+import { filamentManagerPlugin } from '../plugins/filament-manager/index.js'
 import { homeAssistantPlugin } from '../plugins/home-assistant/index.js'
 
 export async function registerBuiltinPlugins(): Promise<void> {
@@ -90,6 +91,12 @@ export async function registerBuiltinPlugins(): Promise<void> {
     tenantAccess: 'controlled'
   })
   await pluginRegistry.register(ordersPlugin, {
+    runtimeSurfaces: ['tenant'],
+    managerSurfaces: ['platform', 'tenant'],
+    tenantAccess: 'controlled'
+  })
+  await pluginRegistry.register(filamentManagerPlugin, {
+    defaultEnabled: true,
     runtimeSurfaces: ['tenant'],
     managerSurfaces: ['platform', 'tenant'],
     tenantAccess: 'controlled'

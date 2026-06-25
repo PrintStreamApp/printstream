@@ -8,12 +8,13 @@
  * Plugins must remain optional: removing a plugin must never break a
  * core page. Plugins should never assume any other plugin is installed.
  *
- * Built-in plugins live under `apps/web/src/plugins/<name>/`. Third-party
- * plugins should ship as ordinary npm packages whose default export is a
- * `WebPlugin`; a runtime loader can be added later without changing
- * existing plugins.
+ * Built-in plugins live under `apps/web/src/plugins/<name>/` and are wired up
+ * in `apps/web/src/plugin/builtin.ts`. A route with a `navLabel` becomes a
+ * top-level tab (tab icons are assigned in `App.tsx`). Third-party plugins
+ * should ship as ordinary npm packages whose default export is a `WebPlugin`;
+ * a runtime loader can be added later without changing existing plugins.
  */
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import type { PluginSurface } from '@printstream/shared'
 
 export interface WebPluginRoute {
@@ -21,6 +22,12 @@ export interface WebPluginRoute {
   element: ComponentType
   /** Optional nav label. If omitted, the route is reachable but unlisted. */
   navLabel?: string
+  /**
+   * Optional mobile bottom-nav icon for this route's tab. When omitted the
+   * shell falls back to a generic plugin icon. Supply a custom icon so the tab
+   * reads at a glance on phones.
+   */
+  navMobileIcon?: ReactNode
 }
 
 export interface WebPluginSlotComponentProps {

@@ -4,7 +4,7 @@
  * load/unload filament actions, persisting through the printer command
  * endpoint.
  */
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   Autocomplete, AutocompleteOption, Button, ButtonGroup, FormControl, FormLabel, Input, ListItemContent, ModalDialog, Option, Select, Stack, Typography
 } from '@mui/joy'
@@ -20,6 +20,7 @@ import {
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
 import { DialogSection } from '../DialogSection'
+import { PluginSlot } from '../../plugin/PluginSlot'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ColorSwatchPicker } from '../ColorSwatchPicker'
 import { FilamentChangeProgressPanel } from './FilamentChangeProgressPanel'
@@ -143,6 +144,13 @@ export function ExternalSpoolEditModal({
     setType(preset.type)
   }
 
+  // Lets the filament-manager plugin's "Pick from library" populate the form.
+  const applyFilamentFromLibrary = useCallback((values: { filamentType?: string | null; colorHex?: string | null; trayInfoIdx?: string | null }) => {
+    if (typeof values.trayInfoIdx === 'string') setTrayInfoIdx(values.trayInfoIdx)
+    if (values.filamentType) setType(values.filamentType)
+    if (values.colorHex) setColor(values.colorHex)
+  }, [])
+
   const currentCustomPresetId = trayInfoIdx && !BAMBU_FILAMENT_PRESETS.some((preset) => preset.id === trayInfoIdx)
     ? trayInfoIdx
     : null
@@ -188,6 +196,16 @@ export function ExternalSpoolEditModal({
         <Stack spacing={2} sx={{ mt: 1 }}>
           <DialogSection title="Filament">
             <Stack spacing={1.25}>
+              <PluginSlot
+                name="externalSpool.editor"
+                context={{
+                  kind: 'external',
+                  printerId,
+                  amsId: spool.amsId,
+                  currentValues: { filamentType: type, colorHex: color, trayInfoIdx },
+                  onApplyFilament: applyFilamentFromLibrary
+                }}
+              />
               <FormControl>
                 <FormLabel>Bambu preset</FormLabel>
                 <Autocomplete

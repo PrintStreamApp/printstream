@@ -26,7 +26,6 @@ export const CANCELLED_COLOR = 'var(--joy-palette-neutral-500)'
 
 export const LIBRARY_VIEW_MODE_KEY = 'bambu.library.viewMode'
 export const LIBRARY_SORT_KEY = 'bambu.library.sort'
-export const LIBRARY_METADATA_FILTER_ALL = '__all__'
 export const DUAL_NOZZLE_PRINTER_MODELS: PrinterModel[] = ['X2D', 'H2D', 'H2DPRO', 'H2C']
 
 export const EMPTY_PRINTERS: Printer[] = []

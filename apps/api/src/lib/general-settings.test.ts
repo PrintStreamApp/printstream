@@ -19,6 +19,7 @@ test('getGeneralSettings defaults unconstrained width off when unset', async () 
     appTheme: 'default',
     unconstrainedWidth: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
+    navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
     supportAccessPermissions: listAllWorkspaceSupportPermissions()
@@ -42,6 +43,7 @@ test('getGeneralSettings reads a persisted unconstrained width flag', async () =
     appTheme: 'default',
     unconstrainedWidth: true,
     landingPage: DEFAULT_APP_LANDING_PAGE,
+    navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
     supportAccessPermissions: listAllWorkspaceSupportPermissions()
@@ -64,6 +66,7 @@ test('updateGeneralSettings upserts the shared unconstrained width flag', async 
     appTheme: 'default',
     unconstrainedWidth: true,
     landingPage: DEFAULT_APP_LANDING_PAGE,
+    navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
     supportAccessPermissions: listAllWorkspaceSupportPermissions()
@@ -100,6 +103,7 @@ test('updateGeneralSettings writes support access policy in workspace scope with
     appTheme: 'default',
     unconstrainedWidth: true,
     landingPage: DEFAULT_APP_LANDING_PAGE,
+    navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: false,
     supportAccessPermissions: ['printers.view', 'jobs.view']

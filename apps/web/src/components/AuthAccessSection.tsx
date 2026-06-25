@@ -53,7 +53,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '../lib/apiClient'
 import {
-  ALL_USER_ROLE_FILTER,
   buildUserRoleOptions,
   filterAndSortUsers,
   getUserDisplayLabel,
@@ -69,7 +68,8 @@ import { deriveAuthHealthSignals } from '../lib/authUi'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { type DirectoryViewMode } from './DirectoryControls'
-import { DirectoryFiltersButton, DirectoryFiltersDialog, DirectoryPrimaryToolbar } from './DirectoryToolbar'
+import { DirectoryPrimaryToolbar } from './DirectoryToolbar'
+import { MultiSelectOption } from './MultiSelectOption'
 import { useMobileViewport } from './useMobileViewport'
 import { SectionNav } from './dashboard/SectionNav'
 import { sectionScrollMarginTop } from './dashboard/SectionNav.constants'
@@ -203,12 +203,11 @@ export function AuthAccessSection({
   const [supportPermissionsDialogOpen, setSupportPermissionsDialogOpen] = useState(false)
   const [userSearch, setUserSearch] = useState('')
   const [userStatusFilter, setUserStatusFilter] = useState<UserStatusFilter>('all')
-  const [userRoleFilter, setUserRoleFilter] = useState<string>(ALL_USER_ROLE_FILTER)
+  const [userRoleFilters, setUserRoleFilters] = useState<string[]>([])
   const [userSortKey, setUserSortKey] = useState<UserSortKey>('name')
   const [userSortDirection, setUserSortDirection] = useState<UserSortDirection>('asc')
   const [userPage, setUserPage] = useState(1)
   const [userPageSize, setUserPageSize] = useState<number>(USER_PAGE_SIZE_OPTIONS[1])
-  const [userFiltersDialogOpen, setUserFiltersDialogOpen] = useState(false)
   const [userViewMode, setUserViewMode] = useLocalStorageState<DirectoryViewMode>(
     USER_DIRECTORY_VIEW_MODE_KEY,
     'icon',
@@ -629,19 +628,14 @@ export function AuthAccessSection({
     () => filterAndSortUsers(users, {
       search: normalizedUserSearch,
       statusFilter: userStatusFilter,
-      roleFilter: userRoleFilter,
+      roleFilters: userRoleFilters,
       sortKey: userSortKey,
       sortDirection: userSortDirection
     }),
-    [normalizedUserSearch, userRoleFilter, userSortDirection, userSortKey, userStatusFilter, users]
+    [normalizedUserSearch, userRoleFilters, userSortDirection, userSortKey, userStatusFilter, users]
   )
   const hasActiveUserFilters = userStatusFilter !== 'all'
-    || userRoleFilter !== ALL_USER_ROLE_FILTER
-  const selectedUserRoleLabel = userRoleFilter === ALL_USER_ROLE_FILTER
-    ? null
-    : userRoleFilter === UNASSIGNED_USER_ROLE_FILTER
-      ? 'No roles assigned'
-      : availableUserRoleOptions.find((option) => option.value === userRoleFilter)?.label ?? null
+    || userRoleFilters.length > 0
   const userPageCount = Math.max(1, Math.ceil(visibleUsers.length / userPageSize))
   const safeUserPage = Math.min(userPage, userPageCount)
   const pagedUsers = useMemo(() => {
@@ -697,17 +691,16 @@ export function AuthAccessSection({
     )
   }, [status?.sessionDuration])
   useEffect(() => {
-    if (userRoleFilter === ALL_USER_ROLE_FILTER || userRoleFilter === UNASSIGNED_USER_ROLE_FILTER) {
-      return
-    }
-
-    if (!availableUserRoleOptions.some((option) => option.value === userRoleFilter)) {
-      setUserRoleFilter(ALL_USER_ROLE_FILTER)
-    }
-  }, [availableUserRoleOptions, userRoleFilter])
+    // Drop any selected role that no longer exists; keep the "unassigned" sentinel.
+    const valid = new Set([UNASSIGNED_USER_ROLE_FILTER, ...availableUserRoleOptions.map((option) => option.value)])
+    setUserRoleFilters((current) => {
+      const next = current.filter((value) => valid.has(value))
+      return next.length === current.length ? current : next
+    })
+  }, [availableUserRoleOptions])
   useEffect(() => {
     setUserPage(1)
-  }, [normalizedUserSearch, userRoleFilter, userSortDirection, userSortKey, userStatusFilter, userPageSize])
+  }, [normalizedUserSearch, userRoleFilters, userSortDirection, userSortKey, userStatusFilter, userPageSize])
   useEffect(() => {
     setUserPage((current) => Math.min(current, Math.max(1, Math.ceil(visibleUsers.length / userPageSize))))
   }, [userPageSize, visibleUsers.length])
@@ -833,7 +826,7 @@ export function AuthAccessSection({
 
   function clearUserFilters() {
     setUserStatusFilter('all')
-    setUserRoleFilter(ALL_USER_ROLE_FILTER)
+    setUserRoleFilters([])
   }
 
   function openSupportPermissionsDialog() {
@@ -1108,12 +1101,49 @@ export function AuthAccessSection({
                         onSearchChange={setUserSearch}
                         searchPlaceholder="Search by name, email, or role"
                         searchAriaLabel="Filter users"
-                        filtersButton={(
-                          <DirectoryFiltersButton
-                            activeCount={Number(userStatusFilter !== 'all') + Number(userRoleFilter !== ALL_USER_ROLE_FILTER)}
-                            onClick={() => setUserFiltersDialogOpen(true)}
-                          />
-                        )}
+                        filters={{
+                          activeCount: Number(userStatusFilter !== 'all') + Number(userRoleFilters.length > 0),
+                          onClear: clearUserFilters,
+                          clearDisabled: !hasActiveUserFilters,
+                          children: (
+                            <>
+                              <FormControl>
+                                <FormLabel>Status</FormLabel>
+                                <Select<UserStatusFilter>
+                                  size="sm"
+                                  value={userStatusFilter}
+                                  onChange={(_event, value) => value && setUserStatusFilter(value)}
+                                  slotProps={{ listbox: { disablePortal: true } }}
+                                >
+                                  {USER_STATUS_OPTIONS.map((option) => (
+                                    <Option key={option.value} value={option.value}>{option.label}</Option>
+                                  ))}
+                                </Select>
+                              </FormControl>
+                              <FormControl>
+                                <FormLabel>Role</FormLabel>
+                                <Select
+                                  multiple
+                                  size="sm"
+                                  value={userRoleFilters}
+                                  onChange={(_event, value) => setUserRoleFilters(value ?? [])}
+                                  placeholder="All roles"
+                                  renderValue={() => userRoleFilters.length === 0 ? null : userRoleFilters
+                                    .map((value) => value === UNASSIGNED_USER_ROLE_FILTER
+                                      ? 'No roles assigned'
+                                      : (availableUserRoleOptions.find((option) => option.value === value)?.label ?? value))
+                                    .join(', ')}
+                                  slotProps={{ listbox: { disablePortal: true } }}
+                                >
+                                  <MultiSelectOption value={UNASSIGNED_USER_ROLE_FILTER} selected={userRoleFilters.includes(UNASSIGNED_USER_ROLE_FILTER)}>No roles assigned</MultiSelectOption>
+                                  {availableUserRoleOptions.map((option) => (
+                                    <MultiSelectOption key={option.value} value={option.value} selected={userRoleFilters.includes(option.value)}>{option.label}</MultiSelectOption>
+                                  ))}
+                                </Select>
+                              </FormControl>
+                            </>
+                          )
+                        }}
                         pageSizeValue={userPageSize}
                         pageSizeOptions={USER_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} per page` }))}
                         onPageSizeChange={setUserPageSize}
@@ -1127,63 +1157,9 @@ export function AuthAccessSection({
                         sortAriaLabel="Sort users by"
                         viewMode={userViewMode}
                         onViewModeChange={setUserViewMode}
-                        disableIconModeOnMobile
-                        sortMinWidth={150}
-                      />
+                        disableIconModeOnMobile                      />
                     </Stack>
 
-                    {hasActiveUserFilters && (
-                      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                        {userStatusFilter !== 'all' && (
-                          <Chip size="sm" variant="soft" color="neutral">
-                            {USER_STATUS_OPTIONS.find((option) => option.value === userStatusFilter)?.label}
-                          </Chip>
-                        )}
-                        {selectedUserRoleLabel && (
-                          <Chip size="sm" variant="soft" color="neutral">
-                            {selectedUserRoleLabel}
-                          </Chip>
-                        )}
-                        <Button size="sm" variant="plain" color="neutral" onClick={clearUserFilters}>
-                          Clear filters
-                        </Button>
-                      </Stack>
-                    )}
-
-                    <DirectoryFiltersDialog
-                      open={userFiltersDialogOpen}
-                      title="User filters"
-                      onClose={() => setUserFiltersDialogOpen(false)}
-                      onClear={clearUserFilters}
-                      clearDisabled={!hasActiveUserFilters}
-                    >
-                      <FormControl>
-                        <FormLabel>Status</FormLabel>
-                        <Select<UserStatusFilter>
-                          size="sm"
-                          value={userStatusFilter}
-                          onChange={(_event, value) => value && setUserStatusFilter(value)}
-                        >
-                          {USER_STATUS_OPTIONS.map((option) => (
-                            <Option key={option.value} value={option.value}>{option.label}</Option>
-                          ))}
-                        </Select>
-                      </FormControl>
-                      <FormControl>
-                        <FormLabel>Role</FormLabel>
-                        <Select<string>
-                          size="sm"
-                          value={userRoleFilter}
-                          onChange={(_event, value) => value && setUserRoleFilter(value)}
-                        >
-                          <Option value={ALL_USER_ROLE_FILTER}>All roles</Option>
-                          <Option value={UNASSIGNED_USER_ROLE_FILTER}>No roles assigned</Option>
-                          {availableUserRoleOptions.map((option) => (
-                            <Option key={option.value} value={option.value}>{option.label}</Option>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    </DirectoryFiltersDialog>
                   </Stack>
                 )}
 

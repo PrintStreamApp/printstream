@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, LibraryFolder } from '@printstream/shared'
-import { filterLibraryEntries, filterLibraryFilesByMetadata, paginateLibraryEntries, sortLibraryEntries } from './libraryDirectory'
+import { filterLibraryEntries, filterLibraryFilesByMetadata, groupLibraryFiles, paginateLibraryEntries, sortLibraryEntries } from './libraryDirectory'
 
 const folders: LibraryFolder[] = [
   { id: 'folder-alpha', name: 'Alpha Models', parentId: null },
@@ -75,20 +75,42 @@ test('filterLibraryEntries matches file kind labels', () => {
 
 test('filterLibraryFilesByMetadata filters by file type label', () => {
   const gcodeThreeMf = filterLibraryFilesByMetadata(files, {
-    printerModel: '__all__',
-    nozzleSize: '__all__',
-    plateType: '__all__',
-    fileType: '3MF GCODE'
+    printerModels: [],
+    nozzleSizes: [],
+    plateTypes: [],
+    fileTypes: ['3MF GCODE']
   })
   const plainThreeMf = filterLibraryFilesByMetadata(files, {
-    printerModel: '__all__',
-    nozzleSize: '__all__',
-    plateType: '__all__',
-    fileType: '3MF'
+    printerModels: [],
+    nozzleSizes: [],
+    plateTypes: [],
+    fileTypes: ['3MF']
   })
 
   assert.deepEqual(gcodeThreeMf.map((file) => file.id), ['file-1'])
   assert.deepEqual(plainThreeMf.map((file) => file.id), ['file-3'])
+})
+
+test('filterLibraryFilesByMetadata treats multiple selected values within a facet as OR', () => {
+  const eitherThreeMf = filterLibraryFilesByMetadata(files, {
+    printerModels: [],
+    nozzleSizes: [],
+    plateTypes: [],
+    fileTypes: ['3MF GCODE', '3MF']
+  })
+
+  assert.deepEqual(eitherThreeMf.map((file) => file.id), ['file-1', 'file-3'])
+})
+
+test('filterLibraryFilesByMetadata with all empty facets returns every file', () => {
+  const all = filterLibraryFilesByMetadata(files, {
+    printerModels: [],
+    nozzleSizes: [],
+    plateTypes: [],
+    fileTypes: []
+  })
+
+  assert.deepEqual(all.map((file) => file.id), files.map((file) => file.id))
 })
 
 test('paginateLibraryEntries keeps folders before files across page boundaries', () => {
@@ -134,4 +156,26 @@ test('sorting then paginating puts the first names on the first page', () => {
   const firstPage = paginateLibraryEntries(sorted.folders, sorted.files, 1, 3)
 
   assert.deepEqual(firstPage.files.map((file) => file.name), ['01.stl', '02.stl', '03.stl'])
+})
+
+test('groupLibraryFiles returns a single group when grouping is off', () => {
+  const groups = groupLibraryFiles(files, 'none')
+  assert.equal(groups.length, 1)
+  assert.deepEqual(groups[0]?.files.map((file) => file.id), ['file-1', 'file-2', 'file-3'])
+})
+
+test('groupLibraryFiles buckets by file type, ordered by label', () => {
+  const groups = groupLibraryFiles(files, 'fileType')
+  assert.deepEqual(groups.map((group) => `${group.label}:${group.files.length}`), ['3MF:1', '3MF GCODE:1', 'STL:1'])
+})
+
+test('groupLibraryFiles buckets by first letter A-Z', () => {
+  const groups = groupLibraryFiles(files, 'letter')
+  assert.deepEqual(groups.map((group) => group.label), ['A', 'G', 'P'])
+})
+
+test('groupLibraryFiles buckets by date added relative to now', () => {
+  const now = Date.parse('2026-05-03T12:00:00.000Z')
+  const groups = groupLibraryFiles(files, 'dateAdded', now)
+  assert.deepEqual(groups.map((group) => `${group.label}:${group.files.length}`), ['Today:1', 'This week:2'])
 })

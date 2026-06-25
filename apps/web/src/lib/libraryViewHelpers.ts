@@ -40,13 +40,13 @@ import {
   supportsPrinterDoorSensor
 } from '@printstream/shared'
 import { hasLoadedFilament } from './filamentColor'
+import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from './libraryDirectory'
 import { amsUnitLetter, type PrinterTrayGroup as PrinterTrayGroupBase } from './printerTrayMapping'
 import { type LibrarySort, type LibraryViewMode } from '../components/LibraryBrowser'
 
 export const LIBRARY_VIEW_MODE_KEY = 'bambu.library.viewMode'
 export const LIBRARY_SORT_KEY = 'bambu.library.sort'
 export const LIBRARY_PAGE_SIZE_OPTIONS = [25, 50, 100] as const
-export const LIBRARY_METADATA_FILTER_ALL = '__all__'
 export const LIBRARY_SORT_OPTIONS = [
   { value: 'name', label: 'Name' },
   { value: 'date', label: 'Date' },
@@ -54,6 +54,10 @@ export const LIBRARY_SORT_OPTIONS = [
   { value: 'mostPrinted', label: 'Most printed' },
   { value: 'lastPrinted', label: 'Last printed' }
 ] as const
+export const LIBRARY_GROUP_KEY = 'bambu.library.group'
+export function parseLibraryGroup(raw: string): LibraryGroupBy | null {
+  return LIBRARY_GROUP_OPTIONS.some((option) => option.value === raw) ? (raw as LibraryGroupBy) : null
+}
 export const VIRTUAL_TRAY_MAIN_ID = 255
 export const VIRTUAL_TRAY_DEPUTY_ID = 254
 export const AVAILABLE_PRINT_STAGES = new Set<PrinterStatus['stage']>(['idle', 'finished', 'failed', 'unknown'])

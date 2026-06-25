@@ -12,7 +12,7 @@
  * These are extracted from `OrdersView.tsx` unchanged; behavior, props, and
  * markup are preserved.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import {
   Accordion,
   AccordionDetails,
@@ -66,7 +66,13 @@ import { LibraryBreadcrumb, LibraryBreadcrumbRow } from '../../../components/Lib
 import { LibraryPickerEmptyState } from '../../../components/LibraryPickerEmptyState'
 import { OverflowTooltipText } from '../../../components/OverflowTooltipText'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../../components/ScrollableDialog'
-import { LibraryBrowser, LibraryFileRow, LibraryToolbar, type LibrarySort, type LibraryViewMode } from '../../../components/LibraryBrowser'
+import { LibraryBrowser, LibraryFileRow, type LibrarySort, type LibraryViewMode } from '../../../components/LibraryBrowser'
+import { DirectoryPrimaryToolbar } from '../../../components/DirectoryToolbar'
+import { LibraryMetadataFilters } from '../../../components/library/LibraryMetadataFilters'
+import { PaginatedLibraryBrowser } from '../../../components/library/PaginatedLibraryBrowser'
+import { libraryFacetsEmpty, useLibraryFilters } from '../../../hooks/useLibraryFilters'
+import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../../../lib/libraryDirectory'
+import { LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS } from '../../../lib/libraryViewHelpers'
 import { LibraryPlatePreview } from '../../../components/LibraryPlateSelect'
 import { ColorSwatchPicker } from '../../../components/ColorSwatchPicker'
 import { isUnslicedThreeMfFile } from '../../../lib/libraryFileTags'
@@ -600,8 +606,11 @@ export function TemplateLibraryFilePickerDialog({
   const selectedFile = selectedFileId ? files.find((file) => file.id === selectedFileId) ?? null : null
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(selectedFile?.folderId ?? null)
   const [bridgeId, setBridgeId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const deferredSearch = useDeferredValue(search)
   const [viewMode, setViewMode] = useState<LibraryViewMode>('list')
   const [sort, setSort] = useState<LibrarySort>({ key: 'name', dir: 'asc' })
+  const [group, setGroup] = useState<LibraryGroupBy>('none')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const browseQuery = useQuery<LibraryBrowseResponse>({
     queryKey: ['library-browse', 'orders-picker', currentFolderId ?? 'root', bridgeId ?? 'none', favoritesOnly],
@@ -628,8 +637,11 @@ export function TemplateLibraryFilePickerDialog({
     staleTime: 60_000
   })
   const bridgeRootMode = browseData?.mode === 'bridge-root'
-  const bridgeEntries = browseData?.bridgeEntries ?? []
-  const bridgeFolders = bridgeEntries.map((bridge) => ({ id: toBridgeFolderId(bridge.id), name: bridge.name, parentId: null } satisfies LibraryFolder))
+  const bridgeEntries = useMemo(() => browseData?.bridgeEntries ?? [], [browseData?.bridgeEntries])
+  const bridgeFolders = useMemo(
+    () => bridgeEntries.map((bridge) => ({ id: toBridgeFolderId(bridge.id), name: bridge.name, parentId: null } satisfies LibraryFolder)),
+    [bridgeEntries]
+  )
 
   const allFolders = useMemo(
     () => foldersQuery.data?.folders ?? [],
@@ -643,6 +655,15 @@ export function TemplateLibraryFilePickerDialog({
     () => browseData?.files ?? [],
     [browseData?.files]
   )
+  const filters = useLibraryFilters({
+    visibleFiles,
+    childFolders,
+    currentFolderId,
+    requestedBridgeId: resolvedBridgeId,
+    deferredSearch,
+    sort,
+    favoritesOnly
+  })
   const activeBridgeName = resolvedBridgeId ? bridgeEntries.find((bridge) => bridge.id === resolvedBridgeId)?.name ?? null : null
   const breadcrumb = useMemo(
     () => buildLibraryBreadcrumb(allFolders, currentFolderId, resolvedBridgeId, activeBridgeName, {
@@ -691,57 +712,98 @@ export function TemplateLibraryFilePickerDialog({
                   />
                 </LibraryBreadcrumbRow>
 
-                <LibraryToolbar
-                  viewMode={viewMode}
-                  onViewModeChange={setViewMode}
-                  sort={sort}
-                  onSortChange={setSort}
-                />
-
                 {pickerError && <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{pickerError.message}</Alert>}
               </Stack>
             </DialogSection>
 
             <DialogSection title="Files">
-              <LibraryBrowser
-                folders={childFolders}
-                files={visibleFiles}
-                viewMode={viewMode}
-                sort={sort}
-                surfaceStyle="dialog"
-                onFolderOpen={(folder) => {
-                  if (isBridgeFolderId(folder.id)) {
-                    setBridgeId(fromBridgeFolderId(folder.id))
-                    setCurrentFolderId(null)
-                    return
+              <Stack spacing={1}>
+                <DirectoryPrimaryToolbar
+                  searchValue={search}
+                  onSearchChange={setSearch}
+                  searchPlaceholder="Search files and folders"
+                  searchAriaLabel="Search library"
+                  filters={{
+                    activeCount: filters.activeMetadataFilterCount,
+                    onClear: filters.clearMetadataFilters,
+                    clearDisabled: filters.activeMetadataFilterCount === 0,
+                    disabled: libraryFacetsEmpty(filters),
+                    children: <LibraryMetadataFilters filters={filters} />
+                  }}
+                  grouping={{ value: group, options: LIBRARY_GROUP_OPTIONS, onChange: setGroup }}
+                  pageSizeValue={filters.pageSize}
+                  pageSizeOptions={LIBRARY_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} per page` }))}
+                  onPageSizeChange={(value) => filters.setPageSize(value as (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number])}
+                  pageSizeAriaLabel="Items per page"
+                  pageSizeRenderValue={(value) => `${value} per page`}
+                  sortValue={sort.key}
+                  sortOptions={LIBRARY_SORT_OPTIONS}
+                  onSortValueChange={(key) => setSort({ ...sort, key })}
+                  sortDirection={sort.dir}
+                  onSortDirectionChange={(dir) => setSort({ ...sort, dir })}
+                  sortAriaLabel="Sort library by"
+                  viewMode={viewMode}
+                  onViewModeChange={setViewMode}
+                />
+
+                <PaginatedLibraryBrowser
+                  group={group}
+                  sort={sort}
+                  filteredFolders={filters.filteredFolders}
+                  filteredFiles={filters.filteredFiles}
+                  filteredItemCount={filters.filteredItemCount}
+                  pagedFolders={filters.pagedFolders}
+                  pagedFiles={filters.pagedFiles}
+                  pagination={{
+                    showingLabel: filters.showingLabel,
+                    currentPage: filters.currentPage,
+                    pageCount: filters.pageCount,
+                    onPageChange: filters.setPage
+                  }}
+                  emptyState={
+                    favoritesOnly
+                      ? <LibraryPickerEmptyState favoritesOnly />
+                      : (
+                          <EmptyState
+                            icon={<FolderOpenRoundedIcon />}
+                            title={bridgeRootMode ? 'No bridges connected' : currentFolderId ? 'This folder is empty' : 'No files in the library yet'}
+                            description={
+                              bridgeRootMode
+                                ? 'Connect a bridge to browse its files.'
+                                : currentFolderId
+                                ? 'Choose another folder or upload a printer-ready file here from the Library page.'
+                                : 'Upload printer-ready files in the Library page, then add them to this template.'
+                            }
+                          />
+                        )
                   }
-                  setCurrentFolderId(folder.id)
-                }}
-                onFilePick={onPick}
-                isFilePickable={(file) => isDirectPrintableFileName(file.name) || isUnslicedThreeMfFile(file)}
-                getFileDisabledReason={(file) => (
-                  isDirectPrintableFileName(file.name) || isUnslicedThreeMfFile(file)
-                    ? null
-                    : 'Only G-code, G-code 3MF, or project 3MF files can be added to orders.'
-                )}
-                emptyState={
-                  favoritesOnly
-                    ? <LibraryPickerEmptyState favoritesOnly />
-                    : (
-                        <EmptyState
-                          icon={<FolderOpenRoundedIcon />}
-                          title={bridgeRootMode ? 'No bridges connected' : currentFolderId ? 'This folder is empty' : 'No files in the library yet'}
-                          description={
-                            bridgeRootMode
-                              ? 'Connect a bridge to browse its files.'
-                              : currentFolderId
-                              ? 'Choose another folder or upload a printer-ready file here from the Library page.'
-                              : 'Upload printer-ready files in the Library page, then add them to this template.'
-                          }
-                        />
-                      )
-                }
-              />
+                  renderBrowser={(folders, files, emptyStateNode) => (
+                    <LibraryBrowser
+                      folders={folders}
+                      files={files}
+                      viewMode={viewMode}
+                      sort={sort}
+                      surfaceStyle="dialog"
+                      emptyState={emptyStateNode}
+                      onFolderOpen={(folder) => {
+                        if (isBridgeFolderId(folder.id)) {
+                          setBridgeId(fromBridgeFolderId(folder.id))
+                          setCurrentFolderId(null)
+                          return
+                        }
+                        setCurrentFolderId(folder.id)
+                      }}
+                      onFilePick={onPick}
+                      isFilePickable={(file) => isDirectPrintableFileName(file.name) || isUnslicedThreeMfFile(file)}
+                      getFileDisabledReason={(file) => (
+                        isDirectPrintableFileName(file.name) || isUnslicedThreeMfFile(file)
+                          ? null
+                          : 'Only G-code, G-code 3MF, or project 3MF files can be added to orders.'
+                      )}
+                    />
+                  )}
+                />
+              </Stack>
             </DialogSection>
           </Stack>
         </ScrollableDialogBody>

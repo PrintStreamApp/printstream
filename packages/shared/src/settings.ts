@@ -26,10 +26,19 @@ export type AppLandingPageSetting = z.infer<typeof appLandingPageSettingSchema>
  * `supportAccessEnabled` allows support users to enter the current workspace.
  * `supportAccessPermissions` controls what non-bypass support users can do.
  */
+/**
+ * Ordered list of primary nav-tab values (app-relative paths like `/printers`).
+ * Empty means "use the built-in default order". Unknown/unavailable values are
+ * ignored, and available tabs missing from the list fall back to the default
+ * position, so the order survives plugins being enabled/disabled.
+ */
+const navTabOrderSchema = z.array(z.string()).default([])
+
 export const generalSettingsSchema = z.object({
   appTheme: appThemeSettingSchema.default('default'),
   unconstrainedWidth: z.boolean().default(false),
   landingPage: appLandingPageSettingSchema.default(DEFAULT_APP_LANDING_PAGE),
+  navTabOrder: navTabOrderSchema,
   quickStartDismissed: z.boolean().default(false),
   supportAccessEnabled: z.boolean().default(true),
   supportAccessPermissions: uniquePermissionArraySchema.default([])
@@ -41,11 +50,12 @@ export const updateGeneralSettingsSchema = z.object({
   appTheme: appThemeSettingSchema.optional(),
   unconstrainedWidth: z.boolean().optional(),
   landingPage: appLandingPageSettingSchema.optional(),
+  navTabOrder: z.array(z.string()).optional(),
   quickStartDismissed: z.boolean().optional(),
   supportAccessEnabled: z.boolean().optional(),
   supportAccessPermissions: uniquePermissionArraySchema.optional()
 }).refine(
-  (value) => value.appTheme !== undefined || value.unconstrainedWidth !== undefined || value.landingPage !== undefined || value.quickStartDismissed !== undefined || value.supportAccessEnabled !== undefined || value.supportAccessPermissions !== undefined,
+  (value) => value.appTheme !== undefined || value.unconstrainedWidth !== undefined || value.landingPage !== undefined || value.navTabOrder !== undefined || value.quickStartDismissed !== undefined || value.supportAccessEnabled !== undefined || value.supportAccessPermissions !== undefined,
   'At least one general setting must be provided.'
 )
 

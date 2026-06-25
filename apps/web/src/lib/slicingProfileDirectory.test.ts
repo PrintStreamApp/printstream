@@ -42,12 +42,19 @@ test('slicing profile defaults sort by name ascending', () => {
 
 test('filterSlicingProfiles matches profile names and kind labels', () => {
   assert.deepEqual(
-    filterSlicingProfiles(PROFILES, 'material', 'all').map((profile) => profile.id),
+    filterSlicingProfiles(PROFILES, 'material', []).map((profile) => profile.id),
     ['filament-1']
   )
   assert.deepEqual(
-    filterSlicingProfiles(PROFILES, 'quality', 'process').map((profile) => profile.id),
+    filterSlicingProfiles(PROFILES, 'quality', ['process']).map((profile) => profile.id),
     ['process-1']
+  )
+})
+
+test('filterSlicingProfiles treats multiple selected kinds as OR', () => {
+  assert.deepEqual(
+    filterSlicingProfiles(PROFILES, '', ['process', 'filament']).map((profile) => profile.id).sort(),
+    ['filament-1', 'process-1']
   )
 })
 
@@ -71,7 +78,7 @@ test('selection helpers toggle one profile or all filtered profiles', () => {
   assert.deepEqual(toggledOnce, ['machine-1'])
   assert.deepEqual(toggleSlicingProfileSelection(toggledOnce, 'machine-1'), [])
 
-  const filteredProfiles = filterSlicingProfiles(PROFILES, '', 'filament')
+  const filteredProfiles = filterSlicingProfiles(PROFILES, '', ['filament'])
   const allSelected = setAllFilteredSlicingProfilesSelected([], filteredProfiles, true)
   assert.deepEqual(allSelected, ['filament-1'])
   assert.deepEqual(setAllFilteredSlicingProfilesSelected(allSelected, filteredProfiles, false), [])

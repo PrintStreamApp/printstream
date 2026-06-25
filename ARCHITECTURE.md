@@ -114,6 +114,8 @@ The platform-facing plugin APIs are split intentionally:
   - Run an **init** function on startup (returning an optional cleanup callback).
 - Plugins must not import each other.
 
+The named extension points core currently exposes are: `printer.card.actions`, `printer.card.headerChips`, `printer.card.menuItems`, `printer.card.dialogs` (printer cards); `library.create`, `library.fileActions`, `library.overlays` (library); `slicing.editor` (slice dialog); and the auth-provider slots `auth.signIn`, `auth.recentVerification`, `auth.userManagement.credentials`, `auth.userManagement.lifecycle`, `account.security`, `settings.authenticationProviders`, `settings.authenticationSetup`. Adding a new point means rendering `<PluginSlot name="..." context={...} />` (or `webPluginRegistry.slots(name)`) in the host and passing a free-form context, including callbacks, so the plugin can drive host state without core depending on the plugin.
+
 ### Built-in plugins
 
 | Plugin | Side | Description |
@@ -126,10 +128,11 @@ The platform-facing plugin APIs are split intentionally:
 | `notifications-discord` | API + web | Posts printer notifications to a configured Discord webhook. |
 | `notifications-ntfy` | API + web | Forwards printer notifications to a configured ntfy topic URL. |
 | `orders` | API + web | Production order templates with named variants, per-copy filament-color override snapshots, required-print expansion, tracked per-print lifecycle, and an app-relative `/orders` workflow mounted under a tenant workspace slug. Template items may reference unsliced project 3MFs; starting one slices first (web slice-then-print flow) and dispatches the sliced output via `slicedFileId` while the item keeps pointing at the source 3MF. |
+| `filament-manager` | API + web | A per-workspace spool inventory (the **Filament** tab) with search/filter/sort/group and list/icon views showing remaining filament graphically and numerically. Auto-adds RFID-tagged Bambu spools on AMS insert and re-associates known spools with their slot, syncing remaining from the printer's remain%; decrements non-Bambu spools by per-job grams when a print finishes (hybrid tracking). Contributes "pick from library" / "save to library" actions into the AMS and external-spool editors. Owns `FilamentSpool` / `FilamentSpoolUsage` tables. |
 | `plate-clearing` | API + web | Gates prints behind a "plate cleared" confirmation. After a print finishes the printer is blocked until the user confirms. External prints bypass the gate. |
 | `model-studio` | API + web | Three.js viewer + multi-plate 3D editor for STL, plated 3MF, and plated G-code library files: per-plate thumbnails and modal preview entry points wired into library actions/dialogs, plus an "Edit in 3D" slice-dialog editor and a "New 3D project" library action that import/arrange models (footprint-aware auto-arrange, auto-orient, primitives, split-to-objects, multi-select with assemble), edit materials, add negative parts / modifiers / support blocker and enforcer volumes, paint supports/seam/colours (Bambu-style circle/sphere brushes, smart/bucket fill, height range, edge detection, on-overhangs-only), place manual brim ears, schedule per-layer filament changes, toggle per-object printability (BambuStudio's "Printable", excluded from the slice but kept in the saved 3MF), and save new or edited 3MFs back to the library. |
 
-Built-in plugins register with different defaults: `auth-local` and `auth-oauth` are always installed and enabled and are available to every workspace (they back the platform's own sign-in); `model-studio` is enabled by default; and the remaining built-ins (the notification channels, `plate-clearing`, `firmware-updates`, `orders`, and `home-assistant`) register disabled until a workspace enables them. Existing installs keep their prior effective enabled state unless they have explicit plugin settings already stored.
+Built-in plugins register with different defaults: `auth-local` and `auth-oauth` are always installed and enabled and are available to every workspace (they back the platform's own sign-in); `model-studio` and `filament-manager` are enabled by default; and the remaining built-ins (the notification channels, `plate-clearing`, `firmware-updates`, `orders`, and `home-assistant`) register disabled until a workspace enables them. Existing installs keep their prior effective enabled state unless they have explicit plugin settings already stored.
 
 All notification plugins share `apps/api/src/lib/notification-format.ts`, which maps printer events (`job.started`, `job.finished`) onto a single `NotificationMessage` contract from `packages/shared`. Notification messages are rendered through user-customizable templates managed via `/api/notifications/templates`. Adding a new trigger only needs a branch in the formatter — every channel picks it up automatically. Plugins still must not import each other; the helper lives in `lib/`.
 
@@ -194,7 +197,7 @@ Stats are durable lifetime counters rather than a live scan of history rows. `Te
 
 The API also runs a small maintenance loop at startup and then daily. It prunes expired cover-cache artifacts, ages out transient hidden library uploads, clears old completed-job thumbnails plus persisted final-frame snapshots, and removes stale bridge-derived metadata/thumbnail cache files so those convenience caches cannot grow on disk forever.
 
-Plugin-specific state should live in the `Setting` table by default. A plugin that genuinely needs its own tables should be promoted out of the core schema in a follow-up rather than growing the core schema.
+Plugin-specific state should live in the `Setting` table by default (keys namespaced `plugin:<name>:<key>`). **Built-in plugins** may add their own tenant-scoped tables to the core schema when the data is structured and relational rather than key/value — the `orders` plugin does this — provided each model carries a `tenantId` relation to `Tenant`, is listed in `TENANT_SCOPED_MODELS` (`apps/api/src/lib/prisma.ts`), and ships a migration. **Third-party (uploaded) plugins** cannot migrate the core schema and must persist through the `Setting` store.
 
 ## Web app pages
 
@@ -208,6 +211,7 @@ Plugin-specific state should live in the `Setting` table by default. A plugin th
 | Auth | Provider-contributed sign-in UI that renders in place whenever the current route requires auth; `/auth` remains an entry route, but the normal flow keeps users on the URL they originally requested. |
 | Account | Self-service account page at `/workspaces/<slug>/account` or `/platform/account` for current-profile edits, browser-session review, and provider-owned account-security controls. |
 | Orders | Built-in app-relative plugin route mounted under `/workspaces/<slug>/orders` for order templates, production orders, per-print tracking, and completion/confirmation actions. |
+| Filament | Built-in plugin route at `/filament` — a spool inventory with search/filter/sort/group, list and icon views showing remaining filament graphically and numerically, manual add/edit/adjust, recycle, and per-spool consumption history. |
 | Logs | Structured log viewer that can show audit and system entries, with level filters applied only to system logs. |
 | Settings | Tenant-scoped configuration, including local auth access management, tenant plugin toggles, notifications, and tenant logs. |
 

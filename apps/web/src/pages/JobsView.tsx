@@ -1,4 +1,4 @@
-import { Box, Button, Card, CardContent, Chip, FormControl, LinearProgress, Option, Select, Stack, Typography } from '@mui/joy'
+import { Box, Button, Card, CardContent, Chip, FormControl, LinearProgress, Select, Stack, Typography } from '@mui/joy'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -46,7 +46,8 @@ import {
 import { PrintJobHistoryCard, PrinterRouteButton, ProjectFilamentChipRow } from '../components/PrintJobHistoryCard'
 import { PrinterJobMediaStrip } from '../components/PrinterJobMediaStrip'
 import { type DirectorySortDirection, type DirectoryViewMode } from '../components/DirectoryControls'
-import { DirectoryFiltersButton, DirectoryFiltersDialog, DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
+import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
+import { MultiSelectOption } from '../components/MultiSelectOption'
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
 import { sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
@@ -57,6 +58,7 @@ import { buildApiUrl } from '../lib/apiUrl'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { formatPrinterJobDisplayName } from '../lib/printerJobName'
 import { formatSecondaryStageLabel } from '../lib/printerProgressSummary'
+import { capitalize } from '../lib/printersViewHelpers'
 import {
   formatSlicingMetadataDisplay,
   formatSlicingProgress,
@@ -161,9 +163,8 @@ export function JobsView() {
   const [restartingJobId, setRestartingJobId] = useState<string | null>(null)
   const [historySearch, setHistorySearch] = useState('')
   const deferredHistorySearch = useDeferredValue(historySearch)
-  const [historyPrinterId, setHistoryPrinterId] = useState<string>('all')
-  const [historyResults, setHistoryResults] = useState<PrintJob['result'][]>(() => [...HISTORY_RESULTS])
-  const [historyFiltersDialogOpen, setHistoryFiltersDialogOpen] = useState(false)
+  const [historyPrinterIds, setHistoryPrinterIds] = useState<string[]>([])
+  const [historyResults, setHistoryResults] = useState<PrintJob['result'][]>([])
   const [historySortValue, setHistorySortValue] = useState<HistorySortValue>('ended')
   const [historySortDirection, setHistorySortDirection] = useState<DirectorySortDirection>('desc')
   const [historyPage, setHistoryPage] = useState(0)
@@ -318,6 +319,14 @@ export function JobsView() {
       .sort((left, right) => left.name.localeCompare(right.name)),
     [historyJobs, historicalSlicingJobs, printerNames]
   )
+  // Drop any selected printer that no longer appears in the history options.
+  useEffect(() => {
+    const ids = new Set(historyPrinterOptions.map((printer) => printer.id))
+    setHistoryPrinterIds((current) => {
+      const next = current.filter((id) => ids.has(id))
+      return next.length === current.length ? current : next
+    })
+  }, [historyPrinterOptions])
   const liveJobs = useMemo<LiveJob[]>(() => {
     const statuses = statusQuery.data ?? {}
     const unfinishedByPrinter = new Map<string, PrintJob>()
@@ -395,9 +404,10 @@ export function JobsView() {
   const filteredHistoryEntries = useMemo(() => {
     const activeResults = new Set(historyResults)
     const normalizedSearch = deferredHistorySearch.trim().toLowerCase()
+    const activePrinterIds = new Set(historyPrinterIds)
     return historyEntries.filter((entry) => {
-      if (historyPrinterId !== 'all' && entry.printerId !== historyPrinterId) return false
-      if (!activeResults.has(entry.result)) return false
+      if (activePrinterIds.size > 0 && (entry.printerId == null || !activePrinterIds.has(entry.printerId))) return false
+      if (activeResults.size > 0 && !activeResults.has(entry.result)) return false
       if (!normalizedSearch) return true
       return entry.searchHaystack.includes(normalizedSearch)
     }).slice().sort((left, right) => {
@@ -407,10 +417,10 @@ export function JobsView() {
         ? rightDate.localeCompare(leftDate)
         : leftDate.localeCompare(rightDate)
     })
-  }, [deferredHistorySearch, historyEntries, historyPrinterId, historyResults, historySortDirection, historySortValue])
+  }, [deferredHistorySearch, historyEntries, historyPrinterIds, historyResults, historySortDirection, historySortValue])
   const historyPageCount = Math.max(1, Math.ceil(filteredHistoryEntries.length / historyPageSize))
   const safeHistoryPage = Math.min(historyPage, historyPageCount - 1)
-  const activeHistoryFilterCount = Number(historyPrinterId !== 'all') + Number(historyResults.length !== HISTORY_RESULTS.length)
+  const activeHistoryFilterCount = Number(historyPrinterIds.length > 0) + Number(historyResults.length > 0)
   const effectiveHistoryViewMode: DirectoryViewMode = isMobileViewport ? 'list' : historyViewMode
   const visibleHistoryEntries = useMemo(() => {
     const start = safeHistoryPage * historyPageSize
@@ -422,8 +432,8 @@ export function JobsView() {
   }, [filteredHistoryEntries.length, historyPageSize])
 
   function clearHistoryFilters() {
-    setHistoryPrinterId('all')
-    setHistoryResults([...HISTORY_RESULTS])
+    setHistoryPrinterIds([])
+    setHistoryResults([])
   }
 
   const inProgressCount = activeSlicingJobs.length + dispatchQueue.length + liveJobs.length
@@ -621,7 +631,59 @@ export function JobsView() {
                 }}
                 searchPlaceholder="Search file, printer, result, slicer, or time"
                 searchAriaLabel="Search job history"
-                filtersButton={<DirectoryFiltersButton activeCount={activeHistoryFilterCount} onClick={() => setHistoryFiltersDialogOpen(true)} />}
+                filters={{
+                  activeCount: activeHistoryFilterCount,
+                  onClear: clearHistoryFilters,
+                  clearDisabled: activeHistoryFilterCount === 0,
+                  children: (
+                    <>
+                      <FormControl>
+                        <Typography level="body-sm" textColor="text.tertiary">Printer</Typography>
+                        <Select
+                          size="sm"
+                          multiple
+                          value={historyPrinterIds}
+                          onChange={(_event, value) => {
+                            setHistoryPage(0)
+                            setHistoryPrinterIds(value ?? [])
+                          }}
+                          placeholder="All printers"
+                          renderValue={() => historyPrinterIds.length === 0
+                            ? null
+                            : historyPrinterIds.length === 1
+                              ? (historyPrinterOptions.find((printer) => printer.id === historyPrinterIds[0])?.name ?? '1 printer')
+                              : `${historyPrinterIds.length} printers`}
+                          slotProps={{ listbox: { disablePortal: true, sx: { maxHeight: 280 } } }}
+                        >
+                          {historyPrinterOptions.map((printer) => (
+                            <MultiSelectOption key={printer.id} value={printer.id} selected={historyPrinterIds.includes(printer.id)}>{printer.name}</MultiSelectOption>
+                          ))}
+                        </Select>
+                      </FormControl>
+                      <FormControl>
+                        <Typography level="body-sm" textColor="text.tertiary">Results</Typography>
+                        <Select
+                          size="sm"
+                          multiple
+                          value={historyResults}
+                          onChange={(_event, value) => {
+                            setHistoryPage(0)
+                            setHistoryResults(value ?? [])
+                          }}
+                          placeholder="All results"
+                          renderValue={() => historyResults.length === 0
+                            ? null
+                            : formatHistoryResultsSummary(historyResults)}
+                          slotProps={{ listbox: { disablePortal: true, sx: { maxHeight: 280 } } }}
+                        >
+                          {HISTORY_RESULTS.map((result) => (
+                            <MultiSelectOption key={result} value={result} selected={historyResults.includes(result)}>{historyResultLabel(result)}</MultiSelectOption>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    </>
+                  )
+                }}
                 pageSizeValue={historyPageSize}
                 pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} rows per page` }))}
                 onPageSizeChange={(value) => {
@@ -645,72 +707,7 @@ export function JobsView() {
                 viewMode={effectiveHistoryViewMode}
                 onViewModeChange={setHistoryViewMode}
                 disableIconModeOnMobile
-                sortMinWidth={140}
               />
-
-              {activeHistoryFilterCount > 0 && (
-                <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                  {historyPrinterId !== 'all' && (
-                    <Chip size="sm" variant="soft" color="neutral">
-                      {historyPrinterOptions.find((printer) => printer.id === historyPrinterId)?.name ?? 'Selected printer'}
-                    </Chip>
-                  )}
-                  {historyResults.length !== HISTORY_RESULTS.length && (
-                    <Chip size="sm" variant="soft" color="neutral">{formatHistoryResultsSummary(historyResults)}</Chip>
-                  )}
-                  <Button size="sm" variant="plain" color="neutral" onClick={clearHistoryFilters}>
-                    Clear filters
-                  </Button>
-                </Stack>
-              )}
-
-              <DirectoryFiltersDialog
-                open={historyFiltersDialogOpen}
-                title="Job history filters"
-                onClose={() => setHistoryFiltersDialogOpen(false)}
-                onClear={clearHistoryFilters}
-                clearDisabled={activeHistoryFilterCount === 0}
-              >
-                <FormControl>
-                  <Typography level="body-sm" textColor="text.tertiary">Printer</Typography>
-                  <Select
-                    size="sm"
-                    value={historyPrinterId}
-                    onChange={(_event, value) => {
-                      setHistoryPage(0)
-                      setHistoryPrinterId(value ?? 'all')
-                    }}
-                  >
-                    <Option value="all">All printers</Option>
-                    {historyPrinterOptions.map((printer) => (
-                      <Option key={printer.id} value={printer.id}>{printer.name}</Option>
-                    ))}
-                  </Select>
-                </FormControl>
-                <FormControl>
-                  <Typography level="body-sm" textColor="text.tertiary">Results</Typography>
-                  <Select
-                    size="sm"
-                    multiple
-                    value={historyResults}
-                    onChange={(_event, value) => {
-                      setHistoryPage(0)
-                      setHistoryResults(value ?? [])
-                    }}
-                    renderValue={() => (
-                      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                        <Chip size="sm" variant="soft">{formatHistoryResultsSummary(historyResults)}</Chip>
-                      </Stack>
-                    )}
-                    slotProps={{ listbox: { sx: { maxHeight: 280 } } }}
-                  >
-                    {HISTORY_RESULTS.map((result) => (
-                      <Option key={result} value={result}>{historyResultLabel(result)}</Option>
-                    ))}
-                  </Select>
-                </FormControl>
-              </DirectoryFiltersDialog>
-
             </Stack>
           )}
           {historyEntries.length > 0 && filteredHistoryEntries.length === 0 && (
@@ -1138,7 +1135,7 @@ function ActiveJobCard({ job, canViewCamera, tenantSlug }: { job: LiveJob; canVi
             >
               {waitingForPrinterStart
                 ? (pendingStartWarning ? 'Start delayed' : 'Waiting to start')
-                : (job.online ? job.stage : `${job.stage} offline`)}
+                : (job.online ? capitalize(job.stage) : `${capitalize(job.stage)} offline`)}
             </Chip>
           </Stack>
 

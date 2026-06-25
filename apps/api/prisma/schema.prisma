@@ -45,6 +45,8 @@ model Tenant {
   orders             Order[]
   orderVariantSelections OrderVariantSelection[]
   orderPrints        OrderPrint[]
+  filamentSpools     FilamentSpool[]
+  filamentSpoolUsages FilamentSpoolUsage[]
   auditLogs          AuditLog[]
   stats              TenantStats?
   printerStats       PrinterStats[]
@@ -72,6 +74,7 @@ model Printer {
   jobs       PrintJob[]
   dispatchJobs DispatchJob[]
   startedOrderPrints OrderPrint[] @relation("OrderPrintStartedPrinter")
+  loadedFilamentSpools FilamentSpool[] @relation("FilamentSpoolLoadedPrinter")
 
   @@unique([tenantId, serial])
   @@index([tenantId, bridgeId, position])
@@ -862,4 +865,91 @@ model OrderPrint {
   @@index([tenantId, libraryFileId])
   @@index([tenantId, startedPrinterId])
   @@index([tenantId, lastPrintJobId])
+}
+
+/// A physical filament spool tracked in a workspace's inventory (the
+/// `filament-manager` plugin). Bambu RFID spools are auto-added on AMS insert and
+/// keyed by `bambuUuid`; other spools are entered manually. `remainingGrams` is
+/// the canonical "amount left": synced from the printer's reported remain% for
+/// Bambu spools, decremented from per-job consumption for the rest (see
+/// `FilamentSpoolUsage`). Tenant-scoped, soft-deletable (recycle) and separately
+/// archivable (used up but kept for history), mirroring `LibraryFile`.
+model FilamentSpool {
+  id              String    @id @default(cuid())
+  tenantId        String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  // Recycle bin: restorable until the retention window hard-deletes the row.
+  deletedAt       DateTime?
+  // Retired / used up but intentionally kept for history; still listable under a filter.
+  archivedAt      DateTime?
+
+  // Material identity
+  brand           String?
+  filamentType    String                          // PLA, PETG, ABS, ...
+  materialSubtype String?                          // e.g. "PLA Silk", "PLA Basic"
+  colorName       String?                          // resolved or custom display name
+  colorHex        String?                          // primary color, #RRGGBB
+  colorsJson      String?                          // multi-color palette as JSON #RRGGBB[]
+  // Preset / RFID identity
+  trayInfoIdx     String?                          // Bambu filament preset id (e.g. "GFA00")
+  bambuUuid       String?                          // RFID serial (tray_uuid); auto-add dedupe key
+  serial          String?                          // manual serial for non-Bambu spools
+  nozzleTempMin   Int?
+  nozzleTempMax   Int?
+  diameterMm      Float     @default(1.75)
+
+  // Quantity tracking
+  netWeightGrams  Int       @default(1000)         // full-spool net filament weight
+  spoolCoreGrams  Int?                             // empty core weight, for scale-based measuring
+  remainingGrams  Float     @default(1000)         // canonical amount left
+  remainSource    String    @default("manual")     // 'printer' | 'tracked' | 'manual'
+
+  // Provenance / cost
+  costCents       Int?
+  currency        String?
+  purchasedAt     DateTime?
+  vendor          String?
+  notes           String?
+
+  // Current location: which printer/slot it is loaded into, if any.
+  loadedPrinterId String?
+  loadedAmsId     Int?                             // AMS unit id, or 254/255 for external virtual trays
+  loadedSlotId    Int?                             // slot within the AMS unit; null for external spools
+  loadedAt        DateTime?
+  lastSeenAt      DateTime?                         // last time confirmed present in a slot
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  loadedPrinter   Printer?  @relation("FilamentSpoolLoadedPrinter", fields: [loadedPrinterId], references: [id], onDelete: SetNull)
+  usage           FilamentSpoolUsage[]
+
+  @@index([tenantId, deletedAt])
+  @@index([tenantId, filamentType])
+  @@index([tenantId, brand])
+  @@index([tenantId, loadedPrinterId])
+  // bambuUuid is not unique: a recycled/archived row may share the RFID of a
+  // re-added spool, so auto-add dedupes among non-deleted rows in app code.
+  @@index([tenantId, bambuUuid])
+}
+
+/// Append-only consumption ledger for a spool: one row per print that drew from
+/// it (`source: 'print'`), per manual correction (`'manual'`), or per RFID
+/// remain% resync (`'rfid-sync'`). `jobId` is a soft reference to `PrintJob`
+/// (kept even if that row is later pruned) so usage history survives, mirroring
+/// how production stats are not reverted on job deletion.
+model FilamentSpoolUsage {
+  id          String    @id @default(cuid())
+  tenantId    String
+  spoolId     String
+  jobId       String?
+  grams       Float
+  source      String    @default("print")          // 'print' | 'manual' | 'rfid-sync'
+  note        String?
+  recordedAt  DateTime  @default(now())
+
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  spool       FilamentSpool @relation(fields: [spoolId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, spoolId, recordedAt])
+  @@index([tenantId, jobId])
 }

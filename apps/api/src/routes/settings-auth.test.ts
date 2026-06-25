@@ -49,6 +49,7 @@ test('settings read remains available without auth permissions', async () => {
       appTheme: 'default',
       unconstrainedWidth: false,
       landingPage: DEFAULT_APP_LANDING_PAGE,
+      navTabOrder: [],
       quickStartDismissed: false,
       supportAccessEnabled: true,
       supportAccessPermissions: listAllWorkspaceSupportPermissions()
@@ -113,6 +114,7 @@ test('settings write allows actors with settings.manage permission', async () =>
       appTheme: 'default',
       unconstrainedWidth: true,
       landingPage: DEFAULT_APP_LANDING_PAGE,
+      navTabOrder: [],
       quickStartDismissed: false,
       supportAccessEnabled: true,
       supportAccessPermissions: listAllWorkspaceSupportPermissions()
@@ -314,6 +316,7 @@ test('settings write for support access allows a recently verified admin', async
       appTheme: 'default',
       unconstrainedWidth: false,
       landingPage: DEFAULT_APP_LANDING_PAGE,
+      navTabOrder: [],
       quickStartDismissed: false,
       supportAccessEnabled: false,
       supportAccessPermissions: ['printers.view']

@@ -38,12 +38,15 @@ import { AppShell, type ShellTab } from './components/AppShell'
 import {
   DEVICE_APP_THEME_OVERRIDE_KEY,
   DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX,
+  DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX,
   DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY,
   parseNullableAppLandingPageSetting,
   parseNullableAppThemeSetting,
   parseNullableBoolean,
+  parseNullableNavTabOrder,
   tenantScopedRoutePath
 } from './appShellHelpers'
+import { orderNavTabs } from './lib/navTabOrder'
 import { marketingModule, platformAdminModule } from './lib/privateModules'
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner'
 import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
@@ -271,6 +274,12 @@ export function App() {
     null,
     parseNullableAppLandingPageSetting
   )
+  const deviceNavTabOrderOverrideKey = `${DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX}.${activeTenantSlug ?? routeTenantSlug ?? 'ambient'}`
+  const [deviceNavTabOrderOverride, setDeviceNavTabOrderOverride] = useLocalStorageState<string[] | null>(
+    deviceNavTabOrderOverrideKey,
+    null,
+    parseNullableNavTabOrder
+  )
   const pluginStateQuery = usePluginCatalogQuery({
     enabled: authBootstrapQuery.isSuccess ? (isAuthenticated || (hasTenantContext && !authEnabled)) : false,
     suppressGlobalErrorToast: true
@@ -351,9 +360,8 @@ export function App() {
       .filter((route) => Boolean(route.navLabel))
       .map((route) => {
         const tabValue = pluginBasePath(route.path)
-        const mobileIcon = tabValue === '/orders'
-          ? <ChecklistRoundedIcon />
-          : <ExtensionRoundedIcon />
+        const mobileIcon = route.navMobileIcon
+          ?? (tabValue === '/orders' ? <ChecklistRoundedIcon /> : <ExtensionRoundedIcon />)
         return { value: tabValue, label: route.navLabel ?? tabValue, mobileIcon }
       })
       .sort((left, right) => {
@@ -563,15 +571,25 @@ export function App() {
       : null,
     [canUseWorkspaceChooser, showsWorkspaceSwitcher]
   )
+  // Settings is pinned at the end of the content tabs; the rest (core content +
+  // plugin tabs) are user-orderable. Empty order → built-in default (Filament
+  // after Printers). Device override wins over the workspace default.
+  const sharedNavTabOrder = useMemo(() => generalSettingsQuery.data?.navTabOrder ?? [], [generalSettingsQuery.data?.navTabOrder])
+  const effectiveNavTabOrder = deviceNavTabOrderOverride ?? sharedNavTabOrder
+  const settingsTab = useMemo(() => coreTabs.find((tab) => tab.value === '/settings') ?? null, [coreTabs])
+  const navContentTabs = useMemo<ReadonlyArray<ShellTab>>(
+    () => orderNavTabs([...coreTabs.filter((tab) => tab.value !== '/settings'), ...pluginTabs], effectiveNavTabOrder),
+    [coreTabs, pluginTabs, effectiveNavTabOrder]
+  )
   const tabs = useMemo<ReadonlyArray<ShellTab>>(
     () => [
       ...platformTabs,
-      ...pluginTabs,
-      ...coreTabs,
+      ...navContentTabs,
+      ...(settingsTab ? [settingsTab] : []),
       ...(accountTab ? [accountTab] : []),
       ...(workspaceChooserTab ? [workspaceChooserTab] : [])
     ],
-    [accountTab, coreTabs, platformTabs, pluginTabs, workspaceChooserTab]
+    [accountTab, navContentTabs, platformTabs, settingsTab, workspaceChooserTab]
   )
 
   const openPlatformWorkspace = (routePath: string) => {
@@ -1068,6 +1086,12 @@ export function App() {
                             onSetSharedAppTheme={(appTheme) => updateGeneralSettings.mutate({ appTheme })}
                             onSetSharedUnconstrainedWidth={(unconstrainedWidth) => updateGeneralSettings.mutate({ unconstrainedWidth })}
                             onSetSharedLandingPage={(landingPage) => updateGeneralSettings.mutate({ landingPage })}
+                            navTabOptions={navContentTabs.map((tab) => ({ value: tab.value, label: tab.label }))}
+                            sharedNavTabOrder={sharedNavTabOrder}
+                            deviceNavTabOrder={deviceNavTabOrderOverride}
+                            onSetSharedNavTabOrder={(navTabOrder) => updateGeneralSettings.mutate({ navTabOrder })}
+                            onSetDeviceNavTabOrder={setDeviceNavTabOrderOverride}
+                            onClearDeviceNavTabOrderOverride={() => setDeviceNavTabOrderOverride(null)}
                           />
                             )
                         ) : (

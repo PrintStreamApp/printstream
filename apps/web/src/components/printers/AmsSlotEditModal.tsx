@@ -33,6 +33,7 @@ import { FilamentChangeProgressPanel } from './FilamentChangeProgressPanel'
 import { useControlledMenuClickAway } from '../../hooks/useControlledMenuClickAway'
 import { bambuColorName, bambuMaterialFromPresetName, bambuMaterialFromType } from '../../data/bambuColors'
 import { BAMBU_FILAMENT_PRESETS, BAMBU_FILAMENT_PRESET_GROUPS, FILAMENT_PRESETS, filamentTypeDefaults } from '../../data/filamentSetupCatalog'
+import { PluginSlot } from '../../plugin/PluginSlot'
 import {
   COMMON_FILAMENT_COLOR_SWATCHES,
   commonFilamentColorName,
@@ -401,6 +402,13 @@ export function AmsSlotEditModal({
     setType(preset.type)
   }
 
+  // Lets the filament-manager plugin's "Pick from library" populate the form.
+  const applyFilamentFromLibrary = useCallback((values: { filamentType?: string | null; colorHex?: string | null; trayInfoIdx?: string | null }) => {
+    if (typeof values.trayInfoIdx === 'string') setTrayInfoIdx(values.trayInfoIdx)
+    if (values.filamentType) setType(values.filamentType)
+    if (values.colorHex) setColor(values.colorHex)
+  }, [])
+
   const currentCustomPresetId = trayInfoIdx && !BAMBU_FILAMENT_PRESETS.some((preset) => preset.id === trayInfoIdx)
     ? trayInfoIdx
     : null
@@ -516,6 +524,17 @@ export function AmsSlotEditModal({
           ) : (
             <DialogSection title="Filament">
               <Stack spacing={1.25}>
+                <PluginSlot
+                  name="ams.slotEditor"
+                  context={{
+                    kind: 'ams',
+                    printerId,
+                    amsId: unit.unitId,
+                    slotId: slot.slot,
+                    currentValues: { filamentType: type, colorHex: color, trayInfoIdx },
+                    onApplyFilament: applyFilamentFromLibrary
+                  }}
+                />
                 <FormControl>
                   <FormLabel>Bambu preset</FormLabel>
                   <Autocomplete

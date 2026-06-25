@@ -1,7 +1,7 @@
 import type { SlicingProfileSummary } from '@printstream/shared'
 
 export type SlicingProfileSortValue = 'updatedAt' | 'name' | 'kind'
-export type SlicingProfileKindFilter = 'all' | SlicingProfileSummary['kind']
+export type SlicingProfileKind = SlicingProfileSummary['kind']
 export type SlicingProfileSortDirection = 'asc' | 'desc'
 
 export const DEFAULT_SLICING_PROFILE_SORT_VALUE: SlicingProfileSortValue = 'name'
@@ -18,11 +18,11 @@ export function formatSlicingProfileKind(kind: SlicingProfileSummary['kind']): s
 export function filterSlicingProfiles(
   profiles: SlicingProfileSummary[],
   search: string,
-  kindFilter: SlicingProfileKindFilter
+  kindFilters: ReadonlyArray<SlicingProfileKind>
 ): SlicingProfileSummary[] {
   const normalizedSearch = search.trim().toLowerCase()
   return profiles.filter((profile) => {
-    if (kindFilter !== 'all' && profile.kind !== kindFilter) return false
+    if (kindFilters.length > 0 && !kindFilters.includes(profile.kind)) return false
     if (!normalizedSearch) return true
     const searchHaystack = `${profile.name} ${formatSlicingProfileKind(profile.kind)}`.toLowerCase()
     return searchHaystack.includes(normalizedSearch)

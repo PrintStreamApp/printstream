@@ -1,6 +1,5 @@
-import { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { Box, Button, Chip, FormControl, FormLabel, Input, ModalClose, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
-import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
+import { useDeferredValue, useMemo, useState, type ReactNode } from 'react'
+import { Box, Button, CircularProgress, ModalClose, Stack, Typography } from '@mui/joy'
 import Inventory2RoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import { useQuery } from '@tanstack/react-query'
 import { EmptyState } from '../../components/EmptyState'
@@ -9,31 +8,31 @@ import { LibraryPickerEmptyState } from '../../components/LibraryPickerEmptyStat
 import { isDirectPrintableFileName, isPrinterModelCompatible, type LibraryBrowseResponse, type LibraryFile, type LibraryFolder, type PrinterModel } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { buildLibraryBreadcrumb, isBridgeFolderId, fromBridgeFolderId, toBridgeFolderId } from '../../lib/libraryNavigation'
-import { formatLibraryFileKindLabel } from '../../lib/libraryDisplay'
 import { isUnslicedThreeMfFile } from '../../lib/libraryFileTags'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
+import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { DialogSection } from '../../components/DialogSection'
-import { DirectoryFiltersMenu } from '../../components/DirectoryToolbar'
+import { DirectoryPrimaryToolbar } from '../../components/DirectoryToolbar'
 import { SearchScopeToggle } from '../../components/library/SearchScopeToggle'
-import {
-  LibraryBrowser,
-  LibraryToolbar,
-  type LibrarySort,
-  type LibraryViewMode
-} from '../../components/LibraryBrowser'
+import { LibraryMetadataFilters } from '../../components/library/LibraryMetadataFilters'
+import { PaginatedLibraryBrowser } from '../../components/library/PaginatedLibraryBrowser'
+import { LibraryBrowser, type LibrarySort, type LibraryViewMode } from '../../components/LibraryBrowser'
+import { libraryFacetsEmpty, useLibraryFilters } from '../../hooks/useLibraryFilters'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
-import { filterLibraryEntries, filterLibraryFilesByMetadata } from '../../lib/libraryDirectory'
-import { parseLibraryViewMode, parseLibrarySort, collectDistinctLibraryFilterValues } from '../../lib/printersViewHelpers'
-import { LIBRARY_VIEW_MODE_KEY, LIBRARY_SORT_KEY, LIBRARY_METADATA_FILTER_ALL } from '../../lib/printerViewConstants'
+import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../../lib/libraryDirectory'
+import { parseLibraryViewMode, parseLibrarySort } from '../../lib/printersViewHelpers'
+import { LIBRARY_VIEW_MODE_KEY, LIBRARY_SORT_KEY, LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS } from '../../lib/libraryViewHelpers'
 
 /**
  * Lightweight library picker used by the printer card's "Print" button.
  *
- * Mirrors {@link LibraryView}'s folder navigation (root listing + drill-in)
- * but only surfaces direct-printable files. When launched from a specific
- * printer card, incompatible files stay visible for context but are
- * disabled with a short compatibility note before handing control back to
- * {@link PrintModal}.
+ * Mirrors {@link LibraryView}'s folder navigation (root listing + drill-in) and
+ * reuses the same toolbar (`DirectoryPrimaryToolbar`), filters
+ * (`useLibraryFilters` + `LibraryMetadataFilters`), grouping, and pagination
+ * (`PaginatedLibraryBrowser`) so the picker is inline with the Library page. It
+ * only surfaces direct-printable files; when launched from a specific printer
+ * card, incompatible files stay visible for context but are disabled with a
+ * short compatibility note before handing control back to {@link PrintModal}.
  */
 export function LibraryPickerModal({
   printerName,
@@ -51,17 +50,16 @@ export function LibraryPickerModal({
   onPick: (file: LibraryFile) => void
   onClose: () => void
 }) {
-  const PICKER_ICON_DIALOG_MAX_WIDTH = 640
+  // List mode is a narrow column; icon mode grows wider so the responsive tile grid
+  // can fit more thumbnails per row (the grid auto-fills columns to the width).
+  const PICKER_LIST_DIALOG_MAX_WIDTH = 640
+  const PICKER_ICON_DIALOG_MAX_WIDTH = 'min(960px, 96vw)'
   const [folderId, setFolderId] = useState<string | null>(null)
   const [bridgeId, setBridgeId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
   const [searchAllFolders, setSearchAllFolders] = useState(false)
   const allFolderSearch = searchAllFolders ? deferredSearch.trim() : ''
-  const [fileTypeFilter, setFileTypeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
-  const [printerModelFilter, setPrinterModelFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
-  const [nozzleSizeFilter, setNozzleSizeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
-  const [plateTypeFilter, setPlateTypeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
   const [viewMode, setViewMode] = useLocalStorageState<LibraryViewMode>(
     LIBRARY_VIEW_MODE_KEY,
     'list',
@@ -73,7 +71,7 @@ export function LibraryPickerModal({
     { key: 'name', dir: 'asc' },
     parseLibrarySort
   )
-
+  const [group, setGroup] = useState<LibraryGroupBy>('none')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   const browseQuery = useQuery({
@@ -100,99 +98,105 @@ export function LibraryPickerModal({
     }
   })
   const bridgeRootMode = browseData?.mode === 'bridge-root'
-  const bridgeEntries = browseData?.bridgeEntries ?? []
-  const bridgeFolders = bridgeEntries.map((bridge) => ({ id: toBridgeFolderId(bridge.id), name: bridge.name, parentId: null } satisfies LibraryFolder))
+  const bridgeEntries = useMemo(() => browseData?.bridgeEntries ?? [], [browseData?.bridgeEntries])
+  const bridgeFolders = useMemo(
+    () => bridgeEntries.map((bridge) => ({ id: toBridgeFolderId(bridge.id), name: bridge.name, parentId: null } satisfies LibraryFolder)),
+    [bridgeEntries]
+  )
   const allFolders = foldersQuery.data?.folders ?? []
   const pickerFiles = useMemo(
     () => (browseData?.files ?? []).filter((file) => isDirectPrintableFileName(file.name) || (canSlice && isUnslicedThreeMfFile(file))),
     [browseData?.files, canSlice]
   )
-  const fileTypeOptions = useMemo(
-    () => collectDistinctLibraryFilterValues(pickerFiles.map((file) => formatLibraryFileKindLabel(file.name, file.kind))),
-    [pickerFiles]
+  const childFolders = useMemo(
+    () => (bridgeRootMode ? bridgeFolders : (browseData?.folders ?? [])),
+    [bridgeFolders, bridgeRootMode, browseData?.folders]
   )
-  const printerModelOptions = useMemo(
-    () => collectDistinctLibraryFilterValues(pickerFiles.flatMap((file) => file.compatiblePrinterModels)),
-    [pickerFiles]
-  )
-  const nozzleSizeOptions = useMemo(
-    () => collectDistinctLibraryFilterValues(pickerFiles.flatMap((file) => file.nozzleSizeChips)),
-    [pickerFiles]
-  )
-  const plateTypeOptions = useMemo(
-    () => collectDistinctLibraryFilterValues(pickerFiles.flatMap((file) => file.plateTypeChips)),
-    [pickerFiles]
-  )
-  const activeFilterCount = Number(fileTypeFilter !== LIBRARY_METADATA_FILTER_ALL)
-    + Number(printerModelFilter !== LIBRARY_METADATA_FILTER_ALL)
-    + Number(nozzleSizeFilter !== LIBRARY_METADATA_FILTER_ALL)
-    + Number(plateTypeFilter !== LIBRARY_METADATA_FILTER_ALL)
-  const metadataFilteredFiles = useMemo(
-    () => filterLibraryFilesByMetadata(pickerFiles, {
-      fileType: fileTypeFilter,
-      printerModel: printerModelFilter,
-      nozzleSize: nozzleSizeFilter,
-      plateType: plateTypeFilter
-    }, LIBRARY_METADATA_FILTER_ALL),
-    [fileTypeFilter, nozzleSizeFilter, pickerFiles, plateTypeFilter, printerModelFilter]
-  )
-  const filteredEntries = useMemo(
-    () => filterLibraryEntries(bridgeRootMode ? bridgeFolders : (browseData?.folders ?? []), metadataFilteredFiles, deferredSearch),
-    [bridgeFolders, bridgeRootMode, browseData?.folders, deferredSearch, metadataFilteredFiles]
-  )
-  const filteredFolders = filteredEntries.folders
-  const filteredFiles = filteredEntries.files
-  const pickerEntryCount = filteredFolders.length + filteredFiles.length
-  const pickerIconColumnCount = Math.min(Math.max(pickerEntryCount, 1), 3)
+
+  const filters = useLibraryFilters({
+    visibleFiles: pickerFiles,
+    childFolders,
+    currentFolderId: folderId,
+    requestedBridgeId: resolvedBridgeId,
+    deferredSearch,
+    sort,
+    favoritesOnly
+  })
+
   const activeBridgeName = resolvedBridgeId ? bridgeEntries.find((bridge) => bridge.id === resolvedBridgeId)?.name ?? null : null
   const breadcrumb = buildLibraryBreadcrumb(allFolders, folderId, resolvedBridgeId, activeBridgeName, {
     showRoot: bridgeEntries.length !== 1
   })
 
-  useEffect(() => {
-    if (fileTypeFilter !== LIBRARY_METADATA_FILTER_ALL && !fileTypeOptions.includes(fileTypeFilter)) {
-      setFileTypeFilter(LIBRARY_METADATA_FILTER_ALL)
-    }
-  }, [fileTypeFilter, fileTypeOptions])
+  const pickerEmptyState = favoritesOnly
+    ? <LibraryPickerEmptyState favoritesOnly />
+    : deferredSearch.trim()
+      ? <LibraryPickerEmptyState searching />
+      : (
+          <EmptyState
+            icon={<Inventory2RoundedIcon />}
+            title={bridgeRootMode ? 'No bridges connected' : 'No files here'}
+            description={
+              filters.activeMetadataFilterCount > 0
+                ? 'No files match the current filters.'
+                : bridgeRootMode
+                  ? 'Connect a bridge to browse its files.'
+                  : canSlice ? 'No printable or slicable files to pick here.' : 'No printable files to pick here.'
+            }
+          />
+        )
 
-  useEffect(() => {
-    if (printerModelFilter !== LIBRARY_METADATA_FILTER_ALL && !printerModelOptions.includes(printerModelFilter)) {
-      setPrinterModelFilter(LIBRARY_METADATA_FILTER_ALL)
-    }
-  }, [printerModelFilter, printerModelOptions])
-
-  useEffect(() => {
-    if (nozzleSizeFilter !== LIBRARY_METADATA_FILTER_ALL && !nozzleSizeOptions.includes(nozzleSizeFilter)) {
-      setNozzleSizeFilter(LIBRARY_METADATA_FILTER_ALL)
-    }
-  }, [nozzleSizeFilter, nozzleSizeOptions])
-
-  useEffect(() => {
-    if (plateTypeFilter !== LIBRARY_METADATA_FILTER_ALL && !plateTypeOptions.includes(plateTypeFilter)) {
-      setPlateTypeFilter(LIBRARY_METADATA_FILTER_ALL)
-    }
-  }, [plateTypeFilter, plateTypeOptions])
-
-  function clearMetadataFilters() {
-    setFileTypeFilter(LIBRARY_METADATA_FILTER_ALL)
-    setPrinterModelFilter(LIBRARY_METADATA_FILTER_ALL)
-    setNozzleSizeFilter(LIBRARY_METADATA_FILTER_ALL)
-    setPlateTypeFilter(LIBRARY_METADATA_FILTER_ALL)
+  const renderBrowser = (folders: LibraryFolder[], files: LibraryFile[], emptyStateNode?: ReactNode) => {
+    return (
+      <LibraryBrowser
+        folders={folders}
+        files={files}
+        viewMode={viewMode}
+        sort={sort}
+        surfaceStyle="dialog"
+        hideFilamentSwatches
+        emptyState={emptyStateNode}
+        onFolderOpen={(folder) => {
+          if (isBridgeFolderId(folder.id)) {
+            setBridgeId(fromBridgeFolderId(folder.id))
+            setFolderId(null)
+            return
+          }
+          setFolderId(folder.id)
+        }}
+        onFilePick={onPick}
+        isFilePickable={(file) => {
+          if (isDirectPrintableFileName(file.name)) {
+            return printerModel ? isPrinterModelCompatible(file.compatiblePrinterModels, printerModel) : true
+          }
+          return canSlice && isUnslicedThreeMfFile(file)
+        }}
+        getFileDisabledReason={(file) => {
+          if (isDirectPrintableFileName(file.name)) {
+            return printerModel && !isPrinterModelCompatible(file.compatiblePrinterModels, printerModel)
+              ? `Not compatible with ${printerModel}.`
+              : null
+          }
+          if (isUnslicedThreeMfFile(file) && !canSlice) {
+            return 'You need Library Upload permission to slice 3MF files before printing.'
+          }
+          return null
+        }}
+      />
+    )
   }
 
   return (
     <Modal open onClose={onClose}>
-      <ModalDialog
+      <ScrollableModalDialog
         sx={{
-          maxWidth: PICKER_ICON_DIALOG_MAX_WIDTH,
-          width: {
-            xs: '100%',
-            sm: viewMode === 'icon' ? 'fit-content' : '100%'
-          }
+          maxWidth: viewMode === 'icon' ? PICKER_ICON_DIALOG_MAX_WIDTH : PICKER_LIST_DIALOG_MAX_WIDTH,
+          width: '100%'
         }}
       >
         <ModalClose />
         <Typography level="h4">{printerName ? `Print on ${printerName}` : 'Print from library'}</Typography>
+        <ScrollableDialogBody sx={{ mt: 1.5, p: 0 }}>
         <Typography level="body-sm" textColor="text.tertiary" sx={{ mb: 1 }}>
           Choose a file from your library.
         </Typography>
@@ -221,202 +225,71 @@ export function LibraryPickerModal({
 
           <DialogSection title="Files">
               <Stack spacing={1}>
-                <Stack spacing={1}>
-                  <Box
-                    sx={{
-                      display: 'grid',
-                      gridTemplateColumns: {
-                        xs: 'minmax(0, 1fr) auto',
-                        md: 'repeat(4, minmax(0, 1fr))'
-                      },
-                      gap: 1,
-                      alignItems: 'center'
-                    }}
-                  >
-                    <Input
-                      size="sm"
-                      value={search}
-                      onChange={(event) => setSearch(event.target.value)}
-                      placeholder="Search files and folders"
-                      startDecorator={<SearchRoundedIcon />}
-                      endDecorator={<SearchScopeToggle allFolders={searchAllFolders} onChange={setSearchAllFolders} />}
-                      slotProps={{ input: { 'aria-label': 'Search print library' } }}
-                      sx={{ minWidth: 0, gridColumn: { md: 'span 3' } }}
-                    />
-                    <DirectoryFiltersMenu
-                      activeCount={activeFilterCount}
-                      onClear={clearMetadataFilters}
-                      clearDisabled={activeFilterCount === 0}
-                      disabled={fileTypeOptions.length === 0 && printerModelOptions.length === 0 && nozzleSizeOptions.length === 0 && plateTypeOptions.length === 0}
-                    >
-                      <FormControl>
-                        <FormLabel>File type</FormLabel>
-                        <Select<string>
-                          size="sm"
-                          value={fileTypeFilter}
-                          onChange={(_event, value) => setFileTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-                          disabled={fileTypeOptions.length === 0}
-                          slotProps={{ listbox: { disablePortal: true } }}
-                        >
-                          <Option value={LIBRARY_METADATA_FILTER_ALL}>All file types</Option>
-                          {fileTypeOptions.map((value) => (
-                            <Option key={value} value={value}>{value}</Option>
-                          ))}
-                        </Select>
-                      </FormControl>
-                      <FormControl>
-                        <FormLabel>Printer model</FormLabel>
-                        <Select<string>
-                          size="sm"
-                          value={printerModelFilter}
-                          onChange={(_event, value) => setPrinterModelFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-                          disabled={printerModelOptions.length === 0}
-                          slotProps={{ listbox: { disablePortal: true } }}
-                        >
-                          <Option value={LIBRARY_METADATA_FILTER_ALL}>All printer models</Option>
-                          {printerModelOptions.map((value) => (
-                            <Option key={value} value={value}>{value}</Option>
-                          ))}
-                        </Select>
-                      </FormControl>
-                      <FormControl>
-                        <FormLabel>Nozzle size</FormLabel>
-                        <Select<string>
-                          size="sm"
-                          value={nozzleSizeFilter}
-                          onChange={(_event, value) => setNozzleSizeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-                          disabled={nozzleSizeOptions.length === 0}
-                          slotProps={{ listbox: { disablePortal: true } }}
-                        >
-                          <Option value={LIBRARY_METADATA_FILTER_ALL}>All nozzle sizes</Option>
-                          {nozzleSizeOptions.map((value) => (
-                            <Option key={value} value={value}>{value}</Option>
-                          ))}
-                        </Select>
-                      </FormControl>
-                      <FormControl>
-                        <FormLabel>Plate type</FormLabel>
-                        <Select<string>
-                          size="sm"
-                          value={plateTypeFilter}
-                          onChange={(_event, value) => setPlateTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-                          disabled={plateTypeOptions.length === 0}
-                          slotProps={{ listbox: { disablePortal: true } }}
-                        >
-                          <Option value={LIBRARY_METADATA_FILTER_ALL}>All plate types</Option>
-                          {plateTypeOptions.map((value) => (
-                            <Option key={value} value={value}>{value}</Option>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    </DirectoryFiltersMenu>
-                  </Box>
-
-                  {activeFilterCount > 0 && (
-                    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                      {fileTypeFilter !== LIBRARY_METADATA_FILTER_ALL && (
-                        <Chip size="sm" variant="soft" color="neutral">{fileTypeFilter}</Chip>
-                      )}
-                      {printerModelFilter !== LIBRARY_METADATA_FILTER_ALL && (
-                        <Chip size="sm" variant="soft" color="neutral">{printerModelFilter}</Chip>
-                      )}
-                      {nozzleSizeFilter !== LIBRARY_METADATA_FILTER_ALL && (
-                        <Chip size="sm" variant="soft" color="neutral">{nozzleSizeFilter}</Chip>
-                      )}
-                      {plateTypeFilter !== LIBRARY_METADATA_FILTER_ALL && (
-                        <Chip size="sm" variant="soft" color="neutral">{plateTypeFilter}</Chip>
-                      )}
-                      <Button size="sm" variant="plain" color="neutral" onClick={clearMetadataFilters}>
-                        Clear filters
-                      </Button>
-                    </Stack>
-                  )}
-                </Stack>
-
-                <LibraryToolbar
+                <DirectoryPrimaryToolbar
+                  searchValue={search}
+                  onSearchChange={setSearch}
+                  searchPlaceholder="Search files and folders"
+                  searchAriaLabel="Search print library"
+                  searchEndDecorator={<SearchScopeToggle allFolders={searchAllFolders} onChange={setSearchAllFolders} />}
+                  filters={{
+                    activeCount: filters.activeMetadataFilterCount,
+                    onClear: filters.clearMetadataFilters,
+                    clearDisabled: filters.activeMetadataFilterCount === 0,
+                    disabled: libraryFacetsEmpty(filters),
+                    children: <LibraryMetadataFilters filters={filters} />
+                  }}
+                  grouping={{ value: group, options: LIBRARY_GROUP_OPTIONS, onChange: setGroup }}
+                  pageSizeValue={filters.pageSize}
+                  pageSizeOptions={LIBRARY_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} per page` }))}
+                  onPageSizeChange={(value) => filters.setPageSize(value as (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number])}
+                  pageSizeAriaLabel="Items per page"
+                  pageSizeRenderValue={(value) => `${value} per page`}
+                  sortValue={sort.key}
+                  sortOptions={LIBRARY_SORT_OPTIONS}
+                  onSortValueChange={(key) => setSort({ ...sort, key })}
+                  sortDirection={sort.dir}
+                  onSortDirectionChange={(dir) => setSort({ ...sort, dir })}
+                  sortAriaLabel="Sort library by"
                   viewMode={viewMode}
                   onViewModeChange={setViewMode}
-                  sort={sort}
-                  onSortChange={setSort}
-                  rightAlignViewModeOnMobile
+                  compactControls
                 />
 
-                <Box
-                  sx={{
-                    maxHeight: '60vh',
-                    overflowY: 'auto',
-                    pr: 0.5,
-                    width: {
-                      xs: '100%',
-                      sm: viewMode === 'icon' ? 'fit-content' : '100%'
-                    },
-                    maxWidth: '100%'
-                  }}
-                >
-                  <LibraryBrowser
-                    folders={filteredFolders}
-                    files={filteredFiles}
-                    viewMode={viewMode}
-                    sort={sort}
-                    surfaceStyle="dialog"
-                    hideFilamentSwatches
-                    stretchIconColumns={false}
-                    iconColumnCount={viewMode === 'icon' ? pickerIconColumnCount : undefined}
-                    onFolderOpen={(folder) => {
-                      if (isBridgeFolderId(folder.id)) {
-                        setBridgeId(fromBridgeFolderId(folder.id))
-                        setFolderId(null)
-                        return
-                      }
-                      setFolderId(folder.id)
-                    }}
-                    onFilePick={onPick}
-                    isFilePickable={(file) => {
-                      if (isDirectPrintableFileName(file.name)) {
-                        return printerModel ? isPrinterModelCompatible(file.compatiblePrinterModels, printerModel) : true
-                      }
-                      return canSlice && isUnslicedThreeMfFile(file)
-                    }}
-                    getFileDisabledReason={(file) => {
-                      if (isDirectPrintableFileName(file.name)) {
-                        return printerModel && !isPrinterModelCompatible(file.compatiblePrinterModels, printerModel)
-                          ? `Not compatible with ${printerModel}.`
-                          : null
-                      }
-                      if (isUnslicedThreeMfFile(file) && !canSlice) {
-                        return 'You need Library Upload permission to slice 3MF files before printing.'
-                      }
-                      return null
-                    }}
-                    emptyState={
-                      favoritesOnly
-                        ? <LibraryPickerEmptyState favoritesOnly />
-                        : deferredSearch.trim()
-                          ? <LibraryPickerEmptyState searching />
-                          : (
-                              <EmptyState
-                                icon={<Inventory2RoundedIcon />}
-                                title={bridgeRootMode ? 'No bridges connected' : 'No files here'}
-                                description={
-                                  activeFilterCount > 0
-                                    ? 'No files match the current filters.'
-                                    : bridgeRootMode
-                                      ? 'Connect a bridge to browse its files.'
-                                      : canSlice ? 'No printable or slicable files to pick here.' : 'No printable files to pick here.'
-                                }
-                              />
-                            )
+                <Box sx={{ width: '100%', maxWidth: '100%' }}>
+                  <PaginatedLibraryBrowser
+                    loading={browseQuery.isLoading}
+                    loadingNode={
+                      <Stack spacing={1} alignItems="center" sx={{ py: 4 }}>
+                        <CircularProgress size="sm" />
+                        <Typography level="body-sm" textColor="text.tertiary">Loading library…</Typography>
+                      </Stack>
                     }
+                    group={group}
+                    sort={sort}
+                    filteredFolders={filters.filteredFolders}
+                    filteredFiles={filters.filteredFiles}
+                    filteredItemCount={filters.filteredItemCount}
+                    pagedFolders={filters.pagedFolders}
+                    pagedFiles={filters.pagedFiles}
+                    pagination={{
+                      showingLabel: filters.showingLabel,
+                      currentPage: filters.currentPage,
+                      pageCount: filters.pageCount,
+                      onPageChange: filters.setPage
+                    }}
+                    emptyState={pickerEmptyState}
+                    renderBrowser={renderBrowser}
                   />
                 </Box>
               </Stack>
           </DialogSection>
         </Stack>
+        </ScrollableDialogBody>
 
         <Stack direction="row" justifyContent="flex-end" sx={{ pt: 1 }}>
           <Button variant="plain" onClick={onClose}>Cancel</Button>
         </Stack>
-      </ModalDialog>
+      </ScrollableModalDialog>
     </Modal>
   )
 }

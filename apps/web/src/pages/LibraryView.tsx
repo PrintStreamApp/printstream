@@ -5,10 +5,10 @@
  * `SliceThenPrintModal`, `SliceResultModal`, `PrintModal`, and the
  * `SliceSettingsPanel`/`SliceSettingsController` consumed by the model studio.
  */
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import {
-  Alert, Box, Button, ButtonGroup, Chip, CircularProgress, Dropdown, FormControl, FormLabel, IconButton,
-  Menu, MenuButton, MenuItem, Option, Select, Sheet, Stack, Tooltip, Typography
+  Alert, Box, Button, ButtonGroup, CircularProgress, Dropdown, IconButton,
+  Menu, MenuButton, MenuItem, Sheet, Stack, Tooltip, Typography
 } from '@mui/joy'
 import CreateNewFolderRoundedIcon from '@mui/icons-material/CreateNewFolderRounded'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
@@ -66,9 +66,8 @@ import { RenameFileModal } from '../components/library/RenameFileModal'
 import { MoveFileModal, MoveFilesModal } from '../components/library/MoveFilesDialog'
 import { FileHistoryDialog } from '../components/library/FileHistoryDialog'
 import { NoConnectedBridgesEmptyState } from '../components/NoConnectedBridgesEmptyState'
-import { PaginatedSection } from '../components/PaginationFooter'
 import { usePromptDialog } from '../components/PromptDialogProvider'
-import { DirectoryFiltersMenu, DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
+import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
 import { SearchScopeToggle } from '../components/library/SearchScopeToggle'
 import {
   LIBRARY_DRAG_MIME,
@@ -81,6 +80,7 @@ import { PluginSlot } from '../plugin/PluginSlot'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { parseLibraryDragItem } from '../lib/libraryDragItem'
 import { isPreviewOnlyLibraryFile, isUnslicedThreeMfFile } from '../lib/libraryFileTags'
+import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../lib/libraryDirectory'
 import { getMeshThumbnailProvider } from '../lib/modelThumbnailRegistry'
 import { buildLibraryBreadcrumb, buildLibraryFavoritesRoute, buildLibraryFolderRoute, fromBridgeFolderId, isBridgeFolderId, isLibraryFavoritesPath, toBridgeFolderId } from '../lib/libraryNavigation'
 import { buildTenantWorkspacePath } from '../lib/workspaceRoute'
@@ -93,14 +93,17 @@ import {
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { toast } from '../lib/toast'
 import { useControlledMenuClickAway } from '../hooks/useControlledMenuClickAway'
-import { useLibraryFilters } from '../hooks/useLibraryFilters'
+import { libraryFacetsEmpty, useLibraryFilters } from '../hooks/useLibraryFilters'
+import { LibraryMetadataFilters } from '../components/library/LibraryMetadataFilters'
+import { PaginatedLibraryBrowser } from '../components/library/PaginatedLibraryBrowser'
 import { useLibrarySelection } from '../hooks/useLibrarySelection'
 import {
-  LIBRARY_METADATA_FILTER_ALL,
+  LIBRARY_GROUP_KEY,
   LIBRARY_PAGE_SIZE_OPTIONS,
   LIBRARY_SORT_KEY,
   LIBRARY_SORT_OPTIONS,
   LIBRARY_VIEW_MODE_KEY,
+  parseLibraryGroup,
   parseLibrarySort,
   parseLibraryViewMode,
   PUBLIC_DEMO_LIBRARY_UPLOAD_NOTICE,
@@ -223,6 +226,7 @@ export function LibraryView() {
   // / a user's favorites surface even past the cap. The hook still re-sorts the
   // returned page client-side (and owns the metadata filters).
   const [sort, setSort] = useLocalStorageState<LibrarySort>(LIBRARY_SORT_KEY, { key: 'name', dir: 'asc' }, parseLibrarySort)
+  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup)
   // "Favorite Files" is its own route (bookmarkable + in history). Derive the mode
   // from the path rather than local state; the toggle navigates to/from it.
   const favoritesOnly = isLibraryFavoritesPath(location.pathname)
@@ -312,32 +316,16 @@ export function LibraryView() {
   // silently dropping rows — the user narrows via a subfolder or search.
   const browseTruncated = browseData?.truncated ?? false
   const browseFileLimitLabel = browseData?.fileLimit?.toLocaleString() ?? ''
+  const libraryFilters = useLibraryFilters({ visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly })
+  // Only the fields referenced outside the shared filters/pagination components
+  // are destructured; the rest are passed straight through via `libraryFilters`.
   const {
-    fileTypeFilter,
-    setFileTypeFilter,
-    printerModelFilter,
-    setPrinterModelFilter,
-    nozzleSizeFilter,
-    setNozzleSizeFilter,
-    plateTypeFilter,
-    setPlateTypeFilter,
     pageSize,
     setPageSize,
-    setPage,
-    fileTypeOptions,
-    printerModelOptions,
-    nozzleSizeOptions,
-    plateTypeOptions,
     activeMetadataFilterCount,
     filteredFiles,
-    filteredItemCount,
-    pageCount,
-    currentPage,
-    pagedFolders,
-    pagedFiles,
-    showingLabel,
     clearMetadataFilters
-  } = useLibraryFilters({ visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly })
+  } = libraryFilters
   const {
     selectionMode,
     setSelectionMode,
@@ -759,13 +747,13 @@ export function LibraryView() {
           />
         )
 
-  const libraryBrowser = (
+  const renderBrowser = (browserFolders: LibraryFolder[], browserFiles: LibraryFile[], emptyStateNode?: ReactNode) => (
     <LibraryBrowser
-      folders={pagedFolders}
-      files={pagedFiles}
+      folders={browserFolders}
+      files={browserFiles}
       viewMode={viewMode}
       sort={sort}
-      emptyState={libraryEmptyState}
+      emptyState={emptyStateNode}
       onFolderOpen={(folder) => navigateToFolder(folder.id)}
       onFilePick={openFileDefaultAction}
       isFilePickable={isDefaultOpenableFile}
@@ -1224,75 +1212,14 @@ export function LibraryView() {
         searchPlaceholder="Search files and folders"
         searchAriaLabel="Search library"
         searchEndDecorator={<SearchScopeToggle allFolders={searchAllFolders} onChange={setSearchAllFolders} />}
-        filtersButton={(
-          <DirectoryFiltersMenu
-            activeCount={activeMetadataFilterCount}
-            onClear={clearMetadataFilters}
-            clearDisabled={activeMetadataFilterCount === 0}
-            disabled={fileTypeOptions.length === 0 && printerModelOptions.length === 0 && nozzleSizeOptions.length === 0 && plateTypeOptions.length === 0}
-          >
-            <FormControl>
-              <FormLabel>File type</FormLabel>
-              <Select<string>
-                size="sm"
-                value={fileTypeFilter}
-                onChange={(_event, value) => setFileTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-                disabled={fileTypeOptions.length === 0}
-                slotProps={{ listbox: { disablePortal: true } }}
-              >
-                <Option value={LIBRARY_METADATA_FILTER_ALL}>All file types</Option>
-                {fileTypeOptions.map((value) => (
-                  <Option key={value} value={value}>{value}</Option>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl>
-              <FormLabel>Printer model</FormLabel>
-              <Select<string>
-                size="sm"
-                value={printerModelFilter}
-                onChange={(_event, value) => setPrinterModelFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-                disabled={printerModelOptions.length === 0}
-                slotProps={{ listbox: { disablePortal: true } }}
-              >
-                <Option value={LIBRARY_METADATA_FILTER_ALL}>All printer models</Option>
-                {printerModelOptions.map((value) => (
-                  <Option key={value} value={value}>{value}</Option>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl>
-              <FormLabel>Nozzle size</FormLabel>
-              <Select<string>
-                size="sm"
-                value={nozzleSizeFilter}
-                onChange={(_event, value) => setNozzleSizeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-                disabled={nozzleSizeOptions.length === 0}
-                slotProps={{ listbox: { disablePortal: true } }}
-              >
-                <Option value={LIBRARY_METADATA_FILTER_ALL}>All nozzle sizes</Option>
-                {nozzleSizeOptions.map((value) => (
-                  <Option key={value} value={value}>{value}</Option>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl>
-              <FormLabel>Plate type</FormLabel>
-              <Select<string>
-                size="sm"
-                value={plateTypeFilter}
-                onChange={(_event, value) => setPlateTypeFilter(value ?? LIBRARY_METADATA_FILTER_ALL)}
-                disabled={plateTypeOptions.length === 0}
-                slotProps={{ listbox: { disablePortal: true } }}
-              >
-                <Option value={LIBRARY_METADATA_FILTER_ALL}>All plate types</Option>
-                {plateTypeOptions.map((value) => (
-                  <Option key={value} value={value}>{value}</Option>
-                ))}
-              </Select>
-            </FormControl>
-          </DirectoryFiltersMenu>
-        )}
+        filters={{
+          activeCount: activeMetadataFilterCount,
+          onClear: clearMetadataFilters,
+          clearDisabled: activeMetadataFilterCount === 0,
+          disabled: libraryFacetsEmpty(libraryFilters),
+          children: <LibraryMetadataFilters filters={libraryFilters} />
+        }}
+        grouping={{ value: group, options: LIBRARY_GROUP_OPTIONS, onChange: setGroup }}
         pageSizeValue={pageSize}
         pageSizeOptions={LIBRARY_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} per page` }))}
         onPageSizeChange={(value) => setPageSize(value as (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number])}
@@ -1306,49 +1233,34 @@ export function LibraryView() {
         sortAriaLabel="Sort library by"
         viewMode={viewMode}
         onViewModeChange={setViewMode}
-        rightAlignViewModeOnMobile
       />
-
-      {activeMetadataFilterCount > 0 && (
-        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-          {fileTypeFilter !== LIBRARY_METADATA_FILTER_ALL && (
-            <Chip size="sm" variant="soft" color="neutral">{fileTypeFilter}</Chip>
-          )}
-          {printerModelFilter !== LIBRARY_METADATA_FILTER_ALL && (
-            <Chip size="sm" variant="soft" color="neutral">{printerModelFilter}</Chip>
-          )}
-          {nozzleSizeFilter !== LIBRARY_METADATA_FILTER_ALL && (
-            <Chip size="sm" variant="soft" color="neutral">{nozzleSizeFilter}</Chip>
-          )}
-          {plateTypeFilter !== LIBRARY_METADATA_FILTER_ALL && (
-            <Chip size="sm" variant="soft" color="neutral">{plateTypeFilter}</Chip>
-          )}
-          <Button size="sm" variant="plain" color="neutral" onClick={clearMetadataFilters}>
-            Clear filters
-          </Button>
-        </Stack>
-      )}
 
       {dragMoveError && <Typography color="danger" level="body-sm">{dragMoveError}</Typography>}
 
-      {libraryBrowserLoading ? (
-        <Stack direction="row" spacing={1} alignItems="center" justifyContent="center" sx={{ py: 6 }}>
-          <CircularProgress size="sm" />
-          <Typography level="body-sm" textColor="text.tertiary">Loading library…</Typography>
-        </Stack>
-      ) : (
-        filteredItemCount > 0 ? (
-          <PaginatedSection
-            showingLabel={showingLabel}
-            previousDisabled={currentPage <= 1}
-            nextDisabled={currentPage >= pageCount}
-            onPrevious={() => setPage((current) => Math.max(1, current - 1))}
-            onNext={() => setPage((current) => Math.min(pageCount, current + 1))}
-          >
-            {libraryBrowser}
-          </PaginatedSection>
-        ) : libraryBrowser
-      )}
+      <PaginatedLibraryBrowser
+        loading={libraryBrowserLoading}
+        loadingNode={
+          <Stack direction="row" spacing={1} alignItems="center" justifyContent="center" sx={{ py: 6 }}>
+            <CircularProgress size="sm" />
+            <Typography level="body-sm" textColor="text.tertiary">Loading library…</Typography>
+          </Stack>
+        }
+        group={group}
+        sort={sort}
+        filteredFolders={libraryFilters.filteredFolders}
+        filteredFiles={filteredFiles}
+        filteredItemCount={libraryFilters.filteredItemCount}
+        pagedFolders={libraryFilters.pagedFolders}
+        pagedFiles={libraryFilters.pagedFiles}
+        pagination={{
+          showingLabel: libraryFilters.showingLabel,
+          currentPage: libraryFilters.currentPage,
+          pageCount: libraryFilters.pageCount,
+          onPageChange: libraryFilters.setPage
+        }}
+        emptyState={libraryEmptyState}
+        renderBrowser={renderBrowser}
+      />
         </>
       )}
 

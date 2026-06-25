@@ -13,6 +13,7 @@ import { listAllWorkspaceSupportPermissions, serializeSupportAccessPermissions, 
 const APP_THEME_KEY = 'app:general:theme'
 const UNCONSTRAINED_WIDTH_KEY = 'app:general:unconstrainedWidth'
 const LANDING_PAGE_KEY = 'app:general:landingPage'
+const NAV_TAB_ORDER_KEY = 'app:general:navTabOrder'
 const QUICK_START_DISMISSED_KEY = 'app:general:quickStartDismissed'
 
 interface GeneralSettingsStore {
@@ -25,10 +26,11 @@ interface GeneralSettingsStore {
 }
 
 export async function getGeneralSettings(store: GeneralSettingsStore = prisma.setting): Promise<GeneralSettings> {
-  const [appThemeRow, unconstrainedWidthRow, landingPageRow, quickStartDismissedRow, supportAccessEnabledRow, supportAccessPermissionsRow] = await Promise.all([
+  const [appThemeRow, unconstrainedWidthRow, landingPageRow, navTabOrderRow, quickStartDismissedRow, supportAccessEnabledRow, supportAccessPermissionsRow] = await Promise.all([
     store.findUnique({ where: { key: scopeSettingKey(APP_THEME_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(UNCONSTRAINED_WIDTH_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(LANDING_PAGE_KEY) } }),
+    store.findUnique({ where: { key: scopeSettingKey(NAV_TAB_ORDER_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(QUICK_START_DISMISSED_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(SUPPORT_ACCESS_ENABLED_SETTING_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(SUPPORT_ACCESS_PERMISSIONS_SETTING_KEY) } })
@@ -38,6 +40,7 @@ export async function getGeneralSettings(store: GeneralSettingsStore = prisma.se
     appTheme: parseAppThemeSetting(appThemeRow?.value),
     unconstrainedWidth: unconstrainedWidthRow?.value === 'true',
     landingPage: parseLandingPageSetting(landingPageRow?.value),
+    navTabOrder: parseNavTabOrder(navTabOrderRow?.value),
     quickStartDismissed: quickStartDismissedRow?.value === 'true',
     supportAccessEnabled: supportAccessEnabledRow?.value !== 'false',
     supportAccessPermissions: parseSupportAccessPermissions(supportAccessPermissionsRow?.value)
@@ -74,6 +77,16 @@ export async function updateGeneralSettings(
       where: { key },
       create: { key, value: input.landingPage },
       update: { value: input.landingPage }
+    })
+  }
+
+  if (input.navTabOrder !== undefined) {
+    const key = scopeSettingKey(NAV_TAB_ORDER_KEY)
+    const value = JSON.stringify(input.navTabOrder)
+    await store.upsert({
+      where: { key },
+      create: { key, value },
+      update: { value }
     })
   }
 
@@ -117,6 +130,16 @@ function parseSupportAccessPermissions(value: string | undefined): string[] {
     return generalSettingsSchema.shape.supportAccessPermissions.parse(parsed)
   } catch {
     return listAllWorkspaceSupportPermissions()
+  }
+}
+
+function parseNavTabOrder(value: string | undefined): string[] {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return generalSettingsSchema.shape.navTabOrder.parse(parsed)
+  } catch {
+    return []
   }
 }
 

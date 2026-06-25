@@ -27,7 +27,7 @@ import {
   type FileTagKind
 } from '../lib/libraryFileTags'
 import { isBridgeFolderId } from '../lib/libraryNavigation'
-import { DirectorySortViewControls, type DirectorySortDirection, type DirectoryViewMode } from './DirectoryControls'
+import { type DirectorySortDirection, type DirectoryViewMode } from './DirectoryControls'
 import { formatDateTime } from '../lib/time'
 import {
   LIBRARY_DRAG_MIME,
@@ -50,48 +50,6 @@ export interface LibrarySort {
 // canonical definitions live in ../lib/libraryDragItem.
 export { LIBRARY_DRAG_MIME }
 export type { LibraryDragItem }
-
-const SORT_LABELS: Record<LibrarySortKey, string> = {
-  name: 'Name',
-  date: 'Date',
-  size: 'Size',
-  mostPrinted: 'Most printed',
-  lastPrinted: 'Last printed'
-}
-
-/** All library sort keys, in display order — shared by the main view and the pickers. */
-const LIBRARY_TOOLBAR_SORT_KEYS = ['name', 'date', 'size', 'mostPrinted', 'lastPrinted'] as const
-
-/** Compact view-mode + sort toolbar shared by both consumers. */
-export function LibraryToolbar({
-  viewMode,
-  onViewModeChange,
-  sort,
-  onSortChange,
-  rightAlignViewModeOnMobile = false
-}: {
-  viewMode: LibraryViewMode
-  onViewModeChange: (mode: LibraryViewMode) => void
-  sort: LibrarySort
-  onSortChange: (sort: LibrarySort) => void
-  rightAlignViewModeOnMobile?: boolean
-}) {
-  return (
-    <DirectorySortViewControls
-      sortValue={sort.key}
-      sortOptions={LIBRARY_TOOLBAR_SORT_KEYS.map((key) => ({ value: key, label: SORT_LABELS[key] }))}
-      onSortValueChange={(key) => onSortChange({ ...sort, key })}
-      sortDirection={sort.dir}
-      onSortDirectionChange={(dir) => onSortChange({ ...sort, dir })}
-      sortAriaLabel="Sort library by"
-      viewMode={viewMode}
-      onViewModeChange={onViewModeChange}
-      matchFilterWidthOnMobile
-      matchFilterWidthOnDesktop
-      rightAlignViewModeOnMobile={rightAlignViewModeOnMobile}
-    />
-  )
-}
 
 interface BrowserProps {
   folders: LibraryFolder[]
@@ -883,10 +841,11 @@ function FileTile({
             {fileTypeIndicatorLabel(file)}
           </Chip>
           {!hideFilamentSwatches && compactTags.filament.length > 0 && (
+            // Bottom-left so the swatches never overlap the file-type chip (bottom-right).
             <Box
               sx={{
                 position: 'absolute',
-                right: 8,
+                left: 8,
                 bottom: 8,
                 zIndex: 1,
                 borderRadius: '999px',
@@ -901,7 +860,7 @@ function FileTile({
                 tags={compactTags.filament}
                 mode="compact"
                 kind="filament"
-                align="right"
+                align="left"
               />
             </Box>
           )}

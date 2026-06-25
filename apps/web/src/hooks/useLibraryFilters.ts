@@ -1,8 +1,9 @@
 /**
  * Owns the Library view's filter/search/sort/pagination concern, extracted
  * verbatim from `pages/LibraryView.tsx`: the search box + deferred search, the
- * four metadata filters (file type, printer model, nozzle size, plate type),
- * the filters dialog open flag, page/page-size, and the persisted sort. From
+ * four metadata filters (file type, printer model, nozzle size, plate type; each
+ * multi-select — an empty selection means "no filter" for that facet), the
+ * filters dialog open flag, page/page-size, and the persisted sort. From
  * those it derives the distinct filter option lists, the metadata/search-filtered
  * entries, and the sorted+paginated page the browser renders.
  *
@@ -25,11 +26,16 @@ import {
 } from '../lib/libraryDirectory'
 import {
   collectDistinctLibraryFilterValues,
-  LIBRARY_METADATA_FILTER_ALL,
   LIBRARY_PAGE_SIZE_OPTIONS
 } from '../lib/libraryViewHelpers'
 import type { LibrarySort } from '../components/LibraryBrowser'
 import type { LibraryFile, LibraryFolder } from '@printstream/shared'
+
+/** Keep only the values still present in `options`, preserving the array identity when nothing was dropped. */
+function pruneToOptions(current: string[], options: string[]): string[] {
+  const next = current.filter((value) => options.includes(value))
+  return next.length === current.length ? current : next
+}
 
 export interface LibraryFiltersParams {
   visibleFiles: LibraryFile[]
@@ -49,14 +55,14 @@ export interface LibraryFiltersParams {
 }
 
 export interface LibraryFilters {
-  fileTypeFilter: string
-  setFileTypeFilter: (value: string) => void
-  printerModelFilter: string
-  setPrinterModelFilter: (value: string) => void
-  nozzleSizeFilter: string
-  setNozzleSizeFilter: (value: string) => void
-  plateTypeFilter: string
-  setPlateTypeFilter: (value: string) => void
+  fileTypeFilters: string[]
+  setFileTypeFilters: (values: string[]) => void
+  printerModelFilters: string[]
+  setPrinterModelFilters: (values: string[]) => void
+  nozzleSizeFilters: string[]
+  setNozzleSizeFilters: (values: string[]) => void
+  plateTypeFilters: string[]
+  setPlateTypeFilters: (values: string[]) => void
   filtersDialogOpen: boolean
   setFiltersDialogOpen: (value: boolean) => void
   pageSize: (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number]
@@ -78,12 +84,22 @@ export interface LibraryFilters {
   clearMetadataFilters: () => void
 }
 
+/** True when none of the four metadata facets have any selectable values (the filters control can be disabled). */
+export function libraryFacetsEmpty(filters: Pick<LibraryFilters,
+  'fileTypeOptions' | 'printerModelOptions' | 'nozzleSizeOptions' | 'plateTypeOptions'
+>): boolean {
+  return filters.fileTypeOptions.length === 0
+    && filters.printerModelOptions.length === 0
+    && filters.nozzleSizeOptions.length === 0
+    && filters.plateTypeOptions.length === 0
+}
+
 export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters {
   const { visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly } = params
-  const [fileTypeFilter, setFileTypeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
-  const [printerModelFilter, setPrinterModelFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
-  const [nozzleSizeFilter, setNozzleSizeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
-  const [plateTypeFilter, setPlateTypeFilter] = useState<string>(LIBRARY_METADATA_FILTER_ALL)
+  const [fileTypeFilters, setFileTypeFilters] = useState<string[]>([])
+  const [printerModelFilters, setPrinterModelFilters] = useState<string[]>([])
+  const [nozzleSizeFilters, setNozzleSizeFilters] = useState<string[]>([])
+  const [plateTypeFilters, setPlateTypeFilters] = useState<string[]>([])
   const [filtersDialogOpen, setFiltersDialogOpen] = useState(false)
   const [pageSize, setPageSize] = useState<(typeof LIBRARY_PAGE_SIZE_OPTIONS)[number]>(25)
   const [page, setPage] = useState(1)
@@ -104,18 +120,18 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
     () => collectDistinctLibraryFilterValues(visibleFiles.flatMap((file) => file.plateTypeChips)),
     [visibleFiles]
   )
-  const activeMetadataFilterCount = Number(fileTypeFilter !== LIBRARY_METADATA_FILTER_ALL)
-    + Number(printerModelFilter !== LIBRARY_METADATA_FILTER_ALL)
-    + Number(nozzleSizeFilter !== LIBRARY_METADATA_FILTER_ALL)
-    + Number(plateTypeFilter !== LIBRARY_METADATA_FILTER_ALL)
+  const activeMetadataFilterCount = Number(fileTypeFilters.length > 0)
+    + Number(printerModelFilters.length > 0)
+    + Number(nozzleSizeFilters.length > 0)
+    + Number(plateTypeFilters.length > 0)
   const metadataFilteredFiles = useMemo(
     () => filterLibraryFilesByMetadata(visibleFiles, {
-      fileType: fileTypeFilter,
-      printerModel: printerModelFilter,
-      nozzleSize: nozzleSizeFilter,
-      plateType: plateTypeFilter
-    }, LIBRARY_METADATA_FILTER_ALL),
-    [fileTypeFilter, nozzleSizeFilter, plateTypeFilter, printerModelFilter, visibleFiles]
+      fileTypes: fileTypeFilters,
+      printerModels: printerModelFilters,
+      nozzleSizes: nozzleSizeFilters,
+      plateTypes: plateTypeFilters
+    }),
+    [fileTypeFilters, nozzleSizeFilters, plateTypeFilters, printerModelFilters, visibleFiles]
   )
   const filteredEntries = useMemo(
     () => filterLibraryEntries(childFolders, metadataFilteredFiles, deferredSearch),
@@ -144,31 +160,26 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
 
   useEffect(() => {
     setPage(1)
-  }, [currentFolderId, deferredSearch, favoritesOnly, fileTypeFilter, nozzleSizeFilter, pageSize, plateTypeFilter, printerModelFilter, requestedBridgeId])
+  }, [currentFolderId, deferredSearch, favoritesOnly, fileTypeFilters, nozzleSizeFilters, pageSize, plateTypeFilters, printerModelFilters, requestedBridgeId])
+
+  // Drop any selected facet value that is no longer offered (e.g. after navigating
+  // to a folder without it). The functional updater keeps the same array identity
+  // when nothing changed, so this never loops.
+  useEffect(() => {
+    setFileTypeFilters((current) => pruneToOptions(current, fileTypeOptions))
+  }, [fileTypeOptions])
 
   useEffect(() => {
-    if (fileTypeFilter !== LIBRARY_METADATA_FILTER_ALL && !fileTypeOptions.includes(fileTypeFilter)) {
-      setFileTypeFilter(LIBRARY_METADATA_FILTER_ALL)
-    }
-  }, [fileTypeFilter, fileTypeOptions])
+    setPrinterModelFilters((current) => pruneToOptions(current, printerModelOptions))
+  }, [printerModelOptions])
 
   useEffect(() => {
-    if (printerModelFilter !== LIBRARY_METADATA_FILTER_ALL && !printerModelOptions.includes(printerModelFilter)) {
-      setPrinterModelFilter(LIBRARY_METADATA_FILTER_ALL)
-    }
-  }, [printerModelFilter, printerModelOptions])
+    setNozzleSizeFilters((current) => pruneToOptions(current, nozzleSizeOptions))
+  }, [nozzleSizeOptions])
 
   useEffect(() => {
-    if (nozzleSizeFilter !== LIBRARY_METADATA_FILTER_ALL && !nozzleSizeOptions.includes(nozzleSizeFilter)) {
-      setNozzleSizeFilter(LIBRARY_METADATA_FILTER_ALL)
-    }
-  }, [nozzleSizeFilter, nozzleSizeOptions])
-
-  useEffect(() => {
-    if (plateTypeFilter !== LIBRARY_METADATA_FILTER_ALL && !plateTypeOptions.includes(plateTypeFilter)) {
-      setPlateTypeFilter(LIBRARY_METADATA_FILTER_ALL)
-    }
-  }, [plateTypeFilter, plateTypeOptions])
+    setPlateTypeFilters((current) => pruneToOptions(current, plateTypeOptions))
+  }, [plateTypeOptions])
 
   useEffect(() => {
     if (page !== currentPage) {
@@ -177,21 +188,21 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
   }, [currentPage, page])
 
   function clearMetadataFilters() {
-    setFileTypeFilter(LIBRARY_METADATA_FILTER_ALL)
-    setPrinterModelFilter(LIBRARY_METADATA_FILTER_ALL)
-    setNozzleSizeFilter(LIBRARY_METADATA_FILTER_ALL)
-    setPlateTypeFilter(LIBRARY_METADATA_FILTER_ALL)
+    setFileTypeFilters([])
+    setPrinterModelFilters([])
+    setNozzleSizeFilters([])
+    setPlateTypeFilters([])
   }
 
   return {
-    fileTypeFilter,
-    setFileTypeFilter,
-    printerModelFilter,
-    setPrinterModelFilter,
-    nozzleSizeFilter,
-    setNozzleSizeFilter,
-    plateTypeFilter,
-    setPlateTypeFilter,
+    fileTypeFilters,
+    setFileTypeFilters,
+    printerModelFilters,
+    setPrinterModelFilters,
+    nozzleSizeFilters,
+    setNozzleSizeFilters,
+    plateTypeFilters,
+    setPlateTypeFilters,
     filtersDialogOpen,
     setFiltersDialogOpen,
     pageSize,

@@ -6,11 +6,13 @@ import FileUploadRoundedIcon from '@mui/icons-material/FileUploadRounded'
 import HubRoundedIcon from '@mui/icons-material/HubRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
+import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import { Alert, Box, Button, Card, CardContent, Checkbox, Chip, DialogTitle, Divider, FormControl, FormLabel, Input, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import {
   type AppLandingPageSetting,
   type AppThemeSetting,
+  DEFAULT_APP_LANDING_PAGE,
   type BridgeListResponse,
   type BridgeStandaloneDownloadsResponse,
   type BridgeResponse,
@@ -35,12 +37,14 @@ import { BridgeInstallCard } from '../components/BridgeInstallCard'
 import { ConfirmActionDialog } from '../components/ConfirmActionDialog'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../components/ScrollableDialog'
 import { type DirectorySortDirection, type DirectorySortOption } from '../components/DirectoryControls'
-import { DirectoryFiltersButton, DirectoryFiltersDialog, DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
+import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
 import { EmptyState } from '../components/EmptyState'
 import { NestedViewHeader } from '../components/NestedViewHeader'
 import { NotificationChannelsPanel } from '../components/NotificationChannelsPanel'
 import { NotificationTemplatesPanel } from '../components/NotificationTemplatesPanel'
 import { PaginatedSection } from '../components/PaginationFooter'
+import { MultiSelectOption } from '../components/MultiSelectOption'
+import { NavTabOrderEditor } from '../components/settings/NavTabOrderEditor'
 import { PluginManagerSection } from '../components/PluginManagerSection'
 import { usePromptDialog } from '../components/PromptDialogProvider'
 import { ApiError, apiFetch } from '../lib/apiClient'
@@ -63,7 +67,7 @@ import {
   setAllFilteredSlicingProfilesSelected,
   sortSlicingProfiles,
   toggleSlicingProfileSelection,
-  type SlicingProfileKindFilter,
+  type SlicingProfileKind,
   type SlicingProfileSortValue
 } from '../lib/slicingProfileDirectory'
 import { buildTenantWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
@@ -108,7 +112,13 @@ export function SettingsView({
   onClearDeviceLandingPageOverride,
   onSetSharedAppTheme,
   onSetSharedUnconstrainedWidth,
-  onSetSharedLandingPage
+  onSetSharedLandingPage,
+  navTabOptions = [],
+  sharedNavTabOrder = [],
+  deviceNavTabOrder = null,
+  onSetSharedNavTabOrder,
+  onSetDeviceNavTabOrder,
+  onClearDeviceNavTabOrderOverride
 }: {
   sharedAppTheme: AppThemeSetting
   sharedUnconstrainedWidth: boolean
@@ -129,6 +139,13 @@ export function SettingsView({
   onSetSharedAppTheme: (value: AppThemeSetting) => void
   onSetSharedUnconstrainedWidth: (value: boolean) => void
   onSetSharedLandingPage: (value: AppLandingPageSetting) => void
+  /** The reorderable nav tabs (value + label), used to render the order editors. */
+  navTabOptions?: ReadonlyArray<{ value: string; label: string }>
+  sharedNavTabOrder?: ReadonlyArray<string>
+  deviceNavTabOrder?: ReadonlyArray<string> | null
+  onSetSharedNavTabOrder?: (order: string[]) => void
+  onSetDeviceNavTabOrder?: (order: string[]) => void
+  onClearDeviceNavTabOrderOverride?: () => void
 }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -308,6 +325,11 @@ export function SettingsView({
           <GeneralSettingCard
             title="Theme"
             description="Choose between the current default appearance and an alternate Aurora background treatment."
+            resetDisabled={deviceAppThemeOverride == null && !(canManageSettings && sharedAppTheme !== 'default')}
+            onReset={() => {
+              if (canManageSettings) onSetSharedAppTheme('default')
+              onClearDeviceAppThemeOverride()
+            }}
           >
             <GeneralSettingSelectRow label="Default setting" helper="Shared default applied to devices that do not have their own override.">
               <Select<ThemeSettingSelectValue>
@@ -352,6 +374,11 @@ export function SettingsView({
           <GeneralSettingCard
             title="Default page"
             description="Choose which page opens first, including enabled plugin pages."
+            resetDisabled={deviceLandingPageOverride == null && !(canManageSettings && sharedLandingPage !== DEFAULT_APP_LANDING_PAGE)}
+            onReset={() => {
+              if (canManageSettings) onSetSharedLandingPage(DEFAULT_APP_LANDING_PAGE)
+              onClearDeviceLandingPageOverride()
+            }}
           >
             <GeneralSettingSelectRow label="Default setting" helper="Shared default applied to devices that do not have their own override.">
               <Select<LandingPageSettingSelectValue>
@@ -396,6 +423,11 @@ export function SettingsView({
           <GeneralSettingCard
             title="Full-width layout"
             description="Remove the desktop max-width cap so the app can expand across the full viewport on wide screens."
+            resetDisabled={deviceUnconstrainedWidthOverride == null && !(canManageSettings && sharedUnconstrainedWidth)}
+            onReset={() => {
+              if (canManageSettings) onSetSharedUnconstrainedWidth(false)
+              onClearDeviceUnconstrainedWidthOverride()
+            }}
           >
             <GeneralSettingSelectRow label="Default setting" helper="Shared default applied to devices that do not have their own override.">
               <Select<WidthSettingSelectValue>
@@ -436,6 +468,52 @@ export function SettingsView({
               />
             )}
           </GeneralSettingCard>
+
+          {onSetSharedNavTabOrder && onSetDeviceNavTabOrder && onClearDeviceNavTabOrderOverride && navTabOptions.length > 0 && (
+            <GeneralSettingCard
+              title="Navigation order"
+              description="Reorder the primary navigation tabs. Settings, Account, and platform tabs always stay at the end."
+              resetDisabled={deviceNavTabOrder == null && !(canManageSettings && sharedNavTabOrder.length > 0)}
+              onReset={() => {
+                if (canManageSettings) onSetSharedNavTabOrder?.([])
+                onClearDeviceNavTabOrderOverride?.()
+              }}
+            >
+              <Stack spacing={0.5}>
+                <FormLabel>Default order</FormLabel>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  {canManageSettings
+                    ? 'Shared default applied to devices that do not set their own order.'
+                    : 'Set by a workspace admin. You can still set a per-device order below.'}
+                </Typography>
+                <NavTabOrderEditor
+                  options={navTabOptions}
+                  order={sharedNavTabOrder}
+                  onChange={onSetSharedNavTabOrder}
+                  disabled={!canManageSettings || sharedSettingsSaving}
+                />
+              </Stack>
+
+              <Stack spacing={0.5}>
+                <FormLabel>This device</FormLabel>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  Saved in this browser only. Reordering here overrides the default order on this device.
+                </Typography>
+                <NavTabOrderEditor
+                  options={navTabOptions}
+                  order={deviceNavTabOrder ?? sharedNavTabOrder}
+                  onChange={onSetDeviceNavTabOrder}
+                />
+              </Stack>
+
+              {deviceNavTabOrder != null && (
+                <DeviceOverrideNotice
+                  message="This device is currently using its own navigation order instead of the shared default."
+                  onClear={onClearDeviceNavTabOrderOverride}
+                />
+              )}
+            </GeneralSettingCard>
+          )}
         </Stack>
       ) : visibleSubview === 'authentication' ? (
         <Stack spacing={1.5}>
@@ -645,22 +723,42 @@ function SettingsOverviewCard({
 function GeneralSettingCard({
   title,
   description,
+  onReset,
+  resetDisabled = false,
   children
 }: {
   title: string
   description: string
+  /** When provided, a "Reset to default" button is shown opposite the title. */
+  onReset?: () => void
+  resetDisabled?: boolean
   children: React.ReactNode
 }) {
   return (
     <Card variant="outlined">
       <CardContent>
         <Stack spacing={1.5}>
-          <Box>
-            <Typography level="title-md">{title}</Typography>
-            <Typography level="body-sm" textColor="text.tertiary">
-              {description}
-            </Typography>
-          </Box>
+          <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
+            <Box sx={{ minWidth: 0 }}>
+              <Typography level="title-md">{title}</Typography>
+              <Typography level="body-sm" textColor="text.tertiary">
+                {description}
+              </Typography>
+            </Box>
+            {onReset && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                startDecorator={<RestartAltRoundedIcon />}
+                disabled={resetDisabled}
+                onClick={onReset}
+                sx={{ flexShrink: 0 }}
+              >
+                Reset to default
+              </Button>
+            )}
+          </Stack>
           <Stack spacing={1.25}>
             {children}
           </Stack>
@@ -754,8 +852,7 @@ function SlicingProfilesSettingsSection() {
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const [uploadError, setUploadError] = React.useState<string | null>(null)
   const [search, setSearch] = React.useState('')
-  const [kindFilter, setKindFilter] = React.useState<SlicingProfileKindFilter>('all')
-  const [filtersDialogOpen, setFiltersDialogOpen] = React.useState(false)
+  const [kindFilters, setKindFilters] = React.useState<SlicingProfileKind[]>([])
   const [sortValue, setSortValue] = React.useState<SlicingProfileSortValue>(DEFAULT_SLICING_PROFILE_SORT_VALUE)
   const [sortDirection, setSortDirection] = React.useState<DirectorySortDirection>(DEFAULT_SLICING_PROFILE_SORT_DIRECTION)
   const [pageSize, setPageSize] = React.useState<(typeof SLICING_PROFILE_PAGE_SIZE_OPTIONS)[number]>(10)
@@ -838,7 +935,7 @@ function SlicingProfilesSettingsSection() {
   const builtinCounts = countProfilesByKind((profilesQuery.data?.profiles ?? []).filter((profile) => profile.source === 'builtin'))
   const listError = profilesQuery.error ? extractErrorMessage(profilesQuery.error) : null
   const deleteError = deleteProfiles.error ? extractErrorMessage(deleteProfiles.error) : null
-  const activeFilterCount = Number(kindFilter !== 'all')
+  const activeFilterCount = Number(kindFilters.length > 0)
   const selectedProfileIdSet = React.useMemo(() => new Set(selectedProfileIds), [selectedProfileIds])
 
   React.useEffect(() => {
@@ -853,8 +950,8 @@ function SlicingProfilesSettingsSection() {
   }, [customProfiles])
 
   const filteredProfiles = React.useMemo(
-    () => filterSlicingProfiles(customProfiles, search, kindFilter),
-    [customProfiles, kindFilter, search]
+    () => filterSlicingProfiles(customProfiles, search, kindFilters),
+    [customProfiles, kindFilters, search]
   )
 
   const sortedProfiles = React.useMemo(
@@ -880,13 +977,13 @@ function SlicingProfilesSettingsSection() {
 
   function clearFilters() {
     setPage(0)
-    setKindFilter('all')
+    setKindFilters([])
   }
 
   function resetSearchAndFilters() {
     setPage(0)
     setSearch('')
-    setKindFilter('all')
+    setKindFilters([])
   }
 
   function toggleProfileSelection(profileId: string) {
@@ -1037,7 +1134,32 @@ function SlicingProfilesSettingsSection() {
             }}
             searchPlaceholder="Search profile name or type"
             searchAriaLabel="Search slicing profiles"
-            filtersButton={<DirectoryFiltersButton activeCount={activeFilterCount} onClick={() => setFiltersDialogOpen(true)} />}
+            filters={{
+              activeCount: activeFilterCount,
+              onClear: clearFilters,
+              clearDisabled: activeFilterCount === 0,
+              children: (
+                <FormControl>
+                  <FormLabel>Profile type</FormLabel>
+                  <Select
+                    multiple
+                    size="sm"
+                    value={kindFilters}
+                    onChange={(_event, value) => {
+                      setPage(0)
+                      setKindFilters(value ?? [])
+                    }}
+                    placeholder="All profile types"
+                    renderValue={() => kindFilters.length === 0 ? null : kindFilters.map((kind) => formatSlicingProfileKind(kind)).join(', ')}
+                    slotProps={{ listbox: { disablePortal: true } }}
+                  >
+                    <MultiSelectOption value="machine" selected={kindFilters.includes('machine')}>Printer</MultiSelectOption>
+                    <MultiSelectOption value="process" selected={kindFilters.includes('process')}>Quality</MultiSelectOption>
+                    <MultiSelectOption value="filament" selected={kindFilters.includes('filament')}>Material</MultiSelectOption>
+                  </Select>
+                </FormControl>
+              )
+            }}
             pageSizeValue={pageSize}
             pageSizeOptions={SLICING_PROFILE_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} per page` }))}
             onPageSizeChange={(value) => {
@@ -1058,46 +1180,7 @@ function SlicingProfilesSettingsSection() {
               setSortDirection(direction)
             }}
             sortAriaLabel="Sort slicing profiles by"
-            sortMinWidth={140}
           />
-
-          {activeFilterCount > 0 && (
-            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-              {kindFilter !== 'all' && (
-                <Chip size="sm" variant="soft" color="neutral">
-                  Type: {formatSlicingProfileKind(kindFilter)}
-                </Chip>
-              )}
-              <Button size="sm" variant="plain" color="neutral" onClick={clearFilters}>
-                Clear filters
-              </Button>
-            </Stack>
-          )}
-
-          <DirectoryFiltersDialog
-            open={filtersDialogOpen}
-            title="Slicing profile filters"
-            onClose={() => setFiltersDialogOpen(false)}
-            onClear={clearFilters}
-            clearDisabled={activeFilterCount === 0}
-          >
-            <FormControl>
-              <FormLabel>Profile type</FormLabel>
-              <Select<SlicingProfileKindFilter>
-                size="sm"
-                value={kindFilter}
-                onChange={(_event, value) => {
-                  setPage(0)
-                  setKindFilter(value ?? 'all')
-                }}
-              >
-                <Option value="all">All profile types</Option>
-                <Option value="machine">Printer</Option>
-                <Option value="process">Quality</Option>
-                <Option value="filament">Material</Option>
-              </Select>
-            </FormControl>
-          </DirectoryFiltersDialog>
 
           {filteredProfiles.length === 0 ? (
             <EmptyState

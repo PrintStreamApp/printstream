@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
-import { Alert, Box, Button, ButtonGroup, Chip, CircularProgress, Divider, FormControl, IconButton, Menu, MenuItem, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, ButtonGroup, CircularProgress, Divider, FormControl, IconButton, Menu, MenuItem, Option, Select, Stack, Typography } from '@mui/joy'
 import AddIcon from '@mui/icons-material/Add'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -24,7 +24,8 @@ import { NestedViewHeader } from '../components/NestedViewHeader'
 import { NoConnectedBridgesEmptyState } from '../components/NoConnectedBridgesEmptyState'
 import { usePromptDialog } from '../components/PromptDialogProvider'
 import { type DirectorySortDirection, type DirectoryViewMode } from '../components/DirectoryControls'
-import { DirectoryFiltersButton, DirectoryFiltersDialog, DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
+import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
+import { MultiSelectOption } from '../components/MultiSelectOption'
 import { SliceFileModal } from '../components/library/SliceFileModal'
 import { SliceThenPrintModal } from '../components/library/SliceThenPrintModal'
 import { PrintModal } from '../components/library/PrintModal'
@@ -121,8 +122,7 @@ export function PrintersView() {
   const [singleViewSettingsOpen, setSingleViewSettingsOpen] = useState(false)
   const [detailHistorySearch, setDetailHistorySearch] = useState('')
   const deferredDetailHistorySearch = useDeferredValue(detailHistorySearch)
-  const [detailHistoryResults, setDetailHistoryResults] = useState<PrintJob['result'][]>(() => [...HISTORY_RESULTS])
-  const [detailHistoryFiltersDialogOpen, setDetailHistoryFiltersDialogOpen] = useState(false)
+  const [detailHistoryResults, setDetailHistoryResults] = useState<PrintJob['result'][]>([])
   const [detailHistorySortDirection, setDetailHistorySortDirection] = useState<DirectorySortDirection>('desc')
   const [detailHistoryPage, setDetailHistoryPage] = useState(0)
   const [detailHistoryPageSize, setDetailHistoryPageSize] = useState<number>(HISTORY_PAGE_SIZE_OPTIONS[0])
@@ -390,7 +390,7 @@ export function PrintersView() {
     const activeResults = new Set(detailHistoryResults)
     const normalizedSearch = deferredDetailHistorySearch.trim().toLowerCase()
     return selectedPrinterJobs.filter((job) => {
-      if (!activeResults.has(job.result)) return false
+      if (activeResults.size > 0 && !activeResults.has(job.result)) return false
       if (!normalizedSearch) return true
       const searchHaystack = [
         formatLibraryFileName(job.fileName || job.jobName || 'Untitled'),
@@ -402,7 +402,7 @@ export function PrintersView() {
   }, [deferredDetailHistorySearch, detailHistoryResults, selectedPrinterJobs])
   const detailHistoryPageCount = Math.max(1, Math.ceil(filteredSelectedPrinterJobs.length / detailHistoryPageSize))
   const safeDetailHistoryPage = Math.min(detailHistoryPage, detailHistoryPageCount - 1)
-  const activeDetailHistoryFilterCount = Number(detailHistoryResults.length !== HISTORY_RESULTS.length)
+  const activeDetailHistoryFilterCount = Number(detailHistoryResults.length > 0)
   const effectiveDetailHistoryViewMode: DirectoryViewMode = isMobileViewport ? 'list' : detailHistoryViewMode
   const visibleSelectedPrinterJobs = useMemo(() => {
     const start = safeDetailHistoryPage * detailHistoryPageSize
@@ -414,7 +414,7 @@ export function PrintersView() {
   }, [detailHistoryPageSize, filteredSelectedPrinterJobs.length])
 
   function clearDetailHistoryFilters() {
-    setDetailHistoryResults([...HISTORY_RESULTS])
+    setDetailHistoryResults([])
   }
 
   const addPrinter = useMutation({
@@ -949,7 +949,34 @@ export function PrintersView() {
                     }}
                     searchPlaceholder="Search file, result, or time"
                     searchAriaLabel="Search printer print history"
-                    filtersButton={<DirectoryFiltersButton activeCount={activeDetailHistoryFilterCount} onClick={() => setDetailHistoryFiltersDialogOpen(true)} />}
+                    filters={{
+                      activeCount: activeDetailHistoryFilterCount,
+                      onClear: clearDetailHistoryFilters,
+                      clearDisabled: activeDetailHistoryFilterCount === 0,
+                      children: (
+                        <FormControl>
+                          <Typography level="body-sm" textColor="text.tertiary">Results</Typography>
+                          <Select
+                            size="sm"
+                            multiple
+                            value={detailHistoryResults}
+                            onChange={(_event, value) => {
+                              setDetailHistoryPage(0)
+                              setDetailHistoryResults(value ?? [])
+                            }}
+                            placeholder="All results"
+                            renderValue={() => detailHistoryResults.length === 0
+                              ? null
+                              : formatHistoryResultsSummary(detailHistoryResults)}
+                            slotProps={{ listbox: { disablePortal: true, sx: { maxHeight: 280 } } }}
+                          >
+                            {HISTORY_RESULTS.map((result) => (
+                              <MultiSelectOption key={result} value={result} selected={detailHistoryResults.includes(result)}>{result}</MultiSelectOption>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      )
+                    }}
                     pageSizeValue={detailHistoryPageSize}
                     pageSizeOptions={HISTORY_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} rows per page` }))}
                     onPageSizeChange={(value) => {
@@ -970,49 +997,7 @@ export function PrintersView() {
                     viewMode={effectiveDetailHistoryViewMode}
                     onViewModeChange={setDetailHistoryViewMode}
                     disableIconModeOnMobile
-                    sortMinWidth={140}
                   />
-
-                  {activeDetailHistoryFilterCount > 0 && (
-                    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                      <Chip size="sm" variant="soft" color="neutral">{formatHistoryResultsSummary(detailHistoryResults)}</Chip>
-                      <Button size="sm" variant="plain" color="neutral" onClick={clearDetailHistoryFilters}>
-                        Clear filters
-                      </Button>
-                    </Stack>
-                  )}
-
-                  <DirectoryFiltersDialog
-                    open={detailHistoryFiltersDialogOpen}
-                    title="Print history filters"
-                    onClose={() => setDetailHistoryFiltersDialogOpen(false)}
-                    onClear={clearDetailHistoryFilters}
-                    clearDisabled={activeDetailHistoryFilterCount === 0}
-                  >
-                    <FormControl>
-                      <Typography level="body-sm" textColor="text.tertiary">Results</Typography>
-                      <Select
-                        size="sm"
-                        multiple
-                        value={detailHistoryResults}
-                        onChange={(_event, value) => {
-                          setDetailHistoryPage(0)
-                          setDetailHistoryResults(value ?? [])
-                        }}
-                        renderValue={() => (
-                          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                            <Chip size="sm" variant="soft">{formatHistoryResultsSummary(detailHistoryResults)}</Chip>
-                          </Stack>
-                        )}
-                        slotProps={{ listbox: { sx: { maxHeight: 280 } } }}
-                      >
-                        {HISTORY_RESULTS.map((result) => (
-                          <Option key={result} value={result}>{result}</Option>
-                        ))}
-                      </Select>
-                    </FormControl>
-                  </DirectoryFiltersDialog>
-
                 </Stack>
               )}
 

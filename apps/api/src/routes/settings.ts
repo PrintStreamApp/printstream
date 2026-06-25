@@ -29,7 +29,7 @@ settingsRouter.put('/', async (request, response) => {
   const parsed = updateGeneralSettingsSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid settings payload.')
 
-  if (parsed.data.appTheme !== undefined || parsed.data.unconstrainedWidth !== undefined || parsed.data.landingPage !== undefined || parsed.data.quickStartDismissed !== undefined) {
+  if (parsed.data.appTheme !== undefined || parsed.data.unconstrainedWidth !== undefined || parsed.data.landingPage !== undefined || parsed.data.navTabOrder !== undefined || parsed.data.quickStartDismissed !== undefined) {
     assertRequestPermission(request, SETTINGS_MANAGE_PERMISSION)
   }
 
@@ -83,7 +83,7 @@ settingsRouter.put('/', async (request, response) => {
     }
   }
 
-  if (parsed.data.appTheme === undefined && parsed.data.unconstrainedWidth === undefined && parsed.data.landingPage === undefined && parsed.data.quickStartDismissed === undefined && parsed.data.supportAccessEnabled === undefined && parsed.data.supportAccessPermissions === undefined) {
+  if (parsed.data.appTheme === undefined && parsed.data.unconstrainedWidth === undefined && parsed.data.landingPage === undefined && parsed.data.navTabOrder === undefined && parsed.data.quickStartDismissed === undefined && parsed.data.supportAccessEnabled === undefined && parsed.data.supportAccessPermissions === undefined) {
     if (!request.auth.authEnabled) {
       throw badRequest('At least one general setting must be provided.')
     }
@@ -111,6 +111,7 @@ settingsRouter.put('/', async (request, response) => {
       ...(parsed.data.appTheme !== undefined ? { appTheme: parsed.data.appTheme } : {}),
       ...(parsed.data.unconstrainedWidth !== undefined ? { unconstrainedWidth: parsed.data.unconstrainedWidth } : {}),
       ...(parsed.data.landingPage !== undefined ? { landingPage: parsed.data.landingPage } : {}),
+      ...(parsed.data.navTabOrder !== undefined ? { navTabOrderCount: parsed.data.navTabOrder.length } : {}),
       ...(parsed.data.quickStartDismissed !== undefined ? { quickStartDismissed: parsed.data.quickStartDismissed } : {}),
       ...(parsed.data.supportAccessEnabled !== undefined ? { supportAccessEnabled: parsed.data.supportAccessEnabled } : {}),
       ...(parsed.data.supportAccessPermissions !== undefined

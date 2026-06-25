@@ -6,32 +6,36 @@ export interface FilteredLibraryEntries {
   files: LibraryFile[]
 }
 
+/**
+ * Selected metadata facets. Each facet is a set of allowed values; an **empty
+ * set means "no filter"** for that facet. Within a facet the match is OR (the
+ * file matches any selected value); across facets it is AND.
+ */
 export interface LibraryFileMetadataFilters {
-  printerModel: string
-  nozzleSize: string
-  plateType: string
-  fileType: string
+  printerModels: string[]
+  nozzleSizes: string[]
+  plateTypes: string[]
+  fileTypes: string[]
 }
 
 export function filterLibraryFilesByMetadata(
   files: ReadonlyArray<LibraryFile>,
-  filters: LibraryFileMetadataFilters,
-  allValue = '__all__'
+  filters: LibraryFileMetadataFilters
 ): LibraryFile[] {
   return files.filter((file) => {
     if (
-      filters.printerModel !== allValue
-      && !file.compatiblePrinterModels.includes(filters.printerModel as LibraryFile['compatiblePrinterModels'][number])
+      filters.printerModels.length > 0
+      && !file.compatiblePrinterModels.some((model) => filters.printerModels.includes(model))
     ) {
       return false
     }
-    if (filters.nozzleSize !== allValue && !file.nozzleSizeChips.includes(filters.nozzleSize)) {
+    if (filters.nozzleSizes.length > 0 && !file.nozzleSizeChips.some((size) => filters.nozzleSizes.includes(size))) {
       return false
     }
-    if (filters.plateType !== allValue && !file.plateTypeChips.includes(filters.plateType)) {
+    if (filters.plateTypes.length > 0 && !file.plateTypeChips.some((plate) => filters.plateTypes.includes(plate))) {
       return false
     }
-    if (filters.fileType !== allValue && formatLibraryFileKindLabel(file.name, file.kind) !== filters.fileType) {
+    if (filters.fileTypes.length > 0 && !filters.fileTypes.includes(formatLibraryFileKindLabel(file.name, file.kind))) {
       return false
     }
     return true
@@ -116,6 +120,68 @@ export function sortLibraryEntries(
     ),
     files: [...files].sort((a, b) => compareLibraryFiles(a, b, sort))
   }
+}
+
+export type LibraryGroupBy = 'none' | 'fileType' | 'letter' | 'dateAdded'
+
+/** Grouping options offered by the library views/pickers, in display order. */
+export const LIBRARY_GROUP_OPTIONS: ReadonlyArray<{ value: LibraryGroupBy; label: string }> = [
+  { value: 'none', label: 'No grouping' },
+  { value: 'fileType', label: 'File type' },
+  { value: 'letter', label: 'Name (A–Z)' },
+  { value: 'dateAdded', label: 'Date added' }
+]
+
+export interface LibraryFileGroup {
+  key: string
+  label: string
+  files: LibraryFile[]
+}
+
+function libraryGroupKey(file: LibraryFile, groupBy: LibraryGroupBy, nowMs: number): { key: string; label: string } {
+  switch (groupBy) {
+    case 'fileType': {
+      const label = formatLibraryFileKindLabel(file.name, file.kind)
+      return { key: label.toLowerCase(), label }
+    }
+    case 'letter': {
+      const first = formatLibraryFileName(file.name).trim().charAt(0).toUpperCase()
+      if (first >= 'A' && first <= 'Z') return { key: first, label: first }
+      // Non-alphabetic names bucket under "#", sorted last via a high key.
+      return { key: '￿', label: '#' }
+    }
+    case 'dateAdded':
+    default: {
+      const ts = Date.parse(file.uploadedAt)
+      const days = Number.isNaN(ts) ? Number.POSITIVE_INFINITY : (nowMs - ts) / 86_400_000
+      if (days < 1) return { key: '0', label: 'Today' }
+      if (days < 7) return { key: '1', label: 'This week' }
+      if (days < 31) return { key: '2', label: 'This month' }
+      return { key: '3', label: 'Older' }
+    }
+  }
+}
+
+/**
+ * Bucket files for the library's grouping control. Returns one group when
+ * `groupBy` is `none`. Groups are ordered by key (alphabetic for file type and
+ * letter, with "#" last; chronological buckets for date added). Files keep their
+ * incoming order, so callers should sort before grouping.
+ */
+export function groupLibraryFiles(
+  files: ReadonlyArray<LibraryFile>,
+  groupBy: LibraryGroupBy,
+  nowMs: number = Date.now()
+): LibraryFileGroup[] {
+  if (groupBy === 'none') return [{ key: 'all', label: '', files: [...files] }]
+  const buckets = new Map<string, LibraryFileGroup>()
+  for (const file of files) {
+    const { key, label } = libraryGroupKey(file, groupBy, nowMs)
+    const bucket = buckets.get(key)
+    if (bucket) bucket.files.push(file)
+    else buckets.set(key, { key, label, files: [file] })
+  }
+  return [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key))
 }
 
 export function paginateLibraryEntries(

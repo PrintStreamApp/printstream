@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AuthUser } from '@printstream/shared'
 import {
-  ALL_USER_ROLE_FILTER,
   buildUserRoleOptions,
   filterAndSortUsers,
   getUserDisplayLabel,
@@ -66,7 +65,7 @@ function sortedNames(
   return filterAndSortUsers(users, {
     search: '',
     statusFilter: 'all',
-    roleFilter: ALL_USER_ROLE_FILTER,
+    roleFilters: [],
     sortKey,
     sortDirection,
     ...extra
@@ -84,7 +83,7 @@ test('filterAndSortUsers filters by status and role', () => {
   const disabledAdmins = filterAndSortUsers(users, {
     search: '',
     statusFilter: 'disabled',
-    roleFilter: 'group-admin',
+    roleFilters: ['group-admin'],
     sortKey: 'name',
     sortDirection: 'asc'
   }).map(getUserDisplayLabel)
@@ -92,11 +91,23 @@ test('filterAndSortUsers filters by status and role', () => {
   assert.deepEqual(disabledAdmins, ['Zed Disabled'])
 })
 
+test('filterAndSortUsers treats multiple selected roles as OR', () => {
+  const adminsOrViewers = filterAndSortUsers(users, {
+    search: '',
+    statusFilter: 'all',
+    roleFilters: ['group-admin', 'group-viewer'],
+    sortKey: 'name',
+    sortDirection: 'asc'
+  }).map(getUserDisplayLabel)
+
+  assert.deepEqual(adminsOrViewers, ['Alpha Admin', 'Mila Member', 'Zed Disabled'])
+})
+
 test('filterAndSortUsers can filter unassigned users', () => {
   const unassignedUsers = filterAndSortUsers(users, {
     search: '',
     statusFilter: 'all',
-    roleFilter: UNASSIGNED_USER_ROLE_FILTER,
+    roleFilters: [UNASSIGNED_USER_ROLE_FILTER],
     sortKey: 'name',
     sortDirection: 'asc'
   }).map(getUserDisplayLabel)
@@ -109,7 +120,7 @@ test('filterAndSortUsers searches name, email, and role metadata', () => {
     filterAndSortUsers(users, {
       search: 'viewer',
       statusFilter: 'all',
-      roleFilter: ALL_USER_ROLE_FILTER,
+      roleFilters: [],
       sortKey: 'name',
       sortDirection: 'asc'
     }).map(getUserDisplayLabel),

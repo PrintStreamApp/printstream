@@ -12,7 +12,7 @@ export type UserRoleOption = {
   label: string
 }
 
-export const ALL_USER_ROLE_FILTER = '__all__'
+/** Sentinel role-filter value matching users with no role assigned (alongside real group ids). */
 export const UNASSIGNED_USER_ROLE_FILTER = '__unassigned__'
 export const USER_SORT_OPTIONS: Array<{ value: UserSortKey; label: string }> = [
   { value: 'name', label: 'Name' },
@@ -47,7 +47,7 @@ export function filterAndSortUsers(
   options: {
     search: string
     statusFilter: UserStatusFilter
-    roleFilter: string
+    roleFilters: string[]
     sortKey: UserSortKey
     sortDirection: UserSortDirection
   }
@@ -57,7 +57,7 @@ export function filterAndSortUsers(
   return [...users]
     .filter((user) => matchesUserSearch(user, normalizedSearch))
     .filter((user) => matchesUserStatusFilter(user, options.statusFilter))
-    .filter((user) => matchesUserRoleFilter(user, options.roleFilter))
+    .filter((user) => matchesUserRoleFilter(user, options.roleFilters))
     .sort((left, right) => compareUsers(left, right, options.sortKey, options.sortDirection))
 }
 
@@ -90,16 +90,19 @@ function matchesUserStatusFilter(user: AuthUser, filter: UserStatusFilter): bool
   }
 }
 
-function matchesUserRoleFilter(user: AuthUser, filter: string): boolean {
-  if (filter === ALL_USER_ROLE_FILTER) {
+/**
+ * Multi-select role filter: an empty selection means "all". Otherwise a user
+ * matches if it satisfies ANY selected value — the `UNASSIGNED` sentinel matches
+ * users with no role, and a group id matches users in that group.
+ */
+function matchesUserRoleFilter(user: AuthUser, filters: string[]): boolean {
+  if (filters.length === 0) {
     return true
   }
 
-  if (filter === UNASSIGNED_USER_ROLE_FILTER) {
-    return user.groups.length === 0
-  }
-
-  return user.groups.some((group) => group.id === filter)
+  return filters.some((filter) => filter === UNASSIGNED_USER_ROLE_FILTER
+    ? user.groups.length === 0
+    : user.groups.some((group) => group.id === filter))
 }
 
 function compareUsers(left: AuthUser, right: AuthUser, sortKey: UserSortKey, sortDirection: UserSortDirection): number {

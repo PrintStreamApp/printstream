@@ -13,11 +13,15 @@
  * through the public event/contract surface, not by importing each
  * other directly.
  *
- * Built-in plugins live under `apps/api/src/plugins/<name>/`. Third-party
- * plugins should ship as ordinary npm packages whose default export is an
- * `ApiPlugin`; loading those packages is out of scope for v1 but the
- * interface is intentionally stable so we can add a loader later without
- * changing existing plugins.
+ * Built-in plugins live under `apps/api/src/plugins/<name>/` and are wired up
+ * in `apps/api/src/plugin/builtin.ts`, where `pluginRegistry.register` sets
+ * their install/enable defaults (`defaultEnabled`), runtime/manager surfaces,
+ * and `tenantAccess`. A built-in plugin may own tenant-scoped Prisma models in
+ * the core schema (see the `orders` plugin); plugins persisting only small
+ * config should use the `settings` store. Third-party plugins should ship as
+ * ordinary npm packages whose default export is an `ApiPlugin`; loading those
+ * packages is out of scope for v1 but the interface is intentionally stable so
+ * we can add a loader later without changing existing plugins.
  */
 import type { Router } from 'express'
 import type { PluginCatalogEntry, PluginManagementEntry, PluginSurface, PluginTenantAccess, PluginSource, TenantPluginAvailability } from '@printstream/shared'
