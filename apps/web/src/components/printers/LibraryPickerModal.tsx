@@ -21,7 +21,7 @@ import { libraryFacetsEmpty, useLibraryFilters } from '../../hooks/useLibraryFil
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../../lib/libraryDirectory'
 import { parseLibraryViewMode, parseLibrarySort } from '../../lib/printersViewHelpers'
-import { LIBRARY_VIEW_MODE_KEY, LIBRARY_SORT_KEY, LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS } from '../../lib/libraryViewHelpers'
+import { LIBRARY_VIEW_MODE_KEY, LIBRARY_SORT_KEY, LIBRARY_GROUP_KEY, LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS, parseLibraryGroup } from '../../lib/libraryViewHelpers'
 
 /**
  * Lightweight library picker used by the printer card's "Print" button.
@@ -71,7 +71,7 @@ export function LibraryPickerModal({
     { key: 'name', dir: 'asc' },
     parseLibrarySort
   )
-  const [group, setGroup] = useState<LibraryGroupBy>('none')
+  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   const browseQuery = useQuery({
@@ -226,6 +226,7 @@ export function LibraryPickerModal({
           <DialogSection title="Files">
               <Stack spacing={1}>
                 <DirectoryPrimaryToolbar
+                  pinnable={false}
                   searchValue={search}
                   onSearchChange={setSearch}
                   searchPlaceholder="Search files and folders"

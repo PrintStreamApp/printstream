@@ -24,7 +24,16 @@ import {
   toBridgeFolderId
 } from '../lib/libraryNavigation'
 import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../lib/libraryDirectory'
-import { LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS } from '../lib/libraryViewHelpers'
+import {
+  LIBRARY_GROUP_KEY,
+  LIBRARY_PAGE_SIZE_OPTIONS,
+  LIBRARY_SORT_KEY,
+  LIBRARY_SORT_OPTIONS,
+  LIBRARY_VIEW_MODE_KEY,
+  parseLibraryGroup
+} from '../lib/libraryViewHelpers'
+import { parseLibrarySort, parseLibraryViewMode } from '../lib/printersViewHelpers'
+import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { LibraryBreadcrumb, LibraryBreadcrumbRow } from './LibraryBreadcrumb'
 import { LibraryPickerEmptyState } from './LibraryPickerEmptyState'
 import { BackAwareModal as Modal } from './BackAwareModal'
@@ -63,9 +72,11 @@ export function LibraryFilePickerDialog({
   const [bridgeId, setBridgeId] = useState<string | null>(initialBridgeId)
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
-  const [viewMode, setViewMode] = useState<LibraryViewMode>('list')
-  const [sort, setSort] = useState<LibrarySort>({ key: 'name', dir: 'asc' })
-  const [group, setGroup] = useState<LibraryGroupBy>('none')
+  // View mode, sort, and grouping persist under the shared library keys, so the
+  // picker opens with the same preferences as the Library page and the other pickers.
+  const [viewMode, setViewMode] = useLocalStorageState<LibraryViewMode>(LIBRARY_VIEW_MODE_KEY, 'list', parseLibraryViewMode, String)
+  const [sort, setSort] = useLocalStorageState<LibrarySort>(LIBRARY_SORT_KEY, { key: 'name', dir: 'asc' }, parseLibrarySort)
+  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   const browseQuery = useQuery({
@@ -173,6 +184,7 @@ export function LibraryFilePickerDialog({
             </LibraryBreadcrumbRow>
 
             <DirectoryPrimaryToolbar
+              pinnable={false}
               searchValue={search}
               onSearchChange={setSearch}
               searchPlaceholder="Search files and folders"

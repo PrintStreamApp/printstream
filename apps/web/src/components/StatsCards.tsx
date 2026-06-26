@@ -19,6 +19,23 @@ type BreakdownItem = {
 }
 
 const EMPTY_CHART_COLOR = 'var(--joy-palette-neutral-softBg)'
+
+/**
+ * Distinct hues for categorical breakdowns with an open-ended number of slices
+ * (filament types, brands, …). Assign by slice index; the ramp repeats past its
+ * length, which is fine since only the leading slices are named in the legend.
+ */
+export const CATEGORICAL_STAT_COLORS = [
+  'var(--joy-palette-primary-400)',
+  'var(--joy-palette-success-400)',
+  'var(--joy-palette-warning-400)',
+  'var(--joy-palette-danger-400)',
+  'var(--joy-palette-primary-200)',
+  'var(--joy-palette-success-200)',
+  'var(--joy-palette-warning-200)',
+  'var(--joy-palette-neutral-400)'
+]
+
 const CHART_SIZE = 110
 const ACTIVITY_CHART_HEIGHT = 92
 const PRINTER_ACTIVITY_COLOR = 'var(--joy-palette-success-400)'
@@ -216,14 +233,19 @@ export function BreakdownStatCard({
   label,
   primaryValue,
   description,
-  items
+  items,
+  maxLegendItems
 }: BaseStatCardProps & {
   primaryValue: string
   description?: string
   items: BreakdownItem[]
+  /** Cap the named legend rows (the pie still shows every slice). Omit to list all. */
+  maxLegendItems?: number
 }) {
   const chartData = buildChartData(items)
   const chartColors = chartData.map((item) => item.color)
+  const legendItems = maxLegendItems == null ? items : items.slice(0, maxLegendItems)
+  const hiddenLegendCount = items.length - legendItems.length
 
   return renderStatCard(
     <CardContent sx={{ height: '100%' }}>
@@ -241,7 +263,7 @@ export function BreakdownStatCard({
               {description ? <Typography level="body-sm" textColor="text.tertiary">{description}</Typography> : null}
             </Stack>
             <Stack spacing={0.875} sx={{ mt: 'auto' }}>
-              {items.map((item) => (
+              {legendItems.map((item) => (
                 <Stack key={item.label} spacing={0.25}>
                   <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center">
                     <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
@@ -265,6 +287,11 @@ export function BreakdownStatCard({
                   ) : null}
                 </Stack>
               ))}
+              {hiddenLegendCount > 0 ? (
+                <Typography level="body-xs" textColor="text.tertiary" sx={{ pl: 2.25 }}>
+                  +{hiddenLegendCount} more
+                </Typography>
+              ) : null}
             </Stack>
           </Stack>
           <Box

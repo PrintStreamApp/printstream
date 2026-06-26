@@ -16,6 +16,7 @@ import { type Dispatch, type SetStateAction } from 'react'
 import {
   classifyLibraryFileKind,
   defaultPrinterCardContentSettings,
+  defaultPrinterViewGroup,
   defaultPrinterViewSort,
   formatBytes,
   formatNozzleDiameterLabel,
@@ -44,6 +45,7 @@ import {
   type PrinterStatus,
   type PrinterView,
   type PrinterViewInput,
+  type PrinterViewGroup,
   type PrinterViewSort,
   type PrinterViewStateFilter
 } from '@printstream/shared'
@@ -265,6 +267,7 @@ export function clonePrinterViewInput(input: PrinterViewInput): PrinterViewInput
     nozzleDiameterFilter: [...input.nozzleDiameterFilter],
     plateTypeFilter: [...input.plateTypeFilter],
     sort: { ...input.sort },
+    group: input.group,
     cardContentSettings: { ...input.cardContentSettings }
   }
 }
@@ -279,6 +282,7 @@ export function resetPrinterViewInput(input: PrinterViewInput): PrinterViewInput
     nozzleDiameterFilter: [],
     plateTypeFilter: [],
     sort: { ...defaultPrinterViewSort },
+    group: defaultPrinterViewGroup,
     cardContentSettings: { ...DEFAULT_PRINTER_CARD_CONTENT_SETTINGS }
   }
 }
@@ -881,6 +885,131 @@ export function printerStateSortRank(status: PrinterStatus | undefined): number 
   if (status.stage === 'paused') return 2
   if (status.stage === 'printing' || status.stage === 'preparing' || status.stage === 'heating') return 0
   return 1
+}
+
+// --- Printers overview directory toolbar (search / sort / group / pagination) ---
+
+/** Sort fields offered in the overview toolbar; direction is a separate toggle. */
+export const PRINTER_OVERVIEW_SORT_FIELD_OPTIONS: ReadonlyArray<{ value: PrinterViewSort['key']; label: string }> = [
+  { value: 'name', label: 'Name' },
+  { value: 'model', label: 'Model' },
+  { value: 'state', label: 'State' },
+  { value: 'manual', label: 'Manual order' }
+]
+
+export const PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS = [12, 24, 48, 96] as const
+const PRINTER_OVERVIEW_PAGE_SIZES = new Set<number>(PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS)
+export function parsePrinterOverviewPageSize(raw: string): number | null {
+  const value = Number(raw)
+  return PRINTER_OVERVIEW_PAGE_SIZES.has(value) ? value : null
+}
+
+/** What the overview's "Group by" control can partition printers on. */
+export type PrinterGroupBy = PrinterViewGroup
+export const PRINTER_GROUP_OPTIONS: ReadonlyArray<{ value: PrinterGroupBy; label: string }> = [
+  { value: 'none', label: 'No grouping' },
+  { value: 'status', label: 'Status' },
+  { value: 'model', label: 'Model' },
+  { value: 'bridge', label: 'Bridge' },
+  { value: 'nozzle', label: 'Nozzle diameter' }
+]
+const PRINTER_GROUP_VALUES = new Set<string>(PRINTER_GROUP_OPTIONS.map((option) => option.value))
+export function parsePrinterGroupBy(raw: string): PrinterGroupBy | null {
+  return PRINTER_GROUP_VALUES.has(raw) ? (raw as PrinterGroupBy) : null
+}
+
+/** Order-insensitive equality for the string-array filters (model, nozzle, plate, printer ids). */
+export function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false
+  const seen = new Set(left)
+  return right.every((value) => seen.has(value))
+}
+
+/** Free-text overview search across a printer's name, model, and host. */
+export function matchesPrinterSearch(printer: Printer, query: string): boolean {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return true
+  return [printer.name, printer.model, printer.host]
+    .filter((value): value is string => Boolean(value))
+    .some((value) => value.toLowerCase().includes(normalized))
+}
+
+/** The discrete state bucket a printer falls in, used for "Group by → Status". */
+export function derivePrinterStateBucket(status: PrinterStatus | undefined): Exclude<PrinterStateFilter, 'all'> {
+  if (!status || !status.online) return 'offline'
+  if (status.stage === 'failed' || status.deviceError != null || status.hmsErrors.length > 0) return 'error'
+  if (status.stage === 'paused') return 'paused'
+  if (status.stage === 'printing' || status.stage === 'preparing' || status.stage === 'heating') return 'printing'
+  return 'idle'
+}
+
+/** Status groups read most usefully in run-state order, not alphabetically. */
+const PRINTER_STATUS_GROUP_ORDER: ReadonlyArray<Exclude<PrinterStateFilter, 'all'>> = ['printing', 'paused', 'error', 'idle', 'offline']
+
+function printerNozzleGroupLabel(printer: Printer, status: PrinterStatus | undefined): string {
+  const diameters = Array.from(new Set(
+    resolvePrinterNozzleDiameters(status, printer.currentNozzleDiameters)
+      .map((entry) => entry.diameter)
+      .filter((value): value is string => value != null)
+  )).sort((left, right) => Number.parseFloat(left) - Number.parseFloat(right))
+  return diameters.length === 0 ? 'Unknown nozzle' : `${diameters.join(', ')} mm`
+}
+
+export type PrinterGroup = { key: string; label: string; printers: Printer[] }
+
+/**
+ * Partition an already-sorted printer list into the overview's display groups.
+ * `none` returns a single unlabelled group (the caller renders no header). Order
+ * within each group is preserved from the input, so the active sort still holds.
+ * Status groups follow run-state order; the rest sort alphabetically with the
+ * unknown/none bucket pinned last. `resolveBridgeName` maps a printer's bridge id
+ * (or null) to a display label so this stays pure.
+ */
+export function groupPrintersForOverview(
+  printers: Printer[],
+  statuses: Record<string, PrinterStatus>,
+  group: PrinterGroupBy,
+  resolveBridgeName: (bridgeId: string | null) => string
+): PrinterGroup[] {
+  if (group === 'none') return [{ key: 'all', label: '', printers }]
+
+  const groups = new Map<string, PrinterGroup>()
+  for (const printer of printers) {
+    const status = statuses[printer.id]
+    let key: string
+    let label: string
+    if (group === 'status') {
+      const bucket = derivePrinterStateBucket(status)
+      key = bucket
+      label = printerStateFilterLabel(bucket)
+    } else if (group === 'model') {
+      key = printer.model
+      label = printer.model === 'unknown' ? 'Unknown model' : printer.model
+    } else if (group === 'bridge') {
+      key = printer.bridgeId ?? '__none__'
+      label = resolveBridgeName(printer.bridgeId ?? null)
+    } else {
+      label = printerNozzleGroupLabel(printer, status)
+      key = label
+    }
+    const existing = groups.get(key)
+    if (existing) existing.printers.push(printer)
+    else groups.set(key, { key, label, printers: [printer] })
+  }
+
+  const ordered = Array.from(groups.values())
+  if (group === 'status') {
+    ordered.sort((left, right) =>
+      PRINTER_STATUS_GROUP_ORDER.indexOf(left.key as Exclude<PrinterStateFilter, 'all'>)
+      - PRINTER_STATUS_GROUP_ORDER.indexOf(right.key as Exclude<PrinterStateFilter, 'all'>))
+    return ordered
+  }
+  const isUnknownGroup = (entry: PrinterGroup) =>
+    entry.key === '__none__' || entry.key === 'unknown' || entry.label.startsWith('Unknown')
+  ordered.sort((left, right) =>
+    (isUnknownGroup(left) ? 1 : 0) - (isUnknownGroup(right) ? 1 : 0)
+    || left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }))
+  return ordered
 }
 
 export function capitalize(value: string): string {

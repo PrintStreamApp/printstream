@@ -1,14 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
-import { Box, Button, Checkbox, Chip, FormControl, FormLabel, Input, ListDivider, ModalClose, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
+import { Box, Button, Chip, FormControl, FormLabel, Input, ModalClose, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import DragIndicatorRoundedIcon from '@mui/icons-material/DragIndicatorRounded'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
-import SortRoundedIcon from '@mui/icons-material/SortRounded'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { type Printer, type PrinterView, type PrinterViewInput } from '@printstream/shared'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { DialogSection } from '../../components/DialogSection'
 import { PrinterCardContentSettingsFields } from './PrinterCardContentSettingsFields'
-import { CARDS_PER_ROW_OPTIONS, PRINTER_VIEW_SORT_OPTIONS, moveListItem, updateViewCardContentSetting, togglePrinterSelection, buildPrinterModelFilterOptions, buildNozzleDiameterFilterOptions, buildPlateTypeFilterOptions, clonePrinterViewInput, resetPrinterViewInput, normalizePrinterViewInput, encodePrinterViewSort, decodePrinterViewSort } from '../../lib/printersViewHelpers'
+import { CARDS_PER_ROW_OPTIONS, moveListItem, updateViewCardContentSetting, clonePrinterViewInput, resetPrinterViewInput, normalizePrinterViewInput } from '../../lib/printersViewHelpers'
 
 /**
  * Printer view configuration modals: reorder printers (PrinterSortModal) and
@@ -149,7 +148,6 @@ export function PrinterSortModal({
 
 export function PrinterViewsModal({
   mode,
-  printers,
   activeView,
   currentViewLabel,
   isCurrentDefaultView,
@@ -161,11 +159,9 @@ export function PrinterViewsModal({
   onCreate,
   onUpdate,
   onDelete,
-  onSetAsDefault,
-  onEditManualOrder
+  onSetAsDefault
 }: {
-  mode: 'edit' | 'create'
-  printers: Printer[]
+  mode: 'settings' | 'create'
   activeView: PrinterView | null
   currentViewLabel: string
   isCurrentDefaultView: boolean
@@ -178,23 +174,10 @@ export function PrinterViewsModal({
   onUpdate: (id: string, input: PrinterViewInput) => void
   onDelete: (id: string) => void
   onSetAsDefault: () => void
-  onEditManualOrder: () => void
 }) {
   const [formValues, setFormValues] = useState<PrinterViewInput>(() => clonePrinterViewInput(currentState))
-  const modelFilterOptions = useMemo(
-    () => buildPrinterModelFilterOptions(printers, formValues.modelFilter),
-    [printers, formValues.modelFilter]
-  )
-  const nozzleDiameterFilterOptions = useMemo(
-    () => buildNozzleDiameterFilterOptions(formValues.nozzleDiameterFilter),
-    [formValues.nozzleDiameterFilter]
-  )
-  const plateTypeFilterOptions = useMemo(
-    () => buildPlateTypeFilterOptions(printers, formValues.plateTypeFilter),
-    [printers, formValues.plateTypeFilter]
-  )
-  const editingView = mode === 'edit' ? activeView : null
-  const isDefaultView = mode === 'edit' && editingView == null
+  const editingView = mode === 'settings' ? activeView : null
+  const isDefaultView = mode === 'settings' && editingView == null
   const isCreatingView = mode === 'create'
   const canSubmitView = !isCreatingView || formValues.name.trim().length > 0
 
@@ -220,11 +203,11 @@ export function PrinterViewsModal({
         }}
       >
         <ModalClose />
-        <Typography level="h4">{isCreatingView ? 'New view' : 'Edit view'}</Typography>
+        <Typography level="h4">{isCreatingView ? 'New view' : 'View settings'}</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           {isCreatingView
-            ? 'Create a saved printer view from the current dashboard state, including layout, filter, sorting, and card content options.'
-            : `Configure ${currentViewLabel} from one place, including layout, filter, sorting, and card content options.`}
+            ? 'Save the current dashboard view — its sort, grouping, filters, layout, and card content — as a named view.'
+            : `Configure ${currentViewLabel}: layout and card content. Sort, grouping, and filters are set from the toolbar.`}
         </Typography>
 
         <ScrollableDialogBody sx={{ mt: 1.5 }}>
@@ -248,183 +231,18 @@ export function PrinterViewsModal({
               )}
             </DialogSection>
 
-            <DialogSection title="Layout and sorting">
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
-                <FormControl sx={{ flex: 1 }}>
-                  <FormLabel>Cards per row</FormLabel>
-                  <Select
-                    value={formValues.cardsPerRow}
-                    onChange={(_event, value) => value && setFormValues((current) => ({ ...current, cardsPerRow: value }))}
-                  >
-                    {CARDS_PER_ROW_OPTIONS.map((value) => (
-                      <Option key={`view-cards-${value}`} value={value}>{value} per row</Option>
-                    ))}
-                  </Select>
-                </FormControl>
-                <FormControl sx={{ flex: 1 }}>
-                  <FormLabel>Sort</FormLabel>
-                  <Stack spacing={0.75}>
-                    <Select
-                      value={encodePrinterViewSort(formValues.sort)}
-                      onChange={(_event, value) => {
-                        if (!value) return
-                        setFormValues((current) => ({ ...current, sort: decodePrinterViewSort(value) }))
-                      }}
-                    >
-                      {PRINTER_VIEW_SORT_OPTIONS.map((option) => (
-                        <Option key={encodePrinterViewSort(option.value)} value={encodePrinterViewSort(option.value)}>
-                          {option.label}
-                        </Option>
-                      ))}
-                    </Select>
-                    {formValues.sort.key === 'manual' && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="plain"
-                        color="neutral"
-                        startDecorator={<SortRoundedIcon />}
-                        disabled={printers.length < 2}
-                        onClick={onEditManualOrder}
-                        sx={{ alignSelf: 'flex-start' }}
-                      >
-                        Edit manual order
-                      </Button>
-                    )}
-                  </Stack>
-                </FormControl>
-              </Stack>
-            </DialogSection>
-
-            <DialogSection
-              title="Filters"
-              description="Limit the view to printers matching every selected filter. Leave a filter empty to include all printers."
-            >
-              <Stack
-                direction={{ xs: 'column', sm: 'row' }}
-                spacing={1.25}
-                useFlexGap
-                sx={{ flexWrap: 'wrap' }}
-              >
-                <FormControl sx={{ flex: '1 1 45%', minWidth: 180 }}>
-                  <FormLabel>State</FormLabel>
-                  <Select
-                    value={formValues.stateFilter}
-                    onChange={(_event, value) => value && setFormValues((current) => ({ ...current, stateFilter: value }))}
-                  >
-                    <Option value="all">All states</Option>
-                    <Option value="idle">Idle</Option>
-                    <Option value="printing">Printing</Option>
-                    <Option value="paused">Paused</Option>
-                    <Option value="error">Error</Option>
-                    <Option value="offline">Offline</Option>
-                  </Select>
-                </FormControl>
-                <FormControl sx={{ flex: '1 1 45%', minWidth: 180 }}>
-                  <FormLabel>Model</FormLabel>
-                  <Select
-                    multiple
-                    placeholder="All models"
-                    value={formValues.modelFilter}
-                    onChange={(_event, value) => setFormValues((current) => ({ ...current, modelFilter: value }))}
-                    renderValue={(selected) => (selected.length === 0 ? 'All models' : selected.map((option) => option.label).join(', '))}
-                    slotProps={{ listbox: { sx: { maxHeight: 280, overflow: 'auto' } } }}
-                  >
-                    {modelFilterOptions.map((model) => (
-                      <Option key={`view-model-${model}`} value={model}>{model}</Option>
-                    ))}
-                  </Select>
-                </FormControl>
-                <FormControl sx={{ flex: '1 1 45%', minWidth: 180 }}>
-                  <FormLabel>Nozzle diameter</FormLabel>
-                  <Select
-                    multiple
-                    placeholder="All sizes"
-                    value={formValues.nozzleDiameterFilter}
-                    onChange={(_event, value) => setFormValues((current) => ({ ...current, nozzleDiameterFilter: value }))}
-                    renderValue={(selected) => (selected.length === 0 ? 'All sizes' : selected.map((option) => `${option.value} mm`).join(', '))}
-                    slotProps={{ listbox: { sx: { maxHeight: 280, overflow: 'auto' } } }}
-                  >
-                    {nozzleDiameterFilterOptions.map((diameter) => (
-                      <Option key={`view-nozzle-${diameter}`} value={diameter}>{diameter} mm</Option>
-                    ))}
-                  </Select>
-                </FormControl>
-                <FormControl sx={{ flex: '1 1 45%', minWidth: 180 }}>
-                  <FormLabel>Plate type</FormLabel>
-                  <Select
-                    multiple
-                    placeholder="All plate types"
-                    value={formValues.plateTypeFilter}
-                    onChange={(_event, value) => setFormValues((current) => ({ ...current, plateTypeFilter: value }))}
-                    renderValue={(selected) => (selected.length === 0 ? 'All plate types' : selected.map((option) => option.label).join(', '))}
-                    slotProps={{ listbox: { sx: { maxHeight: 280, overflow: 'auto' } } }}
-                  >
-                    {plateTypeFilterOptions.map((plateType) => (
-                      <Option key={`view-plate-${plateType}`} value={plateType}>{plateType}</Option>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Stack>
-            </DialogSection>
-
-            <DialogSection
-              title="Printers"
-              description="Leave the selection empty to include every configured printer."
-            >
-              <Stack spacing={1}>
-                {formValues.printerIds.length > 0 && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="plain"
-                    color="neutral"
-                    onClick={() => setFormValues((current) => ({ ...current, printerIds: [] }))}
-                    sx={{ alignSelf: 'flex-start' }}
-                  >
-                    Use all printers
-                  </Button>
-                )}
-                <Sheet variant="soft" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
-                  <Stack divider={<ListDivider inset="gutter" />}>
-                    {printers.map((printer) => {
-                      const checked = formValues.printerIds.includes(printer.id)
-                      return (
-                        <Stack
-                          key={printer.id}
-                          direction="row"
-                          spacing={1.25}
-                          alignItems="center"
-                          onClick={() => {
-                            setFormValues((current) => ({
-                              ...current,
-                              printerIds: togglePrinterSelection(current.printerIds, printer.id)
-                            }))
-                          }}
-                          sx={{ px: 1.5, py: 1, cursor: 'pointer' }}
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onClick={(event) => event.stopPropagation()}
-                            onChange={() => {
-                              setFormValues((current) => ({
-                                ...current,
-                                printerIds: togglePrinterSelection(current.printerIds, printer.id)
-                              }))
-                            }}
-                          />
-                          <Box sx={{ minWidth: 0, flex: 1 }}>
-                            <Typography level="title-sm" noWrap>{printer.name}</Typography>
-                            <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                              {printer.model} · {printer.host}
-                            </Typography>
-                          </Box>
-                        </Stack>
-                      )
-                    })}
-                  </Stack>
-                </Sheet>
-              </Stack>
+            <DialogSection title="Layout">
+              <FormControl sx={{ maxWidth: 280 }}>
+                <FormLabel>Cards per row</FormLabel>
+                <Select
+                  value={formValues.cardsPerRow}
+                  onChange={(_event, value) => value && setFormValues((current) => ({ ...current, cardsPerRow: value }))}
+                >
+                  {CARDS_PER_ROW_OPTIONS.map((value) => (
+                    <Option key={`view-cards-${value}`} value={value}>{value} per row</Option>
+                  ))}
+                </Select>
+              </FormControl>
             </DialogSection>
 
             <DialogSection
@@ -441,7 +259,7 @@ export function PrinterViewsModal({
 
             <DialogSection
               title="Defaults"
-              description="Reset this view back to the standard layout or save it as the default for this workspace."
+              description="Reset the layout and card content to the standard, or save this view as the workspace default."
             >
               <Stack
                 direction="row"
@@ -453,7 +271,12 @@ export function PrinterViewsModal({
                   type="button"
                   variant="plain"
                   color="neutral"
-                  onClick={() => setFormValues((current) => resetPrinterViewInput(current))}
+                  onClick={() => setFormValues((current) => {
+                    // Only the dialog-owned fields reset here; sort/grouping/filters/printers
+                    // are toolbar-owned and must survive (they pass through unchanged).
+                    const defaults = resetPrinterViewInput(current)
+                    return { ...current, cardsPerRow: defaults.cardsPerRow, cardContentSettings: defaults.cardContentSettings }
+                  })}
                 >
                   Reset to defaults
                 </Button>

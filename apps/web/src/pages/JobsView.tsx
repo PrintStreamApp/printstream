@@ -480,7 +480,7 @@ export function JobsView() {
   return (
     <Stack spacing={2}>
       {!showNoConnectedBridgesPlaceholder && <SectionNav aria-label="Jobs sections" sections={sections} mb={0} />}
-      <Typography level="h3">Jobs</Typography>
+      <Typography level="h3" startDecorator={<HistoryRoundedIcon />}>Jobs</Typography>
       {authBootstrapQuery.isLoading && <Typography>Loading…</Typography>}
       {authBootstrapQuery.isSuccess && !canViewJobs && (
         <EmptyState
@@ -657,8 +657,8 @@ export function JobsView() {
             />
           )}
           {historyEntries.length > 0 && (
-            <Stack spacing={1.25}>
-              <DirectoryPrimaryToolbar
+            <DirectoryPrimaryToolbar
+                pinStorageKey="jobs.history"
                 searchValue={historySearch}
                 onSearchChange={(value) => {
                   setHistoryPage(0)
@@ -743,7 +743,6 @@ export function JobsView() {
                 onViewModeChange={setHistoryViewMode}
                 disableIconModeOnMobile
               />
-            </Stack>
           )}
           {historyEntries.length > 0 && filteredHistoryEntries.length === 0 && (
             <Typography level="body-sm" textColor="text.tertiary">

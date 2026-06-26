@@ -1161,6 +1161,7 @@ export function AuthAccessSection({
                   <Stack spacing={1.25}>
                     <Stack spacing={1}>
                       <DirectoryPrimaryToolbar
+                        pinStorageKey="settings.users"
                         searchValue={userSearch}
                         onSearchChange={setUserSearch}
                         searchPlaceholder="Search by name, email, or role"

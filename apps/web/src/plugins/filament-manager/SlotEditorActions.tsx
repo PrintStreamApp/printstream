@@ -120,7 +120,7 @@ export function SlotEditorActions(props: SlotContext) {
           <DialogTitle>Choose a spool</DialogTitle>
           <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
             <Stack spacing={1.5} sx={{ minWidth: 0 }}>
-              <SpoolDirectoryToolbar directory={directory} compactControls />
+              <SpoolDirectoryToolbar directory={directory} compactControls pinnable={false} />
               <SpoolResults
                 directory={directory}
                 hasAnySpools={spools.length > 0}

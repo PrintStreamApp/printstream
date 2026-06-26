@@ -54,6 +54,7 @@ printerViewsRouter.post('/', async (request, response) => {
         plateTypeFilter: serializePrinterViewPlateTypeFilter(parsed.data.plateTypeFilter),
         sortKey: parsed.data.sort.key,
         sortDirection: parsed.data.sort.direction,
+        group: parsed.data.group,
         cardContentSettings: serializePrinterCardContentSettings(parsed.data.cardContentSettings)
       }
     })
@@ -99,6 +100,7 @@ printerViewsRouter.patch('/:id', async (request, response) => {
         plateTypeFilter: serializePrinterViewPlateTypeFilter(parsed.data.plateTypeFilter),
         sortKey: parsed.data.sort.key,
         sortDirection: parsed.data.sort.direction,
+        group: parsed.data.group,
         cardContentSettings: serializePrinterCardContentSettings(parsed.data.cardContentSettings)
       }
     })

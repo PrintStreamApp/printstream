@@ -13,6 +13,8 @@
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import FormatListNumberedRoundedIcon from '@mui/icons-material/FormatListNumberedRounded'
+import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined'
+import PushPinRoundedIcon from '@mui/icons-material/PushPinRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import SortRoundedIcon from '@mui/icons-material/SortRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
@@ -41,6 +43,16 @@ import {
 } from './DirectoryControls'
 import { ViewModeToggle } from './ViewModeToggle'
 import { useMobileViewport } from './useMobileViewport'
+import { useLocalStorageState } from '../hooks/useLocalStorageState'
+
+/**
+ * Pin state persists per toolbar surface (like sort/grouping/page size), keyed by
+ * the caller's `pinStorageKey`. Without a key it falls back to one shared flag.
+ */
+const TOOLBAR_PINNED_KEY = 'directory.toolbar.pinned'
+function parsePinned(raw: string): boolean | null {
+  return raw === 'true' ? true : raw === 'false' ? false : null
+}
 
 type PageSizeOption<T extends string | number> = {
   value: T
@@ -219,7 +231,9 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   viewMode,
   onViewModeChange,
   disableIconModeOnMobile = false,
-  compactControls = false
+  compactControls = false,
+  pinnable = true,
+  pinStorageKey
 }: {
   searchValue: string
   onSearchChange: (value: string) => void
@@ -250,8 +264,23 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
    * one line instead of wrapping.
    */
   compactControls?: boolean
+  /**
+   * Show the pin control and allow the toolbar to stick while scrolling. Defaults
+   * to true for page toolbars; pass false inside a modal/dialog, where the
+   * page-oriented sticky offset would misplace it.
+   */
+  pinnable?: boolean
+  /** Namespaces the persisted pin state so each view remembers its own pin (e.g. "library", "jobs.history"). */
+  pinStorageKey?: string
 }) {
   const isMobile = useMobileViewport()
+  const [pinned, setPinned] = useLocalStorageState<boolean>(
+    pinStorageKey ? `${TOOLBAR_PINNED_KEY}.${pinStorageKey}` : TOOLBAR_PINNED_KEY,
+    false,
+    parsePinned,
+    String
+  )
+  const isPinned = pinnable && pinned
   const showViewModeToggle = viewMode != null && onViewModeChange != null && (!disableIconModeOnMobile || !isMobile)
   const sortConfig = {
     value: sortValue,
@@ -292,8 +321,25 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   const compact = combineControls
 
   return (
-    <Stack spacing={1}>
-      {/* Row 1: search. */}
+    <Stack
+      spacing={1}
+      sx={isPinned
+        ? {
+            // Stick below the page's sticky tab nav (desktop) / safe-area inset (mobile).
+            // No background colour — a solid/translucent fill reads as a dark band over the
+            // page's atmospheric gradient. Just a backdrop blur: the smooth gradient is
+            // virtually unchanged at rest (no visible band), while content scrolling
+            // underneath is frosted rather than overlapping the controls sharply. The
+            // controls are children, so they stay crisp on top of the blurred backdrop.
+            position: 'sticky',
+            top: { xs: 'calc(var(--app-top-inset, 0px) + 8px)', sm: 'calc(var(--app-top-inset, 0px) + 86px)' },
+            zIndex: 19,
+            backdropFilter: 'blur(14px) saturate(1.2)',
+            WebkitBackdropFilter: 'blur(14px) saturate(1.2)'
+          }
+        : undefined}
+    >
+      {/* Row 1: search, with the pin toggle pinned to its right. */}
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', minWidth: 0 }}>
         <Input
           size="sm"
@@ -305,6 +351,21 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
           slotProps={{ input: { 'aria-label': searchAriaLabel } }}
           sx={{ flex: '1 1 auto', minWidth: 0 }}
         />
+        {pinnable && (
+          <Tooltip title={pinned ? 'Unpin toolbar' : 'Pin toolbar so it stays while scrolling'}>
+            <IconButton
+              size="sm"
+              variant={pinned ? 'soft' : 'plain'}
+              color={pinned ? 'primary' : 'neutral'}
+              aria-label={pinned ? 'Unpin toolbar' : 'Pin toolbar'}
+              aria-pressed={pinned}
+              onClick={() => setPinned(!pinned)}
+              sx={{ flexShrink: 0 }}
+            >
+              {pinned ? <PushPinRoundedIcon /> : <PushPinOutlinedIcon />}
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
 
       {/* Row 2: sort, grouping, filters on the left; page size + view mode anchored

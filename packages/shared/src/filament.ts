@@ -157,6 +157,53 @@ export const filamentUsageListSchema = z.object({
 })
 export type FilamentUsageList = z.infer<typeof filamentUsageListSchema>
 
+/**
+ * One slice of a filament-usage breakdown: total grams used for a single
+ * filament type or brand. "Used" is the inventory delta (net weight minus
+ * remaining) summed across the workspace's spools, so it counts both
+ * printer-tracked (Bambu remain%) and per-job-tracked spools.
+ */
+export const filamentUsageSliceSchema = z.object({
+  label: z.string(),
+  gramsUsed: z.number().nonnegative()
+})
+export type FilamentUsageSlice = z.infer<typeof filamentUsageSliceSchema>
+
+/**
+ * Aggregate filament-usage stats for the workspace's spool inventory, surfaced
+ * on the stats page. `byType` and `byBrand` are each sorted by `gramsUsed`
+ * descending; the client decides how many slices to name in a legend.
+ */
+export const filamentUsageStatsSchema = z.object({
+  totalGramsUsed: z.number().nonnegative(),
+  byType: z.array(filamentUsageSliceSchema),
+  byBrand: z.array(filamentUsageSliceSchema)
+})
+export type FilamentUsageStats = z.infer<typeof filamentUsageStatsSchema>
+
+/**
+ * Build sorted filament-usage slices from raw per-group totals. "Used" is net
+ * weight minus remaining (clamped to >= 0); duplicate labels merge, zero-usage
+ * groups drop, and the result sorts by grams used descending. Pure so the
+ * per-tenant aggregation and the platform-wide one share one rule.
+ */
+export function buildFilamentUsageSlices(
+  rows: ReadonlyArray<{ label: string | null | undefined; netWeightGrams: number | null; remainingGrams: number | null }>,
+  fallbackLabel: string
+): FilamentUsageSlice[] {
+  const totals = new Map<string, number>()
+  for (const row of rows) {
+    const used = Math.max(0, (row.netWeightGrams ?? 0) - (row.remainingGrams ?? 0))
+    if (used <= 0) continue
+    const trimmed = typeof row.label === 'string' ? row.label.trim() : ''
+    const label = trimmed.length > 0 ? trimmed : fallbackLabel
+    totals.set(label, (totals.get(label) ?? 0) + used)
+  }
+  return [...totals]
+    .map(([label, gramsUsed]) => ({ label, gramsUsed }))
+    .sort((left, right) => right.gramsUsed - left.gramsUsed)
+}
+
 /** Per-tenant plugin settings surfaced to the settings panel. */
 export const filamentManagerSettingsSchema = z.object({
   autoAddBambuSpools: z.boolean()

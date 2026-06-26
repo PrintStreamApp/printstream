@@ -114,7 +114,7 @@ The platform-facing plugin APIs are split intentionally:
   - Run an **init** function on startup (returning an optional cleanup callback).
 - Plugins must not import each other.
 
-The named extension points core currently exposes are: `printer.card.actions`, `printer.card.headerChips`, `printer.card.menuItems`, `printer.card.dialogs` (printer cards); `library.create`, `library.fileActions`, `library.overlays` (library); `slicing.editor` (slice dialog); and the auth-provider slots `auth.signIn`, `auth.recentVerification`, `auth.userManagement.credentials`, `auth.userManagement.lifecycle`, `account.security`, `settings.authenticationProviders`, `settings.authenticationSetup`. Adding a new point means rendering `<PluginSlot name="..." context={...} />` (or `webPluginRegistry.slots(name)`) in the host and passing a free-form context, including callbacks, so the plugin can drive host state without core depending on the plugin.
+The named extension points core currently exposes are: `printer.card.actions`, `printer.card.headerChips`, `printer.card.menuItems`, `printer.card.dialogs` (printer cards); `library.create`, `library.fileActions`, `library.overlays` (library); `stats.cards` (workspace stats grid); `slicing.editor` (slice dialog); and the auth-provider slots `auth.signIn`, `auth.recentVerification`, `auth.userManagement.credentials`, `auth.userManagement.lifecycle`, `account.security`, `settings.authenticationProviders`, `settings.authenticationSetup`. Adding a new point means rendering `<PluginSlot name="..." context={...} />` (or `webPluginRegistry.slots(name)`) in the host and passing a free-form context, including callbacks, so the plugin can drive host state without core depending on the plugin.
 
 ### Built-in plugins
 

@@ -500,6 +500,7 @@ export function OrdersTableSection({
         <Typography level="body-sm" textColor="text.tertiary">{subtitle}</Typography>
       </Stack>
       <DirectoryPrimaryToolbar
+        pinStorageKey="orders"
         searchValue={searchValue}
         onSearchChange={onSearchChange}
         searchPlaceholder={searchPlaceholder}

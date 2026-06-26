@@ -1,10 +1,12 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
-import { Alert, Box, Button, ButtonGroup, CircularProgress, Divider, FormControl, IconButton, Menu, MenuItem, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, ButtonGroup, CircularProgress, Divider, FormControl, IconButton, Menu, MenuItem, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import AddIcon from '@mui/icons-material/Add'
+import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
+import SortRoundedIcon from '@mui/icons-material/SortRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PaginatedSection } from '../components/PaginationFooter'
 import { Printer3dRoundedIcon } from '../components/Printer3dRoundedIcon'
@@ -38,17 +40,29 @@ import { shouldShowNoConnectedPrintersEmptyState } from '../lib/printersEmptySta
 import { usePlateClearingSync } from '../lib/plateClearing'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildTenantWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspaceRoute'
-import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, filterPrintersForView, sortPrintersForView, parseStoredOptionalString, serializeStoredOptionalString, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings } from '../lib/printersViewHelpers'
+import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, matchesPrinterSearch, filterPrintersForView, sortPrintersForView, groupPrintersForOverview, parseStoredOptionalString, serializeStoredOptionalString, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings, parsePrinterGroupBy, parsePrinterOverviewPageSize, sameStringSet, PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS, type PrinterGroupBy } from '../lib/printersViewHelpers'
 import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, PRINTER_HISTORY_SORT_DIR_KEY, PRINTER_HISTORY_RESULT_FILTER_KEY, PRINTER_HISTORY_PAGE_SIZE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
 import { PrinterCard } from '../components/printers/PrinterCard'
 import { PrinterSortModal, PrinterViewsModal } from '../components/printers/PrinterViewModals'
 import { PrinterCardContentSettingsModal } from '../components/printers/PrinterCardContentSettingsModal'
 import { PrinterFormModal, LocalFilePrintGate, type PrinterFormValues } from '../components/printers/PrinterFormModal'
+import { PrinterOverviewToolbar } from '../components/printers/PrinterOverviewToolbar'
 import { LibraryPickerModal } from '../components/printers/LibraryPickerModal'
 
 type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
 type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[1]
+
+/** The toolbar-editable ("view content") fields that stage as an unsaved draft on a saved view. */
+type PrinterViewDraft = Partial<{
+  sort: PrinterViewSort
+  group: PrinterGroupBy
+  stateFilter: PrinterStateFilter
+  modelFilter: PrinterModel[]
+  nozzleDiameterFilter: string[]
+  plateTypeFilter: string[]
+  printerIds: string[]
+}>
 
 /**
  * Printers dashboard. Lists configured printers with their live status
@@ -135,7 +149,7 @@ export function PrintersView() {
   const [pagePrintMenuOpen, setPagePrintMenuOpen] = useState(false)
   const [sortDialogOpen, setSortDialogOpen] = useState(false)
   const [printerViewsDialogOpen, setPrinterViewsDialogOpen] = useState(false)
-  const [printerViewsDialogMode, setPrinterViewsDialogMode] = useState<'edit' | 'create'>('edit')
+  const [printerViewsDialogMode, setPrinterViewsDialogMode] = useState<'settings' | 'create'>('settings')
   const [singleViewSettingsOpen, setSingleViewSettingsOpen] = useState(false)
   const [detailHistorySearch, setDetailHistorySearch] = useState('')
   const deferredDetailHistorySearch = useDeferredValue(detailHistorySearch)
@@ -234,6 +248,31 @@ export function PrintersView() {
   )
   const [activePrinterViewId, setActivePrinterViewId] = useState<string | null>(() => defaultPrinterViewId)
 
+  // Overview directory-toolbar state. Search + page are ephemeral; page size is a
+  // local display preference. Sort, grouping, the attribute filters, and the printer
+  // selection are "view content": on a saved view they stage in `viewDraft` until the
+  // user saves; on the Overview they write the local defaults (see applyToolbarChange).
+  const [overviewSearch, setOverviewSearch] = useState('')
+  const deferredOverviewSearch = useDeferredValue(overviewSearch)
+  // Overview has no server row, so its grouping is a local pref; saved views store
+  // grouping server-side on the view itself.
+  const [overviewGroup, setOverviewGroup] = useLocalStorageState<PrinterGroupBy>(
+    `bambu.printers.overviewGroup.${workspacePreferenceScopeKey}`,
+    'none',
+    parsePrinterGroupBy,
+    String
+  )
+  const [overviewPageSize, setOverviewPageSize] = useLocalStorageState<number>(
+    `bambu.printers.overviewPageSize.${workspacePreferenceScopeKey}`,
+    PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS[1],
+    parsePrinterOverviewPageSize,
+    String
+  )
+  const [overviewPage, setOverviewPage] = useState(0)
+  // Pending, unsaved toolbar edits to the active saved view (null = in sync with the
+  // saved view). Overlays the view's stored fields until Save changes / Reset.
+  const [viewDraft, setViewDraft] = useState<PrinterViewDraft | null>(null)
+
   const grantedPermissions = useMemo(
     () => new Set(authBootstrapQuery.data?.permissions ?? []),
     [authBootstrapQuery.data?.permissions]
@@ -323,14 +362,30 @@ export function PrintersView() {
   )
   const hasStoredDefaultPrinterView = defaultPrinterViewId != null
     && printerViews.some((view) => view.id === defaultPrinterViewId)
+  // Layout + card content are owned by the View settings dialog (not the toolbar),
+  // so they read straight from the active view / local default.
   const effectiveCardsPerRow = activePrinterView?.cardsPerRow ?? cardsPerRow
-  const effectiveStateFilter = activePrinterView?.stateFilter ?? stateFilter
-  const effectiveModelFilter = activePrinterView?.modelFilter ?? modelFilter
-  const effectiveNozzleDiameterFilter = activePrinterView?.nozzleDiameterFilter ?? nozzleDiameterFilter
-  const effectivePlateTypeFilter = activePrinterView?.plateTypeFilter ?? plateTypeFilter
   const effectiveCardContentSettings = activePrinterView?.cardContentSettings ?? printerCardContentSettings
-  const effectivePrinterIds = activePrinterView?.printerIds ?? defaultViewPrinterIds
-  const effectiveSort = activePrinterView?.sort ?? defaultViewSort
+  // Toolbar-owned "view content": the draft overlays the saved view; Overview reads its
+  // local defaults. These drive the toolbar, filtering, sorting, and grouping below.
+  const effectiveSort = activePrinterView ? (viewDraft?.sort ?? activePrinterView.sort) : defaultViewSort
+  const effectiveGroup = activePrinterView ? (viewDraft?.group ?? activePrinterView.group) : overviewGroup
+  const effectiveStateFilter = activePrinterView ? (viewDraft?.stateFilter ?? activePrinterView.stateFilter) : stateFilter
+  const effectiveModelFilter = activePrinterView ? (viewDraft?.modelFilter ?? activePrinterView.modelFilter) : modelFilter
+  const effectiveNozzleDiameterFilter = activePrinterView ? (viewDraft?.nozzleDiameterFilter ?? activePrinterView.nozzleDiameterFilter) : nozzleDiameterFilter
+  const effectivePlateTypeFilter = activePrinterView ? (viewDraft?.plateTypeFilter ?? activePrinterView.plateTypeFilter) : plateTypeFilter
+  const effectivePrinterIds = activePrinterView ? (viewDraft?.printerIds ?? activePrinterView.printerIds) : defaultViewPrinterIds
+  // A saved view has unsaved toolbar edits when any "view content" field diverges from it.
+  const isViewDirty = activePrinterView != null && (
+    effectiveSort.key !== activePrinterView.sort.key
+    || effectiveSort.direction !== activePrinterView.sort.direction
+    || effectiveGroup !== activePrinterView.group
+    || effectiveStateFilter !== activePrinterView.stateFilter
+    || !sameStringSet(effectiveModelFilter, activePrinterView.modelFilter)
+    || !sameStringSet(effectiveNozzleDiameterFilter, activePrinterView.nozzleDiameterFilter)
+    || !sameStringSet(effectivePlateTypeFilter, activePrinterView.plateTypeFilter)
+    || !sameStringSet(effectivePrinterIds, activePrinterView.printerIds)
+  )
   const dispatchJobsByPrinter = useMemo(
     () => mapActiveDispatchJobsByPrinter(persistedJobs, dispatchQuery.data?.jobs ?? []),
     [dispatchQuery.data?.jobs, persistedJobs]
@@ -364,7 +419,8 @@ export function PrintersView() {
     () => {
       const attributeFiltered = (printerRows ?? []).filter((printer) => {
         const status = printerStatuses?.[printer.id]
-        return matchesPrinterStateFilter(status, effectiveStateFilter)
+        return matchesPrinterSearch(printer, deferredOverviewSearch)
+          && matchesPrinterStateFilter(status, effectiveStateFilter)
           && matchesPrinterViewAttributeFilters(printer, status, {
             modelFilter: effectiveModelFilter,
             nozzleDiameterFilter: effectiveNozzleDiameterFilter,
@@ -375,6 +431,7 @@ export function PrintersView() {
       return sortPrintersForView(viewFiltered, printerStatuses ?? {}, effectiveSort)
     },
     [
+      deferredOverviewSearch,
       effectiveModelFilter,
       effectiveNozzleDiameterFilter,
       effectivePlateTypeFilter,
@@ -385,6 +442,33 @@ export function PrintersView() {
       printerStatuses
     ]
   )
+  const bridgeNameById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const bridge of bridgesQuery.data?.bridges ?? []) map.set(bridge.id, bridge.name)
+    return map
+  }, [bridgesQuery.data?.bridges])
+  const resolveBridgeName = useCallback(
+    (bridgeId: string | null) => (bridgeId ? bridgeNameById.get(bridgeId) ?? 'Unknown bridge' : 'No bridge'),
+    [bridgeNameById]
+  )
+  const overviewPageCount = Math.max(1, Math.ceil(filteredPrinters.length / overviewPageSize))
+  const safeOverviewPage = Math.min(overviewPage, overviewPageCount - 1)
+  const pagedPrinters = useMemo(() => {
+    const start = safeOverviewPage * overviewPageSize
+    return filteredPrinters.slice(start, start + overviewPageSize)
+  }, [filteredPrinters, overviewPageSize, safeOverviewPage])
+  const printerGroups = useMemo(
+    () => groupPrintersForOverview(pagedPrinters, printerStatuses ?? {}, effectiveGroup, resolveBridgeName),
+    [effectiveGroup, pagedPrinters, printerStatuses, resolveBridgeName]
+  )
+  useEffect(() => {
+    setOverviewPage((current) => Math.min(current, Math.max(0, Math.ceil(filteredPrinters.length / overviewPageSize) - 1)))
+  }, [filteredPrinters.length, overviewPageSize])
+  useEffect(() => {
+    // Switching views drops any unsaved toolbar draft from the previous view.
+    setOverviewPage(0)
+    setViewDraft(null)
+  }, [activePrinterViewId])
   const selectedPrinter = useMemo(
     () => (routePrinterId ? printers.find((printer) => printer.id === routePrinterId) ?? null : null),
     [printers, routePrinterId]
@@ -564,6 +648,7 @@ export function PrintersView() {
         views: [...(current?.views ?? []), view]
       }))
       void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
+      setViewDraft(null)
       setActivePrinterViewId(view.id)
       setPrinterViewsDialogOpen(false)
     }
@@ -594,6 +679,86 @@ export function PrintersView() {
       setPrinterViewsDialogOpen(false)
     }
   })
+  // Quiet (no toast / no dialog) PATCH used when the inline toolbar edits the
+  // active saved view in place. Reconciles the cache from the server response.
+  const quietUpdatePrinterView = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: PrinterViewInput }) =>
+      apiFetch<{ view: PrinterView }>(`/api/printer-views/${id}`, { method: 'PATCH', body: input }),
+    onSuccess: ({ view }) => {
+      queryClient.setQueryData<{ views: PrinterView[] }>(printerViewsQueryKey, (current) => ({
+        views: (current?.views ?? []).map((entry) => (entry.id === view.id ? view : entry))
+      }))
+    },
+    onError: (error) => {
+      toast.error(extractErrorMessage(error))
+      void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
+    }
+  })
+
+  // Stage a toolbar "view content" change: on a saved view it overlays the draft
+  // (committed later via Save changes); on the Overview it writes the local defaults.
+  const applyToolbarChange = useCallback((partial: PrinterViewDraft) => {
+    setOverviewPage(0)
+    if (activePrinterView) {
+      setViewDraft((current) => ({ ...current, ...partial }))
+      return
+    }
+    if (partial.sort !== undefined) setDefaultViewSort(partial.sort)
+    if (partial.group !== undefined) setOverviewGroup(partial.group)
+    if (partial.stateFilter !== undefined) setStateFilter(partial.stateFilter)
+    if (partial.modelFilter !== undefined) setModelFilter(partial.modelFilter)
+    if (partial.nozzleDiameterFilter !== undefined) setNozzleDiameterFilter(partial.nozzleDiameterFilter)
+    if (partial.plateTypeFilter !== undefined) setPlateTypeFilter(partial.plateTypeFilter)
+    if (partial.printerIds !== undefined) setDefaultViewPrinterIds(partial.printerIds)
+  }, [
+    activePrinterView,
+    setDefaultViewPrinterIds,
+    setDefaultViewSort,
+    setModelFilter,
+    setNozzleDiameterFilter,
+    setOverviewGroup,
+    setPlateTypeFilter,
+    setStateFilter
+  ])
+
+  const resetActiveView = useCallback(() => setViewDraft(null), [])
+
+  // Commit the staged draft onto the saved view via PATCH (with an optimistic cache
+  // update so the UI settles immediately), then clear the draft.
+  const saveActiveView = useCallback(() => {
+    if (!activePrinterView) return
+    const input: PrinterViewInput = {
+      name: activePrinterView.name,
+      cardsPerRow: activePrinterView.cardsPerRow,
+      cardContentSettings: activePrinterView.cardContentSettings,
+      sort: effectiveSort,
+      group: effectiveGroup,
+      stateFilter: effectiveStateFilter,
+      modelFilter: effectiveModelFilter,
+      nozzleDiameterFilter: effectiveNozzleDiameterFilter,
+      plateTypeFilter: effectivePlateTypeFilter,
+      printerIds: effectivePrinterIds
+    }
+    queryClient.setQueryData<{ views: PrinterView[] }>(printerViewsQueryKey, (current) => ({
+      views: (current?.views ?? []).map((entry) => (entry.id === activePrinterView.id ? { ...entry, ...input } : entry))
+    }))
+    quietUpdatePrinterView.mutate({ id: activePrinterView.id, input })
+    setViewDraft(null)
+    toast.success('View updated')
+  }, [
+    activePrinterView,
+    effectiveGroup,
+    effectiveModelFilter,
+    effectiveNozzleDiameterFilter,
+    effectivePlateTypeFilter,
+    effectivePrinterIds,
+    effectiveSort,
+    effectiveStateFilter,
+    printerViewsQueryKey,
+    queryClient,
+    quietUpdatePrinterView
+  ])
+
   const printerViewsMutationError = createPrinterView.error
     ? (createPrinterView.error as Error).message
     : updatePrinterView.error
@@ -642,13 +807,13 @@ export function PrintersView() {
               onClick={() => setSingleViewSettingsOpen(true)}
               sx={{ flex: '0 0 auto' }}
             >
-              Edit view
+              View settings
             </Button>
           )}
         </Stack>
       ) : showNoConnectedBridgesPlaceholder ? (
         <Stack spacing={1}>
-          <Typography level="h3">Printers</Typography>
+          <Typography level="h3" startDecorator={<Printer3dRoundedIcon />}>Printers</Typography>
         </Stack>
       ) : (
         <Stack spacing={1}>
@@ -659,7 +824,7 @@ export function PrintersView() {
             justifyContent="space-between"
             sx={{ flexWrap: 'wrap' }}
           >
-            <Typography level="h3">Printers</Typography>
+            <Typography level="h3" startDecorator={<Printer3dRoundedIcon />}>Printers</Typography>
             <Stack
               direction="row"
               spacing={1}
@@ -675,6 +840,7 @@ export function PrintersView() {
                     setPrinterViewsDialogOpen(true)
                     return
                   }
+                  setViewDraft(null)
                   setActivePrinterViewId(value === OVERVIEW_VIEW_OPTION_VALUE ? null : value ?? null)
                 }}
                 sx={{ minWidth: 168, flex: '0 0 auto' }}
@@ -702,12 +868,12 @@ export function PrintersView() {
                 color="neutral"
                 startDecorator={<TuneRoundedIcon />}
                 onClick={() => {
-                  setPrinterViewsDialogMode('edit')
+                  setPrinterViewsDialogMode('settings')
                   setPrinterViewsDialogOpen(true)
                 }}
                 sx={{ flex: '0 0 auto' }}
               >
-                Edit view
+                View settings
               </Button>
               {canManagePrinters && <Divider orientation="vertical" sx={{ alignSelf: 'stretch', mx: 0.25 }} />}
               {canManagePrinters && (
@@ -809,6 +975,7 @@ export function PrintersView() {
                     setPrinterViewsDialogOpen(true)
                     return
                   }
+                  setViewDraft(null)
                   setActivePrinterViewId(value === OVERVIEW_VIEW_OPTION_VALUE ? null : value ?? null)
                 }}
                 sx={{ flex: '1 1 0', minWidth: 0 }}
@@ -836,12 +1003,12 @@ export function PrintersView() {
                 color="neutral"
                 startDecorator={<TuneRoundedIcon />}
                 onClick={() => {
-                  setPrinterViewsDialogMode('edit')
+                  setPrinterViewsDialogMode('settings')
                   setPrinterViewsDialogOpen(true)
                 }}
                 sx={{ flex: '0 0 auto', minWidth: 132, px: 1.5 }}
               >
-                Edit view
+                View settings
               </Button>
             </Stack>
           </Stack>
@@ -957,8 +1124,8 @@ export function PrintersView() {
               )}
 
               {selectedPrinterJobs.length > 0 && (
-                <Stack spacing={1.25}>
-                  <DirectoryPrimaryToolbar
+                <DirectoryPrimaryToolbar
+                    pinStorageKey="printers.history"
                     searchValue={detailHistorySearch}
                     onSearchChange={(value) => {
                       setDetailHistoryPage(0)
@@ -1015,7 +1182,6 @@ export function PrintersView() {
                     onViewModeChange={setDetailHistoryViewMode}
                     disableIconModeOnMobile
                   />
-                </Stack>
               )}
 
               {selectedPrinterJobs.length > 0 && filteredSelectedPrinterJobs.length === 0 && (
@@ -1093,94 +1259,172 @@ export function PrintersView() {
           onOpenBridgesSettings={() => navigate(workspacePath('/settings/bridges'))}
         />
       ) : (
-        <Box
-          sx={{
-            display: 'grid',
-            gap: { xs: 1.5, sm: 2.5 },
-            gridTemplateColumns: {
-              xs: '1fr',
-              sm: `repeat(${effectiveCardsPerRow}, minmax(0, 1fr))`
-            }
-          }}
-        >
+        <Stack spacing={1.5}>
+          {printers.length > 0 && (
+            <PrinterOverviewToolbar
+              printers={printers}
+              search={overviewSearch}
+              onSearchChange={(value) => { setOverviewPage(0); setOverviewSearch(value) }}
+              group={effectiveGroup}
+              onGroupChange={(value) => applyToolbarChange({ group: value })}
+              pageSize={overviewPageSize}
+              onPageSizeChange={(value) => { setOverviewPage(0); setOverviewPageSize(value) }}
+              sort={effectiveSort}
+              onSortFieldChange={(key) => applyToolbarChange({ sort: { key, direction: effectiveSort.direction } })}
+              onSortDirectionChange={(direction) => applyToolbarChange({ sort: { key: effectiveSort.key, direction } })}
+              stateFilter={effectiveStateFilter}
+              onStateFilterChange={(value) => applyToolbarChange({ stateFilter: value })}
+              modelFilter={effectiveModelFilter}
+              onModelFilterChange={(value) => applyToolbarChange({ modelFilter: value })}
+              nozzleDiameterFilter={effectiveNozzleDiameterFilter}
+              onNozzleDiameterFilterChange={(value) => applyToolbarChange({ nozzleDiameterFilter: value })}
+              plateTypeFilter={effectivePlateTypeFilter}
+              onPlateTypeFilterChange={(value) => applyToolbarChange({ plateTypeFilter: value })}
+              printerIds={effectivePrinterIds}
+              onPrinterIdsChange={(value) => applyToolbarChange({ printerIds: value })}
+              onClearFilters={() => {
+                setOverviewSearch('')
+                applyToolbarChange({ stateFilter: 'all', modelFilter: [], nozzleDiameterFilter: [], plateTypeFilter: [], printerIds: [] })
+              }}
+            />
+          )}
+
+          {activePrinterView && isViewDirty && (
+            <Sheet
+              variant="soft"
+              color="warning"
+              sx={{ borderRadius: 'md', px: 1.5, py: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
+            >
+              <Typography level="body-sm">
+                Unsaved changes to <strong>{activePrinterView.name}</strong>
+              </Typography>
+              <Stack direction="row" spacing={1} sx={{ ml: 'auto' }}>
+                <Button size="sm" variant="plain" color="neutral" onClick={resetActiveView}>Reset</Button>
+                <Button size="sm" variant="solid" color="primary" startDecorator={<SaveRoundedIcon />} onClick={saveActiveView}>
+                  Save changes
+                </Button>
+              </Stack>
+            </Sheet>
+          )}
+
+          {printers.length > 1 && effectiveSort.key === 'manual' && (
+            <Box>
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                startDecorator={<SortRoundedIcon />}
+                onClick={() => setSortDialogOpen(true)}
+              >
+                Edit manual order
+              </Button>
+            </Box>
+          )}
+
           {shouldShowNoConnectedPrintersEmptyState({
             showNoConnectedBridgesPlaceholder,
             printersCount: printers.length,
             loading: printersQuery.isLoading,
             hasError: Boolean(printersQuery.error)
           }) && (
-            <Box sx={{ gridColumn: '1 / -1' }}>
-              <EmptyState
-                icon={<Printer3dRoundedIcon />}
-                title="No printers connected"
-                description="Add your first Bambu printer to start monitoring status, browsing storage, and sending prints from the library."
-                action={canManagePrinters ? (
-                  <Button size="sm" startDecorator={<AddIcon />} onClick={() => setOpen(true)}>
-                    Add printer
-                  </Button>
-                ) : undefined}
-              />
-            </Box>
-          )}
-          {printers.length > 0 && filteredPrinters.length === 0 && !printersQuery.isLoading && !printersQuery.error && (
-            <Box sx={{ gridColumn: '1 / -1' }}>
-              <EmptyState
-                icon={<Printer3dRoundedIcon />}
-                title="No printers match this filter"
-                description={
-                  effectiveModelFilter.length === 0
-                    && effectiveNozzleDiameterFilter.length === 0
-                    && effectivePlateTypeFilter.length === 0
-                    && effectiveStateFilter !== 'all'
-                    ? `No printers are currently in the ${printerStateFilterLabel(effectiveStateFilter).toLowerCase()} state.`
-                    : 'No printers match the selected filters.'
-                }
-                action={
-                  <Button
-                    size="sm"
-                    variant="soft"
-                    onClick={() => {
-                      if (activePrinterViewId) {
-                        setActivePrinterViewId(null)
-                        return
-                      }
-                      setStateFilter('all')
-                      setModelFilter([])
-                      setNozzleDiameterFilter([])
-                      setPlateTypeFilter([])
-                    }}
-                  >
-                    Clear filter
-                  </Button>
-                }
-              />
-            </Box>
-          )}
-          {filteredPrinters.map((printer) => (
-            <PrinterCard
-              key={printer.id}
-              printer={printer}
-              status={status?.[printer.id]}
-              dispatchLink={dispatchJobsByPrinter.get(printer.id)}
-              activeJob={latestActiveJobsByPrinter.get(printer.id)}
-              latestJob={latestFinishedJobsByPrinter.get(printer.id)}
-              contentSettings={effectiveCardContentSettings}
-              compact={effectiveCardsPerRow >= 4}
-              cardsPerRow={effectiveCardsPerRow}
-              demoMode={demoMode}
-              canControlPrinter={canControlPrinters}
-              canManagePrinter={canManagePrinters}
-              canViewPrinterStorage={canViewPrinterStorage}
-              canDownloadPrinterStorage={canDownloadPrinterStorage}
-              canDispatchPrints={canDispatchPrints}
-              canViewCamera={canViewCamera}
-              onEdit={handleCardEdit}
-              onPrint={handleCardPrint}
-              onPrintLocal={handleCardPrintLocal}
-              onOpenDetails={handleCardOpenDetails}
+            <EmptyState
+              icon={<Printer3dRoundedIcon />}
+              title="No printers connected"
+              description="Add your first Bambu printer to start monitoring status, browsing storage, and sending prints from the library."
+              action={canManagePrinters ? (
+                <Button size="sm" startDecorator={<AddIcon />} onClick={() => setOpen(true)}>
+                  Add printer
+                </Button>
+              ) : undefined}
             />
-          ))}
-        </Box>
+          )}
+
+          {printers.length > 0 && filteredPrinters.length === 0 && !printersQuery.isLoading && !printersQuery.error && (
+            <EmptyState
+              icon={<Printer3dRoundedIcon />}
+              title="No printers match this filter"
+              description={
+                effectiveModelFilter.length === 0
+                  && effectiveNozzleDiameterFilter.length === 0
+                  && effectivePlateTypeFilter.length === 0
+                  && deferredOverviewSearch.trim() === ''
+                  && effectiveStateFilter !== 'all'
+                  ? `No printers are currently in the ${printerStateFilterLabel(effectiveStateFilter).toLowerCase()} state.`
+                  : 'No printers match the current search or filters.'
+              }
+              action={
+                <Button
+                  size="sm"
+                  variant="soft"
+                  onClick={() => {
+                    setOverviewSearch('')
+                    applyToolbarChange({ stateFilter: 'all', modelFilter: [], nozzleDiameterFilter: [], plateTypeFilter: [], printerIds: [] })
+                  }}
+                >
+                  Clear filters
+                </Button>
+              }
+            />
+          )}
+
+          {filteredPrinters.length > 0 && (
+            <PaginatedSection
+              showingLabel={`Showing ${safeOverviewPage * overviewPageSize + 1}-${Math.min(filteredPrinters.length, (safeOverviewPage + 1) * overviewPageSize)} of ${filteredPrinters.length}`}
+              previousDisabled={safeOverviewPage === 0}
+              nextDisabled={safeOverviewPage >= overviewPageCount - 1}
+              onPrevious={() => setOverviewPage((current) => Math.max(0, current - 1))}
+              onNext={() => setOverviewPage((current) => Math.min(overviewPageCount - 1, current + 1))}
+              spacing={1.5}
+            >
+              <Stack spacing={2.5}>
+                {printerGroups.map((groupEntry) => (
+                  <Stack key={groupEntry.key} spacing={groupEntry.label ? 1 : 0}>
+                    {groupEntry.label && (
+                      <Typography level="title-sm" textColor="text.tertiary">
+                        {groupEntry.label} · {groupEntry.printers.length}
+                      </Typography>
+                    )}
+                    <Box
+                      sx={{
+                        display: 'grid',
+                        gap: { xs: 1.5, sm: 2.5 },
+                        gridTemplateColumns: {
+                          xs: '1fr',
+                          sm: `repeat(${effectiveCardsPerRow}, minmax(0, 1fr))`
+                        }
+                      }}
+                    >
+                      {groupEntry.printers.map((printer) => (
+                        <PrinterCard
+                          key={printer.id}
+                          printer={printer}
+                          status={status?.[printer.id]}
+                          dispatchLink={dispatchJobsByPrinter.get(printer.id)}
+                          activeJob={latestActiveJobsByPrinter.get(printer.id)}
+                          latestJob={latestFinishedJobsByPrinter.get(printer.id)}
+                          contentSettings={effectiveCardContentSettings}
+                          compact={effectiveCardsPerRow >= 4}
+                          cardsPerRow={effectiveCardsPerRow}
+                          demoMode={demoMode}
+                          canControlPrinter={canControlPrinters}
+                          canManagePrinter={canManagePrinters}
+                          canViewPrinterStorage={canViewPrinterStorage}
+                          canDownloadPrinterStorage={canDownloadPrinterStorage}
+                          canDispatchPrints={canDispatchPrints}
+                          canViewCamera={canViewCamera}
+                          onEdit={handleCardEdit}
+                          onPrint={handleCardPrint}
+                          onPrintLocal={handleCardPrintLocal}
+                          onOpenDetails={handleCardOpenDetails}
+                        />
+                      ))}
+                    </Box>
+                  </Stack>
+                ))}
+              </Stack>
+            </PaginatedSection>
+          )}
+        </Stack>
       ))}
 
       {open && (
@@ -1259,21 +1503,38 @@ export function PrintersView() {
       {printerViewsDialogOpen && (
         <PrinterViewsModal
           mode={printerViewsDialogMode}
-          printers={printers}
           activeView={activePrinterView}
           currentViewLabel={printerViewsDialogMode === 'create' ? 'New view' : currentViewLabel}
           isCurrentDefaultView={printerViewsDialogMode === 'create' ? false : isActiveViewDefault}
-          currentState={{
-            name: printerViewsDialogMode === 'create' ? '' : activePrinterView?.name ?? '',
-            printerIds: effectivePrinterIds,
-            cardsPerRow: effectiveCardsPerRow,
-            stateFilter: effectiveStateFilter,
-            modelFilter: effectiveModelFilter,
-            nozzleDiameterFilter: effectiveNozzleDiameterFilter,
-            plateTypeFilter: effectivePlateTypeFilter,
-            sort: effectiveSort,
-            cardContentSettings: effectiveCardContentSettings
-          }}
+          currentState={
+            // View settings edits the saved view's committed content (independent of any
+            // pending toolbar draft); New view / Overview capture the current display.
+            printerViewsDialogMode === 'settings' && activePrinterView
+              ? {
+                  name: activePrinterView.name,
+                  printerIds: activePrinterView.printerIds,
+                  cardsPerRow: activePrinterView.cardsPerRow,
+                  stateFilter: activePrinterView.stateFilter,
+                  modelFilter: activePrinterView.modelFilter,
+                  nozzleDiameterFilter: activePrinterView.nozzleDiameterFilter,
+                  plateTypeFilter: activePrinterView.plateTypeFilter,
+                  sort: activePrinterView.sort,
+                  group: activePrinterView.group,
+                  cardContentSettings: activePrinterView.cardContentSettings
+                }
+              : {
+                  name: '',
+                  printerIds: effectivePrinterIds,
+                  cardsPerRow: effectiveCardsPerRow,
+                  stateFilter: effectiveStateFilter,
+                  modelFilter: effectiveModelFilter,
+                  nozzleDiameterFilter: effectiveNozzleDiameterFilter,
+                  plateTypeFilter: effectivePlateTypeFilter,
+                  sort: effectiveSort,
+                  group: effectiveGroup,
+                  cardContentSettings: effectiveCardContentSettings
+                }
+          }
           submitting={printerViewsSubmitting}
           error={printerViewsMutationError}
           onClose={() => setPrinterViewsDialogOpen(false)}
@@ -1298,10 +1559,6 @@ export function PrintersView() {
           onSetAsDefault={() => {
             setDefaultPrinterViewId(activePrinterView?.id ?? null)
             toast.success(`${activePrinterView?.name ?? OVERVIEW_VIEW_LABEL} set as default`)
-          }}
-          onEditManualOrder={() => {
-            setPrinterViewsDialogOpen(false)
-            setSortDialogOpen(true)
           }}
         />
       )}

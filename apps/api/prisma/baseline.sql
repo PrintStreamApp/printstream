@@ -321,6 +321,7 @@ CREATE TABLE "PrinterView" (
     "plateTypeFilter" TEXT NOT NULL DEFAULT '[]',
     "sortKey" TEXT NOT NULL DEFAULT 'name',
     "sortDirection" TEXT NOT NULL DEFAULT 'asc',
+    "group" TEXT NOT NULL DEFAULT 'none',
     "cardContentSettings" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,

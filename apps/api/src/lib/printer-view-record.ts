@@ -7,8 +7,10 @@
  */
 import {
   defaultPrinterCardContentSettings,
+  defaultPrinterViewGroup,
   defaultPrinterViewSort,
   printerCardContentSettingsSchema,
+  printerViewGroupSchema,
   printerViewModelFilterSchema,
   printerViewNozzleDiameterFilterSchema,
   printerViewPlateTypeFilterSchema,
@@ -16,6 +18,7 @@ import {
   printerViewStateFilterSchema,
   type PrinterCardContentSettings,
   type PrinterView,
+  type PrinterViewGroup,
   type PrinterViewInput,
   type PrinterViewModelFilter,
   type PrinterViewNozzleDiameterFilter,
@@ -35,6 +38,7 @@ interface PrinterViewRowLike {
   plateTypeFilter: string
   sortKey: string
   sortDirection: string
+  group: string
   cardContentSettings: string
   createdAt: Date
   updatedAt: Date
@@ -92,6 +96,11 @@ export function parseStoredPrinterViewStateFilter(value: string | null | undefin
   return result.success ? result.data : 'all'
 }
 
+export function parseStoredPrinterViewGroup(value: string | null | undefined): PrinterViewGroup {
+  const result = printerViewGroupSchema.safeParse(value ?? defaultPrinterViewGroup)
+  return result.success ? result.data : defaultPrinterViewGroup
+}
+
 export function parseStoredPrinterViewModelFilter(value: string | null | undefined): PrinterViewModelFilter {
   return parseStoredFilterArray(value, printerViewModelFilterSchema)
 }
@@ -139,6 +148,7 @@ export function toPrinterViewDto(row: PrinterViewRowLike): PrinterView {
     nozzleDiameterFilter: parseStoredPrinterViewNozzleDiameterFilter(row.nozzleDiameterFilter),
     plateTypeFilter: parseStoredPrinterViewPlateTypeFilter(row.plateTypeFilter),
     sort: parseStoredPrinterViewSort(row.sortKey, row.sortDirection),
+    group: parseStoredPrinterViewGroup(row.group),
     cardContentSettings: parseStoredPrinterCardContentSettings(row.cardContentSettings),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString()

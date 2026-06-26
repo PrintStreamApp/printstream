@@ -18,16 +18,19 @@ export function SpoolDirectoryToolbar({
   directory,
   searchPlaceholder = 'Search by brand, colour, material…',
   searchAriaLabel = 'Search spools',
-  compactControls = false
+  compactControls = false,
+  pinnable = true
 }: {
   directory: SpoolDirectory
   searchPlaceholder?: string
   searchAriaLabel?: string
   compactControls?: boolean
+  pinnable?: boolean
 }) {
   const { filters, setFilters, facets } = directory
   return (
     <DirectoryPrimaryToolbar
+      pinStorageKey="filament"
       searchValue={directory.search}
       onSearchChange={directory.setSearch}
       searchPlaceholder={searchPlaceholder}
@@ -77,6 +80,7 @@ export function SpoolDirectoryToolbar({
         ? {}
         : { viewMode: directory.viewMode, onViewModeChange: directory.setViewMode })}
       compactControls={compactControls}
+      pinnable={pinnable}
     />
   )
 }

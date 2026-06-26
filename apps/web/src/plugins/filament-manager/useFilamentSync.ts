@@ -7,7 +7,7 @@ import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { wsEventSchema } from '@printstream/shared'
 import { wsClient } from '../../lib/wsClient'
-import { SPOOLS_QUERY_KEY } from './api'
+import { FILAMENT_STATS_QUERY_KEY, SPOOLS_QUERY_KEY } from './api'
 
 export function useFilamentSync(): void {
   const queryClient = useQueryClient()
@@ -20,6 +20,7 @@ export function useFilamentSync(): void {
       const event = parsed.data
       if (event.type !== 'plugin.event' || event.pluginName !== 'filament-manager') return
       void queryClient.invalidateQueries({ queryKey: SPOOLS_QUERY_KEY })
+      void queryClient.invalidateQueries({ queryKey: FILAMENT_STATS_QUERY_KEY })
     })
     return () => {
       off()

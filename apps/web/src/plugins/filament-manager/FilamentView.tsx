@@ -105,10 +105,7 @@ export function FilamentView() {
     <Stack spacing={1.5}>
       <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between" sx={{ flexWrap: 'wrap' }}>
         <Box sx={{ minWidth: 0 }}>
-          <Typography level="h2" startDecorator={<FilamentSpoolIcon />}>Filament</Typography>
-          <Typography level="body-sm" textColor="text.tertiary">
-            Track your spools — what's in stock, how much is left, and which printers they're loaded into.
-          </Typography>
+          <Typography level="h3" startDecorator={<FilamentSpoolIcon />}>Filament</Typography>
           {summary.count > 0 && (
             <Stack direction="row" spacing={0.75} sx={{ mt: 0.75, flexWrap: 'wrap' }}>
               <Chip size="sm" variant="soft">{summary.count} spools</Chip>

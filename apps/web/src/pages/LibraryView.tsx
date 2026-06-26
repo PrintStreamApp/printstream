@@ -12,6 +12,7 @@ import {
   Menu, MenuButton, MenuItem, Sheet, Stack, Tooltip, Typography
 } from '@mui/joy'
 import CreateNewFolderRoundedIcon from '@mui/icons-material/CreateNewFolderRounded'
+import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import DriveFolderUploadRoundedIcon from '@mui/icons-material/DriveFolderUploadRounded'
 import FileUploadRoundedIcon from '@mui/icons-material/FileUploadRounded'
@@ -1032,7 +1033,7 @@ export function LibraryView() {
       )}
       <Stack spacing={1}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ flexWrap: 'wrap', gap: 1 }}>
-          <Typography level="h3">Library</Typography>
+          <Typography level="h3" startDecorator={<FolderCopyRoundedIcon />}>Library</Typography>
           {!showNoConnectedBridgesPlaceholder && showPrimaryLibraryActions && (
             <Stack
               direction="row"
@@ -1208,6 +1209,7 @@ export function LibraryView() {
       </Stack>
 
       <DirectoryPrimaryToolbar
+        pinStorageKey="library"
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder="Search files and folders"

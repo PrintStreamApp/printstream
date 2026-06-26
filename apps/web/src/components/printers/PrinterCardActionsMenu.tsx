@@ -66,7 +66,7 @@ export function PrinterCardActionsMenu({
         {canManagePrinter && <MenuItem onClick={() => onEdit(printer)}>Edit</MenuItem>}
         {canControlPrinter && <MenuItem disabled={!isOnline} onClick={onRefresh}>Refresh</MenuItem>}
         {canManagePrinter && <MenuItem disabled={!isOnline} onClick={onOpenPrinterSettings}>Printer settings…</MenuItem>}
-        <PluginSlot name="printer.card.menuItems" context={{ printerId: printer.id, printerName: printer.name }} />
+        <PluginSlot name="printer.card.menuItems" context={{ printerId: printer.id, printerName: printer.name, isOnline }} />
         {canControlPrinter && <MenuItem disabled={!isOnline} onClick={onOpenControls}>Controls…</MenuItem>}
         {canOpenAmsSettings && <MenuItem disabled={!isOnline} onClick={onOpenAmsSettings}>AMS settings…</MenuItem>}
         {canControlPrinter && canShowCalibrate && (

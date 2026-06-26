@@ -63,7 +63,7 @@ export function GetStartedView({
   return (
     <Stack spacing={2}>
       <Stack spacing={0.75}>
-        <Typography level="h3">Get started</Typography>
+        <Typography level="h3" startDecorator={<ChecklistRoundedIcon />}>Get started</Typography>
         <Typography level="body-sm" textColor="text.tertiary">
           Connect this workspace to your printers and send your first print.
         </Typography>

@@ -9,6 +9,7 @@ import {
   type FilamentSpool,
   type FilamentSpoolList,
   type FilamentUsageList,
+  type FilamentUsageStats,
   type SpoolCreateInput,
   type SpoolUpdateInput,
   type SpoolAdjustInput,
@@ -17,10 +18,24 @@ import {
 import { apiFetch } from '../../lib/apiClient'
 
 export const SPOOLS_QUERY_KEY = ['filament-manager', 'spools'] as const
+export const FILAMENT_STATS_QUERY_KEY = ['filament-manager', 'stats'] as const
 export const FILAMENT_SETTINGS_QUERY_KEY = ['plugin-settings', 'filament-manager'] as const
 export const spoolUsageQueryKey = (id: string) => ['filament-manager', 'usage', id] as const
 
 const BASE = '/api/plugins/filament-manager'
+
+/**
+ * Aggregate filament-usage stats for the stats page. Gated by `enabled` so the
+ * card never fires the `LIBRARY_VIEW`-protected endpoint for users who lack it.
+ */
+export function useFilamentStatsQuery(enabled: boolean) {
+  return useQuery<FilamentUsageStats>({
+    queryKey: FILAMENT_STATS_QUERY_KEY,
+    queryFn: ({ signal }) => apiFetch<FilamentUsageStats>(`${BASE}/stats`, { signal }),
+    enabled,
+    staleTime: 30_000
+  })
+}
 
 export function useSpoolsQuery() {
   return useQuery<FilamentSpool[]>({

@@ -540,13 +540,16 @@ function FirmwareUpdateChip({ printerId, printerName }: { printerId: string; pri
   )
 }
 
-function FirmwareUpdateMenuItem({ printerId }: { printerId: string }) {
+function FirmwareUpdateMenuItem({ printerId, isOnline }: { printerId: string; isOnline: boolean }) {
   const { canViewPrinters, loading } = useFirmwarePermissions()
 
   if (loading || !canViewPrinters) return null
 
+  // Firmware can only be uploaded to a reachable printer, so gate the action on
+  // online state the same way the core printer-card menu items do (visible but
+  // disabled when offline).
   return (
-    <MenuItem onClick={() => requestFirmwareDialogOpen(printerId)}>
+    <MenuItem disabled={!isOnline} onClick={() => requestFirmwareDialogOpen(printerId)}>
       Firmware updates…
     </MenuItem>
   )
@@ -585,9 +588,9 @@ export const firmwareUpdatesPlugin: WebPlugin = {
     },
     {
       name: 'printer.card.menuItems',
-      component: ({ printerId, printerName }) => {
+      component: ({ printerId, printerName, isOnline }) => {
         if (typeof printerId !== 'string' || typeof printerName !== 'string') return null
-        return <FirmwareUpdateMenuItem printerId={printerId} />
+        return <FirmwareUpdateMenuItem printerId={printerId} isOnline={isOnline === true} />
       }
     },
     {

@@ -47,6 +47,17 @@ export const printerViewSortSchema = z.object({
 })
 export type PrinterViewSort = z.infer<typeof printerViewSortSchema>
 
+/** How the dashboard partitions printers into labelled sections ('none' = a flat grid). */
+export const printerViewGroupSchema = z.enum([
+  'none',
+  'status',
+  'model',
+  'bridge',
+  'nozzle'
+])
+export type PrinterViewGroup = z.infer<typeof printerViewGroupSchema>
+export const defaultPrinterViewGroup: PrinterViewGroup = 'none'
+
 export const printerCardContentSettingsSchema = z.object({
   nozzleTemperatures: z.boolean(),
   bedTemperature: z.boolean(),
@@ -94,6 +105,7 @@ export const printerViewInputSchema = z.object({
   nozzleDiameterFilter: printerViewNozzleDiameterFilterSchema.default([]),
   plateTypeFilter: printerViewPlateTypeFilterSchema.default([]),
   sort: printerViewSortSchema.default(defaultPrinterViewSort),
+  group: printerViewGroupSchema.default(defaultPrinterViewGroup),
   cardContentSettings: printerCardContentSettingsSchema.default(defaultPrinterCardContentSettings)
 })
 export type PrinterViewInput = z.infer<typeof printerViewInputSchema>

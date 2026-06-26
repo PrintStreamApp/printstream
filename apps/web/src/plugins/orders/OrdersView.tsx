@@ -5,6 +5,7 @@ import {
   Stack,
   Typography
 } from '@mui/joy'
+import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
@@ -430,7 +431,7 @@ export function OrdersView() {
       {!showingOrderDetail && (
         <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
           <Stack spacing={0.5}>
-            <Typography level="h3">Orders</Typography>
+            <Typography level="h3" startDecorator={<ChecklistRoundedIcon />}>Orders</Typography>
           </Stack>
           <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
             <Button

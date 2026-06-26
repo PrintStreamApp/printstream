@@ -1,6 +1,7 @@
 import React from 'react'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
+import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
 import { Alert, Box, Button, Card, CardContent, FormControl, FormLabel, Option, Select, Stack, Typography } from '@mui/joy'
 import {
   type AppLandingPageSetting,
@@ -162,7 +163,7 @@ export function SettingsView({
   )
   return (
     <Stack spacing={2}>
-      {visibleSubview === 'root' && <Typography level="h3">Settings</Typography>}
+      {visibleSubview === 'root' && <Typography level="h3" startDecorator={<SettingsRoundedIcon />}>Settings</Typography>}
       {demoSettingsLocked && (
         <Alert color="warning" variant="soft">
           This is the public demo. Settings and authentication changes you make here will not take effect.

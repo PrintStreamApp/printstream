@@ -34,6 +34,7 @@ import {
   getSpoolRow,
   listSpoolRows,
   listUsageRows,
+  readFilamentUsageStats,
   recycleSpoolRow,
   restoreSpoolRow,
   unassignSpoolRow,
@@ -74,6 +75,12 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
     })
     broadcastPluginSettingsChanged(context.pluginName, tenantId)
     response.json({ autoAddBambuSpools: parsed.data.autoAddBambuSpools })
+  })
+
+  // --- stats --------------------------------------------------------
+  context.router.get('/stats', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+    const tenantId = requireRequestTenantId(request)
+    response.json(await readFilamentUsageStats(db, tenantId))
   })
 
   // --- spools -------------------------------------------------------

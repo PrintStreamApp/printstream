@@ -18,6 +18,7 @@ const baseRow = {
   plateTypeFilter: '["Textured PEI Plate"]',
   sortKey: 'name',
   sortDirection: 'asc',
+  group: 'status',
   cardContentSettings: '{}',
   createdAt: new Date('2026-06-08T00:00:00.000Z'),
   updatedAt: new Date('2026-06-08T00:00:00.000Z')
@@ -28,6 +29,11 @@ test('toPrinterViewDto parses the stored attribute filters', () => {
   assert.deepEqual(dto.modelFilter, ['X1C', 'P1S'])
   assert.deepEqual(dto.nozzleDiameterFilter, ['0.4', '0.8'])
   assert.deepEqual(dto.plateTypeFilter, ['Textured PEI Plate'])
+  assert.equal(dto.group, 'status')
+})
+
+test('toPrinterViewDto defaults grouping to none for legacy/invalid rows', () => {
+  assert.equal(toPrinterViewDto({ ...baseRow, group: 'bogus' }).group, 'none')
 })
 
 test('toPrinterViewDto falls back to empty filters for malformed or legacy rows', () => {

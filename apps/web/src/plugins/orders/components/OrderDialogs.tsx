@@ -72,7 +72,16 @@ import { LibraryMetadataFilters } from '../../../components/library/LibraryMetad
 import { PaginatedLibraryBrowser } from '../../../components/library/PaginatedLibraryBrowser'
 import { libraryFacetsEmpty, useLibraryFilters } from '../../../hooks/useLibraryFilters'
 import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../../../lib/libraryDirectory'
-import { LIBRARY_PAGE_SIZE_OPTIONS, LIBRARY_SORT_OPTIONS } from '../../../lib/libraryViewHelpers'
+import {
+  LIBRARY_GROUP_KEY,
+  LIBRARY_PAGE_SIZE_OPTIONS,
+  LIBRARY_SORT_KEY,
+  LIBRARY_SORT_OPTIONS,
+  LIBRARY_VIEW_MODE_KEY,
+  parseLibraryGroup
+} from '../../../lib/libraryViewHelpers'
+import { parseLibrarySort, parseLibraryViewMode } from '../../../lib/printersViewHelpers'
+import { useLocalStorageState } from '../../../hooks/useLocalStorageState'
 import { LibraryPlatePreview } from '../../../components/LibraryPlateSelect'
 import { ColorSwatchPicker } from '../../../components/ColorSwatchPicker'
 import { isUnslicedThreeMfFile } from '../../../lib/libraryFileTags'
@@ -608,9 +617,11 @@ export function TemplateLibraryFilePickerDialog({
   const [bridgeId, setBridgeId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
-  const [viewMode, setViewMode] = useState<LibraryViewMode>('list')
-  const [sort, setSort] = useState<LibrarySort>({ key: 'name', dir: 'asc' })
-  const [group, setGroup] = useState<LibraryGroupBy>('none')
+  // Share the global library view keys so the picker matches the Library page
+  // and the other file pickers across opens.
+  const [viewMode, setViewMode] = useLocalStorageState<LibraryViewMode>(LIBRARY_VIEW_MODE_KEY, 'list', parseLibraryViewMode, String)
+  const [sort, setSort] = useLocalStorageState<LibrarySort>(LIBRARY_SORT_KEY, { key: 'name', dir: 'asc' }, parseLibrarySort)
+  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const browseQuery = useQuery<LibraryBrowseResponse>({
     queryKey: ['library-browse', 'orders-picker', currentFolderId ?? 'root', bridgeId ?? 'none', favoritesOnly],
@@ -719,6 +730,7 @@ export function TemplateLibraryFilePickerDialog({
             <DialogSection title="Files">
               <Stack spacing={1}>
                 <DirectoryPrimaryToolbar
+                  pinnable={false}
                   searchValue={search}
                   onSearchChange={setSearch}
                   searchPlaceholder="Search files and folders"

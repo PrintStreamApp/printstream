@@ -22,10 +22,25 @@ const FilamentView = lazy(async () => {
   return { default: module.FilamentView }
 })
 
+// Lazy so the @mui/x-charts dependency stays out of the app shell and only
+// loads when the stats page is open with this plugin active.
+const FilamentStatsCards = lazy(async () => {
+  const module = await import('./FilamentStatsCards')
+  return { default: module.FilamentStatsCards }
+})
+
 function FilamentRoute() {
   return (
     <Suspense fallback={<Typography level="body-sm">Loading filament…</Typography>}>
       <FilamentView />
+    </Suspense>
+  )
+}
+
+function FilamentStatsSlot() {
+  return (
+    <Suspense fallback={null}>
+      <FilamentStatsCards />
     </Suspense>
   )
 }
@@ -45,6 +60,7 @@ export const filamentManagerPlugin: WebPlugin = {
   ],
   slots: [
     { name: 'ams.slotEditor', component: SlotEditorActions },
-    { name: 'externalSpool.editor', component: SlotEditorActions }
+    { name: 'externalSpool.editor', component: SlotEditorActions },
+    { name: 'stats.cards', component: FilamentStatsSlot }
   ]
 }

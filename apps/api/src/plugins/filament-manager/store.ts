@@ -9,7 +9,14 @@
  */
 import type { Prisma } from '@prisma/client'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
-import type { SpoolCreateInput, SpoolUpdateInput, SpoolAssignInput, FilamentUsageSource } from '@printstream/shared'
+import {
+  buildFilamentUsageSlices,
+  type SpoolCreateInput,
+  type SpoolUpdateInput,
+  type SpoolAssignInput,
+  type FilamentUsageSource,
+  type FilamentUsageStats
+} from '@printstream/shared'
 import { serializeColors, type SpoolRowWithPrinter } from './dto.js'
 
 const loadedPrinterInclude = { loadedPrinter: { select: { name: true } } }
@@ -190,6 +197,59 @@ export async function listUsageRows(db: AnyPrismaClient, tenantId: string, spool
     orderBy: { recordedAt: 'desc' },
     take: limit
   })
+}
+
+/** Fallback label for spools that have no brand recorded. */
+const UNBRANDED_LABEL = 'Unbranded'
+
+/** One filament-usage groupBy row: the grouped key field plus summed weights. */
+type UsageGroupRow = {
+  filamentType?: string
+  brand?: string | null
+  _sum: { netWeightGrams: number | null; remainingGrams: number | null }
+}
+
+/**
+ * `groupBy` is not callable on the `AnyPrismaClient` union (its conditional
+ * overloads don't unify), so bind it to a concrete signature for the two
+ * filament-usage groupings — same workaround as `print-outcome-breakdown.ts`.
+ */
+type UsageGroupBy = (args: {
+  by: ['filamentType'] | ['brand']
+  where: Prisma.FilamentSpoolWhereInput
+  _sum: { netWeightGrams: true; remainingGrams: true }
+}) => Promise<UsageGroupRow[]>
+
+/**
+ * Aggregate filament *used* (net weight minus remaining, per spool) across the
+ * workspace's inventory, grouped by filament type and by brand. Reads the
+ * inventory delta rather than the consumption ledger so it counts both
+ * printer-tracked (Bambu remain%) and per-job-tracked spools — the ledger has
+ * no rows for the Bambu half. Recycled (soft-deleted) spools are excluded;
+ * archived/used-up spools are kept so their past usage still counts. Slice
+ * shaping is shared with the platform-wide aggregation via `buildFilamentUsageSlices`.
+ */
+export async function readFilamentUsageStats(
+  db: AnyPrismaClient,
+  tenantId: string
+): Promise<FilamentUsageStats> {
+  const where: Prisma.FilamentSpoolWhereInput = { tenantId, deletedAt: null }
+  const groupBy = db.filamentSpool.groupBy as unknown as UsageGroupBy
+  const [byTypeRows, byBrandRows] = await Promise.all([
+    groupBy({ by: ['filamentType'], where, _sum: { netWeightGrams: true, remainingGrams: true } }),
+    groupBy({ by: ['brand'], where, _sum: { netWeightGrams: true, remainingGrams: true } })
+  ])
+
+  const byType = buildFilamentUsageSlices(
+    byTypeRows.map((row) => ({ label: row.filamentType, netWeightGrams: row._sum.netWeightGrams, remainingGrams: row._sum.remainingGrams })),
+    'Unknown'
+  )
+  const byBrand = buildFilamentUsageSlices(
+    byBrandRows.map((row) => ({ label: row.brand, netWeightGrams: row._sum.netWeightGrams, remainingGrams: row._sum.remainingGrams })),
+    UNBRANDED_LABEL
+  )
+  const totalGramsUsed = byType.reduce((total, slice) => total + slice.gramsUsed, 0)
+  return { totalGramsUsed, byType, byBrand }
 }
 
 /** Append a consumption-ledger row. Positive `grams` = filament consumed. */

@@ -353,6 +353,7 @@ export function SlicingProfilesSettingsSection() {
           </Stack>
 
           <DirectoryPrimaryToolbar
+            pinStorageKey="settings.slicingProfiles"
             searchValue={search}
             onSearchChange={(value) => {
               setPage(0)
