@@ -51,6 +51,7 @@ import { MultiSelectOption } from '../components/MultiSelectOption'
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
 import { sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
+import { usePersistentState } from '../hooks/usePersistentState'
 import { useMobileViewport } from '../components/useMobileViewport'
 import { apiFetch } from '../lib/apiClient'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
@@ -102,8 +103,42 @@ const HISTORY_SORT_OPTIONS = [
   { value: 'started', label: 'Started' }
 ] as const
 const HISTORY_VIEW_MODE_KEY = 'printstream.jobs.history.viewMode'
+const HISTORY_SORT_KEY = 'printstream.jobs.history.sort'
+const HISTORY_SORT_DIR_KEY = 'printstream.jobs.history.sortDir'
+const HISTORY_RESULT_FILTER_KEY = 'printstream.jobs.history.resultFilter'
+const HISTORY_PRINTER_FILTER_KEY = 'printstream.jobs.history.printerFilter'
+const HISTORY_PAGE_SIZE_KEY = 'printstream.jobs.history.pageSize'
 
 type HistorySortValue = (typeof HISTORY_SORT_OPTIONS)[number]['value']
+
+const HISTORY_SORT_VALUES = new Set<string>(HISTORY_SORT_OPTIONS.map((option) => option.value))
+const HISTORY_RESULT_VALUES = new Set<string>(HISTORY_RESULTS)
+
+// Coerce stored (or corrupt) preference blobs back into valid values, falling
+// back per field to the same defaults the directory controls start with.
+function sanitizeHistorySort(value: unknown): HistorySortValue {
+  return HISTORY_SORT_VALUES.has(value as string) ? (value as HistorySortValue) : 'ended'
+}
+
+function sanitizeHistorySortDirection(value: unknown): DirectorySortDirection {
+  return value === 'asc' ? 'asc' : 'desc'
+}
+
+function sanitizeHistoryResults(value: unknown): PrintJob['result'][] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is PrintJob['result'] => HISTORY_RESULT_VALUES.has(entry as string))
+}
+
+function sanitizeHistoryPrinterIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string')
+}
+
+function sanitizeHistoryPageSize(value: unknown): number {
+  return (HISTORY_PAGE_SIZE_OPTIONS as readonly number[]).includes(value as number)
+    ? (value as number)
+    : HISTORY_PAGE_SIZE_OPTIONS[0]
+}
 
 type HistoryEntry =
   | {
@@ -163,12 +198,12 @@ export function JobsView() {
   const [restartingJobId, setRestartingJobId] = useState<string | null>(null)
   const [historySearch, setHistorySearch] = useState('')
   const deferredHistorySearch = useDeferredValue(historySearch)
-  const [historyPrinterIds, setHistoryPrinterIds] = useState<string[]>([])
-  const [historyResults, setHistoryResults] = useState<PrintJob['result'][]>([])
-  const [historySortValue, setHistorySortValue] = useState<HistorySortValue>('ended')
-  const [historySortDirection, setHistorySortDirection] = useState<DirectorySortDirection>('desc')
+  const [historyPrinterIds, setHistoryPrinterIds] = usePersistentState<string[]>(HISTORY_PRINTER_FILTER_KEY, [], sanitizeHistoryPrinterIds)
+  const [historyResults, setHistoryResults] = usePersistentState<PrintJob['result'][]>(HISTORY_RESULT_FILTER_KEY, [], sanitizeHistoryResults)
+  const [historySortValue, setHistorySortValue] = usePersistentState<HistorySortValue>(HISTORY_SORT_KEY, 'ended', sanitizeHistorySort)
+  const [historySortDirection, setHistorySortDirection] = usePersistentState<DirectorySortDirection>(HISTORY_SORT_DIR_KEY, 'desc', sanitizeHistorySortDirection)
   const [historyPage, setHistoryPage] = useState(0)
-  const [historyPageSize, setHistoryPageSize] = useState<number>(HISTORY_PAGE_SIZE_OPTIONS[0])
+  const [historyPageSize, setHistoryPageSize] = usePersistentState<number>(HISTORY_PAGE_SIZE_KEY, HISTORY_PAGE_SIZE_OPTIONS[0], sanitizeHistoryPageSize)
   const [historyViewMode, setHistoryViewMode] = useLocalStorageState<DirectoryViewMode>(
     HISTORY_VIEW_MODE_KEY,
     'list',
@@ -326,7 +361,7 @@ export function JobsView() {
       const next = current.filter((id) => ids.has(id))
       return next.length === current.length ? current : next
     })
-  }, [historyPrinterOptions])
+  }, [historyPrinterOptions, setHistoryPrinterIds])
   const liveJobs = useMemo<LiveJob[]>(() => {
     const statuses = statusQuery.data ?? {}
     const unfinishedByPrinter = new Map<string, PrintJob>()

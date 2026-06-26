@@ -43,8 +43,7 @@ const envSchema = z.object({
   SLICER_BAMBUSTUDIO_DATA_DIR: z.string().default('/tmp/printstream-slicer/bambustudio-data'),
   SLICER_BAMBUSTUDIO_PROFILE_DIR: z.string().default('/opt/bambustudio/squashfs-root/resources/profiles/BBL'),
   SLICER_ENABLE_PIPE_PROGRESS: booleanEnv(true),
-  SLICER_TIMEOUT_MS: positiveIntEnv(30 * 60 * 1000),
-  PATH: z.string().default('')
+  SLICER_TIMEOUT_MS: positiveIntEnv(30 * 60 * 1000)
 })
 
 export const env = envSchema.parse(process.env)

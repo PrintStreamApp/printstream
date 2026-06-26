@@ -4,7 +4,7 @@
  * The implementation is decomposed into focused modules with one-way dependencies
  * (output/scene-builder -> reader -> internal, so there is no import cycle):
  *  - `three-mf-internal.ts`     — shared scaffolding: ZIP I/O, abort helpers, XML/regex escaping,
- *                                 and the generic `rewriteModelSettingsThreeMf` copy pass.
+ *                                 and the generic `rewriteThreeMfEntries` copy pass.
  *  - `three-mf-reader.ts`       — parse a 3MF into typed index/scene structures ({@link readPlateIndex},
  *                                 {@link readSceneManifest}). The pure index parse is delegated to the
  *                                 shared `@printstream/shared/three-mf` module (the bridge uses it too),

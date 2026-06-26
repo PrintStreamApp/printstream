@@ -37,29 +37,6 @@ class WsClient {
     this.connect()
   }
 
-  restart(): void {
-    if (this.refCount === 0) return
-    if (this.reconnectTimer) {
-      window.clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
-
-    this.closed = false
-    const socket = this.socket
-    if (!socket) {
-      this.connect()
-      return
-    }
-
-    if (socket.readyState === WebSocket.CONNECTING) {
-      socket.addEventListener('open', () => socket.close(), { once: true })
-      return
-    }
-
-    this.socket = null
-    socket.close()
-  }
-
   stop(): void {
     this.refCount = Math.max(0, this.refCount - 1)
     if (this.refCount > 0) return

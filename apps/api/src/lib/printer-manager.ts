@@ -1,15 +1,13 @@
 /**
  * Printer connection manager.
  *
- * Owns one MQTT connection per persisted printer. Translates Bambu's
- * `report` payloads into the normalized {@link PrinterStatus} contract
- * and emits both the snapshot and lifecycle events on the shared
- * {@link printerEvents} bus.
- *
- * Bambu printers in Developer/LAN mode accept TLS MQTT on port 8883
- * with `bblp` as the username and the printer's access code as the
- * password. The status topic is `device/<serial>/report`; commands go
- * to `device/<serial>/request`.
+ * Owns the normalized status state for every persisted printer. The LAN
+ * transport (TLS MQTT on the printer, FTPS for uploads) lives in the bridge
+ * runtime; this manager consumes the per-bridge session via
+ * {@link bridgeSessionManager}, translates Bambu's `report` payloads into the
+ * normalized {@link PrinterStatus} contract, and emits both the snapshot and
+ * lifecycle events on the shared {@link printerEvents} bus. Commands are
+ * forwarded to the owning bridge, which relays them to the printer.
  *
  * Bambu MQTT reports are partial deltas: each message only contains
  * the fields that changed. We therefore keep a per-printer cached

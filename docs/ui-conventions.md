@@ -34,6 +34,7 @@ These conventions capture patterns already used across the web app and the clean
 - Keep pagination rows outside scrollable table or sheet wrappers so the controls do not appear inside the data surface.
 - Reuse the shared pagination components instead of hand-rolling per-view variants.
 - Library file pickers (the print dialog, order picker, and file picker) must reuse the same building blocks as the Library page so search, sort, grouping, filters, and pagination stay identical: drive filter/page state with the `useLibraryFilters` hook, render the toolbar with `DirectoryPrimaryToolbar` (filters children = `LibraryMetadataFilters`, `disabled` = `libraryFacetsEmpty`), and render results with `PaginatedLibraryBrowser` (passing a `renderBrowser` that returns a `LibraryBrowser`). Do not hand-roll a picker toolbar or a bespoke grouped/paginated browser.
+- Persist a directory/list view's display preferences across reloads. The sort field + direction, grouping, active filter facets, page size (rows per page), and view mode (list/icon) are all preferences and must be stored through `useLocalStorageState` (use the `usePersistentState` JSON helper for objects) under a stable per-view storage key, not held in plain `useState`. The search box text and the current page index stay ephemeral — they intentionally reset on reload. A new filterable view wires this up from the start; do not ship a directory toolbar whose grouping/sort/filters reset on every refresh.
 
 ## Tables
 
@@ -63,6 +64,7 @@ These conventions capture patterns already used across the web app and the clean
 
 ## Actions and controls
 
+- A view's primary header actions — the New / Add / Upload / Select buttons that sit beside a page or section heading — use `size="sm"` so they line up with the directory toolbar controls and stay consistent with every other view's header. Joy's default (medium) `Button` size is reserved for in-dialog confirm/cancel actions and full-width mobile CTAs; never leave a header action button at the default size. Buttons rendered in an `EmptyState` `action` slot are `size="sm"` too. When adding a header action to a new view, match the size of the existing header actions on sibling directory views rather than relying on Joy's default.
 - Keep primary actions visually obvious and grouped consistently with existing Joy patterns.
 - In dialogs, keep confirm/save actions on the right, with cancel/dismiss immediately to their left.
 - For confirm and prompt dialogs, always render the dismiss action first and the main action last so the primary or destructive action is the rightmost button. Do not place `Cancel`, `Close`, or `Dismiss` to the right of the dialog's main action.
@@ -70,6 +72,22 @@ These conventions capture patterns already used across the web app and the clean
 - When a card has exactly one primary action, make the whole card clickable instead of adding a separate action button. Use the settings overview card pattern: `Card` as a `button`, a right-side chevron, hover/focus styling, and a descriptive `aria-label`.
 - For standalone toolbar or directory-list select boxes, make the selected value self-describing by prefixing it with the control purpose, such as `Status: Enabled users`, `Role: Admin`, `Sort by: Name A-Z`, or `Rows: 25 per page`. Selects with a persistent adjacent `FormLabel` may keep shorter option labels.
 - Use `variant` and shared theme tokens before custom `sx` overrides.
+
+## Multi-select and bulk actions
+
+The Library view (`LibraryBrowser` + the `useLibrarySelection` hook) is the reference implementation; the Filament tab (`useSpoolSelection`) mirrors it. Keep new multi-select views consistent with it rather than inventing a new selection UI.
+
+- Enter selection mode from a `size="sm" variant="soft"` button labelled `Select...` (with the trailing ellipsis) placed among the header actions. Show it only when the user can act on the rows, and gate it to desktop (selection is hidden at phone widths, where the affordance is impractical).
+- While in selection mode, replace the entry button with a right-aligned action bar (`justifyContent: { xs: 'flex-start', sm: 'flex-end' }`). Order its controls: a `Select all` / `Clear all` toggle (`variant="soft"`, label flips once everything visible is selected), then `Cancel` (`variant="plain"`, exits and clears), then the bulk action buttons. Do not add a separate "N selected" count label — the count lives in the action buttons.
+- Label each bulk action `<Verb> selected (N)`, appending ` (N)` only when N > 0 (e.g. `Move selected (3)`, `Recycle selected (3)`). Destructive actions use `color="danger"` and the filled `DeleteRoundedIcon`, and follow the recycle-vs-delete wording rules above. Disable an action when its applicable count is zero.
+- Only offer a bulk action when it has meaningful multi-item semantics (recycle, move, unload). Inherently single-item actions (edit, adjust, rename) stay in the per-row overflow menu and are omitted from the selection bar.
+- Place the selection checkbox at the leading (left) edge of a list row, and at the top-left of a tile/card (with any per-item actions in the opposite corner). The whole row/card toggles its selection on click; the checkbox itself and any action control `stopPropagation` so they don't double-fire. Use `size="sm"` checkboxes on dense table/card surfaces.
+- Selection has no separate "selected" border state — the checked checkbox is the indicator (matching Library). Track ids that are still visible and prune selections that scroll out of the filtered set or get deleted.
+
+## Hover affordances
+
+- An interactive row, tile, or card (clickable to open, pick, or toggle selection) highlights its border to `primary.500` on hover, with a short `transition` (`border-color 120ms`). Non-interactive surfaces get no hover treatment. This is the `LibraryBrowser` row/tile pattern; reuse it for new card/tile lists.
+- Directory **data tables** are the exception: a Joy `Table` uses its built-in `hoverRow` (background highlight) instead of a border highlight. Do not convert a columned data table into bordered row-cards just to match the card hover — pick the surface (table vs. card list) per the Tables guidance, then use that surface's hover convention.
 
 ## Data loading
 

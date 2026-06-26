@@ -67,6 +67,7 @@ import { authQueryKeys, invalidateAuthQueries, platformAuthScopeKey } from '../l
 import { deriveAuthHealthSignals } from '../lib/authUi'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
+import { usePersistentState } from '../hooks/usePersistentState'
 import { type DirectoryViewMode } from './DirectoryControls'
 import { DirectoryPrimaryToolbar } from './DirectoryToolbar'
 import { MultiSelectOption } from './MultiSelectOption'
@@ -90,6 +91,11 @@ import {
   type SessionDurationSelectValue,
   shouldAutoOpenCreatedUserEditor,
   USER_DIRECTORY_VIEW_MODE_KEY,
+  USER_DIRECTORY_SORT_KEY,
+  USER_DIRECTORY_SORT_DIR_KEY,
+  USER_DIRECTORY_STATUS_FILTER_KEY,
+  USER_DIRECTORY_ROLE_FILTERS_KEY,
+  USER_DIRECTORY_PAGE_SIZE_KEY,
   USER_PAGE_SIZE_OPTIONS
 } from './authAccessHelpers'
 import { buildPermissionSections, RolePermissionsMatrix } from './permissionMatrix'
@@ -104,6 +110,43 @@ import {
   DeleteAuthUserDialog,
   SupportAccessPermissionsDialog
 } from './authAccessDialogs'
+
+// Defaults mirror the persisted user-directory controls' fallbacks below.
+const DEFAULT_USER_SORT_KEY: UserSortKey = 'name'
+const DEFAULT_USER_SORT_DIRECTION: UserSortDirection = 'asc'
+const DEFAULT_USER_STATUS_FILTER: UserStatusFilter = 'all'
+const DEFAULT_USER_PAGE_SIZE: number = USER_PAGE_SIZE_OPTIONS[1]
+
+/** Validate a persisted sort key against the known options; fall back to the default. */
+function sanitizeUserSortKey(value: unknown): UserSortKey {
+  return USER_SORT_OPTIONS.some((option) => option.value === value)
+    ? (value as UserSortKey)
+    : DEFAULT_USER_SORT_KEY
+}
+
+/** Validate a persisted sort direction; fall back to the default. */
+function sanitizeUserSortDirection(value: unknown): UserSortDirection {
+  return value === 'asc' || value === 'desc' ? value : DEFAULT_USER_SORT_DIRECTION
+}
+
+/** Validate a persisted status filter against the known options; fall back to the default. */
+function sanitizeUserStatusFilter(value: unknown): UserStatusFilter {
+  return USER_STATUS_OPTIONS.some((option) => option.value === value)
+    ? (value as UserStatusFilter)
+    : DEFAULT_USER_STATUS_FILTER
+}
+
+/** Coerce a persisted role-filter list to an array of strings; stale ids are pruned later. */
+function sanitizeUserRoleFilters(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+/** Validate a persisted page size against the allowed options; fall back to the default. */
+function sanitizeUserPageSize(value: unknown): number {
+  return USER_PAGE_SIZE_OPTIONS.some((option) => option === value)
+    ? (value as number)
+    : DEFAULT_USER_PAGE_SIZE
+}
 
 type AuthAccessSectionProps = {
   status: AuthManagementStatus | undefined
@@ -202,12 +245,33 @@ export function AuthAccessSection({
   const [pendingSensitiveAction, setPendingSensitiveAction] = useState<PendingSensitiveAction | null>(null)
   const [supportPermissionsDialogOpen, setSupportPermissionsDialogOpen] = useState(false)
   const [userSearch, setUserSearch] = useState('')
-  const [userStatusFilter, setUserStatusFilter] = useState<UserStatusFilter>('all')
-  const [userRoleFilters, setUserRoleFilters] = useState<string[]>([])
-  const [userSortKey, setUserSortKey] = useState<UserSortKey>('name')
-  const [userSortDirection, setUserSortDirection] = useState<UserSortDirection>('asc')
+  // Sort, filters, and page size persist across reloads; search and page stay ephemeral.
+  const [userStatusFilter, setUserStatusFilter] = usePersistentState<UserStatusFilter>(
+    USER_DIRECTORY_STATUS_FILTER_KEY,
+    DEFAULT_USER_STATUS_FILTER,
+    sanitizeUserStatusFilter
+  )
+  const [userRoleFilters, setUserRoleFilters] = usePersistentState<string[]>(
+    USER_DIRECTORY_ROLE_FILTERS_KEY,
+    [],
+    sanitizeUserRoleFilters
+  )
+  const [userSortKey, setUserSortKey] = usePersistentState<UserSortKey>(
+    USER_DIRECTORY_SORT_KEY,
+    DEFAULT_USER_SORT_KEY,
+    sanitizeUserSortKey
+  )
+  const [userSortDirection, setUserSortDirection] = usePersistentState<UserSortDirection>(
+    USER_DIRECTORY_SORT_DIR_KEY,
+    DEFAULT_USER_SORT_DIRECTION,
+    sanitizeUserSortDirection
+  )
   const [userPage, setUserPage] = useState(1)
-  const [userPageSize, setUserPageSize] = useState<number>(USER_PAGE_SIZE_OPTIONS[1])
+  const [userPageSize, setUserPageSize] = usePersistentState<number>(
+    USER_DIRECTORY_PAGE_SIZE_KEY,
+    DEFAULT_USER_PAGE_SIZE,
+    sanitizeUserPageSize
+  )
   const [userViewMode, setUserViewMode] = useLocalStorageState<DirectoryViewMode>(
     USER_DIRECTORY_VIEW_MODE_KEY,
     'icon',
@@ -697,7 +761,7 @@ export function AuthAccessSection({
       const next = current.filter((value) => valid.has(value))
       return next.length === current.length ? current : next
     })
-  }, [availableUserRoleOptions])
+  }, [availableUserRoleOptions, setUserRoleFilters])
   useEffect(() => {
     setUserPage(1)
   }, [normalizedUserSearch, userRoleFilters, userSortDirection, userSortKey, userStatusFilter, userPageSize])

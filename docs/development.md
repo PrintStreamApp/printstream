@@ -19,7 +19,9 @@ apps/
   bridge/     Printer-LAN runtime (discovery, MQTT/FTPS/camera, library storage)
   slicer/     Standalone slicer worker container
 packages/
-  shared/     Zod contracts shared between api, bridge, and web
+  shared/         Zod contracts shared between api, bridge, and web
+  bridge-runtime/ Shared LAN transport (MQTT/FTPS/camera/SSDP) used by api + bridge
+  sea-runtime/    Generic single-file-executable (SEA) plumbing (service install, tray, paths)
 .github/      CI workflows
 .devcontainer/  VS Code dev container
 ```

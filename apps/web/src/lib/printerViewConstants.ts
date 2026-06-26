@@ -34,6 +34,9 @@ export const EMPTY_PRINTER_VIEWS: PrinterView[] = []
 export const HISTORY_PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 export const HISTORY_SORT_OPTIONS = [{ value: 'date', label: 'Date' }] as const
 export const PRINTER_HISTORY_VIEW_MODE_KEY = 'printstream.printers.history.viewMode'
+export const PRINTER_HISTORY_SORT_DIR_KEY = 'printstream.printers.history.sortDir'
+export const PRINTER_HISTORY_RESULT_FILTER_KEY = 'printstream.printers.history.resultFilter'
+export const PRINTER_HISTORY_PAGE_SIZE_KEY = 'printstream.printers.history.pageSize'
 
 export const OVERVIEW_VIEW_OPTION_VALUE = '__overview__'
 export const NEW_VIEW_OPTION_VALUE = '__new__'

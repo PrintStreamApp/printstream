@@ -300,7 +300,9 @@ export async function pruneDormantBridges(): Promise<{ removed: number }> {
 }
 
 export async function runArtifactMaintenance(): Promise<void> {
-  const [hiddenFiles, slicedOutputs, recycledFiles, uploadSessions, jobThumbnails, jobSnapshots, coverCache, bridgeDerivedCache, meshThumbnails, auditLogs, dormantBridges] = await Promise.all([
+  // Several prunes run purely for their side effects; we only bind the few whose
+  // counts we log below (positional holes skip the rest).
+  const [, , , , , , coverCache, bridgeDerivedCache, meshThumbnails, auditLogs] = await Promise.all([
     pruneHiddenLibraryFiles(),
     pruneUnreferencedSlicedOutputs(),
     pruneRecycledLibraryFiles(),
@@ -313,7 +315,6 @@ export async function runArtifactMaintenance(): Promise<void> {
     pruneAuditLogs(),
     pruneDormantBridges()
   ])
-  void dormantBridges
 
   if (meshThumbnails.removedFiles > 0) {
     console.log(`[library-cleanup] pruned ${meshThumbnails.removedFiles} mesh thumbnail${meshThumbnails.removedFiles === 1 ? '' : 's'}`)
@@ -330,22 +331,6 @@ export async function runArtifactMaintenance(): Promise<void> {
   const removedBridgeDerivedArtifacts = bridgeDerivedCache.removedFiles + bridgeDerivedCache.removedDirs
   if (removedBridgeDerivedArtifacts > 0) {
     console.log(`[library-cleanup] pruned ${removedBridgeDerivedArtifacts} bridge derived cache artifact${removedBridgeDerivedArtifacts === 1 ? '' : 's'}`)
-  }
-
-  if (
-    hiddenFiles.removed === 0
-    && slicedOutputs.removed === 0
-    && recycledFiles.removed === 0
-    && uploadSessions.removed === 0
-    && jobThumbnails.removed === 0
-    && jobSnapshots.removed === 0
-    && coverCache.removedCoverFiles === 0
-    && coverCache.removedMemoryEntries === 0
-    && coverCache.removedNegativeEntries === 0
-    && bridgeDerivedCache.removedFiles === 0
-    && bridgeDerivedCache.removedDirs === 0
-  ) {
-    return
   }
 }
 

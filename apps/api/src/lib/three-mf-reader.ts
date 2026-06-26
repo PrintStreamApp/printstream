@@ -39,7 +39,6 @@ import {
   decodeXmlAttributeValue,
   extractPlateType,
   firstStringValue,
-  normalizeColor,
   normalizePrinterModelName,
   nullableNumberArray,
   parseAttrs,

@@ -23,3 +23,11 @@ body {
 
 html, body, #root { width: 100%; }
 #root { min-height: 100vh; }
+
+/* In-page sub-nav and pagination jumps animate via smoothScrollToElement
+   (lib/smoothScroll.ts), a manual rAF scroll. We deliberately do NOT set
+   `scroll-behavior: smooth` here: CSS smooth (and JS `behavior: 'smooth'`) is
+   forced to instant under prefers-reduced-motion — which some embedded browsers
+   report by default — so those jumps snapped instantly. Keeping this off also
+   leaves the `behavior: 'auto'` scrolls (route-change scroll-to-top, modal
+   scroll restoration) correctly instant. */

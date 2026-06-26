@@ -5,8 +5,7 @@
  * highlight, a focused field's draft string): the plate thumbnail strip, the gizmo
  * toolbar and its buttons, the keyboard-shortcut help popup, the manual transform
  * panel and its axis inputs, and the filament option row shared by the material
- * pickers. Extracted from EditorView.tsx verbatim (increment 1 of the editor split);
- * no behavior change. Shared editor types/consts come from ./editorGeometry; the
+ * pickers. Shared editor types/consts come from ./editorGeometry; the
  * filament-option shape is a type-only import from ./EditorView (erased, no runtime
  * cycle).
  */

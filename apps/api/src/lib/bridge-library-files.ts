@@ -125,7 +125,7 @@ export async function readBridgeLibraryFile(bridgeId: string, storedPath: string
  * cache **without** falling back to the `library.inspect3mf` RPC. Returns null on
  * a cache miss. Used by the library *list* path so rendering a folder never blocks
  * on a per-file RPC storm; cold entries are warmed in the background (see
- * {@link warmBridgeLibraryThreeMfIndex}).
+ * {@link warmLibraryFileDerivedChips}).
  */
 export async function readBridgeLibraryThreeMfIndexFromCache(input: {
   ownerBridgeId?: string | null

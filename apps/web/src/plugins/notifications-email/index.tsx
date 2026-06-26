@@ -3,7 +3,6 @@
  *
  * The API plugin owns delivery; this contributes the per-user opt-in panel.
  */
-/* eslint-disable react-refresh/only-export-components -- plugin entry exports a component intentionally */
 import type { WebPlugin } from '../../plugin/types'
 import { EmailNotificationsPanel } from './EmailNotificationsPanel'
 

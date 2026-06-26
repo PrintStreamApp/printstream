@@ -131,6 +131,9 @@ function PrinterCardComponent({
   const [filamentRecoveryDialogOpen, setFilamentRecoveryDialogOpen] = useState(false)
   const [cameraDialogOpenRequestedAt, setCameraDialogOpenRequestedAt] = useState<number | null>(null)
   const activeTrackedJobName = activeJob?.jobName ?? null
+  // A calibration routine has no model or printable objects, so suppress the
+  // model preview (cover) and the skip-object action while one is the active job.
+  const isCalibrationJob = activeJob?.jobKind === 'calibration'
   const historyJobName = latestJob?.jobName ?? null
   const latestJobProgressPercent = latestJob?.progressPercent ?? status?.progressPercent ?? (latestJob?.result === 'success' ? 100 : null)
   // Elapsed-since-finish label for the history footer, using the same compact duration
@@ -163,7 +166,7 @@ function PrinterCardComponent({
   const historyCoverRequestUrl = latestJob && (latestJob.thumbnailPath || latestJob.fileId)
     ? buildApiUrl(`/api/jobs/${latestJob.id}/thumbnail`)
     : null
-  const coverRequestUrl = activeCoverRequestUrl ?? historyCoverRequestUrl
+  const coverRequestUrl = isCalibrationJob ? null : (activeCoverRequestUrl ?? historyCoverRequestUrl)
   const { coverUrl, coverLoaded, coverFailed } = useBufferedCoverImage({
     coverRequestUrl,
     enabled: Boolean(contentSettings.modelThumbnail && coverRequestUrl),
@@ -345,7 +348,7 @@ function PrinterCardComponent({
     onOpenAssistant: openAssistant
   })
   const pausedOnDeviceError = stage === 'paused' && status?.deviceError != null
-  const canSkipObjects = isOnline && (stage === 'printing' || stage === 'paused') && !pausedOnDeviceError
+  const canSkipObjects = isOnline && (stage === 'printing' || stage === 'paused') && !pausedOnDeviceError && !isCalibrationJob
   const activePrintObjectsQuery = useQuery({
     queryKey: ['printer-active-print-objects', printer.id, status?.jobName, status?.gcodeFile, status?.taskId],
     queryFn: ({ signal }) => apiFetch<PrinterActivePrintObjects>(`/api/printers/${printer.id}/active-print-objects`, { signal }),
@@ -668,6 +671,7 @@ function PrinterCardComponent({
         {!isOnline && (
           <Box
             sx={{
+              flexGrow: 1,
               minHeight: { xs: 92, sm: 108 },
               borderRadius: 'sm',
               border: '1px dashed var(--joy-palette-neutral-outlinedBorder)',

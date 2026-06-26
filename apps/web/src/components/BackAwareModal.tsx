@@ -154,7 +154,7 @@ function restoreWindowScrollPosition(position: ScrollPosition | undefined) {
   if (!position) return
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      window.scrollTo(position.x, position.y)
+      window.scrollTo({ left: position.x, top: position.y, behavior: 'auto' })
     })
   })
 }

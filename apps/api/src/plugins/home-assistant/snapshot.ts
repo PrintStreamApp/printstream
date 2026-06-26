@@ -1,7 +1,8 @@
 /**
  * Pure mappers for the Home Assistant bridge snapshot.
  *
- * The Home Assistant integration polls one endpoint, so this module flattens
+ * The Home Assistant integration fetches this snapshot once and then receives
+ * live updates over the WebSocket (it does not poll), so this module flattens
  * persisted printer config plus the live `printerManager` cache into a single,
  * stable payload that is easy to consume from outside the monorepo.
  */

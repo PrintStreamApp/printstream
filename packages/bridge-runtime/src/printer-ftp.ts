@@ -143,13 +143,7 @@ function createFtpSizeExceededError(maxBytes: number): Error {
   return error
 }
 
-/**
- * Open a connected, authenticated FTPS client. Caller must `client.close()`.
- *
- * Bambu firmware advertises `0.0.0.0` as the PASV host, so we override
- * the data-channel target with the printer's control IP. Without this,
- * data transfers fail with `ECONNREFUSED 0.0.0.0:<port>`.
- */
+/** Apply TCP tuning (`TCP_NODELAY` + keep-alive) to an FTPS control or data socket. */
 function applySocketTuning(socket: TunableSocket | null | undefined, settings: ResolvedPrinterFtpTransportSettings): void {
   if (!socket) return
   socket.setNoDelay?.(settings.socketNoDelay)
@@ -169,6 +163,13 @@ async function pasvForceControlHostWithTuning(
   return response
 }
 
+/**
+ * Open a connected, authenticated FTPS client. Caller must `client.close()`.
+ *
+ * Bambu firmware advertises `0.0.0.0` as the PASV host, so we override
+ * the data-channel target with the printer's control IP (via `prepareTransfer`).
+ * Without this, data transfers fail with `ECONNREFUSED 0.0.0.0:<port>`.
+ */
 async function openFtp(printer: Printer, transport: PrinterFtpTransportSettings = {}): Promise<FtpClient> {
   const settings = resolvePrinterFtpTransportSettings(transport)
   // Weak Wi-Fi can briefly stall the FTPS data channel during larger uploads.

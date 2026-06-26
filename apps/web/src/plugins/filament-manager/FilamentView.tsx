@@ -5,10 +5,15 @@
  * rendering are the shared spool primitives ({@link useSpoolDirectory},
  * {@link SpoolDirectoryToolbar}, {@link SpoolResults}) — the same ones the
  * AMS-slot spool picker uses, so the two stay in sync.
+ *
+ * Desktop adds a multi-select mode ({@link useSpoolSelection}) with a bulk action
+ * bar for unloading and recycling several spools at once.
  */
 import { useMemo, useState } from 'react'
 import { Alert, Box, Button, Chip, Stack, Typography } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
+import EjectRoundedIcon from '@mui/icons-material/EjectRounded'
+import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import type { FilamentSpool } from '@printstream/shared'
 import { extractErrorMessage } from '@printstream/shared'
 import { EmptyState } from '../../components/EmptyState'
@@ -23,6 +28,7 @@ import { SpoolAdjustDialog } from './SpoolAdjustDialog'
 import { SpoolDirectoryToolbar } from './SpoolDirectoryToolbar'
 import { SpoolResults } from './SpoolResults'
 import { useSpoolDirectory } from './useSpoolDirectory'
+import { useSpoolSelection } from './useSpoolSelection'
 
 export function FilamentView() {
   useFilamentSync()
@@ -36,6 +42,7 @@ export function FilamentView() {
 
   const spools = useMemo(() => spoolsQuery.data ?? [], [spoolsQuery.data])
   const directory = useSpoolDirectory(spools)
+  const selection = useSpoolSelection(directory.visible)
   const summary = useMemo(() => {
     const active = spools.filter((spool) => spool.archivedAt == null)
     const remainingKg = active.reduce((sum, spool) => sum + spool.remainingGrams, 0) / 1000
@@ -47,6 +54,10 @@ export function FilamentView() {
     return { count: active.length, remainingKg, valueCents }
   }, [spools])
 
+  const { selectedSpools, setSelectionMode, setAllSelected } = selection
+  const loadedSelected = useMemo(() => selectedSpools.filter((spool) => spool.loadedPrinterId), [selectedSpools])
+  const allVisibleSelected = directory.visible.length > 0 && selectedSpools.length === directory.visible.length
+
   const handleRecycle = async (spool: FilamentSpool) => {
     const ok = await confirm({
       title: 'Move spool to recycle bin?',
@@ -57,9 +68,38 @@ export function FilamentView() {
     if (ok) recycle.mutate(spool.id)
   }
 
-  const renderRows = (items: FilamentSpool[]) => directory.effectiveViewMode === 'list'
-    ? <SpoolList spools={items} onEdit={setEditing} onAdjust={setAdjusting} onUnassign={(s) => unassign.mutate(s.id)} onRecycle={handleRecycle} />
-    : <SpoolGrid spools={items} onEdit={setEditing} onAdjust={setAdjusting} onUnassign={(s) => unassign.mutate(s.id)} onRecycle={handleRecycle} />
+  const handleBulkRecycle = async () => {
+    const targets = selectedSpools
+    if (targets.length === 0) return
+    const ok = await confirm({
+      title: targets.length === 1 ? 'Move spool to recycle bin?' : `Move ${targets.length} spools to recycle bin?`,
+      description: 'You can restore them later from the recycle bin.',
+      confirmLabel: 'Move to recycle bin',
+      color: 'danger'
+    })
+    if (!ok) return
+    await Promise.allSettled(targets.map((spool) => recycle.mutateAsync(spool.id)))
+    setSelectionMode(false)
+  }
+
+  const handleBulkUnload = async () => {
+    if (loadedSelected.length === 0) return
+    await Promise.allSettled(loadedSelected.map((spool) => unassign.mutateAsync(spool.id)))
+  }
+
+  const renderRows = (items: FilamentSpool[]) => {
+    const common = {
+      spools: items,
+      onEdit: setEditing,
+      onAdjust: setAdjusting,
+      onUnassign: (spool: FilamentSpool) => unassign.mutate(spool.id),
+      onRecycle: handleRecycle,
+      selectable: selection.selectionMode,
+      selectedIds: selection.selectedIds,
+      onToggleSelect: selection.toggle
+    }
+    return directory.effectiveViewMode === 'list' ? <SpoolList {...common} /> : <SpoolGrid {...common} />
+  }
 
   return (
     <Stack spacing={1.5}>
@@ -77,8 +117,51 @@ export function FilamentView() {
             </Stack>
           )}
         </Box>
-        <Button startDecorator={<AddRoundedIcon />} onClick={() => setCreating(true)}>Add spool</Button>
+        <Stack direction="row" spacing={1} alignItems="center">
+          {!directory.isMobile && !selection.selectionMode && spools.length > 0 && (
+            <Button size="sm" variant="soft" onClick={() => setSelectionMode(true)}>Select...</Button>
+          )}
+          <Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setCreating(true)}>Add spool</Button>
+        </Stack>
       </Stack>
+
+      {selection.selectionMode && (
+        <Stack
+          direction="row"
+          spacing={1}
+          useFlexGap
+          sx={{ flexWrap: 'wrap', justifyContent: { xs: 'flex-start', sm: 'flex-end' } }}
+        >
+          <Button
+            size="sm"
+            variant="soft"
+            onClick={() => setAllSelected(!allVisibleSelected)}
+            disabled={directory.visible.length === 0}
+          >
+            {allVisibleSelected ? 'Clear all' : 'Select all'}
+          </Button>
+          <Button size="sm" variant="plain" onClick={() => setSelectionMode(false)}>Cancel</Button>
+          <Button
+            size="sm"
+            variant="soft"
+            startDecorator={<EjectRoundedIcon />}
+            disabled={loadedSelected.length === 0 || unassign.isPending}
+            onClick={() => void handleBulkUnload()}
+          >
+            Unload selected{loadedSelected.length > 0 ? ` (${loadedSelected.length})` : ''}
+          </Button>
+          <Button
+            size="sm"
+            color="danger"
+            startDecorator={<DeleteRoundedIcon />}
+            disabled={selectedSpools.length === 0}
+            loading={recycle.isPending}
+            onClick={() => void handleBulkRecycle()}
+          >
+            Recycle selected{selectedSpools.length > 0 ? ` (${selectedSpools.length})` : ''}
+          </Button>
+        </Stack>
+      )}
 
       {spoolsQuery.isError && (
         <Alert color="danger" variant="soft">{extractErrorMessage(spoolsQuery.error, 'Could not load spools.')}</Alert>
@@ -96,7 +179,7 @@ export function FilamentView() {
             icon={<FilamentSpoolIcon />}
             title="No spools yet"
             description="Add a spool manually, or insert a Bambu spool into an AMS slot to add it automatically."
-            action={<Button startDecorator={<AddRoundedIcon />} onClick={() => setCreating(true)}>Add spool</Button>}
+            action={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setCreating(true)}>Add spool</Button>}
           />
         }
         noMatchState={

@@ -33,6 +33,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
+import { usePersistentState } from '../../hooks/usePersistentState'
 import { type DirectorySortDirection } from '../../components/DirectoryControls'
 import { ConfirmActionDialog } from '../../components/ConfirmActionDialog'
 import { SliceFileModal } from '../../components/library/SliceFileModal'
@@ -44,6 +45,7 @@ import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/work
 import { buildTenantWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
 import {
   LIST_PAGE_SIZE_OPTIONS,
+  ORDER_SORT_OPTIONS,
   compareOrderDates,
   matchesOrderSearch,
   matchesTemplateSearch,
@@ -66,6 +68,41 @@ import {
 type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
 type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[1]
 
+// localStorage keys for the orders directory controls (sort + page size of each
+// list). Search text and the current page index stay ephemeral on purpose.
+const ACTIVE_SORT_KEY = 'printstream.orders.active.sort'
+const ACTIVE_SORT_DIR_KEY = 'printstream.orders.active.sortDir'
+const ACTIVE_PAGE_SIZE_KEY = 'printstream.orders.active.pageSize'
+const COMPLETED_SORT_KEY = 'printstream.orders.completed.sort'
+const COMPLETED_SORT_DIR_KEY = 'printstream.orders.completed.sortDir'
+const COMPLETED_PAGE_SIZE_KEY = 'printstream.orders.completed.pageSize'
+const TEMPLATES_PAGE_SIZE_KEY = 'printstream.orders.templates.pageSize'
+
+const ORDER_SORT_VALUES = new Set<string>(ORDER_SORT_OPTIONS.map((option) => option.value))
+
+// Coerce stored (or corrupt) preference blobs back into valid values, falling
+// back per field to the same defaults the directory controls start with.
+function sanitizeOrderSort(value: unknown): OrderSortValue {
+  return ORDER_SORT_VALUES.has(value as string) ? (value as OrderSortValue) : 'updated'
+}
+
+function sanitizeSortDirection(value: unknown): DirectorySortDirection {
+  return value === 'asc' ? 'asc' : 'desc'
+}
+
+function sanitizePageSize(value: unknown): number {
+  return (LIST_PAGE_SIZE_OPTIONS as readonly number[]).includes(value as number)
+    ? (value as number)
+    : 10
+}
+
+// Templates start at the smallest page size rather than 10 like the order lists.
+function sanitizeTemplatesPageSize(value: unknown): number {
+  return (LIST_PAGE_SIZE_OPTIONS as readonly number[]).includes(value as number)
+    ? (value as number)
+    : LIST_PAGE_SIZE_OPTIONS[0]
+}
+
 export function OrdersView() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -83,13 +120,13 @@ export function OrdersView() {
   const [templateSearch, setTemplateSearch] = useState('')
   const [activeOrderSearch, setActiveOrderSearch] = useState('')
   const [completedOrderSearch, setCompletedOrderSearch] = useState('')
-  const [activeOrderSortValue, setActiveOrderSortValue] = useState<OrderSortValue>('updated')
-  const [activeOrderSortDirection, setActiveOrderSortDirection] = useState<DirectorySortDirection>('desc')
-  const [completedOrderSortValue, setCompletedOrderSortValue] = useState<OrderSortValue>('updated')
-  const [completedOrderSortDirection, setCompletedOrderSortDirection] = useState<DirectorySortDirection>('desc')
-  const [templatesPageSize, setTemplatesPageSize] = useState<number>(LIST_PAGE_SIZE_OPTIONS[0])
-  const [activeOrdersPageSize, setActiveOrdersPageSize] = useState<number>(10)
-  const [completedOrdersPageSize, setCompletedOrdersPageSize] = useState<number>(10)
+  const [activeOrderSortValue, setActiveOrderSortValue] = usePersistentState<OrderSortValue>(ACTIVE_SORT_KEY, 'updated', sanitizeOrderSort)
+  const [activeOrderSortDirection, setActiveOrderSortDirection] = usePersistentState<DirectorySortDirection>(ACTIVE_SORT_DIR_KEY, 'desc', sanitizeSortDirection)
+  const [completedOrderSortValue, setCompletedOrderSortValue] = usePersistentState<OrderSortValue>(COMPLETED_SORT_KEY, 'updated', sanitizeOrderSort)
+  const [completedOrderSortDirection, setCompletedOrderSortDirection] = usePersistentState<DirectorySortDirection>(COMPLETED_SORT_DIR_KEY, 'desc', sanitizeSortDirection)
+  const [templatesPageSize, setTemplatesPageSize] = usePersistentState<number>(TEMPLATES_PAGE_SIZE_KEY, LIST_PAGE_SIZE_OPTIONS[0], sanitizeTemplatesPageSize)
+  const [activeOrdersPageSize, setActiveOrdersPageSize] = usePersistentState<number>(ACTIVE_PAGE_SIZE_KEY, 10, sanitizePageSize)
+  const [completedOrdersPageSize, setCompletedOrdersPageSize] = usePersistentState<number>(COMPLETED_PAGE_SIZE_KEY, 10, sanitizePageSize)
   const [templatesPage, setTemplatesPage] = useState(0)
   const [activeOrdersPage, setActiveOrdersPage] = useState(0)
   const [completedOrdersPage, setCompletedOrdersPage] = useState(0)

@@ -1,3 +1,12 @@
+/**
+ * LAN printer discovery over SSDP.
+ *
+ * Listens on the Bambu SSDP multicast group (239.255.255.250 on UDP 2021),
+ * parses advertised devices into {@link DiscoveredPrinter}s (mapping the
+ * reported model code to a {@link PrinterModel}), and keeps a live map of
+ * recently-seen printers. Entries expire after `ENTRY_TTL_MS` and are swept
+ * every `PRUNE_INTERVAL_MS`, so a printer that goes quiet drops out of results.
+ */
 import dgram from 'node:dgram'
 import { networkInterfaces } from 'node:os'
 import type { DiscoveredPrinter, PrinterModel } from '@printstream/shared'

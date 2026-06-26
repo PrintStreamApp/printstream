@@ -844,11 +844,6 @@ function mapStage(gcodeState: string): PrinterStage {
  * canonical Bambu identifier (16 hex chars for HMS, 8 hex chars for
  * `print_error`) so the UI can show it consistently and link to Bambu's
  * lookup page when no description is known.
- *
- * `hmsPresent` indicates whether the MQTT message actually contained the
- * `hms` key. When only `print_error` arrives (e.g. after a clear), we must
- * not wipe the existing HMS array — we return `null` so the caller preserves
- * the previous list and only updates the print-error portion.
  */
 function parseHmsErrors(
   hms: unknown,

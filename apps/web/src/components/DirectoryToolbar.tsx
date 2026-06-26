@@ -1,3 +1,15 @@
+/**
+ * Shared directory-toolbar controls reused across every browse surface (library,
+ * jobs, printers, slicing profiles, plugin directories, etc.).
+ *
+ * `DirectoryPrimaryToolbar` is the primary row — search, sort, grouping, filters,
+ * and page-size. When the row can't fit its controls side by side (narrow
+ * viewport, phone, or `compactControls`), sort/grouping/filters collapse into a
+ * single combined "options" dropdown. The individual menus (`DirectoryFiltersMenu`,
+ * `DirectoryGroupingMenu`, `DirectorySortMenu`, `DirectoryPageSizeMenu`) are also
+ * exported for surfaces that compose their own layout. See
+ * `docs/ui-conventions.md` for the toolbar contract.
+ */
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import FormatListNumberedRoundedIcon from '@mui/icons-material/FormatListNumberedRounded'

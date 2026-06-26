@@ -1,6 +1,7 @@
 import { Box, Button, Stack, Typography } from '@mui/joy'
 import React, { useRef, type ReactNode } from 'react'
 import { sectionScrollMarginTop } from './dashboard/SectionNav.constants'
+import { smoothScrollToElement } from '../lib/smoothScroll'
 
 /**
  * Shared pagination footer with the count summary on the left and page
@@ -62,7 +63,7 @@ export function PaginatedSection({
     if (typeof window === 'undefined') return
 
     window.requestAnimationFrame(() => {
-      anchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      if (anchorRef.current) smoothScrollToElement(anchorRef.current)
     })
   }
 

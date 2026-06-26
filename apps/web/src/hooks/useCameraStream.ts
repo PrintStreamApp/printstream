@@ -1,14 +1,14 @@
 /**
  * Hook that subscribes to a printer's camera feed over the shared
- * WebSocket. Calls `onFrame` with each decoded JPEG `ImageBitmap`,
- * suitable for painting onto a canvas without flicker.
+ * WebSocket. Calls `onFrame` with the latest decoded JPEG `ImageBitmap`
+ * (frames that arrive while a decode is in flight are coalesced — only the
+ * newest is decoded), suitable for painting onto a canvas without flicker.
  *
  * On mount it sends `camera.subscribe`; on unmount `camera.unsubscribe`.
  * No additional HTTP connections are opened.
  */
 import { useEffect, useRef } from 'react'
 import { wsClient } from '../lib/wsClient'
-import { markLiveCameraStreamActive, markLiveCameraStreamInactive } from './useLiveCameraState'
 
 const PRINTER_ID_LENGTH = 36
 
@@ -56,7 +56,6 @@ export function useCameraStream(
       wsClient.send(JSON.stringify({ type: 'camera.subscribe', printerId }))
     }
 
-    markLiveCameraStreamActive(printerId)
     subscribe()
     const removeOpenListener = wsClient.onOpen(subscribe)
 
@@ -75,7 +74,6 @@ export function useCameraStream(
       cancelled = true
       removeOpenListener()
       removeListener()
-      markLiveCameraStreamInactive(printerId)
       wsClient.send(JSON.stringify({ type: 'camera.unsubscribe', printerId }))
     }
   }, [enabled, printerId])

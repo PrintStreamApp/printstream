@@ -4,9 +4,9 @@
  * Notification plugins on the server format printer events into a
  * `NotificationMessage` and deliver them through their own channel
  * (ntfy webhook, Discord webhook, browser push, etc). The browser
- * notifications plugin re-broadcasts those messages over the existing
- * WebSocket as `notification` events; the web side displays them via
- * the Notification API.
+ * notifications plugin delivers them as Web Push messages (VAPID-signed,
+ * via the `web-push` library) to each subscribed browser, which displays
+ * them through the Notification API.
  *
  * Keeping this in `@printstream/shared` means every channel agrees on
  * the same shape without any plugin importing another.

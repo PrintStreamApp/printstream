@@ -46,6 +46,11 @@ import { type LibrarySort, type LibraryViewMode } from '../components/LibraryBro
 
 export const LIBRARY_VIEW_MODE_KEY = 'bambu.library.viewMode'
 export const LIBRARY_SORT_KEY = 'bambu.library.sort'
+export const LIBRARY_PAGE_SIZE_KEY = 'bambu.library.pageSize'
+export const LIBRARY_FILE_TYPE_FILTERS_KEY = 'bambu.library.fileTypeFilters'
+export const LIBRARY_PRINTER_MODEL_FILTERS_KEY = 'bambu.library.printerModelFilters'
+export const LIBRARY_NOZZLE_SIZE_FILTERS_KEY = 'bambu.library.nozzleSizeFilters'
+export const LIBRARY_PLATE_TYPE_FILTERS_KEY = 'bambu.library.plateTypeFilters'
 export const LIBRARY_PAGE_SIZE_OPTIONS = [25, 50, 100] as const
 export const LIBRARY_SORT_OPTIONS = [
   { value: 'name', label: 'Name' },

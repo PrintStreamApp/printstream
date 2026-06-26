@@ -195,16 +195,3 @@ export const sectionTabSx = {
     borderColor: 'var(--printstream-section-tab-selected-border)'
   }
 } as const
-
-/** Standard top-level card styling: outlined with no extra shadow. */
-export const topLevelCardSx = {
-  borderColor: 'var(--joy-palette-neutral-700)',
-  boxShadow: 'none'
-} as const
-
-/** Inset surface for nested content (controls panels, summaries). */
-export const nestedInsetSurfaceSx = {
-  backgroundColor: 'var(--joy-palette-background-surface)',
-  border: '1px solid var(--joy-palette-neutral-700)',
-  boxShadow: 'none'
-} as const

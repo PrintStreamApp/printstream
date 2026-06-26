@@ -486,7 +486,7 @@ export function SliceFileModal({
     setFilamentColors(buildInitialFilamentColorSelection(file, bakedIndex))
     appliedBakedDefaultsRef.current = true
     setBakedDefaultsApplied(true)
-  }, [bakedIndex, file, filamentProfiles, machineProfiles, processProfiles, selectedPrinter, targetMode, waitingForSlicingProfiles])
+  }, [bakedIndex, file, filamentProfiles, machineProfiles, processProfiles, selectedMachineProfile, selectedPrinter, targetMode, waitingForSlicingProfiles])
   useEffect(() => {
     setFilamentMaterialOptionIds((current) => {
       const defaults = buildInitialFilamentMaterialOptionSelection(file, bakedIndex, compatibleFilamentProfiles, selectedMachineProfile)

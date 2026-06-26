@@ -28,6 +28,7 @@ import { SpoolGrid } from './SpoolGrid'
 import { SpoolDirectoryToolbar } from './SpoolDirectoryToolbar'
 import { SpoolResults } from './SpoolResults'
 import { useSpoolDirectory } from './useSpoolDirectory'
+import { SPOOL_PICKER_PREFS_KEY } from './constants'
 import { spoolTitle } from './filters'
 
 type ApplyValues = { filamentType?: string | null; colorHex?: string | null; trayInfoIdx?: string | null }
@@ -61,7 +62,7 @@ export function SlotEditorActions(props: SlotContext) {
     () => (spoolsQuery.data ?? []).filter((spool) => spool.archivedAt == null),
     [spoolsQuery.data]
   )
-  const directory = useSpoolDirectory(spools)
+  const directory = useSpoolDirectory(spools, { storageKey: SPOOL_PICKER_PREFS_KEY })
 
   if (!printerId || amsId == null) return null
 

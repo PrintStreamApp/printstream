@@ -2,8 +2,8 @@
  * OS "open the tray" launcher entry, so a user who quits the tray can start it
  * again the obvious way — a Start Menu shortcut (Windows) or an application-menu
  * `.desktop` entry (Linux). Both just run `<exe> tray run` in the user's session.
- * Installed by `installService` and removed by `uninstall`. Parameterized by the
- * app identity.
+ * Installed by `installTrayLauncher` and removed by `uninstallTrayLauncher`.
+ * Parameterized by the app identity.
  */
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'

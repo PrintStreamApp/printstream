@@ -5,9 +5,11 @@ import { useEffect, useState } from 'react'
 import { appShellDesktopSecondaryNavHostId } from '../AppShell.constants'
 import { HorizontalOverflowScroller } from '../HorizontalOverflowScroller'
 import { mobileSectionNavDockBottom } from './SectionNav.constants'
+import { smoothScrollToElement } from '../../lib/smoothScroll'
 
 function scrollToSection(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const target = document.getElementById(id)
+  if (target) smoothScrollToElement(target)
 }
 
 export type SectionNavEntry = {

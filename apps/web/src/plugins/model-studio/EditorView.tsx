@@ -1,10 +1,13 @@
 /**
- * Interactive 3D plate editor (Bambu Studio "prepare" stage, basic).
+ * Interactive 3D plate editor (Bambu Studio "prepare" stage).
  *
- * Loads every plate of a 3MF project, lets the user move/rotate/scale, add,
- * duplicate, and delete model instances across multiple plates, then hands back a
- * `SceneEdit` (the locked shared contract) on apply. Heavy: lazy-loaded by the
- * `SlicingEditorAction` slot button via `React.lazy`.
+ * Loads every plate of a 3MF project and lets the user arrange instances across
+ * plates (move/rotate/scale, add/duplicate/delete, auto-arrange/orient), edit
+ * materials and per-object overrides, paint supports/seams/colour, plane-cut and
+ * split objects, add part volumes, place brim ears, schedule per-layer filament
+ * changes, and measure — then hands back a `SceneEdit` (the locked shared
+ * contract) on apply. Heavy: lazy-loaded by the `SlicingEditorAction` slot button
+ * via `React.lazy`.
  *
  * Transform convention: each instance group's matrix is seeded by decomposing the
  * scene's plate-local 12-element transform (position/quaternion/scale, Euler XYZ).

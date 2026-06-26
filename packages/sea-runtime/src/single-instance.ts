@@ -1,14 +1,14 @@
 /**
- * Cross-arch single-instance guard for the standalone bridge runtime.
+ * Cross-arch single-instance guard for a PrintStream Node SEA runtime.
  *
- * Two bridges talking to the same server with the same identity conflict, so
- * only one should run per machine — regardless of architecture. The lock lives
- * in the shared data dir (arch-independent: e.g. `C:\ProgramData\PrintStream
- * Bridge\`), so an arm64 and an x64 build contend on the same file. It records
- * the holder's PID and is self-recovering: a lock orphaned by a crash is
- * reclaimed once its PID is seen to be dead, so it can never wedge startup
- * permanently. It guards the runtime itself, independent of the control
- * channel (a named pipe / Unix socket, which binds no port).
+ * Generic, app-agnostic plumbing (used by the standalone bridge and the tray
+ * runner): the caller passes an explicit lock-file path in the app's shared,
+ * arch-independent data dir (e.g. the bridge's `C:\ProgramData\PrintStream
+ * Bridge\`), so an arm64 and an x64 build contend on the same file and only one
+ * instance runs per machine. It records the holder's PID and is self-recovering:
+ * a lock orphaned by a crash is reclaimed once its PID is seen to be dead, so it
+ * can never wedge startup permanently. It guards the runtime itself, independent
+ * of the control channel (a named pipe / Unix socket, which binds no port).
  */
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'

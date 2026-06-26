@@ -32,13 +32,14 @@ import { PrintModal } from '../components/library/PrintModal'
 import { useMobileViewport } from '../components/useMobileViewport'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
+import { usePersistentState } from '../hooks/usePersistentState'
 import { useControlledMenuClickAway } from '../hooks/useControlledMenuClickAway'
 import { shouldShowNoConnectedPrintersEmptyState } from '../lib/printersEmptyState'
 import { usePlateClearingSync } from '../lib/plateClearing'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildTenantWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspaceRoute'
 import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, filterPrintersForView, sortPrintersForView, parseStoredOptionalString, serializeStoredOptionalString, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings } from '../lib/printersViewHelpers'
-import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
+import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, PRINTER_HISTORY_SORT_DIR_KEY, PRINTER_HISTORY_RESULT_FILTER_KEY, PRINTER_HISTORY_PAGE_SIZE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
 import { PrinterCard } from '../components/printers/PrinterCard'
 import { PrinterSortModal, PrinterViewsModal } from '../components/printers/PrinterViewModals'
@@ -54,6 +55,22 @@ type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['o
  * (sourced from the WS-fed `printer-status` cache) and supports adding
  * a new printer via a small modal.
  */
+const HISTORY_PAGE_SIZES = new Set<number>(HISTORY_PAGE_SIZE_OPTIONS)
+const HISTORY_RESULT_SET = new Set<PrintJob['result']>(HISTORY_RESULTS)
+
+/** Validators for the per-printer detail history's persisted directory controls (sort direction, result filter, page size). */
+function sanitizeHistorySortDirection(value: unknown): DirectorySortDirection {
+  return value === 'asc' ? 'asc' : 'desc'
+}
+function sanitizeHistoryResults(value: unknown): PrintJob['result'][] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is PrintJob['result'] => HISTORY_RESULT_SET.has(entry as PrintJob['result']))
+    : []
+}
+function sanitizeHistoryPageSize(value: unknown): number {
+  return typeof value === 'number' && HISTORY_PAGE_SIZES.has(value) ? value : HISTORY_PAGE_SIZE_OPTIONS[0]
+}
+
 export function PrintersView() {
   const queryClient = useQueryClient()
   const { confirm } = usePromptDialog()
@@ -122,10 +139,10 @@ export function PrintersView() {
   const [singleViewSettingsOpen, setSingleViewSettingsOpen] = useState(false)
   const [detailHistorySearch, setDetailHistorySearch] = useState('')
   const deferredDetailHistorySearch = useDeferredValue(detailHistorySearch)
-  const [detailHistoryResults, setDetailHistoryResults] = useState<PrintJob['result'][]>([])
-  const [detailHistorySortDirection, setDetailHistorySortDirection] = useState<DirectorySortDirection>('desc')
+  const [detailHistoryResults, setDetailHistoryResults] = usePersistentState<PrintJob['result'][]>(PRINTER_HISTORY_RESULT_FILTER_KEY, [], sanitizeHistoryResults)
+  const [detailHistorySortDirection, setDetailHistorySortDirection] = usePersistentState<DirectorySortDirection>(PRINTER_HISTORY_SORT_DIR_KEY, 'desc', sanitizeHistorySortDirection)
   const [detailHistoryPage, setDetailHistoryPage] = useState(0)
-  const [detailHistoryPageSize, setDetailHistoryPageSize] = useState<number>(HISTORY_PAGE_SIZE_OPTIONS[0])
+  const [detailHistoryPageSize, setDetailHistoryPageSize] = usePersistentState<number>(PRINTER_HISTORY_PAGE_SIZE_KEY, HISTORY_PAGE_SIZE_OPTIONS[0], sanitizeHistoryPageSize)
   const [detailHistoryViewMode, setDetailHistoryViewMode] = useLocalStorageState<DirectoryViewMode>(
     PRINTER_HISTORY_VIEW_MODE_KEY,
     'list',

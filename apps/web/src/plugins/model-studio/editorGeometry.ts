@@ -8,8 +8,7 @@
  * paint-tool, cut-axis, and keyboard-step constants and the plain editor types
  * ({@link GizmoMode}, {@link PaintToolType}, {@link SelectedTransform}, etc.) live here too
  * so both EditorView and the leaf panels (editorPanels.tsx) can import them without
- * pulling in the large view module. Extracted from EditorView.tsx verbatim (increment 1
- * of the editor split); no behavior change.
+ * pulling in the large view module.
  */
 import * as THREE from 'three'
 import { ConvexGeometry } from 'three-stdlib'

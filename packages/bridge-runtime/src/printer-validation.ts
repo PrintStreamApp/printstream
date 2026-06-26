@@ -1,3 +1,11 @@
+/**
+ * LAN reachability and credential validation for a candidate printer.
+ *
+ * Probes the printer over TCP and a short-lived MQTT connection (on
+ * {@link MQTT_PORT}) to classify it as reachable/authenticated, or to surface a
+ * specific {@link PrinterConnectionWarning} (host unreachable, bad access code,
+ * etc.) before the caller commits to a persistent connection.
+ */
 import mqtt from 'mqtt'
 import net from 'node:net'
 import type {

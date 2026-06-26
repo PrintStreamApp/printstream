@@ -5,7 +5,6 @@
  * server settings panel. In the cloud build the API does not register the
  * `email-smtp` plugin, so this panel never appears in the plugin manager.
  */
-/* eslint-disable react-refresh/only-export-components -- plugin entry exports a component intentionally */
 import type { WebPlugin } from '../../plugin/types'
 import { SmtpSettingsPanel } from './SmtpSettingsPanel'
 

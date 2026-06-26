@@ -10,10 +10,9 @@
  * stays in that app; this package holds only service/packaging primitives,
  * parameterized by a service spec and (where needed) injected asset accessors.
  *
- * Extraction is staged: this package currently owns the dotenv config file
- * helper, the single-instance lock, and the per-OS service controllers. The
- * paths, tray, and control channel follow as they are de-coupled from app
- * identity.
+ * It owns the config-file helper, the single-instance lock, the per-OS service
+ * controllers, the loopback control channel, the app paths, and the tray
+ * (assets, per-OS provider scripts, launcher + login-autostart wiring).
  */
 export { parseConfigLines, readConfigFileValues, writeConfigFileValues } from './config-file.js'
 export { acquireSingleInstanceLock } from './single-instance.js'

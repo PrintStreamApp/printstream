@@ -3,14 +3,22 @@
  * mirroring the Library page's `useLibraryFilters`. Shared by the Filament tab
  * and the AMS-slot spool picker so both expose the same controls and derive the
  * visible/grouped/paged spools identically.
+ *
+ * The display preferences — sort field + direction, grouping, filter facets,
+ * page size, and view mode — persist to localStorage under `storageKey` so they
+ * survive a reload; the search box and the current page index stay ephemeral.
+ * Each caller passes its own key (see {@link SPOOL_DIRECTORY_PREFS_KEY} /
+ * {@link SPOOL_PICKER_PREFS_KEY}) so the tab and the picker don't share state.
  */
-import { useDeferredValue, useEffect, useMemo, useState } from 'react'
-import type { FilamentSpool } from '@printstream/shared'
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import type { FilamentSpool, FilamentSpoolStatus } from '@printstream/shared'
 import type { DirectorySortDirection, DirectoryViewMode } from '../../components/DirectoryControls'
 import { useMobileViewport } from '../../components/useMobileViewport'
-import { PAGE_SIZE_OPTIONS } from './constants'
+import { usePersistentState } from '../../hooks/usePersistentState'
+import { PAGE_SIZE_OPTIONS, SPOOL_DIRECTORY_PREFS_KEY } from './constants'
 import {
-  EMPTY_FILTERS, applyFilters, countActiveFilters, deriveFacets, groupSpools, sortSpools,
+  applyFilters, countActiveFilters, deriveFacets, groupSpools, sortSpools,
+  SPOOL_GROUP_OPTIONS, SPOOL_SORT_OPTIONS, STATUS_LABELS,
   type SpoolFilterState, type SpoolGroup, type SpoolGroupBy, type SpoolSort
 } from './filters'
 
@@ -48,18 +56,87 @@ export interface SpoolDirectory {
   groups: SpoolGroup[]
 }
 
-export function useSpoolDirectory(spools: FilamentSpool[]): SpoolDirectory {
+/** The persisted subset of a spool directory's state (everything but search + page index). */
+interface SpoolDirectoryPrefs {
+  sort: SpoolSort
+  direction: DirectorySortDirection
+  group: SpoolGroupBy
+  viewMode: DirectoryViewMode
+  pageSize: number
+  filters: { types: string[]; brands: string[]; statuses: FilamentSpoolStatus[] }
+}
+
+const VALID_SORTS = new Set<string>(SPOOL_SORT_OPTIONS.map((option) => option.value))
+const VALID_GROUPS = new Set<string>(SPOOL_GROUP_OPTIONS.map((option) => option.value))
+const VALID_STATUSES = new Set<string>(Object.keys(STATUS_LABELS))
+const VALID_PAGE_SIZES = new Set<number>(PAGE_SIZE_OPTIONS.map((option) => option.value))
+
+const DEFAULT_PREFS: SpoolDirectoryPrefs = {
+  sort: 'used',
+  direction: 'desc',
+  group: 'none',
+  viewMode: 'list',
+  pageSize: PAGE_SIZE_OPTIONS[0].value,
+  filters: { types: [], brands: [], statuses: [] }
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+/** Coerce a stored (or corrupt) blob into a complete, valid prefs object, field by field. */
+function sanitizeSpoolDirectoryPrefs(value: unknown): SpoolDirectoryPrefs {
+  const raw = (value ?? {}) as Record<string, unknown>
+  const rawFilters = (raw.filters ?? {}) as Record<string, unknown>
+  return {
+    sort: VALID_SORTS.has(raw.sort as string) ? (raw.sort as SpoolSort) : DEFAULT_PREFS.sort,
+    direction: raw.direction === 'asc' ? 'asc' : 'desc',
+    group: VALID_GROUPS.has(raw.group as string) ? (raw.group as SpoolGroupBy) : DEFAULT_PREFS.group,
+    viewMode: raw.viewMode === 'icon' ? 'icon' : 'list',
+    pageSize: VALID_PAGE_SIZES.has(raw.pageSize as number) ? (raw.pageSize as number) : DEFAULT_PREFS.pageSize,
+    filters: {
+      types: asStringArray(rawFilters.types),
+      brands: asStringArray(rawFilters.brands),
+      statuses: asStringArray(rawFilters.statuses).filter((status): status is FilamentSpoolStatus => VALID_STATUSES.has(status))
+    }
+  }
+}
+
+export function useSpoolDirectory(
+  spools: FilamentSpool[],
+  options?: { storageKey?: string }
+): SpoolDirectory {
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
-  const [filters, setFilters] = useState<SpoolFilterState>(EMPTY_FILTERS)
-  const [group, setGroup] = useState<SpoolGroupBy>('none')
-  const [sort, setSort] = useState<SpoolSort>('used')
-  const [direction, setDirection] = useState<DirectorySortDirection>('desc')
-  const [viewMode, setViewMode] = useState<DirectoryViewMode>('list')
+  const [prefs, setPrefs] = usePersistentState<SpoolDirectoryPrefs>(
+    options?.storageKey ?? SPOOL_DIRECTORY_PREFS_KEY,
+    DEFAULT_PREFS,
+    sanitizeSpoolDirectoryPrefs
+  )
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState<number>(PAGE_SIZE_OPTIONS[0].value)
   const isMobile = useMobileViewport()
+
+  const { sort, direction, group, viewMode, pageSize } = prefs
   const effectiveViewMode: DirectoryViewMode = isMobile ? 'icon' : viewMode
+
+  const setSort = useCallback((value: SpoolSort) => setPrefs((p) => ({ ...p, sort: value })), [setPrefs])
+  const setDirection = useCallback((value: DirectorySortDirection) => setPrefs((p) => ({ ...p, direction: value })), [setPrefs])
+  const setGroup = useCallback((value: SpoolGroupBy) => setPrefs((p) => ({ ...p, group: value })), [setPrefs])
+  const setViewMode = useCallback((value: DirectoryViewMode) => setPrefs((p) => ({ ...p, viewMode: value })), [setPrefs])
+  const setPageSize = useCallback((value: number) => setPrefs((p) => ({ ...p, pageSize: value })), [setPrefs])
+  const clearFilters = useCallback(() => setPrefs((p) => ({ ...p, filters: { types: [], brands: [], statuses: [] } })), [setPrefs])
+
+  // `filters` keeps the legacy SpoolFilterState shape (with a `search` field the
+  // toolbar never writes) so callers stay untouched; the persisted prefs hold
+  // only the facet arrays. setFilters maps either form back onto the facets.
+  const filters = useMemo<SpoolFilterState>(() => ({ search: '', ...prefs.filters }), [prefs.filters])
+  const setFilters = useCallback<React.Dispatch<React.SetStateAction<SpoolFilterState>>>((update) => {
+    setPrefs((prev) => {
+      const current: SpoolFilterState = { search: '', ...prev.filters }
+      const next = typeof update === 'function' ? (update as (value: SpoolFilterState) => SpoolFilterState)(current) : update
+      return { ...prev, filters: { types: next.types, brands: next.brands, statuses: next.statuses } }
+    })
+  }, [setPrefs])
 
   const facets = useMemo(() => deriveFacets(spools), [spools])
   const visible = useMemo(
@@ -72,6 +149,19 @@ export function useSpoolDirectory(spools: FilamentSpool[]): SpoolDirectory {
     setPage(1)
   }, [deferredSearch, filters, sort, direction, pageSize, group])
 
+  // Drop persisted facet selections that no longer exist once real spools load.
+  // Guarded on a non-empty list so the initial (still-loading) empty facet set
+  // can't silently wipe the user's saved filters.
+  useEffect(() => {
+    if (spools.length === 0) return
+    setPrefs((prev) => {
+      const types = prev.filters.types.filter((type) => facets.types.includes(type))
+      const brands = prev.filters.brands.filter((brand) => facets.brands.includes(brand))
+      if (types.length === prev.filters.types.length && brands.length === prev.filters.brands.length) return prev
+      return { ...prev, filters: { ...prev.filters, types, brands } }
+    })
+  }, [spools.length, facets, setPrefs])
+
   const activeFilterCount = countActiveFilters(filters)
   const grouped = group !== 'none'
   const total = visible.length
@@ -82,7 +172,7 @@ export function useSpoolDirectory(spools: FilamentSpool[]): SpoolDirectory {
   return {
     search, setSearch,
     filters, setFilters,
-    clearFilters: () => setFilters(EMPTY_FILTERS),
+    clearFilters,
     group, setGroup,
     sort, setSort,
     direction, setDirection,

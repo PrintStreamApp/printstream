@@ -26,10 +26,30 @@ import {
 } from '../lib/libraryDirectory'
 import {
   collectDistinctLibraryFilterValues,
-  LIBRARY_PAGE_SIZE_OPTIONS
+  LIBRARY_FILE_TYPE_FILTERS_KEY,
+  LIBRARY_NOZZLE_SIZE_FILTERS_KEY,
+  LIBRARY_PAGE_SIZE_KEY,
+  LIBRARY_PAGE_SIZE_OPTIONS,
+  LIBRARY_PLATE_TYPE_FILTERS_KEY,
+  LIBRARY_PRINTER_MODEL_FILTERS_KEY
 } from '../lib/libraryViewHelpers'
+import { usePersistentState } from './usePersistentState'
 import type { LibrarySort } from '../components/LibraryBrowser'
 import type { LibraryFile, LibraryFolder } from '@printstream/shared'
+
+type LibraryPageSize = (typeof LIBRARY_PAGE_SIZE_OPTIONS)[number]
+
+const EMPTY_FILTER_VALUES: string[] = []
+const LIBRARY_PAGE_SIZES = new Set<number>(LIBRARY_PAGE_SIZE_OPTIONS)
+
+/** Coerce a stored filter blob into a plain string array (facet values are pruned against the live options separately). */
+function sanitizeFilterValues(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+function sanitizeLibraryPageSize(value: unknown): LibraryPageSize {
+  return typeof value === 'number' && LIBRARY_PAGE_SIZES.has(value) ? (value as LibraryPageSize) : 25
+}
 
 /** Keep only the values still present in `options`, preserving the array identity when nothing was dropped. */
 function pruneToOptions(current: string[], options: string[]): string[] {
@@ -96,12 +116,12 @@ export function libraryFacetsEmpty(filters: Pick<LibraryFilters,
 
 export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters {
   const { visibleFiles, childFolders, currentFolderId, requestedBridgeId, deferredSearch, sort, favoritesOnly } = params
-  const [fileTypeFilters, setFileTypeFilters] = useState<string[]>([])
-  const [printerModelFilters, setPrinterModelFilters] = useState<string[]>([])
-  const [nozzleSizeFilters, setNozzleSizeFilters] = useState<string[]>([])
-  const [plateTypeFilters, setPlateTypeFilters] = useState<string[]>([])
+  const [fileTypeFilters, setFileTypeFilters] = usePersistentState<string[]>(LIBRARY_FILE_TYPE_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
+  const [printerModelFilters, setPrinterModelFilters] = usePersistentState<string[]>(LIBRARY_PRINTER_MODEL_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
+  const [nozzleSizeFilters, setNozzleSizeFilters] = usePersistentState<string[]>(LIBRARY_NOZZLE_SIZE_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
+  const [plateTypeFilters, setPlateTypeFilters] = usePersistentState<string[]>(LIBRARY_PLATE_TYPE_FILTERS_KEY, EMPTY_FILTER_VALUES, sanitizeFilterValues)
   const [filtersDialogOpen, setFiltersDialogOpen] = useState(false)
-  const [pageSize, setPageSize] = useState<(typeof LIBRARY_PAGE_SIZE_OPTIONS)[number]>(25)
+  const [pageSize, setPageSize] = usePersistentState<LibraryPageSize>(LIBRARY_PAGE_SIZE_KEY, 25, sanitizeLibraryPageSize)
   const [page, setPage] = useState(1)
 
   const fileTypeOptions = useMemo(
@@ -164,22 +184,28 @@ export function useLibraryFilters(params: LibraryFiltersParams): LibraryFilters 
 
   // Drop any selected facet value that is no longer offered (e.g. after navigating
   // to a folder without it). The functional updater keeps the same array identity
-  // when nothing changed, so this never loops.
+  // when nothing changed, so this never loops. Each effect skips while its option
+  // list is still empty so a persisted filter isn't wiped before the folder's
+  // files have loaded (the options are empty only mid-load or in an empty folder).
   useEffect(() => {
+    if (fileTypeOptions.length === 0) return
     setFileTypeFilters((current) => pruneToOptions(current, fileTypeOptions))
-  }, [fileTypeOptions])
+  }, [fileTypeOptions, setFileTypeFilters])
 
   useEffect(() => {
+    if (printerModelOptions.length === 0) return
     setPrinterModelFilters((current) => pruneToOptions(current, printerModelOptions))
-  }, [printerModelOptions])
+  }, [printerModelOptions, setPrinterModelFilters])
 
   useEffect(() => {
+    if (nozzleSizeOptions.length === 0) return
     setNozzleSizeFilters((current) => pruneToOptions(current, nozzleSizeOptions))
-  }, [nozzleSizeOptions])
+  }, [nozzleSizeOptions, setNozzleSizeFilters])
 
   useEffect(() => {
+    if (plateTypeOptions.length === 0) return
     setPlateTypeFilters((current) => pruneToOptions(current, plateTypeOptions))
-  }, [plateTypeOptions])
+  }, [plateTypeOptions, setPlateTypeFilters])
 
   useEffect(() => {
     if (page !== currentPage) {

@@ -2,9 +2,9 @@
  * In-memory orchestration for server-side slicing jobs.
  *
  * The API queues and scopes work while a separate slicer runtime owns
- * BambuStudio CLI execution. Persisting completed artifacts into the
- * library is intentionally a follow-up slice after the library storage
- * helper is extracted from the upload route.
+ * BambuStudio CLI execution. Completed artifacts are persisted back into the
+ * library — {@link persistLibraryFileFromLocalPath} for the sliced file and
+ * {@link persistHistoryThumbnailFromLibrary} for its history thumbnail.
  */
 import { randomUUID } from 'node:crypto'
 import { createWriteStream, readFileSync } from 'node:fs'

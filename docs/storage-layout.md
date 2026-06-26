@@ -41,7 +41,7 @@ Regenerable cache (safe to delete; rebuilt on demand):
 Ephemeral temp/work (per-operation; should not survive the operation):
 - API: `slicer-client.ts`, `editor.ts`, `slicing-jobs.ts` (×3), `print-dispatcher.ts`,
   `printer-storage-3mf.ts` (×2), `admin-plugins.ts` + `printers.ts` (multer dest).
-- Bridge: `runtime.ts` (×2), `packages/bridge-runtime/printer-ftp.ts`.
+- Bridge: `runtime.ts` (×2), `packages/bridge-runtime/src/printer-ftp.ts`.
 - Slicer service: `SLICER_WORK_DIR` (`/tmp/printstream-slicer`) + bambustudio home/data.
 
 Hidden (generated-but-unpromoted artifacts):

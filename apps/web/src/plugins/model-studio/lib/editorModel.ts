@@ -237,17 +237,6 @@ export function supportPaintKey(objectId: number, componentObjectId: number): st
   return `${objectId}:${componentObjectId}`
 }
 
-/** A catalog entry the user can add/clone onto a plate. */
-export interface EditorCatalogEntry {
-  objectId: number
-  name: string
-  /** Geometry parts to instantiate when this catalog entry is added. */
-  parts: EditorInstancePart[]
-  /** Filament/color hints carried from a representative source instance. */
-  filamentId: number | null
-  color: string | null
-}
-
 const DEFAULT_BED = { minX: -128, maxX: 128, minY: -128, maxY: 128, excludeAreas: [] as Array<{ polygon: Array<{ x: number; y: number }>; label: string | null }> }
 
 let keyCounter = 0
@@ -487,63 +476,6 @@ export function collectPartProcessOverridesFromScenes(
     }
   }
   return out
-}
-
-/**
- * Build the add-model catalog from the plate index objects, deduped by
- * objectId+name, enriched with geometry parts from any seeded instance that
- * already references the object (so a clone reuses the same parts/transforms).
- */
-export function buildCatalog(
-  index: ThreeMfIndex,
-  state: EditorState
-): EditorCatalogEntry[] {
-  const partsByObjectId = new Map<number, EditorInstance>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (!partsByObjectId.has(instance.objectId)) {
-        partsByObjectId.set(instance.objectId, instance)
-      }
-    }
-  }
-
-  const seen = new Set<string>()
-  const catalog: EditorCatalogEntry[] = []
-  for (const plate of index.plates) {
-    for (const object of plate.objects) {
-      const key = `${object.id}:${object.name ?? ''}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      const source = partsByObjectId.get(object.id)
-      if (!source) continue // No geometry parts known for this object; cannot place it.
-      catalog.push({
-        objectId: object.id,
-        name: object.name ?? `Object ${object.id}`,
-        parts: source.parts.map((part) => ({ ...part, transform: [...part.transform] })),
-        filamentId: source.filamentId,
-        color: source.color
-      })
-    }
-  }
-  return catalog
-}
-
-/** Clone a catalog entry into a fresh instance placed near the plate centre. */
-export function instanceFromCatalog(entry: EditorCatalogEntry): EditorInstance {
-  return {
-    key: nextInstanceKey(),
-    source: { kind: 'object' },
-    objectId: entry.objectId,
-    instanceId: 0,
-    name: entry.name,
-    position: new THREE.Vector3(0, 0, 0),
-    rotation: new THREE.Euler(0, 0, 0, 'XYZ'),
-    scale: new THREE.Vector3(1, 1, 1),
-    filamentId: entry.filamentId,
-    printable: true,
-    color: entry.color,
-    parts: entry.parts.map((part) => ({ ...part, transform: [...part.transform] }))
-  }
 }
 
 /**
@@ -1004,11 +936,6 @@ function collectImportPartFilaments(state: EditorState): SceneEdit['importPartFi
     }
   }
   return byKey.size > 0 ? [...byKey.values()] : undefined
-}
-
-/** Count total instances across all plates (for summary chips). */
-export function countInstances(edit: SceneEdit): number {
-  return edit.instances.length
 }
 
 /**

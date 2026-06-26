@@ -1,7 +1,7 @@
 /**
  * 3MF (Bambu flavor) index parser — the pure string→typed-index core shared by the API
- * ({@link ../../../apps/api/src/lib/three-mf-reader.ts}) and the bridge
- * ({@link ../../../apps/bridge/src/library-3mf.ts}).
+ * (`apps/api/src/lib/three-mf-reader.ts`) and the bridge
+ * (`apps/bridge/src/library-3mf.ts`).
  *
  * Library files are bridge-owned by default, so the bridge normally produces the 3MF index the web
  * sees (via the `library.inspect3mf` RPC); the API runs the same parse for the local-copy/fallback

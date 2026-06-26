@@ -6,6 +6,5 @@
 export {
   mergeInheritedMachineProfile,
   repairEstimateModeProjectSettings,
-  retargetProjectSettingsToMachine,
-  type ProfileRecord
+  retargetProjectSettingsToMachine
 } from '@printstream/shared'

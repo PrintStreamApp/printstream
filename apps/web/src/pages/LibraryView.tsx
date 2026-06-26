@@ -1,9 +1,10 @@
 /**
  * Library top-level view: browse folders/files, upload, rename/move/recycle,
- * file versions, and the in-view 3D preview overlay. Also home to the shared
- * slice/print dialog stack exported for reuse elsewhere — `SliceFileModal`,
+ * file versions, and the in-view 3D preview overlay. It hosts the shared
+ * slice/print dialog stack defined in `components/library/` — `SliceFileModal`,
  * `SliceThenPrintModal`, `SliceResultModal`, `PrintModal`, and the
- * `SliceSettingsPanel`/`SliceSettingsController` consumed by the model studio.
+ * `SliceSettingsPanel`/`SliceSettingsController` (the latter also drives the
+ * model studio's borrowed slice config).
  */
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import {
@@ -226,7 +227,7 @@ export function LibraryView() {
   // / a user's favorites surface even past the cap. The hook still re-sorts the
   // returned page client-side (and owns the metadata filters).
   const [sort, setSort] = useLocalStorageState<LibrarySort>(LIBRARY_SORT_KEY, { key: 'name', dir: 'asc' }, parseLibrarySort)
-  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup)
+  const [group, setGroup] = useLocalStorageState<LibraryGroupBy>(LIBRARY_GROUP_KEY, 'none', parseLibraryGroup, String)
   // "Favorite Files" is its own route (bookmarkable + in history). Derive the mode
   // from the path rather than local state; the toggle navigates to/from it.
   const favoritesOnly = isLibraryFavoritesPath(location.pathname)

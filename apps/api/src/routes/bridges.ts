@@ -1,9 +1,9 @@
 /**
  * Tenant bridge management routes.
  *
- * Owns bridge listing plus the initial connect/rename flows so the web app
- * can attach dormant bridge records to a tenant before deeper bridge
- * transport work lands.
+ * Owns the tenant-facing bridge surface: listing, connect/rename/delete, the
+ * connection test/ping, system-log and debug-capture retrieval, and update
+ * check/start — all routed to the owning bridge through `bridgeSessionManager`.
  */
 import express from 'express'
 import {

@@ -1,6 +1,6 @@
 /**
- * Minimal XML text escaping shared by the service definition generators (the
- * WinSW config) and the tray autostart entries. Kept tiny and dependency-free.
+ * Minimal XML text escaping for the WinSW service-config generator
+ * (`service/winsw.ts`). Kept tiny and dependency-free.
  */
 export function escapeXml(value: string): string {
   return value
