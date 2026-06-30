@@ -1,49 +1,23 @@
-/* eslint-disable react-refresh/only-export-components -- plugin entry exports a lazy route + panel intentionally */
 /**
  * Filament-manager plugin (web side).
  *
  * Adds the top-level **Filament** tab (custom spool icon on mobile) — a spool
  * inventory with search/filter/sort/group, list and icon views, and graphical +
  * numeric remaining-filament. Also contributes the plugin-manager settings panel
- * for the `autoAddBambuSpools` toggle.
+ * for the `autoAddBambuSpools` toggle, and the filament stats cards into the stats slot.
+ *
+ * Eager-loaded with the app shell. (The @mui/x-charts dependency the stats cards use is
+ * already in the shell via the core printer/tenant stats, so this adds no bundle weight.)
  *
  * Spool editing of AMS/external slots (pick-from-library / save-to-library) is
  * contributed separately into the slot editors via plugin slots.
  */
-import { Suspense, lazy } from 'react'
-import { Typography } from '@mui/joy'
 import type { WebPlugin } from '../../plugin/types'
-import { FilamentSpoolIcon } from './FilamentSpoolIcon'
+import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
 import { FilamentManagerSettingsPanel } from './SettingsPanel'
 import { SlotEditorActions } from './SlotEditorActions'
-
-const FilamentView = lazy(async () => {
-  const module = await import('./FilamentView')
-  return { default: module.FilamentView }
-})
-
-// Lazy so the @mui/x-charts dependency stays out of the app shell and only
-// loads when the stats page is open with this plugin active.
-const FilamentStatsCards = lazy(async () => {
-  const module = await import('./FilamentStatsCards')
-  return { default: module.FilamentStatsCards }
-})
-
-function FilamentRoute() {
-  return (
-    <Suspense fallback={<Typography level="body-sm">Loading filament…</Typography>}>
-      <FilamentView />
-    </Suspense>
-  )
-}
-
-function FilamentStatsSlot() {
-  return (
-    <Suspense fallback={null}>
-      <FilamentStatsCards />
-    </Suspense>
-  )
-}
+import { FilamentView } from './FilamentView'
+import { FilamentStatsCards } from './FilamentStatsCards'
 
 export const filamentManagerPlugin: WebPlugin = {
   name: 'filament-manager',
@@ -55,12 +29,12 @@ export const filamentManagerPlugin: WebPlugin = {
       path: '/filament/*',
       navLabel: 'Filament',
       navMobileIcon: <FilamentSpoolIcon />,
-      element: FilamentRoute
+      element: FilamentView
     }
   ],
   slots: [
     { name: 'ams.slotEditor', component: SlotEditorActions },
     { name: 'externalSpool.editor', component: SlotEditorActions },
-    { name: 'stats.cards', component: FilamentStatsSlot }
+    { name: 'stats.cards', component: FilamentStatsCards }
   ]
 }

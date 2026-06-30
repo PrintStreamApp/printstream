@@ -167,7 +167,10 @@ export async function pruneUnreferencedSlicedOutputs(
 ): Promise<{ removed: number }> {
   const cutoff = new Date(Date.now() - env.LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS * ONE_HOUR_MS)
   const stale = await rootPrisma.libraryFile.findMany({
-    where: { hidden: true, snapshotKey: null, origin: 'slice', uploadedAt: { lt: cutoff } },
+    // Belt-and-suspenders: never prune a slice output a print-queue item still points at. The add-to-queue
+    // path un-hides the output (so `hidden: true` shouldn't match a queued one), but this guards against
+    // any path that leaves a queue-referenced output hidden — losing it would break dispatch.
+    where: { hidden: true, snapshotKey: null, origin: 'slice', uploadedAt: { lt: cutoff }, queueItems: { none: {} } },
     select: { id: true, ownerBridgeId: true, storedPath: true }
   })
   let removed = 0

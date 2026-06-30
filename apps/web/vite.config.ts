@@ -114,17 +114,16 @@ export default defineConfig(({ command, mode }) => {
         ].join('; ')
       },
       // When the dev server runs from source behind a TLS-terminating reverse proxy
-      // (e.g. dev.printstream.example.com via nginx + Cloudflare), Vite's host check would
-      // reject the proxied Host and its HMR client would dial the wrong origin/port.
-      // Both are opt-in via env so local `npm run dev` is unaffected:
-      //   VITE_DEV_ALLOWED_HOSTS=dev.printstream.example.com   (comma-separated)
-      //   VITE_DEV_HMR_HOST=dev.printstream.example.com        (HMR over wss on :443)
+      // (e.g. cloudflared → tunnel.printstream.example.com), Vite's host check would reject the
+      // proxied Host — allow it via VITE_DEV_ALLOWED_HOSTS (comma-separated).
       allowedHosts: env.VITE_DEV_ALLOWED_HOSTS
         ? env.VITE_DEV_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter(Boolean)
         : undefined,
-      hmr: env.VITE_DEV_HMR_HOST
-        ? { host: env.VITE_DEV_HMR_HOST, protocol: 'wss', clientPort: 443 }
-        : undefined,
+      // HMR is left to Vite's client inference rather than a forced host/port: the client dials the
+      // SAME origin that served the page — ws://localhost:5173 for local access and
+      // wss://<proxy-host>(:443) through the tunnel — so BOTH access paths get HMR. The old
+      // VITE_DEV_HMR_HOST → { host, protocol:'wss', clientPort:443 } override fixed the tunnel but
+      // broke localhost, because one static socket target can't serve both.
       fs: {
         allow: [workspaceRoot]
       },

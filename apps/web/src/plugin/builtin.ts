@@ -13,6 +13,7 @@ import { plateClearingPlugin } from '../plugins/plate-clearing'
 import { firmwareUpdatesPlugin } from '../plugins/firmware-updates'
 import { ordersPlugin } from '../plugins/orders'
 import { filamentManagerPlugin } from '../plugins/filament-manager'
+import { printQueuePlugin } from '../plugins/print-queue'
 import { homeAssistantWebPlugin } from '../plugins/home-assistant'
 import { authPasswordWebPlugin } from '../plugins/auth-password'
 import { authOauthWebPlugin } from '../plugins/auth-oauth'
@@ -41,6 +42,7 @@ export function registerBuiltinPlugins(): void {
   registerBuiltinPlugin(firmwareUpdatesPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
   registerBuiltinPlugin(ordersPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
   registerBuiltinPlugin(filamentManagerPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
+  registerBuiltinPlugin(printQueuePlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
   registerBuiltinPlugin(homeAssistantWebPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
   webPluginRegistry.runInitHooks()
 }

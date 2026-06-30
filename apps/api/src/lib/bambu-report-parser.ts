@@ -28,6 +28,7 @@ import {
   type Printer,
   type PrinterAmsDryingPhase,
   type PrinterAirductMode,
+  type PrinterFirmwareModule,
   type PrinterLightMode,
   type PrinterPressureAdvanceProfile,
   type PrinterStage,
@@ -107,10 +108,31 @@ export function makeOfflineStatus(printer: Printer): PrinterStatus {
     ams: [],
     externalSpools: buildDefaultExternalSpools(printer),
     firmwareVersion: null,
+    firmwareModules: [],
     sdCardPresent: null,
     connectionWarnings: [],
     observedAt: new Date().toISOString()
   }
+}
+
+/**
+ * Normalize the `module` array from a `get_version` reply into the typed
+ * {@link PrinterFirmwareModule} list. Skips entries without a name or a
+ * usable `sw_ver` (some controllers report an empty version).
+ */
+function parseFirmwareModules(rawModules: unknown[]): PrinterFirmwareModule[] {
+  const modules: PrinterFirmwareModule[] = []
+  for (const entry of rawModules) {
+    if (!isObject(entry)) continue
+    const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+    const version = typeof entry.sw_ver === 'string' ? entry.sw_ver.trim() : ''
+    if (name === '' || version === '') continue
+    const hardwareVersion = typeof entry.hw_ver === 'string' && entry.hw_ver.trim() !== ''
+      ? entry.hw_ver.trim()
+      : null
+    modules.push({ name, version, hardwareVersion })
+  }
+  return modules
 }
 
 const BAMBU_FILAMENT_CHANGE_STEP_LABELS: Record<number, string> = {
@@ -294,14 +316,18 @@ export function parseReport(value: unknown, printer: Printer, currentStatus?: Pr
   const root = value as Record<string, unknown>
 
   // `info.command = "get_version"` is the reply to our post-connect version
-  // request. It carries a list of modules; we only care about `ota` whose
-  // `sw_ver` is the human-facing firmware version Bambu publishes on its
-  // wiki / firmware download page.
+  // request. It carries a list of modules. `ota` is the human-facing firmware
+  // version Bambu publishes on its wiki / firmware download page; the rest
+  // (each AMS unit, the various controllers) are surfaced as `firmwareModules`
+  // so callers can tell when, e.g., an AMS unit lags the main firmware.
   const info = isObject(root.info) ? root.info : null
   if (info && info.command === 'get_version' && Array.isArray(info.module)) {
-    const ota = info.module.find((entry) => isObject(entry) && (entry as Record<string, unknown>).name === 'ota')
-    if (isObject(ota) && typeof ota.sw_ver === 'string' && ota.sw_ver.trim() !== '') {
-      return { firmwareVersion: ota.sw_ver.trim() }
+    const modules = parseFirmwareModules(info.module)
+    if (modules.length > 0) {
+      const ota = modules.find((module) => module.name === 'ota')
+      const delta: Partial<PrinterStatus> = { firmwareModules: modules }
+      if (ota) delta.firmwareVersion = ota.version
+      return delta
     }
   }
 

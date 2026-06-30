@@ -390,6 +390,25 @@ export const printerErrorSchema = z.object({
 })
 export type PrinterError = z.infer<typeof printerErrorSchema>
 
+/**
+ * One firmware module reported in the printer's `info.command=get_version`
+ * reply. Bambu firmware is delivered as a single OTA package, but the printer
+ * reports each sub-module's installed version separately — the main board
+ * (`ota`), each AMS unit (`ams/0`, `ams/1`, ...), and assorted controllers
+ * (`mc`, `th`, `esp32`, ...). `ota` is also surfaced as
+ * {@link PrinterStatus.firmwareVersion}; the rest let the UI show whether,
+ * e.g., an AMS unit is lagging the main firmware.
+ */
+export const printerFirmwareModuleSchema = z.object({
+  /** Module identifier as reported by the printer, e.g. `ota`, `ams/0`, `mc`. */
+  name: z.string(),
+  /** Installed software version for this module (e.g. `00.00.06.49`). */
+  version: z.string(),
+  /** Hardware revision string for the module, when the printer reports one. */
+  hardwareVersion: z.string().nullable()
+})
+export type PrinterFirmwareModule = z.infer<typeof printerFirmwareModuleSchema>
+
 export const printerStatusSchema = z.object({
   printerId: z.string(),
   online: z.boolean(),
@@ -456,6 +475,12 @@ export const printerStatusSchema = z.object({
    * until the printer has answered the version request after a fresh connect.
    */
   firmwareVersion: z.string().nullable(),
+  /**
+   * Per-module firmware versions from the same `get_version` reply (main
+   * board, each AMS unit, controllers). Empty until the printer answers the
+   * version request, or on firmware that does not report a module list.
+   */
+  firmwareModules: z.array(printerFirmwareModuleSchema).default([]),
   /**
    * Whether the printer reports an SD card inserted. Null when the printer
    * has not yet sent a state-bearing report (no information either way).

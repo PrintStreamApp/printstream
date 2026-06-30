@@ -205,6 +205,8 @@ test('pruneUnreferencedSlicedOutputs removes only stale slice-origin hidden rows
   assert.equal(where.hidden, true)
   assert.equal(where.snapshotKey, null)
   assert.equal(where.origin, 'slice')
+  // Never prune a slice output a print-queue item still points at (losing it would break dispatch).
+  assert.deepEqual(where.queueItems, { none: {} })
 })
 
 test('pruneDormantBridges reaps only never-connected, unpaired, expired registrations', async () => {

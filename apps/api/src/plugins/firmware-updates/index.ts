@@ -254,6 +254,18 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
         updateAvailable,
         downloadUrl: latest?.downloadUrl || null,
         releaseNotes: latest?.releaseNotes ?? null,
+        // Per-module versions (each AMS unit, controllers) minus `ota`, which is
+        // already reported as `currentVersion`. Bambu publishes no separate
+        // "latest" for these, so they are display-only — they let the user see
+        // whether an AMS unit lags the main firmware.
+        modules: (status?.firmwareModules ?? [])
+          .filter((module) => module.name !== 'ota')
+          .map((module) => ({
+            name: module.name,
+            version: module.version,
+            hardwareVersion: module.hardwareVersion,
+            isAms: isAmsModuleName(module.name)
+          })),
         availableVersions: versions.map((v) => ({
           version: v.version,
           fileAvailable: Boolean(v.downloadUrl),
@@ -536,10 +548,28 @@ interface UpdateReport {
   updateAvailable: boolean
   downloadUrl: string | null
   releaseNotes: string | null
+  /**
+   * Installed firmware versions for the printer's sub-modules (each AMS unit,
+   * controllers), excluding the main board (`ota`, already in `currentVersion`).
+   * Display-only — Bambu ships these inside the main OTA package and publishes
+   * no separate "latest" to compare against.
+   */
+  modules: Array<{
+    name: string
+    version: string
+    hardwareVersion: string | null
+    /** True for AMS units (`ams/0`, `ams/1`, ...) so the UI can group them. */
+    isAms: boolean
+  }>
   availableVersions: Array<{
     version: string
     fileAvailable: boolean
     releaseNotes: string | null
     releaseTime: string | null
   }>
+}
+
+/** AMS module names look like `ams/0`, `ams/1`, ... (and bare `ams`). */
+function isAmsModuleName(name: string): boolean {
+  return name === 'ams' || name.startsWith('ams/')
 }

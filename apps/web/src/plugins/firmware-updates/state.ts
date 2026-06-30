@@ -7,6 +7,13 @@ export interface AvailableVersion {
   releaseTime: string | null
 }
 
+export interface FirmwareModule {
+  name: string
+  version: string
+  hardwareVersion: string | null
+  isAms: boolean
+}
+
 export interface UpdateReport {
   printerId: string
   printerName: string
@@ -19,6 +26,8 @@ export interface UpdateReport {
   updateAvailable: boolean
   downloadUrl: string | null
   releaseNotes: string | null
+  /** Installed firmware for the printer's sub-modules (AMS units, controllers). Display-only. */
+  modules: FirmwareModule[]
   availableVersions: AvailableVersion[]
 }
 
@@ -126,6 +135,27 @@ export function shouldInvalidateFirmwareUpdates(
 
 export function getInstallableVersions(update: UpdateReport | undefined): AvailableVersion[] {
   return update?.availableVersions.filter((version) => version.fileAvailable) ?? []
+}
+
+/**
+ * Module firmware to show in the dialog, AMS units first (the common reason a
+ * user opens this), each group keeping the printer's reported order.
+ */
+export function getModuleFirmware(update: UpdateReport | undefined): FirmwareModule[] {
+  const modules = update?.modules ?? []
+  return [...modules].sort((a, b) => Number(b.isAms) - Number(a.isAms))
+}
+
+/**
+ * Human-facing label for a module row. AMS units are renumbered to a 1-based
+ * "AMS N" to match the printer's on-screen labelling; other modules show their
+ * raw reported name.
+ */
+export function formatModuleLabel(module: FirmwareModule): string {
+  if (!module.isAms) return module.name
+  const match = /^ams\/(\d+)$/.exec(module.name)
+  if (match) return `AMS ${Number(match[1]) + 1}`
+  return 'AMS'
 }
 
 export function getDefaultSelectedVersion(

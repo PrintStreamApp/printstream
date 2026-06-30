@@ -104,6 +104,9 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
         if (event.resource === 'print-dispatch') {
           void queryClient.invalidateQueries({ queryKey: ['print-dispatch'] })
         }
+        if (event.resource === 'print-queue') {
+          void queryClient.invalidateQueries({ queryKey: ['print-queue'] })
+        }
         if (event.resource === 'slicing') {
           // Job state/progress only — NOT the profiles catalogue. Slice progress fires sub-second;
           // refetching the (slow) profiles query on every tick is the slice-time network spam.

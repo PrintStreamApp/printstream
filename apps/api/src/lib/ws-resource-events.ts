@@ -21,6 +21,7 @@ type ResourceName =
   | 'plugin.settings'
   | 'plugins'
   | 'print-dispatch'
+  | 'print-queue'
   | 'slicing'
   | 'slicing.profiles'
   | 'printer.storage'
@@ -78,6 +79,10 @@ export function broadcastPluginsChanged(tenantId?: string | null): void {
 
 export function broadcastPrintDispatchChanged(tenantId?: string | null): void {
   broadcastResourceChange({ resource: 'print-dispatch', tenantId })
+}
+
+export function broadcastQueueChanged(tenantId?: string | null): void {
+  broadcastResourceChange({ resource: 'print-queue', tenantId })
 }
 
 export function broadcastSlicingChanged(tenantId?: string | null): void {

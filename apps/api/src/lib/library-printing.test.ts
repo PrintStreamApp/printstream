@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import type { PrintDispatchJob, PrintFromLibrary, Printer } from '@printstream/shared'
 import { bridgeSessionManager } from './bridge-session-manager.js'
-import { enqueueLibraryPrint } from './library-printing.js'
+import { enqueueLibraryPrint, validateLibraryPrint } from './library-printing.js'
 import { printDispatcher } from './print-dispatcher.js'
 import { printerManager } from './printer-manager.js'
 import { prisma } from './prisma.js'
@@ -100,6 +100,31 @@ test('library print recovers hidden stale snapshots with a unique connected repl
     ownerBridgeId: 'new-bridge',
     storedPath: 'new-visible.gcode'
   })
+})
+
+test('validateLibraryPrint runs the pre-flight checks but never dispatches', async () => {
+  prisma.libraryFile.findFirst = ((async () => makeLibraryFile({ id: 'file-1', snapshotKey: null })) as unknown) as typeof prisma.libraryFile.findFirst
+  prisma.printer.findFirst = ((async () => makePrinter()) as unknown) as typeof prisma.printer.findFirst
+  bridgeSessionManager.isConnected = (() => true) as typeof bridgeSessionManager.isConnected
+  printerManager.getPrinter = (() => makePrinter()) as typeof printerManager.getPrinter
+  let dispatched = false
+  printDispatcher.enqueueSnapshotPrint = (async () => { dispatched = true; return makeJob() }) as typeof printDispatcher.enqueueSnapshotPrint
+
+  await validateLibraryPrint(makePrintInput(), 'tenant-1') // resolves — all checks pass
+  assert.equal(dispatched, false) // ...and it never starts a real print
+})
+
+test('validateLibraryPrint surfaces a missing file', async () => {
+  prisma.libraryFile.findFirst = ((async () => null) as unknown) as typeof prisma.libraryFile.findFirst
+  await assert.rejects(validateLibraryPrint(makePrintInput(), 'tenant-1'), /File not found/)
+})
+
+test('validateLibraryPrint surfaces a disconnected target printer', async () => {
+  prisma.libraryFile.findFirst = ((async () => makeLibraryFile({ id: 'file-1', snapshotKey: null })) as unknown) as typeof prisma.libraryFile.findFirst
+  prisma.printer.findFirst = ((async () => makePrinter()) as unknown) as typeof prisma.printer.findFirst
+  bridgeSessionManager.isConnected = (() => true) as typeof bridgeSessionManager.isConnected
+  printerManager.getPrinter = (() => undefined) as typeof printerManager.getPrinter // not connected
+  await assert.rejects(validateLibraryPrint(makePrintInput(), 'tenant-1'), /not connected/)
 })
 
 function makeLibraryFile(overrides: Partial<{

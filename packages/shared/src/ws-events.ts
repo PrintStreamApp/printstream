@@ -71,6 +71,7 @@ export const wsResourceChangedEventSchema = z.object({
     'plugins',
     'plugin.settings',
     'print-dispatch',
+    'print-queue',
     'slicing',
     // The slicer PROFILE catalogue (machines/processes/filaments). Emitted only when profiles
     // actually change (custom profile create/delete), NOT on slice progress — so the slow profiles

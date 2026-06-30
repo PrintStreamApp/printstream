@@ -329,6 +329,7 @@ function makeStatus(overrides: Partial<PrinterStatus>): PrinterStatus {
     ams: [],
     externalSpools: [],
     firmwareVersion: null,
+    firmwareModules: [],
     sdCardPresent: true,
     connectionWarnings: [],
     observedAt: new Date().toISOString(),

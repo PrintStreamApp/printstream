@@ -22,7 +22,7 @@ import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/Sc
 import { EmptyState } from '../../components/EmptyState'
 import { toast } from '../../lib/toast'
 import { useSpoolsQuery, useSpoolMutations } from './api'
-import { FilamentSpoolIcon } from './FilamentSpoolIcon'
+import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
 import { SpoolList } from './SpoolList'
 import { SpoolGrid } from './SpoolGrid'
 import { SpoolDirectoryToolbar } from './SpoolDirectoryToolbar'

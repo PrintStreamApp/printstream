@@ -42,6 +42,7 @@ import { OverflowTooltipText } from './OverflowTooltipText'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { filamentBackground, filamentTextColor, hasLoadedFilament, resolveFilamentDisplay, resolveProjectFilamentColorName } from '../lib/filamentColor'
 import { AmsSpoolSetupDialog, type AmsSpoolSetupTarget } from './AmsSpoolSetupDialog'
+import { formatFilamentRemaining } from '../lib/filamentSufficiency'
 import { getSlotRemainingState } from '../lib/slotRemaining'
 import { amsUnitLetter, filterTrayGroupsForFilament, sanitizeTrayMapping, type PrinterTrayGroup } from '../lib/printerTrayMapping'
 
@@ -942,7 +943,7 @@ function StorageTrayOptionLabel({
   // Only spools with a readable RFID/Bambu tag (trayUuid) report remaining; third-party
   // spools have no reliable figure, so we omit the estimate rather than show a guess.
   const remainingDetail = hasFilament && tray.trayUuid != null && tray.remainPercent != null && remainGrams != null
-    ? `${Math.round(tray.remainPercent)}% (~${remainGrams}g)`
+    ? formatFilamentRemaining(remainGrams, tray.remainPercent)
     : null
   const typeMismatch = Boolean(
     requiredFilamentType
@@ -1007,7 +1008,7 @@ function StorageTrayOptionLabel({
           <Stack direction="row" spacing={0.5} alignItems="center" sx={{ gridColumn: '1 / 2', minWidth: 0 }}>
             <Typography
               level="body-xs"
-              textColor={remainingState.insufficient ? 'danger.plainColor' : 'text.primary'}
+              textColor={remainingState.insufficient ? 'danger.plainColor' : 'text.tertiary'}
               noWrap
               sx={{ minWidth: 0, fontWeight: remainingState.insufficient ? 'md' : undefined }}
             >

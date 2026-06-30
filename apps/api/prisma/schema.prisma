@@ -47,6 +47,7 @@ model Tenant {
   orderPrints        OrderPrint[]
   filamentSpools     FilamentSpool[]
   filamentSpoolUsages FilamentSpoolUsage[]
+  queueItems         QueueItem[]
   auditLogs          AuditLog[]
   stats              TenantStats?
   printerStats       PrinterStats[]
@@ -75,6 +76,8 @@ model Printer {
   dispatchJobs DispatchJob[]
   startedOrderPrints OrderPrint[] @relation("OrderPrintStartedPrinter")
   loadedFilamentSpools FilamentSpool[] @relation("FilamentSpoolLoadedPrinter")
+  queueItemTargets   QueueItem[] @relation("QueueItemTargetPrinter")
+  queueItemLastRuns  QueueItem[] @relation("QueueItemLastPrinter")
 
   @@unique([tenantId, serial])
   @@index([tenantId, bridgeId, position])
@@ -148,6 +151,7 @@ model PrintJob {
   printer         Printer   @relation(fields: [printerId], references: [id], onDelete: Cascade)
   file            LibraryFile? @relation(fields: [fileId], references: [id], onDelete: SetNull)
   orderPrints     OrderPrint[] @relation("OrderPrintLastJob")
+  queueItems      QueueItem[]  @relation("QueueItemLastJob")
 
   @@index([tenantId, printerId, startedAt])
   @@index([tenantId, printerId, finishedAt, startedAt])
@@ -330,6 +334,7 @@ model LibraryFile {
   favorites     LibraryFileFavorite[]
   orderTemplatePrints OrderTemplatePrint[]
   orderPrints   OrderPrint[]
+  queueItems    QueueItem[]
 
   @@index([tenantId, uploadedAt])
   @@index([tenantId, folderId])
@@ -953,4 +958,74 @@ model FilamentSpoolUsage {
 
   @@index([tenantId, spoolId, recordedAt])
   @@index([tenantId, jobId])
+}
+
+/// A queued print waiting to be dispatched (the `print-queue` plugin). One shared,
+/// reorderable workspace backlog: each item targets any eligible printer by default
+/// but can be pinned to a specific printer or printer model ("Any X1C"). `quantity`/
+/// `completedCount` track first-class copies — the row counts down rather than being
+/// exploded into N rows. `requiredFilamentsJson` snapshots the plate's required
+/// filaments at add time so eligibility/AMS matching needs no per-list 3MF inspection.
+/// v1 is manual-dispatch only; auto-advance is a deliberate later phase. `status` is the
+/// dispatch lifecycle (queued|held|dispatching|printing|done|failed); per-printer
+/// eligibility is computed live (not persisted) from the shared matcher.
+model QueueItem {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  libraryFileId         String?
+  fileName              String
+  // Source kind for display: 'gcode' | '3mf'.
+  kind                  String   @default("gcode")
+  // 1-based plate index inside a multi-plate 3MF.
+  plateIndex            Int      @default(1)
+  plateName             String?
+  // First-class copies: the row stays queued until completedCount reaches quantity.
+  quantity              Int      @default(1)
+  completedCount        Int      @default(0)
+  // Fractional rank for cheap drag-reorder without renumbering siblings.
+  sortKey               Float    @default(0)
+  // Hybrid targeting: 'any' | 'printer' | 'model'.
+  targetKind            String   @default("any")
+  targetPrinterId       String?
+  targetModel           String?
+  // Serialized PrintFromLibrary print options (useAms, bedLevel, flowCalibration, ...).
+  printOptionsJson      String?
+  // Optional manual tray override; the matcher computes one at dispatch when null.
+  amsMappingJson        String?
+  // Snapshot of the plate's required filaments ([{id,filamentType,color}]) at add time.
+  requiredFilamentsJson String?
+  // Snapshot of the file's compatible printer models (JSON string[]) at add time; the
+  // matcher rejects printers whose model isn't compatible (sliced gcode is machine-specific).
+  compatibleModelsJson  String?
+  // Snapshot of the plate's bed/plate type and nozzle diameters (JSON string[]) at add time,
+  // for display in the queue list (matches what the file would show when printed).
+  plateType             String?
+  nozzleDiametersJson   String?
+  status                String   @default("queued")
+  label                 String?
+  createdById           String?
+  // Most recent dispatch attempt — printer + tracked PrintJob linkage for completion
+  // reconciliation and history (mirrors OrderPrint's last-print columns).
+  lastPrinterId         String?
+  lastDispatchJobId     String?
+  lastPrintJobId        String?
+  lastJobName           String?
+  lastResult            String?
+  lastDispatchedAt      DateTime?
+  lastFinishedAt        DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant                Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  libraryFile           LibraryFile? @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
+  targetPrinter         Printer?     @relation("QueueItemTargetPrinter", fields: [targetPrinterId], references: [id], onDelete: SetNull)
+  lastPrinter           Printer?     @relation("QueueItemLastPrinter", fields: [lastPrinterId], references: [id], onDelete: SetNull)
+  lastPrintJob          PrintJob?    @relation("QueueItemLastJob", fields: [lastPrintJobId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, sortKey])
+  @@index([tenantId, sortKey])
+  @@index([tenantId, libraryFileId])
+  @@index([tenantId, targetPrinterId])
+  @@index([tenantId, lastPrinterId])
+  @@index([tenantId, lastPrintJobId])
 }

@@ -1,8 +1,8 @@
 /**
- * Custom "spool of filament" icon for the Filament tab (face-on spool: flange
- * ring, wound-filament coil, centre hub, and a loose strand). Drawn with
- * `currentColor` strokes so it inherits nav colour and sizing like the other
- * tab icons.
+ * Custom "spool of filament" icon (face-on spool: flange ring, wound-filament coil, centre hub, and a
+ * loose strand). Drawn with `currentColor` strokes so it inherits surrounding colour and sizing. Shared
+ * across the app — the Filament tab/nav, and the print-queue start dialog's material indicator — so the
+ * "material" glyph is consistent everywhere (and reusable without one plugin importing another).
  */
 import { SvgIcon } from '@mui/joy'
 import type { ComponentProps } from 'react'

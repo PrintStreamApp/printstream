@@ -339,40 +339,23 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
           }
         : undefined}
     >
-      {/* Row 1: search, with the pin toggle pinned to its right. */}
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', minWidth: 0 }}>
-        <Input
-          size="sm"
-          value={searchValue}
-          onChange={(event) => onSearchChange(event.target.value)}
-          placeholder={searchPlaceholder}
-          startDecorator={<SearchRoundedIcon />}
-          endDecorator={searchEndDecorator}
-          slotProps={{ input: { 'aria-label': searchAriaLabel } }}
-          sx={{ flex: '1 1 auto', minWidth: 0 }}
-        />
-        {pinnable && (
-          <Tooltip title={pinned ? 'Unpin toolbar' : 'Pin toolbar so it stays while scrolling'}>
-            <IconButton
-              size="sm"
-              variant={pinned ? 'soft' : 'plain'}
-              color={pinned ? 'primary' : 'neutral'}
-              aria-label={pinned ? 'Unpin toolbar' : 'Pin toolbar'}
-              aria-pressed={pinned}
-              onClick={() => setPinned(!pinned)}
-              sx={{ flexShrink: 0 }}
-            >
-              {pinned ? <PushPinRoundedIcon /> : <PushPinOutlinedIcon />}
-            </IconButton>
-          </Tooltip>
-        )}
-      </Box>
+      {/* Row 1: search, full width. */}
+      <Input
+        size="sm"
+        value={searchValue}
+        onChange={(event) => onSearchChange(event.target.value)}
+        placeholder={searchPlaceholder}
+        startDecorator={<SearchRoundedIcon />}
+        endDecorator={searchEndDecorator}
+        slotProps={{ input: { 'aria-label': searchAriaLabel } }}
+        sx={{ minWidth: 0 }}
+      />
 
-      {/* Row 2: sort, grouping, filters on the left; page size + view mode anchored
-          to the right end. On phones sort/grouping/filters collapse into one
-          combined dropdown. In compact mode the row stays on one line (nowrap) so a
-          fit-content container (e.g. the print dialog) grows to fit it instead of
-          wrapping the controls. */}
+      {/* Row 2: sort, grouping, filters on the left; page size, view mode, then the
+          pin toggle anchored to the right end. On phones sort/grouping/filters
+          collapse into one combined dropdown. In compact mode the row stays on one
+          line (nowrap) so a fit-content container (e.g. the print dialog) grows to
+          fit it instead of wrapping the controls. */}
       <Box ref={rowRef} sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: compact ? 'nowrap' : 'wrap', minWidth: 0 }}>
         {combineControls ? (
           <DirectoryControlsMenu sort={sortConfig} grouping={grouping} filters={filters} />
@@ -400,6 +383,21 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
           />
           {showViewModeToggle && viewMode && onViewModeChange && (
             <ViewModeToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
+          )}
+          {pinnable && (
+            <Tooltip title={pinned ? 'Unpin toolbar' : 'Pin toolbar so it stays while scrolling'}>
+              <IconButton
+                size="sm"
+                variant={pinned ? 'soft' : 'plain'}
+                color={pinned ? 'primary' : 'neutral'}
+                aria-label={pinned ? 'Unpin toolbar' : 'Pin toolbar'}
+                aria-pressed={pinned}
+                onClick={() => setPinned(!pinned)}
+                sx={{ flexShrink: 0 }}
+              >
+                {pinned ? <PushPinRoundedIcon /> : <PushPinOutlinedIcon />}
+              </IconButton>
+            </Tooltip>
           )}
         </Box>
       </Box>

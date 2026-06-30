@@ -7,8 +7,10 @@ import {
   firmwareStillPendingInstall,
   formatFirmwareChipLabel,
   firmwareChipColor,
+  formatModuleLabel,
   getDefaultSelectedVersion,
   getInstallableVersions,
+  getModuleFirmware,
   getUpdatesStorageKey,
   getSelectedReleaseNotes,
   isActiveUploadStatus,
@@ -38,6 +40,10 @@ const sampleUpdate: UpdateReport = {
   updateAvailable: true,
   downloadUrl: 'https://example.com/01.10.00.00.zip',
   releaseNotes: '# Version 01.10.00.00',
+  modules: [
+    { name: 'mc', version: '00.00.30.04', hardwareVersion: null, isAms: false },
+    { name: 'ams/0', version: '00.00.06.49', hardwareVersion: 'AMS08', isAms: true }
+  ],
   availableVersions: [
     {
       version: '01.10.00.00',
@@ -256,6 +262,15 @@ test('version selection falls back to the first installable version when the lat
 
   const installable = getInstallableVersions(update)
   assert.equal(getDefaultSelectedVersion(update, installable), '01.10.00.00')
+})
+
+test('module firmware sorts AMS units first and labels them 1-based', () => {
+  const ordered = getModuleFirmware(sampleUpdate)
+  assert.deepEqual(ordered.map((module) => module.name), ['ams/0', 'mc'])
+  assert.equal(formatModuleLabel(ordered[0]!), 'AMS 1')
+  assert.equal(formatModuleLabel(ordered[1]!), 'mc')
+  assert.equal(formatModuleLabel({ name: 'ams/1', version: '0', hardwareVersion: null, isAms: true }), 'AMS 2')
+  assert.deepEqual(getModuleFirmware(undefined), [])
 })
 
 test('chip and polling helpers reflect upload lifecycle and pending install state', () => {

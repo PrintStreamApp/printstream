@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   COMMON_FILAMENT_COLOR_SWATCHES,
+  colorDistance,
   commonFilamentColorName,
+  deltaE2000,
   filamentBackground,
   hasLoadedFilament,
   resolveCompactFilamentTypeLabel,
@@ -10,7 +12,8 @@ import {
   resolveFilamentColorSwatches,
   resolveFilamentDisplay,
   resolveProjectFilamentColorName,
-  resolveFilamentSwatchName
+  resolveFilamentSwatchName,
+  type Lab
 } from './filamentColor.js'
 
 test('resolveFilamentColorName prefers a known Bambu swatch name', () => {
@@ -276,6 +279,44 @@ test('hasLoadedFilament ignores empty identity strings', () => {
 test('resolveCompactFilamentTypeLabel collapses preset-like PLA names to the base family', () => {
   assert.equal(resolveCompactFilamentTypeLabel('PLA Basic Gray'), 'PLA')
   assert.equal(resolveCompactFilamentTypeLabel('PLA Matte White'), 'PLA')
+})
+
+// Reference pairs from Sharma, Wu & Dalal (2005), "The CIEDE2000 Color-Difference Formula".
+// The antipodal-hue near-grey pairs (their rows 9-12) are intentionally omitted: they sit exactly
+// on the formula's 180-degree hue discontinuity, where the result is floating-point-sensitive and
+// not meaningful for ranking real colours.
+const SHARMA_DELTA_E_PAIRS: ReadonlyArray<readonly [Lab, Lab, number]> = [
+  [[50, 2.6772, -79.7751], [50, 0, -82.7485], 2.0425],
+  [[50, -0.001, 2.49], [50, 0.0009, -2.49], 4.8045],
+  [[60.2574, -34.0099, 36.2677], [60.4626, -34.1751, 39.4387], 1.2644],
+  [[22.7233, 20.0904, -46.694], [23.0331, 14.973, -42.5619], 2.0373],
+  [[6.7747, -0.2908, -2.4247], [5.8714, -0.0985, -2.2286], 0.6377],
+  [[2.0776, 0.0795, -1.135], [0.9033, -0.0636, -0.5514], 0.9082]
+]
+
+test('deltaE2000 matches the Sharma et al. CIEDE2000 reference data', () => {
+  for (const [reference, sample, expected] of SHARMA_DELTA_E_PAIRS) {
+    assert.ok(
+      Math.abs(deltaE2000(reference, sample) - expected) < 1e-4,
+      `dE00(${JSON.stringify(reference)}, ${JSON.stringify(sample)}) = ${deltaE2000(reference, sample)}, expected ${expected}`
+    )
+  }
+})
+
+test('colorDistance ranks a muted teal nearest other teals, not greys (perceptual, not RGB)', () => {
+  const teal = '#408080'
+  const darkTeal = colorDistance(teal, '#005F61')
+  // The exact regression from the screenshot: a desaturated teal scored numerically close to greys
+  // under raw RGB distance, burying the obvious teal match. The perceptual metric reverses that.
+  assert.ok(darkTeal < colorDistance(teal, '#808080'), 'dark teal should beat mid grey')
+  assert.ok(darkTeal < colorDistance(teal, '#545454'), 'dark teal should beat dark grey')
+  assert.ok(darkTeal < colorDistance(teal, '#2FA84F'), 'dark teal should beat a saturated green')
+})
+
+test('colorDistance is 0 for identical colours and Infinity for unparseable input', () => {
+  assert.equal(colorDistance('#408080', '#408080'), 0)
+  assert.equal(colorDistance('#408080', 'not-a-colour'), Number.POSITIVE_INFINITY)
+  assert.equal(colorDistance(null, '#408080'), Number.POSITIVE_INFINITY)
 })
 
 test('resolveCompactFilamentTypeLabel keeps meaningful engineering variants and support labels', () => {

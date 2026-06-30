@@ -33,9 +33,25 @@ interface LibraryFilePrintRow extends SnapshotLibraryFile {
 }
 
 export async function enqueueLibraryPrint(input: PrintFromLibrary, tenantId: string): Promise<PrintDispatchJob> {
-  const file = await prisma.libraryFile.findFirst({ where: { id: input.fileId, tenantId } })
+  return enqueueLibraryPrintSource(input, await resolveLibraryPrintSource(input.fileId, tenantId))
+}
+
+/** Resolve a library file id to a connected print source (preferring a connected duplicate when the
+ *  owning bridge is offline), or throw 'File not found'. Shared by real dispatch and dry-run validation. */
+async function resolveLibraryPrintSource(fileId: string, tenantId: string): Promise<LibraryPrintSource> {
+  const file = await prisma.libraryFile.findFirst({ where: { id: fileId, tenantId } })
   if (!file) throw notFound('File not found')
-  return enqueueLibraryPrintSource(input, toLibraryPrintSource(await resolveConnectedLibrarySource(file)))
+  return toLibraryPrintSource(await resolveConnectedLibrarySource(file))
+}
+
+/**
+ * Run every pre-flight check a real Start runs — file resolved, source readable on the bridge, printable,
+ * printer connected, print guards, and 3MF plate/filament compatibility — WITHOUT uploading or starting.
+ * Throws the same HttpErrors `enqueueLibraryPrint` would (e.g. 'File missing on bridge'), so a "dry run"
+ * surfaces exactly what a real Start would hit. Used by the print-queue dry-run/"Check" action.
+ */
+export async function validateLibraryPrint(input: PrintFromLibrary, tenantId: string): Promise<void> {
+  await assertLibraryPrintSourceReady(input, await resolveLibraryPrintSource(input.fileId, tenantId))
 }
 
 async function resolveConnectedLibrarySource(file: LibraryFilePrintRow): Promise<LibraryFilePrintRow> {
@@ -85,38 +101,7 @@ export async function enqueueLibraryPrintSource(
   input: PrintFromLibrary,
   source: LibraryPrintSource
 ): Promise<PrintDispatchJob> {
-  if (!isDirectPrintableFileName(source.name)) {
-    throw badRequest('Only .gcode or .gcode.3mf files can be printed directly')
-  }
-
-  const printer = await prisma.printer.findFirst({ where: { id: input.printerId, tenantId: source.tenantId } })
-  if (!printer) throw notFound('Printer not found')
-  if (!printerManager.getPrinter(printer.id)) throw notFound('Printer not found or not connected')
-
-  const blocked = printGuards.evaluate({ printerId: printer.id, source: 'dispatch' })
-  if (blocked) throw conflict(blocked.reason ?? 'Print blocked by a plugin')
-
-  const sourceKind = getPrintSourceKind(source.name)
-  let index = null
-  if (sourceKind === '3mf') {
-    try {
-      index = await readLibraryThreeMfIndex(source)
-    } catch {
-      throw notFound('File missing on bridge')
-    }
-
-    const printerModel = printerModelSchema.safeParse(printer.model)
-    assertLibraryPrintCompatibilityForIndex(index, {
-      plate: input.plate,
-      printerModel: printerModel.success ? printerModel.data : 'unknown',
-      printerStatus: printerManager.getStatus(printer.id),
-      amsMapping: input.amsMapping,
-      allowIncompatibleFilament: input.allowIncompatibleFilament,
-      allowPlateTypeMismatch: input.allowPlateTypeMismatch,
-      currentPlateType: input.currentPlateType,
-      currentNozzleDiameters: input.currentNozzleDiameters
-    })
-  }
+  const { printer, index } = await assertLibraryPrintSourceReady(input, source)
 
   try {
     const plateName = resolveRequestedPlateName(source.name, index, input.plate)
@@ -141,6 +126,48 @@ export async function enqueueLibraryPrintSource(
     if (error instanceof HttpError) throw error
     throw badRequest((error as Error).message || 'Failed to enqueue print')
   }
+}
+
+/**
+ * Every pre-flight check a print must pass before dispatch (everything except the snapshot record +
+ * FTPS upload + MQTT start): printable name, printer connected, print guards, and — for a 3MF — that the
+ * file is readable on the bridge plus plate/filament/nozzle compatibility. Throws on the first failure;
+ * returns the printer row + parsed index for the caller to reuse.
+ */
+async function assertLibraryPrintSourceReady(input: PrintFromLibrary, source: LibraryPrintSource) {
+  if (!isDirectPrintableFileName(source.name)) {
+    throw badRequest('Only .gcode or .gcode.3mf files can be printed directly')
+  }
+
+  const printer = await prisma.printer.findFirst({ where: { id: input.printerId, tenantId: source.tenantId } })
+  if (!printer) throw notFound('Printer not found')
+  if (!printerManager.getPrinter(printer.id)) throw notFound('Printer not found or not connected')
+
+  const blocked = printGuards.evaluate({ printerId: printer.id, source: 'dispatch' })
+  if (blocked) throw conflict(blocked.reason ?? 'Print blocked by a plugin')
+
+  let index: Awaited<ReturnType<typeof readLibraryThreeMfIndex>> | null = null
+  if (getPrintSourceKind(source.name) === '3mf') {
+    try {
+      index = await readLibraryThreeMfIndex(source)
+    } catch {
+      throw notFound('File missing on bridge')
+    }
+
+    const printerModel = printerModelSchema.safeParse(printer.model)
+    assertLibraryPrintCompatibilityForIndex(index, {
+      plate: input.plate,
+      printerModel: printerModel.success ? printerModel.data : 'unknown',
+      printerStatus: printerManager.getStatus(printer.id),
+      amsMapping: input.amsMapping,
+      allowIncompatibleFilament: input.allowIncompatibleFilament,
+      allowPlateTypeMismatch: input.allowPlateTypeMismatch,
+      currentPlateType: input.currentPlateType,
+      currentNozzleDiameters: input.currentNozzleDiameters
+    })
+  }
+
+  return { printer, index }
 }
 
 function resolveRequestedPlateName(

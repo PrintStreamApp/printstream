@@ -40,6 +40,7 @@ import {
   DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX,
   DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX,
   DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY,
+  catchAllRouteDecision,
   parseNullableAppLandingPageSetting,
   parseNullableAppThemeSetting,
   parseNullableBoolean,
@@ -114,6 +115,10 @@ const baseCoreTabs: ReadonlyArray<ShellTab> = [
     iconOnly: true
   }
 ]
+
+// Default left-to-right order for the leading plugin tabs (Orders, then Queue);
+// any other plugin tab falls back to alphabetical after these.
+const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/orders', '/queue']
 
 const webRuntimeStartedAt = new Date().toISOString()
 
@@ -365,8 +370,14 @@ export function App() {
         return { value: tabValue, label: route.navLabel ?? tabValue, mobileIcon }
       })
       .sort((left, right) => {
-        if (left.value === '/orders') return -1
-        if (right.value === '/orders') return 1
+        // Pinned default order for the first plugin tabs; everything else alphabetical.
+        const leftRank = PLUGIN_TAB_DEFAULT_ORDER.indexOf(left.value)
+        const rightRank = PLUGIN_TAB_DEFAULT_ORDER.indexOf(right.value)
+        if (leftRank !== -1 || rightRank !== -1) {
+          if (leftRank === -1) return 1
+          if (rightRank === -1) return -1
+          return leftRank - rightRank
+        }
         return left.label.localeCompare(right.label)
       }),
     [pluginRoutes]
@@ -400,6 +411,25 @@ export function App() {
     },
     [allPluginRoutes, apiPluginsByName, appPathname, currentPluginSurface, pluginStateQuery.data?.plugins]
   )
+  // Plugin routes (e.g. /queue) are only mounted once the plugin catalog query resolves, which itself
+  // can't start until auth bootstrap finishes. On a hard refresh of a plugin route that determination is
+  // still in flight at first paint, so the route isn't in the tree yet. Track whether the current path is
+  // a known plugin route and whether the catalog is still resolving, so the catch-all below can wait
+  // instead of redirecting the refresh to home before the plugin route can appear.
+  const appPathIsKnownPluginRoute = useMemo(
+    () => allPluginRoutes.some((route) =>
+      pluginSupportsRuntimeSurface(route, currentPluginSurface) && appPathname.startsWith(pluginBasePath(route.path))),
+    [allPluginRoutes, appPathname, currentPluginSurface]
+  )
+  const hasPluginState = pluginStateQuery.data?.plugins != null
+  const pluginCatalogEnabled = authBootstrapReady && (isAuthenticated || (hasTenantContext && !authEnabled))
+  const pluginCatalogResolving = !hasPluginState && !pluginStateQuery.isError
+    && (authBootstrapQuery.isPending || pluginCatalogEnabled)
+  const catchAllDecision = catchAllRouteDecision({
+    isKnownPluginRoute: appPathIsKnownPluginRoute,
+    pluginCatalogResolving,
+    hasPluginState
+  })
   const coreTabs = useMemo<ReadonlyArray<ShellTab>>(
     () => {
       if (!authBootstrapReady) return []
@@ -1103,7 +1133,16 @@ export function App() {
                   const Element = route.element
                   return <Route key={`${route.pluginName}:scoped:${route.path}`} path={tenantScopedRoutePath(route.path)} element={renderTenantContextElement(<Element />)} />
                 })}
-                <Route path="*" element={<Navigate to="/" replace />} />
+                {/* A known plugin route (e.g. /queue) on a cold load isn't mounted yet while the plugin
+                    catalog resolves — wait rather than redirect home. See catchAllRouteDecision. */}
+                <Route
+                  path="*"
+                  element={catchAllDecision === 'wait'
+                    ? <Typography>Loading…</Typography>
+                    : catchAllDecision === 'defer-to-plugin-handling'
+                      ? null
+                      : <Navigate to="/" replace />}
+                />
                       </Routes>
                     </RouteErrorBoundary>
                     <StatusToastStack>

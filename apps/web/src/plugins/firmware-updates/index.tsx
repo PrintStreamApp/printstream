@@ -61,8 +61,10 @@ import {
   firmwareChipColor,
   firmwareStillPendingInstall,
   formatFirmwareChipLabel,
+  formatModuleLabel,
   getDefaultSelectedVersion,
   getInstallableVersions,
+  getModuleFirmware,
   getSelectedReleaseNotes,
   isActiveUploadStatus,
   isDowngradeSelection,
@@ -296,6 +298,7 @@ function FirmwareUpdateDetailsDialog({
   // the update report has loaded; the user can pick any older version
   // that is also available on Bambu's download page.
   const installableVersions = useMemo(() => getInstallableVersions(update), [update])
+  const moduleFirmware = useMemo(() => getModuleFirmware(update), [update])
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
   useEffect(() => {
     if (selectedVersion) return
@@ -380,6 +383,27 @@ function FirmwareUpdateDetailsDialog({
                     <Typography level="body-md">{update.latestVersion ?? '—'}</Typography>
                   </Box>
                 </Stack>
+
+                {moduleFirmware.length > 0 && (
+                  <Box>
+                    <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 0.5 }}>
+                      Module firmware
+                    </Typography>
+                    <Stack spacing={0.25}>
+                      {moduleFirmware.map((module) => (
+                        <Stack key={module.name} direction="row" spacing={2} justifyContent="space-between" alignItems="baseline">
+                          <Typography level="body-sm">{formatModuleLabel(module)}</Typography>
+                          <Typography level="body-sm" textColor="text.secondary" sx={{ fontFamily: 'code' }}>
+                            {module.version}
+                          </Typography>
+                        </Stack>
+                      ))}
+                    </Stack>
+                    <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
+                      AMS and controller firmware ship inside the main firmware package; flashing the printer updates them too.
+                    </Typography>
+                  </Box>
+                )}
 
                 {installableVersions.length > 0 && (
                   <FormControl size="sm">

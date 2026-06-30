@@ -8,13 +8,12 @@
  * tray/compatibility derivations live in `../../lib/libraryViewHelpers`; this
  * file only owns the dialog's React surface.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Box, Button, Card, CardContent, Checkbox, Chip, DialogActions, FormControl, FormLabel, Option, Select, Sheet, Stack, Tooltip, Typography
+  Alert, Box, Button, Card, CardContent, Checkbox, Chip, DialogActions, Sheet, Stack, Typography
 } from '@mui/joy'
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
@@ -36,7 +35,6 @@ import {
   findFilamentCompatibilityIssues,
   findNozzleDiameterCompatibilityIssues,
   formatNozzleDiameterLabel,
-  formatNozzleLabel,
   getPrinterPrintStartOptions,
   getPrinterPrintOptionCapabilities,
   isPlateTypeCompatible,
@@ -44,8 +42,6 @@ import {
   resolvePrinterNozzleDiameters
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
-import { filamentBackground, filamentTextColor, resolveFilamentDisplay, resolveProjectFilamentColorName } from '../../lib/filamentColor'
-import { getSlotRemainingState } from '../../lib/slotRemaining'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
 import {
@@ -56,15 +52,15 @@ import {
   usePlateClearingSync
 } from '../../lib/plateClearing'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
-import { OverflowTooltipText } from '../OverflowTooltipText'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
+import { PrinterMapping } from './PrinterMapping'
+import { PrintStartOptionsFields } from './PrintStartOptionsFields'
 import { usePromptDialog } from '../PromptDialogProvider'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { formatLibraryFileName } from '../../lib/libraryDisplay'
 import { filterTrayGroupsForFilament, sanitizeTrayMapping } from '../../lib/printerTrayMapping'
-import { AmsSpoolSetupDialog, type AmsSpoolSetupTarget } from '../AmsSpoolSetupDialog'
 import {
   buildPrintStartPreferenceKey,
   DEFAULT_STORED_PRINT_START_OPTIONS,
@@ -90,68 +86,9 @@ import {
   printerStatusChipLabel,
   resolvePrinterNozzleCount,
   stopEventPropagation,
-  trayHasLoadedFilament,
-  trayHasUnknownSpool,
-  type PlateTypeMismatchIssue,
-  type PrinterTrayOption
+  type PlateTypeMismatchIssue
 } from '../../lib/libraryViewHelpers'
 import { plateHasSliceData } from '../../lib/sliceProfileMatching'
-
-const printOptionFieldSx = {
-  display: 'grid',
-  gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) minmax(7.5rem, 8.25rem)' },
-  alignItems: 'center',
-  gap: 0.75,
-  minWidth: 0,
-  width: '100%'
-} as const
-
-const printOptionSelectSx = {
-  minWidth: 0,
-  width: { xs: '100%', sm: '8.25rem' },
-  maxWidth: '100%',
-  justifySelf: { xs: 'stretch', sm: 'end' }
-} as const
-
-const printOptionHelpText = {
-  bedLevel: 'This checks the flatness of the heatbed. Leveling makes the extruded height uniform.',
-  vibrationCompensation: 'This calibrates printer vibrations before the print starts to reduce ringing and improve surface quality.',
-  flowCalibration: 'This process determines the dynamic flow values to improve overall print quality. Automatic mode skips calibration if the filament was calibrated recently.',
-  nozzleOffsetCalibration: 'Calibrate nozzle offsets to enhance print quality. Automatic mode checks for calibration before printing and skips it when unnecessary.'
-} as const
-
-function PrintOptionLabel({
-  label,
-  tooltip
-}: {
-  label: string
-  tooltip?: string
-}) {
-  return (
-    <FormLabel sx={{ minWidth: 0 }}>
-      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-        <Box component="span" sx={{ minWidth: 0 }}>{label}</Box>
-        {tooltip ? (
-          <Tooltip title={tooltip} variant="soft" size="sm">
-            <Box
-              component="span"
-              sx={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                color: 'text.tertiary',
-                cursor: 'help',
-                flexShrink: 0,
-                '& svg': { fontSize: 18 }
-              }}
-            >
-              <InfoOutlinedIcon />
-            </Box>
-          </Tooltip>
-        ) : null}
-      </Box>
-    </FormLabel>
-  )
-}
 
 interface PrintModalProps {
   file: LibraryFile
@@ -176,6 +113,10 @@ interface PrintModalProps {
     body: Omit<StartOrderPrintInput, 'printerId'>
   }) => Promise<void>
   onSubmitted?: (printerIds: string[]) => void
+  /** Override the dialog heading (default "Send to printer"). */
+  title?: string
+  /** Override the submit-button label (default "Print on N printers"). */
+  submitLabel?: string
 }
 
 interface AmsMappingsBySerial {
@@ -209,7 +150,9 @@ export function PrintModal({
   projectFilamentOverrides,
   selectionMode = 'multiple',
   submitPrint,
-  onSubmitted
+  onSubmitted,
+  title,
+  submitLabel
 }: PrintModalProps) {
   const { confirm } = usePromptDialog()
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
@@ -923,7 +866,7 @@ export function PrintModal({
     <>
       <Modal open onClose={dismissCurrentStep}>
         <ScrollableModalDialog sx={{ maxWidth: 640, width: '100%' }}>
-        <Typography level="h4">Send to printer</Typography>
+        <Typography level="h4">{title ?? 'Send to printer'}</Typography>
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={1}
@@ -1186,81 +1129,19 @@ export function PrintModal({
                 Select at least one printer to review print settings.
               </Typography>
             ) : (
-              <Box sx={{ minWidth: 0, width: '100%', display: 'grid', gap: 1 }}>
-                {visiblePrintOptionCapabilities.timelapse && (
-                  <FormControl sx={printOptionFieldSx}>
-                    <PrintOptionLabel label="Timelapse" />
-                    <Select<'off' | 'on'>
-                      value={timelapse ? 'on' : 'off'}
-                      onChange={(_event, value) => value && updateTimelapse(value === 'on')}
-                      size="sm"
-                      sx={printOptionSelectSx}
-                    >
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                    </Select>
-                  </FormControl>
-                )}
-                {visiblePrintOptionCapabilities.bedLevel && (
-                  <FormControl sx={printOptionFieldSx}>
-                    <PrintOptionLabel label="Auto Bed Leveling" tooltip={printOptionHelpText.bedLevel} />
-                    <Select<PrintOnOffAutoMode>
-                      value={bedLevel}
-                      onChange={(_event, value) => value && updateBedLevel(value)}
-                      size="sm"
-                      sx={printOptionSelectSx}
-                    >
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                      {visiblePrintOptionCapabilities.bedLevelAuto && <Option value="auto">Auto</Option>}
-                    </Select>
-                  </FormControl>
-                )}
-                {visiblePrintOptionCapabilities.vibrationCompensation && (
-                  <FormControl sx={printOptionFieldSx}>
-                    <PrintOptionLabel label="Vibration Compensation" tooltip={printOptionHelpText.vibrationCompensation} />
-                    <Select<'off' | 'on'>
-                      value={vibrationCompensation ? 'on' : 'off'}
-                      onChange={(_event, value) => value && updateVibrationCompensation(value === 'on')}
-                      size="sm"
-                      sx={printOptionSelectSx}
-                    >
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                    </Select>
-                  </FormControl>
-                )}
-                {visiblePrintOptionCapabilities.flowCalibration && (
-                  <FormControl sx={printOptionFieldSx}>
-                    <PrintOptionLabel label="Flow Dynamics Calibration" tooltip={printOptionHelpText.flowCalibration} />
-                    <Select<PrintOnOffAutoMode>
-                      value={flowCalibration}
-                      onChange={(_event, value) => value && updateFlowCalibration(value)}
-                      size="sm"
-                      sx={printOptionSelectSx}
-                    >
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                      {visiblePrintOptionCapabilities.flowCalibrationAuto && <Option value="auto">Auto</Option>}
-                    </Select>
-                  </FormControl>
-                )}
-                {visiblePrintOptionCapabilities.nozzleOffsetCalibration && (
-                  <FormControl sx={printOptionFieldSx}>
-                    <PrintOptionLabel label="Nozzle Offset Calibration" tooltip={printOptionHelpText.nozzleOffsetCalibration} />
-                    <Select<PrintNozzleOffsetCalibrationMode>
-                      value={nozzleOffsetCalibration}
-                      onChange={(_event, value) => value && updateNozzleOffsetCalibration(value)}
-                      size="sm"
-                      sx={printOptionSelectSx}
-                    >
-                      <Option value="off">Off</Option>
-                      <Option value="on">On</Option>
-                      <Option value="auto">Auto</Option>
-                    </Select>
-                  </FormControl>
-                )}
-              </Box>
+              <PrintStartOptionsFields
+                timelapse={timelapse}
+                onTimelapseChange={updateTimelapse}
+                bedLevel={bedLevel}
+                onBedLevelChange={updateBedLevel}
+                vibrationCompensation={vibrationCompensation}
+                onVibrationCompensationChange={updateVibrationCompensation}
+                flowCalibration={flowCalibration}
+                onFlowCalibrationChange={updateFlowCalibration}
+                nozzleOffsetCalibration={nozzleOffsetCalibration}
+                onNozzleOffsetCalibrationChange={updateNozzleOffsetCalibration}
+                capabilities={visiblePrintOptionCapabilities}
+              />
             )}
           </Sheet>
 
@@ -1399,7 +1280,7 @@ export function PrintModal({
               }
               onClick={submit}
             >
-              Print on {selectedIds.length} printer{selectedIds.length === 1 ? '' : 's'}
+              {submitLabel ?? `Print on ${selectedIds.length} printer${selectedIds.length === 1 ? '' : 's'}`}
             </Button>
           </Stack>
         </DialogActions>
@@ -1410,417 +1291,5 @@ export function PrintModal({
         context={{ previewFileId, previewPlateIndex: plateIndex, onPreviewClose: () => setPreviewFileId(null) }}
       />
     </>
-  )
-}
-
-/**
- * Per-printer tray mapping editor. For each project filament, the user
- * picks which printer tray should feed it. Filaments not
- * actually used by the selected plate are dimmed but still configurable
- * (so the user can pre-set values when later switching plates).
- *
- * Every used filament must have an explicit tray before the print can
- * be dispatched — there is no “auto” fallback because the printer
- * doesn’t actually pick slots itself.
- */
-function PrinterMapping({
-  printer,
-  status,
-  filaments,
-  usedGramsById,
-  mapping,
-  issues,
-  onChange
-}: {
-  printer: Printer
-  status: PrinterStatus | undefined
-  /** Already narrowed to the filaments to map (see {@link visibleMappingFilaments}). */
-  filaments: ThreeMfProjectFilament[]
-  usedGramsById: Map<number, number>
-  mapping: number[]
-  issues: FilamentCompatibilityIssue[]
-  onChange: (filamentId: number, tray: number) => void
-}) {
-  const trayGroups = useMemo(() => buildPrinterTrayGroups(status), [status])
-  const printerTrays = useMemo(() => trayGroups.flatMap((group) => group.trays), [trayGroups])
-  const nozzleCount = resolvePrinterNozzleCount(printer, status)
-  // Spool-setup dialog for unrecognized-but-occupied slots picked in the mapping.
-  const [spoolSetupTarget, setSpoolSetupTarget] = useState<AmsSpoolSetupTarget | null>(null)
-  const issueByFilamentId = useMemo(
-    () => new Map(issues.map((issue) => [issue.filamentId, issue] as const)),
-    [issues]
-  )
-
-  if (trayGroups.length === 0) {
-    return (
-      <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 1 }}>
-        {printer.name} has no reported printer trays yet — using printer default.
-      </Typography>
-    )
-  }
-
-  return (
-    <Stack spacing={0.5} sx={{ mt: 1 }}>
-      {filaments.map((filament) => {
-        const allowedTrayGroups = filterTrayGroupsForFilament(trayGroups, filament.nozzleId ?? null)
-        const slotIndex = filament.id - 1
-        const value = mapping[slotIndex] ?? -1
-        const selectedTray = printerTrays.find((tray) => tray.mappingValue === value)
-        const selectedUnknownTray = selectedTray && trayHasUnknownSpool(selectedTray) ? selectedTray : null
-        const grams = usedGramsById.get(filament.id)
-        const colorLabel = resolveProjectFilamentColorName({
-          color: filament.color,
-          filamentName: filament.filamentName,
-          filamentType: filament.filamentType
-        })
-        const issue = issueByFilamentId.get(filament.id)
-        const nozzleLabel = formatNozzleLabel(filament.nozzleId ?? null, 'short', nozzleCount)
-        const filamentPrimaryLabel = [
-          filament.filamentName ?? filament.filamentType ?? 'filament',
-          colorLabel
-        ].filter(Boolean).join(' · ')
-        const filamentMetaLabel = [
-          nozzleLabel,
-          grams != null ? `${grams.toFixed(grams < 10 ? 1 : 0)}g` : null
-        ].filter(Boolean).join(' · ')
-        const allowedTrayByValue = new Map(
-          allowedTrayGroups.flatMap((group) => group.trays.map((tray) => [tray.mappingValue, tray] as const))
-        )
-        return (
-          <Stack key={filament.id} spacing={0.25}>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: '1 1 0', minWidth: 0 }}>
-                <Box
-                  sx={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: '50%',
-                    backgroundColor: filament.color ?? 'var(--joy-palette-neutral-700)',
-                    border: '1px solid var(--joy-palette-neutral-700)',
-                    flexShrink: 0,
-                    boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)'
-                  }}
-                />
-                <Stack spacing={0} sx={{ minWidth: 0, flex: '1 1 0' }}>
-                  <OverflowTooltipText
-                    level="body-xs"
-                    sx={{ minWidth: 0 }}
-                    noWrap
-                    text={filamentPrimaryLabel}
-                  />
-                  {filamentMetaLabel ? (
-                    <OverflowTooltipText
-                      level="body-xs"
-                      textColor="text.tertiary"
-                      sx={{ minWidth: 0 }}
-                      noWrap
-                      text={filamentMetaLabel}
-                    />
-                  ) : null}
-                </Stack>
-              </Stack>
-              <Select
-                size="sm"
-                value={value === -1 ? null : value}
-                placeholder="Choose slot…"
-                color={value === -1 || issue ? 'warning' : 'neutral'}
-                onChange={(_event, next) => next != null && onChange(filament.id, next)}
-                renderValue={(option) => {
-                  if (!option) return <Typography level="body-xs">Choose slot…</Typography>
-                  const tray = allowedTrayByValue.get(option.value as number)
-                  if (!tray) return <Typography level="body-xs">Choose slot…</Typography>
-                  return (
-                    <SlotOptionLabel
-                      tray={tray}
-                      trays={printerTrays}
-                      nozzleCount={nozzleCount}
-                      requiredFilamentType={filament.filamentType}
-                      requiredNozzleId={filament.nozzleId ?? null}
-                      requiredGrams={grams ?? null}
-                      autoRefillEnabled={status?.amsSettings.autoRefill === true}
-                    />
-                  )
-                }}
-                sx={{ flex: '1 1 0', minWidth: 0 }}
-                slotProps={{
-                  // Joy's Select button centers its content by default;
-                  // the rendered value here is a flex row that needs to
-                  // hug the left edge so it visually matches the option
-                  // rows in the dropdown.
-                  button: {
-                    onClick: stopEventPropagation,
-                    onMouseDown: stopEventPropagation,
-                    onPointerDown: stopEventPropagation,
-                    onTouchStart: stopEventPropagation,
-                    sx: { textAlign: 'left', justifyContent: 'flex-start', minHeight: 40 }
-                  },
-                  listbox: {
-                    placement: 'bottom-end',
-                    modifiers: [{ name: 'equalWidth', enabled: false }],
-                    sx: {
-                      minWidth: { xs: 'min(92vw, 360px)', sm: 360 },
-                      maxWidth: 'calc(100vw - 32px)',
-                      width: 'max-content'
-                    }
-                  }
-                }}
-              >
-                {(() => {
-                  const nodes: ReactNode[] = []
-                  for (const group of allowedTrayGroups) {
-                    if (allowedTrayGroups.length > 0) {
-                      nodes.push(
-                        <Typography
-                          key={`header-${group.key}`}
-                          level="body-xs"
-                          textColor="text.tertiary"
-                          sx={{ px: 1, pt: 0.5, pb: 0.25, fontWeight: 'lg', textTransform: 'uppercase', letterSpacing: '0.05em' }}
-                        >
-                          {group.label}
-                        </Typography>
-                      )
-                    }
-                    for (const tray of group.trays) {
-                      nodes.push(
-                        <Option key={tray.key} value={tray.mappingValue}>
-                          <SlotOptionLabel
-                            tray={tray}
-                            trays={printerTrays}
-                            nozzleCount={nozzleCount}
-                            requiredFilamentType={filament.filamentType}
-                            requiredNozzleId={filament.nozzleId ?? null}
-                            requiredGrams={grams ?? null}
-                            autoRefillEnabled={status?.amsSettings.autoRefill === true}
-                          />
-                        </Option>
-                      )
-                    }
-                  }
-                  return nodes
-                })()}
-              </Select>
-            </Stack>
-            {issue && (
-              <Typography level="body-xs" color="warning" sx={{ pl: 'calc(14px + 8px)' }}>
-                {formatCompatibilityIssue(issue, nozzleCount)}
-              </Typography>
-            )}
-            {selectedUnknownTray && (
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ pl: 'calc(14px + 8px)' }}>
-                <Typography level="body-xs" color="warning">
-                  This slot holds an unrecognized spool.
-                </Typography>
-                <Button
-                  size="sm"
-                  variant="plain"
-                  sx={{ minHeight: 0, py: 0 }}
-                  onClick={() => setSpoolSetupTarget({
-                    printerId: printer.id,
-                    kind: selectedUnknownTray.kind,
-                    amsId: selectedUnknownTray.kind === 'ams' ? selectedUnknownTray.amsUnitId ?? 0 : selectedUnknownTray.mappingValue,
-                    ...(selectedUnknownTray.kind === 'ams' ? { slotId: selectedUnknownTray.amsSlotId ?? 0 } : {}),
-                    label: `${selectedUnknownTray.groupLabel ?? 'Slot'} ${selectedUnknownTray.badgeLabel}`,
-                    initial: {
-                      filamentType: selectedUnknownTray.filamentType,
-                      color: selectedUnknownTray.color,
-                      trayInfoIdx: selectedUnknownTray.trayInfoIdx
-                    }
-                  })}
-                >
-                  Set up spool…
-                </Button>
-              </Stack>
-            )}
-          </Stack>
-        )
-      })}
-      {spoolSetupTarget && (
-        <AmsSpoolSetupDialog target={spoolSetupTarget} onClose={() => setSpoolSetupTarget(null)} />
-      )}
-    </Stack>
-  )
-}
-
-/** Color swatch + slot label + loaded filament type + remaining estimate, used in slot Selects. */
-function SlotOptionLabel({
-  tray,
-  trays,
-  nozzleCount,
-  requiredFilamentType,
-  requiredNozzleId,
-  requiredGrams,
-  autoRefillEnabled
-}: {
-  tray: PrinterTrayOption
-  trays: readonly PrinterTrayOption[]
-  nozzleCount?: number | null
-  requiredFilamentType?: string | null
-  requiredNozzleId?: number | null
-  requiredGrams?: number | null
-  autoRefillEnabled?: boolean
-}) {
-  const hasFilament = trayHasLoadedFilament(tray)
-  const unknownSpool = trayHasUnknownSpool(tray)
-  const filament = resolveFilamentDisplay(tray)
-  const brandLabel = filament.material ? `Bambu ${filament.material}` : tray.filamentType
-  const filamentDetail = unknownSpool
-    ? 'Unknown spool'
-    : [brandLabel ?? 'Empty', filament.name].filter(Boolean).join(' · ')
-  const remainingState = getSlotRemainingState({
-    tray,
-    trays,
-    requiredFilamentType,
-    requiredNozzleId,
-    requiredGrams,
-    autoRefillEnabled
-  })
-  const remainGrams = remainingState.remainGrams
-  // Only spools with a readable RFID/Bambu tag (trayUuid) report remaining; third-party
-  // spools have no reliable figure, so we omit the estimate rather than show a guess.
-  const remainingDetail =
-    hasFilament && tray.trayUuid != null && tray.remainPercent != null && remainGrams != null
-      ? `${Math.round(tray.remainPercent)}% (~${remainGrams}g)`
-      : null
-  const typeMismatch = Boolean(
-    requiredFilamentType
-    && tray.filamentType
-    && findFilamentCompatibilityIssues(
-      [{ filamentId: 1, filamentType: requiredFilamentType, filamentName: null, nozzleId: requiredNozzleId ?? null }],
-      new Map([[1, { filamentType: tray.filamentType, label: tray.label, nozzleId: tray.nozzleId }]])
-    )[0]?.typeMismatch
-  )
-  const nozzleMismatch = Boolean(
-    requiredNozzleId != null
-    && (tray.nozzleId == null || requiredNozzleId !== tray.nozzleId)
-  )
-  const incompatibilityLabel = typeMismatch
-    ? `Incompatible material: requires ${requiredFilamentType ?? 'the selected material'}${tray.filamentType ? `, slot has ${tray.filamentType}` : ''}.`
-    : nozzleMismatch
-      ? `Incompatible nozzle: requires ${formatNozzleLabel(requiredNozzleId ?? null, 'short', nozzleCount) ?? 'the target nozzle'}${tray.nozzleId != null ? `, slot is ${formatNozzleLabel(tray.nozzleId, 'short', nozzleCount)}` : ''}.`
-      : null
-  const badgeBackground = filamentBackground(filament.colors, tray.color, 'var(--joy-palette-neutral-800)')
-  const badgeForeground = filamentTextColor(filament.colors, tray.color, 'var(--joy-palette-text-primary)')
-  return (
-    <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
-      <Box
-        sx={{
-          width: 32,
-          height: 32,
-          borderRadius: '50%',
-          border: '1px solid var(--joy-palette-neutral-700)',
-          background: badgeBackground,
-          color: badgeForeground,
-          flexShrink: 0,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '0.7rem',
-          fontWeight: 'lg',
-          lineHeight: 1,
-          boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)'
-        }}
-      >
-        {tray.badgeLabel}
-      </Box>
-      <Box
-        sx={{
-          minWidth: 0,
-          flex: 1,
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) auto',
-          columnGap: 1,
-          rowGap: 0.125
-        }}
-      >
-        <Typography level="body-xs" textColor={unknownSpool ? 'warning.300' : 'text.tertiary'} noWrap sx={{ minWidth: 0, gridColumn: '1 / 2' }}>
-          {filamentDetail}
-        </Typography>
-        {incompatibilityLabel && (
-          <IncompatibilityWarningGlyph label={incompatibilityLabel} />
-        )}
-        {remainingDetail && (
-          <Stack
-            direction="row"
-            spacing={0.5}
-            alignItems="center"
-            sx={{ gridColumn: '1 / 2', minWidth: 0 }}
-          >
-            <Typography
-              level="body-xs"
-              textColor={remainingState.insufficient ? 'danger.plainColor' : 'text.primary'}
-              noWrap
-              sx={{ minWidth: 0, fontWeight: remainingState.insufficient ? 'md' : undefined }}
-            >
-              {remainingDetail}
-            </Typography>
-            {remainingState.usesAutoRefill && (
-              <Tooltip title="AMS auto-refill can continue this filament from another matching AMS slot." variant="soft" size="sm">
-                <Box
-                  component="span"
-                  sx={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    color: 'primary.plainColor',
-                    flexShrink: 0
-                  }}
-                >
-                  <AutoRefillGlyph />
-                </Box>
-              </Tooltip>
-            )}
-          </Stack>
-        )}
-      </Box>
-    </Stack>
-  )
-}
-
-function IncompatibilityWarningGlyph({ label }: { label: string }) {
-  return (
-    <Tooltip title={label} variant="soft" size="sm">
-      <Box
-        component="span"
-        aria-label={label}
-        sx={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          color: 'warning.plainColor',
-          flexShrink: 0,
-          gridColumn: '2 / 3',
-          gridRow: '1 / span 2',
-          alignSelf: 'center',
-          justifySelf: 'end',
-          cursor: 'help'
-        }}
-      >
-        <WarningGlyph />
-      </Box>
-    </Tooltip>
-  )
-}
-
-function AutoRefillGlyph() {
-  return (
-    <Box
-      component="svg"
-      viewBox="0 0 24 24"
-      aria-hidden
-      sx={{ width: 14, height: 14, display: 'block', fill: 'currentColor' }}
-    >
-      <path d="M12 5a7 7 0 0 1 6.42 4.22H16v2h6V5h-2v2.38A9 9 0 0 0 3 12h2a7 7 0 0 1 7-7zm7 6a7 7 0 0 1-13.42 2.78H8v-2H2v6h2v-2.38A9 9 0 0 0 21 12h-2a7 7 0 0 1-7 7z" />
-    </Box>
-  )
-}
-
-function WarningGlyph() {
-  return (
-    <Box
-      component="svg"
-      viewBox="0 0 24 24"
-      aria-hidden
-      sx={{ width: 16, height: 16, display: 'block', fill: 'currentColor' }}
-    >
-      <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
-    </Box>
   )
 }

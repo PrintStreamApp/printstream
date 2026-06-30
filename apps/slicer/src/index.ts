@@ -31,6 +31,7 @@ import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import { env } from './env.js'
 import { terminateSlicerChild } from './terminate-child.js'
+import { outputSignalsSliceComplete } from './slice-progress.js'
 import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
 import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
 import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
@@ -733,13 +734,25 @@ async function executeCli(input: {
   let progressPipePath: string | null = null
   let progressPipeReader: ReturnType<typeof createReadStream> | null = null
   const args = [...input.args]
+  // Liveness + completion tracking, shared by the CLI stdout/stderr streams and the
+  // optional --pipe channel, and read by the stall/success guard in the Promise below.
+  let lastOutputAt = Date.now()
+  let sliceSucceeded = false
+  const noteOutput = (text: string): void => {
+    lastOutputAt = Date.now()
+    if (!sliceSucceeded && outputSignalsSliceComplete(text)) sliceSucceeded = true
+  }
   if (env.SLICER_ENABLE_PIPE_PROGRESS && input.supportedFlags.has('--pipe') && !args.includes('--pipe')) {
     try {
       progressPipePath = path.join(path.dirname(input.outputPath), `${input.slicerTarget.id}-${randomUUID()}.pipe`)
       await rm(progressPipePath, { force: true })
       await mkfifo(progressPipePath)
       progressPipeReader = createReadStream(progressPipePath, { encoding: 'utf8' })
-      progressPipeReader.on('data', (chunk: string | Buffer) => appendOutput(input.outputLines, 'stdout', String(chunk)))
+      progressPipeReader.on('data', (chunk: string | Buffer) => {
+        const text = String(chunk)
+        appendOutput(input.outputLines, 'stdout', text)
+        noteOutput(text)
+      })
       progressPipeReader.on('error', (error) => {
         appendStructuredOutput(input.outputLines, 'system', `Progress pipe read failed: ${error.message}`)
       })
@@ -771,19 +784,54 @@ async function executeCli(input: {
           XDG_DATA_HOME: input.bambuDataDir
         }
       })
+      // Reset the stall clock to the moment the CLI actually starts.
+      lastOutputAt = Date.now()
       // Cancels the SIGTERM->SIGKILL escalation once the child actually exits.
       let cancelTermination: (() => void) | null = null
+      let successGraceTimer: ReturnType<typeof setTimeout> | null = null
       const timeout = setTimeout(() => {
         console.warn(`[slicer:executeCli] timed out after ${env.SLICER_TIMEOUT_MS}ms; terminating CLI`)
         cancelTermination = terminateSlicerChild(child)
         reject(new Error('Slicer CLI timed out'))
       }, env.SLICER_TIMEOUT_MS)
+      // Stall + completion guard (polled):
+      //  - Once BambuStudio reports "All done, Success" the artifact is fully written; give
+      //    the process a short grace to exit, then force it (qemu teardown can hang without
+      //    ever firing 'close', leaving zombie Xvfb procs) and treat the slice as done.
+      //  - Otherwise, if the CLI has produced no output for SLICER_STALL_TIMEOUT_MS it is
+      //    wedged (commonly the emulated "Exporting 3mf" step at 97%); terminate and fail
+      //    fast rather than waiting out the full SLICER_TIMEOUT_MS.
+      const guard = setInterval(() => {
+        if (sliceSucceeded) {
+          if (!successGraceTimer) {
+            successGraceTimer = setTimeout(() => {
+              console.warn('[slicer:executeCli] CLI reported success but has not exited; terminating after grace')
+              cancelTermination = terminateSlicerChild(child)
+              resolve()
+            }, env.SLICER_SUCCESS_EXIT_GRACE_MS)
+            successGraceTimer.unref?.()
+          }
+          return
+        }
+        const idleMs = Date.now() - lastOutputAt
+        if (idleMs >= env.SLICER_STALL_TIMEOUT_MS) {
+          console.warn(`[slicer:executeCli] no CLI output for ${idleMs}ms; terminating (stalled)`)
+          cancelTermination = terminateSlicerChild(child)
+          reject(new Error('Slicer stopped responding (no progress). It may have stalled — try slicing again.'))
+        }
+      }, 5_000)
+      guard.unref?.()
+      const clearTimers = () => {
+        clearTimeout(timeout)
+        clearInterval(guard)
+        if (successGraceTimer) clearTimeout(successGraceTimer)
+      }
       // Client cancel: kill the CLI so it stops occupying a slicer slot (otherwise it runs to
       // completion and the next queued job waits on a zombie).
       const onAbort = () => {
         console.warn('[slicer:executeCli] client cancelled; terminating CLI')
         cancelTermination = terminateSlicerChild(child)
-        clearTimeout(timeout)
+        clearTimers()
         reject(new Error('Slicing cancelled'))
       }
       if (input.signal) {
@@ -800,20 +848,24 @@ async function executeCli(input: {
       child.stdout.on('data', (chunk: string) => {
         stdoutCombined = appendCappedTail(stdoutCombined, chunk)
         appendOutput(input.outputLines, 'stdout', chunk)
+        noteOutput(chunk)
       })
       child.stderr.on('data', (chunk: string) => {
         stderrCombined = appendCappedTail(stderrCombined, chunk)
         appendOutput(input.outputLines, 'stderr', chunk)
+        noteOutput(chunk)
       })
       child.on('error', (error) => {
-        clearTimeout(timeout)
+        clearTimers()
         cleanupAbort()
         reject(error)
       })
       child.on('close', (code) => {
-        clearTimeout(timeout)
+        clearTimers()
         cleanupAbort()
-        if (code === 0) resolve()
+        // Trust BambuStudio's own success marker over a non-zero teardown exit under
+        // emulation — the artifact is already fully written.
+        if (sliceSucceeded || code === 0) resolve()
         else {
           const stderrTail = stderrCombined.trim().split(/\r?\n/u).filter(Boolean).slice(-5).join(' | ')
           console.warn(

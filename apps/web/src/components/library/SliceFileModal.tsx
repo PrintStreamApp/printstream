@@ -12,7 +12,7 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Box, Button, Chip, DialogActions, ModalDialog, Stack, Typography
+  Box, Button, DialogActions, ModalDialog, Sheet, Stack, Typography
 } from '@mui/joy'
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -33,7 +33,8 @@ import type {
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { bambuModelKeysAreCompatible } from '../../lib/bambuPrinterModels'
-import { filamentBackground, filamentTextColor, resolveFilamentDisplay } from '../../lib/filamentColor'
+import { resolveFilamentDisplay } from '../../lib/filamentColor'
+import { FilamentOptionLabel } from './FilamentOptionLabel'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import {
   extractLayerHeightToken,
@@ -126,6 +127,7 @@ export function SliceFileModal({
   flow = 'library',
   preferredPrinterId,
   defaultPlateNumber,
+  flowCopy,
   onClose,
   onSubmit
 }: {
@@ -151,6 +153,8 @@ export function SliceFileModal({
   preferredPrinterId?: string
   /** Preselect this plate (e.g. an order item's plate) instead of plate 1. */
   defaultPlateNumber?: number
+  /** Override the print-flow title/description/continue-button copy (e.g. for "add to queue"). */
+  flowCopy?: { title?: string; description?: string | null; continueLabel?: string }
   onClose: () => void
   onSubmit: (input: SliceFileSubmitInput, action: SliceFileSubmitAction, options?: { keepDialogOpen?: boolean }) => void
 }) {
@@ -159,14 +163,14 @@ export function SliceFileModal({
   const resourceBasePath = buildLibraryResourceBasePath(file.id, versionId)
   const requiresSinglePlate = flow === 'print'
   const saveActionVisible = flow === 'library'
-  const dialogTitle = flow === 'print'
+  const dialogTitle = flowCopy?.title ?? (flow === 'print'
     ? `Prepare ${formatLibraryFileName(file.name)} for print`
-    : `Slice ${formatLibraryFileName(file.name)}`
-  const dialogDescription = flow === 'print'
-    ? 'Review slicing settings before continuing to printer selection.'
-    : null
+    : `Slice ${formatLibraryFileName(file.name)}`)
+  const dialogDescription = flowCopy?.description !== undefined
+    ? flowCopy.description
+    : (flow === 'print' ? 'Review slicing settings before continuing to printer selection.' : null)
   const isMobileViewport = useMobileViewport()
-  const printActionLabel = flow === 'print' ? 'Continue to print' : (isMobileViewport ? 'Print' : 'Print Now')
+  const printActionLabel = flowCopy?.continueLabel ?? (flow === 'print' ? 'Continue to print' : (isMobileViewport ? 'Print' : 'Print Now'))
   const saveActionLabel = isMobileViewport ? 'Save' : 'Save to Library'
   const lockedPreferredPrinter = useMemo(
     () => flow === 'print' && preferredPrinterId
@@ -1010,7 +1014,9 @@ export function SliceFileModal({
               type="button"
               loading={submitting && submitAction === 'print'}
               disabled={!canSubmit || submitting}
-              startDecorator={<PrintRoundedIcon />}
+              // The print-prep flow "continues" to a follow-up step (printer selection or
+              // the queue dialog), so no print icon; the direct library print keeps it.
+              startDecorator={flow === 'print' ? undefined : <PrintRoundedIcon />}
               onClick={() => submit('print')}
             >
               {printActionLabel}
@@ -1105,58 +1111,32 @@ export function SliceFileModal({
                   const tray = option.trayId != null ? printerTrayMap.get(option.trayId) : undefined
                   // Only RFID/Bambu spools report a reliable remaining figure.
                   const remainGrams = tray && tray.trayUuid != null ? estimateRemainGrams(tray.remainPercent) : null
-                  const remainingLabel = remainGrams != null && tray?.remainPercent != null
-                    ? `${Math.round(tray.remainPercent)}% (~${remainGrams}g)`
-                    : null
-                  // The swatch badge already names the slot (A1/B2/Ext-L) and the group header names the
-                  // nozzle, so the subtext only needs the loaded colour — no redundant "Slot N" / nozzle.
-                  const subLabel = (tray ? resolveFilamentDisplay(tray).name : null) ?? tray?.filamentType ?? option.materialType
+                  // Pre-fold "brand + type" so the brand isn't doubled when the label already carries it,
+                  // then hand the whole identity to the shared label as the name (type left to the label).
+                  const brandLabel = option.brand && !option.label.toLowerCase().includes(option.brand.toLowerCase())
+                    ? `${option.brand} ${option.label}`
+                    : option.label
                   return (
-                  <Button
-                    key={option.id}
-                    type="button"
-                    variant="outlined"
-                    color="neutral"
-                    onClick={() => {
-                      if (!selectedPrinterMaterialPickerFilament) return
-                      handleMaterialOptionChange(selectedPrinterMaterialPickerFilament.projectFilamentId, option)
-                      setPrinterMaterialPickerFilamentId(null)
-                    }}
-                    sx={{ justifyContent: 'flex-start', minHeight: 48 }}
-                  >
-                    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0, width: '100%' }}>
-                      <Box
-                        sx={{
-                          width: 28,
-                          height: 28,
-                          borderRadius: '50%',
-                          background: filamentBackground(option.colors, option.color, 'var(--joy-palette-neutral-800)'),
-                          color: filamentTextColor(option.colors, option.color, 'var(--joy-palette-text-primary)'),
-                          border: '1px solid',
-                          borderColor: 'divider',
-                          flexShrink: 0,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '0.65rem',
-                          fontWeight: 'lg',
-                          lineHeight: 1,
-                          boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)'
-                        }}
-                      >
-                        {option.slotLabel}
-                      </Box>
-                      <Stack spacing={0} sx={{ minWidth: 0, alignItems: 'flex-start', flex: 1 }}>
-                        <Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>{option.label}</Typography>
-                        {subLabel && (
-                          <Typography level="body-xs" textColor="text.tertiary" noWrap sx={{ minWidth: 0 }}>{subLabel}</Typography>
-                        )}
-                      </Stack>
-                      {remainingLabel && (
-                        <Chip size="sm" variant="soft" color="neutral" sx={{ ml: 1, flexShrink: 0 }}>{remainingLabel}</Chip>
-                      )}
-                    </Stack>
-                  </Button>
+                    <Sheet
+                      key={option.id}
+                      variant="outlined"
+                      onClick={() => {
+                        if (!selectedPrinterMaterialPickerFilament) return
+                        handleMaterialOptionChange(selectedPrinterMaterialPickerFilament.projectFilamentId, option)
+                        setPrinterMaterialPickerFilamentId(null)
+                      }}
+                      sx={{ p: 1, borderRadius: 'sm', cursor: 'pointer', transition: 'border-color 120ms', '&:hover': { borderColor: 'primary.500' } }}
+                    >
+                      <FilamentOptionLabel
+                        color={option.color}
+                        colors={option.colors}
+                        colorName={tray ? resolveFilamentDisplay(tray).name : null}
+                        filamentName={brandLabel}
+                        swatchLabel={option.slotLabel}
+                        remainingGrams={remainGrams}
+                        remainPercent={tray?.remainPercent}
+                      />
+                    </Sheet>
                   )
                 })}
               </Stack>
