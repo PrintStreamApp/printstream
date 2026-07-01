@@ -8,7 +8,7 @@
  */
 import { useCallback, useState, type ComponentProps } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { LibraryFile, Printer, PrinterStatus, SlicingCapabilities, SlicingJobResponse } from '@printstream/shared'
+import type { LibraryFile, Printer, PrinterStatus, QueueOrderLink, SlicingCapabilities, SlicingJobResponse } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { SliceFileModal } from '../../components/library/SliceFileModal'
 import { SliceThenPrintModal } from '../../components/library/SliceThenPrintModal'
@@ -18,7 +18,19 @@ import { QueueItemDialog } from './QueueItemDialog'
 type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
 type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[1]
 
-export function SliceToQueueFlow({ file, onClose }: { file: LibraryFile; onClose: () => void }) {
+export function SliceToQueueFlow({
+  file,
+  onClose,
+  orderLink,
+  defaultPlate
+}: {
+  file: LibraryFile
+  onClose: () => void
+  /** Link the queued output to an order print (orders "Add to queue" flow). */
+  orderLink?: QueueOrderLink
+  /** Preselect this plate in the slice + queue dialogs. */
+  defaultPlate?: number
+}) {
   const queryClient = useQueryClient()
   const [jobId, setJobId] = useState<string | null>(null)
 
@@ -31,6 +43,15 @@ export function SliceToQueueFlow({ file, onClose }: { file: LibraryFile; onClose
     }
     onClose()
   }, [jobId, onClose])
+
+  // Back steps out of the queue setup and returns to the still-mounted slice settings,
+  // discarding the throwaway sliced output so re-slicing starts clean.
+  const handleBackToConfig = useCallback(() => {
+    if (jobId) {
+      void apiFetch(`/api/slicing/jobs/${jobId}/discard`, { method: 'POST' }).catch(() => undefined)
+    }
+    setJobId(null)
+  }, [jobId])
 
   const printersQuery = useQuery<{ printers: Printer[] }>({
     queryKey: ['printers'],
@@ -95,8 +116,10 @@ export function SliceToQueueFlow({ file, onClose }: { file: LibraryFile; onClose
 
   if (!printersQuery.data) return null
 
-  if (!jobId) {
-    return (
+  // The slice settings stay mounted beneath the queue setup so "Back" returns to them
+  // with the form intact (rather than closing and reopening a fresh dialog).
+  return (
+    <>
       <SliceFileModal
         file={file}
         printers={printersQuery.data.printers}
@@ -108,7 +131,7 @@ export function SliceToQueueFlow({ file, onClose }: { file: LibraryFile; onClose
         submitAction={startSlicingJob.variables?.action ?? null}
         submitError={startSlicingJob.error instanceof Error ? startSlicingJob.error.message : null}
         flow="print"
-        defaultPlateNumber={1}
+        defaultPlateNumber={defaultPlate ?? 1}
         flowCopy={{
           title: 'Slice for the queue',
           description: 'Review slicing settings, then continue to add the sliced result to the print queue.',
@@ -117,23 +140,30 @@ export function SliceToQueueFlow({ file, onClose }: { file: LibraryFile; onClose
         onClose={handleClose}
         onSubmit={(input, action) => startSlicingJob.mutate({ action, ...input })}
       />
-    )
-  }
-
-  return (
-    <SliceThenPrintModal
-      sourceFile={file}
-      jobId={jobId}
-      printers={printersQuery.data.printers}
-      trackingCopy={{
-        title: 'Add to queue',
-        pendingText: 'This stays here until slicing is ready, then continues to the queue setup.',
-        readyText: 'Slicing finished. Opening the queue setup…'
-      }}
-      renderReady={(outputFile) => (
-        <QueueItemDialog open onClose={handleClose} fixedFile={{ id: outputFile.id, name: outputFile.name }} />
+      {jobId && (
+        <SliceThenPrintModal
+          sourceFile={file}
+          jobId={jobId}
+          printers={printersQuery.data.printers}
+          trackingCopy={{
+            title: 'Add to queue',
+            pendingText: 'This stays here until slicing is ready, then continues to the queue setup.',
+            readyText: 'Slicing finished. Opening the queue setup…'
+          }}
+          renderReady={(outputFile) => (
+            <QueueItemDialog
+              open
+              onClose={handleClose}
+              // Back returns to the still-open slice settings to re-slice.
+              onBack={handleBackToConfig}
+              fixedFile={{ id: outputFile.id, name: outputFile.name }}
+              orderLink={orderLink}
+              defaultPlate={defaultPlate}
+            />
+          )}
+          onClose={handleClose}
+        />
       )}
-      onClose={handleClose}
-    />
+    </>
   )
 }

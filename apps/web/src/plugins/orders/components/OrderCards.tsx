@@ -32,6 +32,7 @@ import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import TaskAltRoundedIcon from '@mui/icons-material/TaskAltRounded'
 import UndoRoundedIcon from '@mui/icons-material/UndoRounded'
 import type { LibraryFile, Order, OrderTemplate } from '@printstream/shared'
+import { PluginSlot } from '../../../plugin/PluginSlot'
 import { formatLibraryFileName } from '../../../lib/libraryDisplay'
 import { formatDateTime } from '../../../lib/time'
 import {
@@ -128,6 +129,7 @@ export function OrderListCard({
             {groupedPrints.map((group) => (
               <OrderListPrintCard
                 key={group.key}
+                orderId={order.id}
                 group={group}
                 file={group.libraryFileId ? filesById.get(group.libraryFileId) ?? null : null}
                 orderIsActive={order.status === 'active'}
@@ -146,6 +148,7 @@ export function OrderListCard({
 }
 
 export function OrderListPrintCard({
+  orderId,
   group,
   file,
   orderIsActive,
@@ -155,6 +158,7 @@ export function OrderListPrintCard({
   canManageOrders,
   canStartOrderPrint
 }: {
+  orderId: string
   group: OrderPrintGroup
   file: LibraryFile | null
   orderIsActive: boolean
@@ -233,6 +237,21 @@ export function OrderListPrintCard({
                 </IconButton>
               </span>
             </Tooltip>
+          )}
+          {/* Optional "Add to queue" (print-queue plugin), linking the queued print to this order. */}
+          {group.startablePrint && orderIsActive && (
+            <PluginSlot
+              name="orders.itemActions"
+              context={{
+                libraryFileId: group.libraryFileId,
+                fileName: group.libraryFileName,
+                plate: group.plate,
+                orderId,
+                orderPrintId: group.startablePrint.id,
+                disabled: !canStartOrderPrint || !file || !group.fileAvailable,
+                variant: 'icon'
+              }}
+            />
           )}
           {group.manuallyCompletablePrint && orderIsActive && (
             <Tooltip title={group.total > 1 ? 'Mark one done' : 'Mark done manually'}>
@@ -527,6 +546,21 @@ export function OrderCard({
                         >
                           Start print
                         </Button>
+                      )}
+                      {/* Optional "Add to queue" (print-queue plugin), linked to this order. */}
+                      {group.startablePrint && order.status === 'active' && (
+                        <PluginSlot
+                          name="orders.itemActions"
+                          context={{
+                            libraryFileId: group.libraryFileId,
+                            fileName: group.libraryFileName,
+                            plate: group.plate,
+                            orderId: order.id,
+                            orderPrintId: group.startablePrint.id,
+                            disabled: !canStartOrderPrint || !file || !group.fileAvailable,
+                            variant: 'button'
+                          }}
+                        />
                       )}
                       {group.confirmablePrint && (
                         <Button

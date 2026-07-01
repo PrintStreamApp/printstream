@@ -14,6 +14,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   Box, Button, DialogActions, ModalDialog, Sheet, Stack, Typography
 } from '@mui/joy'
+import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import { useQuery } from '@tanstack/react-query'
@@ -72,6 +73,7 @@ import {
   matchesPrinterModel,
   mergeProjectSlicingProfiles,
   normalizeSliceFilamentColor,
+  parseSliceToolheadNozzleId,
   pickMachineProfileByName,
   pickMachineProfileForPrinter,
   resolveCompatiblePlateTypes,
@@ -128,6 +130,7 @@ export function SliceFileModal({
   preferredPrinterId,
   defaultPlateNumber,
   flowCopy,
+  onBack,
   onClose,
   onSubmit
 }: {
@@ -155,6 +158,12 @@ export function SliceFileModal({
   defaultPlateNumber?: number
   /** Override the print-flow title/description/continue-button copy (e.g. for "add to queue"). */
   flowCopy?: { title?: string; description?: string | null; continueLabel?: string }
+  /**
+   * When provided, the dialog shows a "Back" action that returns to the step it was
+   * opened from (e.g. the library file picker in the printers flow), which stays
+   * mounted underneath. Without it, only Cancel/Close is offered.
+   */
+  onBack?: () => void
   onClose: () => void
   onSubmit: (input: SliceFileSubmitInput, action: SliceFileSubmitAction, options?: { keepDialogOpen?: boolean }) => void
 }) {
@@ -613,12 +622,23 @@ export function SliceFileModal({
   const materialToolheadOptions = sliceToolheads.length > 1 ? sliceToolheads : []
   const missingFilamentProfile = visibleProjectFilaments.some((filament) => !filamentMaterialOptionIds[filament.projectFilamentId])
   const missingFilamentToolhead = materialToolheadOptions.length > 0 && visibleProjectFilaments.some((filament) => !filamentToolheadIds[filament.projectFilamentId])
-  // The full ordered filament list to bake into the saved/sliced 3MF — only when the
-  // user changed the material count (recolor-only keeps the existing slice-time path,
-  // so unchanged projects never rewrite project_settings.config). `sourceIndex` tells
-  // the writer which original filament to clone slicer settings from for each slot.
+  // A nozzle reassignment (which extruder a material prints on) must also persist: otherwise the
+  // saved 3MF keeps the old `filament_nozzle_map` / slice_info group ids and reopens on the old
+  // nozzle. Compared against each slot's baked nozzle so a nozzle-only change still lights up Save
+  // (dual-nozzle only — there are no toolhead options to change on a single-nozzle machine).
+  const filamentNozzlesChanged = useMemo(
+    () => materialToolheadOptions.length > 0 && baseProjectFilaments.some((filament) => {
+      const selected = parseSliceToolheadNozzleId(filamentToolheadIds[filament.projectFilamentId])
+      return selected != null && selected !== (filament.nozzleId ?? null)
+    }),
+    [materialToolheadOptions.length, baseProjectFilaments, filamentToolheadIds]
+  )
+  // The full ordered filament list to bake into the saved/sliced 3MF — only when the user changed
+  // the material count, a colour, a profile, or a nozzle (an otherwise unchanged project never
+  // rewrites project_settings.config). `sourceIndex` tells the writer which original filament to
+  // clone slicer settings from for each slot; `nozzleId` carries the per-slot nozzle assignment.
   const desiredFilaments = useMemo<SceneEditFilament[] | null>(() => {
-    if (!filamentCountChanged && !filamentColorsChanged && !filamentProfilesChanged) return null
+    if (!filamentCountChanged && !filamentColorsChanged && !filamentProfilesChanged && !filamentNozzlesChanged) return null
     return projectFilaments.map((filament) => {
       const isAdded = addedFilamentIds.has(filament.projectFilamentId)
       const sourceIndex = isAdded
@@ -631,10 +651,13 @@ export function SliceFileModal({
         // The selected preset name (e.g. "Bambu PETG HF @BBL H2D 0.4 nozzle") so the material
         // choice persists as `filament_settings_id`. Null keeps the slot's existing preset.
         settingsId: selectedOption?.material ?? null,
-        sourceIndex: sourceIndex >= 0 ? sourceIndex : 0
+        sourceIndex: sourceIndex >= 0 ? sourceIndex : 0,
+        // The chosen toolhead's runtime nozzle id (0 = right, 1 = left), falling back to the slot's
+        // baked nozzle so unchanged slots keep their assignment. Null on single-nozzle projects.
+        nozzleId: parseSliceToolheadNozzleId(filamentToolheadIds[filament.projectFilamentId]) ?? filament.nozzleId ?? null
       }
     })
-  }, [filamentCountChanged, filamentColorsChanged, filamentProfilesChanged, projectFilaments, addedFilamentIds, addedFilamentSourceIndex, baseProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors])
+  }, [filamentCountChanged, filamentColorsChanged, filamentProfilesChanged, filamentNozzlesChanged, projectFilaments, addedFilamentIds, addedFilamentSourceIndex, baseProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, filamentToolheadIds])
   const handleAddFilament = useCallback(() => {
     const template = projectFilaments[0] ?? null
     const templateId = template?.projectFilamentId ?? null
@@ -996,31 +1019,45 @@ export function SliceFileModal({
               {(!saveDestinationOpen || submitAction !== 'save') && submitError && <Typography level="body-sm" color="danger">{submitError}</Typography>}
             </Stack>
           </ScrollableDialogBody>
-          <DialogActions sx={{ pt: 1 }}>
-            <Button type="button" variant="plain" onClick={onClose}>{flow === 'print' ? 'Cancel' : 'Close'}</Button>
-            {saveActionVisible && (
+          <DialogActions sx={{ pt: 1, justifyContent: onBack ? 'space-between' : undefined }}>
+            {onBack && (
               <Button
                 type="button"
-                variant="outlined"
-                loading={submitting && submitAction === 'save'}
-                disabled={!canSubmit || submitting}
-                startDecorator={<ContentCutRoundedIcon />}
-                onClick={() => setSaveDestinationOpen(true)}
+                variant="plain"
+                color="neutral"
+                startDecorator={<ArrowBackRoundedIcon />}
+                onClick={onBack}
+                disabled={submitting}
               >
-                {saveActionLabel}
+                Back
               </Button>
             )}
-            <Button
-              type="button"
-              loading={submitting && submitAction === 'print'}
-              disabled={!canSubmit || submitting}
-              // The print-prep flow "continues" to a follow-up step (printer selection or
-              // the queue dialog), so no print icon; the direct library print keeps it.
-              startDecorator={flow === 'print' ? undefined : <PrintRoundedIcon />}
-              onClick={() => submit('print')}
-            >
-              {printActionLabel}
-            </Button>
+            <Stack direction="row" spacing={1}>
+              <Button type="button" variant="plain" onClick={onClose}>{flow === 'print' ? 'Cancel' : 'Close'}</Button>
+              {saveActionVisible && (
+                <Button
+                  type="button"
+                  variant="outlined"
+                  loading={submitting && submitAction === 'save'}
+                  disabled={!canSubmit || submitting}
+                  startDecorator={<ContentCutRoundedIcon />}
+                  onClick={() => setSaveDestinationOpen(true)}
+                >
+                  {saveActionLabel}
+                </Button>
+              )}
+              <Button
+                type="button"
+                loading={submitting && submitAction === 'print'}
+                disabled={!canSubmit || submitting}
+                // The print-prep flow "continues" to a follow-up step (printer selection or
+                // the queue dialog), so no print icon; the direct library print keeps it.
+                startDecorator={flow === 'print' ? undefined : <PrintRoundedIcon />}
+                onClick={() => submit('print')}
+              >
+                {printActionLabel}
+              </Button>
+            </Stack>
           </DialogActions>
           </Box>
         </ScrollableModalDialog>

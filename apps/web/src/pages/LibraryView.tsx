@@ -129,6 +129,14 @@ type LibraryPrintTarget = {
 type SliceThenPrintTarget = {
   sourceFile: LibraryFile
   jobId: string
+  /**
+   * Whether abandoning (Cancel) the print should also close the slice dialog
+   * mounted beneath it. True for the slim "prepare for print" flow, where that
+   * dialog is just an earlier step; false for the editor flow, where Cancel (and
+   * finishing a print) returns to the still-open 3D editor rather than closing it.
+   * Unset for the slice-results target, which reuses this shape.
+   */
+  closeConfigOnDismiss?: boolean
 }
 
 /**
@@ -493,12 +501,20 @@ export function LibraryView() {
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
     onSuccess: async (response, variables) => {
-      // Editor-initiated prints keep the slice dialog (and the editor on top of it)
-      // open so the print flow layers over the editor; otherwise close as usual.
-      if (!variables.keepDialogOpen) closeSliceDialog()
+      // Keep the slice dialog mounted underneath the print flow so its "Back" returns
+      // to slice settings: the editor flow already keeps the editor open (keepDialogOpen),
+      // and the slim "prepare for print" flow now stays mounted too. Other actions close
+      // the dialog as before.
+      const keepSliceDialogOpen = variables.keepDialogOpen || variables.action === 'print'
+      if (!keepSliceDialogOpen) closeSliceDialog()
       await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
       if (variables.action === 'print') {
-        setSliceThenPrintTarget({ sourceFile: variables.file, jobId: response.job.id })
+        setSliceThenPrintTarget({
+          sourceFile: variables.file,
+          jobId: response.job.id,
+          // Slim prepare flow → Cancel closes it; editor flow → Cancel returns to the editor.
+          closeConfigOnDismiss: !variables.keepDialogOpen
+        })
       }
       if (variables.action === 'slice') {
         setSliceResultTarget({ sourceFile: variables.file, jobId: response.job.id })
@@ -1352,7 +1368,15 @@ export function LibraryView() {
           sourceFile={sliceThenPrintTarget.sourceFile}
           jobId={sliceThenPrintTarget.jobId}
           printers={printersQuery.data?.printers ?? []}
-          onClose={() => setSliceThenPrintTarget(null)}
+          // Slim prepare flow: Back returns to the still-mounted slice settings, Cancel
+          // abandons the whole flow. Editor flow: there is no distinct "abandon" (both
+          // would just return to the editor), so only Cancel is shown and it returns to
+          // the editor, as before.
+          onBack={sliceThenPrintTarget.closeConfigOnDismiss ? () => setSliceThenPrintTarget(null) : undefined}
+          onClose={() => {
+            setSliceThenPrintTarget(null)
+            if (sliceThenPrintTarget.closeConfigOnDismiss) closeSliceDialog()
+          }}
         />
       )}
 

@@ -8,14 +8,14 @@ import {
   QueryClientProvider
 } from '@tanstack/react-query'
 import { extractErrorMessage } from '@printstream/shared'
-import { App } from './App'
+import { Root } from './Root'
 import { PromptDialogProvider } from './components/PromptDialogProvider'
 import { getBrowserEnv } from './lib/browserEnv'
-import { registerBuiltinPlugins } from './plugin/builtin'
 import { registerAppServiceWorker } from './lib/appUpdate'
 import { shouldSuppressGlobalErrorToast, shouldSuppressPassiveAuthQueryError } from './lib/queryErrorToast'
 import { extractDisabledPluginNameFromErrorMessage } from './lib/pluginSettings'
-import { completeSplashScreen, setSplashScreenProgress } from './lib/splashScreen'
+import { isMarketingPath, marketingRoutePaths } from './lib/marketingManifest'
+import { dismissSplashScreenImmediately, setSplashScreenProgress } from './lib/splashScreen'
 import { toast } from './lib/toast'
 // Self-hosted brand fonts (no Google Fonts CDN dependency). Weights mirror the
 // theme: IBM Plex Sans 400/500/600 (body + UI), Space Grotesk 400/500/700 (display).
@@ -41,7 +41,16 @@ async function clearOldOriginState(): Promise<void> {
   }
 }
 
-setSplashScreenProgress(12, 'Starting app shell')
+// A cold load of a public marketing page must not show the app-boot splash ("Loading the app…"),
+// so dismiss it immediately and skip the boot-progress text — Root renders the light marketing
+// branch. Real app loads (and entering the app from marketing, see Root) keep/re-show the splash.
+const marketingColdLoad = marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname)
+const bootProgress = (percent: number, status: string): void => {
+  if (!marketingColdLoad) setSplashScreenProgress(percent, status)
+}
+if (marketingColdLoad) dismissSplashScreenImmediately()
+
+bootProgress(12, 'Starting app shell')
 if (browserEnv.devMode) {
   void clearOldOriginState()
 } else {
@@ -49,9 +58,10 @@ if (browserEnv.devMode) {
 }
 const root = ReactDOM.createRoot(document.getElementById('root')!)
 
-setSplashScreenProgress(34, 'Registering updates')
-registerBuiltinPlugins()
-setSplashScreenProgress(58, 'Loading built-in features')
+bootProgress(34, 'Registering updates')
+// Built-in plugins register when the app shell chunk loads (see App.tsx), not here — so a cold
+// load of a marketing page never pulls the plugin graph. Root lazy-loads the app branch.
+bootProgress(58, 'Preparing')
 
 // Surface any uncaught query/mutation errors as toast notifications so we
 // have a single, consistent place users see failures. Individual call sites
@@ -85,19 +95,19 @@ const queryClient = new QueryClient({
   mutationCache: new MutationCache({ onError: reportMutationError })
 })
 
-setSplashScreenProgress(78, 'Preparing client state')
-setSplashScreenProgress(90, 'Rendering interface')
+bootProgress(78, 'Preparing client state')
+bootProgress(90, 'Rendering interface')
 
 root.render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <PromptDialogProvider>
-          <App />
+          <Root />
         </PromptDialogProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>
 )
-
-completeSplashScreen()
+// The splash is completed by whichever branch mounts (App / MarketingApp) once it's ready, so it
+// stays visible across the lazy chunk load instead of being dismissed before anything renders.

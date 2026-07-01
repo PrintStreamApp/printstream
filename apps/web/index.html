@@ -72,6 +72,16 @@
         display: none;
       }
 
+      /* Marketing cold load (set by the pre-bundle script in <body>): never paint the app-boot
+         splash, and reveal #root immediately so the light marketing page renders without it. */
+      html.ps-marketing-boot #app-splash {
+        display: none;
+      }
+
+      html.ps-marketing-boot #root {
+        visibility: visible;
+      }
+
       .app-splash__panel {
         width: min(100%, 460px);
         padding: 28px 24px 24px;
@@ -224,6 +234,19 @@
     </div>
     <script>
       document.getElementById('app-splash')?.setAttribute('data-started-at', String(Date.now()))
+    </script>
+    <script>
+      /* Decide marketing-vs-app BEFORE any bundle loads, so a public marketing page never paints the
+         app-boot splash. Kept in sync with src/private/cloud/marketingRoutes.ts; the public export
+         empties this list (OSS ships no marketing site) so a self-hosted "/" keeps its boot splash. */
+      (function () {
+        try {
+          var PS_MARKETING_PATHS = [];
+          if (PS_MARKETING_PATHS.indexOf(window.location.pathname) !== -1) {
+            document.documentElement.classList.add('ps-marketing-boot');
+          }
+        } catch (e) {}
+      })();
     </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

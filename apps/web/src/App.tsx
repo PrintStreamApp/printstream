@@ -96,6 +96,7 @@ import { ConnectBridgeView } from './pages/ConnectBridgeView'
 import { stashPendingBridgeConnectCode } from './lib/pendingBridgeConnect'
 import { CORE_LANDING_PAGE_OPTIONS } from './lib/landingPageOptions'
 import { webPluginRegistry } from './plugin/registry'
+import { registerBuiltinPlugins } from './plugin/builtin'
 import { buildChromeCssVars } from './theme/buildTheme'
 import { auroraChrome, auroraTheme, defaultChrome, theme } from './theme/theme'
 import { platformAuroraChrome, platformAuroraTheme, platformChrome, platformTheme } from './theme/platformTheme'
@@ -116,9 +117,15 @@ const baseCoreTabs: ReadonlyArray<ShellTab> = [
   }
 ]
 
-// Default left-to-right order for the leading plugin tabs (Orders, then Queue);
-// any other plugin tab falls back to alphabetical after these.
-const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/orders', '/queue']
+// Default left-to-right order for the leading plugin tabs (Queue, then Orders);
+// any other plugin tab falls back to alphabetical after these. The final
+// interleaving with core tabs is governed by DEFAULT_NAV_TAB_ORDER.
+const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/queue', '/orders']
+
+// Register built-in plugins when this (lazy-loaded) app-shell chunk first loads — moved out of
+// main.tsx so a cold load of a marketing page never pulls in the plugin graph. Runs once at module
+// import, before <App> first renders (which reads webPluginRegistry.routes()).
+registerBuiltinPlugins()
 
 const webRuntimeStartedAt = new Date().toISOString()
 

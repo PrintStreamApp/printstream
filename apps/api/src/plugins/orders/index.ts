@@ -41,6 +41,7 @@ import { broadcastOrdersChanged, broadcastPrintDispatchChanged } from '../../lib
 import type { AnyPrismaClient } from '../../lib/prisma.js'
 import { getCurrentTenant } from '../../lib/tenant-context.js'
 import { readPlateIndex, type ThreeMfIndex } from '../../lib/three-mf.js'
+import { createOrderQueueLinkHandlers } from './queue-link.js'
 
 type OrdersPluginDeps = {
   enqueueLibraryPrint: typeof enqueueLibraryPrint
@@ -103,6 +104,18 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
     version: '0.1.0',
     description: 'Templated production orders built from library files and tracked against real print completions.',
     async register(context) {
+      // The print-queue mirrors an order-linked queue item's lifecycle onto its order
+      // print via the shared bus (queued → dispatched → the existing poll-sync finishes it).
+      const queueLink = createOrderQueueLinkHandlers({ logger: context.logger })
+      context.printerEvents.on('order-print.queued', queueLink.onQueued)
+      context.printerEvents.on('order-print.unqueued', queueLink.onUnqueued)
+      context.printerEvents.on('order-print.dispatched', queueLink.onDispatched)
+      context.onShutdown(() => {
+        context.printerEvents.off('order-print.queued', queueLink.onQueued)
+        context.printerEvents.off('order-print.unqueued', queueLink.onUnqueued)
+        context.printerEvents.off('order-print.dispatched', queueLink.onDispatched)
+      })
+
       context.router.get('/templates', requireRequestPermission(JOBS_VIEW_PERMISSION), async (_request, response) => {
         response.json({ templates: await listTemplates(context.prisma) })
       })

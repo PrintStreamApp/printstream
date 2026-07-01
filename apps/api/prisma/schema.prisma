@@ -1004,6 +1004,12 @@ model QueueItem {
   status                String   @default("queued")
   label                 String?
   createdById           String?
+  // Optional link to the order print this item was queued for (the orders plugin).
+  // Plain ids, no FK: a stale link (order/print deleted) is handled gracefully as a
+  // no-op. When set, adding/removing/dispatching this item is mirrored onto the order
+  // print via the printerEvents bus (the orders plugin listens) — no cross-plugin import.
+  orderId               String?
+  orderPrintId          String?
   // Most recent dispatch attempt — printer + tracked PrintJob linkage for completion
   // reconciliation and history (mirrors OrderPrint's last-print columns).
   lastPrinterId         String?
@@ -1028,4 +1034,5 @@ model QueueItem {
   @@index([tenantId, targetPrinterId])
   @@index([tenantId, lastPrinterId])
   @@index([tenantId, lastPrintJobId])
+  @@index([tenantId, orderPrintId])
 }

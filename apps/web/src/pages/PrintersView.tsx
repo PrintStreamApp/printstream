@@ -628,7 +628,8 @@ export function PrintersView() {
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
     onSuccess: async (response, variables) => {
-      setSliceTarget(null)
+      // Keep the slice dialog mounted beneath the print flow so its "Back" returns to
+      // slice settings; the whole flow is torn down together via closePrintFlow.
       await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
       if (variables.action === 'print') {
         setSliceThenPrintTarget({
@@ -1582,9 +1583,10 @@ export function PrintersView() {
           canSlice={canUploadLibrary}
           onClose={() => setPickerForPrinter(null)}
           onPick={(file) => {
+            // Keep the picker mounted underneath so "Back" from the slice/print setup
+            // returns to file selection (matching the sliced-file branch below).
             if (isUnslicedThreeMfFile(file)) {
               setSliceTarget({ file, preferredPrinterId: pickerForPrinter.id })
-              setPickerForPrinter(null)
               return
             }
             setPrintTarget({ file, printerId: pickerForPrinter.id })
@@ -1627,9 +1629,10 @@ export function PrintersView() {
           canSlice={canUploadLibrary}
           onClose={() => setPageLibraryPickerOpen(false)}
           onPick={(file) => {
+            // Keep the picker mounted underneath so "Back" from the slice/print setup
+            // returns to file selection (matching the sliced-file branch below).
             if (isUnslicedThreeMfFile(file)) {
               setSliceTarget({ file, preferredPrinterId: '' })
-              setPageLibraryPickerOpen(false)
               return
             }
             setPrintTarget({ file, printerId: '' })
@@ -1650,7 +1653,9 @@ export function PrintersView() {
           submitError={startSlicingJob.error instanceof Error ? startSlicingJob.error.message : null}
           flow="print"
           preferredPrinterId={sliceTarget.preferredPrinterId || undefined}
-          onClose={() => setSliceTarget(null)}
+          // Back returns to the still-open library picker; Cancel abandons the whole flow.
+          onBack={() => setSliceTarget(null)}
+          onClose={closePrintFlow}
           onSubmit={(input, action) => startSlicingJob.mutate({
             file: sliceTarget.file,
             preferredPrinterId: sliceTarget.preferredPrinterId,
@@ -1667,7 +1672,9 @@ export function PrintersView() {
           preferredPrinterId={sliceThenPrintTarget.preferredPrinterId || undefined}
           lockPrinterSelection={Boolean(sliceThenPrintTarget.preferredPrinterId)}
           printers={printersQuery.data?.printers ?? []}
-          onClose={() => setSliceThenPrintTarget(null)}
+          // Back returns to the still-open slice settings; Cancel abandons the whole flow.
+          onBack={() => setSliceThenPrintTarget(null)}
+          onClose={closePrintFlow}
         />
       )}
 

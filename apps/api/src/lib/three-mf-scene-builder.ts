@@ -16,6 +16,7 @@
 import { createWriteStream } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPlateFilamentChanges } from '@printstream/shared'
+import { sliceExtruderForNozzleId, stringArray } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import type { ImportedMesh } from './mesh-import.js'
@@ -284,6 +285,8 @@ const THREE_MF_RELS_XML = [
 
 /** Sub-model relationships file: lists the `/3D/Objects/…model` part files the root model references. */
 const THREE_MF_MODEL_RELS_ENTRY = '3D/_rels/3dmodel.model.rels'
+/** Slice metadata: per-plate `<filament>` entries carrying each material's sliced `group_id` (nozzle). */
+const SLICE_INFO_ENTRY = 'Metadata/slice_info.config'
 const THREE_MF_3DMODEL_REL_TYPE = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel'
 
 /**
@@ -973,6 +976,87 @@ function applyFilamentList(projectSettingsJson: string, filaments: SceneEditFila
 }
 
 /**
+ * Persist the editor's per-material dual-nozzle assignment into `project_settings.config`.
+ *
+ * `filament_nozzle_map` is written **verbatim** as each slot's runtime nozzle id (0 = right,
+ * 1 = left) — the same nozzle-id space the index parser (`extractNozzleMapping`) reads back and
+ * the slicer writes. Per the nozzle-mapping invariant, do NOT remap it through
+ * `physical_extruder_map`: a second inversion mis-assigns nozzles on non-identity machines (the
+ * H2D's `["1","0"]`) and fails dual-nozzle offset calibration (printer error 0300-4010).
+ *
+ * `extruder_nozzle_stats` is rebuilt so an extruder reads "active" iff a filament is assigned to
+ * it — otherwise a stale single-active reading short-circuits `extractNozzleMapping` and forces
+ * every filament onto one nozzle (which is exactly how a save silently reverts to the old nozzle).
+ * The rebuild is coarse (one `Standard` bucket per extruder) and only runs when the edit assigns
+ * EVERY slot a nozzle, so the active/inactive set is complete; the slicer regenerates the precise
+ * per-volume-type stats at the next slice. A no-op on single-nozzle projects
+ * (`physical_extruder_map` shorter than 2) or when no filament carries a nozzle id.
+ */
+export function applyNozzleAssignmentToProjectSettings(projectSettingsJson: string, filaments: SceneEditFilament[]): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(projectSettingsJson)
+  } catch {
+    return projectSettingsJson
+  }
+  if (!parsed || typeof parsed !== 'object') return projectSettingsJson
+  const record = parsed as Record<string, unknown>
+  const physicalExtruderMap = stringArray(record.physical_extruder_map)
+  if (physicalExtruderMap.length < 2) return projectSettingsJson
+  if (!filaments.some((filament) => filament.nozzleId != null)) return projectSettingsJson
+
+  const nozzleMap = Array.isArray(record.filament_nozzle_map) ? record.filament_nozzle_map.map((value) => String(value)) : []
+  const extruderUsage = new Array<number>(physicalExtruderMap.length).fill(0)
+  filaments.forEach((filament, index) => {
+    if (filament.nozzleId == null) return
+    while (nozzleMap.length <= index) nozzleMap.push('')
+    nozzleMap[index] = String(filament.nozzleId)
+    const extruder = sliceExtruderForNozzleId(filament.nozzleId, physicalExtruderMap)
+    if (extruder != null && extruder < extruderUsage.length) extruderUsage[extruder] = (extruderUsage[extruder] ?? 0) + 1
+  })
+  record.filament_nozzle_map = nozzleMap
+  if (filaments.every((filament) => filament.nozzleId != null)) {
+    record.extruder_nozzle_stats = extruderUsage.map((count) => `Standard#${count}`)
+  }
+
+  return JSON.stringify(record)
+}
+
+/**
+ * Move each `<filament id=…>`'s `group_id` in `slice_info.config` onto the slicer extruder that
+ * feeds its desired runtime nozzle. slice_info's group ids are the authoritative signal the index
+ * parser prefers once a project carries concrete slice usage, so they must follow the assignment or
+ * a reopened sliced project shows the pre-edit nozzle. Filaments the edit does not (re)assign, and
+ * files without a matching `<filament>` entry, are left byte-for-byte intact. A no-op on
+ * single-nozzle projects or when no assignment inverts to a valid extruder.
+ */
+export function rewriteSliceInfoNozzleGroups(sliceInfoXml: string, filaments: SceneEditFilament[], physicalExtruderMap: string[]): string {
+  if (physicalExtruderMap.length < 2) return sliceInfoXml
+  const groupByFilamentId = new Map<number, number>()
+  filaments.forEach((filament, index) => {
+    if (filament.nozzleId == null) return
+    const extruder = sliceExtruderForNozzleId(filament.nozzleId, physicalExtruderMap)
+    if (extruder != null) groupByFilamentId.set(index + 1, extruder)
+  })
+  if (groupByFilamentId.size === 0) return sliceInfoXml
+  return sliceInfoXml.replace(/<filament\b([^>]*?)(\/?)>(?:<\/filament>)?/g, (match, attrs: string, selfClosing: string) => {
+    const idMatch = attrs.match(/\sid="(\d+)"/)
+    const filamentId = Number.parseInt(idMatch?.[1] ?? '', 10)
+    const group = Number.isInteger(filamentId) ? groupByFilamentId.get(filamentId) : undefined
+    if (group == null) return match
+    const nextAttrs = upsertXmlIntAttribute(attrs, 'group_id', group)
+    return `<filament${nextAttrs}${selfClosing === '/' ? '/>' : '></filament>'}`
+  })
+}
+
+/** Replace an integer XML attribute in an attribute string, or append it when absent. */
+function upsertXmlIntAttribute(attrs: string, key: string, value: number): string {
+  const pattern = new RegExp(`\\s${key}="[^"]*"`)
+  const replacement = ` ${key}="${value}"`
+  return pattern.test(attrs) ? attrs.replace(pattern, replacement) : `${attrs}${replacement}`
+}
+
+/**
  * Remap every `model_settings.config` part `extruder` from its OLD filament slot to the
  * new one after a material add/remove. `oldIndexToNewId` maps a 0-based old filament index
  * to its 1-based new id (built from each desired filament's `sourceIndex`). A part whose
@@ -1159,6 +1243,10 @@ export async function buildEditedThreeMf(
   let baseModelSettingsXml = NEW_PROJECT_MODEL_SETTINGS_XML
   let projectSettingsJson: string | null = null
   let baseCustomGcodeXml: string | null = null
+  // The sliced project's `slice_info.config` (per-plate `<filament>` group ids). Read so a nozzle
+  // reassignment can move each filament's `group_id` — the signal the index parser prefers once a
+  // project carries concrete slice usage — onto the chosen nozzle. Null for unsliced projects.
+  let baseSliceInfoXml: string | null = null
   // The sub-model relationships file (Production-Extension projects). Split-out imported part files
   // are appended here so BambuStudio loads them; null when the source has none (we create one then).
   let baseModelRelsXml: string | null = null
@@ -1174,6 +1262,9 @@ export async function buildEditedThreeMf(
       .then((buffer) => buffer.toString('utf8'))
       .catch(() => null)
     baseCustomGcodeXml = await readEntry(baseSourcePath, CUSTOM_GCODE_PER_LAYER_ENTRY, undefined, 4 * 1024 * 1024)
+      .then((buffer) => buffer.toString('utf8'))
+      .catch(() => null)
+    baseSliceInfoXml = await readEntry(baseSourcePath, SLICE_INFO_ENTRY, undefined, 8 * 1024 * 1024)
       .then((buffer) => buffer.toString('utf8'))
       .catch(() => null)
   }
@@ -1262,12 +1353,22 @@ export async function buildEditedThreeMf(
         return paints ? applyTrianglePaintToModelEntry(acc, channel.attribute, paints) : acc
       }, xml))
     }
-    // Compose project_settings.config rewrites: filament set first (add/remove
-    // materials), then per-plate prime-tower corners.
+    // The project's slicer->runtime nozzle map, needed to move slice_info group ids onto the
+    // chosen nozzles. Empty for single-nozzle projects or a from-scratch project with no settings.
+    let physicalExtruderMap: string[] = []
+    if (projectSettingsJson) {
+      try {
+        const parsed: unknown = JSON.parse(projectSettingsJson)
+        if (parsed && typeof parsed === 'object') physicalExtruderMap = stringArray((parsed as Record<string, unknown>).physical_extruder_map)
+      } catch { /* not JSON we can read; leave the nozzle map empty */ }
+    }
+    // Compose project_settings.config rewrites: filament set first (add/remove materials), then the
+    // per-slot dual-nozzle assignment, then per-plate prime-tower corners.
     const projectSettingsTransforms: Array<(xml: string) => string> = []
     if (edit.filaments && edit.filaments.length > 0) {
       const filaments = edit.filaments
       projectSettingsTransforms.push((xml) => applyFilamentList(xml, filaments))
+      projectSettingsTransforms.push((xml) => applyNozzleAssignmentToProjectSettings(xml, filaments))
     }
     if (edit.plates.some((plate) => plate.primeTower)) {
       projectSettingsTransforms.push((xml) => applyPrimeTowerSettings(xml, edit))
@@ -1277,6 +1378,13 @@ export async function buildEditedThreeMf(
         'Metadata/project_settings.config',
         (xml) => projectSettingsTransforms.reduce((acc, transform) => transform(acc), xml)
       )
+    }
+    // slice_info.config: move each reassigned filament's group_id onto the chosen nozzle so a
+    // reopened sliced project reflects the new assignment (group ids outrank filament_nozzle_map
+    // once the project carries concrete slice usage). Only when the source shipped slice_info.
+    if (edit.filaments && edit.filaments.length > 0 && baseSliceInfoXml !== null && physicalExtruderMap.length >= 2) {
+      const filaments = edit.filaments
+      transforms.set(SLICE_INFO_ENTRY, (xml) => rewriteSliceInfoNozzleGroups(xml, filaments, physicalExtruderMap))
     }
     // Split-out imported sub-models: write each part file and declare it in the sub-model rels so
     // BambuStudio loads them (transform the existing rels, or add a fresh one if the source had none).

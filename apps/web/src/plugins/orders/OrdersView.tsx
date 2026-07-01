@@ -36,6 +36,7 @@ import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { type DirectorySortDirection } from '../../components/DirectoryControls'
+import { PluginSlot } from '../../plugin/PluginSlot'
 import { ConfirmActionDialog } from '../../components/ConfirmActionDialog'
 import { SliceFileModal } from '../../components/library/SliceFileModal'
 import { SliceThenPrintModal } from '../../components/library/SliceThenPrintModal'
@@ -278,7 +279,8 @@ export function OrdersView() {
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
     onSuccess: async (response, variables) => {
-      setSliceTarget(null)
+      // Keep the slice dialog mounted beneath the print flow so its "Back" returns to
+      // slice settings; abandoning the print tears both down together.
       await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
       setSliceThenPrintTarget({
         orderId: variables.orderTarget.orderId,
@@ -688,7 +690,12 @@ export function OrdersView() {
             invalidateOrders()
             void queryClient.invalidateQueries({ queryKey: ['print-dispatch'] })
           }}
-          onClose={() => setSliceThenPrintTarget(null)}
+          // Back returns to the still-open slice settings; Cancel abandons the whole flow.
+          onBack={() => setSliceThenPrintTarget(null)}
+          onClose={() => {
+            setSliceThenPrintTarget(null)
+            setSliceTarget(null)
+          }}
         />
       )}
 
@@ -727,6 +734,10 @@ export function OrdersView() {
           })
         }}
       />
+
+      {/* Always-mounted host for the order-item "Add to queue" action (print-queue plugin);
+          renders nothing until an action fires, and nothing when no plugin is present. */}
+      <PluginSlot name="orders.overlays" context={{}} />
     </Stack>
   )
 }

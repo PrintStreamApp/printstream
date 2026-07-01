@@ -466,6 +466,17 @@ export function buildSliceToolheadId(nozzleId: number): string {
   return `nozzle-${nozzleId}`
 }
 
+/**
+ * The runtime nozzle id (0 = right, 1 = left) encoded in a `nozzle-<id>` toolhead id, or null
+ * for the single-nozzle `primary` id / any non-nozzle toolhead. The inverse of
+ * {@link buildSliceToolheadId}; used to carry the editor's toolhead pick into a saved 3MF.
+ */
+export function parseSliceToolheadNozzleId(toolheadId: string | null | undefined): number | null {
+  const match = toolheadId?.match(/^nozzle-(\d+)$/)
+  const nozzleId = Number.parseInt(match?.[1] ?? '', 10)
+  return Number.isInteger(nozzleId) && nozzleId >= 0 ? nozzleId : null
+}
+
 export function normalizedProfileText(value: string): string {
   return value.toLowerCase().replace(/bambu\s+lab/g, '').replace(/[^a-z0-9.]+/g, ' ').trim()
 }

@@ -48,6 +48,38 @@ export function completeSplashScreen(): void {
   }, remainingVisibleMs)
 }
 
+/**
+ * Reveal #root and remove the boot splash instantly (no minimum-visible delay). Used for a light
+ * marketing cold load so the app-boot splash ("Loading the app…") never dwells on a marketing page.
+ */
+export function dismissSplashScreenImmediately(): void {
+  completionScheduled = true
+  document.body?.classList.add('app-boot-ready')
+  const splash = getSplashRoot()
+  if (splash) splash.classList.add(COMPLETE_CLASS, HIDDEN_CLASS)
+}
+
+/**
+ * Re-show the boot splash after it was dismissed — e.g. when the user enters the app from a marketing
+ * page and the heavy app chunk has to load. {@link completeSplashScreen} hides it again once ready.
+ */
+export function showSplashScreen(): void {
+  const splash = getSplashRoot()
+  // Leave an already-visible splash alone (e.g. a normal cold app-route load) so its timing isn't reset.
+  const alreadyVisible =
+    !document.body?.classList.contains('app-boot-ready') &&
+    !(splash?.classList.contains(COMPLETE_CLASS) || splash?.classList.contains(HIDDEN_CLASS))
+  if (alreadyVisible) return
+
+  completionScheduled = false
+  splashScreenStartedAt = Date.now()
+  // Clear the pre-bundle marketing flag too, or the index.html CSS would keep the splash hidden when
+  // entering the app from a marketing page.
+  document.documentElement.classList.remove('ps-marketing-boot')
+  document.body?.classList.remove('app-boot-ready')
+  if (splash) splash.classList.remove(COMPLETE_CLASS, HIDDEN_CLASS)
+}
+
 export function resetSplashScreenStateForTests(): void {
   splashScreenStartedAt = null
   completionScheduled = false

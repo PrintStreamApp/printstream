@@ -328,6 +328,17 @@ export const queueAmsMappingSchema = z.array(z.number().int())
 
 const queueLabelSchema = z.string().trim().max(120).nullish()
 
+/**
+ * Links a queued item back to the order print it was queued for. When present, the
+ * orders plugin mirrors the queue lifecycle onto the order print (queued → started →
+ * awaiting-confirmation) so dispatching from the queue advances the order.
+ */
+export const queueOrderLinkSchema = z.object({
+  orderId: z.string().min(1),
+  orderPrintId: z.string().min(1)
+})
+export type QueueOrderLink = z.infer<typeof queueOrderLinkSchema>
+
 export const queueItemCreateSchema = z.object({
   libraryFileId: z.string().min(1),
   plate: z.number().int().positive().default(1),
@@ -338,7 +349,9 @@ export const queueItemCreateSchema = z.object({
   amsMapping: queueAmsMappingSchema.optional(),
   /** Override the plate's required materials (general "any printer" mapping). */
   requiredFilaments: z.array(queueRequiredFilamentSchema).max(64).optional(),
-  label: queueLabelSchema
+  label: queueLabelSchema,
+  /** When set, link this item to an order print so the queue advances the order. */
+  orderLink: queueOrderLinkSchema.optional()
 })
 export type QueueItemCreateInput = z.infer<typeof queueItemCreateSchema>
 
@@ -416,6 +429,9 @@ export const queueItemSchema = z.object({
   options: queuePrintOptionsSchema,
   status: queueItemStatusSchema,
   label: z.string().nullable(),
+  /** Order print this item was queued for (the orders plugin), or null for a standalone item. */
+  orderId: z.string().nullable(),
+  orderPrintId: z.string().nullable(),
   lastPrinterId: z.string().nullable(),
   lastPrinterName: z.string().nullable(),
   lastResult: z.enum(['success', 'failed', 'cancelled']).nullable(),

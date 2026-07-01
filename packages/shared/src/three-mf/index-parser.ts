@@ -534,6 +534,26 @@ function usesUiOrderedDualNozzleTargets(physicalExtruderMap: string[]): boolean 
   return numberAt(physicalExtruderMap, 0) === 0 && numberAt(physicalExtruderMap, 1) === 1
 }
 
+/**
+ * The slicer-extruder index (a `slice_info` `group_id` / `filament_nozzle_map` slot value)
+ * that feeds runtime nozzle `nozzleId` (0 = right, 1 = left) on the project's machine. This is
+ * the exact inverse of {@link normalizeProjectNozzleTarget}: it finds the extruder slot `g`
+ * whose `physical_extruder_map[g]`, normalized, equals `nozzleId`, so a value written to
+ * `group_id`/`filament_nozzle_map` round-trips back to `nozzleId` through `extractNozzleMapping`.
+ * The writer that persists an editor nozzle change (`apps/api/src/lib/three-mf-scene-builder.ts`)
+ * uses it to keep the read and write paths inverse-free mirrors. Returns null for single-nozzle
+ * projects (`physical_extruder_map` shorter than 2) or when no extruder feeds that nozzle.
+ */
+export function sliceExtruderForNozzleId(nozzleId: number, physicalExtruderMap: string[]): number | null {
+  if (physicalExtruderMap.length < 2) return null
+  for (let extruder = 0; extruder < physicalExtruderMap.length; extruder++) {
+    const runtime = numberAt(physicalExtruderMap, extruder)
+    if (runtime === null) continue
+    if (normalizeProjectNozzleTarget(runtime, physicalExtruderMap) === nozzleId) return extruder
+  }
+  return null
+}
+
 function shouldPreferFilamentNozzleMap(
   physicalExtruderMap: string[],
   mappingFromSliceInfo: ReadonlyMap<number, number>,

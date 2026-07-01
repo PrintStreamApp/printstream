@@ -319,8 +319,9 @@ export type SceneEditObjectBrimEars = z.infer<typeof sceneEditObjectBrimEarsSche
  * `i` (0-based) becomes filament id `i + 1`. `sourceIndex` is the 0-based index of an
  * existing filament whose slicer settings should seed this slot (so a cloned/new slot
  * inherits a sensible profile); null seeds from the first filament (or profile defaults
- * on a from-scratch project). Applied by rewriting the filament-indexed arrays in
- * `project_settings.config` at save/slice time.
+ * on a from-scratch project). `nozzleId` carries the per-slot dual-nozzle assignment.
+ * Applied by rewriting the filament-indexed arrays in `project_settings.config` (and, for
+ * the nozzle, `slice_info.config` group ids) at save/slice time.
  */
 export const sceneEditFilamentSchema = z.object({
   color: z.string().trim().min(1),
@@ -332,7 +333,17 @@ export const sceneEditFilamentSchema = z.object({
    * old preset name and reopens as the previous material. Null/omitted keeps the existing id.
    */
   settingsId: z.string().trim().min(1).nullable().optional(),
-  sourceIndex: z.number().int().nonnegative().nullable().optional()
+  sourceIndex: z.number().int().nonnegative().nullable().optional(),
+  /**
+   * Desired runtime nozzle for this slot on a dual-nozzle machine (0 = right, 1 = left) —
+   * the same nozzle-id space the shared index parser (`extractNozzleMapping`) canonicalises
+   * every BambuStudio nozzle-map quirk into. Carries the editor's per-material nozzle pick
+   * into the saved 3MF (`filament_nozzle_map` + `slice_info` group ids); without it a
+   * changed nozzle is dropped on save and the project reopens on the old nozzle. Null/omitted
+   * leaves the slot's existing nozzle assignment untouched (single-nozzle projects, or slots
+   * the user did not (re)assign).
+   */
+  nozzleId: z.number().int().min(0).nullable().optional()
 })
 export type SceneEditFilament = z.infer<typeof sceneEditFilamentSchema>
 

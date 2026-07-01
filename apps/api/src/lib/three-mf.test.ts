@@ -8,9 +8,9 @@ import { test } from 'node:test'
 import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
-import { applyPartProcessOverrides, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, serializeBrimEarPoints } from './three-mf-scene-builder.js'
+import { applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
 import { parseBrimEarPoints, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
-import type { SceneEdit } from '@printstream/shared'
+import type { SceneEdit, SceneEditFilament } from '@printstream/shared'
 
 const sliceInfoXml = `
 <config>
@@ -201,6 +201,116 @@ test('buildThreeMfIndex prefers concrete slice_info filament usage over conflict
   assert.equal(index.plates[0]?.filaments[0]?.nozzleId, 1)
   assert.equal(index.plates[0]?.filaments[1]?.nozzleId, 0)
   assert.equal(index.plates[0]?.filaments[2]?.nozzleId, 0)
+})
+
+// The editor-save nozzle-persistence path: applyNozzleAssignmentToProjectSettings +
+// rewriteSliceInfoNozzleGroups must be the exact inverse of extractNozzleMapping so a nozzle
+// pick round-trips back through buildThreeMfIndex. Written as read->write->read to lock the
+// mirror; the H2D map (`["1","0"]`) is deliberately non-identity so a stray second inversion
+// would surface here.
+const H2D_PHYSICAL_EXTRUDER_MAP = ['1', '0']
+
+test('nozzle assignment round-trips a left<->right swap through the index parser (sliced project)', () => {
+  const sliceInfo = `
+<config>
+  <plate>
+    <metadata key="index" value="1"/>
+    <filament id="1" tray_info_idx="GFB00" type="ABS" color="#FFC72C" used_m="50" used_g="125" group_id="0" nozzle_diameter="0.40" volume_type="Standard" used_for_object="true"/>
+    <filament id="2" tray_info_idx="GFB00" type="ABS" color="#000000" used_m="20" used_g="40" group_id="1" nozzle_diameter="0.40" volume_type="Standard" used_for_object="true"/>
+  </plate>
+</config>
+`.trim()
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'ABS'],
+    filament_settings_id: ['ABS Left', 'ABS Right'],
+    physical_extruder_map: H2D_PHYSICAL_EXTRUDER_MAP,
+    filament_nozzle_map: ['1', '0'],
+    extruder_nozzle_stats: ['Standard#1', 'Standard#1']
+  })
+  const before = buildThreeMfIndex(sliceInfo, projectSettings)
+  assert.equal(before.projectFilaments[0]?.nozzleId, 1) // material 1 on the left nozzle
+  assert.equal(before.projectFilaments[1]?.nozzleId, 0) // material 2 on the right nozzle
+
+  const filaments: SceneEditFilament[] = [
+    { color: '#FFC72C', sourceIndex: 0, nozzleId: 0 }, // move material 1 to the right nozzle
+    { color: '#000000', sourceIndex: 1, nozzleId: 1 }  // move material 2 to the left nozzle
+  ]
+  const nextProjectSettings = applyNozzleAssignmentToProjectSettings(projectSettings, filaments)
+  const nextSliceInfo = rewriteSliceInfoNozzleGroups(sliceInfo, filaments, H2D_PHYSICAL_EXTRUDER_MAP)
+
+  const after = buildThreeMfIndex(nextSliceInfo, nextProjectSettings)
+  assert.equal(after.projectFilaments[0]?.nozzleId, 0)
+  assert.equal(after.projectFilaments[1]?.nozzleId, 1)
+  assert.equal(after.plates[0]?.filaments[0]?.nozzleId, 0)
+  assert.equal(after.plates[0]?.filaments[1]?.nozzleId, 1)
+})
+
+test('nozzle assignment round-trips with no slice_info filament assignments (verbatim filament_nozzle_map)', () => {
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'ABS'],
+    filament_settings_id: ['ABS Left', 'ABS Right'],
+    physical_extruder_map: H2D_PHYSICAL_EXTRUDER_MAP,
+    filament_nozzle_map: ['1', '0'],
+    extruder_nozzle_stats: ['Standard#1', 'Standard#1']
+  })
+  const filaments: SceneEditFilament[] = [
+    { color: '#FFC72C', sourceIndex: 0, nozzleId: 0 },
+    { color: '#000000', sourceIndex: 1, nozzleId: 1 }
+  ]
+  const next = applyNozzleAssignmentToProjectSettings(projectSettings, filaments)
+  const index = buildThreeMfIndex('<config><header /></config>', next)
+  assert.equal(index.projectFilaments[0]?.nozzleId, 0)
+  assert.equal(index.projectFilaments[1]?.nozzleId, 1)
+})
+
+test('nozzle assignment clears a stale single-active short-circuit so a move to the other nozzle persists', () => {
+  // A project sliced with BOTH materials on the left nozzle: extruder_nozzle_stats marks only the
+  // left extruder active, which short-circuits every filament onto that nozzle on read — this is
+  // the "saves left no matter what" state before the fix.
+  const sliceInfo = `
+<config>
+  <plate>
+    <metadata key="index" value="1"/>
+    <filament id="1" tray_info_idx="GFB00" type="ABS" color="#FFC72C" used_m="50" used_g="125" group_id="0" nozzle_diameter="0.40" volume_type="Standard" used_for_object="true"/>
+    <filament id="2" tray_info_idx="GFB00" type="ABS" color="#000000" used_m="20" used_g="40" group_id="0" nozzle_diameter="0.40" volume_type="Standard" used_for_object="true"/>
+  </plate>
+</config>
+`.trim()
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'ABS'],
+    filament_settings_id: ['ABS Left', 'ABS Left'],
+    physical_extruder_map: H2D_PHYSICAL_EXTRUDER_MAP,
+    filament_nozzle_map: ['1', '1'],
+    extruder_nozzle_stats: ['Standard#2', 'Standard#0'] // only the left extruder reads active
+  })
+  const before = buildThreeMfIndex(sliceInfo, projectSettings)
+  assert.equal(before.projectFilaments[0]?.nozzleId, 1)
+  assert.equal(before.projectFilaments[1]?.nozzleId, 1)
+
+  const filaments: SceneEditFilament[] = [
+    { color: '#FFC72C', sourceIndex: 0, nozzleId: 0 }, // move material 1 to the right nozzle
+    { color: '#000000', sourceIndex: 1, nozzleId: 1 }  // material 2 stays left
+  ]
+  const nextProjectSettings = applyNozzleAssignmentToProjectSettings(projectSettings, filaments)
+  const nextSliceInfo = rewriteSliceInfoNozzleGroups(sliceInfo, filaments, H2D_PHYSICAL_EXTRUDER_MAP)
+
+  const after = buildThreeMfIndex(nextSliceInfo, nextProjectSettings)
+  assert.equal(after.projectFilaments[0]?.nozzleId, 0)
+  assert.equal(after.projectFilaments[1]?.nozzleId, 1)
+})
+
+test('nozzle assignment is a no-op on single-nozzle projects', () => {
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C'],
+    filament_type: ['PLA'],
+    filament_settings_id: ['PLA'],
+    physical_extruder_map: ['0']
+  })
+  const filaments: SceneEditFilament[] = [{ color: '#FFC72C', sourceIndex: 0, nozzleId: 0 }]
+  assert.equal(applyNozzleAssignmentToProjectSettings(projectSettings, filaments), projectSettings)
 })
 
 test('buildPlateObjectsWithPreview derives first-layer previews from gcode comments', () => {

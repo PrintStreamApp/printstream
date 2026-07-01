@@ -7,6 +7,7 @@
  * and to edit a queued one before it dispatches.
  */
 import { useEffect, useMemo, useState } from 'react'
+import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import {
   Button,
   DialogActions,
@@ -30,6 +31,7 @@ import {
   type PrinterStatus,
   type Printer,
   type QueueItem,
+  type QueueOrderLink,
   type QueuePrintOptions,
   type QueueRequiredFilament,
   type QueueTarget,
@@ -71,8 +73,18 @@ interface SelectedFile {
 interface QueueItemDialogProps {
   open: boolean
   onClose: () => void
+  /**
+   * When provided, the dialog shows a "Back" action that returns to the step it was
+   * opened from (e.g. the slice settings in the slice-to-queue flow), which stays
+   * mounted underneath. Without it, only Cancel is offered.
+   */
+  onBack?: () => void
   /** Create with a known file (library menu); omit for the searchable Queue-tab add. */
   fixedFile?: SelectedFile
+  /** Preselect this plate (e.g. an order item's plate). */
+  defaultPlate?: number
+  /** When queuing an order item, link the created item to its order print (fixes quantity to 1). */
+  orderLink?: QueueOrderLink
   /** Edit an existing queued item. */
   item?: QueueItem
 }
@@ -100,7 +112,7 @@ function toProjectFilament(filament: ThreeMfIndex['plates'][number]['filaments']
   }
 }
 
-export function QueueItemDialog({ open, onClose, fixedFile, item }: QueueItemDialogProps) {
+export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate, orderLink, item }: QueueItemDialogProps) {
   const isEdit = Boolean(item)
   const initialFile: SelectedFile | null = item
     ? (item.libraryFileId ? { id: item.libraryFileId, name: item.fileName } : null)
@@ -109,7 +121,7 @@ export function QueueItemDialog({ open, onClose, fixedFile, item }: QueueItemDia
   // The file is always known up front (the Queue picker / library menu provide it,
   // or it comes from the item being edited), so there is no in-dialog file search.
   const selectedFile = initialFile
-  const [plateIndex, setPlateIndex] = useState(item?.plateIndex ?? 1)
+  const [plateIndex, setPlateIndex] = useState(item?.plateIndex ?? defaultPlate ?? 1)
   const [quantity, setQuantity] = useState(item?.quantity ?? 1)
   const [targetValue, setTargetValue] = useState(item ? encodeTarget(item.target) : 'any')
   const [options, setOptions] = useState<QueuePrintOptions>(item?.options ?? queuePrintOptionsSchema.parse({}))
@@ -261,11 +273,13 @@ export function QueueItemDialog({ open, onClose, fixedFile, item }: QueueItemDia
         await addItem.mutateAsync({
           libraryFileId: selectedFile.id,
           plate,
-          quantity,
+          // An order-linked item is one order print → always a single copy.
+          quantity: orderLink ? 1 : quantity,
           target,
           options,
           ...(isSpecific && amsMapping ? { amsMapping } : {}),
           ...(materialsOverride ? { requiredFilaments: materialsOverride } : {}),
+          ...(orderLink ? { orderLink } : {}),
           label: null
         })
         toast.success(`Added "${selectedFile.name}" to the queue`)
@@ -304,15 +318,18 @@ export function QueueItemDialog({ open, onClose, fixedFile, item }: QueueItemDia
               ) : null}
 
               <Stack direction="row" spacing={2}>
-                <FormControl sx={{ width: 120 }}>
-                  <FormLabel>Copies</FormLabel>
-                  <Input
-                    type="number"
-                    slotProps={{ input: { min: 1, max: 999 } }}
-                    value={quantity}
-                    onChange={(event) => setQuantity(Math.min(999, Math.max(1, Number(event.target.value) || 1)))}
-                  />
-                </FormControl>
+                {/* An order-linked item maps to one order print, so copies are fixed at 1. */}
+                {!orderLink && (
+                  <FormControl sx={{ width: 120 }}>
+                    <FormLabel>Copies</FormLabel>
+                    <Input
+                      type="number"
+                      slotProps={{ input: { min: 1, max: 999 } }}
+                      value={quantity}
+                      onChange={(event) => setQuantity(Math.min(999, Math.max(1, Number(event.target.value) || 1)))}
+                    />
+                  </FormControl>
+                )}
                 <FormControl sx={{ flex: 1 }}>
                   <FormLabel>Target printer</FormLabel>
                   <TargetSelect printers={compatiblePrinters} value={targetValue} onChange={changeTarget} />
@@ -360,11 +377,24 @@ export function QueueItemDialog({ open, onClose, fixedFile, item }: QueueItemDia
               </DialogSection>
           </Stack>
         </ScrollableDialogBody>
-        <DialogActions>
-          <Button variant="solid" loading={busy} disabled={!selectedFile} onClick={submit}>
-            {isEdit ? 'Save' : 'Add to queue'}
-          </Button>
-          <Button variant="plain" color="neutral" onClick={onClose}>Cancel</Button>
+        <DialogActions sx={{ justifyContent: onBack ? 'space-between' : undefined }}>
+          {onBack && (
+            <Button
+              variant="plain"
+              color="neutral"
+              startDecorator={<ArrowBackRoundedIcon />}
+              onClick={onBack}
+              disabled={busy}
+            >
+              Back
+            </Button>
+          )}
+          <Stack direction="row" spacing={1}>
+            <Button variant="plain" color="neutral" onClick={onClose}>Cancel</Button>
+            <Button variant="solid" loading={busy} disabled={!selectedFile} onClick={submit}>
+              {isEdit ? 'Save' : 'Add to queue'}
+            </Button>
+          </Stack>
         </DialogActions>
       </ScrollableModalDialog>
     </Modal>

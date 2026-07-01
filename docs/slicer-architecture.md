@@ -161,6 +161,14 @@ instance rather than per object — so routing it through `--skip-objects` is a 
   (`three-mf-scene-builder.ts`, `three-mf-output.ts`) live only in the api modules.)
 - **Nozzle-id mapping** in the slicer's `output-metadata.ts` must stay byte-for-byte —
   see the slicer development notes.
+- **Editor nozzle assignment** (`SceneEditFilament.nozzleId`, 0 = right / 1 = left) is persisted on
+  save by `three-mf-scene-builder.ts`: `filament_nozzle_map` is written **verbatim** as the runtime
+  nozzle id (same inverse-free mirror as the slicer, per that same invariant), each `slice_info`
+  `<filament>` `group_id` is moved onto the chosen nozzle (it outranks `filament_nozzle_map` once a
+  project has concrete slice usage), and `extruder_nozzle_stats` is rebuilt so a stale single-active
+  reading can't short-circuit every filament onto one nozzle. The read side (`extractNozzleMapping`)
+  and this write side share `sliceExtruderForNozzleId` so they cannot drift; cover any change with a
+  read→write→read round-trip through `buildThreeMfIndex`.
 - The editor reflects new state through scene re-render, not optimistic UI guesses.
 
 ## Known god files / target decomposition (roadmap)

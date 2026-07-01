@@ -27,6 +27,7 @@ import { requireRequestPermission } from '../../lib/authorization.js'
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
 import { enqueueLibraryPrint, validateLibraryPrint } from '../../lib/library-printing.js'
 import { getPrintSourceKind } from '../../lib/print-dispatcher.js'
+import { printerEvents } from '../../lib/printer-events.js'
 import { printerManager } from '../../lib/printer-manager.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
 import { requireRequestTenantId, requireRouteParam } from '../../lib/request-helpers.js'
@@ -85,6 +86,9 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     const requiredFilaments = withUsedGramsFrom(parsed.data.requiredFilaments ?? plate.requiredFilaments, plate.requiredFilaments)
     const sortKey = await nextSortKey(prisma)
 
+    // An order-linked item maps 1:1 to a single order print, so it is always a single
+    // copy (the quantity control is hidden for order items on the client).
+    const orderLink = parsed.data.orderLink ?? null
     const created = await prisma.queueItem.create({
       data: {
         tenantId,
@@ -93,7 +97,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         kind: getPrintSourceKind(file.name),
         plateIndex: parsed.data.plate,
         plateName: plate.plateName,
-        quantity: parsed.data.quantity,
+        quantity: orderLink ? 1 : parsed.data.quantity,
         sortKey,
         targetKind: parsed.data.target.kind,
         targetPrinterId: parsed.data.target.kind === 'printer' ? parsed.data.target.printerId ?? null : null,
@@ -105,6 +109,8 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         nozzleDiametersJson: JSON.stringify(plate.nozzleDiameters),
         amsMappingJson: parsed.data.amsMapping?.length ? JSON.stringify(parsed.data.amsMapping) : null,
         label: normalizeLabel(parsed.data.label),
+        orderId: orderLink?.orderId ?? null,
+        orderPrintId: orderLink?.orderPrintId ?? null,
         status: 'queued'
       },
       include: queueItemInclude
@@ -116,6 +122,10 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       summary: `Added "${created.fileName}" to the print queue.`,
       metadata: { queueItemId: created.id, libraryFileId: file.id, quantity: created.quantity }
     })
+    // Mirror the queued state onto the order print (shows "queued", blocks a double start).
+    if (orderLink) {
+      context.printerEvents.emit('order-print.queued', { tenantId, orderPrintId: orderLink.orderPrintId })
+    }
     broadcastQueueChanged(tenantId)
     response.status(201).json({ item: toQueueItemDto(created) })
   })
@@ -337,6 +347,14 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       summary: `Removed "${existing.fileName}" from the print queue.`,
       metadata: { queueItemId: existing.id }
     })
+    // Removing a still-queued order item releases its order print back to pending.
+    // (A dispatched/printing/done item has already advanced the order — leave it.)
+    if (existing.orderPrintId && (existing.status === 'queued' || existing.status === 'held')) {
+      printerEvents.emit('order-print.unqueued', {
+        tenantId: requireRequestTenantId(request),
+        orderPrintId: existing.orderPrintId
+      })
+    }
     broadcastQueueChanged(requireRequestTenantId(request))
     response.status(204).end()
   })
@@ -417,6 +435,17 @@ async function applyDispatch(
       lastFinishedAt: null
     }
   })
+  // Record the dispatch against the linked order print (the orders plugin listens);
+  // it marks the print started so its existing PrintJob poll-sync tracks the result.
+  if (item.orderPrintId) {
+    printerEvents.emit('order-print.dispatched', {
+      tenantId,
+      orderPrintId: item.orderPrintId,
+      printerId,
+      fileName: item.fileName,
+      plate: item.plateIndex
+    })
+  }
   return job
 }
 

@@ -31,7 +31,7 @@ import {
   slicingStatusColor
 } from '../../lib/slicingJobPresentation'
 import { formatSecondsDuration } from '../../lib/time'
-import { buildDefaultAmsMappingFromSlicingTarget } from '../../lib/slicingPrintHandoff'
+import { buildDefaultAmsMappingFromSlicingTarget, resolveSlicingLeaveAction } from '../../lib/slicingPrintHandoff'
 import { toast } from '../../lib/toast'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
 import { useSlicingJobs } from '../../hooks/useSlicingJobs'
@@ -80,6 +80,7 @@ export function SliceThenPrintModal({
   printSubmitLabel,
   renderReady,
   trackingCopy,
+  onBack,
   onClose
 }: {
   sourceFile: LibraryFile
@@ -113,6 +114,12 @@ export function SliceThenPrintModal({
     body: Omit<StartOrderPrintInput, 'printerId'>
     outputFile: LibraryFile
   }) => Promise<void>
+  /**
+   * When provided, the print setup shows a "Back" action that returns to the
+   * still-mounted slice settings underneath (discarding the throwaway output so
+   * re-slicing starts clean). Without it, only Cancel/Print are offered.
+   */
+  onBack?: () => void
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
@@ -139,25 +146,54 @@ export function SliceThenPrintModal({
   const jobRef = useRef(job)
   jobRef.current = job
   const dismissHandledRef = useRef(false)
-  const handleDismiss = useCallback(() => {
+  // Set once the sliced output has actually been dispatched to a printer, so leaving
+  // the dialog afterwards keeps the printed file instead of discarding it (PrintModal
+  // calls onClose on a successful print).
+  const printedRef = useRef(false)
+  // Cancel a still-running slice, or discard a finished-but-unused hidden output, so
+  // leaving never orphans the job. A printed output is kept.
+  const runOrphanCleanup = useCallback(() => {
     dismissHandledRef.current = true
     const current = jobRef.current
-    if (current && isSlicingInProgress(current.status)) {
+    const action = resolveSlicingLeaveAction({
+      status: current?.status,
+      outputFileId: current?.outputFileId,
+      printed: printedRef.current
+    })
+    if (action === 'cancel') {
       void apiFetch(`/api/slicing/jobs/${jobId}/cancel`, { method: 'POST' })
         .then(() => queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] }))
         .catch(() => undefined)
-    } else if (current?.status === 'ready' && current.outputFileId) {
-      // Sliced but dismissed before the handoff completed: discard the hidden output.
+    } else if (action === 'discard') {
+      // Sliced but left before printing: discard the hidden throwaway output.
       void apiFetch(`/api/slicing/jobs/${jobId}/discard`, { method: 'POST' }).catch(() => undefined)
     }
+  }, [jobId, queryClient])
+  // Dismiss (Cancel / backdrop / Escape) abandons the whole flow.
+  const handleDismiss = useCallback(() => {
+    runOrphanCleanup()
     onClose()
-  }, [jobId, queryClient, onClose])
-  // Unmounted without an explicit dismiss (e.g. navigated away) while slicing ran: cancel it.
+  }, [runOrphanCleanup, onClose])
+  // Back steps out of the print setup and returns to the slice settings still mounted
+  // underneath; the throwaway output is discarded so re-slicing starts clean.
+  const handleBack = useCallback(() => {
+    runOrphanCleanup()
+    onBack?.()
+  }, [runOrphanCleanup, onBack])
+  // Unmounted without an explicit dismiss (e.g. navigated away): cancel a running
+  // slice, or discard an unprinted finished output, rather than orphaning it.
   useOrphanSliceCleanup(() => {
     if (dismissHandledRef.current) return
     const current = jobRef.current
-    if (current && isSlicingInProgress(current.status)) {
+    const action = resolveSlicingLeaveAction({
+      status: current?.status,
+      outputFileId: current?.outputFileId,
+      printed: printedRef.current
+    })
+    if (action === 'cancel') {
       void apiFetch(`/api/slicing/jobs/${jobId}/cancel`, { method: 'POST' }).catch(() => undefined)
+    } else if (action === 'discard') {
+      void apiFetch(`/api/slicing/jobs/${jobId}/discard`, { method: 'POST' }).catch(() => undefined)
     }
   })
 
@@ -174,9 +210,10 @@ export function SliceThenPrintModal({
         lockPrinterSelection={lockPrinterSelection}
         defaultPlate={job.plate > 0 ? job.plate : 1}
         defaultAmsMapping={defaultAmsMapping}
-        submitPrint={submitPrint
-          ? ({ printerId, body }) => submitPrint({ printerId, body, outputFile })
-          : async ({ printerId, body }) => {
+        submitPrint={async ({ printerId, body }) => {
+          if (submitPrint) {
+            await submitPrint({ printerId, body, outputFile })
+          } else {
             await apiFetch(`/api/slicing/jobs/${job.id}/print`, {
               method: 'POST',
               body: {
@@ -184,8 +221,12 @@ export function SliceThenPrintModal({
                 ...body
               }
             })
-          }}
-        onClose={onClose}
+          }
+          // The output is now consumed by a real print; leaving must not discard it.
+          printedRef.current = true
+        }}
+        onBack={onBack ? handleBack : undefined}
+        onClose={handleDismiss}
       />
     )
   }

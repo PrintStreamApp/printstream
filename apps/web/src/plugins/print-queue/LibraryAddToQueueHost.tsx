@@ -12,7 +12,7 @@
  */
 import { createContext, useContext } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import type { LibraryFile } from '@printstream/shared'
+import type { LibraryFile, QueueOrderLink } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { QueueItemDialog } from './QueueItemDialog'
 import { SliceToQueueFlow } from './SliceToQueueFlow'
@@ -27,18 +27,43 @@ export function LibraryAddToQueueHost() {
   return (
     <QueueOverlayActiveContext.Provider value={true}>
       {request.kind === 'direct'
-        ? <QueueItemDialog open onClose={clearAddToQueueRequest} fixedFile={{ id: request.id, name: request.name }} />
-        : <SliceRequestHost id={request.id} onClose={clearAddToQueueRequest} />}
+        ? (
+          <QueueItemDialog
+            open
+            onClose={clearAddToQueueRequest}
+            fixedFile={{ id: request.id, name: request.name }}
+            orderLink={request.orderLink}
+            defaultPlate={request.plate}
+          />
+        )
+        : (
+          <SliceRequestHost
+            id={request.id}
+            onClose={clearAddToQueueRequest}
+            orderLink={request.orderLink}
+            defaultPlate={request.plate}
+          />
+        )}
     </QueueOverlayActiveContext.Provider>
   )
 }
 
 /** Loads the full library file (needed by the slicer dialog) before running the slice flow. */
-function SliceRequestHost({ id, onClose }: { id: string; onClose: () => void }) {
+function SliceRequestHost({
+  id,
+  onClose,
+  orderLink,
+  defaultPlate
+}: {
+  id: string
+  onClose: () => void
+  orderLink?: QueueOrderLink
+  defaultPlate?: number
+}) {
   const fileQuery = useQuery<{ file: LibraryFile }>({
     queryKey: ['library-file', id],
     queryFn: ({ signal }) => apiFetch<{ file: LibraryFile }>(`/api/library/${id}`, { signal })
   })
   if (!fileQuery.data) return null
-  return <SliceToQueueFlow file={fileQuery.data.file} onClose={onClose} />
+  return <SliceToQueueFlow file={fileQuery.data.file} onClose={onClose} orderLink={orderLink} defaultPlate={defaultPlate} />
 }

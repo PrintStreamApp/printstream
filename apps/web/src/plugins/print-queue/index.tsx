@@ -12,6 +12,7 @@ import { QueueView } from './QueueView'
 import { SettingsPanel } from './SettingsPanel'
 import { LibraryAddToQueueAction } from './LibraryAddToQueueAction'
 import { LibraryAddToQueueHost } from './LibraryAddToQueueHost'
+import { OrdersAddToQueueAction } from './OrdersAddToQueueAction'
 
 export const printQueuePlugin: WebPlugin = {
   name: 'print-queue',
@@ -30,7 +31,11 @@ export const printQueuePlugin: WebPlugin = {
     // sits immediately after the core "Print" item (which renders before the slot) in
     // every library kebab/context menu, ahead of model-studio's Preview / Open actions.
     { name: 'library.fileActions', component: LibraryAddToQueueAction, order: -10 },
-    { name: 'library.overlays', component: LibraryAddToQueueHost }
+    { name: 'library.overlays', component: LibraryAddToQueueHost },
+    // Order items get an "Add to queue" action that links the queued print to the order;
+    // the overlay host (shared with the library) renders the resulting flow.
+    { name: 'orders.itemActions', component: OrdersAddToQueueAction },
+    { name: 'orders.overlays', component: LibraryAddToQueueHost }
   ],
   settingsPanel: SettingsPanel
 }

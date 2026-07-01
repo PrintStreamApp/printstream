@@ -8,6 +8,7 @@ import {
   loadedSlotsFromStatus,
   normalizeHexColor,
   queueDispatchSchema,
+  queueItemCreateSchema,
   summarizeQueueItemEligibility,
   type QueueItemPlacement,
   type QueueLoadedSlot,
@@ -260,4 +261,19 @@ test('summarizeQueueItemEligibility exposes structured missing filaments for a m
   const model = summarizeQueueItemEligibility(placement({ compatibleModels: ['H2D'] }), [printer], EXACT)
   assert.equal(model.blocked, true)
   assert.deepEqual(model.missingFilaments, [])
+})
+
+test('queueItemCreateSchema accepts an optional order link', () => {
+  const withoutLink = queueItemCreateSchema.parse({ libraryFileId: 'file-1', plate: 1 })
+  assert.equal(withoutLink.orderLink, undefined)
+
+  const linked = queueItemCreateSchema.parse({
+    libraryFileId: 'file-1',
+    plate: 2,
+    orderLink: { orderId: 'order-1', orderPrintId: 'print-1' }
+  })
+  assert.deepEqual(linked.orderLink, { orderId: 'order-1', orderPrintId: 'print-1' })
+
+  // A partial link is rejected — both ids are required to link an order print.
+  assert.equal(queueItemCreateSchema.safeParse({ libraryFileId: 'f', orderLink: { orderId: 'o' } }).success, false)
 })

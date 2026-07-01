@@ -15,7 +15,12 @@
   "updateRemoteUserUID": true,
   "remoteEnv": {
     "DATABASE_URL": "postgresql://postgres:postgres@db:5432/printstream?schema=public",
-    "API_PORT": "4000"
+    "API_PORT": "4000",
+    // Lets the PostgreSQL extension (and terminal `psql`) authenticate to the dev
+    // DB with no prompt: its libpq tools service falls back to PGPASSWORD when the
+    // preconfigured connection in .vscode/settings.json sends no password. Same
+    // throwaway `postgres` credential as DATABASE_URL above.
+    "PGPASSWORD": "postgres"
     // CLIENT_ORIGIN intentionally not set here: the devcontainer `${localEnv:VAR:default}`
     // syntax splits on ":" and truncates a colon-containing default, so
     // "http://localhost:5173" collapsed to "http" — an invalid URL that broke
@@ -29,7 +34,8 @@
     "vscode": {
       "extensions": [
         "dbaeumer.vscode-eslint",
-        "Prisma.prisma"
+        "Prisma.prisma",
+        "ms-ossdata.vscode-pgsql"
       ],
       "settings": {
         "editor.codeActionsOnSave": {

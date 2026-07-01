@@ -58,7 +58,7 @@ type PluginManagerSectionProps = {
  * lets each tenant enable or disable them locally.
  */
 export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
-  const { demoMode } = useRuntimePolicy()
+  const { demoMode, selfHosted } = useRuntimePolicy()
   const queryClient = useQueryClient()
   const isPlatformManager = surface === 'platform'
   const platformQuery = useQuery({
@@ -157,7 +157,10 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
     ? platformQuery.data?.plugins != null
     : tenantQuery.data?.plugins != null
   const merged = hasPluginState
-    ? mergePlugins(apiPlugins, webPlugins).filter((entry) => !isAuthPlugin(entry.name))
+    ? mergePlugins(apiPlugins, webPlugins)
+      .filter((entry) => !isAuthPlugin(entry.name))
+      // Self-hosted-only plugins (e.g. email-smtp) have no backend in cloud; hide them.
+      .filter((entry) => selfHosted || !entry.web?.selfHostedOnly)
     : []
   const platformEntries = merged.filter((entry) => pluginHasManagerSurface(entry, 'platform') && !pluginHasManagerSurface(entry, 'tenant'))
   const tenantEntries = merged.filter((entry) => pluginHasManagerSurface(entry, 'tenant'))

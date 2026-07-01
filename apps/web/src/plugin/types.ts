@@ -51,6 +51,13 @@ export interface WebPlugin {
   description?: string
   runtimeSurfaces?: PluginSurface[]
   managerSurfaces?: PluginSurface[]
+  /**
+   * When true, the plugin is only relevant to self-hosted deployments and is
+   * hidden from the plugin manager in cloud mode. Mirrors the API's
+   * `isSelfHostedDeployment()` registration gate for the backend, which the web
+   * can only evaluate at runtime via `runtimePolicy.selfHosted`.
+   */
+  selfHostedOnly?: boolean
   routes?: WebPluginRoute[]
   slots?: WebPluginSlot[]
   /**

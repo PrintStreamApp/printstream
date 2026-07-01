@@ -8,11 +8,22 @@
  * is an unsliced project 3MF (slice first, then add the sliced output to the queue).
  */
 import { useSyncExternalStore } from 'react'
+import type { QueueOrderLink } from '@printstream/shared'
 
 export interface QueueAddRequest {
   kind: 'direct' | 'slice'
   id: string
   name: string
+  /** When queuing from an order item, link the created item back to its order print. */
+  orderLink?: QueueOrderLink
+  /** Preselect this plate (e.g. the order item's plate). */
+  plate?: number
+}
+
+/** Extra context carried from an order-item "Add to queue". */
+export interface QueueAddContext {
+  orderLink?: QueueOrderLink
+  plate?: number
 }
 
 let current: QueueAddRequest | null = null
@@ -22,13 +33,13 @@ function emit() {
   for (const listener of listeners) listener()
 }
 
-export function requestAddToQueue(file: { id: string; name: string }): void {
-  current = { kind: 'direct', id: file.id, name: file.name }
+export function requestAddToQueue(file: { id: string; name: string }, context?: QueueAddContext): void {
+  current = { kind: 'direct', id: file.id, name: file.name, orderLink: context?.orderLink, plate: context?.plate }
   emit()
 }
 
-export function requestSliceThenQueue(file: { id: string; name: string }): void {
-  current = { kind: 'slice', id: file.id, name: file.name }
+export function requestSliceThenQueue(file: { id: string; name: string }, context?: QueueAddContext): void {
+  current = { kind: 'slice', id: file.id, name: file.name, orderLink: context?.orderLink, plate: context?.plate }
   emit()
 }
 

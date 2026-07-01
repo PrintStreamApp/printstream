@@ -683,6 +683,8 @@ CREATE TABLE "QueueItem" (
     "status" TEXT NOT NULL DEFAULT 'queued',
     "label" TEXT,
     "createdById" TEXT,
+    "orderId" TEXT,
+    "orderPrintId" TEXT,
     "lastPrinterId" TEXT,
     "lastDispatchJobId" TEXT,
     "lastPrintJobId" TEXT,
@@ -995,6 +997,9 @@ CREATE INDEX "QueueItem_tenantId_lastPrinterId_idx" ON "QueueItem"("tenantId", "
 
 -- CreateIndex
 CREATE INDEX "QueueItem_tenantId_lastPrintJobId_idx" ON "QueueItem"("tenantId", "lastPrintJobId");
+
+-- CreateIndex
+CREATE INDEX "QueueItem_tenantId_orderPrintId_idx" ON "QueueItem"("tenantId", "orderPrintId");
 
 -- AddForeignKey
 ALTER TABLE "Printer" ADD CONSTRAINT "Printer_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

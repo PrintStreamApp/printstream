@@ -36,8 +36,9 @@ export function registerBuiltinPlugins(): void {
   registerBuiltinPlugin(notificationsDiscordPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
   registerBuiltinPlugin(notificationsBrowserPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
   registerBuiltinPlugin(notificationsEmailWebPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  // email-smtp is OSS-only on the API; its panel is inert in cloud (absent from the catalog).
-  registerBuiltinPlugin(emailSmtpWebPlugin, { runtimeSurfaces: ['platform', 'tenant'], managerSurfaces: ['platform', 'tenant'] })
+  // email-smtp is OSS-only: the API registers its backend only when self-hosted, so hide the
+  // manager panel in cloud too (the web can only know at runtime via runtimePolicy.selfHosted).
+  registerBuiltinPlugin(emailSmtpWebPlugin, { runtimeSurfaces: ['platform', 'tenant'], managerSurfaces: ['platform', 'tenant'], selfHostedOnly: true })
   registerBuiltinPlugin(plateClearingPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
   registerBuiltinPlugin(firmwareUpdatesPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
   registerBuiltinPlugin(ordersPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
@@ -49,7 +50,7 @@ export function registerBuiltinPlugins(): void {
 
 function registerBuiltinPlugin(
   plugin: WebPlugin,
-  metadata: { runtimeSurfaces: PluginSurface[]; managerSurfaces: PluginSurface[] }
+  metadata: { runtimeSurfaces: PluginSurface[]; managerSurfaces: PluginSurface[]; selfHostedOnly?: boolean }
 ): void {
   webPluginRegistry.register({ ...plugin, ...metadata })
 }

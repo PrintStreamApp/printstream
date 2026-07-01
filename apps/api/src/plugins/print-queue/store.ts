@@ -226,6 +226,8 @@ export function toQueueItemDto(row: QueueItemRow): QueueItemDto {
     options: parsePrintOptions(row.printOptionsJson),
     status: normalizeStatus(row.status),
     label: row.label,
+    orderId: row.orderId,
+    orderPrintId: row.orderPrintId,
     lastPrinterId: row.lastPrinterId,
     lastPrinterName: row.lastPrinter?.name ?? null,
     lastResult: normalizeResult(row.lastResult),

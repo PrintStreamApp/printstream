@@ -63,6 +63,13 @@ These conventions capture patterns already used across the web app and the clean
 - Simple confirm, alert, prompt, and media-viewer dialogs are exempt when they only have one short body region.
 - Prefer the shared `DialogSection` helper in `apps/web/src/components/DialogSection.tsx` when the dialog follows the standard `title + optional helper text + outlined section surface` pattern.
 
+## Multi-step dialog flows (stack, don't swap)
+
+- A multi-step flow (e.g. pick file → prepare/slice → print, or slice → add to queue) keeps each earlier step **mounted underneath** the next and layers the new step on top. Do not close the earlier dialog and open a fresh one for the next step: swapping loses the user's in-progress input and strands them with no way back. This is the same stacking the file pickers, process-settings, and material-picker sub-dialogs already use.
+- Wire the transition through parent state: the "advance" handler (e.g. a slice-job `onSuccess`) sets the next step's state **without** clearing the current step's, and a later step exposes `onBack` that clears only its own state, revealing the still-mounted step beneath.
+- A later step's footer follows the shared `PrintModal` layout: a labelled **Back** (with `ArrowBackRoundedIcon`) on the left returns to the previous step; **Cancel** (grouped with the primary action on the right) abandons the whole flow. Reserve `onBack` for when it is genuinely distinct from Cancel — when returning to the previous step and abandoning would do the same thing (e.g. a print launched from the full 3D editor, where Cancel already returns to the editor), show only Cancel.
+- Any output produced by an intermediate step (e.g. a hidden sliced file) must survive a real Back/re-run without orphaning: discard it when the user backs out or abandons, keep it once it has been consumed (printed / added). Centralise that decision — see `resolveSlicingLeaveAction` in `apps/web/src/lib/slicingPrintHandoff.ts`.
+
 ## Actions and controls
 
 - A view's primary header actions — the New / Add / Upload / Select buttons that sit beside a page or section heading — use `size="sm"` so they line up with the directory toolbar controls and stay consistent with every other view's header. Joy's default (medium) `Button` size is reserved for in-dialog confirm/cancel actions and full-width mobile CTAs; never leave a header action button at the default size. Buttons rendered in an `EmptyState` `action` slot are `size="sm"` too. When adding a header action to a new view, match the size of the existing header actions on sibling directory views rather than relying on Joy's default.
