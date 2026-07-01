@@ -561,10 +561,9 @@ export function App() {
   const isMarketingRoute = routeTenantSlug == null && appPathname === '/' && marketing != null
   const isPublicInfoRoute = routeTenantSlug == null
     && marketingRoutes.some((route) => route.publicChrome && route.path !== '/' && route.path === appPathname)
-  // Marketing-module routes (including redirect-only entries like `/demo`)
-  // must skip the top-level auth gate: a cached ambient bootstrap reports
-  // global auth enabled, which would otherwise render the sign-in wall
-  // synchronously before the route element (or its redirect) can run.
+  // Marketing-module routes must skip the top-level auth gate: a cached ambient
+  // bootstrap reports global auth enabled, which would otherwise render the
+  // sign-in wall synchronously before the route element can run.
   const isPrivatePublicRoute = routeTenantSlug == null && marketingRoutes.some((route) => route.path === appPathname)
   const tenantLandingRouteReady = isTenantWorkspaceLandingReady({
     routeTenantSlug,

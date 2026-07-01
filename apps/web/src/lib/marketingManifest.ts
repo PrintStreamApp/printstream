@@ -14,7 +14,7 @@ const manifestModules = import.meta.glob('../private/*/marketingRoutes.ts', { ea
   { MARKETING_ROUTE_PATHS?: readonly string[] }
 >
 
-/** Public marketing *page* paths (empty in the public/OSS build). Excludes runtime-only routes like `/demo`. */
+/** Public marketing *page* paths (empty in the public/OSS build). */
 export const marketingRoutePaths: ReadonlyArray<string> = Object.values(manifestModules).flatMap(
   (module) => module.MARKETING_ROUTE_PATHS ?? []
 )
