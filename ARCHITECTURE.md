@@ -36,7 +36,7 @@ The product now operates in two workspace modes:
 
 | Layer | Description |
 |---|---|
-| `apps/web` | Mobile-friendly React + Joy UI PWA shell, page routes, WS subscription, plugin host. |
+| `apps/web` | Fully responsive React + Joy UI PWA shell (first-class on desktop and mobile alike), page routes, WS subscription, plugin host. |
 | `apps/api` | Express HTTP routes, bridge session server, printer manager, WS broadcaster, Prisma persistence, plugin host. |
 | `apps/bridge` | Outbound LAN runtime for SSDP discovery plus bridged MQTT/FTPS/camera transport. |
 | `apps/slicer` | Standalone runtime that wraps the BambuStudio CLI to slice 3MFs on request from the API. |
