@@ -11,6 +11,7 @@ import type { ShellIdentity } from '../lib/authUi'
 import { HorizontalOverflowScroller } from './HorizontalOverflowScroller'
 import { appShellDesktopSecondaryNavHostId } from './AppShell.constants'
 import { sectionTabSx } from '../theme/theme'
+import { useShellTabBadges } from '../lib/shellBadges'
 
 const ambientOverlayBase = [
   'var(--printstream-shell-ambient-overlay-base)',
@@ -83,6 +84,7 @@ export function AppShell<TValue extends string>({
   const hasTabs = tabs.length > 0
   const showsNavigationFrame = showNavigationFrame || hasTabs
   const canOpenWorkspaceChooser = workspaceChooserAvailable && typeof onOpenWorkspaceChooser === 'function'
+  const badgedTabs = useShellTabBadges()
   const showsWorkspaceChooser = workspaceChooserAvailable
   const workspaceChooserButtonLabel = workspaceChooserLabel ?? 'Choose workspace'
   const workspaceChooserButtonAriaLabel = workspaceChooserLabel
@@ -252,10 +254,11 @@ export function AppShell<TValue extends string>({
                       key={tab.value}
                       value={tab.value}
                       data-tab-value={tab.value}
-                      sx={tab.iconOnly || tab.mobileIcon ? [primaryTabSx, iconOnlyTabSx] : primaryTabSx}
+                      sx={[...(tab.iconOnly || tab.mobileIcon ? [primaryTabSx, iconOnlyTabSx] : [primaryTabSx]), { position: 'relative' }]}
                       aria-label={tab.ariaLabel ?? tab.label}
                       title={tab.ariaLabel ?? tab.label}
                     >
+                      {badgedTabs.has(tab.value) && <TabBadgeDot />}
                       {tab.iconOnly ? (
                         <Box
                           component="span"
@@ -396,10 +399,11 @@ export function AppShell<TValue extends string>({
                     key={`desktop-${tab.value}`}
                     value={tab.value}
                     data-tab-value={tab.value}
-                    sx={tab.iconOnly ? [sectionTabSx, iconOnlyTabSx] : sectionTabSx}
+                    sx={[...(tab.iconOnly ? [sectionTabSx, iconOnlyTabSx] : [sectionTabSx]), { position: 'relative' }]}
                     aria-label={tab.ariaLabel ?? tab.label}
                     title={tab.ariaLabel ?? tab.label}
                   >
+                    {badgedTabs.has(tab.value) && <TabBadgeDot />}
                     {tab.iconOnly ? (
                       <Box
                         component="span"
@@ -531,5 +535,25 @@ export function AppShell<TValue extends string>({
         </Box>
       </Stack>
     </Box>
+  )
+}
+
+/** Notification dot rendered on a shell tab whose value is badged (see `lib/shellBadges.ts`). */
+function TabBadgeDot() {
+  return (
+    <Box
+      component="span"
+      aria-hidden="true"
+      sx={{
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        backgroundColor: 'primary.solidBg',
+        pointerEvents: 'none'
+      }}
+    />
   )
 }

@@ -68,6 +68,9 @@ bridgesRouter.get('/', async (request, response) => {
       lastUpdateCheckAt: true,
       lastUpdateError: true,
       lastSeenAt: true,
+      lastCrashAt: true,
+      lastCrashReason: true,
+      recentCrashCount: true,
       createdAt: true,
       updatedAt: true,
       _count: {
@@ -159,6 +162,9 @@ bridgesRouter.patch('/:id', async (request, response) => {
       lastUpdateCheckAt: true,
       lastUpdateError: true,
       lastSeenAt: true,
+      lastCrashAt: true,
+      lastCrashReason: true,
+      recentCrashCount: true,
       createdAt: true,
       updatedAt: true,
       _count: {
@@ -485,6 +491,9 @@ function toBridgeSummary(bridge: {
   lastUpdateCheckAt: Date | null
   lastUpdateError: string | null
   lastSeenAt: Date | null
+  lastCrashAt?: Date | null
+  lastCrashReason?: string | null
+  recentCrashCount?: number
   createdAt: Date
   updatedAt: Date
   _count: {
@@ -500,7 +509,12 @@ function toBridgeSummary(bridge: {
     updatedAt: bridge.updatedAt.toISOString(),
     connectionStats: bridgeSessionManager.getConnectionStats(bridge.id),
     update: buildBridgeUpdateSummary(bridge),
-    debugCapture: getBridgeDebugCaptureStatus(bridge.id)
+    debugCapture: getBridgeDebugCaptureStatus(bridge.id),
+    crash: {
+      lastCrashAt: bridge.lastCrashAt?.toISOString() ?? null,
+      recentCrashCount: bridge.recentCrashCount ?? 0,
+      lastReason: bridge.lastCrashReason ?? null
+    }
   }
 }
 

@@ -51,8 +51,65 @@ model Tenant {
   auditLogs          AuditLog[]
   stats              TenantStats?
   printerStats       PrinterStats[]
+  subscription       TenantSubscription?
 
   @@unique([name])
+}
+
+/// Per-tenant cloud billing state, synced from Paddle via webhooks. Cloud-only:
+/// unused in self-hosted single-tenant installs, and plan enforcement degrades
+/// to "unlimited" when the private billing module is absent.
+model TenantSubscription {
+  id                   String    @id @default(cuid())
+  tenantId             String    @unique
+  /// "free" | "pro" — the tenant's current plan.
+  plan                 String    @default("free")
+  /// Paddle subscription status: active | trialing | past_due | paused | canceled.
+  status               String    @default("active")
+  paddleCustomerId     String?
+  paddleSubscriptionId String?   @unique
+  /// Paddle price id for the recurring base/per-printer item currently applied.
+  priceId              String?
+  /// Billable printer quantity most recently reported to Paddle.
+  printerQuantity      Int       @default(0)
+  /// Printers granted free by a platform admin: raises the Free-plan cap and is
+  /// excluded from Pro per-printer billing.
+  compedPrinters       Int       @default(0)
+  currentPeriodEnd     DateTime?
+  canceledAt           DateTime?
+  /// When a scheduled (end-of-period) Paddle cancellation takes effect.
+  scheduledCancelAt    DateTime?
+  /// Set when a platform admin comps/overrides the plan (id of the granting user).
+  compedByUserId       String?
+  compedReason         String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([paddleCustomerId])
+}
+
+/// Vendor-issued self-hosted license keys (cloud-only issuer state). Not
+/// tenant-owned — these track keys sold (commercial) or granted (community) for
+/// self-hosted installs. Harmless/unused in self-hosted or OSS deployments.
+model License {
+  id                  String    @id @default(cuid())
+  /// "community" | "commercial".
+  edition             String
+  licensee            String
+  email               String?
+  /// The signed license token (PSL1.*) delivered to the customer.
+  key                 String
+  /// "active" | "revoked".
+  status              String    @default("active")
+  paddleCustomerId    String?
+  paddleTransactionId String?   @unique
+  updatesUntil        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([email])
 }
 
 model Printer {
@@ -107,6 +164,14 @@ model Bridge {
   lastUpdateCheckAt DateTime?
   lastUpdateError String?
   lastSeenAt DateTime?
+  // Self-reported crash health: the bridge reports when its previous run died
+  // without a clean shutdown. `recentCrashCount` is the bridge's own rolling-window
+  // count; `lastCrashNotifiedAt` throttles the user notification across restarts.
+  // See bridge crash-tracker + apps/api/src/lib/bridge-crash-reports.ts.
+  lastCrashAt DateTime?
+  lastCrashReason String?
+  recentCrashCount Int @default(0)
+  lastCrashNotifiedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -1035,4 +1100,113 @@ model QueueItem {
   @@index([tenantId, lastPrinterId])
   @@index([tenantId, lastPrintJobId])
   @@index([tenantId, orderPrintId])
+}
+
+/// A two-way support conversation between a workspace user and the platform
+/// team (cloud-only messaging). Not tenant-owned — platform admins read these
+/// across tenants via `rootPrisma`; the participant/tenant columns are
+/// point-in-time snapshots (no FKs) so a conversation outlives the account or
+/// workspace it came from. `tenantId` is deliberately unscoped (see
+/// TENANT_SCOPED_MODELS exceptions). Unused in self-hosted, which emails
+/// help/feedback instead of messaging.
+model SupportConversation {
+  id                 String    @id @default(cuid())
+  /// "feedback" | "bug" | "question" (user-initiated) | "message" (platform-initiated).
+  kind               String
+  subject            String
+  /// "open" | "resolved".
+  status             String    @default("open")
+  userId             String?
+  userEmail          String?
+  userName           String?
+  tenantId           String?
+  tenantName         String?
+  resolvedAt         DateTime?
+  lastMessageAt      DateTime  @default(now())
+  /// High-water marks for unread computation on each side.
+  userLastReadAt     DateTime?
+  platformLastReadAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  messages SupportMessage[]
+
+  @@index([lastMessageAt])
+  @@index([userId, lastMessageAt])
+  @@index([status, lastMessageAt])
+}
+
+/// One message inside a SupportConversation (cloud-only; see the conversation
+/// model). Submission context (page/app build/browser) is captured on the
+/// conversation-opening message only.
+model SupportMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  /// "user" | "platform".
+  side           String
+  senderUserId   String?
+  senderName     String
+  body           String
+  pageUrl        String?
+  appVersion     String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+/// Product suggestion board post (cloud-only). Not tenant-owned — the board is
+/// platform-wide and shared by every cloud workspace, accessed via `rootPrisma`.
+/// `authorName` is a display snapshot so posts survive account deletion.
+/// Harmless/unused in self-hosted or OSS deployments.
+model Suggestion {
+  id           String   @id @default(cuid())
+  title        String
+  body         String
+  authorUserId String?
+  authorName   String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  votes    SuggestionVote[]
+  comments SuggestionComment[]
+
+  @@index([createdAt])
+  @@index([authorUserId])
+}
+
+/// One user's vote on a suggestion (cloud-only; see Suggestion).
+model SuggestionVote {
+  suggestionId String
+  userId       String
+  /// +1 (upvote) or -1 (downvote); clearing a vote deletes the row.
+  value        Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  suggestion Suggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+
+  @@id([suggestionId, userId])
+  @@index([userId])
+}
+
+/// A comment on a suggestion (cloud-only; see Suggestion). Replies reference
+/// their top-level parent via `parentId` (one nesting level).
+model SuggestionComment {
+  id           String   @id @default(cuid())
+  suggestionId String
+  parentId     String?
+  authorUserId String?
+  authorName   String
+  body         String
+  createdAt    DateTime @default(now())
+
+  suggestion Suggestion         @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  parent     SuggestionComment? @relation("SuggestionCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    SuggestionComment[] @relation("SuggestionCommentReplies")
+
+  @@index([suggestionId, createdAt])
+  @@index([authorUserId])
 }

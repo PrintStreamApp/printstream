@@ -13,7 +13,7 @@
  *
  * ## Transport (no port to collide with)
  *
- * On Linux/macOS the cluster listens on a **Unix domain socket only** (no TCP
+ * On Linux the cluster listens on a **Unix domain socket only** (no TCP
  * port at all), so it can never clash with another application's port. On Windows
  * — where Postgres/Prisma Unix-socket support is unreliable — it binds a
  * **loopback TCP port chosen free at startup**, which likewise cannot collide.

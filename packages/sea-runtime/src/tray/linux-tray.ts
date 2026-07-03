@@ -3,7 +3,7 @@
  * legacy) with a Gtk.StatusIcon fallback. It reads status from the app's
  * world-readable status file (the control socket is owned by the root service
  * and unreachable from this user process) and treats a live PID as "running".
- * The menu mirrors the Windows and macOS trays item-for-item, revealing items
+ * The menu mirrors the Windows tray item-for-item, revealing items
  * from the status fields present (an "Open <app>" item when an `appUrl` is set).
  * Desktop Linux tray
  * support is best-effort — the script exits with code 3 when GTK bindings are

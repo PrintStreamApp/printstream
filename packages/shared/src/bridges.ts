@@ -119,6 +119,50 @@ export const inactiveBridgeDebugCaptureStatus: BridgeDebugCaptureStatus = {
   hasCapture: false
 }
 
+/**
+ * The bridge's self-reported crash health. A bridge reports a crash when it
+ * detects on startup that its previous run died without a clean shutdown; the
+ * API records the latest into these fields. Used to surface "unstable" /
+ * "crash-looping" health in the UI.
+ */
+export const bridgeCrashHealthSchema = z.object({
+  /** ISO timestamp of the most recent crash the bridge reported, or null if none. */
+  lastCrashAt: z.string().datetime().nullable(),
+  /** Crashes the bridge counted within its rolling window as of the last report. */
+  recentCrashCount: z.number().int().nonnegative(),
+  /** Short reason for the most recent crash (truncated), or null for a hard kill / unknown cause. */
+  lastReason: z.string().nullable()
+})
+export type BridgeCrashHealth = z.infer<typeof bridgeCrashHealthSchema>
+
+/** A bridge with no reported crashes. */
+export const healthyBridgeCrashHealth: BridgeCrashHealth = {
+  lastCrashAt: null,
+  recentCrashCount: 0,
+  lastReason: null
+}
+
+/** Rolling window over which bridge crashes are counted and treated as "recent". */
+export const BRIDGE_CRASH_WINDOW_SECONDS = 3600
+/** At or above this many crashes within the window, a bridge is treated as crash-looping. */
+export const BRIDGE_CRASH_LOOP_THRESHOLD = 3
+
+export type BridgeCrashState = 'healthy' | 'unstable' | 'looping'
+
+/**
+ * Derive a bridge's crash state from its reported crash health. A crash only
+ * counts while it is inside the rolling window — a bridge that crashed once and
+ * has been stable since reads as healthy again, so a stale count never pins the
+ * UI to "unstable" forever.
+ */
+export function deriveBridgeCrashState(crash: BridgeCrashHealth, nowMs: number): BridgeCrashState {
+  if (!crash.lastCrashAt) return 'healthy'
+  const lastMs = Date.parse(crash.lastCrashAt)
+  if (!Number.isFinite(lastMs)) return 'healthy'
+  if (nowMs - lastMs > BRIDGE_CRASH_WINDOW_SECONDS * 1000) return 'healthy'
+  return crash.recentCrashCount >= BRIDGE_CRASH_LOOP_THRESHOLD ? 'looping' : 'unstable'
+}
+
 export const bridgeSummarySchema = z.object({
   id: z.string(),
   name: z.string().min(1).max(120),
@@ -128,7 +172,8 @@ export const bridgeSummarySchema = z.object({
   updatedAt: z.string().datetime(),
   connectionStats: bridgeConnectionStatsSchema,
   update: bridgeUpdateSummarySchema,
-  debugCapture: bridgeDebugCaptureStatusSchema
+  debugCapture: bridgeDebugCaptureStatusSchema,
+  crash: bridgeCrashHealthSchema
 })
 
 export type BridgeSummary = z.infer<typeof bridgeSummarySchema>

@@ -60,7 +60,8 @@ import {
   type BridgeRuntimeInboundMessage,
   type Printer,
   type BridgeRuntimeRegistrationRequest,
-  type BridgeRuntimeRegistrationResponse
+  type BridgeRuntimeRegistrationResponse,
+  type BridgeCrashReport
 } from '@printstream/shared'
 import {
   deletePrinterDirectory,
@@ -109,6 +110,7 @@ import {
 import { BridgePrinterMonitor } from './printer-monitor.js'
 import { collectBridgeMetrics, recordApiReconnect } from './bridge-metrics.js'
 import { clearBridgeCredentials, loadBridgeState, writeBridgeState, type BridgeState } from './state-store.js'
+import { initCrashTracker, installBridgeCrashHandlers, markCleanShutdown } from './crash-tracker.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -153,6 +155,12 @@ export interface BridgeRuntimeClientOptions {
   simulator?: BridgeRuntimeSimulator | null
   /** Packaging-specific update mechanics; defaults to the Docker image-pull driver. */
   updateDriver?: BridgeUpdateDriver
+  /**
+   * Path to the crash-detection run-state marker. Defaults to a
+   * `bridge-run-state.json` next to `BRIDGE_STATE_FILE` (the bridge data dir),
+   * which resolves correctly for both the Docker and standalone packagings.
+   */
+  crashMarkerPath?: string
 }
 
 export interface BridgeRuntimeSimulator {
@@ -182,6 +190,8 @@ export class BridgeRuntimeClient {
   private readonly ftpActivityUnsubscribers = new Map<string, () => void>()
   private readonly rpcAbortControllers = new Map<string, AbortController>()
   private restartScheduled = false
+  /** A crash the previous run left behind, flushed to the workspace on connect. */
+  private pendingCrashReport: BridgeCrashReport | null = null
   private connectionProbeTimer: ReturnType<typeof setInterval> | null = null
   private connectionProbeInitialTimer: ReturnType<typeof setTimeout> | null = null
   /** The active connection's printer monitor, so the LAN probe can skip already-connected printers. */
@@ -208,7 +218,24 @@ export class BridgeRuntimeClient {
     return { ...this.statusSnapshot }
   }
 
+  /** Marker file for crash detection; sits in the bridge data dir for both packagings. */
+  private get crashMarkerPath(): string {
+    return this.options.crashMarkerPath ?? path.join(path.dirname(env.BRIDGE_STATE_FILE), 'bridge-run-state.json')
+  }
+
   async start(): Promise<void> {
+    // Install crash detection before anything else: process-level fatal handlers
+    // that record a reason before exiting, plus a check for whether the previous
+    // run died without a clean shutdown (reported to the workspace on connect).
+    installBridgeCrashHandlers({ markerPath: this.crashMarkerPath })
+    this.pendingCrashReport = initCrashTracker(this.crashMarkerPath)
+    if (this.pendingCrashReport) {
+      const reason = this.pendingCrashReport.reason?.split('\n', 1)[0]
+      console.warn(
+        `Previous bridge run ended without a clean shutdown${reason ? `: ${reason}` : ' (no reason captured — likely a hard kill)'}. Reporting it to the workspace.`
+      )
+    }
+
     this.updateStatus({
       lifecycle: 'starting',
       message: 'Starting bridge runtime.'
@@ -494,6 +521,14 @@ export class BridgeRuntimeClient {
           // (re)connected) re-learns it and keeps the banner accurate.
           if (parsed.data.connected && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'bridge.debug.capture.status', status: getCaptureStatus() }))
+          }
+          // Flush a pending crash report once per surviving run: the previous run
+          // died without a clean shutdown, and this is the first authenticated
+          // moment we can tell the workspace. Sent regardless of workspace pairing
+          // so the crash is never lost; the API scopes/notifies as it can.
+          if (this.pendingCrashReport && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'bridge.crash.report', report: this.pendingCrashReport }))
+            this.pendingCrashReport = null
           }
         }
       })
@@ -997,6 +1032,9 @@ export class BridgeRuntimeClient {
   private scheduleBridgeRestart(): void {
     if (this.restartScheduled) return
     this.restartScheduled = true
+    // An update-triggered restart is intentional, not a crash — mark the run
+    // clean so the next start does not report it.
+    markCleanShutdown(this.crashMarkerPath)
     setTimeout(() => process.exit(0), 500)
   }
 

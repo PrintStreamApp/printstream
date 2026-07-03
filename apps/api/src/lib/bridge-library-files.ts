@@ -3,7 +3,7 @@
  */
 import { createReadStream } from 'node:fs'
 import path from 'node:path'
-import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import {
   bridgeLibraryReadChunkResultSchema,
@@ -33,6 +33,23 @@ const BRIDGE_LIBRARY_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024
  */
 const BRIDGE_LIBRARY_CHUNK_RPC_TIMEOUT_MS = 120_000
 const BRIDGE_LIBRARY_DERIVED_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1000
+/**
+ * TTL for the `_bridge-cache` local copies of bridge-owned files. These are pure
+ * caches — {@link ensureBridgeLibraryLocalCopy} re-fetches from the bridge on
+ * demand — but they are FULL file copies, so without a prune the directory keeps
+ * one permanent copy of every file ever dispatched/sliced (observed multi-GB in
+ * production). mtime doubles as last-validated-use (see the touch in
+ * `ensureBridgeLibraryLocalCopy`), making this an LRU: only copies unused for
+ * the whole window are dropped.
+ */
+const BRIDGE_LIBRARY_LOCAL_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/**
+ * How stale a local copy's mtime may get before a validated use refreshes it.
+ * Throttled (rather than touching on every use) because the in-memory 3MF index
+ * cache keys on mtime — an unconditional touch would invalidate that cache and
+ * force a re-parse on every access.
+ */
+const BRIDGE_LIBRARY_LOCAL_CACHE_TOUCH_AFTER_MS = 24 * 60 * 60 * 1000
 /**
  * Version for the on-disk derived 3MF index cache. Derived from the shared parser version
  * ({@link THREE_MF_INDEX_PARSER_VERSION}) so the index shape and the cache invalidate together —
@@ -295,17 +312,49 @@ export async function pruneBridgeLibraryDerivedCache(maxAgeMs = BRIDGE_LIBRARY_D
   return await pruneDerivedCacheDirectory(bridgeLibraryDerivedCacheDir, maxAgeMs)
 }
 
+/**
+ * LRU prune of the `_bridge-cache` local file copies (see
+ * {@link BRIDGE_LIBRARY_LOCAL_CACHE_TTL_MS}). Safe because these are pure caches:
+ * a pruned copy is transparently re-fetched from the owning bridge the next time
+ * something needs it. Runs in the daily artifact maintenance.
+ */
+export async function pruneBridgeLibraryLocalCache(maxAgeMs = BRIDGE_LIBRARY_LOCAL_CACHE_TTL_MS): Promise<{
+  removedFiles: number
+  removedDirs: number
+}> {
+  return await pruneDerivedCacheDirectory(bridgeLibraryCacheDir, maxAgeMs)
+}
+
 export async function ensureBridgeLibraryLocalCopy(input: {
   bridgeId: string
   storedPath: string
 }): Promise<string> {
   const targetPath = resolveBridgeLibraryCachePath(input.bridgeId, input.storedPath)
   if (await isBridgeLibraryLocalCopyComplete(input.bridgeId, input.storedPath, targetPath)) {
+    await refreshLocalCopyRecency(targetPath)
     return targetPath
   }
   await rm(targetPath, { force: true }).catch(() => undefined)
   await copyBridgeLibraryFileToLocalCache(input.bridgeId, input.storedPath, targetPath)
   return targetPath
+}
+
+/**
+ * Bump a validated local copy's mtime so the LRU prune sees it as recently used.
+ * Throttled to once per {@link BRIDGE_LIBRARY_LOCAL_CACHE_TOUCH_AFTER_MS} —
+ * touching on every use would needlessly invalidate the mtime-keyed in-memory
+ * 3MF index cache. Best-effort: a failed touch only risks an earlier prune,
+ * which the on-demand re-fetch absorbs.
+ */
+async function refreshLocalCopyRecency(targetPath: string): Promise<void> {
+  try {
+    const info = await stat(targetPath)
+    if (Date.now() - info.mtimeMs < BRIDGE_LIBRARY_LOCAL_CACHE_TOUCH_AFTER_MS) return
+    const now = new Date()
+    await utimes(targetPath, now, now)
+  } catch {
+    // Cache-recency bookkeeping only; never fail the caller over it.
+  }
 }
 
 async function isBridgeLibraryLocalCopyComplete(bridgeId: string, storedPath: string, targetPath: string): Promise<boolean> {

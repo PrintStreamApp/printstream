@@ -156,6 +156,36 @@ export const bridgeMetricsMessageSchema = z.object({
   metrics: bridgeMetricsSnapshotSchema
 })
 
+/**
+ * A crash the bridge detected about *itself*: it noticed on startup that its
+ * previous run terminated without a clean shutdown. The bridge reports this once
+ * per surviving run (on session (re)connect); a crash-loop therefore produces one
+ * report per restart, and the API rate-limits the user-facing notification.
+ */
+export const bridgeCrashReportSchema = z.object({
+  /**
+   * Error message + truncated stack captured by the crashing run's fatal handler,
+   * or null when the crash left no JS-level reason (hard kill: OOM / SIGKILL /
+   * native fault).
+   */
+  reason: z.string().max(4000).nullable(),
+  /** ISO timestamp of when the crashed run had started. */
+  crashedRunStartedAt: z.string(),
+  /** ISO timestamp of when the surviving run detected the crash (≈ crash time). */
+  detectedAt: z.string(),
+  /** Crashes within the rolling window, including the one being reported (≥ 1). */
+  recentCrashCount: z.number().int().positive(),
+  /** Length of the rolling window `recentCrashCount` is measured over. */
+  windowSeconds: z.number().int().positive()
+})
+
+export type BridgeCrashReport = z.infer<typeof bridgeCrashReportSchema>
+
+export const bridgeCrashReportMessageSchema = z.object({
+  type: z.literal('bridge.crash.report'),
+  report: bridgeCrashReportSchema
+})
+
 export const bridgePrinterStatusMessageSchema = z.object({
   type: z.literal('bridge.printer.status'),
   printer: printerStatusSchema
@@ -743,7 +773,8 @@ export const bridgeRuntimeInboundMessageSchema = z.discriminatedUnion('type', [
   bridgePrinterRemovedMessageSchema,
   bridgeDebugCaptureStatusMessageSchema,
   bridgePrinterConnectionMessageSchema,
-  bridgeMetricsMessageSchema
+  bridgeMetricsMessageSchema,
+  bridgeCrashReportMessageSchema
 ])
 
 export type BridgeRuntimeInboundMessage = z.infer<typeof bridgeRuntimeInboundMessageSchema>

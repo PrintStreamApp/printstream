@@ -19,6 +19,40 @@
  */
 import { rootPrisma } from './prisma.js'
 
+/**
+ * Per-dispatch serialization of journal writes.
+ *
+ * The dispatcher fires the enqueue INSERT and every lifecycle UPDATE without
+ * awaiting them (a journal hiccup must never block a print), so on their own they
+ * carry no happens-before relationship. Under connection-pool contention a late
+ * enqueue INSERT could commit *after* a terminal UPDATE that ran first and found
+ * no row — leaving the terminal state dropped and the row stuck at its seed
+ * `queued` forever (observed live: dispatches logged `failed` yet the journal row
+ * stayed `queued`). Chaining every write for a given id onto a per-id tail restores
+ * the call order the fire-and-forget calls drop, so INSERT -> uploading -> terminal
+ * always commit in that order regardless of awaiting.
+ */
+const journalChains = new Map<string, Promise<unknown>>()
+
+/**
+ * Run `operation` after any prior journal write for `id` has settled, preserving
+ * call order. The returned promise settles with the caller's own operation (so a
+ * must-succeed writer like {@link markDispatchStartAttempted} can await/propagate);
+ * the stored tail is rejection-isolated so one failed write never stalls the next.
+ */
+function enqueueJournalWrite<T>(id: string, operation: () => Promise<T>): Promise<T> {
+  const previous = journalChains.get(id) ?? Promise.resolve()
+  const result = previous.then(operation, operation)
+  const tail = result.then(() => undefined, () => undefined)
+  journalChains.set(id, tail)
+  void tail.finally(() => {
+    // Only the live tail clears itself, so a newer write that already replaced it
+    // keeps the chain (and this bounds the map to in-flight dispatches).
+    if (journalChains.get(id) === tail) journalChains.delete(id)
+  })
+  return result
+}
+
 /** Journal lifecycle states. A superset of the public dispatch statuses plus `interrupted`. */
 export type DispatchJournalStatus =
   | 'queued'
@@ -57,7 +91,7 @@ export function isReconcilableDispatch(
 /** Create the journal row when a dispatch is enqueued. Best-effort. */
 export async function recordDispatchEnqueued(seed: DispatchJournalSeed): Promise<void> {
   try {
-    await rootPrisma.dispatchJob.create({
+    await enqueueJournalWrite(seed.id, () => rootPrisma.dispatchJob.create({
       data: {
         id: seed.id,
         tenantId: seed.tenantId,
@@ -67,7 +101,7 @@ export async function recordDispatchEnqueued(seed: DispatchJournalSeed): Promise
         fileName: seed.fileName,
         remoteName: seed.remoteName
       }
-    })
+    }))
   } catch (error) {
     console.warn(`[dispatch-journal] failed to record enqueue for ${seed.id}`, (error as Error).message)
   }
@@ -80,7 +114,7 @@ export async function recordDispatchStatus(
   fields: { error?: string | null; finishedAt?: Date | null; clearStartAttempt?: boolean } = {}
 ): Promise<void> {
   try {
-    await rootPrisma.dispatchJob.update({
+    await enqueueJournalWrite(id, () => rootPrisma.dispatchJob.update({
       where: { id },
       data: {
         status,
@@ -88,7 +122,7 @@ export async function recordDispatchStatus(
         ...(fields.finishedAt !== undefined ? { finishedAt: fields.finishedAt } : {}),
         ...(fields.clearStartAttempt ? { startCommandAttemptedAt: null } : {})
       }
-    })
+    }))
   } catch (error) {
     console.warn(`[dispatch-journal] failed to record ${status} for ${id}`, (error as Error).message)
   }
@@ -100,10 +134,12 @@ export async function recordDispatchStatus(
  * a later crash can never misclassify a started print as a safe-to-clean pre-publish row.
  */
 export async function markDispatchStartAttempted(id: string): Promise<void> {
-  await rootPrisma.dispatchJob.update({
+  // Chained like the best-effort writers so it commits AFTER the enqueue INSERT,
+  // but its rejection propagates (the caller aborts the dispatch before publish).
+  await enqueueJournalWrite(id, () => rootPrisma.dispatchJob.update({
     where: { id },
     data: { startCommandAttemptedAt: new Date() }
-  })
+  }))
 }
 
 /**
@@ -144,4 +180,25 @@ export async function deleteDispatchJournalRows(ids: readonly string[]): Promise
   } catch (error) {
     console.warn('[dispatch-journal] failed to delete handled rows', (error as Error).message)
   }
+}
+
+/** Journal rows older than this are no longer useful for reconcile or diagnostics. */
+const DISPATCH_JOURNAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+
+/**
+ * Retention prune: delete journal rows whose dispatch finished (any terminal
+ * state) longer than the retention window ago. The journal is operational
+ * bookkeeping, not print history (`PrintJob` is history) — without a prune it
+ * grows by one row per dispatch forever. Scoping on `finishedAt` leaves
+ * in-flight rows (`queued`/`uploading`, finishedAt NULL) for the boot reconcile,
+ * and elderly `interrupted` rows are covered too: their orphaned-SD cleanup is
+ * only meaningful shortly after the interruption. Runs in the daily artifact
+ * maintenance. Returns the count.
+ */
+export async function pruneDispatchJournal(maxAgeMs = DISPATCH_JOURNAL_RETENTION_MS): Promise<{ removed: number }> {
+  const cutoff = new Date(Date.now() - maxAgeMs)
+  const result = await rootPrisma.dispatchJob.deleteMany({
+    where: { finishedAt: { lt: cutoff } }
+  })
+  return { removed: result.count }
 }

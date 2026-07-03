@@ -45,6 +45,9 @@ const PAIRED_BRIDGE_SELECT = {
   lastUpdateCheckAt: true,
   lastUpdateError: true,
   lastSeenAt: true,
+  lastCrashAt: true,
+  lastCrashReason: true,
+  recentCrashCount: true,
   createdAt: true,
   updatedAt: true,
   _count: {

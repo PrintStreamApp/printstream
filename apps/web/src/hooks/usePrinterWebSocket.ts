@@ -104,6 +104,9 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
         if (event.resource === 'print-dispatch') {
           void queryClient.invalidateQueries({ queryKey: ['print-dispatch'] })
         }
+        if (event.resource === 'support') {
+          void queryClient.invalidateQueries({ queryKey: ['support'] })
+        }
         if (event.resource === 'print-queue') {
           void queryClient.invalidateQueries({ queryKey: ['print-queue'] })
         }

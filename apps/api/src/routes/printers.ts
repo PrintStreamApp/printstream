@@ -72,6 +72,8 @@ import { assertTenantOwnsPrinter, requireTenantOwnedConnectedPrinter } from '../
 import { buildPlateGcodeFileHint, extractObservedPrintPlateIndex } from '@printstream/shared'
 import { syncBridgePrinterConfig } from '../lib/bridge-printer-config.js'
 import { printerDiscovery } from '../lib/printer-discovery.js'
+import { assertPrinterQuotaOrThrow, notifyPrinterCountChanged } from '../lib/printer-quota.js'
+import { assertNativeLicenseAllowsPrinterAdd } from '../lib/license-enforcement.js'
 import { reconnectPrinter } from '../lib/printer-reconnect.js'
 import { validatePrinterLanConnection } from '../lib/printer-connection-validation.js'
 import {
@@ -358,6 +360,8 @@ printersRouter.post('/', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), a
   }
   await assertBridgeAssignmentExists(parsed.data.bridgeId)
   const tenantId = requireRequestTenantId(request)
+  await assertPrinterQuotaOrThrow(tenantId)
+  await assertNativeLicenseAllowsPrinterAdd()
   const last = await prisma.printer.findFirst({ orderBy: { position: 'desc' } })
   const created = await prisma.printer.create({
     data: {
@@ -380,6 +384,7 @@ printersRouter.post('/', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), a
   // serial can still be adopted elsewhere if printers are shared or
   // migrated between tenants.
   printerDiscovery.dismiss(dto.serial, created.tenantId)
+  notifyPrinterCountChanged(created.tenantId)
   // Never record the LAN access code in the audit trail.
   annotateRequestAuditLog(request, {
     action: 'add-printer',
@@ -460,6 +465,7 @@ printersRouter.delete('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSIO
   })
   await prisma.printer.delete({ where: { id: existing.id } })
   printerManager.remove(existing.id)
+  notifyPrinterCountChanged(existing.tenantId)
   await syncBridgePrinterConfig(existing.bridgeId)
   response.status(204).end()
 })

@@ -8,7 +8,7 @@ PrintStream is a self-hosted web app for monitoring and controlling Bambu Lab pr
 
 > Smaller, simpler, and more touch-friendly than the alternatives. Self-hosted and plugin-extensible.
 
-**Website:** [printstream.app](https://printstream.app) — the product site, with a full feature tour, screenshots, and an optional hosted version you don't have to run yourself.
+**Website:** [printstream.app](https://printstream.app) — the product site, with a full feature tour, screenshots, and an optional hosted version you don't have to run yourself. PrintStream is a product of [Dynamic Solutions](https://dynamic-solutions.ca).
 
 > **Beta — read before you rely on it.** PrintStream is in active beta. It has been tested with the **Bambu Lab P1P, P1S, and H2D**. Other Bambu Lab models should work, but this hasn't been confirmed yet — expect to verify behavior on untested hardware, and please report what you find. See [Safety & liability](#safety--liability) before connecting printers.
 

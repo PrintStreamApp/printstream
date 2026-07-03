@@ -21,6 +21,11 @@ export interface PublicRouteContext {
   isAuthenticated: boolean
   /** Route into the app for the current actor (workspace landing or chooser). */
   appHref: string
+  /**
+   * Route to the actor's account page (billing lives there) — the workspace
+   * account when a tenant is active, otherwise the same as `appHref`.
+   */
+  accountHref: string
   /** Where the public demo entry should land. */
   demoLandingRoute: string
 }
@@ -55,6 +60,12 @@ export interface PrivatePlatformAdminModule {
   OverviewView: ComponentType
   /** Rendered at `/platform/tenants`. */
   TenantsView: ComponentType<PlatformTenantsViewProps>
+  /** Rendered at `/platform/billing` (gated by `billing.manage`). */
+  BillingView: ComponentType
+  /** Rendered at `/platform/messages` (the support-messaging inbox). */
+  MessagesView: ComponentType
+  /** Rendered at `/platform/suggestions/*` (the shared suggestion board; footer-linked, no nav tab). */
+  SuggestionsView: ComponentType
   /** Nav tabs listed before the platform settings tab. */
   navTabs: ReadonlyArray<ShellTab>
 }

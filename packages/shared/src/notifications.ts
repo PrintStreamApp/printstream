@@ -23,6 +23,7 @@ export const notificationCategorySchema = z.enum([
   'job.finished',
   'printer.added',
   'printer.removed',
+  'bridge.crashed',
   'system'
 ])
 export type NotificationCategory = z.infer<typeof notificationCategorySchema>
@@ -40,7 +41,8 @@ export const notificationTemplateEventSchema = z.enum([
   'job.error',
   'job.finished.success',
   'job.finished.failed',
-  'job.finished.cancelled'
+  'job.finished.cancelled',
+  'bridge.crashed'
 ])
 export type NotificationTemplateEvent = z.infer<typeof notificationTemplateEventSchema>
 
@@ -55,7 +57,8 @@ export const notificationTemplateVariables: Record<NotificationTemplateEvent, re
   'job.error': ['printerName', 'jobName', 'errorMessage', 'errorCode'],
   'job.finished.success': ['printerName', 'jobName', 'result'],
   'job.finished.failed': ['printerName', 'jobName', 'result'],
-  'job.finished.cancelled': ['printerName', 'jobName', 'result']
+  'job.finished.cancelled': ['printerName', 'jobName', 'result'],
+  'bridge.crashed': ['bridgeName', 'crashCount']
 }
 
 export const notificationTemplateSchema = z.object({

@@ -141,6 +141,46 @@ test('BridgePrinterMonitor keeps a fresh report stream alive without recreating 
   }
 })
 
+test('a late error from a watchdog-discarded client does not crash the process (connack-timeout crash-loop fix)', () => {
+  mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] })
+  try {
+    const clients: FakeMqttClient[] = []
+    const monitor = new BridgePrinterMonitor(
+      () => {},
+      (() => {
+        const client = new FakeMqttClient()
+        clients.push(client)
+        return client as never
+      }) as typeof mqttConnect
+    )
+
+    monitor.updatePrinters([makePrinter()])
+    clients[0].connected = true
+    clients[0].emit('connect')
+    // Watchdog tears down the silent first client and rebuilds a fresh one.
+    mock.timers.tick(120_000)
+    assert.equal(clients.length, 2, 'watchdog should have recreated the client')
+
+    // mqtt.js can fire a connack-timeout 'error' from an internal timer after the
+    // client was discarded. On a bare EventEmitter an 'error' with no listener throws
+    // (exactly the unhandled 'error' that crash-looped the live bridge). The teardown
+    // must have left a sink so this is inert.
+    assert.doesNotThrow(() => clients[0].emit('error', new Error('connack timeout')))
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('a late error from a removed printer client does not crash the process', () => {
+  const client = new FakeMqttClient()
+  const monitor = new BridgePrinterMonitor(() => {}, (() => client as never) as typeof mqttConnect)
+
+  monitor.updatePrinters([makePrinter()])
+  monitor.updatePrinters([]) // removes the printer, discarding its client
+
+  assert.doesNotThrow(() => client.emit('error', new Error('connack timeout')))
+})
+
 test('BridgePrinterMonitor.isConnected reflects the live MQTT connection state', () => {
   const client = new FakeMqttClient()
   const monitor = new BridgePrinterMonitor(() => {}, (() => client as never) as typeof mqttConnect)

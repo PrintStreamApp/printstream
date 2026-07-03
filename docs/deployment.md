@@ -30,6 +30,17 @@ The default stack runs `db` (PostgreSQL) plus the **combined app image** (`ghcr.
 
 On first start the API auto-creates a default workspace when the database has no workspaces yet.
 
+### Updating
+
+```bash
+docker compose pull && docker compose up -d && docker image prune -f
+```
+
+The `docker image prune -f` matters: each pull leaves the previous multi-GB image
+behind untagged ("dangling"), and nothing else removes those — without the prune
+the Docker disk grows by the full image set on every update, forever. The prune
+only removes dangling images, so other tagged images on the host are untouched.
+
 ### Slicer service
 
 The `slicer` service is part of the stack and binds to loopback by default (`127.0.0.1:4010` on the deployment host). Keep `SLICER_BIND_HOST=127.0.0.1` unless you intentionally need direct network access. Set `SLICER_SERVICE_URL` (and a `SLICER_SERVICE_TOKEN` secret) on the API to enable server-side slicing.

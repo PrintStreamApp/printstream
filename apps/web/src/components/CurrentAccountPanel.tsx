@@ -4,6 +4,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { Alert, Box, Button, Card, CardContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy'
 import {
+  BILLING_MANAGE_OWN_PERMISSION,
   extractErrorMessage,
   type AuthSessionListResponse,
   type AuthUserResponse,
@@ -44,6 +45,13 @@ export function CurrentAccountPanel({
   const isAuthenticatedUser = actorType === 'user'
   const isSupportUser = isAuthenticatedUser && (authBootstrapQuery.data?.actor.isPlatformUser ?? false)
   const hasTenantContext = authBootstrapQuery.data?.tenant != null
+  // Billing is workspace-scoped, so it belongs to the workspace the account
+  // route is viewing — not the personal account. Surface it to any member who
+  // can manage this workspace's plan, including a platform user who is also a
+  // member here (they still get the personal-account redirect below, but their
+  // own workspace's billing must not be swallowed by that interstitial).
+  const canManageOwnBilling = (authBootstrapQuery.data?.permissions ?? []).includes(BILLING_MANAGE_OWN_PERMISSION)
+  const showsBillingSection = isAuthenticatedUser && hasTenantContext && canManageOwnBilling
   const isPlatformAccountRoute = isPlatformWorkspacePath(location.pathname)
   const shouldOpenPlatformAccount = isSupportUser && hasTenantContext && !isPlatformAccountRoute
   const authProviders = authBootstrapQuery.data?.providers ?? []
@@ -191,6 +199,19 @@ export function CurrentAccountPanel({
     })
   }
 
+  const billingSection = showsBillingSection ? (
+    <Box id="billing" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
+      <StaticPluginSlot name="account.billing" />
+    </Box>
+  ) : null
+
+  // Cloud support messaging (empty in OSS/self-hosted builds).
+  const messagesSection = (
+    <Box id="messages" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
+      <StaticPluginSlot name="account.support" />
+    </Box>
+  )
+
   if (shouldOpenPlatformAccount) {
     return (
       <Stack spacing={2}>
@@ -201,6 +222,9 @@ export function CurrentAccountPanel({
             {bootstrapError}
           </Alert>
         )}
+
+        {billingSection}
+        {messagesSection}
 
         <AccountSectionHeading
           title="Open your platform account"
@@ -291,6 +315,10 @@ export function CurrentAccountPanel({
           )}
         </Stack>
       </Box>
+
+      {billingSection}
+
+      {messagesSection}
 
       {isAuthenticatedUser && (
         <Box id="profile" sx={{ scrollMarginTop: sectionScrollMarginTop }}>

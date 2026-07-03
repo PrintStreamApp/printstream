@@ -37,7 +37,7 @@ export default function MarketingApp() {
   }, [])
 
   const routes = marketingModule?.routes ?? []
-  const context = { isAuthenticated: false, appHref: APP_ENTRY, demoLandingRoute: '' }
+  const context = { isAuthenticated: false, appHref: APP_ENTRY, accountHref: APP_ENTRY, demoLandingRoute: '' }
 
   return (
     <CssVarsProvider theme={theme} defaultMode="dark">

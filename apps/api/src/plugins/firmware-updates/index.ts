@@ -36,7 +36,8 @@ import { listPrinterDirectory, uploadFileToPrinter } from '../../lib/printer-ftp
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
 import { assertSafeOutboundUrl } from '../../lib/outbound-url-guard.js'
 import { requireRouteParam } from '../../lib/request-helpers.js'
-import { FirmwareSource, compareVersions, type FirmwareVersion } from './firmware-source.js'
+import { FirmwareSource, compareVersions, resolveApiKey, type FirmwareVersion } from './firmware-source.js'
+import { evaluateOfflineUpdate, evaluatePrerequisite } from './firmware-constraints.js'
 
 /**
  * Firmware binaries are downloaded server-side and staged on the printer SD card,
@@ -238,6 +239,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
         status = await refreshFirmwareStatus(printerId)
       }
       const currentVersion = status?.firmwareVersion ?? null
+      const apiKey = resolveApiKey(printer.model)
       const versions = await source.listVersions(printer.model)
       const latest = versions[0] ?? null
       const updateAvailable = Boolean(
@@ -254,6 +256,10 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
         updateAvailable,
         downloadUrl: latest?.downloadUrl || null,
         releaseNotes: latest?.releaseNotes ?? null,
+        // Whether the printer can flash an SD-staged package at all. When the
+        // installed firmware is below the model's offline floor, the printer has
+        // no "Update Offline" option yet and must be updated online once first.
+        offlineUpdate: evaluateOfflineUpdate(apiKey, currentVersion),
         // Per-module versions (each AMS unit, controllers) minus `ota`, which is
         // already reported as `currentVersion`. Bambu publishes no separate
         // "latest" for these, so they are display-only — they let the user see
@@ -270,7 +276,11 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
           version: v.version,
           fileAvailable: Boolean(v.downloadUrl),
           releaseNotes: v.releaseNotes,
-          releaseTime: v.releaseTime
+          releaseTime: v.releaseTime,
+          // The intermediate "stepping-stone" build (if any) this printer must
+          // install before it can flash this version directly. Null when the jump
+          // is allowed or the installed version is still unknown.
+          prerequisite: evaluatePrerequisite(apiKey, currentVersion, v.version)
         }))
       }
     }
@@ -380,6 +390,17 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
 
         const target = await resolveTarget(printer, requestedVersion, controller.signal)
         state.firmwareVersion = target.version
+
+        // Some target versions need an intermediate "stepping-stone" build first;
+        // staging the target would leave a file the printer refuses to flash directly.
+        const currentVersion = printerManager.getStatus(printerId)?.firmwareVersion ?? null
+        const hop = evaluatePrerequisite(resolveApiKey(printer.model), currentVersion, target.version)
+        if (hop) {
+          throw new Error(
+            `Firmware ${target.version} can't be installed directly from ${currentVersion ?? 'the current firmware'}. `
+            + `Install ${hop.requiredVersion} (${hop.label}) first, then update to ${target.version}.`
+          )
+        }
         throwIfAborted(controller.signal)
 
         state.status = 'downloading'
@@ -471,6 +492,16 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
         throw badRequest('No SD card detected in the printer')
       }
 
+      // Below the model's offline floor the printer has no "Update Offline" option,
+      // so a staged package can never be flashed — reject rather than upload a dead
+      // file. (The UI also blocks this; this is the boundary backstop.)
+      const offlineUpdate = evaluateOfflineUpdate(resolveApiKey(printer.model), status?.firmwareVersion ?? null)
+      if (offlineUpdate.belowMinimum && offlineUpdate.minimumVersion) {
+        throw badRequest(
+          `Offline firmware updates need at least ${offlineUpdate.minimumVersion} installed before the printer's Update Offline option appears; this printer is on ${status?.firmwareVersion}. Update it online via Bambu Handy or Bambu Studio once, then PrintStream can manage updates over the LAN.`
+        )
+      }
+
       const parsed = startUploadSchema.safeParse(request.body ?? {})
       if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid request body')
 
@@ -549,6 +580,15 @@ interface UpdateReport {
   downloadUrl: string | null
   releaseNotes: string | null
   /**
+   * Whether offline (SD-card) updates are usable on this printer right now. Below
+   * the model's floor the printer cannot flash a staged package — it must be
+   * updated online once first — so the UI warns instead of staging a dead file.
+   */
+  offlineUpdate: {
+    minimumVersion: string | null
+    belowMinimum: boolean
+  }
+  /**
    * Installed firmware versions for the printer's sub-modules (each AMS unit,
    * controllers), excluding the main board (`ota`, already in `currentVersion`).
    * Display-only — Bambu ships these inside the main OTA package and publishes
@@ -566,6 +606,11 @@ interface UpdateReport {
     fileAvailable: boolean
     releaseNotes: string | null
     releaseTime: string | null
+    /**
+     * Intermediate "stepping-stone" build this printer must install before it can
+     * flash this version directly, or null when the jump is allowed.
+     */
+    prerequisite: { requiredVersion: string; label: string } | null
   }>
 }
 

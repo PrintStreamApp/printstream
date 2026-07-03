@@ -42,7 +42,7 @@ function download(platformKey: string): BridgeStandaloneDownload {
 }
 
 const ALL_DOWNLOADS = [
-  download('darwin-arm64'),
+  download('linux-arm64'),
   download('linux-x64'),
   download('win32-x64')
 ]
@@ -97,9 +97,9 @@ test('without a detected platform nothing is flagged, and each package opens the
     assert.doesNotMatch(item.textContent ?? '', /Compatible with this machine/)
   }
 
-  fireEvent.click(view.getByRole('menuitem', { name: 'macOS (Apple Silicon)' }))
+  fireEvent.click(view.getByRole('menuitem', { name: 'Linux (ARM64)' }))
   const link = await view.findByRole('link', { name: 'Download' })
-  assert.equal(link.getAttribute('href'), download('darwin-arm64').url)
+  assert.equal(link.getAttribute('href'), download('linux-arm64').url)
 })
 
 test('the Docker entry opens a compose quick-start with the server origin filled in', async () => {

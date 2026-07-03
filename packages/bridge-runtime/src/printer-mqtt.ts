@@ -31,6 +31,10 @@ export async function publishPrinterCommand(printer: Printer, payload: Record<st
       client.removeListener('connect', onConnect)
       client.removeListener('error', onError)
       client.removeListener('close', onClose)
+      // Keep a no-op error sink for the discarded client: mqtt.js can still emit a
+      // late 'error' (e.g. a connack-timeout timer) during/after end(), and with no
+      // listener Node turns that into an unhandled 'error' event that crashes the host.
+      client.on('error', () => {})
       client.end(true)
       if (error) reject(error)
       else resolve()

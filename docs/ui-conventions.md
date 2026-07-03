@@ -2,7 +2,14 @@
 
 These conventions capture patterns already used across the web app and the cleanup decisions we want to preserve.
 
-## Page structure
+## New view checklist
+
+Read this document before building a new view, and match sibling views rather than Joy defaults (`OrdersView` is a good reference). The rules missed most often when a view is added:
+
+- The page heading is a single `Typography level="h3"` with the view's nav icon as `startDecorator` (never `h2` — see "Page structure").
+- Every header action beside the heading (New / Add / Upload / Select) and every `EmptyState` `action` button is `size="sm"` (see "Buttons and actions"). Joy's default (medium) size is reserved for in-dialog confirm/cancel actions and full-width mobile CTAs.
+- Filterable lists use the shared toolbar/pagination building blocks (`DirectoryPrimaryToolbar`, `PaginationFooter`) and persist their display preferences (see "Layout and width", "Pagination").
+- Everything works from a 375px viewport up.
 
 - Give each top-level view one primary page heading.
 - A top-level page heading is a single `Typography level="h3"` (reserve `level="h2"` for auth, setup, and marketing hero screens) and leads with the page's navigation icon as its `startDecorator`, so the heading mirrors its nav tab — e.g. Library → `FolderCopyRoundedIcon`, Printers → `Printer3dRoundedIcon`, Jobs → `HistoryRoundedIcon`, Stats → `QueryStatsRoundedIcon`, Filament → `FilamentSpoolIcon`. Custom icons inherit size and colour from the heading via `currentColor`, so no explicit sizing is needed.

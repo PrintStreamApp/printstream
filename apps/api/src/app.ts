@@ -29,6 +29,8 @@ import { slicingRouter } from './routes/slicing.js'
 import { editorRouter } from './routes/editor.js'
 import { deleteOperationsRouter } from './routes/delete-operations.js'
 import { printerViewsRouter } from './routes/printer-views.js'
+import { licenseRouter } from './routes/license.js'
+import { registerNativeLicensePrintGuard } from './lib/license-enforcement.js'
 import { settingsRouter } from './routes/settings.js'
 import { bridgesRouter } from './routes/bridges.js'
 import { bridgeRuntimeRouter } from './routes/bridge-runtime.js'
@@ -123,7 +125,14 @@ app.use('/api', createRateLimitMiddleware({
   max: 1_800,
   skip: skipHealthChecks
 }))
-app.use(express.json({ limit: '4mb' }))
+// Capture the raw request buffer so webhook routes (e.g. Paddle billing in the
+// private cloud module) can verify HMAC signatures over the exact bytes received.
+app.use(express.json({
+  limit: '4mb',
+  verify: (request, _response, buffer) => {
+    ;(request as express.Request & { rawBody?: Buffer }).rawBody = buffer
+  }
+}))
 app.use(installAuthContext({ demoMode: false }))
 app.use(installTenantContext())
 app.use(installAuditLogCapture())
@@ -178,6 +187,10 @@ app.use('/api/camera', cameraRouter)
 app.use('/api/logs', logsRouter)
 app.use('/api/notifications', notificationsRouter)
 app.use('/api/settings', settingsRouter)
+app.use('/api/license', licenseRouter)
+// Native (paid) builds require a commercial license: past the evaluation
+// window, dispatch is guarded and printer adds are blocked. No-op elsewhere.
+registerNativeLicensePrintGuard()
 app.use('/api/bridges', bridgesRouter)
 app.use('/api/bridge-runtime', bridgeRuntimeRouter)
 app.use('/api/stats', tenantStatsRouter)

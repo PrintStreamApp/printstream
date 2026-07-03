@@ -11,17 +11,27 @@ import { SETTINGS_MANAGE_PERMISSION } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { AUTHENTICATION_REQUIRED_MESSAGE } from '../lib/authorization.js'
 import { assertRequestPermission } from '../lib/authorization.js'
+import { blockedPluginsForTenant } from '../lib/plugin-plan-gate.js'
 import { pluginRegistry } from '../plugin/registry.js'
 import { badRequest, forbidden, unauthorized } from '../lib/http-error.js'
 
 export const pluginCatalogRouter = Router()
 
-pluginCatalogRouter.get('/', (request, response) => {
+pluginCatalogRouter.get('/', async (request, response) => {
   if (request.auth.authEnabled && request.auth.actor.type === 'anonymous') {
     throw unauthorized(AUTHENTICATION_REQUIRED_MESSAGE)
   }
 
-  response.json({ plugins: pluginRegistry.listCatalog(request) })
+  // Plan-gated plugins (e.g. Pro plugins on a Free workspace) surface as
+  // enabled: false so tabs/routes hide, plus planBlocked so the plugin manager
+  // can explain why instead of showing a dead toggle.
+  const blocked = request.tenant ? await blockedPluginsForTenant(request.tenant.id) : null
+  const plugins = pluginRegistry.listCatalog(request).map((plugin) =>
+    blocked?.has(plugin.name)
+      ? { ...plugin, enabled: false, planBlocked: true }
+      : plugin
+  )
+  response.json({ plugins })
 })
 
 pluginCatalogRouter.post('/:name/enabled', async (request, response) => {
@@ -33,6 +43,13 @@ pluginCatalogRouter.post('/:name/enabled', async (request, response) => {
 
   if (typeof request.body?.enabled !== 'boolean') {
     throw badRequest('Expected { enabled: boolean }')
+  }
+
+  if (request.body.enabled) {
+    const blocked = await blockedPluginsForTenant(request.tenant.id)
+    if (blocked.has(request.params.name)) {
+      throw forbidden('This plugin requires the Pro plan.')
+    }
   }
 
   const plugin = await pluginRegistry.setTenantEnabled(

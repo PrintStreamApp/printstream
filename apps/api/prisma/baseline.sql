@@ -14,6 +14,45 @@ CREATE TABLE "Tenant" (
 );
 
 -- CreateTable
+CREATE TABLE "TenantSubscription" (
+    "id" TEXT NOT NULL,
+    "tenantId" TEXT NOT NULL,
+    "plan" TEXT NOT NULL DEFAULT 'free',
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "paddleCustomerId" TEXT,
+    "paddleSubscriptionId" TEXT,
+    "priceId" TEXT,
+    "printerQuantity" INTEGER NOT NULL DEFAULT 0,
+    "compedPrinters" INTEGER NOT NULL DEFAULT 0,
+    "currentPeriodEnd" TIMESTAMP(3),
+    "canceledAt" TIMESTAMP(3),
+    "scheduledCancelAt" TIMESTAMP(3),
+    "compedByUserId" TEXT,
+    "compedReason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TenantSubscription_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "License" (
+    "id" TEXT NOT NULL,
+    "edition" TEXT NOT NULL,
+    "licensee" TEXT NOT NULL,
+    "email" TEXT,
+    "key" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "paddleCustomerId" TEXT,
+    "paddleTransactionId" TEXT,
+    "updatesUntil" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "License_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "Printer" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
@@ -52,6 +91,10 @@ CREATE TABLE "Bridge" (
     "lastUpdateCheckAt" TIMESTAMP(3),
     "lastUpdateError" TEXT,
     "lastSeenAt" TIMESTAMP(3),
+    "lastCrashAt" TIMESTAMP(3),
+    "lastCrashReason" TEXT,
+    "recentCrashCount" INTEGER NOT NULL DEFAULT 0,
+    "lastCrashNotifiedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -698,11 +741,100 @@ CREATE TABLE "QueueItem" (
     CONSTRAINT "QueueItem_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "SupportConversation" (
+    "id" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "subject" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'open',
+    "userId" TEXT,
+    "userEmail" TEXT,
+    "userName" TEXT,
+    "tenantId" TEXT,
+    "tenantName" TEXT,
+    "resolvedAt" TIMESTAMP(3),
+    "lastMessageAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "userLastReadAt" TIMESTAMP(3),
+    "platformLastReadAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "SupportConversation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "SupportMessage" (
+    "id" TEXT NOT NULL,
+    "conversationId" TEXT NOT NULL,
+    "side" TEXT NOT NULL,
+    "senderUserId" TEXT,
+    "senderName" TEXT NOT NULL,
+    "body" TEXT NOT NULL,
+    "pageUrl" TEXT,
+    "appVersion" TEXT,
+    "userAgent" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SupportMessage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Suggestion" (
+    "id" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "body" TEXT NOT NULL,
+    "authorUserId" TEXT,
+    "authorName" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Suggestion_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "SuggestionVote" (
+    "suggestionId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "value" INTEGER NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "SuggestionVote_pkey" PRIMARY KEY ("suggestionId","userId")
+);
+
+-- CreateTable
+CREATE TABLE "SuggestionComment" (
+    "id" TEXT NOT NULL,
+    "suggestionId" TEXT NOT NULL,
+    "parentId" TEXT,
+    "authorUserId" TEXT,
+    "authorName" TEXT NOT NULL,
+    "body" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SuggestionComment_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "Tenant_slug_key" ON "Tenant"("slug");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Tenant_name_key" ON "Tenant"("name");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TenantSubscription_tenantId_key" ON "TenantSubscription"("tenantId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TenantSubscription_paddleSubscriptionId_key" ON "TenantSubscription"("paddleSubscriptionId");
+
+-- CreateIndex
+CREATE INDEX "TenantSubscription_paddleCustomerId_idx" ON "TenantSubscription"("paddleCustomerId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "License_paddleTransactionId_key" ON "License"("paddleTransactionId");
+
+-- CreateIndex
+CREATE INDEX "License_email_idx" ON "License"("email");
 
 -- CreateIndex
 CREATE INDEX "Printer_tenantId_bridgeId_position_idx" ON "Printer"("tenantId", "bridgeId", "position");
@@ -1001,6 +1133,36 @@ CREATE INDEX "QueueItem_tenantId_lastPrintJobId_idx" ON "QueueItem"("tenantId", 
 -- CreateIndex
 CREATE INDEX "QueueItem_tenantId_orderPrintId_idx" ON "QueueItem"("tenantId", "orderPrintId");
 
+-- CreateIndex
+CREATE INDEX "SupportConversation_lastMessageAt_idx" ON "SupportConversation"("lastMessageAt");
+
+-- CreateIndex
+CREATE INDEX "SupportConversation_userId_lastMessageAt_idx" ON "SupportConversation"("userId", "lastMessageAt");
+
+-- CreateIndex
+CREATE INDEX "SupportConversation_status_lastMessageAt_idx" ON "SupportConversation"("status", "lastMessageAt");
+
+-- CreateIndex
+CREATE INDEX "SupportMessage_conversationId_createdAt_idx" ON "SupportMessage"("conversationId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "Suggestion_createdAt_idx" ON "Suggestion"("createdAt");
+
+-- CreateIndex
+CREATE INDEX "Suggestion_authorUserId_idx" ON "Suggestion"("authorUserId");
+
+-- CreateIndex
+CREATE INDEX "SuggestionVote_userId_idx" ON "SuggestionVote"("userId");
+
+-- CreateIndex
+CREATE INDEX "SuggestionComment_suggestionId_createdAt_idx" ON "SuggestionComment"("suggestionId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "SuggestionComment_authorUserId_idx" ON "SuggestionComment"("authorUserId");
+
+-- AddForeignKey
+ALTER TABLE "TenantSubscription" ADD CONSTRAINT "TenantSubscription_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
 -- AddForeignKey
 ALTER TABLE "Printer" ADD CONSTRAINT "Printer_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -1207,4 +1369,16 @@ ALTER TABLE "QueueItem" ADD CONSTRAINT "QueueItem_lastPrinterId_fkey" FOREIGN KE
 
 -- AddForeignKey
 ALTER TABLE "QueueItem" ADD CONSTRAINT "QueueItem_lastPrintJobId_fkey" FOREIGN KEY ("lastPrintJobId") REFERENCES "PrintJob"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SupportMessage" ADD CONSTRAINT "SupportMessage_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "SupportConversation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SuggestionVote" ADD CONSTRAINT "SuggestionVote_suggestionId_fkey" FOREIGN KEY ("suggestionId") REFERENCES "Suggestion"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SuggestionComment" ADD CONSTRAINT "SuggestionComment_suggestionId_fkey" FOREIGN KEY ("suggestionId") REFERENCES "Suggestion"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SuggestionComment" ADD CONSTRAINT "SuggestionComment_parentId_fkey" FOREIGN KEY ("parentId") REFERENCES "SuggestionComment"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

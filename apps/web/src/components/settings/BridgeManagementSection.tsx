@@ -3,6 +3,7 @@ import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import ArticleRoundedIcon from '@mui/icons-material/ArticleRounded'
 import HubRoundedIcon from '@mui/icons-material/HubRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import WarningRoundedIcon from '@mui/icons-material/WarningRounded'
 import { Alert, Box, Button, Card, CardContent, Chip, DialogTitle, Divider, FormControl, FormLabel, Input, Sheet, Stack, Typography } from '@mui/joy'
 import {
   type BridgeListResponse,
@@ -25,6 +26,7 @@ import { invalidateBridgeQueries } from '../../lib/bridgeQueryInvalidation'
 import { consumePendingBridgeConnectCode } from '../../lib/pendingBridgeConnect'
 import { formatDateTime } from '../../lib/time'
 import { formatBridgeUpdateStatus } from '../../lib/bridgeUpdateStatus'
+import { bridgeCrashChip } from '../../lib/bridgeCrashHealth'
 import { BackAwareModal } from '../BackAwareModal'
 import { BridgeInstallCard } from '../BridgeInstallCard'
 import { ConfirmActionDialog } from '../ConfirmActionDialog'
@@ -214,6 +216,7 @@ function BridgeSettingsRow({ bridge }: { bridge: BridgeSummary }) {
   const [detailsOpen, setDetailsOpen] = React.useState(false)
   const online = bridge.connectionStats.connected
   const needsUpdate = BRIDGE_UPDATE_ATTENTION_STATUSES.has(bridge.update.status)
+  const crashChip = bridgeCrashChip(bridge.crash)
   const printerLabel = bridge.printerCount === 1 ? '1 printer' : `${bridge.printerCount} printers`
   return (
     <>
@@ -230,6 +233,7 @@ function BridgeSettingsRow({ bridge }: { bridge: BridgeSummary }) {
                   </Chip>
                   <Chip size="sm" variant="soft" color="neutral">{printerLabel}</Chip>
                   {needsUpdate && <Chip size="sm" variant="soft" color="primary">Update available</Chip>}
+                  {crashChip && <Chip size="sm" variant="soft" color={crashChip.color}>{crashChip.label}</Chip>}
                 </Stack>
               </Stack>
             </Stack>
@@ -340,6 +344,8 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
       : null
   const removeError = removeBridge.error ? extractErrorMessage(removeBridge.error) : null
   const online = bridge.connectionStats.connected
+  const crashChip = bridgeCrashChip(bridge.crash)
+  const lastCrashLabel = bridge.crash.lastCrashAt ? new Date(bridge.crash.lastCrashAt).toLocaleString() : null
   const lastSeenLabel = bridge.lastSeenAt ? new Date(bridge.lastSeenAt).toLocaleString() : 'Not seen yet'
   const connectedAtLabel = bridge.connectionStats.connectedAt ? new Date(bridge.connectionStats.connectedAt).toLocaleString() : null
   const updateStatusLabel = formatBridgeUpdateStatus(bridge.update.status)
@@ -373,7 +379,27 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
                 <Chip size="sm" variant="soft" color={online ? 'success' : 'neutral'}>{online ? 'Online' : 'Offline'}</Chip>
                 <Chip size="sm" variant="soft" color="neutral">{printerLabel}</Chip>
                 <Chip size="sm" variant="soft" color={needsUpdate ? 'primary' : 'neutral'}>{updateStatusLabel}</Chip>
+                {crashChip && <Chip size="sm" variant="soft" color={crashChip.color}>{crashChip.label}</Chip>}
               </Stack>
+
+              {crashChip && (
+                <Alert color={crashChip.color} variant="soft" startDecorator={<WarningRoundedIcon />}>
+                  <Stack sx={{ minWidth: 0 }}>
+                    <Typography level="title-sm">
+                      {crashChip.label === 'Crash-looping' ? 'This bridge is crash-looping' : 'This bridge recently crashed'}
+                    </Typography>
+                    <Typography level="body-sm">
+                      {bridge.crash.recentCrashCount} crash{bridge.crash.recentCrashCount === 1 ? '' : 'es'} in the last hour
+                      {lastCrashLabel ? `, most recently ${lastCrashLabel}` : ''}. Check the bridge machine and its logs.
+                    </Typography>
+                    {bridge.crash.lastReason && (
+                      <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5, wordBreak: 'break-word' }}>
+                        {bridge.crash.lastReason}
+                      </Typography>
+                    )}
+                  </Stack>
+                </Alert>
+              )}
 
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'flex-end' }}>
                 <FormControl sx={{ flex: 1 }}>
@@ -403,6 +429,8 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
                 <BridgeDetail label="Pending RPCs" value={bridge.connectionStats.pendingRpcCount} />
                 <BridgeDetail label="Camera watches" value={bridge.connectionStats.activeCameraWatchCount} />
                 <BridgeDetail label="Active transfers" value={bridge.connectionStats.activePrinterFtpCount} />
+                {lastCrashLabel && <BridgeDetail label="Last crash" value={lastCrashLabel} />}
+                {bridge.crash.recentCrashCount > 0 && <BridgeDetail label="Recent crashes (1h)" value={bridge.crash.recentCrashCount} />}
               </Box>
 
               <Divider />

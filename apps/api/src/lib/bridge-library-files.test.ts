@@ -12,6 +12,7 @@ import {
   ensureLibraryFileReplica,
   inspectBridgeLibraryThreeMf,
   pruneBridgeLibraryDerivedCache,
+  pruneBridgeLibraryLocalCache,
   readBridgeLibraryThumbnail,
   storeBridgeLibraryBuffer,
   statBridgeLibraryFile,
@@ -640,4 +641,60 @@ test('copyBridgeLibraryFile requests an in-bridge copy without pulling bytes thr
     sourceStoredPath: 'source.3mf',
     targetStoredPath: 'snapshot.3mf'
   })
+})
+
+test('pruneBridgeLibraryLocalCache removes stale local copies and keeps fresh ones', async () => {
+  const staleDir = path.join(libraryDir, '_bridge-cache', 'bridge-local-prune-test')
+  const stalePath = path.join(staleDir, 'stale-copy.3mf')
+  const freshPath = path.join(staleDir, 'fresh-copy.3mf')
+  await mkdir(staleDir, { recursive: true })
+  await writeFile(stalePath, 'stale bytes')
+  await writeFile(freshPath, 'fresh bytes')
+  const staleDate = new Date(Date.now() - 10_000)
+  await utimes(stalePath, staleDate, staleDate)
+
+  try {
+    const result = await pruneBridgeLibraryLocalCache(1_000)
+
+    assert.ok(result.removedFiles >= 1, 'the stale copy is removed')
+    await assert.rejects(() => readFile(stalePath), /ENOENT/)
+    assert.equal((await readFile(freshPath, 'utf8')), 'fresh bytes')
+  } finally {
+    await rm(staleDir, { recursive: true, force: true }).catch(() => undefined)
+  }
+})
+
+test('ensureBridgeLibraryLocalCopy refreshes recency on a validated stale copy so active files never age out', async () => {
+  const bridgeId = 'bridge-cache-recency-test'
+  const storedPath = 'bridge-cache-recency.3mf'
+  const cachePath = path.join(libraryDir, '_bridge-cache', bridgeId, storedPath)
+
+  await rm(path.join(libraryDir, '_bridge-cache', bridgeId), { recursive: true, force: true }).catch(() => undefined)
+  await mkdir(path.dirname(cachePath), { recursive: true })
+  await writeFile(cachePath, 'bridge payload')
+  // Two days old: past the touch-throttle window, so a validated use must bump it.
+  const staleDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+  await utimes(cachePath, staleDate, staleDate)
+
+  mock.method(bridgeSessionManager, 'isConnected', () => true)
+  mock.method(bridgeSessionManager, 'requestRpc', async (_bridgeId: string, _method: string, params: unknown) => {
+    const offset = typeof params === 'object' && params && 'offset' in params && typeof params.offset === 'number'
+      ? params.offset
+      : 0
+    const payload = Buffer.from('bridge payload')
+    return offset >= payload.byteLength
+      ? { bufferBase64: Buffer.alloc(0).toString('base64'), eof: true, sizeBytes: payload.byteLength }
+      : { bufferBase64: payload.subarray(offset).toString('base64'), eof: true, sizeBytes: payload.byteLength }
+  })
+
+  try {
+    const resolvedPath = await ensureBridgeLibraryLocalCopy({ bridgeId, storedPath })
+    assert.equal(resolvedPath, cachePath)
+    const { stat: statFile } = await import('node:fs/promises')
+    const info = await statFile(cachePath)
+    assert.ok(Date.now() - info.mtimeMs < 60_000, 'mtime was refreshed to now (LRU recency bump)')
+    assert.equal((await readFile(cachePath, 'utf8')), 'bridge payload', 'the copy itself was not re-downloaded')
+  } finally {
+    await rm(path.join(libraryDir, '_bridge-cache', bridgeId), { recursive: true, force: true }).catch(() => undefined)
+  }
 })

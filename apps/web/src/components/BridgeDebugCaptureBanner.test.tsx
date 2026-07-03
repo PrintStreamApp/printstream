@@ -46,7 +46,8 @@ function makeBridge(debugCapture: BridgeDebugCaptureStatus): BridgeSummary {
       lastError: null,
       manualUpdateCommand: null
     },
-    debugCapture
+    debugCapture,
+    crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
   }
 }
 

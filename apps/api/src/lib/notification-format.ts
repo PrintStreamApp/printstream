@@ -236,6 +236,40 @@ async function formatJobError(event: JobErrorEvent): Promise<NotificationMessage
   }
 }
 
+async function formatBridgeCrashed(event: {
+  bridgeId: string
+  bridgeName: string
+  tenantId: string | null
+  recentCrashCount: number
+}): Promise<NotificationMessage | null> {
+  const rendered = renderNotificationTemplate('bridge.crashed', {
+    bridgeName: event.bridgeName,
+    crashCount: String(event.recentCrashCount)
+  })
+  if (!rendered.enabled) return null
+  return {
+    id: randomUUID(),
+    category: 'bridge.crashed',
+    level: 'error',
+    title: rendered.title,
+    body: rendered.body,
+    timestamp: nowIso(),
+    tenantId: event.tenantId ?? undefined,
+    // Collapse repeated crash notices for the same bridge on channels that honor tags.
+    tag: `bridge:${event.bridgeId}:crash`,
+    url: await resolveBridgeNotificationUrl(event.tenantId)
+  }
+}
+
+async function resolveBridgeNotificationUrl(tenantId: string | null): Promise<string> {
+  if (!tenantId) return '/workspaces'
+  const tenant = await rootPrisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { slug: true }
+  })
+  return tenant?.slug ? `/workspaces/${tenant.slug}/settings/bridges` : '/workspaces'
+}
+
 async function resolvePrinterNotificationUrl(printerId: string): Promise<string> {
   const tenantId = printerManager.getTenantId(printerId)
   if (!tenantId) {
@@ -359,14 +393,33 @@ export function subscribePrinterNotifications(
     })()
   }
 
+  const onBridgeCrashed = (event: {
+    bridgeId: string
+    bridgeName: string
+    tenantId: string | null
+    recentCrashCount: number
+  }) => {
+    void (async () => {
+      try {
+        if (options.shouldHandleTenantId && !options.shouldHandleTenantId(event.tenantId)) return
+        const message = await formatBridgeCrashed(event)
+        if (message) await safeHandler(message)
+      } catch (error) {
+        options.onError?.(error)
+      }
+    })()
+  }
+
   bus.on('print-job.finished', onJobFinished)
   bus.on('print-job.started', onJobStarted)
   bus.on('status', onStatus)
+  bus.on('bridge.crashed', onBridgeCrashed)
 
   return () => {
     bus.off('print-job.finished', onJobFinished)
     bus.off('print-job.started', onJobStarted)
     bus.off('status', onStatus)
+    bus.off('bridge.crashed', onBridgeCrashed)
   }
 }
 

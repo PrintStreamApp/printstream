@@ -25,7 +25,8 @@ import path from 'node:path'
 import { readdir, rm, stat } from 'node:fs/promises'
 import { env } from './env.js'
 import { PUBLIC_DEMO_TENANT_SLUG } from '@printstream/shared'
-import { deleteLibraryFileBytes, pruneBridgeLibraryDerivedCache } from './bridge-library-files.js'
+import { deleteLibraryFileBytes, pruneBridgeLibraryDerivedCache, pruneBridgeLibraryLocalCache } from './bridge-library-files.js'
+import { pruneDispatchJournal } from './dispatch-journal.js'
 import { pruneMeshThumbnailCache } from './mesh-thumbnail-cache.js'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import { libraryDir } from './library-paths.js'
@@ -305,7 +306,7 @@ export async function pruneDormantBridges(): Promise<{ removed: number }> {
 export async function runArtifactMaintenance(): Promise<void> {
   // Several prunes run purely for their side effects; we only bind the few whose
   // counts we log below (positional holes skip the rest).
-  const [, , , , , , coverCache, bridgeDerivedCache, meshThumbnails, auditLogs] = await Promise.all([
+  const [, , , , , , coverCache, bridgeDerivedCache, meshThumbnails, auditLogs, , bridgeLocalCache, dispatchJournal] = await Promise.all([
     pruneHiddenLibraryFiles(),
     pruneUnreferencedSlicedOutputs(),
     pruneRecycledLibraryFiles(),
@@ -316,7 +317,9 @@ export async function runArtifactMaintenance(): Promise<void> {
     pruneBridgeLibraryDerivedCache(),
     pruneMeshThumbnailCache(),
     pruneAuditLogs(),
-    pruneDormantBridges()
+    pruneDormantBridges(),
+    pruneBridgeLibraryLocalCache(),
+    pruneDispatchJournal()
   ])
 
   if (meshThumbnails.removedFiles > 0) {
@@ -334,6 +337,15 @@ export async function runArtifactMaintenance(): Promise<void> {
   const removedBridgeDerivedArtifacts = bridgeDerivedCache.removedFiles + bridgeDerivedCache.removedDirs
   if (removedBridgeDerivedArtifacts > 0) {
     console.log(`[library-cleanup] pruned ${removedBridgeDerivedArtifacts} bridge derived cache artifact${removedBridgeDerivedArtifacts === 1 ? '' : 's'}`)
+  }
+
+  const removedBridgeLocalCopies = bridgeLocalCache.removedFiles + bridgeLocalCache.removedDirs
+  if (removedBridgeLocalCopies > 0) {
+    console.log(`[library-cleanup] pruned ${removedBridgeLocalCopies} unused bridge local file cop${removedBridgeLocalCopies === 1 ? 'y' : 'ies'}`)
+  }
+
+  if (dispatchJournal.removed > 0) {
+    console.log(`[library-cleanup] pruned ${dispatchJournal.removed} expired dispatch journal row${dispatchJournal.removed === 1 ? '' : 's'}`)
   }
 }
 

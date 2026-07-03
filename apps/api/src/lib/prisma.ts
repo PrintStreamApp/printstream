@@ -75,7 +75,8 @@ export const TENANT_SCOPED_MODELS = new Set([
   'FilamentSpoolUsage',
   'QueueItem',
   'TenantStats',
-  'PrinterStats'
+  'PrinterStats',
+  'TenantSubscription'
 ])
 
 /**
@@ -91,6 +92,10 @@ export const TENANT_SCOPED_MODELS = new Set([
  * - `AuthTenantMembership` — the user-to-tenant link itself; auth flows query it
  *   with explicit `{ tenantId, userId }` (and tenant-compound uniques), including
  *   cross-tenant lookups of which workspaces a user belongs to.
+ * - `SupportConversation` — cloud support messaging. Its `tenantId` is a
+ *   nullable point-in-time snapshot (no FK) recording which workspace the
+ *   conversation came from; the inbox is platform-wide and every query goes
+ *   through `rootPrisma` in the private cloud support routes.
  *
  * This set exists so the "every tenantId model is accounted for" invariant holds
  * and a future tenantId model is consciously classified rather than silently left
@@ -99,7 +104,8 @@ export const TENANT_SCOPED_MODELS = new Set([
  */
 export const TENANT_SCOPED_EXCEPTION_MODELS = new Set([
   'AuthGroup',
-  'AuthTenantMembership'
+  'AuthTenantMembership',
+  'SupportConversation'
 ])
 
 /** Read/bulk-write operations where we merge `{ tenantId }` into the `where` clause. */

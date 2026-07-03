@@ -12,10 +12,12 @@ import {
   getInstallableVersions,
   getModuleFirmware,
   getUpdatesStorageKey,
+  getSelectedPrerequisite,
   getSelectedReleaseNotes,
   isActiveUploadStatus,
   isDowngradeSelection,
   isInstallableVersionSelected,
+  isOfflineUpdateBlocked,
   isUploadedVersionLatest,
   parseUploadProgressEvent,
   readStoredUpdates,
@@ -40,6 +42,7 @@ const sampleUpdate: UpdateReport = {
   updateAvailable: true,
   downloadUrl: 'https://example.com/01.10.00.00.zip',
   releaseNotes: '# Version 01.10.00.00',
+  offlineUpdate: { minimumVersion: '01.07.00.00', belowMinimum: false },
   modules: [
     { name: 'mc', version: '00.00.30.04', hardwareVersion: null, isAms: false },
     { name: 'ams/0', version: '00.00.06.49', hardwareVersion: 'AMS08', isAms: true }
@@ -49,19 +52,22 @@ const sampleUpdate: UpdateReport = {
       version: '01.10.00.00',
       fileAvailable: true,
       releaseNotes: '# Version 01.10.00.00',
-      releaseTime: '2026-04-13T03:07:41Z'
+      releaseTime: '2026-04-13T03:07:41Z',
+      prerequisite: null
     },
     {
       version: '01.09.01.00',
       fileAvailable: true,
       releaseNotes: '# Version 01.09.01.00',
-      releaseTime: '2026-01-14T00:00:00Z'
+      releaseTime: '2026-01-14T00:00:00Z',
+      prerequisite: null
     },
     {
       version: '01.08.02.00',
       fileAvailable: false,
       releaseNotes: null,
-      releaseTime: '2025-06-03T09:38:31Z'
+      releaseTime: '2025-06-03T09:38:31Z',
+      prerequisite: null
     }
   ]
 }
@@ -254,7 +260,8 @@ test('version selection falls back to the first installable version when the lat
         version: '01.11.00.00',
         fileAvailable: false,
         releaseNotes: null,
-        releaseTime: '2026-05-01T00:00:00Z'
+        releaseTime: '2026-05-01T00:00:00Z',
+        prerequisite: null
       },
       ...sampleUpdate.availableVersions
     ]
@@ -388,6 +395,39 @@ test('chip label and color helpers map each upload status to the intended UI cop
     firmwareFilename: null,
     firmwareVersion: null
   }), 'danger')
+})
+
+test('isOfflineUpdateBlocked reflects the report offline floor flag', () => {
+  assert.equal(isOfflineUpdateBlocked(undefined), false)
+  assert.equal(isOfflineUpdateBlocked(sampleUpdate), false)
+  assert.equal(
+    isOfflineUpdateBlocked({ ...sampleUpdate, offlineUpdate: { minimumVersion: '01.07.00.00', belowMinimum: true } }),
+    true
+  )
+})
+
+test('getSelectedPrerequisite returns the stepping-stone hop attached to the selected version', () => {
+  const update: UpdateReport = {
+    ...sampleUpdate,
+    availableVersions: [
+      {
+        version: '01.10.00.00',
+        fileAvailable: true,
+        releaseNotes: null,
+        releaseTime: null,
+        prerequisite: { requiredVersion: '01.09.01.00', label: 'Bridge Firmware' }
+      },
+      { version: '01.09.01.00', fileAvailable: true, releaseNotes: null, releaseTime: null, prerequisite: null }
+    ]
+  }
+
+  assert.deepEqual(getSelectedPrerequisite(update, '01.10.00.00'), {
+    requiredVersion: '01.09.01.00',
+    label: 'Bridge Firmware'
+  })
+  assert.equal(getSelectedPrerequisite(update, '01.09.01.00'), null)
+  assert.equal(getSelectedPrerequisite(update, null), null)
+  assert.equal(getSelectedPrerequisite(undefined, '01.10.00.00'), null)
 })
 
 function createMockStorage() {

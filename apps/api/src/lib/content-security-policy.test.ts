@@ -19,20 +19,32 @@ test('allows blob:/data: images and media for camera frames and thumbnails', () 
   }
 })
 
+const PADDLE = 'https://*.paddle.com'
+
 test('locks down the high-value directives', () => {
   assert.deepEqual(directives.get('default-src'), ["'self'"])
   assert.deepEqual(directives.get('object-src'), ["'none'"])
   assert.deepEqual(directives.get('frame-ancestors'), ["'none'"])
   assert.deepEqual(directives.get('base-uri'), ["'self'"])
-  assert.deepEqual(directives.get('connect-src'), ["'self'"])
   assert.deepEqual(directives.get('form-action'), ["'self'"])
 })
 
-test('does not allow cross-origin script or unsafe-eval', () => {
+test('only Paddle checkout is allow-listed cross-origin (no other hosts)', () => {
+  // The cloud checkout needs Paddle.js + its iframe/APIs; nothing else may be
+  // cross-origin. Every non-keyword source must be 'self' or the Paddle host.
+  for (const directive of ['script-src', 'connect-src', 'frame-src', 'img-src', 'style-src']) {
+    const sources = directives.get(directive) ?? []
+    const crossOrigin = sources.filter((s) => s.startsWith('http'))
+    assert.deepEqual(crossOrigin, crossOrigin.length ? [PADDLE] : [], `${directive} may only allow Paddle cross-origin`)
+  }
+  assert.ok((directives.get('connect-src') ?? []).includes("'self'"))
+})
+
+test('does not allow unsafe-eval or non-Paddle cross-origin script', () => {
   const scriptSrc = directives.get('script-src') ?? []
   assert.ok(scriptSrc.includes("'self'"))
   assert.ok(!scriptSrc.includes("'unsafe-eval'"), 'production script-src must not allow eval')
-  assert.ok(!scriptSrc.some((s) => s.startsWith('http')), 'no cross-origin script sources')
+  assert.ok(scriptSrc.every((s) => !s.startsWith('http') || s === PADDLE), 'only Paddle allowed cross-origin')
 })
 
 test('allows the model-studio web worker (worker-src self blob:)', () => {

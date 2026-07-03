@@ -117,6 +117,46 @@ const envSchema = z.object({
   }, z.string().email().optional()),
   CLOUDFLARE_EMAIL_FROM_NAME: optionalStringEnv(),
   NTFY_TOPIC_URL: optionalStringEnv(),
+  // Paddle billing (cloud-only; unset in self-hosted/OSS builds). The private
+  // billing module reads these; when absent, billing is inert and plans are unlimited.
+  /**
+   * Master launch switch for billing enforcement (cloud-only). While false —
+   * the beta default — plans exist but nothing is enforced or sold: no Free
+   * printer cap, no Pro plugin gating, and checkout/portal actions are
+   * refused. Paddle config (below) can be present for admin surfaces and
+   * webhook processing without turning enforcement on. Flip to true at launch
+   * (staging keeps it true for sandbox testing).
+   */
+  BILLING_ENFORCEMENT: booleanEnv(false),
+  /**
+   * Set by the native (paid) self-hosted distribution at boot. Arms native
+   * license enforcement: a commercial license is required after the evaluation
+   * window (community keys cover the Docker build only). Never set in Docker,
+   * OSS, or cloud deployments.
+   */
+  PRINTSTREAM_NATIVE: booleanEnv(false),
+  PADDLE_API_KEY: optionalStringEnv(),
+  PADDLE_WEBHOOK_SECRET: optionalStringEnv(),
+  /**
+   * Paddle client-side token (safe to expose in the browser). Delivered to the
+   * checkout page at runtime via `/api/billing/checkout-config` so Paddle.js can
+   * open the overlay; separate from the secret server-side API key.
+   */
+  PADDLE_CLIENT_TOKEN: optionalStringEnv(),
+  PADDLE_ENVIRONMENT: z.enum(['sandbox', 'production']).default('sandbox'),
+  /** Paddle price id for the Pro plan base fee (includes the first 2 printers). */
+  PADDLE_PRICE_PRO_BASE: optionalStringEnv(),
+  /** Paddle price id for each additional printer beyond the base allotment. */
+  PADDLE_PRICE_PRO_PER_PRINTER: optionalStringEnv(),
+  /** Paddle price ids for the self-host commercial license (one-time + annual renewal). */
+  PADDLE_PRICE_SELFHOST_LICENSE: optionalStringEnv(),
+  PADDLE_PRICE_SELFHOST_RENEWAL: optionalStringEnv(),
+  /**
+   * Ed25519 private key (PEM/PKCS8) used by the cloud to sign self-hosted license
+   * keys. Cloud-only secret; unset elsewhere. Must match the public key embedded
+   * in `src/lib/license.ts`.
+   */
+  PRINTSTREAM_LICENSE_SIGNING_KEY: optionalStringEnv(),
   LIBRARY_DIR: z.string().default('./data/library'),
   LIBRARY_MAX_UPLOAD_BYTES: positiveIntEnv(1024 * 1024 * 1024),
   LIBRARY_TRANSIENT_RETENTION_DAYS: positiveIntEnv(7),

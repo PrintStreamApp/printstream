@@ -1,10 +1,31 @@
 import { wsEventSchema } from '@printstream/shared'
 
+/**
+ * Intermediate "stepping-stone" firmware a printer must install before it can flash
+ * a given target version directly (e.g. Bambu's P1 "Bridge Firmware").
+ */
+export interface FirmwarePrerequisite {
+  requiredVersion: string
+  label: string
+}
+
 export interface AvailableVersion {
   version: string
   fileAvailable: boolean
   releaseNotes: string | null
   releaseTime: string | null
+  /** The hop required before this version can be flashed, or null when the jump is allowed. */
+  prerequisite: FirmwarePrerequisite | null
+}
+
+/**
+ * Whether offline (SD-card) updates are usable on a printer right now. Below the
+ * model's floor the printer has no on-screen "Update Offline" option, so a staged
+ * package can never be flashed — it must be updated online once first.
+ */
+export interface OfflineUpdateInfo {
+  minimumVersion: string | null
+  belowMinimum: boolean
 }
 
 export interface FirmwareModule {
@@ -26,6 +47,8 @@ export interface UpdateReport {
   updateAvailable: boolean
   downloadUrl: string | null
   releaseNotes: string | null
+  /** Whether offline (SD-card) updates are usable on this printer's installed firmware. */
+  offlineUpdate: OfflineUpdateInfo
   /** Installed firmware for the printer's sub-modules (AMS units, controllers). Display-only. */
   modules: FirmwareModule[]
   availableVersions: AvailableVersion[]
@@ -178,6 +201,27 @@ export function isInstallableVersionSelected(
 
 export function isDowngradeSelection(update: UpdateReport | undefined, selectedVersion: string | null): boolean {
   return Boolean(selectedVersion && update?.currentVersion && selectedVersion !== update.latestVersion)
+}
+
+/**
+ * True when offline (SD-card) updates are blocked outright because the installed
+ * firmware is below the model's offline floor. The printer must be updated online
+ * once before PrintStream can stage a flashable package.
+ */
+export function isOfflineUpdateBlocked(update: UpdateReport | undefined): boolean {
+  return update?.offlineUpdate.belowMinimum ?? false
+}
+
+/**
+ * The stepping-stone hop required before the selected version can be flashed, or
+ * null when the jump is allowed. Drives the "install X first" guidance.
+ */
+export function getSelectedPrerequisite(
+  update: UpdateReport | undefined,
+  selectedVersion: string | null
+): FirmwarePrerequisite | null {
+  if (!update || !selectedVersion) return null
+  return update.availableVersions.find((version) => version.version === selectedVersion)?.prerequisite ?? null
 }
 
 export function getSelectedReleaseNotes(update: UpdateReport | undefined, selectedVersion: string | null): string | null {

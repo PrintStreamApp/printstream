@@ -302,6 +302,127 @@ test('firmware-updates falls back when firmwareVersion refresh times out', async
   )
 })
 
+test('firmware-updates report surfaces the offline floor and stepping-stone prerequisites', async () => {
+  const realFetch = globalThis.fetch
+  mock.method(printerManager, 'getPrinter', () => printer)
+  // P1S above the offline floor (01.07.00.00) but below the Bridge Firmware (01.09.01.00).
+  mock.method(printerManager, 'getStatus', () => ({ online: true, firmwareVersion: '01.09.00.00', sdCardPresent: true } as never))
+  mock.method(globalThis, 'fetch', firmwareFetchMock(realFetch, [{ version: '01.10.00.00', url: 'https://public-cdn.bblmw.com/example.zip' }]))
+
+  const response = await withRegisteredPluginApp({
+    prismaPrinterFindMany: async () => [{ id: printer.id }]
+  }, async ({ baseUrl }) => fetch(`${baseUrl}/api/plugins/firmware-updates/updates`))
+
+  assert.equal(response.status, 200)
+  const body = await response.json() as {
+    updates: Array<{
+      offlineUpdate: { minimumVersion: string | null; belowMinimum: boolean }
+      availableVersions: Array<{ version: string; prerequisite: { requiredVersion: string; label: string } | null }>
+    }>
+  }
+  assert.deepEqual(body.updates[0]?.offlineUpdate, { minimumVersion: '01.07.00.00', belowMinimum: false })
+  const target = body.updates[0]?.availableVersions.find((v) => v.version === '01.10.00.00')
+  assert.deepEqual(target?.prerequisite, { requiredVersion: '01.09.01.00', label: 'Bridge Firmware' })
+})
+
+test('firmware-updates upload is rejected when installed firmware is below the offline floor', async () => {
+  const realFetch = globalThis.fetch
+  mock.method(printerManager, 'getPrinter', () => printer)
+  // P1S below the 01.07.00.00 offline floor — the printer has no Update Offline option.
+  mock.method(printerManager, 'getStatus', () => ({ online: true, firmwareVersion: '01.06.00.00', sdCardPresent: true } as never))
+  mock.method(globalThis, 'fetch', firmwareFetchMock(realFetch, [{ version: '01.10.00.00', url: 'https://public-cdn.bblmw.com/example.zip' }]))
+
+  const response = await withRegisteredPluginApp({
+    prismaPrinterFindMany: async () => [{ id: printer.id }]
+  }, async ({ baseUrl }) => fetch(`${baseUrl}/api/plugins/firmware-updates/updates/${printer.id}/upload`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({})
+  }))
+
+  assert.equal(response.status, 400)
+  const body = await response.json() as { error: string }
+  assert.match(body.error, /at least 01\.07\.00\.00/)
+  assert.match(body.error, /Update Offline/)
+})
+
+test('firmware-updates upload errors with guidance when a stepping-stone version is required', async () => {
+  const realFetch = globalThis.fetch
+  mock.method(printerManager, 'getPrinter', () => printer)
+  mock.method(printerManager, 'getTenantId', () => 'tenant-1')
+  // Above the floor, below the bridge: jumping straight to 01.10.00.00 needs 01.09.01.00 first.
+  mock.method(printerManager, 'getStatus', () => ({ online: true, firmwareVersion: '01.09.00.00', sdCardPresent: true } as never))
+  mock.method(globalThis, 'fetch', firmwareFetchMock(realFetch, [{ version: '01.10.00.00', url: 'https://public-cdn.bblmw.com/example.zip' }]))
+
+  await withRegisteredPluginApp({
+    prismaPrinterFindMany: async () => [{ id: printer.id }]
+  }, async ({ baseUrl }) => {
+    const startResponse = await fetch(`${baseUrl}/api/plugins/firmware-updates/updates/${printer.id}/upload`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: '01.10.00.00' })
+    })
+    assert.equal(startResponse.status, 202)
+
+    let statusBody: { status: string; error: string | null } | null = null
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const response = await fetch(`${baseUrl}/api/plugins/firmware-updates/updates/${printer.id}/upload/status`)
+      statusBody = await response.json() as { status: string; error: string | null }
+      if (statusBody.status === 'error') break
+    }
+
+    assert.ok(statusBody)
+    assert.equal(statusBody.status, 'error')
+    assert.match(statusBody.error ?? '', /can't be installed directly/)
+    assert.match(statusBody.error ?? '', /01\.09\.01\.00 \(Bridge Firmware\)/)
+  })
+})
+
+/**
+ * Build a `fetch` stub covering the two Bambu upstreams the firmware source reads:
+ * the bambulab.com download page (per-version URLs) and the wiki release-history
+ * page (the "latest" pointer). Local FTPS calls fall through to the real fetch.
+ */
+function firmwareFetchMock(
+  realFetch: typeof globalThis.fetch,
+  downloadVersions: Array<{ version: string; url: string }>
+): typeof globalThis.fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input)
+    if (url.startsWith('http://127.0.0.1:')) return realFetch(input, init)
+    if (url.includes('/support/firmware-download/p1')) {
+      const nextData = JSON.stringify({
+        props: {
+          pageProps: {
+            printerMap: {
+              p1: {
+                versions: downloadVersions.map((v) => ({
+                  version: v.version,
+                  url: v.url,
+                  release_notes_en: `# Version ${v.version}`,
+                  release_time: '2026-04-13T03:07:41Z'
+                }))
+              }
+            }
+          }
+        }
+      })
+      return new Response(
+        `<!DOCTYPE html><html><body><script id="__NEXT_DATA__" type="application/json">${nextData}</script></body></html>`,
+        { status: 200, headers: { 'content-type': 'text/html' } }
+      )
+    }
+    if (url.includes('wiki.bambulab.com')) {
+      const anchors = downloadVersions
+        .map((v) => `<div id="h-${v.version.replace(/\./g, '')}-20260101"></div>`)
+        .join('')
+      return new Response(anchors, { status: 200, headers: { 'content-type': 'text/html' } })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  }) as typeof globalThis.fetch
+}
+
 async function withRegisteredPluginApp<T>(
   options: {
     prismaPrinterFindMany: () => Promise<Array<{ id: string }>>

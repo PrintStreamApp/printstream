@@ -32,6 +32,7 @@ import { printerEvents } from '../lib/printer-events.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { printGuards } from '../lib/print-guards.js'
 import { wsBroadcaster } from '../lib/ws-server.js'
+import { blockedPluginsForTenant, planGatedPluginNames } from '../lib/plugin-plan-gate.js'
 import { broadcastPluginSettingsChanged, broadcastPluginsChanged } from '../lib/ws-resource-events.js'
 import {
   derivePluginDefaultEnableMode,
@@ -113,7 +114,8 @@ export class PluginRegistry {
     // Guard runs before the plugin's own routes so install/enable state
     // can change without re-mounting routers. The order matters: an
     // uninstalled plugin reads as "not found", a disabled-but-installed
-    // plugin reads as "service unavailable".
+    // plugin reads as "service unavailable", and a plan-gated plugin reads
+    // as "forbidden" (the workspace's plan doesn't include it).
     this.router.use(`/${plugin.name}`, (request: Request, response: Response, next: NextFunction) => {
       const current = this.registered.get(plugin.name)
       if (!current?.installed) {
@@ -126,6 +128,19 @@ export class PluginRegistry {
       }
       if (!this.isEnabledInRequestContext(current, request)) {
         response.status(503).json({ error: `Plugin disabled: ${plugin.name}` })
+        return
+      }
+      const tenantId = request.tenant?.id
+      if (tenantId && planGatedPluginNames().has(plugin.name)) {
+        void blockedPluginsForTenant(tenantId)
+          .then((blocked) => {
+            if (blocked.has(plugin.name)) {
+              response.status(403).json({ error: `This plugin requires the Pro plan: ${plugin.name}` })
+              return
+            }
+            next()
+          })
+          .catch(next)
         return
       }
       next()

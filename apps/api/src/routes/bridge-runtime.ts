@@ -94,6 +94,9 @@ const BRIDGE_RESPONSE_SELECT = {
   lastUpdateCheckAt: true,
   lastUpdateError: true,
   lastSeenAt: true,
+  lastCrashAt: true,
+  lastCrashReason: true,
+  recentCrashCount: true,
   createdAt: true,
   updatedAt: true,
   _count: { select: { printers: true } }
@@ -115,7 +118,12 @@ function buildRegistrationResponse(bridge: RegisteredBridgeRow, runtimeToken: st
       updatedAt: bridge.updatedAt.toISOString(),
       connectionStats: bridgeSessionManager.getConnectionStats(bridge.id),
       update: buildBridgeUpdateSummary(bridge),
-      debugCapture: getBridgeDebugCaptureStatus(bridge.id)
+      debugCapture: getBridgeDebugCaptureStatus(bridge.id),
+      crash: {
+        lastCrashAt: bridge.lastCrashAt?.toISOString() ?? null,
+        recentCrashCount: bridge.recentCrashCount ?? 0,
+        lastReason: bridge.lastCrashReason ?? null
+      }
     },
     runtimeToken,
     connectPath: BRIDGE_RUNTIME_CONNECT_PATH,

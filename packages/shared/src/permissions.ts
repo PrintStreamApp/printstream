@@ -35,6 +35,8 @@ export const permissionValues = [
   'auth.users.revokeSessions',
   'auth.users.view',
   'auth.users.viewSessions',
+  'billing.manage',
+  'billing.manageOwn',
   'camera.view',
   'jobs.delete',
   'jobs.view',
@@ -110,6 +112,8 @@ export const AUTH_USERS_EDIT_PERMISSION: Permission = 'auth.users.edit'
 export const AUTH_USERS_REVOKE_SESSIONS_PERMISSION: Permission = 'auth.users.revokeSessions'
 export const AUTH_USERS_VIEW_PERMISSION: Permission = 'auth.users.view'
 export const AUTH_USERS_VIEW_SESSIONS_PERMISSION: Permission = 'auth.users.viewSessions'
+export const BILLING_MANAGE_PERMISSION: Permission = 'billing.manage'
+export const BILLING_MANAGE_OWN_PERMISSION: Permission = 'billing.manageOwn'
 export const CAMERA_VIEW_PERMISSION: Permission = 'camera.view'
 export const JOBS_DELETE_PERMISSION: Permission = 'jobs.delete'
 export const JOBS_VIEW_PERMISSION: Permission = 'jobs.view'
@@ -131,6 +135,7 @@ export const TENANTS_MANAGE_PERMISSION: Permission = 'tenants.manage'
 
 const tenantHiddenPermissions = new Set<Permission>([
   AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION,
+  BILLING_MANAGE_PERMISSION,
   PLUGINS_MANAGE_PERMISSION,
   TENANTS_DISABLE_PERMISSION,
   TENANTS_MANAGE_PERMISSION
@@ -139,6 +144,7 @@ const tenantHiddenPermissions = new Set<Permission>([
 const platformVisiblePermissions = new Set<Permission>([
   AUTH_ACCESS_VIEW_PERMISSION,
   AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION,
+  BILLING_MANAGE_PERMISSION,
   PLUGINS_MANAGE_PERMISSION,
   AUTH_PASSKEYS_EDIT_PERMISSION,
   AUTH_PASSKEYS_REVOKE_PERMISSION,
@@ -546,5 +552,15 @@ export const permissionDefinitions: PermissionDefinition[] = [
     key: TENANTS_MANAGE_PERMISSION,
     label: 'Manage Tenants',
     description: 'Create, update, and administer tenant workspaces and their cloud-hosted routing.'
+  },
+  {
+    key: BILLING_MANAGE_PERMISSION,
+    label: 'Manage Billing',
+    description: 'View every tenant\'s subscription and plan, and comp or override a plan.'
+  },
+  {
+    key: BILLING_MANAGE_OWN_PERMISSION,
+    label: 'Manage Workspace Billing',
+    description: 'Start, upgrade, and manage this workspace\'s own subscription and payment method.'
   }
 ]

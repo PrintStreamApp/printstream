@@ -406,6 +406,9 @@ function PluginSectionCard({
           const installed = isPluginInstalled(entry)
           const enabled = isPluginEnabled(entry)
           const available = isPluginAvailableInCurrentContext(entry)
+          // Plan-gated (e.g. a Pro plugin on a Free workspace): visible but not
+          // togglable, with the reason stated instead of a dead switch.
+          const planBlocked = entry.api?.planBlocked === true
           const tenantManaged = entry.api?.tenantAccess === 'controlled'
           const togglable = entry.api != null && installed && (
             isPlatformManager
@@ -434,6 +437,10 @@ function PluginSectionCard({
           ) : isPlatformManager && tenantManaged ? (
             <Typography level="body-sm" textColor="text.tertiary">
               Tenant workspaces decide whether to turn this plugin on. The platform only controls whether it is available and whether it starts enabled for them.
+            </Typography>
+          ) : planBlocked ? (
+            <Typography level="body-sm" textColor="text.tertiary">
+              Included in the Pro plan — upgrade this workspace to use it.
             </Typography>
           ) : !enabled ? (
             <Typography level="body-sm" textColor="text.tertiary">
@@ -480,7 +487,8 @@ function PluginSectionCard({
                           <Chip size="sm" variant="soft" color="primary">{entry.api.source}</Chip>
                         )}
                         {!installed && <Chip size="sm" variant="soft" color="neutral">not installed</Chip>}
-                        {!available && <Chip size="sm" variant="soft" color="warning">not available here</Chip>}
+                        {!available && !planBlocked && <Chip size="sm" variant="soft" color="warning">not available here</Chip>}
+                        {planBlocked && <Chip size="sm" variant="outlined" color="warning">Pro</Chip>}
                       </Stack>
 
                       {showToggle && (
@@ -490,7 +498,7 @@ function PluginSectionCard({
                           </Typography>
                           <Switch
                             checked={installed && enabled}
-                            disabled={!togglable || busy}
+                            disabled={!togglable || planBlocked || busy}
                             onChange={(event) => {
                               if (entry.api && installed) {
                                 setEnabled({ name: entry.name, enabled: event.target.checked })

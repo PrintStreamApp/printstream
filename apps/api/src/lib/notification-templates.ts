@@ -103,6 +103,16 @@ const DEFINITIONS: TemplateDefinition[] = [
       body: 'Job: {{jobName}}',
       includeSnapshot: false
     }
+  },
+  {
+    event: 'bridge.crashed',
+    label: 'Bridge crashed',
+    defaults: {
+      enabled: true,
+      title: 'Bridge {{bridgeName}} restarted after a crash',
+      body: 'The PrintStream bridge {{bridgeName}} stopped unexpectedly and was restarted. If this keeps happening, check the bridge machine and its logs.',
+      includeSnapshot: false
+    }
   }
 ]
 

@@ -272,13 +272,29 @@ export class BridgePrinterMonitor {
     )
     this.recordConnection(entry.printer, `watchdog recreate after ${Math.round(silentMs / 1000)}s silent`)
     this.clearPushallTimer(entry)
-    try {
-      entry.client.removeAllListeners()
-      entry.client.end(true)
-    } catch {
-      // ignore teardown failures; we are replacing the client regardless
-    }
+    BridgePrinterMonitor.destroyClient(entry.client)
     this.createClient(entry)
+  }
+
+  /**
+   * Tear down an mqtt client we are discarding (watchdog recreate or printer
+   * removal). After removing our handlers, attach a no-op `error` sink BEFORE
+   * `end(true)`: mqtt.js can still emit a late `error` during/after teardown —
+   * most notably a `connack timeout` fired from an internal timer for a printer
+   * that accepted the TCP socket but never completed the MQTT handshake. With no
+   * listener, Node promotes that to an *unhandled* `error` event and crashes the
+   * whole bridge process (this crash-looped a live bridge ~10k times via
+   * systemd's restart-always). The sink guarantees a listener for the discarded
+   * client's remaining lifetime.
+   */
+  private static destroyClient(client: MqttClient): void {
+    try {
+      client.removeAllListeners()
+      client.on('error', () => {})
+      client.end(true)
+    } catch {
+      // Ignore teardown failures; the client is being discarded regardless.
+    }
   }
 
   private recordConnection(printer: Printer, summary: string): void {
@@ -305,9 +321,9 @@ export class BridgePrinterMonitor {
     this.clearPushallTimer(entry)
     // Detach handlers before force-closing so a late close/error/message event from
     // the torn-down client can't fire (e.g. announcing offline for a removed printer),
-    // mirroring the watchdog recovery path.
-    entry.client.removeAllListeners()
-    entry.client.end(true)
+    // mirroring the watchdog recovery path. destroyClient keeps a no-op error sink so a
+    // late connack-timeout can't become an unhandled 'error' and crash the bridge.
+    BridgePrinterMonitor.destroyClient(entry.client)
     if (announceRemoval) {
       this.sendMessage({
         type: 'bridge.printer.removed',

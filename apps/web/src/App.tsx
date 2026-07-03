@@ -50,10 +50,14 @@ import {
 import { orderNavTabs } from './lib/navTabOrder'
 import { marketingModule, platformAdminModule } from './lib/privateModules'
 import { BridgeUpdateBanner } from './components/BridgeUpdateBanner'
+import { LicenseBanner } from './components/LicenseBanner'
+import { BridgeCrashBanner } from './components/BridgeCrashBanner'
 import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
 import { LibraryUploadPanel } from './components/LibraryUploadPanel'
 import { DevRuntimeStatus } from './components/DevRuntimeStatus'
 import { AppVersionFooter } from './components/AppVersionFooter'
+import { HelpFeedbackButton } from './components/HelpFeedbackButton'
+import { PluginSlot } from './plugin/PluginSlot'
 import { DeleteOperationToasts } from './components/DeleteOperationToasts'
 import { DispatchToasts } from './components/DispatchToasts'
 import { SlicingToasts } from './components/SlicingToasts'
@@ -613,9 +617,19 @@ export function App() {
   const sharedNavTabOrder = useMemo(() => generalSettingsQuery.data?.navTabOrder ?? [], [generalSettingsQuery.data?.navTabOrder])
   const effectiveNavTabOrder = deviceNavTabOrderOverride ?? sharedNavTabOrder
   const settingsTab = useMemo(() => coreTabs.find((tab) => tab.value === '/settings') ?? null, [coreTabs])
+  // Core content tabs resolve on auth bootstrap but plugin tabs (Queue, Orders,
+  // Filament) only after the plugin catalog query settles — a later, separate
+  // round-trip. Rendering as each source arrives makes tabs visibly pop into the
+  // bar one wave after another (worst on a workspace switch, which clears the
+  // catalog first). Hold the whole content-tab set until the catalog has settled
+  // (resolved, errored, or not applicable) so they appear together in one shot.
+  const contentTabsReady = authBootstrapReady
+    && (!pluginCatalogEnabled || hasPluginState || pluginStateQuery.isError)
   const navContentTabs = useMemo<ReadonlyArray<ShellTab>>(
-    () => orderNavTabs([...coreTabs.filter((tab) => tab.value !== '/settings'), ...pluginTabs], effectiveNavTabOrder),
-    [coreTabs, pluginTabs, effectiveNavTabOrder]
+    () => contentTabsReady
+      ? orderNavTabs([...coreTabs.filter((tab) => tab.value !== '/settings'), ...pluginTabs], effectiveNavTabOrder)
+      : [],
+    [contentTabsReady, coreTabs, pluginTabs, effectiveNavTabOrder]
   )
   const tabs = useMemo<ReadonlyArray<ShellTab>>(
     () => [
@@ -758,10 +772,17 @@ export function App() {
       apiRuntimeError={devHealthQuery.isError}
     />
   ) : null
-  // App-shell footer: dev runtime chips (dev only) plus the running build /
-  // update hint. AppVersionFooter renders nothing when there is no build to show.
+  // App-shell footer: the feedback entry point (plus any plugin-contributed
+  // footer actions, e.g. the cloud suggestion box), dev runtime chips (dev
+  // only), and the running build / update hint. AppVersionFooter renders
+  // nothing when there is no build to show.
   const appFooterTrailing = (
     <Stack spacing={0.75} alignItems="center" useFlexGap>
+      <Stack direction="row" spacing={1} useFlexGap alignItems="center" justifyContent="center" sx={{ flexWrap: 'wrap' }}>
+        {/* Platform users staff the support inbox — hide the help entry point there. */}
+        {!inPlatformMode && <HelpFeedbackButton />}
+        <PluginSlot name="shell.footer" />
+      </Stack>
       {devRuntimeIndicator}
       <AppVersionFooter />
     </Stack>
@@ -808,6 +829,9 @@ export function App() {
   const publicRouteContext = {
     isAuthenticated,
     appHref: defaultRoute,
+    // Billing/upgrade CTAs land on the account page (its Billing section), not
+    // the workspace landing; without an active tenant fall back to the app entry.
+    accountHref: activeTenantSlug ? buildTenantWorkspacePath(activeTenantSlug, '/account') : defaultRoute,
     demoLandingRoute: publicDemoLandingRoute
   }
   const marketingRootRoute = marketingRoutes.find((route) => route.path === '/')
@@ -988,7 +1012,11 @@ export function App() {
                 <PluginCatalogQueryProvider value={pluginStateQuery}>
                   <PrintDispatchJobsQueryProvider value={shellDispatchQuery}>
                     <ScrollReset />
+                    {/* Headless plugin components that sync app-level state (e.g. unread badges). */}
+                    <PluginSlot name="shell.background" />
+                    {hasTenantContext && <LicenseBanner />}
                     {hasTenantContext && canManageSettings && <BridgeUpdateBanner />}
+                    {hasTenantContext && canManageSettings && <BridgeCrashBanner />}
                     {hasTenantContext && canManageSettings && <BridgeDebugCaptureBanner />}
                     {hasTenantContext && <LibraryUploadPanel />}
                     <RouteErrorBoundary resetKey={location.pathname}>
@@ -1072,6 +1100,36 @@ export function App() {
                                 ? <Typography>Opening workspace…</Typography>
                                 : <Navigate to={tenantSettingsPath} replace />
                           )
+                        : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                    )}
+                  />
+                ) : null}
+                {platformAdmin ? (
+                  <Route
+                    path="/platform/billing"
+                    element={renderProtectedElement(
+                      canUsePlatformWorkspace && inPlatformMode
+                        ? <platformAdmin.BillingView />
+                        : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                    )}
+                  />
+                ) : null}
+                {platformAdmin ? (
+                  <Route
+                    path="/platform/messages"
+                    element={renderProtectedElement(
+                      canUsePlatformWorkspace && inPlatformMode
+                        ? <platformAdmin.MessagesView />
+                        : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                    )}
+                  />
+                ) : null}
+                {platformAdmin ? (
+                  <Route
+                    path="/platform/suggestions/*"
+                    element={renderProtectedElement(
+                      canUsePlatformWorkspace && inPlatformMode
+                        ? <platformAdmin.SuggestionsView />
                         : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                     )}
                   />

@@ -26,18 +26,26 @@
  * once validated. The dev server (vite.config) enforces an equivalent policy so
  * the resource directives are exercised during development.
  */
+// Paddle Billing checkout (cloud-only). Paddle.js is served from `cdn.paddle.com`
+// and opens the checkout in an iframe from `*.paddle.com` (e.g. `buy.paddle.com`,
+// `sandbox-buy.paddle.com`), calling Paddle's APIs and loading card-brand images
+// from the same host set. Allow-listing these is inert on self-hosted/OSS builds
+// (which never load Paddle.js) — it only widens what the cloud checkout needs.
+const PADDLE = 'https://*.paddle.com'
+
 const CSP_DIRECTIVES: Record<string, string[]> = {
   'default-src': ["'self'"],
   'base-uri': ["'self'"],
   'frame-ancestors': ["'none'"],
   'object-src': ["'none'"],
   'form-action': ["'self'"],
-  'img-src': ["'self'", 'data:', 'blob:'],
+  'img-src': ["'self'", 'data:', 'blob:', PADDLE],
   'media-src': ["'self'", 'data:', 'blob:'],
   'font-src': ["'self'", 'data:'],
-  'style-src': ["'self'", "'unsafe-inline'"],
-  'script-src': ["'self'", "'unsafe-inline'"],
-  'connect-src': ["'self'"],
+  'style-src': ["'self'", "'unsafe-inline'", PADDLE],
+  'script-src': ["'self'", "'unsafe-inline'", PADDLE],
+  'connect-src': ["'self'", PADDLE],
+  'frame-src': ["'self'", PADDLE],
   'worker-src': ["'self'", 'blob:']
 }
 

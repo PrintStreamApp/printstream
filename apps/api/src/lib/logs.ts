@@ -48,6 +48,26 @@ export function installLogCapture(): void {
   console.debug = (...args: unknown[]) => { record('debug', args); originalDebug(...args) }
 }
 
+/**
+ * Append a structured system log entry with an explicit tenant scope. Use this
+ * for events detected OUTSIDE a request/tenant context (e.g. a bridge crash
+ * report arriving over the bridge session): the console-capture path reads the
+ * ambient tenant, which is null off-request, so a bare `console.*` line would be
+ * invisible to the owning tenant's Logs view. Callers own their own live-refresh
+ * broadcast (`broadcastLogsChanged`).
+ */
+export function pushSystemLog(entry: { level: SystemLogEntry['level']; message: string; tenantId: string | null }): void {
+  buffer.push({
+    kind: 'system',
+    timestamp: new Date().toISOString(),
+    level: entry.level,
+    message: entry.message,
+    tenantId: entry.tenantId,
+    correlationId: null
+  })
+  if (buffer.length > MAX_ENTRIES) buffer.shift()
+}
+
 export function getLogs(limit = 500, input?: { tenantId?: string }): SystemLogEntry[] {
   const entries = input?.tenantId
     ? buffer.filter((entry) => entry.tenantId === input.tenantId)

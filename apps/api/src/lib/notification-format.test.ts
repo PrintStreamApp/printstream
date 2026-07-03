@@ -98,6 +98,36 @@ test('subscribePrinterNotifications formats enabled started messages from bus ev
   assert.equal(message.url, '/workspaces/default/printers/printer-1')
 })
 
+test('subscribePrinterNotifications formats bridge.crashed messages from bus events', async () => {
+  rootPrisma.tenant.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.tenant.findUnique
+  const bus = new PrinterEventBus()
+  const message = await new Promise<NotificationMessage>((resolve) => {
+    const dispose = subscribePrinterNotifications(bus, (next) => {
+      dispose()
+      resolve(next)
+    })
+    bus.emit('bridge.crashed', { bridgeId: 'bridge-1', bridgeName: 'Store', tenantId: 'tenant-1', recentCrashCount: 4 })
+  })
+
+  assert.equal(message.category, 'bridge.crashed')
+  assert.equal(message.level, 'error')
+  assert.match(message.title, /Store/)
+  assert.equal(message.tenantId, 'tenant-1')
+  assert.equal(message.tag, 'bridge:bridge-1:crash')
+  assert.equal(message.url, '/workspaces/default/settings/bridges')
+})
+
+test('subscribePrinterNotifications suppresses bridge.crashed when the template is disabled', async () => {
+  setNotificationTemplateOverrideForTests('bridge.crashed', { enabled: false })
+  const bus = new PrinterEventBus()
+  const received: NotificationMessage[] = []
+  const dispose = subscribePrinterNotifications(bus, (message) => { received.push(message) })
+  bus.emit('bridge.crashed', { bridgeId: 'bridge-1', bridgeName: 'Store', tenantId: 'tenant-1', recentCrashCount: 1 })
+  await new Promise((resolve) => setImmediate(resolve))
+  dispose()
+  assert.equal(received.length, 0)
+})
+
 test('subscribePrinterNotifications formats finished messages and cleanup unsubscribes listeners', async () => {
   printerManager.getTenantId = (() => 'tenant-1') as typeof printerManager.getTenantId
   rootPrisma.tenant.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.tenant.findUnique

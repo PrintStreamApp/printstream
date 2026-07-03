@@ -8,6 +8,7 @@ import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation } from '@tanstack/react-query'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
+import { StaticPluginSlot } from '../../plugin/StaticPluginSlot'
 import { type BridgeSummary, type PrinterConnectionValidation, extractErrorMessage, formatNozzleDiameterLabel, getDetectedPrinterNozzleDiameters, mayRequireExternalStorageForActiveSkipObjects, isDirectPrintableFileName, resolvePrinterNozzleDiameters, type DiscoveredPrinter, type LibraryFile, type PrinterNozzleDiameterSelection, type Printer, type PrinterModel, type PrinterStatus } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
@@ -375,6 +376,9 @@ export function PrinterFormModal({
         <Typography level="h4">{title}</Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           <Stack spacing={2}>
+            {/* Deployment-specific notices about adding a printer (e.g. the cloud's
+                per-printer billing consent); renders nothing when no plugin fills it. */}
+            {mode === 'add' && <StaticPluginSlot name="printers.addDialog.notice" />}
             {mode === 'add' && discovered.length > 0 && (
               <DialogSection
                 title="Discovery"

@@ -4,7 +4,8 @@
  * unit-testable; `detectBridgePlatformKey` gathers the browser hints,
  * including Chromium's high-entropy UA-Client-Hints architecture when
  * available. A null result simply means the UI lists all packages without a
- * recommendation (phones, tablets, unknown platforms).
+ * recommendation (phones, tablets, Macs, unknown platforms — there is no
+ * macOS package).
  */
 import type { BridgeStandaloneDownload } from '@printstream/shared'
 
@@ -20,8 +21,6 @@ export interface BridgePlatformHints {
 export const BRIDGE_PLATFORM_LABELS: Record<string, string> = {
   'win32-x64': 'Windows (x64)',
   'win32-arm64': 'Windows (ARM64)',
-  'darwin-arm64': 'macOS (Apple Silicon)',
-  'darwin-x64': 'macOS (Intel)',
   'linux-x64': 'Linux (x64)',
   'linux-arm64': 'Linux (ARM64)'
 }
@@ -30,29 +29,28 @@ export function bridgePlatformLabel(platformKey: string): string {
   return BRIDGE_PLATFORM_LABELS[platformKey] ?? platformKey
 }
 
-type BridgePlatformOs = 'win32' | 'darwin' | 'linux' | 'other'
+type BridgePlatformOs = 'win32' | 'linux' | 'other'
 
 const BRIDGE_OS_LABELS: Record<BridgePlatformOs, string> = {
   win32: 'Windows',
-  darwin: 'macOS',
   linux: 'Linux',
   other: 'Other'
 }
 
-const BRIDGE_OS_ORDER: Record<BridgePlatformOs, number> = { win32: 0, darwin: 1, linux: 2, other: 3 }
+const BRIDGE_OS_ORDER: Record<BridgePlatformOs, number> = { win32: 0, linux: 1, other: 2 }
 
 export function bridgePlatformOs(platformKey: string): BridgePlatformOs {
   const os = platformKey.split('-')[0]
-  return os === 'win32' || os === 'darwin' || os === 'linux' ? os : 'other'
+  return os === 'win32' || os === 'linux' ? os : 'other'
 }
 
-/** Just the architecture portion of the label, e.g. "x64", "Apple Silicon". */
+/** Just the architecture portion of the label, e.g. "x64", "ARM64". */
 export function bridgePlatformArchLabel(platformKey: string): string {
   const match = /\(([^)]+)\)/.exec(bridgePlatformLabel(platformKey))
   return match ? match[1]! : bridgePlatformLabel(platformKey)
 }
 
-/** Stable order: OS (Windows → macOS → Linux), then x64 before ARM64. */
+/** Stable order: OS (Windows → Linux), then x64 before ARM64. */
 export function compareBridgePlatforms(a: string, b: string): number {
   const osDiff = BRIDGE_OS_ORDER[bridgePlatformOs(a)] - BRIDGE_OS_ORDER[bridgePlatformOs(b)]
   if (osDiff !== 0) return osDiff
@@ -98,26 +96,20 @@ export function resolveBridgePlatformKey(hints: BridgePlatformHints): string | n
     // package is the safe default (it runs everywhere via emulation).
     return archHint === 'arm64' ? 'win32-arm64' : 'win32-x64'
   }
-  if (os === 'darwin') {
-    // Safari exposes no architecture hints; Apple Silicon is the safe default
-    // for current Macs, and Intel users can pick from the full list.
-    return `darwin-${archHint ?? 'arm64'}`
-  }
   if (archHint) return `linux-${archHint}`
   return /\b(aarch64|arm64)\b/i.test(userAgent) ? 'linux-arm64' : 'linux-x64'
 }
 
-function resolveOs(uaDataPlatform: string | undefined, userAgent: string): 'win32' | 'darwin' | 'linux' | null {
+function resolveOs(uaDataPlatform: string | undefined, userAgent: string): 'win32' | 'linux' | null {
   const platform = uaDataPlatform?.toLowerCase() ?? ''
   if (platform === 'windows') return 'win32'
-  if (platform === 'macos') return 'darwin'
   if (platform === 'linux') return 'linux'
-  if (platform === 'android' || platform === 'ios' || platform === 'chrome os' || platform === 'chromeos') return null
+  // No macOS package exists; Macs fall through to the "list everything" view.
+  if (platform === 'macos' || platform === 'android' || platform === 'ios' || platform === 'chrome os' || platform === 'chromeos') return null
 
-  // Mobile devices have no matching package even when the UA mentions Linux/Mac.
-  if (/Android|iPhone|iPad|iPod|CrOS/i.test(userAgent)) return null
+  // Mobile devices and Macs have no matching package even when the UA mentions Linux.
+  if (/Android|iPhone|iPad|iPod|CrOS|Mac OS X|Macintosh/i.test(userAgent)) return null
   if (/Windows NT/i.test(userAgent)) return 'win32'
-  if (/Mac OS X|Macintosh/i.test(userAgent)) return 'darwin'
   if (/Linux/i.test(userAgent)) return 'linux'
   return null
 }
@@ -162,7 +154,7 @@ export async function detectBridgePlatformKey(navigatorLike: Navigator = navigat
  * bridge build is published. The URLs are inert (`#`).
  */
 export function placeholderBridgeDownloads(): BridgeStandaloneDownload[] {
-  return ['win32-x64', 'darwin-arm64', 'linux-x64', 'linux-arm64', 'win32-arm64', 'darwin-x64'].map((platformKey) => ({
+  return ['win32-x64', 'linux-x64', 'linux-arm64', 'win32-arm64'].map((platformKey) => ({
     platformKey,
     buildRevision: 'devplaceholder',
     releasedAt: '2026-01-01T00:00:00.000Z',

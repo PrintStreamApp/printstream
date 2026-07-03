@@ -26,6 +26,7 @@ import { printerDiscovery } from './printer-discovery.js'
 import { printerManager } from './printer-manager.js'
 import { wsBroadcaster } from './ws-server.js'
 import { recordBridgeMessageDropped, recordBridgeMetricsSnapshot, clearBridgeMetrics } from './metrics.js'
+import { ingestBridgeCrashReport } from './bridge-crash-reports.js'
 import { broadcastBridgesChanged, broadcastPrinterViewsChanged } from './ws-resource-events.js'
 
 const CONNECT_PATH = '/api/bridge-runtime/connect'
@@ -401,6 +402,12 @@ function handleAuthenticatedMessage(
     }
     case 'bridge.metrics': {
       recordBridgeMetricsSnapshot(bridgeId, tenantId, message.metrics)
+      return
+    }
+    case 'bridge.crash.report': {
+      // Fire-and-forget: recording a crash must never stall the session loop.
+      void ingestBridgeCrashReport({ bridgeId, sessionTenantId: tenantId, report: message.report })
+        .catch((error) => console.error(`[bridge-crash] failed to record crash report for bridge ${bridgeId}`, (error as Error).message))
       return
     }
     case 'bridge.hello': {

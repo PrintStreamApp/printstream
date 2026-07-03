@@ -27,6 +27,7 @@ import { resolveSettingsAuthState } from '../lib/settingsAuth'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildTenantWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
+import { LicenseSettingsSection } from './LicenseSettingsSection'
 import { LogsPanel } from './LogsView'
 
 type ThemeSettingSelectValue = AppThemeSetting
@@ -177,6 +178,8 @@ export function SettingsView({
             description="Application layout defaults and device-specific interface preferences."
             onAction={() => navigate(settingsPath('/settings/general'))}
           />
+
+          {selfHosted && <LicenseSettingsSection canManage={canManageSettings} />}
 
           {showsTenantAuthenticationSection && (
             <SettingsOverviewCard

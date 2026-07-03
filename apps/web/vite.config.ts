@@ -104,12 +104,13 @@ export default defineConfig(({ command, mode }) => {
           "frame-ancestors 'none'",
           "object-src 'none'",
           "form-action 'self'",
-          "img-src 'self' data: blob:",
+          "img-src 'self' data: blob: https://*.paddle.com",
           "media-src 'self' data: blob:",
           "font-src 'self' data:",
-          "style-src 'self' 'unsafe-inline'",
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-          "connect-src 'self' ws: wss:",
+          "style-src 'self' 'unsafe-inline' https://*.paddle.com",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.paddle.com",
+          "connect-src 'self' ws: wss: https://*.paddle.com",
+          "frame-src 'self' https://*.paddle.com",
           "worker-src 'self' blob:"
         ].join('; ')
       },

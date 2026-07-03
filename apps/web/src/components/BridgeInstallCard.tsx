@@ -129,17 +129,6 @@ function BridgeInstallHint({ platformKey, fileName }: { platformKey: string; fil
       </Typography>
     )
   }
-  if (os === 'darwin') {
-    return (
-      <Stack spacing={0.5}>
-        <Typography level="body-sm">
-          Double-click the downloaded file to install. If macOS blocks it (unidentified developer),
-          right-click the file and choose Open — or run:
-        </Typography>
-        <CopyableCodeBlock text={`xattr -d com.apple.quarantine ${fileName}`} copyAriaLabel="Copy command" />
-      </Stack>
-    )
-  }
   return (
     <Stack spacing={0.5}>
       <Typography level="body-sm">

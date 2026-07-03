@@ -152,7 +152,8 @@ test('bridge list returns connected tenant bridges for settings managers', async
             activePrinterFtpCount: 1
           },
           update: unknownBridgeUpdate,
-          debugCapture: inactiveBridgeDebugCaptureStatus
+          debugCapture: inactiveBridgeDebugCaptureStatus,
+          crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
         }
       ]
     })
@@ -174,6 +175,9 @@ test('bridge list returns connected tenant bridges for settings managers', async
         lastUpdateCheckAt: true,
         lastUpdateError: true,
         lastSeenAt: true,
+        lastCrashAt: true,
+        lastCrashReason: true,
+        recentCrashCount: true,
         createdAt: true,
         updatedAt: true,
         _count: {
@@ -230,7 +234,8 @@ test('bridge connect attaches a dormant bridge to the current tenant', async () 
           activePrinterFtpCount: 0
         },
         update: unknownBridgeUpdate,
-        debugCapture: inactiveBridgeDebugCaptureStatus
+        debugCapture: inactiveBridgeDebugCaptureStatus,
+        crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
       }
     })
   })
@@ -418,7 +423,8 @@ test('bridge connect reattaches orphaned tenant printers when this is the only t
           activePrinterFtpCount: 0
         },
         update: unknownBridgeUpdate,
-        debugCapture: inactiveBridgeDebugCaptureStatus
+        debugCapture: inactiveBridgeDebugCaptureStatus,
+        crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
       }
     })
   })

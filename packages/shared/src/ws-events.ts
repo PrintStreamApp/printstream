@@ -77,7 +77,10 @@ export const wsResourceChangedEventSchema = z.object({
     // actually change (custom profile create/delete), NOT on slice progress — so the slow profiles
     // query is not refetched sub-second for the duration of a slice. Distinct from 'slicing', which
     // fires on every job state/progress change and invalidates only the jobs list.
-    'slicing.profiles'
+    'slicing.profiles',
+    // Support conversations (cloud messaging): broadcast platform-wide (tenantId null) because
+    // both the workspace participant and platform-workspace clients must refresh unread state.
+    'support'
   ]),
   printerId: z.string().optional(),
   pluginName: z.string().optional()

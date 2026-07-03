@@ -94,7 +94,7 @@ test('ensureBuiltInPlatformAuthGroups creates and restores platform roles withou
     tenantId: null,
     key: PLATFORM_ADMIN_GROUP_KEY,
     name: 'Admin',
-    description: 'Full platform access including settings, plugins, tenants, auth management, and support-access bypass.',
+    description: 'Full platform access including billing, settings, plugins, tenants, auth management, and support-access bypass.',
     permissions: builtInPlatformAuthGroupSeeds.find((seed) => seed.key === PLATFORM_ADMIN_GROUP_KEY)?.permissions,
     isSystem: true,
     isEditable: false,

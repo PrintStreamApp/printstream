@@ -65,10 +65,12 @@ import {
   getDefaultSelectedVersion,
   getInstallableVersions,
   getModuleFirmware,
+  getSelectedPrerequisite,
   getSelectedReleaseNotes,
   isActiveUploadStatus,
   isDowngradeSelection,
   isInstallableVersionSelected,
+  isOfflineUpdateBlocked,
   isUploadedVersionLatest,
   parseFirmwareStatusEvent,
   parseUploadProgressEvent,
@@ -360,6 +362,15 @@ function FirmwareUpdateDetailsDialog({
   const pendingInstall = firmwareStillPendingInstall(update, progress)
   const uploadedVersionIsLatest = isUploadedVersionLatest(update, progress)
   const selectedReleaseNotes = useMemo(() => getSelectedReleaseNotes(update, selectedVersion), [selectedVersion, update])
+  // Two Bambu limitations make a staged package non-flashable; surface both so the
+  // upload is never a dead end. The offline floor blocks every version (update
+  // online first); a prerequisite hop blocks only the selected target.
+  const offlineBlocked = isOfflineUpdateBlocked(update)
+  const offlineMinimum = update?.offlineUpdate.minimumVersion ?? null
+  const selectedPrerequisite = useMemo(() => getSelectedPrerequisite(update, selectedVersion), [update, selectedVersion])
+  const prerequisiteInstallable = selectedPrerequisite
+    ? isInstallableVersionSelected(installableVersions, selectedPrerequisite.requiredVersion)
+    : false
 
   return (
     <Modal open onClose={onClose}>
@@ -383,6 +394,21 @@ function FirmwareUpdateDetailsDialog({
                     <Typography level="body-md">{update.latestVersion ?? '—'}</Typography>
                   </Box>
                 </Stack>
+
+                {offlineBlocked && offlineMinimum && (
+                  <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+                    <Box>
+                      <Typography level="title-sm">Update online first</Typography>
+                      <Typography level="body-sm">
+                        This printer is on {update.currentVersion ?? 'an older firmware'}. Bambu only adds the
+                        on-screen <strong>Update Offline</strong> option from firmware {offlineMinimum} onward, so
+                        PrintStream can't stage a package it can flash yet. Update it once with Bambu Handy or Bambu
+                        Studio (temporarily leaving LAN-only mode if needed); after that, PrintStream can manage
+                        updates over your LAN.
+                      </Typography>
+                    </Box>
+                  </Alert>
+                )}
 
                 {moduleFirmware.length > 0 && (
                   <Box>
@@ -434,6 +460,33 @@ function FirmwareUpdateDetailsDialog({
                       </Typography>
                     )}
                   </FormControl>
+                )}
+
+                {!offlineBlocked && selectedPrerequisite && (
+                  <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+                    <Box>
+                      <Typography level="title-sm">Install {selectedPrerequisite.requiredVersion} first</Typography>
+                      <Typography level="body-sm">
+                        {selectedVersion} can't be flashed directly from {update.currentVersion ?? 'the current firmware'}.
+                        Bambu requires the {selectedPrerequisite.label} ({selectedPrerequisite.requiredVersion}) as an
+                        intermediate step
+                        {prerequisiteInstallable
+                          ? '.'
+                          : ", which isn't available to upload here yet — download it from Bambu Lab and flash it from the printer screen."}
+                      </Typography>
+                      {prerequisiteInstallable && (
+                        <Button
+                          size="sm"
+                          variant="soft"
+                          color="warning"
+                          sx={{ mt: 1 }}
+                          onClick={() => setSelectedVersion(selectedPrerequisite.requiredVersion)}
+                        >
+                          Switch to {selectedPrerequisite.requiredVersion}
+                        </Button>
+                      )}
+                    </Box>
+                  </Alert>
                 )}
 
                 {selectedReleaseNotes && (
@@ -516,7 +569,7 @@ function FirmwareUpdateDetailsDialog({
           ) : canManagePrinters ? (
             <Button
               color={isDowngrade ? 'warning' : 'primary'}
-              disabled={!update || !update.online || !installable || sdMissing || cancelUpload.isPending || !selectedVersion}
+              disabled={!update || !update.online || !installable || sdMissing || offlineBlocked || Boolean(selectedPrerequisite) || cancelUpload.isPending || !selectedVersion}
               loading={startUpload.isPending}
               onClick={() => {
                 if (selectedVersion) startUpload.mutate(selectedVersion)

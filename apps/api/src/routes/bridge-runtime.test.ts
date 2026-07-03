@@ -241,7 +241,8 @@ test('bridge runtime register refreshes an existing bridge when credentials matc
           activePrinterFtpCount: 0
         },
         update: currentBridgeUpdate,
-        debugCapture: inactiveBridgeDebugCaptureStatus
+        debugCapture: inactiveBridgeDebugCaptureStatus,
+        crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
       },
       runtimeToken,
       connectPath: '/api/bridge-runtime/connect',
@@ -328,7 +329,8 @@ test('bridge runtime register preserves a connected bridge name on reconnect', a
           activePrinterFtpCount: 0
         },
         update: currentBridgeUpdate,
-        debugCapture: inactiveBridgeDebugCaptureStatus
+        debugCapture: inactiveBridgeDebugCaptureStatus,
+        crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
       },
       runtimeToken,
       connectPath: '/api/bridge-runtime/connect',

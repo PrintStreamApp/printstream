@@ -54,6 +54,19 @@ export interface PrinterEvents {
     fileName: string
     plate: number
   }) => void
+  /**
+   * A bridge reported that its previous run crashed (restarted without a clean
+   * shutdown). Emitted by the bridge-crash-report ingest after it has decided the
+   * crash warrants a user notification (rate-limited); the notification formatter
+   * turns it into a `bridge.crashed` message on every channel. `tenantId` is null
+   * for an unpaired bridge (no one to notify).
+   */
+  'bridge.crashed': (event: {
+    bridgeId: string
+    bridgeName: string
+    tenantId: string | null
+    recentCrashCount: number
+  }) => void
 }
 
 export class PrinterEventBus extends EventEmitter {

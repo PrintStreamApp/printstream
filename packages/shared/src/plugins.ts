@@ -26,7 +26,9 @@ export const pluginCatalogEntrySchema = z.object({
   runtimeSurfaces: z.array(pluginSurfaceSchema).min(1),
   managerSurfaces: z.array(pluginSurfaceSchema).min(1),
   tenantAccess: pluginTenantAccessSchema,
-  availableInCurrentContext: z.boolean()
+  availableInCurrentContext: z.boolean(),
+  /** True when the deployment's plan gate blocks this plugin for the current workspace (e.g. a Pro plugin on a Free plan). */
+  planBlocked: z.boolean().optional()
 })
 
 export type PluginCatalogEntry = z.infer<typeof pluginCatalogEntrySchema>

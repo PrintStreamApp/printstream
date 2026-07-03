@@ -20,16 +20,6 @@ test('resolveBridgePlatformKey prefers UA client hints when available', () => {
     uaDataArchitecture: 'arm',
     uaDataBitness: '64'
   }), 'linux-arm64')
-  assert.equal(resolveBridgePlatformKey({
-    userAgent: MAC_UA,
-    uaDataPlatform: 'macOS',
-    uaDataArchitecture: 'x86',
-    uaDataBitness: '64'
-  }), 'darwin-x64')
-})
-
-test('resolveBridgePlatformKey defaults Macs without hints to Apple Silicon', () => {
-  assert.equal(resolveBridgePlatformKey({ userAgent: MAC_UA }), 'darwin-arm64')
 })
 
 test('resolveBridgePlatformKey recommends the native build on Windows-on-ARM', () => {
@@ -53,6 +43,17 @@ test('resolveBridgePlatformKey detects ARM Linux from the user agent', () => {
   }), 'linux-arm64')
 })
 
+test('resolveBridgePlatformKey returns null for Macs (no macOS package exists)', () => {
+  assert.equal(resolveBridgePlatformKey({ userAgent: MAC_UA }), null)
+  assert.equal(resolveBridgePlatformKey({ userAgent: MAC_UA, uaDataPlatform: 'macOS' }), null)
+  assert.equal(resolveBridgePlatformKey({
+    userAgent: MAC_UA,
+    uaDataPlatform: 'macOS',
+    uaDataArchitecture: 'x86',
+    uaDataBitness: '64'
+  }), null)
+})
+
 test('resolveBridgePlatformKey returns null for phones, tablets, and unknowns', () => {
   assert.equal(resolveBridgePlatformKey({ userAgent: ANDROID_UA }), null)
   assert.equal(resolveBridgePlatformKey({ userAgent: IPAD_UA }), null)
@@ -60,22 +61,28 @@ test('resolveBridgePlatformKey returns null for phones, tablets, and unknowns', 
   assert.equal(resolveBridgePlatformKey({ userAgent: '' }), null)
 })
 
-test('compareBridgePlatforms orders by OS (Windows, macOS, Linux) then x64 before ARM64', () => {
-  const shuffled = ['linux-arm64', 'darwin-x64', 'win32-arm64', 'linux-x64', 'win32-x64', 'darwin-arm64']
+test('compareBridgePlatforms orders by OS (Windows, Linux) then x64 before ARM64', () => {
+  const shuffled = ['linux-arm64', 'win32-arm64', 'linux-x64', 'win32-x64']
   assert.deepEqual([...shuffled].sort(compareBridgePlatforms), [
-    'win32-x64', 'win32-arm64', 'darwin-x64', 'darwin-arm64', 'linux-x64', 'linux-arm64'
+    'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'
   ])
 })
 
 test('bridgePlatformArchLabel returns just the architecture', () => {
   assert.equal(bridgePlatformArchLabel('win32-x64'), 'x64')
-  assert.equal(bridgePlatformArchLabel('darwin-arm64'), 'Apple Silicon')
   assert.equal(bridgePlatformArchLabel('linux-arm64'), 'ARM64')
 })
 
 test('groupByBridgeOs returns ordered OS groups with sorted items', () => {
-  const items = ['linux-arm64', 'win32-x64', 'darwin-arm64', 'linux-x64'].map((platformKey) => ({ platformKey }))
+  const items = ['linux-arm64', 'win32-x64', 'linux-x64'].map((platformKey) => ({ platformKey }))
   const groups = groupByBridgeOs(items, (item) => item.platformKey)
-  assert.deepEqual(groups.map((group) => group.osLabel), ['Windows', 'macOS', 'Linux'])
-  assert.deepEqual(groups[2]!.items.map((item) => item.platformKey), ['linux-x64', 'linux-arm64'])
+  assert.deepEqual(groups.map((group) => group.osLabel), ['Windows', 'Linux'])
+  assert.deepEqual(groups[1]!.items.map((item) => item.platformKey), ['linux-x64', 'linux-arm64'])
+})
+
+test('groupByBridgeOs files unknown platform keys under Other instead of dropping them', () => {
+  // e.g. a server publishing a platform this web build does not know about.
+  const items = ['darwin-arm64', 'win32-x64'].map((platformKey) => ({ platformKey }))
+  const groups = groupByBridgeOs(items, (item) => item.platformKey)
+  assert.deepEqual(groups.map((group) => group.osLabel), ['Windows', 'Other'])
 })
