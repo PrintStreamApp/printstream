@@ -13,6 +13,7 @@ import { type BridgeSummary, type PrinterConnectionValidation, extractErrorMessa
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
+import { ConnectivityGuideButton } from '../../components/ConnectivityGuideButton'
 import { DialogSection } from '../../components/DialogSection'
 import { buildPrinterConnectionValidationFeedback } from '../../lib/printerConnectionValidation'
 import { useRuntimePolicy } from '../../lib/runtimePolicy'
@@ -501,9 +502,11 @@ export function PrinterFormModal({
                       setAccessCode(event.target.value)
                     }}
                   />
-                  {mode === 'edit' ? (
-                    <FormHelperText>The stored access code is hidden. Enter a new one only to change it.</FormHelperText>
-                  ) : null}
+                  <FormHelperText>
+                    {mode === 'edit'
+                      ? 'The stored access code is hidden. Enter a new one only to change it.'
+                      : 'Shown on the printer screen with LAN Only Mode. Newer firmware also needs Developer Mode enabled.'}
+                  </FormHelperText>
                 </FormControl>
                 {mayRequireExternalStorageForActiveSkipObjects(model) ? (
                   <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
@@ -532,7 +535,7 @@ export function PrinterFormModal({
                     </Typography>
                   </FormControl>
                 )}
-                <Box>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                   <Button
                     type="button"
                     variant="outlined"
@@ -543,7 +546,8 @@ export function PrinterFormModal({
                   >
                     Test connection
                   </Button>
-                </Box>
+                  <ConnectivityGuideButton variant="plain" />
+                </Stack>
                 {connectionValidationFeedback && (
                   <Alert color={connectionValidationFeedback.color} variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
                     <Stack spacing={0.25}>

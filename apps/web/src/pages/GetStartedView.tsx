@@ -1,5 +1,6 @@
 import CelebrationRoundedIcon from '@mui/icons-material/CelebrationRounded'
 import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
 import RouterRoundedIcon from '@mui/icons-material/RouterRounded'
 import VisibilityOffRoundedIcon from '@mui/icons-material/VisibilityOffRounded'
@@ -8,9 +9,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { Alert, Button, Card, CardContent, Stack, Typography } from '@mui/joy'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
+import { ConnectivityGuideButton } from '../components/ConnectivityGuideButton'
 import { Printer3dRoundedIcon } from '../components/Printer3dRoundedIcon'
 import { usePromptDialog } from '../components/PromptDialogProvider'
 import { apiFetch } from '../lib/apiClient'
+import { PRINTER_CONNECTIVITY_INTRO } from '../lib/printerConnectivityGuide'
 import { buildTenantWorkspacePath, buildWorkspaceSelectionPath, parseWorkspacePathname } from '../lib/workspaceRoute'
 
 /**
@@ -68,6 +71,13 @@ export function GetStartedView({
           Connect this workspace to your printers and send your first print.
         </Typography>
       </Stack>
+
+      <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
+        <Stack spacing={0.75} alignItems="flex-start">
+          <Typography level="body-sm">{PRINTER_CONNECTIVITY_INTRO}</Typography>
+          <ConnectivityGuideButton />
+        </Stack>
+      </Alert>
 
       {statsQuery.isError ? (
         <Alert color="danger" variant="soft">

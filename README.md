@@ -67,7 +67,7 @@ If the `build:` blocks in `compose.yml` are commented out, uncomment them first;
 
 Then open `http://<your-server>:8080`. A default workspace is created automatically on first start, and the bundled bridge comes online and pairs itself — there's no secret to set and no pairing step. Add your printers and go.
 
-- Printers must have **LAN mode** enabled with their access code handy (Bambu printer screen → Settings → LAN Only Mode / access code).
+- Printers must have **LAN mode** enabled with their access code handy (Bambu printer screen → Settings → LAN Only Mode / access code). Newer Bambu firmware also requires **Developer Mode** (in the LAN Only Mode settings) before local apps such as PrintStream may connect.
 - Full details, reverse-proxy notes, the optional slicer service, and running the bridge on a separate machine: [docs/deployment.md](docs/deployment.md). All settings: [docs/configuration.md](docs/configuration.md).
 
 ## Plugins

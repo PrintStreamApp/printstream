@@ -34,7 +34,6 @@
     "vscode": {
       "extensions": [
         "dbaeumer.vscode-eslint",
-        "Prisma.prisma",
         "ms-ossdata.vscode-pgsql"
       ],
       "settings": {

@@ -110,6 +110,143 @@ test('slicer client surfaces structured worker errors', async () => {
   }
 })
 
+test('slicer client spreads concurrent slices across instances and routes progress to the owning one', async () => {
+  const sourceDir = await mkdtemp(path.join(tmpdir(), 'printstream-slicer-client-test-'))
+  cleanupPaths.add(sourceDir)
+  const sourcePath = path.join(sourceDir, 'input.3mf')
+  await writeFile(sourcePath, 'input-bytes')
+
+  const stubA = await createSlicerStub('instance-a')
+  const stubB = await createSlicerStub('instance-b')
+
+  try {
+    const client = new SlicerClient([stubA.url, `${stubB.url}/`])
+
+    const runA = client.run({
+      jobId: 'job-a',
+      sourceFileName: 'input.3mf',
+      sourcePath,
+      request: makeRequest(),
+      signal: new AbortController().signal
+    })
+    const runB = client.run({
+      jobId: 'job-b',
+      sourceFileName: 'input.3mf',
+      sourcePath,
+      request: makeRequest(),
+      signal: new AbortController().signal
+    })
+
+    // Wait until each instance holds one in-flight slice.
+    await waitFor(() => stubA.sliceJobIds.length === 1 && stubB.sliceJobIds.length === 1)
+    assert.deepEqual(stubA.sliceJobIds, ['job-a'])
+    assert.deepEqual(stubB.sliceJobIds, ['job-b'])
+
+    // Progress for each job must be read from the instance running it.
+    const progressA = await client.progress('job-a')
+    const progressB = await client.progress('job-b')
+    assert.equal(progressA?.[0]?.text, 'instance-a')
+    assert.equal(progressB?.[0]?.text, 'instance-b')
+
+    stubA.releaseSlices()
+    stubB.releaseSlices()
+    const [resultA, resultB] = await Promise.all([runA, runB])
+    cleanupPaths.add(path.dirname(resultA.artifactPath))
+    cleanupPaths.add(path.dirname(resultB.artifactPath))
+
+    // Once a job completes, its instance binding is dropped and progress is a no-op.
+    assert.equal(await client.progress('job-a'), null)
+  } finally {
+    await stubA.close()
+    await stubB.close()
+  }
+})
+
+test('slicer client reuses the free instance for sequential slices', async () => {
+  const sourceDir = await mkdtemp(path.join(tmpdir(), 'printstream-slicer-client-test-'))
+  cleanupPaths.add(sourceDir)
+  const sourcePath = path.join(sourceDir, 'input.3mf')
+  await writeFile(sourcePath, 'input-bytes')
+
+  const stubA = await createSlicerStub('instance-a')
+  const stubB = await createSlicerStub('instance-b')
+
+  try {
+    const client = new SlicerClient([stubA.url, stubB.url])
+    for (const jobId of ['job-1', 'job-2', 'job-3']) {
+      const run = client.run({
+        jobId,
+        sourceFileName: 'input.3mf',
+        sourcePath,
+        request: makeRequest(),
+        signal: new AbortController().signal
+      })
+      await waitFor(() => stubA.sliceJobIds.length + stubB.sliceJobIds.length >= Number(jobId.slice(-1)))
+      stubA.releaseSlices()
+      stubB.releaseSlices()
+      cleanupPaths.add(path.dirname((await run).artifactPath))
+    }
+
+    // With no overlap, the first (least-busy tie) instance takes every job.
+    assert.deepEqual(stubA.sliceJobIds, ['job-1', 'job-2', 'job-3'])
+    assert.deepEqual(stubB.sliceJobIds, [])
+  } finally {
+    await stubA.close()
+    await stubB.close()
+  }
+})
+
+/**
+ * Minimal slicer-service stub: holds POST /slice responses until released (so
+ * tests can observe in-flight assignment) and serves GET /jobs/:id progress
+ * that names the instance, letting tests assert progress routing.
+ */
+async function createSlicerStub(name: string) {
+  const sliceJobIds: string[] = []
+  const pendingSlices: Array<() => void> = []
+  const server = createServer((request, response) => {
+    if (request.method === 'GET' && request.url?.startsWith('/jobs/')) {
+      response.statusCode = 200
+      response.setHeader('Content-Type', 'application/json')
+      response.end(JSON.stringify({ output: [{ stream: 'system', text: name, createdAt: new Date().toISOString() }] }))
+      return
+    }
+    const envelope = typeof request.headers['x-printstream-slice-request'] === 'string' ? request.headers['x-printstream-slice-request'] : ''
+    const parsed = JSON.parse(Buffer.from(envelope, 'base64url').toString('utf8')) as { jobId?: string }
+    request.resume()
+    request.on('end', () => {
+      sliceJobIds.push(parsed.jobId ?? 'unknown')
+      pendingSlices.push(() => {
+        const artifactBytes = Buffer.from(`artifact-from-${name}`)
+        response.statusCode = 200
+        response.setHeader('Content-Type', 'application/octet-stream')
+        response.setHeader('Content-Length', String(artifactBytes.byteLength))
+        response.setHeader('X-PrintStream-Output-File-Name', encodeURIComponent('result.gcode.3mf'))
+        response.end(artifactBytes)
+      })
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  const address = server.address()
+  if (!address || typeof address !== 'object') throw new Error('stub server has no address')
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    sliceJobIds,
+    releaseSlices: () => {
+      while (pendingSlices.length > 0) pendingSlices.shift()?.()
+    },
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for condition')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
 function makeRequest() {
   return {
     sourceFileId: 'source-1',

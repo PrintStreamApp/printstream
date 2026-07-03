@@ -100,6 +100,25 @@ export function resolveBridgePlatformKey(hints: BridgePlatformHints): string | n
   return /\b(aarch64|arm64)\b/i.test(userAgent) ? 'linux-arm64' : 'linux-x64'
 }
 
+/**
+ * True when the visitor appears to be on macOS. There is no native macOS
+ * bridge package, so the install UI uses this to point Mac users at Docker or
+ * a separate Windows/Linux machine instead of leaving them guessing.
+ */
+export function isMacPlatform(hints: Pick<BridgePlatformHints, 'userAgent' | 'uaDataPlatform'>): boolean {
+  const platform = hints.uaDataPlatform?.toLowerCase() ?? ''
+  if (platform) return platform === 'macos'
+  const userAgent = hints.userAgent ?? ''
+  // iOS user agents say "like Mac OS X" — they are not Macs.
+  if (/iPhone|iPad|iPod/i.test(userAgent)) return false
+  return /Mac OS X|Macintosh/i.test(userAgent)
+}
+
+export function detectMacPlatform(navigatorLike: Navigator = navigator): boolean {
+  const uaData = (navigatorLike as UaDataNavigator).userAgentData
+  return isMacPlatform({ userAgent: navigatorLike.userAgent, uaDataPlatform: uaData?.platform })
+}
+
 function resolveOs(uaDataPlatform: string | undefined, userAgent: string): 'win32' | 'linux' | null {
   const platform = uaDataPlatform?.toLowerCase() ?? ''
   if (platform === 'windows') return 'win32'

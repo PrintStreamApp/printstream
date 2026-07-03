@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { bridgePlatformArchLabel, compareBridgePlatforms, groupByBridgeOs, resolveBridgePlatformKey } from './bridgePlatform'
+import { bridgePlatformArchLabel, compareBridgePlatforms, groupByBridgeOs, isMacPlatform, resolveBridgePlatformKey } from './bridgePlatform'
 
 const WINDOWS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15'
@@ -59,6 +59,18 @@ test('resolveBridgePlatformKey returns null for phones, tablets, and unknowns', 
   assert.equal(resolveBridgePlatformKey({ userAgent: IPAD_UA }), null)
   assert.equal(resolveBridgePlatformKey({ userAgent: ANDROID_UA, uaDataPlatform: 'Android' }), null)
   assert.equal(resolveBridgePlatformKey({ userAgent: '' }), null)
+})
+
+test('isMacPlatform spots Macs via UA-CH platform or the user agent', () => {
+  assert.equal(isMacPlatform({ uaDataPlatform: 'macOS', userAgent: MAC_UA }), true)
+  assert.equal(isMacPlatform({ userAgent: MAC_UA }), true)
+  // A present non-Mac UA-CH platform wins over any UA sniffing.
+  assert.equal(isMacPlatform({ uaDataPlatform: 'Windows', userAgent: WINDOWS_UA }), false)
+  assert.equal(isMacPlatform({ userAgent: WINDOWS_UA }), false)
+  assert.equal(isMacPlatform({ userAgent: LINUX_UA }), false)
+  // iOS says "like Mac OS X" but is not a Mac.
+  assert.equal(isMacPlatform({ userAgent: IPAD_UA }), false)
+  assert.equal(isMacPlatform({ userAgent: '' }), false)
 })
 
 test('compareBridgePlatforms orders by OS (Windows, Linux) then x64 before ARM64', () => {

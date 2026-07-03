@@ -29,6 +29,7 @@ import { formatBridgeUpdateStatus } from '../../lib/bridgeUpdateStatus'
 import { bridgeCrashChip } from '../../lib/bridgeCrashHealth'
 import { BackAwareModal } from '../BackAwareModal'
 import { BridgeInstallCard } from '../BridgeInstallCard'
+import { ConnectivityGuideButton } from '../ConnectivityGuideButton'
 import { ConfirmActionDialog } from '../ConfirmActionDialog'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 
@@ -80,14 +81,17 @@ export function BridgeSettingsSection() {
   return (
     <Stack spacing={1.5}>
       <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
-        <Stack spacing={0.25}>
-          <Typography level="title-sm">What a bridge does</Typography>
-          <Typography level="body-sm">
-            A bridge links the printers on your local network to PrintStream and stores your library
-            files. Because it owns that connection and your files, it needs to stay running on an
-            always-on machine near your printers — a Raspberry Pi or any computer that&apos;s left on
-            works well.
-          </Typography>
+        <Stack spacing={0.75} alignItems="flex-start">
+          <Stack spacing={0.25}>
+            <Typography level="title-sm">What a bridge does</Typography>
+            <Typography level="body-sm">
+              A bridge links the printers on your local network to PrintStream and stores your library
+              files. Because it owns that connection and your files, it needs to stay running on an
+              always-on machine near your printers — a Raspberry Pi or any computer that&apos;s left on
+              works well.
+            </Typography>
+          </Stack>
+          <ConnectivityGuideButton />
         </Stack>
       </Alert>
 

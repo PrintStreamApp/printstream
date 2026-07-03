@@ -36,12 +36,12 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `LIBRARY_TRANSIENT_RETENTION_DAYS` | `7` | How long hidden transient library uploads are retained before scheduled cleanup removes them. |
 | `LIBRARY_RECYCLE_RETENTION_DAYS` | `30` | How long recycle-bin (soft-deleted) library files stay restorable before scheduled cleanup removes them permanently. |
 | `LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS` | `24` | How long unreferenced sliced outputs (never saved to the library or snapshotted for print history) are kept before cleanup removes them. |
-| `SLICER_SERVICE_URL` | *(unset)* | Optional URL for the standalone slicer container. Set to enable server-side slicing orchestration. |
+| `SLICER_SERVICE_URL` | *(unset)* | Optional URL for the standalone slicer container. Set to enable server-side slicing orchestration. Accepts a comma-separated list of identical slicer instances; slices are assigned to the least-busy instance and progress follows the instance that owns the job. |
 | `SLICER_SERVICE_TOKEN` | *(unset)* | Optional bearer token shared between the API and slicer container. Treat this as a secret. |
 | `SLICER_BIND_HOST` | `127.0.0.1` | Host interface for the published slicer port in Compose (`127.0.0.1` keeps it private to the server). |
 | `SLICER_BIND_PORT` | `4010` | Host port mapped to slicer container port `4010` in Compose. |
-| `SLICING_MAX_CONCURRENT_JOBS` | `1` | Maximum number of slicing jobs the API will run against slicer workers at once. |
-| `SLICING_MAX_QUEUED_JOBS` | `10` | Maximum number of queued slicing jobs waiting for a concurrency slot. |
+| `SLICING_MAX_CONCURRENT_JOBS` | *(one per slicer URL)* | Maximum slicing jobs the API runs at once across all slicer instances. Defaults to the number of configured `SLICER_SERVICE_URL` entries. Raising it above that makes single instances run concurrent CLI slices, which contend on the shared per-target BambuStudio home dir — prefer adding instances instead. |
+| `SLICING_MAX_QUEUED_JOBS` | `25` | Maximum number of queued slicing jobs waiting for a concurrency slot. |
 | `SLICING_REQUEST_TIMEOUT_MS` | `1800000` | Timeout for API-to-slicer requests. |
 | `SLICER_DEFAULT_TARGET_ID` | *(first installed target)* | Override the default slicer version shown in the slice dialog. Must match an `id` from the built-in target manifest (`/opt/printstream-slicers/targets.json`). |
 | `SLICER_ENABLE_PIPE_PROGRESS` | `true` | When `true`, append Bambu/Orca CLI `--pipe` progress JSON frames into slicing job output so the UI can render determinate progress updates. |

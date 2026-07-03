@@ -14,7 +14,7 @@ import React from 'react'
 import ArrowDropDownRoundedIcon from '@mui/icons-material/ArrowDropDownRounded'
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import type { BridgeStandaloneDownload } from '@printstream/shared'
-import { bridgePlatformArchLabel, bridgePlatformLabel, groupByBridgeOs } from '../lib/bridgePlatform'
+import { bridgePlatformArchLabel, bridgePlatformLabel, detectMacPlatform, groupByBridgeOs } from '../lib/bridgePlatform'
 import { BackAwareModal } from './BackAwareModal'
 import { BridgeDockerDialog } from './BridgeDockerDialog'
 import { CopyableCodeBlock } from './CopyableCodeBlock'
@@ -28,10 +28,17 @@ export function BridgeInstallCard({ downloads, detectedPlatformKey, serverUrl }:
   const [selected, setSelected] = React.useState<BridgeStandaloneDownload | null>(null)
   const [dockerOpen, setDockerOpen] = React.useState(false)
   const hasDownloads = downloads.length > 0
+  const isMac = React.useMemo(() => typeof navigator !== 'undefined' && detectMacPlatform(navigator), [])
 
   return (
     <Card variant="outlined">
       <CardContent>
+        {isMac ? (
+          <Typography level="body-sm" textColor="text.tertiary" sx={{ mb: 1 }}>
+            There is no native macOS build — run the bridge with Docker, or install it on an
+            always-on Windows or Linux machine (a Raspberry Pi works well).
+          </Typography>
+        ) : null}
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
           <Dropdown>
             <MenuButton

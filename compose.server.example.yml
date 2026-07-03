@@ -63,10 +63,14 @@ services:
       # Bridge release artifacts (published by CI, promoted by deploys) live in
       # the repo checkout and are bind-mounted so the API can serve them.
       BRIDGE_RELEASES_DIR: /data/bridge-releases
+      # Accepts a comma-separated list of identical slicer instances to slice in
+      # parallel (add a second slicer service with its own work volume and list
+      # both URLs). Concurrency defaults to one job per listed instance;
+      # SLICING_MAX_QUEUED_JOBS defaults to 25. See docs/configuration.md.
       SLICER_SERVICE_URL: ${SLICER_SERVICE_URL:-http://slicer:4010}
       SLICER_SERVICE_TOKEN: ${SLICER_SERVICE_TOKEN:-}
-      SLICING_MAX_CONCURRENT_JOBS: ${SLICING_MAX_CONCURRENT_JOBS:-1}
-      SLICING_MAX_QUEUED_JOBS: ${SLICING_MAX_QUEUED_JOBS:-10}
+      SLICING_MAX_CONCURRENT_JOBS: ${SLICING_MAX_CONCURRENT_JOBS:-}
+      SLICING_MAX_QUEUED_JOBS: ${SLICING_MAX_QUEUED_JOBS:-}
       PLUGINS_DIR: /data/plugins
       DISCOVERY_PORT: ${DISCOVERY_PORT:-2021}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}

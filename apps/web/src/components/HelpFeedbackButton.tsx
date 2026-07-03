@@ -18,7 +18,6 @@ export function HelpFeedbackButton() {
         size="sm"
         startDecorator={<HelpOutlineRoundedIcon fontSize="small" />}
         onClick={() => setOpen(true)}
-        sx={{ color: 'neutral.500', fontWeight: 'md' }}
       >
         Help &amp; feedback
       </Button>

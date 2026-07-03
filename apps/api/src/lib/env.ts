@@ -162,10 +162,23 @@ const envSchema = z.object({
   LIBRARY_TRANSIENT_RETENTION_DAYS: positiveIntEnv(7),
   LIBRARY_RECYCLE_RETENTION_DAYS: positiveIntEnv(30),
   LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS: positiveIntEnv(24),
+  /**
+   * Base URL(s) of the standalone slicer runtime. Accepts a comma-separated
+   * list to fan slices out across multiple identical sidecars (each instance
+   * should run one slice at a time — see `SLICING_MAX_CONCURRENT_JOBS`).
+   * The parsed list is exported as `SLICER_SERVICE_URLS`.
+   */
   SLICER_SERVICE_URL: optionalStringEnv(),
   SLICER_SERVICE_TOKEN: optionalStringEnv(),
-  SLICING_MAX_CONCURRENT_JOBS: positiveIntEnv(1),
-  SLICING_MAX_QUEUED_JOBS: positiveIntEnv(10),
+  /**
+   * Total slicing jobs the API runs at once across all slicer instances.
+   * Defaults to the number of configured `SLICER_SERVICE_URL` entries so
+   * adding a sidecar adds a slot; override only to run more than one
+   * concurrent slice per instance (not recommended — concurrent CLI runs in
+   * one container contend on the shared BambuStudio home dir).
+   */
+  SLICING_MAX_CONCURRENT_JOBS: optionalPositiveIntEnv(),
+  SLICING_MAX_QUEUED_JOBS: positiveIntEnv(25),
   SLICING_REQUEST_TIMEOUT_MS: positiveIntEnv(30 * 60 * 1000),
   SLICING_MAX_ARTIFACT_BYTES: positiveIntEnv(1024 * 1024 * 1024),
   BRIDGE_RELEASES_DIR: z.string().default('./data/bridge-releases'),
@@ -276,7 +289,16 @@ const envSchema = z.object({
 
 const parsedEnv = envSchema.parse(process.env)
 
+/** `SLICER_SERVICE_URL` split into normalized (trailing-slash-free) base URLs. */
+const slicerServiceUrls = (parsedEnv.SLICER_SERVICE_URL ?? '')
+  .split(',')
+  .map((url) => url.trim().replace(/\/+$/, ''))
+  .filter((url) => url.length > 0)
+
 export const env = {
   ...parsedEnv,
+  SLICER_SERVICE_URLS: slicerServiceUrls,
+  // One concurrent slice per slicer instance unless explicitly overridden.
+  SLICING_MAX_CONCURRENT_JOBS: parsedEnv.SLICING_MAX_CONCURRENT_JOBS ?? Math.max(1, slicerServiceUrls.length),
   PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT: parsedEnv.PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT ?? bridgeBuildMetadata.sourceFingerprint
 }

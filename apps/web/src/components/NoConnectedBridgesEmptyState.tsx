@@ -1,6 +1,7 @@
 import React from 'react'
 import HubRoundedIcon from '@mui/icons-material/HubRounded'
-import { Button } from '@mui/joy'
+import { Button, Stack } from '@mui/joy'
+import { ConnectivityGuideButton } from './ConnectivityGuideButton'
 import { EmptyState } from './EmptyState'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 
@@ -38,6 +39,7 @@ export function NoConnectedBridgesEmptyState({
         title={managedTitle ?? 'Connecting to your printers'}
         description={managedDescription
           ?? 'PrintStream is still starting its printer connection service. If this persists, make sure all PrintStream services are running.'}
+        action={<ConnectivityGuideButton />}
       />
     )
   }
@@ -49,13 +51,16 @@ export function NoConnectedBridgesEmptyState({
       description={canOpenBridgesSettings
         ? description
         : `${description} A workspace manager can connect one in Settings > Bridges.`}
-      action={canOpenBridgesSettings && onOpenBridgesSettings
-        ? (
+      action={(
+        <Stack direction="row" spacing={1} justifyContent="center" flexWrap="wrap" useFlexGap>
+          {canOpenBridgesSettings && onOpenBridgesSettings && (
             <Button size="sm" onClick={onOpenBridgesSettings}>
               Open bridges
             </Button>
-          )
-        : undefined}
+          )}
+          <ConnectivityGuideButton />
+        </Stack>
+      )}
     />
   )
 }

@@ -28,7 +28,13 @@ const NO_STORE_FILES = new Set([
   'manifest.webmanifest'
 ])
 
-function applyNoStore(response: Response): void {
+/**
+ * Marks a response uncacheable with the same header set the SPA entry files
+ * use. Exported for handlers that serve alternate flavors of `index.html`
+ * (e.g. the cloud module's SEO-enriched marketing pages) so their caching
+ * behavior stays identical to the plain SPA fallback.
+ */
+export function applyNoStore(response: Response): void {
   response.setHeader('Cache-Control', NO_STORE)
   response.setHeader('Pragma', 'no-cache')
   response.setHeader('Expires', '0')

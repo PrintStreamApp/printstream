@@ -1,0 +1,5 @@
+# A PrintStream instance is a private printer dashboard, so it opts out of
+# search-engine indexing by default. (The hosted cloud deployment replaces
+# this file with a dynamic policy that allows its public marketing pages.)
+User-agent: *
+Disallow: /

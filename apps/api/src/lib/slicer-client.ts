@@ -1,8 +1,11 @@
 /**
- * Client for the standalone BambuStudio slicer runtime.
+ * Client for the standalone BambuStudio slicer runtime(s).
  *
- * The API owns tenant checks, queueing, and library persistence. This
- * client only speaks to the external worker container that runs the CLI.
+ * The API owns tenant checks, queueing, and library persistence. This client
+ * only speaks to the external worker container(s) that run the CLI.
+ * `SLICER_SERVICE_URL` may list several identical sidecars (comma-separated):
+ * slices go to the least-busy instance, progress polls follow the instance
+ * that owns the job, and reads (health/profiles/resolve) fail over in order.
  */
 import { slicingMetadataSchema, slicingTargetDescriptorSchema, type CreateSlicingJob, type SliceEnvelope, type SlicingMetadata, type SlicingOutputLine, type SlicingProfileSummary, type SlicingTargetDescriptor } from '@printstream/shared'
 import { createReadStream, createWriteStream } from 'node:fs'
@@ -61,64 +64,80 @@ export class SlicerServiceError extends Error {
 }
 
 export class SlicerClient {
-  constructor(
-    private readonly baseUrl = env.SLICER_SERVICE_URL?.replace(/\/+$/, '') ?? null
-  ) {}
+  private readonly baseUrls: string[]
+  /** In-flight slice count per instance base URL; drives least-busy assignment. */
+  private readonly inflight = new Map<string, number>()
+  /** Active slicer job id -> owning instance, so progress polls hit the instance running the job. */
+  private readonly jobInstances = new Map<string, string>()
+
+  /**
+   * All instances are assumed to run the same slicer image (same targets and
+   * builtin profiles): reads (health, profiles, resolve) try instances in
+   * order and return the first success, while slices are assigned to the
+   * least-busy instance.
+   */
+  constructor(baseUrls: string | readonly string[] | null = env.SLICER_SERVICE_URLS) {
+    const list = baseUrls == null ? [] : typeof baseUrls === 'string' ? [baseUrls] : [...baseUrls]
+    this.baseUrls = list.map((url) => url.replace(/\/+$/, '')).filter((url) => url.length > 0)
+  }
 
   isConfigured(): boolean {
-    return this.baseUrl != null
+    return this.baseUrls.length > 0
   }
 
   async capabilities(): Promise<SlicerCapabilities> {
-    if (!this.baseUrl) {
+    if (this.baseUrls.length === 0) {
       return { configured: false, healthy: false, slicerName: null, defaultTargetId: null, targets: [] }
     }
 
-    try {
-      const response = await fetch(`${this.baseUrl}/health`, {
-        headers: this.headers(),
-        signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
-      })
-      if (!response.ok) {
-        console.warn('[slicer] capabilities failed', `slicer service returned ${response.status}`)
-        return { configured: true, healthy: false, slicerName: null, defaultTargetId: null, targets: [] }
+    for (const baseUrl of this.baseUrls) {
+      try {
+        const response = await fetch(`${baseUrl}/health`, {
+          headers: this.headers(),
+          signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
+        })
+        if (!response.ok) {
+          console.warn('[slicer] capabilities failed', `slicer service at ${baseUrl} returned ${response.status}`)
+          continue
+        }
+        const body = await response.json().catch(() => ({})) as { name?: unknown; defaultTargetId?: unknown; targets?: unknown }
+        const targets = parseSlicerTargets(body.targets)
+        const defaultTargetId = typeof body.defaultTargetId === 'string' && body.defaultTargetId.trim() ? body.defaultTargetId.trim() : null
+        const defaultTarget = defaultTargetId ? targets.find((target) => target.id === defaultTargetId) ?? null : targets[0] ?? null
+        return {
+          configured: true,
+          healthy: true,
+          slicerName: defaultTarget?.label ?? (typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'PrintStream slicer'),
+          defaultTargetId,
+          targets
+        }
+      } catch (error) {
+        console.warn('[slicer] capabilities failed', `${baseUrl}: ${(error as Error).message}`)
       }
-      const body = await response.json().catch(() => ({})) as { name?: unknown; defaultTargetId?: unknown; targets?: unknown }
-      const targets = parseSlicerTargets(body.targets)
-      const defaultTargetId = typeof body.defaultTargetId === 'string' && body.defaultTargetId.trim() ? body.defaultTargetId.trim() : null
-      const defaultTarget = defaultTargetId ? targets.find((target) => target.id === defaultTargetId) ?? null : targets[0] ?? null
-      return {
-        configured: true,
-        healthy: true,
-        slicerName: defaultTarget?.label ?? (typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'PrintStream slicer'),
-        defaultTargetId,
-        targets
-      }
-    } catch (error) {
-      console.warn('[slicer] capabilities failed', (error as Error).message)
-      return { configured: true, healthy: false, slicerName: null, defaultTargetId: null, targets: [] }
     }
+    return { configured: true, healthy: false, slicerName: null, defaultTargetId: null, targets: [] }
   }
 
   async profiles(targetId?: string | null): Promise<SlicingProfileSummary[]> {
-    if (!this.baseUrl) return []
-    try {
-      const params = new URLSearchParams()
-      if (targetId?.trim()) params.set('targetId', targetId.trim())
-      const response = await fetch(`${this.baseUrl}/profiles${params.size > 0 ? `?${params.toString()}` : ''}`, {
-        headers: this.headers(),
-        signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
-      })
-      if (!response.ok) {
-        console.warn('[slicer] profiles failed', `slicer service returned ${response.status}`)
-        return []
+    for (const baseUrl of this.baseUrls) {
+      try {
+        const params = new URLSearchParams()
+        if (targetId?.trim()) params.set('targetId', targetId.trim())
+        const response = await fetch(`${baseUrl}/profiles${params.size > 0 ? `?${params.toString()}` : ''}`, {
+          headers: this.headers(),
+          signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
+        })
+        if (!response.ok) {
+          console.warn('[slicer] profiles failed', `slicer service at ${baseUrl} returned ${response.status}`)
+          continue
+        }
+        const body = await response.json().catch(() => null) as { profiles?: unknown } | null
+        return parseProfiles(body?.profiles)
+      } catch (error) {
+        console.warn('[slicer] profiles failed', `${baseUrl}: ${(error as Error).message}`)
       }
-      const body = await response.json().catch(() => null) as { profiles?: unknown } | null
-      return parseProfiles(body?.profiles)
-    } catch (error) {
-      console.warn('[slicer] profiles failed', (error as Error).message)
-      return []
     }
+    return []
   }
 
   /**
@@ -130,27 +149,28 @@ export class SlicerClient {
     targetId: string | null | undefined,
     profile: { source: 'builtin' | 'custom'; name: string; content?: string }
   ): Promise<Record<string, string | string[]> | null> {
-    if (!this.baseUrl) return null
-    try {
-      const params = new URLSearchParams()
-      if (targetId?.trim()) params.set('targetId', targetId.trim())
-      const response = await fetch(`${this.baseUrl}/profiles/resolve${params.size > 0 ? `?${params.toString()}` : ''}`, {
-        method: 'POST',
-        headers: { ...this.headers(), 'content-type': 'application/json' },
-        body: JSON.stringify({ source: profile.source, name: profile.name, content: profile.content }),
-        signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
-      })
-      if (!response.ok) {
-        console.warn('[slicer] resolveProcessConfig failed', `slicer service returned ${response.status}`)
-        return null
+    for (const baseUrl of this.baseUrls) {
+      try {
+        const params = new URLSearchParams()
+        if (targetId?.trim()) params.set('targetId', targetId.trim())
+        const response = await fetch(`${baseUrl}/profiles/resolve${params.size > 0 ? `?${params.toString()}` : ''}`, {
+          method: 'POST',
+          headers: { ...this.headers(), 'content-type': 'application/json' },
+          body: JSON.stringify({ source: profile.source, name: profile.name, content: profile.content }),
+          signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
+        })
+        if (!response.ok) {
+          console.warn('[slicer] resolveProcessConfig failed', `slicer service at ${baseUrl} returned ${response.status}`)
+          continue
+        }
+        const body = await response.json().catch(() => null) as { config?: unknown } | null
+        if (!body || typeof body.config !== 'object' || body.config == null) return null
+        return normalizeResolvedConfig(body.config as Record<string, unknown>)
+      } catch (error) {
+        console.warn('[slicer] resolveProcessConfig failed', `${baseUrl}: ${(error as Error).message}`)
       }
-      const body = await response.json().catch(() => null) as { config?: unknown } | null
-      if (!body || typeof body.config !== 'object' || body.config == null) return null
-      return normalizeResolvedConfig(body.config as Record<string, unknown>)
-    } catch (error) {
-      console.warn('[slicer] resolveProcessConfig failed', (error as Error).message)
-      return null
     }
+    return null
   }
 
   /**
@@ -162,31 +182,41 @@ export class SlicerClient {
     targetId: string | null | undefined,
     profile: { source: 'builtin' | 'custom'; name: string; content?: string }
   ): Promise<Record<string, string | string[]> | null> {
-    if (!this.baseUrl) return null
-    try {
-      const params = new URLSearchParams()
-      if (targetId?.trim()) params.set('targetId', targetId.trim())
-      const response = await fetch(`${this.baseUrl}/profiles/resolve${params.size > 0 ? `?${params.toString()}` : ''}`, {
-        method: 'POST',
-        headers: { ...this.headers(), 'content-type': 'application/json' },
-        body: JSON.stringify({ source: profile.source, kind: 'machine', name: profile.name, content: profile.content }),
-        // The merged machine profile is small; the short-request cap is fine.
-        signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
-      })
-      if (!response.ok) {
-        console.warn('[slicer] resolveMachineConfig failed', `slicer service returned ${response.status}`)
-        return null
+    for (const baseUrl of this.baseUrls) {
+      try {
+        const params = new URLSearchParams()
+        if (targetId?.trim()) params.set('targetId', targetId.trim())
+        const response = await fetch(`${baseUrl}/profiles/resolve${params.size > 0 ? `?${params.toString()}` : ''}`, {
+          method: 'POST',
+          headers: { ...this.headers(), 'content-type': 'application/json' },
+          body: JSON.stringify({ source: profile.source, kind: 'machine', name: profile.name, content: profile.content }),
+          // The merged machine profile is small; the short-request cap is fine.
+          signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
+        })
+        if (!response.ok) {
+          console.warn('[slicer] resolveMachineConfig failed', `slicer service at ${baseUrl} returned ${response.status}`)
+          continue
+        }
+        const body = await response.json().catch(() => null) as { config?: unknown } | null
+        if (!body || typeof body.config !== 'object' || body.config == null) return null
+        return normalizeResolvedConfig(body.config as Record<string, unknown>)
+      } catch (error) {
+        console.warn('[slicer] resolveMachineConfig failed', `${baseUrl}: ${(error as Error).message}`)
       }
-      const body = await response.json().catch(() => null) as { config?: unknown } | null
-      if (!body || typeof body.config !== 'object' || body.config == null) return null
-      return normalizeResolvedConfig(body.config as Record<string, unknown>)
-    } catch (error) {
-      console.warn('[slicer] resolveMachineConfig failed', (error as Error).message)
-      return null
+    }
+    return null
+  }
+
+  async run(input: SlicerRunInput): Promise<SlicerRunResult> {
+    const baseUrl = this.claimInstance(input.jobId)
+    try {
+      return await this.runOnInstance(baseUrl, input)
+    } finally {
+      this.releaseInstance(input.jobId, baseUrl)
     }
   }
 
-  async run(input: SlicerRunInput): Promise<SlicerRunResult> {    if (!this.baseUrl) throw new Error('Slicer service is not configured')
+  private async runOnInstance(baseUrl: string, input: SlicerRunInput): Promise<SlicerRunResult> {
     // The slice request travels to the slicer as a base64 HTTP header, so it must stay small.
     // The editor's per-plate thumbnails (base64 PNGs) are only needed by the API (it bakes them
     // into the sliced output after the slice) — the slicer already receives the arranged 3MF, so
@@ -209,7 +239,7 @@ export class SlicerClient {
     const artifactDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-'))
     const downloadPath = path.join(artifactDir, 'download.bin')
     const response = await this.runSliceRequest({
-      url: `${this.baseUrl}/slice`,
+      url: `${baseUrl}/slice`,
       sourcePath: input.sourcePath,
       sourceSize: sourceInfo.size,
       envelope,
@@ -256,9 +286,12 @@ export class SlicerClient {
   }
 
   async progress(jobId: string): Promise<SlicingOutputLine[] | null> {
-    if (!this.baseUrl) return null
+    // Progress must be read from the instance running the job; before the job
+    // is claimed (or after it finishes) there is nothing to poll.
+    const baseUrl = this.jobInstances.get(jobId)
+    if (!baseUrl) return null
     try {
-      const response = await fetch(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}`, {
+      const response = await fetch(`${baseUrl}/jobs/${encodeURIComponent(jobId)}`, {
         headers: this.headers(),
         signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
       })
@@ -277,6 +310,33 @@ export class SlicerClient {
 
   private headers(): Record<string, string> {
     return env.SLICER_SERVICE_TOKEN ? { Authorization: `Bearer ${env.SLICER_SERVICE_TOKEN}` } : {}
+  }
+
+  /**
+   * Assigns a slice to the least-busy instance (first configured wins ties)
+   * and records the job -> instance binding for progress routing. The caller
+   * must pair this with {@link releaseInstance} (run() does, in a finally).
+   */
+  private claimInstance(jobId: string): string {
+    if (this.baseUrls.length === 0) throw new Error('Slicer service is not configured')
+    let chosen = this.baseUrls[0]!
+    let chosenInflight = this.inflight.get(chosen) ?? 0
+    for (const baseUrl of this.baseUrls) {
+      const count = this.inflight.get(baseUrl) ?? 0
+      if (count < chosenInflight) {
+        chosen = baseUrl
+        chosenInflight = count
+      }
+    }
+    this.inflight.set(chosen, chosenInflight + 1)
+    this.jobInstances.set(jobId, chosen)
+    return chosen
+  }
+
+  private releaseInstance(jobId: string, baseUrl: string): void {
+    const count = this.inflight.get(baseUrl) ?? 0
+    this.inflight.set(baseUrl, Math.max(0, count - 1))
+    this.jobInstances.delete(jobId)
   }
 
   private async runSliceRequest(input: {
