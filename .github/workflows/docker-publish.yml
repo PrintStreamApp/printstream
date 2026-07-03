@@ -26,7 +26,7 @@
 #
 # This file ships into the public repo via the snapshot export and is GUARDED to
 # run ONLY there: the private monorepo deploys over SSH and must never publish an
-# image built from private (cloud) source. See docs/open-core.md.
+# image built from private (cloud) source.
 name: Publish Docker images
 
 on:

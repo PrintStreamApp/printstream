@@ -7,8 +7,7 @@
  * viewport, phone, or `compactControls`), sort/grouping/filters collapse into a
  * single combined "options" dropdown. The individual menus (`DirectoryFiltersMenu`,
  * `DirectoryGroupingMenu`, `DirectorySortMenu`, `DirectoryPageSizeMenu`) are also
- * exported for surfaces that compose their own layout. See
- * `docs/ui-conventions.md` for the toolbar contract.
+ * exported for surfaces that compose their own layout.
  */
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'

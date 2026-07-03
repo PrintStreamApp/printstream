@@ -19,13 +19,13 @@ export interface PrinterConnectivityStep {
 
 /** One-line framing for the guide, shared by the dialog and marketing surfaces. */
 export const PRINTER_CONNECTIVITY_INTRO =
-  'PrintStream talks to your Bambu printers directly over your own network — no traffic is routed through Bambu’s cloud. That needs three things.'
+  'PrintStream talks to your Bambu printers directly over your own network, with no traffic routed through Bambu’s cloud. That needs three things.'
 
 export const PRINTER_CONNECTIVITY_STEPS: PrinterConnectivityStep[] = [
   {
     id: 'bridge',
     title: 'A bridge on your printers’ network',
-    body: 'The bridge is a small service that runs on the same local network as your printers and connects outward to PrintStream. Because it only dials out, nothing on your network is exposed to the internet and no port forwarding is needed. Any always-on machine works — a Raspberry Pi or a computer that stays on is plenty.'
+    body: 'The bridge is a small service that runs on the same local network as your printers and connects outward to PrintStream. Because it only dials out, nothing on your network is exposed to the internet and no port forwarding is needed. Any always-on machine works: a Raspberry Pi or a computer that stays on is plenty.'
   },
   {
     id: 'lan-mode',
@@ -35,7 +35,7 @@ export const PRINTER_CONNECTIVITY_STEPS: PrinterConnectivityStep[] = [
   {
     id: 'developer-mode',
     title: 'Developer Mode on newer firmware',
-    body: 'Recent Bambu firmware also requires Developer Mode (found in the LAN Only Mode settings on the printer screen) before local apps may connect. Older firmware has no such switch and needs no extra step — the connection test when adding a printer tells you if the printer is still rejecting connections.'
+    body: 'Recent Bambu firmware also requires Developer Mode (found in the LAN Only Mode settings on the printer screen) before local apps may connect. Older firmware has no such switch and needs no extra step. The connection test when adding a printer tells you if the printer is still rejecting connections.'
   }
 ]
 
@@ -53,5 +53,5 @@ export const LAN_ONLY_MODE_TRADEOFF =
 export const MANAGED_BRIDGE_STEP: PrinterConnectivityStep = {
   id: 'bridge',
   title: 'Printer connectivity is built in',
-  body: 'This PrintStream server includes its own printer connection service, so there is nothing to install — printers on the server’s local network are reached automatically.'
+  body: 'This PrintStream server includes its own printer connection service, so there is nothing to install. Printers on the server’s local network are reached automatically.'
 }
