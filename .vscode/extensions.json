@@ -4,7 +4,6 @@
   // Microsoft PostgreSQL extension; eslint + prisma match our toolchain.
   "recommendations": [
     "ms-ossdata.vscode-pgsql",
-    "dbaeumer.vscode-eslint",
-    "Prisma.prisma"
+    "dbaeumer.vscode-eslint"
   ]
 }

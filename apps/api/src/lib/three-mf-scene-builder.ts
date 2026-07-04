@@ -232,7 +232,9 @@ function renderArrangedModelSettingsPlates(arranged: ArrangedInstance[], plates:
 }
 
 function replaceModelSettingsPlates(xml: string, platesXml: string): string {
-  const withoutPlates = xml.replace(/[ \t]*<plate\b[^>]*>[\s\S]*?<\/plate>\n?/g, '')
+  // No leading `[ \t]*` indentation trim: it made the scan quadratic on
+  // whitespace-heavy uploads, and any orphaned indentation is inert in XML.
+  const withoutPlates = xml.replace(/<plate\b[^>]*>[\s\S]*?<\/plate>\n?/g, '')
   const insertion = platesXml ? `${platesXml}\n` : ''
   if (/<\/config>/.test(withoutPlates)) {
     return withoutPlates.replace(/<\/config>/, `${insertion}</config>`)
@@ -1255,7 +1257,9 @@ export async function buildEditedThreeMf(
     baseModelRelsXml = await readEntry(baseSourcePath, THREE_MF_MODEL_RELS_ENTRY, undefined, 4 * 1024 * 1024)
       .then((buffer) => buffer.toString('utf8'))
       .catch(() => null)
-    baseModelSettingsXml = await readEntry(baseSourcePath, 'Metadata/model_settings.config', undefined, 64 * 1024 * 1024)
+    // Default 8 MiB cap — matches the bridge's bound for the same entry, and
+    // bounds the plate-rewrite regex scans over this XML.
+    baseModelSettingsXml = await readEntry(baseSourcePath, 'Metadata/model_settings.config')
       .then((buffer) => buffer.toString('utf8'))
       .catch(() => NEW_PROJECT_MODEL_SETTINGS_XML)
     projectSettingsJson = await readEntry(baseSourcePath, 'Metadata/project_settings.config', undefined, 8 * 1024 * 1024)

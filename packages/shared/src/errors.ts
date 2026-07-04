@@ -8,16 +8,25 @@ export interface ApiErrorBody {
   message?: unknown
 }
 
+/**
+ * Only this much of an HTML error body is scanned. A human-facing message never
+ * needs more, and the cap keeps a huge (or adversarial) response body from
+ * stalling the regexes below.
+ */
+const HTML_MESSAGE_SCAN_LIMIT = 8 * 1024
+
 function extractHtmlErrorMessage(value: string): string | null {
   if (!/<[a-z][\s\S]*>/i.test(value)) return null
 
-  const title = value.match(/<title[^>]*>\s*([^<]+?)\s*<\/title>/i)?.[1]?.trim()
+  const scan = value.slice(0, HTML_MESSAGE_SCAN_LIMIT)
+
+  const title = scan.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim()
   if (title) return title
 
-  const heading = value.match(/<h1[^>]*>\s*([^<]+?)\s*<\/h1>/i)?.[1]?.trim()
+  const heading = scan.match(/<h1[^>]*>([^<]*)<\/h1>/i)?.[1]?.trim()
   if (heading) return heading
 
-  const text = value
+  const text = scan
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')

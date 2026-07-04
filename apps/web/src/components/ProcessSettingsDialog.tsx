@@ -647,13 +647,16 @@ function ProcessSettingField(props: ProcessSettingFieldProps): JSX.Element {
 
   const isInteger = option.type === 'int'
   const isFloat = option.type === 'float'
-  // percent / floatOrPercent may hold a `%` suffix (e.g. "40%"), so they can't be a native
-  // number input — they stay text but only accept number/`.`/`%`/`-` characters.
+  // A pure percent value is serialized with a `%` suffix ("15%"), but since it is ALWAYS a
+  // percentage the suffix is redundant with the `%` sidetext decorator — show just the number
+  // in a native number input and re-append the suffix on change. floatOrPercent stays text:
+  // there the typed `%` is meaningful (it distinguishes "40%" from "0.4" mm).
+  const isPurePercent = option.type === 'percent' && !option.vector
   const isPercentish = option.type === 'percent' || option.type === 'floatOrPercent'
   const isNumeric = isInteger || isFloat || isPercentish
   // A vector setting packs several values into one string (e.g. "0.4,0.4"); keep it free-text.
   // A native number input gives the right keyboard + spinners and rejects letters outright.
-  const useNumberInput = (isInteger || isFloat) && !option.vector
+  const useNumberInput = (isInteger || isFloat || isPurePercent) && !option.vector
   // Single numeric fields get a FIXED width so every one lines up (otherwise each sizes itself
   // between min/max from its content + the native spinners, so e.g. "Wall loops" and "Top shell
   // layers" came out different widths). Vector/string/point keep the wider flexible range.
@@ -662,13 +665,18 @@ function ProcessSettingField(props: ProcessSettingFieldProps): JSX.Element {
   return (
     <Input
       type={useNumberInput ? 'number' : 'text'}
-      value={scalar}
+      value={isPurePercent ? scalar.replace(/%/g, '').trim() : scalar}
       disabled={!enabled}
       onChange={(event) => {
-        // The native number input already blocks non-numeric text; the percent fields are text,
-        // so strip anything that can't belong to a number/percent as it is typed.
+        // The native number input already blocks non-numeric text; the floatOrPercent fields are
+        // text, so strip anything that can't belong to a number/percent as it is typed.
         const raw = event.target.value
-        onScalarChange(settingKey, isPercentish && !option.vector ? raw.replace(/[^\d.%-]/g, '') : raw)
+        if (isPurePercent) {
+          // Keep BambuStudio's serialized form ("15%") in the config.
+          onScalarChange(settingKey, raw === '' ? '' : `${raw}%`)
+        } else {
+          onScalarChange(settingKey, isPercentish && !option.vector ? raw.replace(/[^\d.%-]/g, '') : raw)
+        }
       }}
       endDecorator={option.sidetext ? <Typography level="body-xs">{option.sidetext}</Typography> : undefined}
       slotProps={isNumeric ? {

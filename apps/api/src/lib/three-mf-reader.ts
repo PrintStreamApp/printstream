@@ -403,7 +403,9 @@ export async function readSceneManifest(
 
   const [rootModelXml, modelSettingsXml, projectSettingsJson, brimEarPointsText, customGcodeText] = await Promise.all([
     readEntry(filePath, '3D/3dmodel.model', signal, 64 * 1024 * 1024).then((buffer) => buffer.toString('utf8')),
-    readEntry(filePath, 'Metadata/model_settings.config', signal, 64 * 1024 * 1024).then((buffer) => buffer.toString('utf8')),
+    // Default 8 MiB cap — matches the bridge's bound for the same entry; only the
+    // mesh XML above legitimately outgrows it.
+    readEntry(filePath, 'Metadata/model_settings.config', signal).then((buffer) => buffer.toString('utf8')),
     readEntry(filePath, 'Metadata/project_settings.config', signal, 8 * 1024 * 1024)
       .then((buffer) => buffer.toString('utf8'))
       .catch(() => null),

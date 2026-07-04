@@ -22,3 +22,15 @@ test('extractErrorMessage extracts useful text from HTML error bodies', () => {
     'Access denied'
   )
 })
+test('extractErrorMessage scans only the head of a huge HTML body', () => {
+  const filler = '<p>x</p>'.repeat(64 * 1024)
+  assert.equal(
+    extractErrorMessage(`<html><head><title>502 Bad Gateway</title></head><body>${filler}</body></html>`),
+    '502 Bad Gateway'
+  )
+  // A title buried past the scan window is not worth hunting for; the strip
+  // fallback (bounded to the same window) answers instead.
+  const late = extractErrorMessage(`<html>${filler}<title>late title</title></html>`)
+  assert.ok(!late.includes('late title'))
+  assert.ok(late.startsWith('x x'))
+})

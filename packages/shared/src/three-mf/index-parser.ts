@@ -661,9 +661,16 @@ export function collectNormalizedModels(value: unknown, models: Set<PrinterModel
   }
 }
 
+/**
+ * Longest printer-model value worth parsing. Real `printer_model` /
+ * `compatible_printers` values are at most a few KB; the cap keeps the
+ * forgiving regexes below from backtracking over a pathological entry.
+ */
+const SERIALIZED_MODEL_VALUE_LIMIT = 64 * 1024
+
 function parseSerializedModelValues(value: string): string[] {
   const trimmed = value.trim()
-  if (!trimmed) return []
+  if (!trimmed || trimmed.length > SERIALIZED_MODEL_VALUE_LIMIT) return []
 
   const bracketedMatches = Array.from(trimmed.matchAll(/\[([^\]]+)\]/g), (match) => match[1]?.trim() ?? '')
     .filter(Boolean)
@@ -746,6 +753,34 @@ export function normalizePrinterModelName(value: string | undefined): PrinterMod
 }
 
 /**
+ * Inner bodies of every `<tag ...>...</tag>` element, located with indexOf
+ * scans so an adversarial (unclosed / repeated) uploaded document stays
+ * linear instead of triggering regex backtracking.
+ */
+function extractTagBlocks(xml: string, tag: string): string[] {
+  const open = `<${tag}`
+  const close = `</${tag}>`
+  const out: string[] = []
+  let cursor = 0
+  while (true) {
+    const start = xml.indexOf(open, cursor)
+    if (start < 0) break
+    const afterName = xml.charAt(start + open.length)
+    if (afterName !== '' && afterName !== '>' && afterName !== '/' && !/\s/.test(afterName)) {
+      cursor = start + open.length
+      continue
+    }
+    const openEnd = xml.indexOf('>', start + open.length)
+    if (openEnd < 0) break
+    const end = xml.indexOf(close, openEnd + 1)
+    if (end < 0) break
+    out.push(xml.slice(openEnd + 1, end))
+    cursor = end + close.length
+  }
+  return out
+}
+
+/**
  * Parse Bambu Studio's `model_settings.config` for per-plate labels and the
  * object filament ids that still matter when `slice_info.config` is absent.
  */
@@ -768,8 +803,8 @@ export function parseModelSettingsPlates(xml: string, projectSettingsJson: strin
     const usedFilamentIds = new Set<number>()
     const objects: BridgeLibraryThreeMfObject[] = []
     const seenObjectIds = new Set<number>()
-    for (const match of block.matchAll(/<model_instance\b[^>]*>[\s\S]*?<metadata\s+key="object_id"\s+value="(\d+)"\s*\/>[\s\S]*?<\/model_instance>/g)) {
-      const objectId = Number.parseInt(match[1] ?? '', 10)
+    for (const instanceBody of extractTagBlocks(block, 'model_instance')) {
+      const objectId = Number.parseInt(instanceBody.match(/<metadata\s+key="object_id"\s+value="(\d+)"\s*\/>/)?.[1] ?? '', 10)
       if (!Number.isInteger(objectId) || objectId <= 0) continue
       for (const extruderId of objectExtrudersById.get(objectId) ?? []) {
         if (extruderId > 0) usedFilamentIds.add(extruderId)
@@ -939,7 +974,9 @@ function numberAt(values: string[], index: number): number | null {
 /** Parse an XML attribute string into a record. Exported for the scene reader. */
 export function parseAttrs(input: string): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const match of input.matchAll(/([\w:-]+)="([^"]*)"/g)) {
+  // The lookbehind pins each attempt to the start of a name run, keeping the
+  // scan linear on malformed input instead of retrying inside long name runs.
+  for (const match of input.matchAll(/(?<![\w:-])([\w:-]+)="([^"]*)"/g)) {
     const key = match[1]
     const value = match[2]
     if (key != null && value != null) out[key] = decodeXmlAttributeValue(value)
@@ -982,8 +1019,10 @@ function numOrNull(value: string | undefined): number | null {
  */
 function cleanFilamentName(value: string | undefined): string | null {
   if (!value) return null
+  // No leading `\s*`: the qualifier match runs to end-of-string, so the final
+  // trim removes the same whitespace without the quadratic backtracking.
   const trimmed = value.trim()
-    .replace(/\s*@BBL\b.*$/i, '')
+    .replace(/@BBL\b.*$/i, '')
     .trim()
   return trimmed || null
 }

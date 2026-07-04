@@ -1,0 +1,10 @@
+# CodeQL scan configuration for the public repository.
+#
+# Test files and test-only helpers are excluded: alerts raised against test
+# scaffolding (stubbed fetch handlers, fixture builders) describe code that
+# never runs in production and drown out findings in shipped code.
+name: PrintStream CodeQL config
+paths-ignore:
+  - '**/*.test.ts'
+  - '**/*.test.tsx'
+  - '**/test-utils/**'

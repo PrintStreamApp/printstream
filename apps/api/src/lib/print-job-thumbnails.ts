@@ -35,6 +35,7 @@ export async function deletePrintJobThumbnail(storedPath: string): Promise<void>
 }
 
 function resolvePrintJobThumbnailPath(storedPath: string): string {
-  if (path.isAbsolute(storedPath)) return storedPath
-  return path.join(PRINT_JOB_THUMBNAIL_DIR, storedPath)
+  // storedPath is always the server-generated `${jobId}.png`; basename keeps a
+  // corrupted or tampered stored value from escaping the thumbnail directory.
+  return path.join(PRINT_JOB_THUMBNAIL_DIR, path.basename(storedPath))
 }

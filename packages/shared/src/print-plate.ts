@@ -9,9 +9,11 @@ function parsePositiveInteger(value: string | null | undefined): number | null {
 }
 
 function basename(value: string): string {
-  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '')
-  const slashIndex = normalized.lastIndexOf('/')
-  return slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized
+  const normalized = value.replace(/\\/g, '/')
+  let end = normalized.length
+  while (end > 0 && normalized[end - 1] === '/') end -= 1
+  const slashIndex = normalized.lastIndexOf('/', end - 1)
+  return normalized.slice(slashIndex + 1, end)
 }
 
 function stripObservedPrintExtension(value: string): string {
