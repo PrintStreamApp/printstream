@@ -4,7 +4,8 @@
  * These render no editor state of their own beyond trivial local UI state (drag
  * highlight, a focused field's draft string): the plate thumbnail strip, the gizmo
  * toolbar and its buttons, the keyboard-shortcut help popup, the manual transform
- * panel and its axis inputs, and the filament option row shared by the material
+ * panel and its axis inputs, the per-plate layer-pauses section, and the filament
+ * option row shared by the material
  * pickers. Shared editor types/consts come from ./editorGeometry; the
  * filament-option shape is a type-only import from ./EditorView (erased, no runtime
  * cycle).
@@ -35,6 +36,7 @@ import {
 } from '@mui/joy'
 import { listItemDecoratorClasses } from '@mui/joy/ListItemDecorator'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded'
@@ -64,11 +66,11 @@ import FormatPaintRoundedIcon from '@mui/icons-material/FormatPaintRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
 import TouchAppRoundedIcon from '@mui/icons-material/TouchAppRounded'
-import type { LibraryFile } from '@printstream/shared'
+import type { LibraryFile, SceneEditPartSubtype } from '@printstream/shared'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
-import type { GizmoMode, SelectedTransform } from './editorGeometry'
-import type { EditorInstance, EditorPlate } from './lib/editorModel'
+import { PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform } from './editorGeometry'
+import type { EditorInstance, EditorPause, EditorPlate } from './lib/editorModel'
 import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
 import type { FilamentOption } from './EditorView'
 
@@ -916,6 +918,53 @@ function FilamentBadge({
 }
 
 /**
+ * Per-part "Change type" menu (BambuStudio's right-click → Change type): pick the part's
+ * Bambu volume subtype. A non-normal part shows a highlighted trigger so retyped parts are
+ * visible at a glance in the list.
+ */
+function PartTypeMenu({
+  subtype,
+  partName,
+  onChange
+}: {
+  subtype: string | null
+  partName: string
+  onChange: (subtype: SceneEditPartSubtype) => void
+}) {
+  const current = subtype ?? 'normal_part'
+  const isSpecial = current !== 'normal_part'
+  const currentLabel = PART_SUBTYPE_OPTIONS.find((option) => option.subtype === current)?.label ?? current
+  return (
+    <Dropdown>
+      <Tooltip title={`Part type: ${currentLabel}`}>
+        <MenuButton
+          slots={{ root: IconButton }}
+          slotProps={{ root: {
+            size: 'sm',
+            variant: isSpecial ? 'soft' : 'plain',
+            color: isSpecial ? 'primary' : 'neutral',
+            'aria-label': `Change type of ${partName}`
+          } }}
+        >
+          <CategoryRoundedIcon fontSize="small" />
+        </MenuButton>
+      </Tooltip>
+      <Menu placement="bottom-end" sx={{ zIndex: (theme) => theme.zIndex.tooltip }}>
+        {PART_SUBTYPE_OPTIONS.map((option) => (
+          <MenuItem
+            key={option.subtype}
+            selected={option.subtype === current}
+            onClick={() => { if (option.subtype !== current) onChange(option.subtype) }}
+          >
+            {option.label}
+          </MenuItem>
+        ))}
+      </Menu>
+    </Dropdown>
+  )
+}
+
+/**
  * The Objects sidebar list. Each row selects/duplicates/deletes the model. When
  * `perObject` is supplied (slice settings present), the row also carries the
  * per-object controls that used to live in a separate dialog: a print on/off
@@ -925,7 +974,11 @@ export function ModelList({
   instances,
   selectedKey,
   extraSelectedKeys,
+  partSelection,
   onSelect,
+  onSelectPart,
+  onObjectContextMenu,
+  onPartContextMenu,
   onRename,
   onDuplicate,
   onDelete,
@@ -934,13 +987,22 @@ export function ModelList({
   onReassignFilament,
   resolveFilamentId,
   onTogglePrintable,
+  onChangePartType,
   perObject
 }: {
   instances: EditorInstance[]
   selectedKey: string | null
   /** Additional multi-selected instance keys (Ctrl/Cmd-click). */
   extraSelectedKeys?: ReadonlyArray<string>
-  onSelect: (key: string, additive?: boolean) => void
+  /** Selected PARTS of one object (mutually exclusive with the object selection). */
+  partSelection?: { objectId: number; componentObjectIds: ReadonlyArray<number> } | null
+  onSelect: (key: string, modifiers?: { additive?: boolean; range?: boolean }) => void
+  /** Select a part row (plain / Ctrl-toggle / Shift-range, BambuStudio volume-mode rules). */
+  onSelectPart?: (objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }) => void
+  /** Right-click on an object row: open the object context menu at the pointer. */
+  onObjectContextMenu?: (key: string, position: { x: number; y: number }) => void
+  /** Right-click on a part row: open the part context menu at the pointer. */
+  onPartContextMenu?: (objectId: number, componentObjectId: number, position: { x: number; y: number }) => void
   onRename: (key: string) => void
   onDuplicate: (key: string) => void
   onDelete: (key: string) => void
@@ -951,6 +1013,8 @@ export function ModelList({
   resolveFilamentId?: (id: number | null) => number | null
   /** Toggle an instance's Bambu "Printable" flag (per-instance, editor-owned). */
   onTogglePrintable: (key: string) => void
+  /** Change a part's Bambu volume type (BambuStudio's "Change type"), keyed like part filament. */
+  onChangePartType?: (objectId: number, componentObjectId: number, subtype: SceneEditPartSubtype) => void
   /** Slice-config per-object process overrides (keyed by Bambu objectId). Null without a profile. */
   perObject?: {
     sliceObjectIds: Set<number>
@@ -984,7 +1048,13 @@ export function ModelList({
         const showParts = instance.parts.length > 1
         return (
           <Fragment key={instance.key}>
-            <ListItem sx={{ borderRadius: 'sm', bgcolor: instance.key === selectedKey ? 'neutral.softBg' : extraSelectedKeys?.includes(instance.key) ? 'neutral.plainActiveBg' : undefined }}>
+            <ListItem
+              onContextMenu={onObjectContextMenu ? (event) => {
+                event.preventDefault()
+                onObjectContextMenu(instance.key, { x: event.clientX, y: event.clientY })
+              } : undefined}
+              sx={{ borderRadius: 'sm', bgcolor: instance.key === selectedKey ? 'neutral.softBg' : extraSelectedKeys?.includes(instance.key) ? 'neutral.plainActiveBg' : undefined }}
+            >
               <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
                 <Tooltip title={printing ? 'Printable — toggle to skip' : 'Skipped — toggle to print'} variant="soft">
                   <Switch
@@ -998,8 +1068,10 @@ export function ModelList({
                 <Typography
                   level="body-sm"
                   noWrap
-                  onClick={(event) => onSelect(instance.key, event.ctrlKey || event.metaKey)}
-                  sx={{ flex: 1, minWidth: 0, cursor: 'pointer', opacity: printing ? 1 : 0.5 }}
+                  onClick={(event) => onSelect(instance.key, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey })}
+                  // userSelect off so a Shift-range click extends the selection instead of
+                  // highlighting the row names as text.
+                  sx={{ flex: 1, minWidth: 0, cursor: 'pointer', userSelect: 'none', opacity: printing ? 1 : 0.5 }}
                 >
                   {instance.name}
                 </Typography>
@@ -1042,10 +1114,32 @@ export function ModelList({
                 </Tooltip>
               </Stack>
             </ListItem>
-            {showParts && instance.parts.map((part, index) => (
-              <ListItem key={`${instance.key}:${index}`} sx={{ pl: 3 }}>
+            {showParts && instance.parts.map((part, index) => {
+              const partSelected = perObjectId != null
+                && partSelection?.objectId === perObjectId
+                && partSelection.componentObjectIds.includes(part.componentObjectId)
+              return (
+              <ListItem
+                key={`${instance.key}:${index}`}
+                onContextMenu={onPartContextMenu && perObjectId != null ? (event) => {
+                  event.preventDefault()
+                  onPartContextMenu(perObjectId, part.componentObjectId, { x: event.clientX, y: event.clientY })
+                } : undefined}
+                sx={{ pl: 3, borderRadius: 'sm', bgcolor: partSelected ? 'neutral.softBg' : undefined }}
+              >
                 <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
-                  <Typography level="body-xs" noWrap sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography
+                    level="body-xs"
+                    noWrap
+                    onClick={onSelectPart && perObjectId != null ? (event) => {
+                      onSelectPart(perObjectId, part.componentObjectId, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey })
+                    } : undefined}
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      ...(onSelectPart && perObjectId != null ? { cursor: 'pointer', userSelect: 'none' } : {})
+                    }}
+                  >
                     {part.name ?? `Part ${index + 1}`}
                   </Typography>
                   <FilamentBadge
@@ -1054,6 +1148,13 @@ export function ModelList({
                     options={filamentOptions}
                     onReassign={onReassignFilament && perObjectId != null ? (fid) => onReassignFilament([{ objectId: perObjectId, componentObjectId: part.componentObjectId }], fid) : undefined}
                   />
+                  {onChangePartType && perObjectId != null && (
+                    <PartTypeMenu
+                      subtype={part.subtype}
+                      partName={part.name ?? `Part ${index + 1}`}
+                      onChange={(subtype) => onChangePartType(perObjectId, part.componentObjectId, subtype)}
+                    />
+                  )}
                   {perObject?.onEditPart && sliceObject != null && (() => {
                     const partOverrides = perObject!.partOverrideCountFor?.(sliceObject, part.componentObjectId) ?? 0
                     return (
@@ -1072,10 +1173,113 @@ export function ModelList({
                   })()}
                 </Stack>
               </ListItem>
-            ))}
+              )
+            })}
           </Fragment>
         )
       })}
     </List>
+  )
+}
+
+/**
+ * Click-driven help popup for the Pauses section (not a hover Tooltip, so it also
+ * opens on touch devices). Explains the before-the-layer semantics and how to read
+ * an exact height off the sliced G-code preview.
+ */
+function PauseHelpPopup() {
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{ root: { size: 'sm', variant: 'plain', color: 'neutral', 'aria-label': 'About pauses' } }}
+      >
+        <HelpOutlineRoundedIcon fontSize="small" />
+      </MenuButton>
+      <Menu placement="bottom-start" sx={{ zIndex: (theme) => theme.zIndex.tooltip, p: 1.25, maxWidth: 300 }}>
+        <Typography level="title-sm" sx={{ mb: 0.75 }}>Pauses</Typography>
+        <Stack spacing={0.75}>
+          <Typography level="body-xs">
+            The printer stops just before it prints the layer that ends at the height you
+            enter, then waits for you to resume from the printer screen. With 0.2 mm layers,
+            a pause at 5.0 mm stops once 4.8 mm has printed.
+          </Typography>
+          <Typography level="body-xs">
+            Each pause shows as an amber line on the models, and the height keeps working
+            if you change the layer height later.
+          </Typography>
+          <Typography level="body-xs">
+            Need an exact layer? Slice the plate, scrub the G-code preview to the layer you
+            want, and enter the height shown next to the layer number.
+          </Typography>
+        </Stack>
+      </Menu>
+    </Dropdown>
+  )
+}
+
+/**
+ * The per-plate "Pauses" section rendered under the Objects list: layer pauses entered
+ * by print height (mm), mirroring the filament-change rows. Baked to PausePrint entries
+ * in `Metadata/custom_gcode_per_layer.xml` on save.
+ */
+export function PlatePausesSection({ pauses, onChange }: {
+  pauses: EditorPause[]
+  onChange: (pauses: EditorPause[]) => void
+}) {
+  return (
+    <Stack spacing={0.75} sx={{ mt: 1 }}>
+      <Stack direction="row" spacing={0.25} alignItems="center">
+        <Typography level="title-sm">Pauses</Typography>
+        <PauseHelpPopup />
+      </Stack>
+      {pauses.length === 0 && (
+        <Typography level="body-xs" textColor="text.tertiary">
+          Stop the print at a height, e.g. to embed magnets or nuts, then resume from the
+          printer.
+        </Typography>
+      )}
+      {pauses.map((pause, index) => (
+        <Stack key={index} direction="row" spacing={0.75} alignItems="center">
+          <Input
+            size="sm"
+            type="number"
+            value={pause.z}
+            endDecorator="mm"
+            slotProps={{ input: { min: 0.2, step: 0.2, 'aria-label': 'Pause height' } }}
+            onChange={(event) => {
+              const next = Number.parseFloat(event.target.value)
+              if (!Number.isFinite(next) || next <= 0) return
+              onChange(pauses.map((entry, i) => (i === index ? { z: next } : entry)))
+            }}
+            sx={{ width: 110, flexShrink: 0 }}
+          />
+          <Typography level="body-xs" textColor="text.tertiary" sx={{ flex: 1, minWidth: 0 }}>
+            before this layer prints
+          </Typography>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label="Remove pause"
+            onClick={() => onChange(pauses.filter((_, i) => i !== index))}
+          >
+            <CloseRoundedIcon />
+          </IconButton>
+        </Stack>
+      ))}
+      <Button
+        size="sm"
+        variant="soft"
+        startDecorator={<AddRoundedIcon />}
+        onClick={() => {
+          const lastZ = pauses[pauses.length - 1]?.z ?? 0
+          onChange([...pauses, { z: Math.round((lastZ + 1) * 10) / 10 }])
+        }}
+        sx={{ alignSelf: 'flex-start' }}
+      >
+        Add pause
+      </Button>
+    </Stack>
   )
 }

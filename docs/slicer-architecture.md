@@ -63,10 +63,13 @@ painting (world-normal gate that also blocks propagation). `brimEars` carries pe
 ears (object-local points + radius), written wholesale to Bambu's
 `Metadata/brim_ear_points.txt` (objects referenced by 1-based root-resource ordinal);
 `readSceneManifest` parses the sidecar back onto scene instances so reopened
-projects keep their ears. `filamentChanges` carries per-plate layer-based filament
-changes (ToolChange entries in `Metadata/custom_gcode_per_layer.xml`); the writer
-merges listed plates' tool changes while preserving pause/custom entries and
-untouched plates, and the scene response seeds the editor's per-plate list.
+projects keep their ears. `filamentChanges` and `pauses` carry per-plate layer-based
+filament changes and layer pauses (ToolChange / PausePrint entries in
+`Metadata/custom_gcode_per_layer.xml`, both keyed by the target layer's `top_z` in mm
+— the slicer re-snaps to the nearest layer at slice time, BambuStudio semantics); the
+writer replaces only the listed plates' entries of the edited type while preserving
+the other entry types and untouched plates, and the scene response seeds the editor's
+per-plate lists.
 `addedParts` carries new volumes added INSIDE objects (Bambu's negative parts,
 modifiers, support blockers/enforcers): each references a staged import's mesh plus
 an object-local 12-number matrix; the writer injects the mesh as a new object
@@ -79,6 +82,13 @@ persists ModelVolume config, so the slicer applies them inside the volume. Paren
 carrying an inline mesh are first wrapped (mesh moves to its own object behind an
 identity component) so 3MF's mesh-XOR-components rule holds. Painting/ears/parts
 are limited to in-project parts; imports/cut halves are not supported yet.
+`partTypeChanges` / `importPartTypes` carry BambuStudio's "Change type" (normal /
+negative / modifier / support blocker / enforcer) on existing parts: the first keys by
+objectId+componentObjectId (baked parts, applied by rewriting the `<part>`'s `subtype`
+attribute), the second by importId+solid index (unsaved multi-solid imports, whose parts
+are baked with the chosen subtype instead of `normal_part`). Retyped parts render as
+translucent volumes and per-part process overrides apply inside them, exactly like
+added modifier volumes.
 
 `meshReplacements` carries BambuStudio "Replace with…" swaps: each `{objectId, importId}`
 records that an in-project object's mesh was replaced by a staged import. The replaced
@@ -141,14 +151,21 @@ deleting objects corrupts the `<assemble>` cross-references). The only mechanism
 is the `--skip-objects "<identify_id,…>"` command-line flag, keyed on each instance's `identify_id`
 (stored as `loaded_id` by the loader). So `printable="0"` is purely an **in-3MF marker of intent**;
 the slicer service is what enforces it: before invoking the CLI, `apps/slicer/src/skip-objects.ts`
-(`deriveSkipObjectIdentifyIds`) reads the build items marked `printable="0"`, maps each `objectid`
-to its `model_settings` `identify_id`, and appends `--skip-objects`.
+(`deriveSkipObjectIdentifyIds`) reads the build items marked `printable="0"`, maps each one to its
+instance's `model_settings` `identify_id`, and appends `--skip-objects`.
 
-This drives the **slice/print dialog's per-object selection**: `createObjectCustomizedThreeMf`
-(`three-mf-output.ts`) marks the deselected objects `printable="0"` on the target plate, and real
-Bambu source projects carry the `identify_id`s the mapping needs. The editor's per-*instance*
-Printable toggle writes the same marker, but its rebuilt 3MF omits `identify_id`s and skips per
-instance rather than per object — so routing it through `--skip-objects` is a separate follow-up.
+Both exclusion surfaces ride this path. The **slice/print dialog's per-object selection**:
+`createObjectCustomizedThreeMf` (`three-mf-output.ts`) marks the deselected objects `printable="0"`
+on the target plate. The **editor's per-instance Printable toggle**: the bake writes `printable="0"`
+on the skipped instances' build items. The `identify_id`s both need are guaranteed by the bake:
+`renderArrangedModelSettingsPlates` (`three-mf-scene-builder.ts`) writes one on **every**
+`model_instance` — preserving the source project's ids for returning instances and minting fresh
+unique ids for new/duplicated ones — so an editor-rewritten (or editor-saved) project stays
+skippable. (Editor saves used to strip `identify_id`s, which silently broke per-object selection
+on any previously saved project; such a project regains ids on its next save.) The skip mapping is
+per **instance** — build items appear in instance-id order, so an object with a mix of printable
+and skipped items skips only the toggled instances, while an object whose items are all
+unprintable skips every instance.
 
 ## Invariants
 

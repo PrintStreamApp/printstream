@@ -2,17 +2,23 @@
  * "Help & feedback" dialog: starts a support conversation with the PrintStream
  * team (feedback, bug report, or question), available to every signed-in user.
  * On the hosted deployment it opens a two-way conversation via
- * `POST /api/support/conversations` — replies land in Account → Messages.
+ * `POST /api/support/conversations`, and the `help.conversations` plugin slot
+ * below the form lists the user's existing conversations so replies are
+ * readable from the same footer button (the Account → Messages composer passes
+ * `showConversations={false}` because that page already shows the list).
  * Self-hosted installs cannot reach the platform, so the same form composes a
  * prefilled email to `SUPPORT_CONTACT_EMAIL` in the user's mail app instead.
  */
 import { useState } from 'react'
-import { Box, Button, FormControl, FormLabel, ModalDialog, Radio, RadioGroup, Stack, Textarea, Typography } from '@mui/joy'
+import { useQueryClient } from '@tanstack/react-query'
+import { Box, Button, DialogTitle, FormControl, FormLabel, Radio, RadioGroup, Stack, Textarea, Typography } from '@mui/joy'
 import { SUPPORT_CONTACT_EMAIL, type CreateSupportConversationRequest } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { toast } from '../lib/toast'
+import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { BackAwareModal as Modal } from './BackAwareModal'
+import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 
 type HelpKind = CreateSupportConversationRequest['kind']
 
@@ -28,8 +34,18 @@ const KIND_PLACEHOLDERS: Record<HelpKind, string> = {
   question: 'What can we help you with?'
 }
 
-export function HelpFeedbackDialog({ onClose }: { onClose: () => void }) {
+const COMPOSE_FORM_ID = 'help-feedback-compose'
+
+export function HelpFeedbackDialog({
+  onClose,
+  showConversations = true
+}: {
+  onClose: () => void
+  /** Hide the `help.conversations` slot when the host page already lists them. */
+  showConversations?: boolean
+}) {
   const { selfHosted } = useRuntimePolicy()
+  const queryClient = useQueryClient()
   const [kind, setKind] = useState<HelpKind>('question')
   const [message, setMessage] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -52,7 +68,10 @@ export function HelpFeedbackDialog({ onClose }: { onClose: () => void }) {
         method: 'POST',
         body: { kind, message: message.trim(), pageUrl: window.location.pathname }
       })
-      toast.success('Message sent — replies show up under Messages on your Account page.')
+      // Refresh every mounted conversation list (this dialog's slot and
+      // Account → Messages) so the new thread appears without a reload.
+      void queryClient.invalidateQueries({ queryKey: ['support'] })
+      toast.success('Message sent. Replies show up under Help & feedback and on your Account page.')
       onClose()
     } catch (err) {
       setError((err as Error).message)
@@ -68,49 +87,57 @@ export function HelpFeedbackDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal open onClose={onClose}>
-      <ModalDialog sx={{ maxWidth: 520, width: '100%' }}>
-        <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          <Stack spacing={0.5}>
-            <Typography level="h4">Help &amp; feedback</Typography>
-            <Typography level="body-sm" textColor="text.tertiary">
-              {selfHosted
-                ? `Opens an email draft to ${SUPPORT_CONTACT_EMAIL} in your mail app.`
-                : 'Starts a conversation with the PrintStream team — we reply under Messages on your Account page.'}
-            </Typography>
-          </Stack>
-          <FormControl>
-            <FormLabel>What kind of message is this?</FormLabel>
-            <RadioGroup
-              orientation="horizontal"
-              value={kind}
-              onChange={(event) => setKind(event.target.value as HelpKind)}
-              sx={{ gap: 2, flexWrap: 'wrap' }}
+      <ScrollableModalDialog sx={{ maxWidth: 520 }}>
+        <DialogTitle>Help &amp; feedback</DialogTitle>
+        <Typography level="body-sm" textColor="text.tertiary">
+          {selfHosted
+            ? `Opens an email draft to ${SUPPORT_CONTACT_EMAIL} in your mail app.`
+            : 'Starts a conversation with the PrintStream team. We reply here and under Messages on your Account page.'}
+        </Typography>
+        <ScrollableDialogBody>
+          <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+            <Box
+              component="form"
+              id={COMPOSE_FORM_ID}
+              onSubmit={handleSubmit}
+              sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}
             >
-              <Radio value="question" label={KIND_LABELS.question} />
-              <Radio value="feedback" label={KIND_LABELS.feedback} />
-              <Radio value="bug" label={KIND_LABELS.bug} />
-            </RadioGroup>
-          </FormControl>
-          <FormControl>
-            <FormLabel>Message</FormLabel>
-            <Textarea
-              value={message}
-              autoFocus
-              minRows={4}
-              maxRows={10}
-              placeholder={KIND_PLACEHOLDERS[kind]}
-              onChange={(event) => setMessage(event.target.value)}
-            />
-          </FormControl>
-          {error && <Typography color="danger" level="body-sm">{error}</Typography>}
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 0.5 }}>
-            <Button type="button" variant="plain" onClick={onClose}>Cancel</Button>
-            <Button type="submit" loading={submitting} disabled={!canSubmit}>
-              {selfHosted ? 'Open email draft' : 'Send'}
-            </Button>
+              <FormControl>
+                <FormLabel>What kind of message is this?</FormLabel>
+                <RadioGroup
+                  orientation="horizontal"
+                  value={kind}
+                  onChange={(event) => setKind(event.target.value as HelpKind)}
+                  sx={{ gap: 2, flexWrap: 'wrap' }}
+                >
+                  <Radio value="question" label={KIND_LABELS.question} />
+                  <Radio value="feedback" label={KIND_LABELS.feedback} />
+                  <Radio value="bug" label={KIND_LABELS.bug} />
+                </RadioGroup>
+              </FormControl>
+              <FormControl>
+                <FormLabel>Message</FormLabel>
+                <Textarea
+                  value={message}
+                  autoFocus
+                  minRows={4}
+                  maxRows={10}
+                  placeholder={KIND_PLACEHOLDERS[kind]}
+                  onChange={(event) => setMessage(event.target.value)}
+                />
+              </FormControl>
+              {error && <Typography color="danger" level="body-sm">{error}</Typography>}
+            </Box>
+            {showConversations && <StaticPluginSlot name="help.conversations" />}
           </Stack>
-        </Box>
-      </ModalDialog>
+        </ScrollableDialogBody>
+        <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 0.5 }}>
+          <Button type="button" variant="plain" onClick={onClose}>Cancel</Button>
+          <Button type="submit" form={COMPOSE_FORM_ID} loading={submitting} disabled={!canSubmit}>
+            {selfHosted ? 'Open email draft' : 'Send'}
+          </Button>
+        </Stack>
+      </ScrollableModalDialog>
     </Modal>
   )
 }

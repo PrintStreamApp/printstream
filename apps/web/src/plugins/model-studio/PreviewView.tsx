@@ -670,6 +670,12 @@ export function PreviewView(props: Record<string, unknown>) {
                   }}
                 >
                   <Chip size="sm" variant="soft" color="neutral">{gcodeTopLayer + 1}/{gcodeLayerCount}</Chip>
+                  {/* The layer's print height: what a pause or filament change in the editor keys on. */}
+                  {gcodePreviewRef.current && (
+                    <Chip size="sm" variant="soft" color="neutral">
+                      {Number(gcodePreviewRef.current.layerZ(gcodeTopLayer).toFixed(2))} mm
+                    </Chip>
+                  )}
                   <Slider
                     orientation="vertical"
                     size="sm"

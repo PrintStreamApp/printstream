@@ -18,6 +18,7 @@ export function PasskeyRegistrationDialog({
   title,
   description,
   confirmLabel,
+  cancelLabel = 'Cancel',
   loading,
   error,
   onClose,
@@ -27,6 +28,7 @@ export function PasskeyRegistrationDialog({
   title: string
   description: string
   confirmLabel: string
+  cancelLabel?: string
   loading: boolean
   error: string | null
   onClose: () => void
@@ -72,7 +74,7 @@ export function PasskeyRegistrationDialog({
 
         <DialogActions>
           <Button variant="plain" color="neutral" onClick={onClose} disabled={loading}>
-            Cancel
+            {cancelLabel}
           </Button>
           <Button loading={loading} onClick={() => onConfirm(nickname.trim() ? nickname.trim() : null)}>
             {confirmLabel}

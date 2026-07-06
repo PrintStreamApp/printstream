@@ -160,6 +160,8 @@ export interface ThreeMfScene {
   primeTower: ThreeMfPrimeTower | null
   /** Layer-based filament changes for this plate (custom_gcode_per_layer ToolChanges). */
   filamentChanges?: Array<{ z: number; filamentId: number; color: string | null }>
+  /** Layer pauses for this plate (custom_gcode_per_layer PausePrint entries). */
+  pauses?: Array<{ z: number }>
   /** Project filament palette (1-based ids), for rendering colour paint in previews. */
   projectFilaments?: Array<{ id: number; color: string | null }>
 }
@@ -515,6 +517,7 @@ export async function readSceneManifest(
   }
 
   const filamentChanges = parseCustomGcodeToolChanges(customGcodeText, plate.index)
+  const pauses = parseCustomGcodePauses(customGcodeText, plate.index)
   const scene: ThreeMfScene = {
     plateIndex: plate.index,
     plateName: plate.name,
@@ -523,6 +526,7 @@ export async function readSceneManifest(
     instances,
     primeTower: parsePrimeTower(projectSettingsJson, plate.index),
     ...(filamentChanges.length > 0 ? { filamentChanges } : {}),
+    ...(pauses.length > 0 ? { pauses } : {}),
     ...(projectFilaments.length > 0
       ? { projectFilaments: projectFilaments.map((filament) => ({ id: filament.id, color: filament.color ?? null })) }
       : {})
@@ -681,28 +685,52 @@ export function parseRootModelComponents(xml: string): Map<number, ThreeMfRootCo
 export const CUSTOM_GCODE_PER_LAYER_ENTRY = 'Metadata/custom_gcode_per_layer.xml'
 
 /**
- * Parse one plate's ToolChange entries (type="2") from `custom_gcode_per_layer.xml`:
- * `{ z, filamentId, color }` per change, ordered as stored. Pause/custom entries are
- * intentionally skipped — the editor only authors filament changes.
+ * Iterate one plate's `<layer .../>` attribute sets from `custom_gcode_per_layer.xml`,
+ * in stored order. Shared by the ToolChange and PausePrint parsers below.
  */
-export function parseCustomGcodeToolChanges(
-  text: string | null,
-  plateIndex: number
-): Array<{ z: number; filamentId: number; color: string | null }> {
-  if (!text) return []
-  const out: Array<{ z: number; filamentId: number; color: string | null }> = []
+function* iterateCustomGcodePlateLayers(text: string | null, plateIndex: number): Generator<Record<string, string>> {
+  if (!text) return
   for (const plateMatch of text.matchAll(/<plate>([\s\S]*?)<\/plate>/g)) {
     const block = plateMatch[1] ?? ''
     const id = Number.parseInt(parseAttrs(/<plate_info\b([^>]*)\/>/.exec(block)?.[1] ?? '').id ?? '', 10)
     if (id !== plateIndex) continue
     for (const layerMatch of block.matchAll(/<layer\b([^>]*)\/>/g)) {
-      const attrs = parseAttrs(layerMatch[1] ?? '')
-      if (attrs.type !== '2') continue
-      const z = Number.parseFloat(attrs.top_z ?? '')
-      const filamentId = Number.parseInt(attrs.extruder ?? '', 10)
-      if (!Number.isFinite(z) || !Number.isInteger(filamentId) || filamentId <= 0) continue
-      out.push({ z, filamentId, color: attrs.color?.trim() || null })
+      yield parseAttrs(layerMatch[1] ?? '')
     }
+  }
+}
+
+/**
+ * Parse one plate's ToolChange entries (type="2") from `custom_gcode_per_layer.xml`:
+ * `{ z, filamentId, color }` per change, ordered as stored. Other entry types are
+ * intentionally skipped — pauses have their own parser below.
+ */
+export function parseCustomGcodeToolChanges(
+  text: string | null,
+  plateIndex: number
+): Array<{ z: number; filamentId: number; color: string | null }> {
+  const out: Array<{ z: number; filamentId: number; color: string | null }> = []
+  for (const attrs of iterateCustomGcodePlateLayers(text, plateIndex)) {
+    if (attrs.type !== '2') continue
+    const z = Number.parseFloat(attrs.top_z ?? '')
+    const filamentId = Number.parseInt(attrs.extruder ?? '', 10)
+    if (!Number.isFinite(z) || !Number.isInteger(filamentId) || filamentId <= 0) continue
+    out.push({ z, filamentId, color: attrs.color?.trim() || null })
+  }
+  return out
+}
+
+/**
+ * Parse one plate's PausePrint entries (type="1") from `custom_gcode_per_layer.xml`:
+ * `{ z }` per pause (the paused layer's top_z), ordered as stored.
+ */
+export function parseCustomGcodePauses(text: string | null, plateIndex: number): Array<{ z: number }> {
+  const out: Array<{ z: number }> = []
+  for (const attrs of iterateCustomGcodePlateLayers(text, plateIndex)) {
+    if (attrs.type !== '1') continue
+    const z = Number.parseFloat(attrs.top_z ?? '')
+    if (!Number.isFinite(z) || z <= 0) continue
+    out.push({ z })
   }
   return out
 }

@@ -116,6 +116,11 @@ export interface GcodeStats {
 export interface ParsedGcodeLayers {
   /** Number of detected print layers (distinct extrusion Z heights). */
   layerCount: number
+  /**
+   * Each layer's extrusion Z in mm — the layer's top, matching the `top_z` a layer
+   * pause or filament change is stored at (length = layerCount).
+   */
+  layerZ: number[]
   /** Flat extrusion vertex positions [x1,y1,z1,x2,y2,z2,...], ordered by layer. */
   extrusionPositions: Float32Array
   /** Cumulative extrusion vertex count at the END of each layer (length = layerCount). */
@@ -199,6 +204,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
   let headerTotalSeconds: number | null = null
 
   const extrusionLayers: number[][] = []
+  const layerZ: number[] = []
   const widthLayers: number[][] = []
   const heightLayers: number[][] = []
   const roleLayers: number[][] = []
@@ -217,6 +223,7 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
     if (currentLayerZ === null || Math.abs(targetZ - currentLayerZ) > Z_EPSILON) {
       layer += 1
       currentLayerZ = targetZ
+      layerZ[layer] = targetZ
     }
   }
 
@@ -391,8 +398,13 @@ export function parseGcodeLayers(text: string): ParsedGcodeLayers {
   }
   void sawWidth
 
+  // ensureLayer can open a layer the Z tracker never stamped (safety path); backfill
+  // holes from the previous layer so the readout never shows undefined.
+  for (let i = 0; i < layerCount; i++) if (layerZ[i] === undefined) layerZ[i] = layerZ[i - 1] ?? 0
+
   return {
     layerCount,
+    layerZ: layerZ.slice(0, layerCount),
     extrusionPositions: extrusion.positions,
     extrusionLayerEnd: extrusion.layerEnd,
     extrusionWidths: flattenScalar(widthLayers, Float32Array) as Float32Array,
@@ -497,6 +509,8 @@ export interface LayeredGcodePreview {
   setVisibleLayers: (topLayer: number, options?: { single?: boolean; showTravel?: boolean; moveEnd?: number }) => void
   /** Number of scrubbable extrusion moves rendered on a layer (drives the move slider). */
   moveCount: (layer: number) => number
+  /** The layer's print Z in mm (its top) — what a layer pause or filament change keys on. */
+  layerZ: (layer: number) => number
   dispose: () => void
 }
 
@@ -742,6 +756,7 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
     layerCount: parsed.layerCount,
     setVisibleLayers,
     moveCount: layerMoveCount,
+    layerZ: (layer: number) => parsed.layerZ[Math.max(0, Math.min(layer, parsed.layerCount - 1))] ?? 0,
     dispose: () => {
       extrusionGeometry.dispose()
       travelGeometry.dispose()

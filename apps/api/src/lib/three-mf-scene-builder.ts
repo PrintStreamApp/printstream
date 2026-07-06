@@ -15,7 +15,7 @@
  */
 import { createWriteStream } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPlateFilamentChanges } from '@printstream/shared'
+import { isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
 import { sliceExtruderForNozzleId, stringArray } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
@@ -206,12 +206,60 @@ function replaceThreeMfBuildSection(modelXml: string, buildItemsXml: string): st
   return modelXml.replace(/<\/model>\s*$/, `  <build>${body}</build>\n</model>\n`)
 }
 
-function renderArrangedModelSettingsPlates(arranged: ArrangedInstance[], plates: SceneEdit['plates']): string {
+/**
+ * Instance `identify_id`s parsed from a source `model_settings.config`, keyed
+ * `"<object_id>:<instance_id>"`, plus the highest id seen (0 when there are none).
+ * The bake preserves a returning instance's id and allocates fresh ones above `maxId`.
+ */
+interface ModelSettingsIdentifyIds {
+  byInstance: Map<string, number>
+  maxId: number
+}
+
+/**
+ * Read every `model_instance`'s `identify_id` out of a `model_settings.config`. The id is
+ * BambuStudio's per-instance handle (`loaded_id` in the engine) — the ONLY key the CLI's
+ * `--skip-objects` flag accepts — so the bake must carry it through (or mint one) for the
+ * per-object/instance "Printable" exclusion to be enforceable on the rewritten file.
+ */
+function parseModelSettingsIdentifyIds(modelSettingsXml: string): ModelSettingsIdentifyIds {
+  const byInstance = new Map<string, number>()
+  let maxId = 0
+  for (const instance of modelSettingsXml.matchAll(/<model_instance\b[^>]*>[\s\S]*?<\/model_instance>/g)) {
+    const objectId = Number(/object_id"\s+value="(\d+)"/.exec(instance[0])?.[1])
+    const instanceId = Number(/instance_id"\s+value="(\d+)"/.exec(instance[0])?.[1])
+    const identifyId = Number(/identify_id"\s+value="(\d+)"/.exec(instance[0])?.[1])
+    if (!Number.isInteger(identifyId)) continue
+    maxId = Math.max(maxId, identifyId)
+    if (Number.isInteger(objectId) && Number.isInteger(instanceId)) {
+      byInstance.set(`${objectId}:${instanceId}`, identifyId)
+    }
+  }
+  return { byInstance, maxId }
+}
+
+function renderArrangedModelSettingsPlates(
+  arranged: ArrangedInstance[],
+  plates: SceneEdit['plates'],
+  sourceIdentifyIds: ModelSettingsIdentifyIds
+): string {
   const instancesByPlate = new Map<number, ArrangedInstance[]>()
   for (const instance of arranged) {
     const list = instancesByPlate.get(instance.plateIndex) ?? []
     list.push(instance)
     instancesByPlate.set(instance.plateIndex, list)
+  }
+  // Every instance carries an identify_id: a returning (objectId, instanceId) keeps the
+  // source's, new/duplicated instances get fresh ids above the source's maximum. Without
+  // one the CLI assigns its own loaded_id at load time, which the slicer service cannot
+  // predict — making printable="0" instances impossible to translate into --skip-objects.
+  let nextIdentifyId = sourceIdentifyIds.maxId + 1
+  const identifyIdFor = (instance: ArrangedInstance): number => {
+    const preserved = sourceIdentifyIds.byInstance.get(`${instance.objectId}:${instance.instanceId}`)
+    if (preserved != null) return preserved
+    const allocated = nextIdentifyId
+    nextIdentifyId += 1
+    return allocated
   }
   const ordered = [...plates].sort((left, right) => left.index - right.index)
   const blocks = ordered.map((plate) => {
@@ -222,6 +270,7 @@ function renderArrangedModelSettingsPlates(arranged: ArrangedInstance[], plates:
         `    <model_instance>`,
         `      <metadata key="object_id" value="${instance.objectId}"/>`,
         `      <metadata key="instance_id" value="${instance.instanceId}"/>`,
+        `      <metadata key="identify_id" value="${identifyIdFor(instance)}"/>`,
         `    </model_instance>`
       )
     }
@@ -435,17 +484,18 @@ interface ImportedPartFileEntry {
 function renderImportedMultiPartModelSettingsXml(
   objectId: number,
   name: string,
-  parts: Array<{ componentObjectId: number; name: string; extruder: number | null; processOverrides?: Record<string, string | string[]> }>
+  parts: Array<{ componentObjectId: number; name: string; extruder: number | null; processOverrides?: Record<string, string | string[]>; subtype?: string }>
 ): string {
   return [
     `  <object id="${objectId}">`,
     `    <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
     ...parts.flatMap((part) => [
-      `    <part id="${part.componentObjectId}" subtype="normal_part">`,
+      `    <part id="${part.componentObjectId}" subtype="${escapeXmlAttribute(part.subtype ?? 'normal_part')}">`,
       `      <metadata key="name" value="${escapeXmlAttribute(part.name)}"/>`,
       ...(part.extruder != null ? [`      <metadata key="extruder" value="${part.extruder}"/>`] : []),
-      // Per-part process overrides set on the unsaved import, baked into the part's metadata.
-      ...Object.entries(part.processOverrides ?? {}).map(([key, value]) =>
+      // Per-part process overrides set on the unsaved import, baked into the part's metadata
+      // (process-setting keys only — structural keys must not be forgeable through this map).
+      ...Object.entries(part.processOverrides ?? {}).filter(([key]) => isProcessSettingKey(key)).map(([key, value]) =>
         `      <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(Array.isArray(value) ? value.join(';') : value)}"/>`),
       '    </part>'
     ]),
@@ -547,6 +597,13 @@ function buildEditedThreeMfDocuments(
     if (!byPart) { byPart = new Map(); importPartProcess.set(entry.importId, byPart) }
     byPart.set(entry.partIndex, entry.overrides)
   }
+  // Part-type changes for multi-solid imports: importId -> (solid index -> Bambu subtype).
+  const importPartTypes = new Map<string, Map<number, string>>()
+  for (const entry of edit.importPartTypes ?? []) {
+    let byPart = importPartTypes.get(entry.importId)
+    if (!byPart) { byPart = new Map(); importPartTypes.set(entry.importId, byPart) }
+    byPart.set(entry.partIndex, entry.subtype)
+  }
   const toExtruder = (filamentId: number | null): number | null =>
     filamentId != null ? filamentToExtruder.get(filamentId) ?? filamentId : null
   for (const imported of imports) {
@@ -566,6 +623,7 @@ function buildEditedThreeMfDocuments(
       })
       const partFilaments = importPartFilament.get(imported.importId)
       const partProcess = importPartProcess.get(imported.importId)
+      const partTypes = importPartTypes.get(imported.importId)
       const solidMeshXmls = multiParts.map((part, i) => renderImportedMeshObjectXml(componentIds[i]!, part.mesh, genUuid))
       if (genUuid) {
         // Production extension: emit the solids as a separate /3D/Objects sub-model and reference
@@ -588,7 +646,9 @@ function buildEditedThreeMfDocuments(
           name: part.name,
           extruder: toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder,
           // Per-part process overrides set on the unsaved import (keyed by solid index).
-          processOverrides: partProcess?.get(i)
+          processOverrides: partProcess?.get(i),
+          // Part type chosen on the unsaved import (Change type); defaults to normal_part.
+          subtype: partTypes?.get(i)
         }))
       ))
     } else {
@@ -624,7 +684,10 @@ function buildEditedThreeMfDocuments(
   modelXml = replaceThreeMfBuildSection(modelXml, renderArrangedBuildItems(arranged, genUuid))
 
   let modelSettingsXml = injectModelSettingsObjects(baseModelSettingsXml, settingsObjects.join('\n'))
-  modelSettingsXml = replaceModelSettingsPlates(modelSettingsXml, renderArrangedModelSettingsPlates(arranged, edit.plates))
+  modelSettingsXml = replaceModelSettingsPlates(
+    modelSettingsXml,
+    renderArrangedModelSettingsPlates(arranged, edit.plates, parseModelSettingsIdentifyIds(baseModelSettingsXml))
+  )
 
   // Attach added part volumes BEFORE the unreferenced-object sweep: a part mesh is
   // only kept alive by the <component> reference inserted here.
@@ -648,6 +711,10 @@ function buildEditedThreeMfDocuments(
 
   if (edit.partProcessOverrides && edit.partProcessOverrides.length > 0) {
     modelSettingsXml = applyPartProcessOverrides(modelSettingsXml, edit.partProcessOverrides)
+  }
+
+  if (edit.partTypeChanges && edit.partTypeChanges.length > 0) {
+    modelSettingsXml = applyPartTypeChanges(modelSettingsXml, edit.partTypeChanges)
   }
 
   if (edit.objectNames && edit.objectNames.length > 0) {
@@ -760,7 +827,9 @@ function addModelSettingsPartEntry(
   name: string,
   settings?: Record<string, string>
 ): string {
-  const settingsXml = Object.entries(settings ?? {}).map(([key, value]) =>
+  // Process-setting keys only: the name/extruder/matrix entries are authored explicitly, so a
+  // structural key smuggled through the settings map must not duplicate or clobber them.
+  const settingsXml = Object.entries(settings ?? {}).filter(([key]) => isProcessSettingKey(key)).map(([key, value]) =>
     `      <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(value)}"/>`)
   const partXml = [
     `    <part id="${partObjectId}" subtype="${escapeXmlAttribute(subtype)}">`,
@@ -859,11 +928,43 @@ export function applyPartProcessOverrides(modelSettingsXml: string, overrides: S
       // identity/placement metadata like source_object_id, source_offset_*, matrix).
       const stripped = partBody.replace(/[ \t]*<metadata\s+key="([^"]+)"\s+value="[^"]*"\s*\/>\n?/g, (line, key: string) =>
         isProcessSettingKey(key) ? '' : line)
-      const injected = Object.entries(partOverrides).map(([key, value]) => {
+      // Inject ONLY process-setting keys. A stale/hand-built request whose override map carries
+      // structural metadata (matrix, source_offset_*, name, extruder) must not clobber — or
+      // duplicate — the part's real entries, which the strip above deliberately preserved.
+      const injected = Object.entries(partOverrides).filter(([key]) => isProcessSettingKey(key)).map(([key, value]) => {
         const serialized = Array.isArray(value) ? value.join(';') : value
         return `\n      <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(serialized)}"/>`
       }).join('')
       return `<part${partAttrs}>${injected}${stripped}</part>`
+    })
+  })
+}
+
+/**
+ * Apply part-type changes (BambuStudio's "Change type": normal/negative/modifier/support
+ * blocker/enforcer) by rewriting the matching `<part>`s' `subtype` attribute inside
+ * `model_settings.config`. Keyed by objectId + componentObjectId like
+ * {@link applyPartProcessOverrides}; the type is shared by every instance of the object.
+ */
+export function applyPartTypeChanges(modelSettingsXml: string, changes: SceneEditPartTypeChange[]): string {
+  const byObjectPart = new Map<number, Map<number, string>>()
+  for (const change of changes) {
+    let parts = byObjectPart.get(change.objectId)
+    if (!parts) { parts = new Map(); byObjectPart.set(change.objectId, parts) }
+    parts.set(change.componentObjectId, change.subtype)
+  }
+  return modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
+    const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
+    const parts = byObjectPart.get(objectId)
+    if (!parts) return objectBlock
+    return objectBlock.replace(/<part\b([^>]*)>/g, (partTag, partAttrs: string) => {
+      const parsed = parseAttrs(partAttrs)
+      const subtype = parts.get(Number.parseInt(parsed.id ?? '', 10))
+      if (!subtype) return partTag
+      if (/\bsubtype="[^"]*"/.test(partAttrs)) {
+        return `<part${partAttrs.replace(/\bsubtype="[^"]*"/, `subtype="${escapeXmlAttribute(subtype)}"`)}>`
+      }
+      return `<part${partAttrs} subtype="${escapeXmlAttribute(subtype)}">`
     })
   })
 }
@@ -1141,49 +1242,82 @@ function resolvePartPaintByEntry(
   return byEntry
 }
 
+/** A `<layer .../>` tag paired with its parsed top_z so merged plates can emit in z order. */
+interface CustomGcodeLayerTag {
+  tag: string
+  z: number
+}
+
 /**
- * Merge layer-based filament changes into BambuStudio's `custom_gcode_per_layer.xml`.
- * Listed plates get their ToolChange (`type="2"`) entries REPLACED by the edit; their
- * pause/custom entries and every unlisted plate are preserved verbatim from the source.
- * Returns '' when nothing remains (clears the sidecar).
+ * BambuStudio's default pause command for Bambu machines. Informational in the sidecar:
+ * at slice time the engine re-resolves the machine profile's `machine_pause_gcode`
+ * rather than using the stored string.
+ */
+const PAUSE_PRINT_GCODE = 'M400 U1'
+
+/**
+ * Merge layer-based filament changes and layer pauses into BambuStudio's
+ * `custom_gcode_per_layer.xml`. Plates listed in `filamentEdits` get their ToolChange
+ * (`type="2"`) entries REPLACED; plates listed in `pauseEdits` get their PausePrint
+ * (`type="1"`) entries REPLACED. All other entry types and every unlisted plate are
+ * preserved verbatim from the source. An undefined edit list leaves that entry type
+ * untouched everywhere. Returns '' when nothing remains (clears the sidecar).
  */
 export function mergeCustomGcodePerLayer(
   sourceXml: string | null,
-  edits: SceneEditPlateFilamentChanges[]
+  filamentEdits: SceneEditPlateFilamentChanges[] | undefined,
+  pauseEdits?: SceneEditPlatePauses[]
 ): string {
-  const sourcePlates = new Map<number, { toolChanges: string[]; others: string[]; mode: string | null }>()
+  const sourcePlates = new Map<number, { toolChanges: CustomGcodeLayerTag[]; pauses: CustomGcodeLayerTag[]; others: CustomGcodeLayerTag[]; mode: string | null }>()
   if (sourceXml) {
     for (const plateMatch of sourceXml.matchAll(/<plate>([\s\S]*?)<\/plate>/g)) {
       const block = plateMatch[1] ?? ''
       const id = Number.parseInt(parseAttrs(/<plate_info\b([^>]*)\/>/.exec(block)?.[1] ?? '').id ?? '', 10)
       if (!Number.isInteger(id) || id <= 0) continue
-      const toolChanges: string[] = []
-      const others: string[] = []
+      const toolChanges: CustomGcodeLayerTag[] = []
+      const pauses: CustomGcodeLayerTag[] = []
+      const others: CustomGcodeLayerTag[] = []
       for (const layerMatch of block.matchAll(/<layer\b([^>]*)\/>/g)) {
-        const target = parseAttrs(layerMatch[1] ?? '').type === '2' ? toolChanges : others
-        target.push(layerMatch[0])
+        const attrs = parseAttrs(layerMatch[1] ?? '')
+        const target = attrs.type === '2' ? toolChanges : attrs.type === '1' ? pauses : others
+        const z = Number.parseFloat(attrs.top_z ?? '')
+        target.push({ tag: layerMatch[0], z: Number.isFinite(z) ? z : 0 })
       }
       const mode = /<mode\b[^>]*\/>/.exec(block)?.[0] ?? null
-      sourcePlates.set(id, { toolChanges, others, mode })
+      sourcePlates.set(id, { toolChanges, pauses, others, mode })
     }
   }
-  const editsByPlate = new Map(edits.map((entry) => [entry.plateIndex, entry.changes]))
-  const plateIds = [...new Set([...sourcePlates.keys(), ...editsByPlate.keys()])].sort((left, right) => left - right)
+  const filamentEditsByPlate = filamentEdits ? new Map(filamentEdits.map((entry) => [entry.plateIndex, entry.changes])) : null
+  const pauseEditsByPlate = pauseEdits ? new Map(pauseEdits.map((entry) => [entry.plateIndex, entry.pauses])) : null
+  const plateIds = [...new Set([
+    ...sourcePlates.keys(),
+    ...(filamentEditsByPlate?.keys() ?? []),
+    ...(pauseEditsByPlate?.keys() ?? [])
+  ])].sort((left, right) => left - right)
   const blocks: string[] = []
   for (const plateId of plateIds) {
     const source = sourcePlates.get(plateId)
-    const edited = editsByPlate.get(plateId)
-    const toolChangeTags = edited
-      ? edited.map((change) =>
-        `<layer top_z="${change.z}" type="2" extruder="${change.filamentId}" color="${escapeXmlAttribute(change.color ?? '')}" extra="" gcode="tool_change"/>`)
+    const editedChanges = filamentEditsByPlate?.get(plateId)
+    const editedPauses = pauseEditsByPlate?.get(plateId)
+    const toolChangeTags = editedChanges
+      ? editedChanges.map((change): CustomGcodeLayerTag => ({
+        tag: `<layer top_z="${change.z}" type="2" extruder="${change.filamentId}" color="${escapeXmlAttribute(change.color ?? '')}" extra="" gcode="tool_change"/>`,
+        z: change.z
+      }))
       : source?.toolChanges ?? []
+    const pauseTags = editedPauses
+      ? editedPauses.map((pause): CustomGcodeLayerTag => ({
+        tag: `<layer top_z="${pause.z}" type="1" extruder="1" color="" extra="" gcode="${PAUSE_PRINT_GCODE}"/>`,
+        z: pause.z
+      }))
+      : source?.pauses ?? []
     const otherTags = source?.others ?? []
-    if (toolChangeTags.length === 0 && otherTags.length === 0) continue
+    const layerTags = [...toolChangeTags, ...pauseTags, ...otherTags].sort((left, right) => left.z - right.z)
+    if (layerTags.length === 0) continue
     blocks.push([
       '<plate>',
       `<plate_info id="${plateId}"/>`,
-      ...toolChangeTags,
-      ...otherTags,
+      ...layerTags.map((entry) => entry.tag),
       source?.mode ?? '<mode value="MultiAsSingle"/>',
       '</plate>'
     ].join('\n'))
@@ -1317,10 +1451,10 @@ export async function buildEditedThreeMf(
   const brimEarPointsContent = edit.brimEars !== undefined
     ? serializeBrimEarPoints(edit.brimEars, modelXml)
     : null
-  // Layer-based filament changes: merged with the source sidecar (preserving pauses
-  // and unedited plates); absent keeps the source file untouched.
-  const customGcodeContent = edit.filamentChanges !== undefined
-    ? mergeCustomGcodePerLayer(baseCustomGcodeXml, edit.filamentChanges)
+  // Layer-based filament changes + layer pauses: merged with the source sidecar
+  // (preserving unedited entry types and plates); both absent keeps the source file untouched.
+  const customGcodeContent = edit.filamentChanges !== undefined || edit.pauses !== undefined
+    ? mergeCustomGcodePerLayer(baseCustomGcodeXml, edit.filamentChanges, edit.pauses)
     : null
 
   if (baseSourcePath) {

@@ -60,6 +60,7 @@ import type {
   ProcessSettingOverrides,
   SceneEdit,
   SceneEditAddedPartSubtype,
+  SceneEditPartSubtype,
   StagedImport,
   ThreeMfIndex
 } from '@printstream/shared'
@@ -106,6 +107,7 @@ import {
   effectiveAddedParts,
   effectiveBrimEars,
   effectiveFilamentChanges,
+  effectivePauses,
   nextInstanceKey,
   seedEditorState,
   seedEmptyEditorState,
@@ -113,6 +115,7 @@ import {
   type EditorAddedPart,
   type EditorBrimEar,
   type EditorFilamentChange,
+  type EditorPause,
   type EditorInstance,
   type EditorPlate,
   type EditorState
@@ -135,7 +138,8 @@ import {
 import {
   ADDED_PART_MESH_NAME,
   ADDED_PART_SPECS,
-  applyFilamentChangeBands,
+  ADDED_PART_SUBTYPES,
+  applyLayerBandOverlays,
   bedsEqual,
   BRIM_EAR_MARKER_COLOR,
   BRIM_EAR_MARKER_NAME,
@@ -147,6 +151,7 @@ import {
   DOWN_VECTOR,
   evictGeometryCache,
   FILAMENT_CHANGE_MAX_BANDS,
+  LAYER_PAUSE_MAX_STRIPES,
   GEOMETRY_CACHE_MAX_ENTRIES,
   KEY_MOVE_STEP,
   KEY_MOVE_STEP_FINE,
@@ -166,7 +171,7 @@ import {
   syncBrimEarMarkerMatrices,
   touchCacheEntry,
   zoneRequiredNozzle,
-  type FilamentChangeBandUniforms,
+  type LayerBandUniforms,
   type GeometryCache,
   type GizmoMode,
   type ImportGeometryCache,
@@ -180,6 +185,7 @@ import {
   isImportableLibraryFile,
   KeyboardHelpButton,
   ModelList,
+  PlatePausesSection,
   PlateThumbnailStrip,
   SaveSplitButton,
   SliceSplitButton,
@@ -189,6 +195,14 @@ import {
 import { BrimEarsPanel } from './BrimEarsPanel'
 import { CutToolPanel } from './CutToolPanel'
 import { EditorContextMenu } from './EditorContextMenu'
+import { EditorPartContextMenu } from './EditorPartContextMenu'
+import {
+  prunePartSelection,
+  rangePartSelection,
+  rangeSlice,
+  togglePartInSelection,
+  type PartSelection
+} from './lib/selectionModel'
 import { MeasurePanel } from './MeasurePanel'
 import { PaintToolPanel } from './PaintToolPanel'
 import { useEditorHistory } from './useEditorHistory'
@@ -547,13 +561,16 @@ function EditorView({
   const isInstancePrinted = useCallback((instance: EditorInstance) => instance.printable, [])
   const isInstancePrintedRef = useRef(isInstancePrinted)
   isInstancePrintedRef.current = isInstancePrinted
-  const [editingObject, setEditingObject] = useState<{ id: number; name: string } | null>(null)
-  // A normal part of a multi-part object whose per-part process overrides are being edited.
-  const [editingPart, setEditingPart] = useState<{ objectId: number; componentObjectId: number; name: string } | null>(null)
+  // Object(s) whose per-object process overrides are being edited. Multiple ids = the
+  // bulk context-menu action: the dialog seeds from the first and applies to all.
+  const [editingObject, setEditingObject] = useState<{ ids: ReadonlyArray<number>; name: string } | null>(null)
+  // Normal part(s) of one multi-part object whose per-part process overrides are being
+  // edited. Multiple ids = the part-selection bulk action (seed from first, apply to all).
+  const [editingPart, setEditingPart] = useState<{ objectId: number; componentObjectIds: ReadonlyArray<number>; name: string } | null>(null)
   // Modifier part whose per-volume process overrides are being edited (dialog open).
   const [editingPartKey, setEditingPartKey] = useState<string | null>(null)
   const editingObjectOverrides = useMemo(
-    () => (editingObject && perObject ? perObject.value[String(editingObject.id)] ?? EMPTY_OBJECT_OVERRIDES : EMPTY_OBJECT_OVERRIDES),
+    () => (editingObject && perObject ? perObject.value[String(editingObject.ids[0])] ?? EMPTY_OBJECT_OVERRIDES : EMPTY_OBJECT_OVERRIDES),
     [editingObject, perObject]
   )
   // Sidebar view: the shared slice settings vs. the model/per-object list (Bambu-style).
@@ -953,10 +970,22 @@ function EditorView({
   const [extraSelectedKeys, setExtraSelectedKeys] = useState<ReadonlyArray<string>>([])
   const extraSelectedKeysRef = useRef(extraSelectedKeys)
   extraSelectedKeysRef.current = extraSelectedKeys
+  // Selected PARTS of one object (BambuStudio volume-mode). Mutually exclusive with the
+  // object selection above — selecting either kind clears the other (never mixed), and
+  // parts only multi-select within one object (rules in lib/selectionModel.ts). Geometry-
+  // level (objectId+componentObjectId), so it means "this part on every copy".
+  const [partSelection, setPartSelection] = useState<PartSelection | null>(null)
+  const partSelectionRef = useRef(partSelection)
+  partSelectionRef.current = partSelection
+  // Shift-range anchors: the last plainly/Ctrl-clicked object row and part row.
+  const objectAnchorKeyRef = useRef<string | null>(null)
+  const partAnchorRef = useRef<{ objectId: number; componentObjectId: number } | null>(null)
   /** Replace the whole selection with one key (plain click semantics). */
   const selectExclusive = useCallback((key: string | null) => {
     setSelectedKey(key)
     setExtraSelectedKeys((current) => (current.length > 0 ? [] : current))
+    setPartSelection((current) => (current ? null : current))
+    if (key) objectAnchorKeyRef.current = key
   }, [])
   const selectExclusiveRef = useRef(selectExclusive)
   selectExclusiveRef.current = selectExclusive
@@ -964,6 +993,8 @@ function EditorView({
   const toggleAdditiveSelection = useCallback((key: string) => {
     const primary = selectedKeyRef.current
     const extras = extraSelectedKeysRef.current
+    setPartSelection((current) => (current ? null : current))
+    objectAnchorKeyRef.current = key
     if (primary === key) {
       const [next, ...rest] = extras
       setSelectedKey(next ?? null)
@@ -996,6 +1027,18 @@ function EditorView({
       return next.length === current.length ? current : next
     })
   }, [activePlateIndex, state, selectedKey])
+  // Part selection follows the project: drop parts whose owning object (on any plate —
+  // part identity is geometry-level) or the parts themselves vanished (delete/undo/replace).
+  useEffect(() => {
+    setPartSelection((current) => {
+      if (!current) return current
+      const owner = state?.plates.flatMap((plate) => plate.instances).find((instance) => {
+        const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+        return ownerId === current.objectId
+      })
+      return prunePartSelection(current, owner ? owner.parts.map((part) => part.componentObjectId) : null)
+    })
+  }, [state])
   const gizmoModeRef = useRef<GizmoMode>(gizmoMode)
   gizmoModeRef.current = gizmoMode
   const setGizmoModeRef = useRef(setGizmoMode)
@@ -1011,12 +1054,25 @@ function EditorView({
   // Commits a dragged prime-tower position back into state (rebound below).
   const movePrimeTowerRef = useRef<((x: number, y: number) => void) | null>(null)
 
-  // Right-click context menu (anchored at the cursor on the instance under it).
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; key: string } | null>(null)
+  // Right-click context menu, anchored at the cursor: on an object (viewport or object
+  // row) or on the selected part(s) of one object (part rows in the list).
+  const [contextMenu, setContextMenu] = useState<
+    | ({ x: number; y: number } & (
+      | { kind: 'object'; key: string }
+      | { kind: 'parts'; objectId: number; componentObjectIds: ReadonlyArray<number> }
+    ))
+    | null
+  >(null)
   const openContextMenuRef = useRef<(menu: { x: number; y: number; key: string } | null) => void>(() => {})
   openContextMenuRef.current = (menu) => {
-    if (menu) setSelectedKey(menu.key)
-    setContextMenu(menu)
+    if (!menu) {
+      setContextMenu(null)
+      return
+    }
+    // Right-clicking a member keeps the multi-selection (the menu offers bulk actions);
+    // any other object becomes the sole selection first (BambuStudio behaviour).
+    if (!allSelectedKeysRef.current().includes(menu.key)) selectExclusiveRef.current(menu.key)
+    setContextMenu({ x: menu.x, y: menu.y, kind: 'object', key: menu.key })
   }
   // The context menu is a bare anchored Menu (no Dropdown), so it lacks Joy's built-in
   // click-away/Escape handling — wire it up below. `contextMenuListboxRef` is the menu's
@@ -1157,11 +1213,15 @@ function EditorView({
           for (const { part, geometry } of partGeometries) {
             const partFilamentId = resolveColorFilamentIdRef.current(part.filamentId)
             const partColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || part.color || meshColor
-            const partGroup = createThreeMfPartObject(geometry, { color: partColor, clearanceTransform: placement })
-            const partMesh = partGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
-            if (partMesh) {
-              applyFilamentChangeBands(partMesh.material as THREE.Material, filamentChangeUniformsRef.current)
-              partMesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: part.color || instance.color }
+            // subtype: an import solid retyped via "Change type" (e.g. to a modifier volume)
+            // renders translucent like a baked part of that type.
+            const partGroup = createThreeMfPartObject(geometry, { color: partColor, clearanceTransform: placement, subtype: part.subtype })
+            if (!isModifierVolumeSubtype(part.subtype)) {
+              const partMesh = partGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
+              if (partMesh) {
+                applyLayerBandOverlays(partMesh.material as THREE.Material, layerBandUniformsRef.current)
+                partMesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: part.color || instance.color }
+              }
             }
             rotor.add(partGroup)
           }
@@ -1171,7 +1231,7 @@ function EditorView({
           const importGroup = createThreeMfPartObject(geometry, { color: meshColor, clearanceTransform: placement })
           const importMesh = importGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
           if (importMesh) {
-            applyFilamentChangeBands(importMesh.material as THREE.Material, filamentChangeUniformsRef.current)
+            applyLayerBandOverlays(importMesh.material as THREE.Material, layerBandUniformsRef.current)
             importMesh.userData.recolor = { filamentId: meshFilamentId, fallbackColor: instance.color }
           }
           rotor.add(importGroup)
@@ -1199,6 +1259,9 @@ function EditorView({
             clearanceTransform: placement.clone().multiply(partTransform),
             subtype: part.subtype
           })
+          // Part identity for the part-selection highlight (owner comes from the
+          // enclosing instance group's key; see syncPartSelectionBoxes).
+          partGroup.userData.partRef = { componentObjectId: part.componentObjectId }
           // Printed parts (not blocker/enforcer/modifier volumes) are paintable with the
           // support/seam brushes; tag the mesh and show any existing paint as overlays.
           // Bambu marks ordinary parts subtype="normal_part", so test via the predicate.
@@ -1207,7 +1270,7 @@ function EditorView({
               (child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true
             )
             if (paintableMesh) {
-              applyFilamentChangeBands(paintableMesh.material as THREE.Material, filamentChangeUniformsRef.current)
+              applyLayerBandOverlays(paintableMesh.material as THREE.Material, layerBandUniformsRef.current)
               paintableMesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: part.color || instance.color }
               paintableMesh.userData.supportPaintPart = {
                 objectId: instance.objectId,
@@ -1521,6 +1584,7 @@ function EditorView({
     interactionActiveRef,
     selectedKeyRef,
     extraSelectedKeysRef,
+    partSelectionRef,
     allSelectedKeysRef,
     selectExclusiveRef,
     toggleAdditiveSelectionRef,
@@ -2082,13 +2146,15 @@ function EditorView({
   // ---- State mutations -------------------------------------------------------
   // Shared band-shader uniforms: every part material reads these, so editing the
   // panel recolours the whole plate immediately.
-  const filamentChangeUniformsRef = useRef<FilamentChangeBandUniforms>({
+  const layerBandUniformsRef = useRef<LayerBandUniforms>({
     uFcCount: { value: 0 },
     uFcHeights: { value: new Array(FILAMENT_CHANGE_MAX_BANDS).fill(0) },
-    uFcColors: { value: Array.from({ length: FILAMENT_CHANGE_MAX_BANDS }, () => new THREE.Color('#9aa4ad')) }
+    uFcColors: { value: Array.from({ length: FILAMENT_CHANGE_MAX_BANDS }, () => new THREE.Color('#9aa4ad')) },
+    uPauseCount: { value: 0 },
+    uPauseHeights: { value: new Array(LAYER_PAUSE_MAX_STRIPES).fill(0) }
   })
   useEffect(() => {
-    const uniforms = filamentChangeUniformsRef.current
+    const uniforms = layerBandUniformsRef.current
     const changes = activePlate
       ? [...effectiveFilamentChanges(activePlate)].sort((left, right) => left.z - right.z).slice(0, FILAMENT_CHANGE_MAX_BANDS)
       : []
@@ -2099,6 +2165,11 @@ function EditorView({
       uniforms.uFcColors.value[index]!.set(
         (colorFilamentId != null && filamentColors?.[colorFilamentId]) || '#9aa4ad'
       )
+    })
+    const pauses = activePlate ? effectivePauses(activePlate).slice(0, LAYER_PAUSE_MAX_STRIPES) : []
+    uniforms.uPauseCount.value = pauses.length
+    pauses.forEach((pause, index) => {
+      uniforms.uPauseHeights.value[index] = pause.z
     })
   }, [activePlate, state, filamentColors, resolveColorFilamentId])
 
@@ -2117,6 +2188,14 @@ function EditorView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlateIndex])
 
+  /** Replace the active plate's layer pauses (history-recorded). */
+  const setActivePlatePauses = useCallback((pauses: EditorPause[]) => {
+    updatePlates((plates) => plates.map((plate) => (
+      plate.index === activePlateIndex ? { ...plate, pausesOverride: pauses } : plate
+    )))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePlateIndex])
+
   const updatePlates = useCallback((updater: (plates: EditorPlate[]) => EditorPlate[]) => {
     recordHistory()
     setState((current) => {
@@ -2131,14 +2210,69 @@ function EditorView({
     setRebuildToken((token) => token + 1)
   }, [recordHistory])
 
-  const handleSelect = useCallback((key: string, additive = false) => {
-    if (additive) {
+  const handleSelect = useCallback((key: string, modifiers?: { additive?: boolean; range?: boolean }) => {
+    if (modifiers?.range) {
+      // Shift-click: select the contiguous run of object rows from the anchor (the last
+      // plainly/Ctrl-clicked row) to the target; the anchor stays the primary.
+      const ordered = activePlateRef.current?.instances.map((instance) => instance.key) ?? []
+      const [primary, ...rest] = rangeSlice(ordered, objectAnchorKeyRef.current, key)
+      setSelectedKey(primary ?? key)
+      setExtraSelectedKeys(rest)
+      setPartSelection((current) => (current ? null : current))
+      return
+    }
+    if (modifiers?.additive) {
       toggleAdditiveSelection(key)
       return
     }
     if (selectedKeyRef.current === key) selectExclusive(null)
     else selectExclusive(key)
   }, [toggleAdditiveSelection, selectExclusive])
+
+  // Part-row selection (BambuStudio volume-mode, rules in lib/selectionModel.ts): plain
+  // click selects one part, Ctrl toggles siblings, Shift ranges between siblings, and a
+  // part of a different object CONVERTS the selection. Entering part mode always leaves
+  // object mode.
+  const handleSelectPart = useCallback((objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }) => {
+    setSelectedKey(null)
+    setExtraSelectedKeys((current) => (current.length > 0 ? [] : current))
+    setPartSelection((current) => {
+      if (modifiers.range) {
+        const owner = stateRef.current?.plates.flatMap((plate) => plate.instances).find((instance) => {
+          const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+          return ownerId === objectId
+        })
+        const ordered = owner?.parts.map((part) => part.componentObjectId) ?? [componentObjectId]
+        return rangePartSelection(objectId, ordered, partAnchorRef.current, componentObjectId)
+      }
+      partAnchorRef.current = { objectId, componentObjectId }
+      if (modifiers.additive) return togglePartInSelection(current, objectId, componentObjectId)
+      // Plain click on the sole selected part deselects it (parity with object rows).
+      if (current && current.objectId === objectId
+        && current.componentObjectIds.length === 1 && current.componentObjectIds[0] === componentObjectId) {
+        return null
+      }
+      return { objectId, componentObjectIds: [componentObjectId] }
+    })
+  }, [])
+
+  // Right-click on list rows: keep the selection when clicking a member (bulk menu),
+  // otherwise select just the clicked row first — same rule as the viewport.
+  const handleObjectRowContextMenu = useCallback((key: string, position: { x: number; y: number }) => {
+    if (!allSelectedKeysRef.current().includes(key)) selectExclusive(key)
+    setContextMenu({ ...position, kind: 'object', key })
+  }, [selectExclusive])
+  const handlePartRowContextMenu = useCallback((objectId: number, componentObjectId: number, position: { x: number; y: number }) => {
+    let selection = partSelectionRef.current
+    if (!selection || selection.objectId !== objectId || !selection.componentObjectIds.includes(componentObjectId)) {
+      selection = { objectId, componentObjectIds: [componentObjectId] }
+      setSelectedKey(null)
+      setExtraSelectedKeys((current) => (current.length > 0 ? [] : current))
+      setPartSelection(selection)
+      partAnchorRef.current = { objectId, componentObjectId }
+    }
+    setContextMenu({ ...position, kind: 'parts', objectId, componentObjectIds: selection.componentObjectIds })
+  }, [])
 
   // Reassign the filament of a set of object parts (keyed by objectId+componentObjectId).
   // Filament is a property of the object's part, shared across instances/plates, so we
@@ -2166,6 +2300,37 @@ function EditorView({
       })
     })))
   }, [updatePlates])
+
+  // Change parts' Bambu volume type (BambuStudio's "Change type": normal / negative /
+  // modifier / support blocker / enforcer), for one part or a whole part selection. The
+  // type is a property of the object's part — shared across instances and plates — so it
+  // is recorded once per part in partTypeChanges (for the bake) and reflected onto every
+  // matching part.subtype (for the list and the viewport, which restyles on the rebuild).
+  const handleChangePartTypes = useCallback((targets: ReadonlyArray<{ objectId: number; componentObjectId: number }>, subtype: SceneEditPartSubtype) => {
+    if (targets.length === 0) return
+    const targetSet = new Set(targets.map((target) => `${target.objectId}:${target.componentObjectId}`))
+    recordHistory()
+    setState((current) => {
+      if (!current) return current
+      const plates = current.plates.map((plate) => ({
+        ...plate,
+        instances: plate.instances.map((instance) => {
+          // Object parts key on the Bambu object id; import parts on the import's synthetic
+          // object identity (replacedObjectId) — same ownership rule as filament reassignment.
+          const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+          if (ownerId == null || !instance.parts.some((part) => targetSet.has(`${ownerId}:${part.componentObjectId}`))) return instance
+          return {
+            ...instance,
+            parts: instance.parts.map((part) => targetSet.has(`${ownerId}:${part.componentObjectId}`) ? { ...part, subtype } : part)
+          }
+        })
+      }))
+      const partTypeChanges = { ...(current.partTypeChanges ?? {}) }
+      for (const target of targets) partTypeChanges[supportPaintKey(target.objectId, target.componentObjectId)] = subtype
+      return { ...current, plates, partTypeChanges }
+    })
+    setRebuildToken((token) => token + 1)
+  }, [recordHistory])
 
   // Rename an object (Bambu groups by object, so the new label applies to every
   // instance of it). Marks the object as renamed so buildSceneEdit emits an override.
@@ -2391,6 +2556,23 @@ function EditorView({
       setImporting(false)
     }
   }, [activePlateIndex, refreshAddedPartMeshes, recordHistoryRef])
+
+  /**
+   * Change an added part volume's subtype (negative part / modifier / support blocker /
+   * enforcer). Added parts live in the in-place-mutated `addedParts` session map, so after
+   * the mutation the state identity is refreshed to re-render the panel, and the viewport
+   * meshes are rebuilt to pick up the subtype's colour.
+   */
+  const handleChangeAddedPartType = useCallback((key: string, subtype: SceneEditAddedPartSubtype) => {
+    const state = stateRef.current
+    const part = Object.values(state?.addedParts ?? {}).flat().find((entry) => entry.key === key)
+    if (!state || !part || part.subtype === subtype) return
+    recordHistoryRef.current?.()
+    part.subtype = subtype
+    refreshAddedPartMeshes()
+    regenerateActiveThumbnailRef.current?.()
+    setState((current) => (current ? { ...current } : current))
+  }, [refreshAddedPartMeshes, recordHistoryRef])
 
   /** Remove the currently selected added part volume. */
   const handleRemoveAddedPart = useCallback(() => {
@@ -2619,25 +2801,94 @@ function EditorView({
     setExtraSelectedKeys((current) => current.filter((entry) => !keySet.has(entry)))
   }, [activePlateIndex, updatePlates, selectionFor])
 
-  /** Move an instance from the active plate to another plate, placed at a free spot. */
+  /**
+   * Move an instance — or, when it belongs to the multi-selection, the whole selection —
+   * from the active plate to another plate, each placed at a free spot.
+   */
   const handleMoveToPlate = useCallback((key: string, targetIndex: number) => {
+    const keySet = new Set(selectionFor(key))
     updatePlates((plates) => {
       const source = plates.find((plate) => plate.index === activePlateIndex)
-      const instance = source?.instances.find((entry) => entry.key === key)
       const target = plates.find((plate) => plate.index === targetIndex)
-      if (!instance || !target) return plates
-      const spot = findFreePlatePosition(target)
-      const moved: EditorInstance = { ...instance, position: instance.position.clone() }
-      moved.position.x = spot.x
-      moved.position.y = spot.y
+      const moving = source?.instances.filter((entry) => keySet.has(entry.key)) ?? []
+      if (!target || moving.length === 0) return plates
+      let nextTarget = target
+      for (const instance of moving) {
+        const spot = findFreePlatePosition(nextTarget)
+        const moved: EditorInstance = { ...instance, position: instance.position.clone() }
+        moved.position.x = spot.x
+        moved.position.y = spot.y
+        nextTarget = { ...nextTarget, instances: [...nextTarget.instances, moved] }
+      }
       return plates.map((plate) => {
-        if (plate.index === activePlateIndex) return { ...plate, instances: plate.instances.filter((entry) => entry.key !== key) }
-        if (plate.index === targetIndex) return { ...plate, instances: [...plate.instances, moved] }
+        if (plate.index === activePlateIndex) return { ...plate, instances: plate.instances.filter((entry) => !keySet.has(entry.key)) }
+        if (plate.index === targetIndex) return nextTarget
         return plate
       })
     })
-    setSelectedKey((current) => (current === key ? null : current))
-  }, [activePlateIndex, updatePlates])
+    setSelectedKey((current) => (current && keySet.has(current) ? null : current))
+    setExtraSelectedKeys((current) => current.filter((entry) => !keySet.has(entry)))
+  }, [activePlateIndex, updatePlates, selectionFor])
+
+  /** Set (not toggle) the Printable flag on a set of instances — the bulk context-menu action. */
+  const handleSetPrintableSelection = useCallback((keys: ReadonlyArray<string>, printable: boolean) => {
+    const keySet = new Set(keys)
+    updatePlates((plates) => plates.map((plate) => ({
+      ...plate,
+      instances: plate.instances.map((entry) =>
+        keySet.has(entry.key) && entry.printable !== printable ? { ...entry, printable } : entry)
+    })))
+  }, [updatePlates])
+
+  /**
+   * Assign one material to EVERY part of the clicked object — or of the whole selection
+   * when it belongs to one (the context menu's bulk "Change material").
+   */
+  const reassignSelectionFilament = useCallback((key: string, filamentId: number) => {
+    const keySet = new Set(selectionFor(key))
+    const targets: Array<{ objectId: number; componentObjectId: number }> = []
+    for (const instance of activePlateRef.current?.instances ?? []) {
+      if (!keySet.has(instance.key)) continue
+      const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+      if (ownerId == null) continue
+      for (const part of instance.parts) targets.push({ objectId: ownerId, componentObjectId: part.componentObjectId })
+    }
+    reassignFilament(targets, filamentId)
+  }, [selectionFor, reassignFilament])
+
+  /**
+   * Open per-object process settings for the clicked object — or the whole selection when
+   * it belongs to one (bulk: the dialog seeds from the first object and applies to all).
+   */
+  const openObjectSettingsFor = useCallback((key: string) => {
+    const keySet = new Set(selectionFor(key))
+    const ids: number[] = []
+    let firstName = ''
+    for (const instance of activePlateRef.current?.instances ?? []) {
+      if (!keySet.has(instance.key)) continue
+      const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+      if (ownerId == null || ids.includes(ownerId)) continue
+      ids.push(ownerId)
+      if (!firstName) firstName = instance.name
+    }
+    if (ids.length === 0) return
+    setEditingObject({ ids, name: ids.length > 1 ? `${ids.length} objects` : firstName })
+  }, [selectionFor])
+
+  /** Open per-part process settings for the current part selection (bulk when several). */
+  const openPartSettingsForSelection = useCallback(() => {
+    const selection = partSelectionRef.current
+    if (!selection || selection.componentObjectIds.length === 0) return
+    const owner = stateRef.current?.plates.flatMap((plate) => plate.instances).find((instance) => {
+      const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+      return ownerId === selection.objectId
+    })
+    const first = owner?.parts.find((part) => part.componentObjectId === selection.componentObjectIds[0])
+    const name = selection.componentObjectIds.length > 1
+      ? `${selection.componentObjectIds.length} parts`
+      : (first?.name ?? 'Part')
+    setEditingPart({ objectId: selection.objectId, componentObjectIds: [...selection.componentObjectIds], name })
+  }, [])
 
   /**
    * Toggle an instance's BambuStudio "Printable" flag. Per-instance (by key) so individual
@@ -3297,7 +3548,18 @@ function EditorView({
                   >
                     <Stack direction="row" spacing={0.75} alignItems="center">
                       <Box sx={{ width: 12, height: 12, borderRadius: '3px', flexShrink: 0, bgcolor: `#${ADDED_PART_SPECS[selectedAddedPart.subtype].color.toString(16).padStart(6, '0')}` }} />
-                      <Typography level="title-sm">{ADDED_PART_SPECS[selectedAddedPart.subtype].label}</Typography>
+                      <Typography level="title-sm" sx={{ flex: 1 }}>{ADDED_PART_SPECS[selectedAddedPart.subtype].label}</Typography>
+                      <Select
+                        size="sm"
+                        variant="plain"
+                        value={selectedAddedPart.subtype}
+                        onChange={(_event, subtype) => { if (subtype) handleChangeAddedPartType(selectedAddedPart.key, subtype) }}
+                        slotProps={{ button: { 'aria-label': 'Change part type' } }}
+                      >
+                        {ADDED_PART_SUBTYPES.map((subtype) => (
+                          <Option key={subtype} value={subtype}>{ADDED_PART_SPECS[subtype].label}</Option>
+                        ))}
+                      </Select>
                     </Stack>
                     <Typography level="body-xs" textColor="text.tertiary">
                       {ADDED_PART_SPECS[selectedAddedPart.subtype].hint} Move, rotate, or scale it with
@@ -3446,7 +3708,11 @@ function EditorView({
                       instances={activePlate.instances}
                       selectedKey={selectedKey}
                       extraSelectedKeys={extraSelectedKeys}
+                      partSelection={partSelection}
                       onSelect={handleSelect}
+                      onSelectPart={handleSelectPart}
+                      onObjectContextMenu={handleObjectRowContextMenu}
+                      onPartContextMenu={handlePartRowContextMenu}
                       onRename={handleRenameObject}
                       onDuplicate={handleDuplicate}
                       onDelete={handleDelete}
@@ -3455,6 +3721,8 @@ function EditorView({
                       onReassignFilament={filamentOptions.length > 0 ? reassignFilament : undefined}
                       resolveFilamentId={resolveColorFilamentId}
                       onTogglePrintable={handleTogglePrintable}
+                      onChangePartType={(objectId, componentObjectId, subtype) =>
+                        handleChangePartTypes([{ objectId, componentObjectId }], subtype)}
                       perObject={perObject ? {
                         // Baked objects from the slice index PLUS each not-yet-saved import's
                         // synthetic object id, so per-object process is editable before any save.
@@ -3466,8 +3734,8 @@ function EditorView({
                               : [])
                         ]),
                         overrideCountFor: (objectId) => Object.keys(perObject.value[String(objectId)] ?? {}).length,
-                        onEditObject: (objectId, name) => setEditingObject({ id: objectId, name }),
-                        onEditPart: (objectId, componentObjectId, name) => setEditingPart({ objectId, componentObjectId, name }),
+                        onEditObject: (objectId, name) => setEditingObject({ ids: [objectId], name }),
+                        onEditPart: (objectId, componentObjectId, name) => setEditingPart({ objectId, componentObjectIds: [componentObjectId], name }),
                         partOverrideCountFor: (objectId, componentObjectId) =>
                           Object.keys(stateRef.current?.partProcessOverrides?.[supportPaintKey(objectId, componentObjectId)] ?? {}).length
                       } : undefined}
@@ -3553,6 +3821,12 @@ function EditorView({
                       Add filament change
                     </Button>
                   </Stack>
+                )}
+                {activePlate && (
+                  <PlatePausesSection
+                    pauses={effectivePauses(activePlate)}
+                    onChange={setActivePlatePauses}
+                  />
                 )}
               </>
             )
@@ -3710,11 +3984,12 @@ function EditorView({
             else void handleImportFile(file)
           }}
         />
-        {contextMenu && (
+        {contextMenu?.kind === 'object' && (
           <EditorContextMenu
             contextMenu={contextMenu}
             listboxRef={contextMenuListboxRef}
             onClose={() => setContextMenu(null)}
+            selectionCount={selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key) ? extraSelectedKeys.length + 1 : 1}
             onDuplicate={handleDuplicate}
             onSplitToObjects={(key) => { void handleSplitToObjects(key) }}
             canAssemble={extraSelectedKeys.length > 0 && (selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key))}
@@ -3724,6 +3999,10 @@ function EditorView({
             onReplaceFromFile={(key) => { setReplaceTargetKey(key); fileInputRef.current?.click() }}
             isObject={activePlate?.instances.find((entry) => entry.key === contextMenu.key)?.source.kind === 'object'}
             onAddPartVolume={(key, subtype) => { void handleAddPartVolume(key, subtype) }}
+            filamentOptions={filamentOptions}
+            onChangeMaterial={(filamentId) => reassignSelectionFilament(contextMenu.key, filamentId)}
+            onSetPrintable={(printable) => handleSetPrintableSelection(selectionFor(contextMenu.key), printable)}
+            onEditObjectSettings={perObject ? () => openObjectSettingsFor(contextMenu.key) : undefined}
             onCenterOnPlate={() => {
               const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
               if (plate) {
@@ -3739,6 +4018,24 @@ function EditorView({
             otherPlates={(state?.plates ?? []).filter((plate) => plate.index !== activePlateIndex)}
             onMoveToPlate={handleMoveToPlate}
             onDelete={handleDelete}
+          />
+        )}
+        {contextMenu?.kind === 'parts' && (
+          <EditorPartContextMenu
+            contextMenu={contextMenu}
+            count={contextMenu.componentObjectIds.length}
+            listboxRef={contextMenuListboxRef}
+            onClose={() => setContextMenu(null)}
+            onChangeType={(subtype) => handleChangePartTypes(
+              contextMenu.componentObjectIds.map((componentObjectId) => ({ objectId: contextMenu.objectId, componentObjectId })),
+              subtype
+            )}
+            filamentOptions={filamentOptions}
+            onChangeMaterial={(filamentId) => reassignFilament(
+              contextMenu.componentObjectIds.map((componentObjectId) => ({ objectId: contextMenu.objectId, componentObjectId })),
+              filamentId
+            )}
+            onEditSettings={perObject ? openPartSettingsForSelection : undefined}
           />
         )}
       </ModalDialog>
@@ -3853,8 +4150,13 @@ function EditorView({
           // materials history); recording also flags the project dirty so Save lights up / close warns.
           recordMaterialsHistory()
           const next = { ...perObject.value }
-          if (Object.keys(overrides).length === 0) delete next[String(editingObject.id)]
-          else next[String(editingObject.id)] = overrides
+          // Bulk apply (context menu on a multi-selection) REPLACES every selected
+          // object's override set with the dialog result, like BambuStudio's
+          // multi-object per-object settings.
+          for (const id of editingObject.ids) {
+            if (Object.keys(overrides).length === 0) delete next[String(id)]
+            else next[String(id)] = overrides
+          }
           perObject.onChange(next)
           setEditingObject(null)
         }}
@@ -3863,8 +4165,10 @@ function EditorView({
     {editingPart && perObject && (() => {
       // Per-PART process overrides: same restricted catalog as the per-object dialog, baselined on
       // the inherited global + object overrides; the result is stored per part and baked into that
-      // part's model_settings block (separate from the object's overall overrides).
-      const partKey = supportPaintKey(editingPart.objectId, editingPart.componentObjectId)
+      // part's model_settings block (separate from the object's overall overrides). With several
+      // parts selected (bulk), the dialog seeds from the FIRST part and applies to all of them.
+      const partKeys = editingPart.componentObjectIds.map((componentObjectId) =>
+        supportPaintKey(editingPart.objectId, componentObjectId))
       const objectOverrides = perObject.value[String(editingPart.objectId)] ?? {}
       return (
         <ProcessSettingsDialog
@@ -3875,7 +4179,7 @@ function EditorView({
           processProfileId={perObject.processProfileId}
           processProfileName={editingPart.name}
           sourceFileId={perObject.sourceFileId}
-          initialOverrides={stateRef.current?.partProcessOverrides?.[partKey] ?? EMPTY_OBJECT_OVERRIDES}
+          initialOverrides={(partKeys[0] != null ? stateRef.current?.partProcessOverrides?.[partKeys[0]] : undefined) ?? EMPTY_OBJECT_OVERRIDES}
           visibilityContext={{ ...perObject.visibilityContext, isGlobalConfig: false }}
           allowedKeys={PER_OBJECT_PROCESS_KEYS}
           baseOverlay={{ ...perObject.globalOverrides, ...objectOverrides }}
@@ -3887,8 +4191,10 @@ function EditorView({
             setState((current) => {
               if (!current) return current
               const map = { ...(current.partProcessOverrides ?? {}) }
-              if (Object.keys(serialized).length === 0) delete map[partKey]
-              else map[partKey] = serialized
+              for (const partKey of partKeys) {
+                if (Object.keys(serialized).length === 0) delete map[partKey]
+                else map[partKey] = serialized
+              }
               return { ...current, partProcessOverrides: map }
             })
             setEditingPart(null)

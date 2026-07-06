@@ -4,11 +4,11 @@
 
 [![PrintStream: live dashboard of your Bambu Lab printers](https://printstream.app/marketing/printers.jpg)](https://printstream.app)
 
-PrintStream is a self-hosted web app for monitoring and controlling Bambu Lab printers. Open it on your phone, tablet, or desktop, see every printer live, and send prints from a shared file library. It's fully responsive (first-class on desktop and completely supported on mobile, with no surface treated as secondary), installs like an app (PWA), and runs on your own hardware.
+PrintStream is a web app for monitoring and controlling Bambu Lab printers. Open it on your phone, tablet, or desktop, see every printer live, and send prints from a shared file library. It's fully responsive (first-class on desktop and completely supported on mobile, with no surface treated as secondary) and installs like an app (PWA).
 
-> Smaller, simpler, and more touch-friendly than the alternatives. Self-hosted and plugin-extensible.
+> Smaller, simpler, and more touch-friendly than the alternatives. Plugin-extensible, with nothing to run at the printer site but a small bridge.
 
-**Website:** [printstream.app](https://printstream.app), the product site, with a full feature tour, screenshots, and an optional hosted version you don't have to run yourself. PrintStream is a product of [Dynamic Solutions](https://dynamic-solutions.ca).
+**This repository is the self-hosted community edition.** The main PrintStream product is the hosted version at [printstream.app](https://printstream.app): the same software, run for you in the cloud, so the only thing you install is the small bridge that talks to your printers. This edition is for people who prefer to run the whole stack on their own hardware. The website has the full feature tour and screenshots. PrintStream is a product of [Dynamic Solutions](https://dynamic-solutions.ca).
 
 > **Beta: read before you rely on it.** PrintStream is in active beta. It has been tested with the **Bambu Lab P1P, P1S, and H2D**. Other Bambu Lab models should work, but this hasn't been confirmed yet, so expect to verify behavior on untested hardware, and please report what you find. See [Safety & liability](#safety--liability) before connecting printers.
 
@@ -84,6 +84,12 @@ Optional features ship as plugins you can switch on per workspace: sign-in provi
 ## For developers
 
 PrintStream is a TypeScript monorepo: Express + Prisma + MQTT/WebSockets on the back, Vite + React + Joy UI on the front, shared Zod contracts in between, and a plugin system on both sides.
+
+### Where development happens
+
+Day-to-day development happens in a primary repository that also contains the closed-source cloud surface of the hosted product. This public repository is a snapshot of the open core, exported at development milestones rather than commit-by-commit, so it can sit a little behind the hosted version and its history is regenerated with each snapshot.
+
+Forks, issues, and pull requests here are welcome all the same. Accepted pull requests are merged into the primary repository and arrive back here with the next snapshot, so your change may land as part of a larger export rather than as a direct merge of your branch.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit together
 - [docs/development.md](docs/development.md): dev setup (devcontainer or host) and testing

@@ -19,6 +19,7 @@ import type {
   LibraryThreeMfSceneInstance,
   SceneEdit,
   SceneEditAddedPartSubtype,
+  SceneEditPartSubtype,
   StagedImport,
   ThreeMfIndex
 } from '@printstream/shared'
@@ -141,6 +142,10 @@ export interface EditorPlate {
    * plate so reorders/deletes keep it aligned with the right plate.
    */
   filamentChangesOverride?: EditorFilamentChange[]
+  /** Layer pauses seeded from the source 3MF (baseline). */
+  pauses?: EditorPause[]
+  /** This session's edited pause set; undefined means untouched (same rules as filament changes). */
+  pausesOverride?: EditorPause[]
 }
 
 /** One layer-based filament change: swap to `filamentId` at print height `z` (mm). */
@@ -149,9 +154,19 @@ export interface EditorFilamentChange {
   filamentId: number
 }
 
+/** One layer pause: printing stops just before the layer whose top is `z` (mm). */
+export interface EditorPause {
+  z: number
+}
+
 /** Effective filament changes for a plate: this session's override, else the seed. */
 export function effectiveFilamentChanges(plate: EditorPlate): EditorFilamentChange[] {
   return plate.filamentChangesOverride ?? plate.filamentChanges ?? []
+}
+
+/** Effective layer pauses for a plate: this session's override, else the seed. */
+export function effectivePauses(plate: EditorPlate): EditorPause[] {
+  return plate.pausesOverride ?? plate.pauses ?? []
 }
 
 export interface EditorState {
@@ -191,6 +206,15 @@ export interface EditorState {
    * map clears it. Cloned by {@link cloneEditorState}; emitted as `SceneEdit.partProcessOverrides`.
    */
   partProcessOverrides?: Record<string, Record<string, string>>
+  /**
+   * Part-type changes made this session (BambuStudio's "Change type": normal/negative/
+   * modifier/support blocker/enforcer), keyed by {@link supportPaintKey}
+   * (`objectId:componentObjectId`; an unsaved import keys on its synthetic object id).
+   * The change is also reflected onto every instance's `part.subtype` so the list and
+   * viewport re-render from one source. Cloned by {@link cloneEditorState}; emitted as
+   * `SceneEdit.partTypeChanges` / `SceneEdit.importPartTypes`.
+   */
+  partTypeChanges?: Record<string, SceneEditPartSubtype>
 }
 
 /** A new volume added inside an object this session (Bambu "Add negative part/..."). */
@@ -406,6 +430,9 @@ export function fillPlateFromScene(plate: EditorPlate, scene: LibraryThreeMfScen
     primeTower: scene.primeTower ?? null,
     ...(scene.filamentChanges && scene.filamentChanges.length > 0
       ? { filamentChanges: scene.filamentChanges.map((change) => ({ z: change.z, filamentId: change.filamentId })) }
+      : {}),
+    ...(scene.pauses && scene.pauses.length > 0
+      ? { pauses: scene.pauses.map((pause) => ({ z: pause.z })) }
       : {})
   }
 }
@@ -681,13 +708,16 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     ),
     partFilaments: collectPartFilaments(state),
     partProcessOverrides: collectPartProcessOverrides(state),
+    partTypeChanges: collectPartTypeChanges(state),
     importPartFilaments: collectImportPartFilaments(state),
     importPartProcessOverrides: collectImportPartProcessOverrides(state),
+    importPartTypes: collectImportPartTypes(state),
     supportPaint: collectPartPaint(state, state.supportPaint),
     seamPaint: collectPartPaint(state, state.seamPaint),
     colorPaint: collectPartPaint(state, state.colorPaint),
     brimEars: collectBrimEars(state),
     filamentChanges: collectFilamentChanges(state),
+    pauses: collectPauses(state),
     objectNames: collectObjectNames(state),
     addedParts: collectAddedParts(state),
     meshReplacements: collectMeshReplacements(state)
@@ -768,6 +798,25 @@ function collectFilamentChanges(state: EditorState): SceneEdit['filamentChanges'
 }
 
 /**
+ * Emit only plates whose layer pauses were edited this session (the writer merges them
+ * with the source sidecar, preserving untouched plates and other entry types). An
+ * edited-to-empty plate emits an empty list so its pauses are cleared.
+ */
+function collectPauses(state: EditorState): SceneEdit['pauses'] {
+  const out: NonNullable<SceneEdit['pauses']> = []
+  for (const plate of state.plates) {
+    if (!plate.pausesOverride) continue
+    out.push({
+      plateIndex: plate.index,
+      pauses: [...plate.pausesOverride]
+        .sort((left, right) => left.z - right.z)
+        .map((pause) => ({ z: pause.z }))
+    })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
  * Emit the COMPLETE brim-ear picture once any object was edited this session: the
  * sidecar file is rewritten wholesale, so untouched placed objects must re-emit their
  * seeded ears or they would be lost. No session edits -> undefined (file kept as-is).
@@ -818,6 +867,57 @@ function collectPartPaint(
       componentObjectId,
       triangles: Object.fromEntries(Object.entries(triangles).map(([index, code]) => [String(index), code]))
     })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/** Part-type changes for parts whose in-project object is still placed (keyed objectId:componentId). */
+function collectPartTypeChanges(state: EditorState): SceneEdit['partTypeChanges'] {
+  if (!state.partTypeChanges) return undefined
+  const placedObjectIds = new Set<number>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
+    }
+  }
+  const out: NonNullable<SceneEdit['partTypeChanges']> = []
+  for (const [key, subtype] of Object.entries(state.partTypeChanges)) {
+    const [objectIdRaw, componentRaw] = key.split(':')
+    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
+    const componentObjectId = Number.parseInt(componentRaw ?? '', 10)
+    if (!Number.isInteger(objectId) || !Number.isInteger(componentObjectId)) continue
+    if (!placedObjectIds.has(objectId)) continue
+    out.push({ objectId, componentObjectId, subtype })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
+ * Part-type changes for multi-solid imports, keyed by import + 0-based solid index. Mirrors
+ * {@link collectImportPartProcessOverrides}: the UI keys the change by the import instance's
+ * synthetic object id, mapped back to the importId here so the bake writes the solid's
+ * `<part>` with the chosen subtype.
+ */
+function collectImportPartTypes(state: EditorState): SceneEdit['importPartTypes'] {
+  if (!state.partTypeChanges) return undefined
+  const importByObjectId = new Map<number, string>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
+        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
+      }
+    }
+  }
+  if (importByObjectId.size === 0) return undefined
+  const out: NonNullable<SceneEdit['importPartTypes']> = []
+  for (const [key, subtype] of Object.entries(state.partTypeChanges)) {
+    const [objectIdRaw, partRaw] = key.split(':')
+    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
+    const partIndex = Number.parseInt(partRaw ?? '', 10)
+    if (!Number.isInteger(objectId) || !Number.isInteger(partIndex)) continue
+    const importId = importByObjectId.get(objectId)
+    if (!importId) continue
+    out.push({ importId, partIndex, subtype })
   }
   return out.length > 0 ? out : undefined
 }
@@ -983,7 +1083,9 @@ export function cloneEditorState(state: EditorState): EditorState {
       })),
       primeTower: plate.primeTower ? { ...plate.primeTower } : null,
       ...(plate.filamentChanges ? { filamentChanges: plate.filamentChanges.map((change) => ({ ...change })) } : {}),
-      ...(plate.filamentChangesOverride ? { filamentChangesOverride: plate.filamentChangesOverride.map((change) => ({ ...change })) } : {})
+      ...(plate.filamentChangesOverride ? { filamentChangesOverride: plate.filamentChangesOverride.map((change) => ({ ...change })) } : {}),
+      ...(plate.pauses ? { pauses: plate.pauses.map((pause) => ({ ...pause })) } : {}),
+      ...(plate.pausesOverride ? { pausesOverride: plate.pausesOverride.map((pause) => ({ ...pause })) } : {})
     })),
     ...(state.supportPaint
       ? {
@@ -1013,6 +1115,7 @@ export function cloneEditorState(state: EditorState): EditorState {
         )
       }
       : {}),
+    ...(state.partTypeChanges ? { partTypeChanges: { ...state.partTypeChanges } } : {}),
     ...(state.brimEars
       ? {
         brimEars: Object.fromEntries(

@@ -16,6 +16,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../lib/apiClient'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
+import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { isPlatformWorkspacePath } from '../lib/workspaceRoute'
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
 import { mobileSectionNavReserveSpace, sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
@@ -39,6 +40,7 @@ export function CurrentAccountPanel({
   const navigate = useNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
+  const { selfHosted } = useRuntimePolicy()
   const authBootstrapQuery = useAuthBootstrapQuery({ suppressGlobalErrorToast: true })
 
   const actorType = authBootstrapQuery.data?.actor.type ?? 'anonymous'
@@ -126,6 +128,14 @@ export function CurrentAccountPanel({
     meta: { suppressGlobalErrorToast: true },
     mutationFn: () => apiFetch<void>('/api/auth/logout', { method: 'POST' }),
     onSuccess: async () => {
+      // Cloud: leave the app entirely — a hard load of the marketing home
+      // drops all signed-in state (WS connection, caches, sticky entered-app
+      // branch) and boots the light marketing bundle. Self-hosted has no
+      // marketing surface, so stay in the SPA on the sign-in wall.
+      if (!selfHosted) {
+        window.location.assign('/')
+        return
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['auth-bootstrap'] }),
         queryClient.invalidateQueries({ queryKey: ['local-auth-status'] }),

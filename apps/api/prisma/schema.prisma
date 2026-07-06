@@ -1210,3 +1210,48 @@ model SuggestionComment {
   @@index([suggestionId, createdAt])
   @@index([authorUserId])
 }
+
+/// A single-use invite code that gates cloud self-registration during the
+/// beta (cloud-only; managed by platform admins, accessed via `rootPrisma`).
+/// The code itself is stored displayable (`XXXX-XXXX`) — it is a distribution
+/// gate, not a credential; brute force is bounded by the register rate limit.
+/// `usedByTenantId` is a plain snapshot (no FK) so the audit trail survives
+/// tenant deletion. Harmless/unused in self-hosted or OSS deployments.
+model BetaInviteCode {
+  id             String    @id @default(cuid())
+  code           String    @unique
+  /// Operator note about who the code was issued to.
+  note           String?
+  disabled       Boolean   @default(false)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  usedAt         DateTime?
+  usedByEmail    String?
+  usedByTenantId String?
+
+  pendingRegistrations PendingRegistration[]
+
+  @@index([createdAt])
+}
+
+/// An in-flight self-registration awaiting email-code confirmation
+/// (cloud-only). The workspace, user, and membership are only created when
+/// the emailed code is verified, so a mistyped address never burns the invite
+/// code or leaves an orphan tenant. Rows are short-lived and cleaned up
+/// opportunistically on each registration start.
+model PendingRegistration {
+  id            String   @id @default(cuid())
+  email         String
+  displayName   String?
+  workspaceName String
+  inviteCodeId  String
+  /// SHA-256 of the emailed confirmation code (never stored in cleartext).
+  codeHash      String
+  attemptCount  Int      @default(0)
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+
+  inviteCode BetaInviteCode @relation(fields: [inviteCodeId], references: [id], onDelete: Cascade)
+
+  @@index([email, expiresAt])
+}

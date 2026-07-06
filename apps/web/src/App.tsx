@@ -58,6 +58,7 @@ import { DevRuntimeStatus } from './components/DevRuntimeStatus'
 import { AppVersionFooter } from './components/AppVersionFooter'
 import { HelpFeedbackButton } from './components/HelpFeedbackButton'
 import { PluginSlot } from './plugin/PluginSlot'
+import { StaticPluginSlot } from './plugin/StaticPluginSlot'
 import { DeleteOperationToasts } from './components/DeleteOperationToasts'
 import { DispatchToasts } from './components/DispatchToasts'
 import { SlicingToasts } from './components/SlicingToasts'
@@ -1014,6 +1015,10 @@ export function App() {
                     <ScrollReset />
                     {/* Headless plugin components that sync app-level state (e.g. unread badges). */}
                     <PluginSlot name="shell.background" />
+                    {/* App-level overlay dialogs contributed by plugins (e.g. the post-sign-in
+                        passkey setup offer). Static slot: auth surfaces must render without
+                        consulting the plugin catalog. */}
+                    <StaticPluginSlot name="shell.overlays" />
                     {hasTenantContext && <LicenseBanner />}
                     {hasTenantContext && canManageSettings && <BridgeUpdateBanner />}
                     {hasTenantContext && canManageSettings && <BridgeCrashBanner />}

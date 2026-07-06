@@ -11,15 +11,13 @@ import { type LicensePayload, type LicenseStatus, licensePayloadSchema } from '@
 const TOKEN_PREFIX = 'PSL1'
 
 /**
- * Vendor license public key. DEVELOPMENT PLACEHOLDER — replace with your own
- * production Ed25519 public key (and keep the matching private key secret) before
- * issuing real licenses. Generate a pair with:
- *   node -e "const c=require('crypto');const k=c.generateKeyPairSync('ed25519');\
- *     console.log(k.publicKey.export({type:'spki',format:'pem'}));\
- *     console.error(k.privateKey.export({type:'pkcs8',format:'pem'}))"
+ * Vendor license public key (production). Keys issued by the hosted service are
+ * signed with the matching private key (`PRINTSTREAM_LICENSE_SIGNING_KEY`, a
+ * cloud-only secret that never ships); embedding only the public half lets any
+ * build — including OSS — validate a key but never forge one.
  */
 const LICENSE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAdCWY0RiZGELrWqMxspZNjIfI0MqIHRBfpKFNqkr3peQ=
+MCowBQYDK2VwAyEAASSkRDutYm4lun9jOAAaqHB++LHub6ChS5Zufa4LCMQ=
 -----END PUBLIC KEY-----`
 
 function base64url(input: Buffer | string): string {

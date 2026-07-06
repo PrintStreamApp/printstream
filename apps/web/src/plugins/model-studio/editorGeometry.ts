@@ -12,7 +12,7 @@
  */
 import * as THREE from 'three'
 import { ConvexGeometry } from 'three-stdlib'
-import type { LibraryThreeMfPrimeTower, SceneEditAddedPartSubtype } from '@printstream/shared'
+import type { LibraryThreeMfPrimeTower, SceneEditAddedPartSubtype, SceneEditPartSubtype } from '@printstream/shared'
 import type { SliceMaterialsSnapshot } from '../../components/library/SliceSettingsPanel'
 import type { TrianglePaintChannel } from './lib/threeMfScene'
 import { FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
@@ -42,6 +42,15 @@ export const ADDED_PART_SPECS: Record<SceneEditAddedPartSubtype, { label: string
   support_enforcer: { label: 'Support enforcer', color: 0x3a62e0, hint: 'Supports are always generated inside its volume.' }
 }
 export const ADDED_PART_SUBTYPES = Object.keys(ADDED_PART_SPECS) as SceneEditAddedPartSubtype[]
+
+/** BambuStudio's "Change type" options, in its menu order, with its labels. */
+export const PART_SUBTYPE_OPTIONS: ReadonlyArray<{ subtype: SceneEditPartSubtype; label: string }> = [
+  { subtype: 'normal_part', label: 'Normal part' },
+  { subtype: 'negative_part', label: 'Negative part' },
+  { subtype: 'modifier_part', label: 'Modifier' },
+  { subtype: 'support_blocker', label: 'Support blocker' },
+  { subtype: 'support_enforcer', label: 'Support enforcer' }
+]
 
 /**
  * Per-channel wiring for the two triangle-paint brushes. Both share the brush, panel,
@@ -587,29 +596,39 @@ export function computePlacementWarnings(
  * opacity/transparency is captured once so it can be restored when re-enabled.
  */
 export const FILAMENT_CHANGE_MAX_BANDS = 8
+export const LAYER_PAUSE_MAX_STRIPES = 8
+/** Half-height (mm) of the pause stripe drawn at each pause's world Z. */
+const LAYER_PAUSE_STRIPE_HALF_HEIGHT = 0.3
 
-/** Shared uniform set driving the filament-change band shader on every part material. */
-export interface FilamentChangeBandUniforms {
+/**
+ * Shared uniform set driving the layer-band overlay shader on every part material:
+ * filament-change recolour bands plus layer-pause marker stripes.
+ */
+export interface LayerBandUniforms {
   uFcCount: { value: number }
   uFcHeights: { value: number[] }
   uFcColors: { value: THREE.Color[] }
+  uPauseCount: { value: number }
+  uPauseHeights: { value: number[] }
 }
 
 /**
- * Inject layer-based filament-change banding into a part's MeshStandardMaterial: above
- * each change height (world Z, ascending) the fragment colour switches to that change's
- * material colour, so the 3D model shows the swap exactly where it will print. Uniforms
- * are shared across all part materials, so panel edits update every mesh per-frame
- * without recompiling shaders.
+ * Inject per-height layer overlays into a part's MeshStandardMaterial: above each
+ * filament-change height (world Z, ascending) the fragment colour switches to that
+ * change's material colour, and a thin amber stripe marks each layer pause, so the
+ * 3D model shows both exactly where they will print. Uniforms are shared across all
+ * part materials, so panel edits update every mesh per-frame without recompiling shaders.
  */
-export function applyFilamentChangeBands(material: THREE.Material, uniforms: FilamentChangeBandUniforms): void {
+export function applyLayerBandOverlays(material: THREE.Material, uniforms: LayerBandUniforms): void {
   const standard = material as THREE.MeshStandardMaterial
-  if (standard.userData.hasFilamentChangeBands) return
-  standard.userData.hasFilamentChangeBands = true
+  if (standard.userData.hasLayerBandOverlays) return
+  standard.userData.hasLayerBandOverlays = true
   standard.onBeforeCompile = (shader) => {
     shader.uniforms.uFcCount = uniforms.uFcCount
     shader.uniforms.uFcHeights = uniforms.uFcHeights
     shader.uniforms.uFcColors = uniforms.uFcColors
+    shader.uniforms.uPauseCount = uniforms.uPauseCount
+    shader.uniforms.uPauseHeights = uniforms.uPauseHeights
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vFcWorldZ;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFcWorldZ = (modelMatrix * vec4(position, 1.0)).z;')
@@ -619,13 +638,21 @@ export function applyFilamentChangeBands(material: THREE.Material, uniforms: Fil
         'varying float vFcWorldZ;',
         'uniform int uFcCount;',
         `uniform float uFcHeights[${FILAMENT_CHANGE_MAX_BANDS}];`,
-        `uniform vec3 uFcColors[${FILAMENT_CHANGE_MAX_BANDS}];`
+        `uniform vec3 uFcColors[${FILAMENT_CHANGE_MAX_BANDS}];`,
+        'uniform int uPauseCount;',
+        `uniform float uPauseHeights[${LAYER_PAUSE_MAX_STRIPES}];`
       ].join('\n'))
       .replace('#include <color_fragment>', [
         '#include <color_fragment>',
         `for (int i = 0; i < ${FILAMENT_CHANGE_MAX_BANDS}; i++) {`,
         '  if (i < uFcCount && vFcWorldZ >= uFcHeights[i]) {',
         '    diffuseColor.rgb = uFcColors[i];',
+        '  }',
+        '}',
+        `for (int i = 0; i < ${LAYER_PAUSE_MAX_STRIPES}; i++) {`,
+        // toFixed keeps the literal a valid GLSL float even for a whole-number constant.
+        `  if (i < uPauseCount && abs(vFcWorldZ - uPauseHeights[i]) < ${LAYER_PAUSE_STRIPE_HALF_HEIGHT.toFixed(4)}) {`,
+        '    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.62, 0.11), 0.85);',
         '  }',
         '}'
       ].join('\n'))

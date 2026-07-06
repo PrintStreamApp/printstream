@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
-import { applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
-import { parseBrimEarPoints, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
+import { applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
+import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
 import type { SceneEdit, SceneEditFilament } from '@printstream/shared'
 
 const sliceInfoXml = `
@@ -691,6 +691,40 @@ test('applyPartProcessOverrides sets a part\'s process metadata without touching
   assert.match(out.slice(0, out.indexOf('<part')), /<metadata key="wall_loops" value="2"\/>/)
 })
 
+test('applyPartProcessOverrides refuses to inject structural keys smuggled into the override map', () => {
+  // A June-2026 editor bug seeded override maps from ALL part metadata — including matrix and
+  // source_offset_* — which, injected back, duplicated the part's structural entries. Only
+  // process-setting keys may pass through.
+  const xml = '<config><object id="3"><part id="4"><metadata key="name" value="B"/><metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/></part></object></config>'
+  const out = applyPartProcessOverrides(xml, [{
+    objectId: 3,
+    componentObjectId: 4,
+    overrides: { wall_loops: '6', matrix: '9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9', source_offset_x: '42', name: 'evil' }
+  }])
+  const part4 = /<part id="4">[\s\S]*?<\/part>/.exec(out)?.[0] ?? ''
+  assert.match(part4, /<metadata key="wall_loops" value="6"\/>/)
+  // The real structural entries survive untouched, and no duplicates/forgeries are injected.
+  assert.match(part4, /<metadata key="name" value="B"\/>/)
+  assert.match(part4, /<metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"\/>/)
+  assert.doesNotMatch(part4, /9 9 9/)
+  assert.doesNotMatch(part4, /source_offset_x/)
+  assert.doesNotMatch(part4, /evil/)
+})
+
+test('applyPartTypeChanges rewrites only the targeted part\'s subtype', () => {
+  const xml = '<config><object id="3"><part id="3" subtype="normal_part"><metadata key="name" value="A"/></part><part id="4" subtype="normal_part"><metadata key="name" value="B"/></part></object><object id="7"><part id="8" subtype="normal_part"/></object></config>'
+  const out = applyPartTypeChanges(xml, [{ objectId: 3, componentObjectId: 4, subtype: 'modifier_part' }])
+  assert.match(out, /<part id="4" subtype="modifier_part">/)
+  assert.match(out, /<part id="3" subtype="normal_part">/)
+  assert.match(out, /<part id="8" subtype="normal_part"\/>/)
+})
+
+test('applyPartTypeChanges inserts a subtype attribute when the part has none', () => {
+  const xml = '<config><object id="3"><part id="4"><metadata key="name" value="B"/></part></object></config>'
+  const out = applyPartTypeChanges(xml, [{ objectId: 3, componentObjectId: 4, subtype: 'support_blocker' }])
+  assert.match(out, /<part id="4" subtype="support_blocker">/)
+})
+
 test('createObjectCustomizedThreeMf excludes deselected objects and injects per-object overrides in one pass', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-objcustom-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
@@ -1357,6 +1391,34 @@ test('writeArrangedThreeMf writes brim ears and readSceneManifest exposes them',
   }
 })
 
+test('writeArrangedThreeMf writes layer pauses and readSceneManifest exposes them', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-pauses-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'pauses.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(ARRANGE_MODEL_XML, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(ARRANGE_MODEL_SETTINGS_XML, 'utf8')]
+    ])
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      pauses: [{ plateIndex: 1, pauses: [{ z: 5.6 }] }]
+    }
+    await writeArrangedThreeMf(sourcePath, outputPath, edit)
+
+    const sidecar = (await readEntry(outputPath, 'Metadata/custom_gcode_per_layer.xml')).toString('utf8')
+    assert.match(sidecar, /<layer top_z="5.6" type="1" extruder="1" color="" extra="" gcode="M400 U1"\/>/)
+
+    const scene = await readSceneManifest(outputPath, 1)
+    assert.deepEqual(scene.pauses, [{ z: 5.6 }])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 const CUSTOM_GCODE_SOURCE_XML = [
   '<?xml version="1.0" encoding="utf-8"?>',
   '<custom_gcodes_per_layer>',
@@ -1405,6 +1467,48 @@ test('parseCustomGcodeToolChanges reads only the requested plate and tool change
   assert.deepEqual(parseCustomGcodeToolChanges(CUSTOM_GCODE_SOURCE_XML, 1), [{ z: 4, filamentId: 2, color: '#FF0000' }])
   assert.deepEqual(parseCustomGcodeToolChanges(CUSTOM_GCODE_SOURCE_XML, 2), [{ z: 2.4, filamentId: 3, color: '#0000FF' }])
   assert.deepEqual(parseCustomGcodeToolChanges(null, 1), [])
+})
+
+test('mergeCustomGcodePerLayer replaces edited plates\' pauses, preserves tool changes', () => {
+  const merged = mergeCustomGcodePerLayer(CUSTOM_GCODE_SOURCE_XML, undefined, [
+    { plateIndex: 1, pauses: [{ z: 12.4 }, { z: 3.2 }] }
+  ])
+  // Plate 1: the old pause is replaced by the two new ones; the tool change survives.
+  assert.doesNotMatch(merged, /pause here/)
+  assert.match(merged, /<layer top_z="3.2" type="1" extruder="1" color="" extra="" gcode="M400 U1"\/>/)
+  assert.match(merged, /<layer top_z="12.4" type="1" extruder="1" color="" extra="" gcode="M400 U1"\/>/)
+  assert.match(merged, /<layer top_z="4" type="2" extruder="2" color="#FF0000" extra="" gcode="tool_change"\/>/)
+  // Entries emit in ascending top_z order within the plate (BambuStudio keeps ticks sorted).
+  assert.ok(merged.indexOf('top_z="3.2"') < merged.indexOf('top_z="4"'))
+  assert.ok(merged.indexOf('top_z="4"') < merged.indexOf('top_z="12.4"'))
+  // Plate 2 is untouched.
+  assert.match(merged, /<layer top_z="2.4" type="2" extruder="3" color="#0000FF" extra="" gcode="tool_change"\/>/)
+
+  // Clearing a plate's pauses keeps its tool changes.
+  const cleared = mergeCustomGcodePerLayer(CUSTOM_GCODE_SOURCE_XML, undefined, [{ plateIndex: 1, pauses: [] }])
+  assert.doesNotMatch(cleared, /type="1"/)
+  assert.match(cleared, /<layer top_z="4" type="2"/)
+
+  // Editing filament changes and pauses in one merge composes on the same plate.
+  const both = mergeCustomGcodePerLayer(
+    CUSTOM_GCODE_SOURCE_XML,
+    [{ plateIndex: 1, changes: [{ z: 6.2, filamentId: 4 }] }],
+    [{ plateIndex: 1, pauses: [{ z: 8 }] }]
+  )
+  assert.deepEqual(parseCustomGcodeToolChanges(both, 1), [{ z: 6.2, filamentId: 4, color: null }])
+  assert.deepEqual(parseCustomGcodePauses(both, 1), [{ z: 8 }])
+
+  // Creating from nothing produces a fresh sidecar the pause parser round-trips.
+  const fresh = mergeCustomGcodePerLayer(null, undefined, [{ plateIndex: 2, pauses: [{ z: 5.6 }] }])
+  assert.deepEqual(parseCustomGcodePauses(fresh, 2), [{ z: 5.6 }])
+  assert.deepEqual(parseCustomGcodePauses(fresh, 1), [])
+  assert.equal(mergeCustomGcodePerLayer(null, undefined, [{ plateIndex: 1, pauses: [] }]), '')
+})
+
+test('parseCustomGcodePauses reads only the requested plate\'s pause entries', () => {
+  assert.deepEqual(parseCustomGcodePauses(CUSTOM_GCODE_SOURCE_XML, 1), [{ z: 9 }])
+  assert.deepEqual(parseCustomGcodePauses(CUSTOM_GCODE_SOURCE_XML, 2), [])
+  assert.deepEqual(parseCustomGcodePauses(null, 1), [])
 })
 
 const FILAMENT_MODEL_SETTINGS_XML = [
@@ -1649,6 +1753,109 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
     // The per-part process override persisted onto the matching part.
     const overridden = reParts.find((part) => part.componentObjectId === bakedParts[1]!.componentObjectId)
     assert.deepEqual(overridden?.processOverrides, { sparse_infill_density: '99%' })
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('buildEditedThreeMf preserves source identify_ids and mints fresh ones for new instances', async () => {
+  // identify_id is the CLI's per-instance handle (`loaded_id`) — the only key `--skip-objects`
+  // accepts. The bake must carry the source ids through (and mint unique ones for duplicates)
+  // or per-object/instance exclusion silently stops working on every editor-rewritten project.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-identify-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['Metadata/model_settings.config', Buffer.from(OBJECT_MODEL_SETTINGS_XML, 'utf8')],
+      ['3D/3dmodel.model', Buffer.from(OBJECT_MODEL_3DMODEL_XML, 'utf8')]
+    ])
+    const place = (x: number) => ({ position: { x, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } })
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 3, plateIndex: 1, ...place(-40) },
+        // A second copy of object 3 added this session (no source identify_id to preserve),
+        // toggled unprintable so the skip path has something to key on.
+        { objectId: 3, plateIndex: 1, ...place(0), printable: false },
+        { objectId: 11, plateIndex: 1, ...place(40) }
+      ]
+    }
+    await buildEditedThreeMf(sourcePath, outputPath, edit, [])
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const instances = [...settingsXml.matchAll(/<model_instance>[\s\S]*?<\/model_instance>/g)].map((match) => ({
+      objectId: Number(/object_id" value="(\d+)"/.exec(match[0])?.[1]),
+      instanceId: Number(/instance_id" value="(\d+)"/.exec(match[0])?.[1]),
+      identifyId: Number(/identify_id" value="(\d+)"/.exec(match[0])?.[1])
+    }))
+    // Returning instances keep their source ids (object 3 instance 0 -> 153, object 11 -> 204).
+    assert.equal(instances.find((entry) => entry.objectId === 3 && entry.instanceId === 0)?.identifyId, 153)
+    assert.equal(instances.find((entry) => entry.objectId === 11 && entry.instanceId === 0)?.identifyId, 204)
+    // The new duplicate gets a fresh id above the source maximum, and all ids are unique.
+    const duplicate = instances.find((entry) => entry.objectId === 3 && entry.instanceId === 1)
+    assert.ok((duplicate?.identifyId ?? 0) > 204, 'new instance id is minted above the source maximum')
+    assert.equal(new Set(instances.map((entry) => entry.identifyId)).size, instances.length)
+    // The unprintable duplicate's build item carries printable="0" — with the identify_id above,
+    // the slicer's --skip-objects translation can now enforce the editor's Printable toggle.
+    const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    const object3Items = [...modelXml.matchAll(/<item objectid="3"[^>]*\/>/g)].map((match) => match[0])
+    assert.equal(object3Items.length, 2)
+    assert.match(object3Items[1]!, /printable="0"/)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('buildEditedThreeMf applies part-type changes on baked parts and import solids', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-parttype-'))
+  const outputPath = path.join(tempDir, 'assembly.3mf')
+  try {
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    const mesh = { ...quad(0), parts: [
+      { name: 'Cylinder', mesh: quad(0) },
+      { name: 'Hole modifier', mesh: quad(5) }
+    ] }
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      // "Change type" on the unsaved import's second solid: bake it as a modifier volume.
+      importPartTypes: [{ importId: 'imp-1', partIndex: 1, subtype: 'modifier_part' }]
+    }
+    await buildEditedThreeMf(null, outputPath, edit, [{ importId: 'imp-1', name: 'CHM Cylinder', mesh, parts: mesh.parts }])
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const subtypes = [...settingsXml.matchAll(/<part id="\d+" subtype="([^"]+)">/g)].map((match) => match[1])
+    assert.deepEqual(subtypes, ['normal_part', 'modifier_part'])
+
+    // The scene reader re-hydrates the subtype, and a later save can change a BAKED part's type.
+    const scene = await readSceneManifest(outputPath, 1)
+    const parts = scene.instances[0]!.parts
+    assert.equal(parts[1]?.subtype, 'modifier_part')
+    const reEdit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: scene.instances[0]!.objectId, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      partTypeChanges: [
+        { objectId: scene.instances[0]!.objectId, componentObjectId: parts[1]!.componentObjectId, subtype: 'support_enforcer' },
+        { objectId: scene.instances[0]!.objectId, componentObjectId: parts[0]!.componentObjectId, subtype: 'negative_part' }
+      ]
+    }
+    const reOutput = path.join(tempDir, 'reedited.3mf')
+    await buildEditedThreeMf(outputPath, reOutput, reEdit, [])
+    const reScene = await readSceneManifest(reOutput, 1)
+    const reParts = reScene.instances[0]!.parts
+    assert.equal(reParts.find((part) => part.componentObjectId === parts[0]!.componentObjectId)?.subtype, 'negative_part')
+    assert.equal(reParts.find((part) => part.componentObjectId === parts[1]!.componentObjectId)?.subtype, 'support_enforcer')
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

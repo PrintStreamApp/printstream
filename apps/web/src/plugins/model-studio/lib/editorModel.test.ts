@@ -94,6 +94,29 @@ test('buildSceneEdit emits per-part filament + a meshReplacements entry for a mu
   assert.deepEqual(edit.meshReplacements, [{ objectId: syntheticId, importId: 'imp-3' }])
 })
 
+test('buildSceneEdit routes part-type changes to partTypeChanges (objects) and importPartTypes (imports)', () => {
+  const state: EditorState = seedEmptyEditorState()
+  // An unsaved multi-solid import whose second solid was retyped to a modifier.
+  const imported = instanceFromStagedImport(MULTI)
+  const syntheticId = imported.source.kind === 'import' ? imported.source.replacedObjectId : null
+  state.plates[0]!.instances.push(imported)
+  // An in-project object whose part 5 was retyped to a support blocker.
+  const objectInstance = instanceFromStagedImport(STAGED)
+  objectInstance.source = { kind: 'object' }
+  objectInstance.objectId = 7
+  state.plates[0]!.instances.push(objectInstance)
+  state.partTypeChanges = {
+    [`${syntheticId}:1`]: 'modifier_part',
+    '7:5': 'support_blocker',
+    // A change on an object no longer placed must not be emitted.
+    '99:1': 'negative_part'
+  }
+
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.partTypeChanges, [{ objectId: 7, componentObjectId: 5, subtype: 'support_blocker' }])
+  assert.deepEqual(edit.importPartTypes, [{ importId: 'imp-3', partIndex: 1, subtype: 'modifier_part' }])
+})
+
 test('buildSceneEdit emits importId for import-backed instances and objectId otherwise', () => {
   const state: EditorState = seedEmptyEditorState()
   state.plates[0]!.instances.push(instanceFromStagedImport(STAGED))
@@ -378,6 +401,21 @@ test('buildSceneEdit emits filament changes only for plates edited this session,
   // Edited-to-empty clears the plate's changes (emitted as an empty list).
   state.plates[0]!.filamentChangesOverride = []
   assert.deepEqual(buildSceneEdit(state).filamentChanges, [{ plateIndex: 1, changes: [] }])
+})
+
+test('buildSceneEdit emits layer pauses only for plates edited this session, sorted by height', () => {
+  const state: EditorState = seedEmptyEditorState()
+  state.plates[0]!.pauses = [{ z: 5 }] // seeded, untouched
+  const edit = buildSceneEdit(state)
+  assert.equal(edit.pauses, undefined)
+
+  state.plates[0]!.pausesOverride = [{ z: 12.4 }, { z: 3.2 }]
+  const edited = buildSceneEdit(state)
+  assert.deepEqual(edited.pauses, [{ plateIndex: 1, pauses: [{ z: 3.2 }, { z: 12.4 }] }])
+
+  // Edited-to-empty clears the plate's pauses (emitted as an empty list).
+  state.plates[0]!.pausesOverride = []
+  assert.deepEqual(buildSceneEdit(state).pauses, [{ plateIndex: 1, pauses: [] }])
 })
 
 test('buildSceneEdit emits added parts only for placed objects; clone keeps them independent', async () => {

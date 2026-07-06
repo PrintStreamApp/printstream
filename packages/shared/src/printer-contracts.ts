@@ -1010,6 +1010,13 @@ export const libraryThreeMfSceneSchema = z.object({
     z: z.number(),
     filamentId: z.number().int().positive(),
     color: z.string().nullable().default(null)
+  })).optional(),
+  /**
+   * Layer pauses for this plate (PausePrint entries parsed from
+   * `Metadata/custom_gcode_per_layer.xml`): pause just before the layer topping out at `z` mm.
+   */
+  pauses: z.array(z.object({
+    z: z.number()
   })).optional()
 })
 export type LibraryThreeMfScene = z.infer<typeof libraryThreeMfSceneSchema>

@@ -138,6 +138,31 @@ export const sceneEditVec3Schema = z.object({
 export type SceneEditVec3 = z.infer<typeof sceneEditVec3Schema>
 
 /**
+ * A 12-element 3MF transform (column-major 3x3 followed by translation), sanity-guarded.
+ *
+ * The guard exists because a client-side transform bug once wrote part matrices with scale
+ * factors around 1e7–1e13 (and near-zero counterparts) into saved projects; those degenerate
+ * volumes overflow the slicer's fixed-point coordinates and poison the file permanently. Bounds
+ * are generous — a print bed is ~350 mm and legitimate scales sit within a few orders of
+ * magnitude of 1 — so real content never trips them: every element must be finite and below
+ * 1e6 in magnitude, and each basis column of the 3x3 must have a length in [1e-6, 1e6]
+ * (rejecting both exploded and collapsed-to-degenerate axes).
+ */
+export const threeMfTransformSchema = z.array(z.number().finite().gt(-1e6).lt(1e6)).length(12)
+  .superRefine((elements, context) => {
+    for (let column = 0; column < 3; column += 1) {
+      const length = Math.hypot(elements[column * 3]!, elements[column * 3 + 1]!, elements[column * 3 + 2]!)
+      if (length < 1e-6 || length > 1e6) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Transform basis column ${column + 1} is degenerate (length ${length})`
+        })
+        return
+      }
+    }
+  })
+
+/**
  * One placed model instance in an edited arrangement. References its geometry either by Bambu
  * `objectId` (already present in the base project's `model_settings.config`) or by `importId` (a
  * foreign mesh staged via the import endpoint and baked into the 3MF on save/slice). Exactly one of
@@ -162,7 +187,7 @@ export const sceneEditInstanceSchema = z.object({
    * needed because world-space scale on a rotated object produces a shear that the
    * decomposed T*R*S form can't represent. position/rotation/scale stay for display.
    */
-  matrix: z.array(z.number()).length(12).optional(),
+  matrix: threeMfTransformSchema.optional(),
   /** Optional per-instance filament (1-based project filament id) override. */
   filamentId: z.number().int().positive().nullable().optional(),
   /**
@@ -288,6 +313,28 @@ export const sceneEditPlateFilamentChangesSchema = z.object({
 })
 export type SceneEditPlateFilamentChanges = z.infer<typeof sceneEditPlateFilamentChangesSchema>
 
+/**
+ * One layer pause: printing stops just before the layer whose top is `z` (mm) starts.
+ * The slicer snaps `z` to the nearest layer at slice time (BambuStudio semantics), so
+ * the pause survives layer-height changes without a stored layer index.
+ */
+export const sceneEditPauseSchema = z.object({
+  z: z.number().positive().max(1000)
+})
+export type SceneEditPause = z.infer<typeof sceneEditPauseSchema>
+
+/**
+ * Per-plate layer pauses (Bambu Studio's layer-slider "add pause"), written as
+ * PausePrint entries in `Metadata/custom_gcode_per_layer.xml`. Listed plates have
+ * their pause entries REPLACED by `pauses` (empty array clears them); other entry
+ * types and unlisted plates are preserved from the source file.
+ */
+export const sceneEditPlatePausesSchema = z.object({
+  plateIndex: z.number().int().positive(),
+  pauses: z.array(sceneEditPauseSchema).max(64)
+})
+export type SceneEditPlatePauses = z.infer<typeof sceneEditPlatePausesSchema>
+
 /** One manual brim ear: position in OBJECT-LOCAL mm plus the ear radius. */
 export const sceneEditBrimEarSchema = z.object({
   x: z.number().finite(),
@@ -369,6 +416,46 @@ export const sceneEditAddedPartSubtypeSchema = z.enum([
 export type SceneEditAddedPartSubtype = z.infer<typeof sceneEditAddedPartSubtypeSchema>
 
 /**
+ * Every Bambu volume subtype a part can be CHANGED to (BambuStudio's right-click →
+ * "Change type"): the addable helper subtypes plus `normal_part` (ordinary printed solid).
+ */
+export const sceneEditPartSubtypeSchema = z.enum([
+  'normal_part',
+  'negative_part',
+  'modifier_part',
+  'support_blocker',
+  'support_enforcer'
+])
+export type SceneEditPartSubtype = z.infer<typeof sceneEditPartSubtypeSchema>
+
+/**
+ * A part-type change on one part (volume) of an in-project object — BambuStudio's
+ * "Change type" (e.g. turning an imported solid into a modifier volume). Keyed like
+ * {@link sceneEditPartProcessOverrideSchema} by objectId + the part's component object id;
+ * applied by rewriting the part's `subtype` attribute in `model_settings.config`. The type
+ * is a property of the object's part, shared by every placed instance.
+ */
+export const sceneEditPartTypeChangeSchema = z.object({
+  objectId: z.number().int().positive(),
+  componentObjectId: z.number().int().positive(),
+  subtype: sceneEditPartSubtypeSchema
+})
+export type SceneEditPartTypeChange = z.infer<typeof sceneEditPartTypeChangeSchema>
+
+/**
+ * A part-type change for one solid of a multi-solid import, keyed by import + 0-based solid
+ * index — an unsaved import has no baked 3MF part ids yet, so its parts can't use
+ * {@link sceneEditPartTypeChangeSchema}. Applied while the import's solids are baked into one
+ * object (the part is written with this subtype instead of `normal_part`).
+ */
+export const sceneEditImportPartTypeSchema = z.object({
+  importId: z.string().trim().min(1),
+  partIndex: z.number().int().nonnegative(),
+  subtype: sceneEditPartSubtypeSchema
+})
+export type SceneEditImportPartType = z.infer<typeof sceneEditImportPartTypeSchema>
+
+/**
  * A new volume added INSIDE an existing object (BambuStudio's "Add negative part /
  * modifier / support blocker / enforcer"): the staged import's mesh becomes a new
  * object resource referenced as a `<component>` of the parent root object, and the
@@ -381,7 +468,7 @@ export const sceneEditAddedPartSchema = z.object({
   importId: z.string().trim().min(1),
   subtype: sceneEditAddedPartSubtypeSchema,
   name: z.string().trim().min(1).max(200),
-  matrix: z.array(z.number()).length(12),
+  matrix: threeMfTransformSchema,
   /**
    * Per-volume process overrides (modifier parts): written as `<metadata key value/>`
    * entries inside the part's `model_settings.config` block, which is exactly how
@@ -444,10 +531,14 @@ export const sceneEditSchema = z.object({
   partFilaments: z.array(sceneEditPartFilamentSchema).optional(),
   /** Optional per-part process overrides (process settings on individual parts of an object). */
   partProcessOverrides: z.array(sceneEditPartProcessOverrideSchema).optional(),
+  /** Optional part-type changes (normal/negative/modifier/blocker/enforcer) on in-project objects' parts. */
+  partTypeChanges: z.array(sceneEditPartTypeChangeSchema).max(400).optional(),
   /** Optional per-part filament for multi-solid imports, keyed by import + solid index. */
   importPartFilaments: z.array(sceneEditImportPartFilamentSchema).max(400).optional(),
   /** Optional per-part process overrides for multi-solid imports, keyed by import + solid index. */
   importPartProcessOverrides: z.array(sceneEditImportPartProcessOverrideSchema).max(400).optional(),
+  /** Optional part-type changes for multi-solid imports' solids, keyed by import + solid index. */
+  importPartTypes: z.array(sceneEditImportPartTypeSchema).max(400).optional(),
   /** Optional per-part support-paint maps (parts painted with the support brush). */
   supportPaint: z.array(sceneEditPartPaintSchema).optional(),
   /** Optional per-part seam-paint maps (parts painted with the seam brush). */
@@ -458,6 +549,8 @@ export const sceneEditSchema = z.object({
   brimEars: z.array(sceneEditObjectBrimEarsSchema).optional(),
   /** Optional per-plate layer-based filament changes (replaces listed plates' entries). */
   filamentChanges: z.array(sceneEditPlateFilamentChangesSchema).optional(),
+  /** Optional per-plate layer pauses (replaces listed plates' pause entries). */
+  pauses: z.array(sceneEditPlatePausesSchema).optional(),
   /** Optional per-object display-name overrides (object renamed in the editor). */
   objectNames: z.array(sceneEditObjectNameSchema).optional(),
   /**

@@ -46,6 +46,7 @@ import {
   type PlacementWarning
 } from './editorGeometry'
 import { type EditorInstance, type EditorPlate } from './lib/editorModel'
+import { type PartSelection } from './lib/selectionModel'
 import { type SupportPaintBrushMode } from './lib/supportPaint'
 
 /**
@@ -102,6 +103,8 @@ export interface EditorSceneParams {
   // Selection.
   selectedKeyRef: MutableRefObject<string | null>
   extraSelectedKeysRef: MutableRefObject<ReadonlyArray<string>>
+  /** Selected PARTS of one object (BambuStudio volume-mode) — drives per-part highlight boxes. */
+  partSelectionRef: MutableRefObject<PartSelection | null>
   allSelectedKeysRef: MutableRefObject<() => string[]>
   selectExclusiveRef: MutableRefObject<(key: string | null) => void>
   toggleAdditiveSelectionRef: MutableRefObject<(key: string) => void>
@@ -187,6 +190,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     interactionActiveRef,
     selectedKeyRef,
     extraSelectedKeysRef,
+    partSelectionRef,
     allSelectedKeysRef,
     selectExclusiveRef,
     toggleAdditiveSelectionRef,
@@ -382,6 +386,51 @@ export function useEditorScene(params: EditorSceneParams): void {
           scene.add(helper)
         }
         helper.box.copy(printableMeshBox(group, false))
+      }
+    }
+
+    // Bright outline boxes around the SELECTED PARTS (part selection is geometry-level,
+    // so the part lights up on every instance of the owning object on the plate). Synced
+    // every frame like the extras; part groups are found by the partRef tag the plate
+    // build stamps on them, and bounds use the group's transformed AABB (cheap path).
+    const partSelectionBoxes = new Map<string, THREE.Box3Helper>()
+    const syncPartSelectionBoxes = () => {
+      const selection = partSelectionRef.current
+      const wanted = new Map<string, THREE.Object3D>()
+      if (selection) {
+        for (const instance of activePlateRef.current?.instances ?? []) {
+          const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+          if (ownerId !== selection.objectId) continue
+          const group = groupByKeyRef.current.get(instance.key)
+          if (!group) continue
+          group.traverse((node) => {
+            const ref = node.userData.partRef as { componentObjectId: number } | undefined
+            if (ref && selection.componentObjectIds.includes(ref.componentObjectId)) {
+              wanted.set(`${instance.key}:${ref.componentObjectId}`, node)
+            }
+          })
+        }
+      }
+      for (const [key, helper] of partSelectionBoxes) {
+        if (!wanted.has(key)) {
+          scene.remove(helper)
+          helper.geometry.dispose()
+          ;(helper.material as THREE.Material).dispose()
+          partSelectionBoxes.delete(key)
+        }
+      }
+      for (const [key, partGroup] of wanted) {
+        let helper = partSelectionBoxes.get(key)
+        if (!helper) {
+          helper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color(0x35e07f))
+          const material = helper.material as THREE.LineBasicMaterial
+          material.depthTest = false
+          material.transparent = true
+          helper.renderOrder = 4
+          partSelectionBoxes.set(key, helper)
+          scene.add(helper)
+        }
+        helper.box.setFromObject(partGroup)
       }
     }
 
@@ -1238,6 +1287,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       // the few groups that actually carry markers pay anything here.
       for (const group of groupByKeyRef.current.values()) syncBrimEarMarkerMatrices(group)
       syncExtraSelectionBoxes()
+      syncPartSelectionBoxes()
       renderer.render(scene, camera)
       viewCube.sync(camera)
       // Re-check placement (~4x/sec) so collision/off-plate/floating/unprintable/tower

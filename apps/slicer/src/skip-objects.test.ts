@@ -39,6 +39,26 @@ test('skipObjectIdentifyIdsFromXml skips all instances of an unprintable object'
   assert.deepEqual(skipObjectIdentifyIdsFromXml(MODEL_XML, twoInstances).sort((a, b) => a - b), [4001, 4002, 4266])
 })
 
+test('skipObjectIdentifyIdsFromXml skips only the toggled instance of a mixed object', () => {
+  // The editor's per-INSTANCE Printable toggle: object 81 has two build items (instance-id
+  // order), only the SECOND is unprintable — so only identify_id 4002 is skipped.
+  const mixedModel = MODEL_XML.replace(
+    '  <item objectid="126" p:UUID="0000007e-0000-0000-0000-000000000000" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="0"/>',
+    [
+      '  <item objectid="81" p:UUID="00000052-0000-0000-0000-000000000000" transform="1 0 0 0 1 0 0 0 1 20 0 0" printable="0"/>',
+      '  <item objectid="126" p:UUID="0000007e-0000-0000-0000-000000000000" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/>'
+    ].join('\n')
+  ).replace(
+    '  <item objectid="81" p:UUID="00000051-0000-0000-0000-000000000000" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="0"/>',
+    '  <item objectid="81" p:UUID="00000051-0000-0000-0000-000000000000" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/>'
+  )
+  const twoInstances = SETTINGS_XML.replace(
+    '</plate></config>',
+    '  <model_instance><metadata key="object_id" value="81"/><metadata key="instance_id" value="1"/><metadata key="identify_id" value="4002"/></model_instance>\n</plate></config>'
+  )
+  assert.deepEqual(skipObjectIdentifyIdsFromXml(mixedModel, twoInstances), [4002])
+})
+
 test('buildSkipObjectsArgs formats the CLI flag, or nothing when empty', () => {
   assert.deepEqual(buildSkipObjectsArgs([4001, 4266]), ['--skip-objects', '4001,4266'])
   assert.deepEqual(buildSkipObjectsArgs([]), [])

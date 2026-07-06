@@ -374,7 +374,12 @@ export type EmailCodeVerifyRequest = z.infer<typeof emailCodeVerifyRequestSchema
 export const emailCodeVerifyResponseSchema = z.object({
   authenticated: z.literal(true),
   actor: authActorSummarySchema,
-  redirectTo: z.string().nullable().optional()
+  redirectTo: z.string().nullable().optional(),
+  /**
+   * How many passkeys the signed-in user already has. Zero means the client
+   * just watched the user sign in the hard way and should offer to set one up.
+   */
+  passkeyCount: z.number().int().nonnegative().default(0)
 })
 
 export type EmailCodeVerifyResponse = z.infer<typeof emailCodeVerifyResponseSchema>
