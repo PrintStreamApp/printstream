@@ -453,8 +453,9 @@ export async function readSceneManifest(
 
     const instanceParts: ThreeMfSceneInstancePart[] = []
     let instanceName: string | null = null
-    let instanceFilamentId: number | null = null
-    let instanceFilament: ThreeMfProjectFilament | null = null
+    // Filament of each printed (non-modifier) part, in part order; null = the part carries
+    // no extruder metadata of its own (it inherits the object default).
+    const printedPartFilamentIds: Array<number | null> = []
     for (const component of components) {
       const metadata = partMetadata.get(component.objectId) ?? null
       const subtype = metadata?.subtype ?? null
@@ -486,11 +487,21 @@ export async function readSceneManifest(
       })
       if (isModifier) continue
       if (instanceName == null) instanceName = metadata?.name ?? null
-      if (instanceFilamentId == null && filamentId != null) {
-        instanceFilamentId = filamentId
-        instanceFilament = filament
-      }
+      printedPartFilamentIds.push(filamentId)
     }
+    // Instance-level filament: only when EVERY printed part carries the same explicit
+    // filament (single-part objects, uniformly-assigned assemblies, and objects whose
+    // parts all inherit an object-level extruder — part metadata inherits that above).
+    // Picking the first non-null part here mislabeled partially-assigned objects: the
+    // editor seeds an unassigned part's filament from the instance, so after reassigning
+    // SOME parts and saving, a reload painted the untouched parts with the reassigned
+    // sibling's filament — and the next save baked that onto every part.
+    const firstPrintedFilamentId = printedPartFilamentIds[0] ?? null
+    const instanceFilamentId = firstPrintedFilamentId != null
+      && printedPartFilamentIds.every((id) => id === firstPrintedFilamentId)
+      ? firstPrintedFilamentId
+      : null
+    const instanceFilament = instanceFilamentId != null ? projectFilamentsById.get(instanceFilamentId) ?? null : null
 
     if (instanceParts.length > 0) {
       // The instance's display name is the OBJECT's name (what a rename writes); fall back to the
@@ -844,17 +855,21 @@ export function parseModelSettingsScene(xml: string): {
     const objectId = Number.parseInt(objectAttrs.id ?? '', 10)
     if (!Number.isInteger(objectId) || objectId <= 0) continue
 
-    const objectName = readModelSettingsMetadataString(block, 'name')
-    if (objectName != null) objectNamesById.set(objectId, objectName)
-    const objectExtruderId = readModelSettingsMetadataInt(block, 'extruder')
-
-    // Per-object PROCESS overrides are object-level `<metadata>` (BEFORE the first `<part>`),
-    // alongside name/extruder. Everything that isn't one of those structural keys is a process
-    // override the editor should re-seed into its per-object gear on reopen.
+    // Object-level metadata lives BEFORE the first `<part>`; scanning the whole block would
+    // misread a PART's name/extruder as the object's. That leak made an extruder-less part
+    // inherit its sibling's reassigned extruder (via the `?? objectExtruderId` below), so a
+    // partially-reassigned object reopened — and re-saved — with every part on one material.
     const objectHead = (() => {
       const firstPart = block.search(/<part\b/)
       return firstPart >= 0 ? block.slice(0, firstPart) : block
     })()
+    const objectName = readModelSettingsMetadataString(objectHead, 'name')
+    if (objectName != null) objectNamesById.set(objectId, objectName)
+    const objectExtruderId = readModelSettingsMetadataInt(objectHead, 'extruder')
+
+    // Per-object PROCESS overrides are object-level `<metadata>` too. Everything in the head
+    // that isn't a structural key is a process override the editor should re-seed into its
+    // per-object gear on reopen.
     const overrides: Record<string, string> = {}
     for (const meta of objectHead.matchAll(/<metadata\s+key="([^"]+)"\s+value="([^"]*)"\s*\/>/g)) {
       const key = meta[1]

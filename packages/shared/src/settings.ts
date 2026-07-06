@@ -6,7 +6,16 @@ const uniquePermissionArraySchema = z.array(permissionSchema).refine(
   'Permissions must be unique.'
 )
 
-export const appThemeSettingSchema = z.enum(['default', 'aurora'])
+export const appThemeSettingSchema = z.enum([
+  'default',
+  'aurora',
+  'graphite-green',
+  'graphite-sky',
+  'graphite-violet',
+  'graphite-rose',
+  'slate',
+  'code-dark'
+])
 const appLandingPagePathSchema = z.string().regex(/^\/[a-z0-9-]+(?:\/[a-z0-9-]+)*$/, 'Landing page must be an app-relative path.')
 const legacyAppLandingPageSettingSchema = z.enum(['printers', 'library', 'jobs', 'stats', 'settings']).transform((value) => `/${value}`)
 export const DEFAULT_APP_LANDING_PAGE = '/printers'

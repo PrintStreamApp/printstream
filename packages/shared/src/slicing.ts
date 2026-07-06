@@ -443,6 +443,22 @@ export const sceneEditPartTypeChangeSchema = z.object({
 export type SceneEditPartTypeChange = z.infer<typeof sceneEditPartTypeChangeSchema>
 
 /**
+ * A transform change on one part (volume) of an in-project object — moving / rotating /
+ * scaling a part inside its object (e.g. repositioning a support blocker after it was
+ * baked). `matrix` is the part's new OBJECT-LOCAL placement (12 numbers, column-major
+ * 3x3 + translation — the same convention as `sceneEditInstanceSchema.matrix`), applied
+ * by rewriting the part's `<component>` transform. Keyed like
+ * {@link sceneEditPartTypeChangeSchema} by objectId + the part's component object id;
+ * the placement is a property of the object's part, shared by every placed instance.
+ */
+export const sceneEditPartTransformSchema = z.object({
+  objectId: z.number().int().positive(),
+  componentObjectId: z.number().int().positive(),
+  matrix: threeMfTransformSchema
+})
+export type SceneEditPartTransform = z.infer<typeof sceneEditPartTransformSchema>
+
+/**
  * A part-type change for one solid of a multi-solid import, keyed by import + 0-based solid
  * index — an unsaved import has no baked 3MF part ids yet, so its parts can't use
  * {@link sceneEditPartTypeChangeSchema}. Applied while the import's solids are baked into one
@@ -533,6 +549,8 @@ export const sceneEditSchema = z.object({
   partProcessOverrides: z.array(sceneEditPartProcessOverrideSchema).optional(),
   /** Optional part-type changes (normal/negative/modifier/blocker/enforcer) on in-project objects' parts. */
   partTypeChanges: z.array(sceneEditPartTypeChangeSchema).max(400).optional(),
+  /** Optional part-placement changes (move/rotate/scale a part inside its object). */
+  partTransforms: z.array(sceneEditPartTransformSchema).max(400).optional(),
   /** Optional per-part filament for multi-solid imports, keyed by import + solid index. */
   importPartFilaments: z.array(sceneEditImportPartFilamentSchema).max(400).optional(),
   /** Optional per-part process overrides for multi-solid imports, keyed by import + solid index. */

@@ -48,6 +48,17 @@ export function createThreeMfMatrix(transform: number[]): THREE.Matrix4 {
   return matrix
 }
 
+/** Inverse of {@link createThreeMfMatrix}: serialize a Matrix4 to the 12-element 3MF layout. */
+export function threeMfTransformFromMatrix(matrix: THREE.Matrix4): number[] {
+  const e = matrix.elements // THREE stores column-major; 3MF wants the three basis columns + translation
+  return [
+    e[0] ?? 1, e[1] ?? 0, e[2] ?? 0,
+    e[4] ?? 0, e[5] ?? 1, e[6] ?? 0,
+    e[8] ?? 0, e[9] ?? 0, e[10] ?? 1,
+    e[12] ?? 0, e[13] ?? 0, e[14] ?? 0
+  ]
+}
+
 /**
  * Per-triangle paint codes parsed from a mesh's `paint_supports`/`paint_seam`
  * attributes, keyed by triangle index in mesh order ('4' enforcer, '8' blocker, longer

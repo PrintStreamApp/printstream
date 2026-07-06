@@ -10,7 +10,7 @@
  * filament-option shape is a type-only import from ./EditorView (erased, no runtime
  * cycle).
  */
-import { Fragment, useRef, useState } from 'react'
+import { Fragment, useRef, useState, type ReactNode } from 'react'
 import {
   Box,
   Button,
@@ -28,6 +28,8 @@ import {
   Menu,
   MenuButton,
   MenuItem,
+  Option,
+  Select,
   Sheet,
   Stack,
   Switch,
@@ -66,11 +68,11 @@ import FormatPaintRoundedIcon from '@mui/icons-material/FormatPaintRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
 import TouchAppRoundedIcon from '@mui/icons-material/TouchAppRounded'
-import type { LibraryFile, SceneEditPartSubtype } from '@printstream/shared'
+import type { LibraryFile, SceneEditAddedPartSubtype, SceneEditPartSubtype } from '@printstream/shared'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
-import { PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform } from './editorGeometry'
-import type { EditorInstance, EditorPause, EditorPlate } from './lib/editorModel'
+import { ADDED_PART_SPECS, PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform } from './editorGeometry'
+import type { EditorAddedPart, EditorFilamentChange, EditorInstance, EditorPause, EditorPlate } from './lib/editorModel'
 import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
 import type { FilamentOption } from './EditorView'
 
@@ -520,6 +522,7 @@ export function KeyboardHelpButton() {
  */
 export function TransformPanel({
   transform,
+  heading,
   uniformScale,
   onToggleUniformScale,
   onPosition,
@@ -527,6 +530,12 @@ export function TransformPanel({
   onScale
 }: {
   transform: SelectedTransform
+  /**
+   * Shown above the rows when the values describe something other than the selected
+   * object — e.g. a selected PART's object-local placement (BambuStudio's "Volume
+   * Operations" title). Omitted for the plain object transform.
+   */
+  heading?: string
   uniformScale: boolean
   onToggleUniformScale: (value: boolean) => void
   onPosition: (axis: 'x' | 'y' | 'z', value: number) => void
@@ -535,6 +544,7 @@ export function TransformPanel({
 }) {
   return (
     <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {heading && <Typography level="body-xs" sx={{ fontWeight: 600 }}>{heading}</Typography>}
       <AxisRow label="Position (mm)" values={transform.position} step={1} onChange={onPosition} />
       <AxisRow label="Rotation (°)" values={transform.rotationDeg} step={1} onChange={onRotation} />
       <Stack spacing={0.5}>
@@ -917,23 +927,29 @@ function FilamentBadge({
   )
 }
 
+/** The "Change type" options for session-ADDED part volumes (never normal parts). */
+const ADDED_PART_TYPE_OPTIONS = PART_SUBTYPE_OPTIONS.filter((option) => option.subtype !== 'normal_part')
+
 /**
  * Per-part "Change type" menu (BambuStudio's right-click → Change type): pick the part's
  * Bambu volume subtype. A non-normal part shows a highlighted trigger so retyped parts are
- * visible at a glance in the list.
+ * visible at a glance in the list. Added part volumes pass the reduced option list
+ * (they can never become normal parts).
  */
 function PartTypeMenu({
   subtype,
   partName,
+  options = PART_SUBTYPE_OPTIONS,
   onChange
 }: {
   subtype: string | null
   partName: string
+  options?: ReadonlyArray<{ subtype: SceneEditPartSubtype; label: string }>
   onChange: (subtype: SceneEditPartSubtype) => void
 }) {
   const current = subtype ?? 'normal_part'
   const isSpecial = current !== 'normal_part'
-  const currentLabel = PART_SUBTYPE_OPTIONS.find((option) => option.subtype === current)?.label ?? current
+  const currentLabel = options.find((option) => option.subtype === current)?.label ?? current
   return (
     <Dropdown>
       <Tooltip title={`Part type: ${currentLabel}`}>
@@ -950,7 +966,7 @@ function PartTypeMenu({
         </MenuButton>
       </Tooltip>
       <Menu placement="bottom-end" sx={{ zIndex: (theme) => theme.zIndex.tooltip }}>
-        {PART_SUBTYPE_OPTIONS.map((option) => (
+        {options.map((option) => (
           <MenuItem
             key={option.subtype}
             selected={option.subtype === current}
@@ -975,6 +991,7 @@ export function ModelList({
   selectedKey,
   extraSelectedKeys,
   partSelection,
+  selectedBakedPart,
   onSelect,
   onSelectPart,
   onObjectContextMenu,
@@ -988,6 +1005,12 @@ export function ModelList({
   resolveFilamentId,
   onTogglePrintable,
   onChangePartType,
+  addedPartsFor,
+  selectedAddedPartKey,
+  onSelectAddedPart,
+  onChangeAddedPartType,
+  onRemoveAddedPart,
+  onEditAddedPartSettings,
   perObject
 }: {
   instances: EditorInstance[]
@@ -996,9 +1019,14 @@ export function ModelList({
   extraSelectedKeys?: ReadonlyArray<string>
   /** Selected PARTS of one object (mutually exclusive with the object selection). */
   partSelection?: { objectId: number; componentObjectIds: ReadonlyArray<number> } | null
+  /** The baked part currently holding the transform gizmo (row highlight). */
+  selectedBakedPart?: { objectId: number; componentObjectId: number } | null
   onSelect: (key: string, modifiers?: { additive?: boolean; range?: boolean }) => void
-  /** Select a part row (plain / Ctrl-toggle / Shift-range, BambuStudio volume-mode rules). */
-  onSelectPart?: (objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }) => void
+  /**
+   * Select a part row: plain click hands the part the gizmo (move/rotate/scale);
+   * Ctrl-toggle / Shift-range build the bulk selection (BambuStudio volume-mode rules).
+   */
+  onSelectPart?: (objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
   /** Right-click on an object row: open the object context menu at the pointer. */
   onObjectContextMenu?: (key: string, position: { x: number; y: number }) => void
   /** Right-click on a part row: open the part context menu at the pointer. */
@@ -1015,6 +1043,16 @@ export function ModelList({
   onTogglePrintable: (key: string) => void
   /** Change a part's Bambu volume type (BambuStudio's "Change type"), keyed like part filament. */
   onChangePartType?: (objectId: number, componentObjectId: number, subtype: SceneEditPartSubtype) => void
+  /** Part volumes ADDED this session (blockers/enforcers/modifiers/negatives) for an instance's object. */
+  addedPartsFor?: (instance: EditorInstance) => EditorAddedPart[]
+  /** The added part currently holding the transform gizmo (row highlight). */
+  selectedAddedPartKey?: string | null
+  /** Select an added part row: selects the instance and hands the part the gizmo. */
+  onSelectAddedPart?: (instanceKey: string, partKey: string) => void
+  onChangeAddedPartType?: (partKey: string, subtype: SceneEditAddedPartSubtype) => void
+  onRemoveAddedPart?: (partKey: string) => void
+  /** Open per-volume process settings for a modifier part (needs slice settings). */
+  onEditAddedPartSettings?: (partKey: string) => void
   /** Slice-config per-object process overrides (keyed by Bambu objectId). Null without a profile. */
   perObject?: {
     sliceObjectIds: Set<number>
@@ -1116,8 +1154,10 @@ export function ModelList({
             </ListItem>
             {showParts && instance.parts.map((part, index) => {
               const partSelected = perObjectId != null
-                && partSelection?.objectId === perObjectId
-                && partSelection.componentObjectIds.includes(part.componentObjectId)
+                && ((partSelection?.objectId === perObjectId
+                  && partSelection.componentObjectIds.includes(part.componentObjectId))
+                  || (selectedBakedPart?.objectId === perObjectId
+                    && selectedBakedPart.componentObjectId === part.componentObjectId))
               return (
               <ListItem
                 key={`${instance.key}:${index}`}
@@ -1132,7 +1172,7 @@ export function ModelList({
                     level="body-xs"
                     noWrap
                     onClick={onSelectPart && perObjectId != null ? (event) => {
-                      onSelectPart(perObjectId, part.componentObjectId, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey })
+                      onSelectPart(perObjectId, part.componentObjectId, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey }, instance.key)
                     } : undefined}
                     sx={{
                       flex: 1,
@@ -1175,6 +1215,71 @@ export function ModelList({
               </ListItem>
               )
             })}
+            {(addedPartsFor?.(instance) ?? []).map((part) => (
+              // Part volumes added THIS session (support blocker/enforcer, modifier, negative):
+              // they only become real `<component>` parts at save time, so list them from the
+              // session state — otherwise a freshly added blocker is invisible here until a
+              // save + reopen. Clicking hands the part the transform gizmo.
+              <ListItem
+                key={part.key}
+                sx={{ pl: 3, borderRadius: 'sm', bgcolor: part.key === selectedAddedPartKey ? 'neutral.softBg' : undefined }}
+              >
+                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
+                  <Box
+                    sx={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: '3px',
+                      flexShrink: 0,
+                      bgcolor: `#${ADDED_PART_SPECS[part.subtype].color.toString(16).padStart(6, '0')}`
+                    }}
+                  />
+                  <Typography
+                    level="body-xs"
+                    noWrap
+                    onClick={onSelectAddedPart ? () => onSelectAddedPart(instance.key, part.key) : undefined}
+                    sx={{ flex: 1, minWidth: 0, ...(onSelectAddedPart ? { cursor: 'pointer', userSelect: 'none' } : {}) }}
+                  >
+                    {part.name}
+                  </Typography>
+                  {onChangeAddedPartType && (
+                    <PartTypeMenu
+                      subtype={part.subtype}
+                      partName={part.name}
+                      options={ADDED_PART_TYPE_OPTIONS}
+                      // The reduced option list never yields 'normal_part', so the narrowing cast is safe.
+                      onChange={(subtype) => onChangeAddedPartType(part.key, subtype as SceneEditAddedPartSubtype)}
+                    />
+                  )}
+                  {part.subtype === 'modifier_part' && onEditAddedPartSettings && (
+                    <Tooltip title="Modifier settings">
+                      <IconButton
+                        size="sm"
+                        variant={Object.keys(part.settings ?? {}).length > 0 ? 'soft' : 'plain'}
+                        color={Object.keys(part.settings ?? {}).length > 0 ? 'primary' : 'neutral'}
+                        onClick={() => onEditAddedPartSettings(part.key)}
+                        aria-label={`Modifier settings for ${part.name}`}
+                      >
+                        <TuneRoundedIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                  {onRemoveAddedPart && (
+                    <Tooltip title="Remove part">
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="danger"
+                        onClick={() => onRemoveAddedPart(part.key)}
+                        aria-label={`Remove ${part.name}`}
+                      >
+                        <DeleteRoundedIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                </Stack>
+              </ListItem>
+            ))}
           </Fragment>
         )
       })}
@@ -1183,26 +1288,54 @@ export function ModelList({
 }
 
 /**
- * Click-driven help popup for the Pauses section (not a hover Tooltip, so it also
- * opens on touch devices). Explains the before-the-layer semantics and how to read
- * an exact height off the sliced G-code preview.
+ * Click-driven help popup for a sidebar section heading (not a hover Tooltip, so it
+ * also opens on touch devices). Carries the section's explanatory copy so the section
+ * itself stays compact — the Filament changes / Pauses pair sits side by side under
+ * the object list and must not eat the list's vertical space.
  */
-function PauseHelpPopup() {
+function SectionHelpPopup({ ariaLabel, title, children }: {
+  ariaLabel: string
+  title: string
+  children: ReactNode
+}) {
   return (
     <Dropdown>
       <MenuButton
         slots={{ root: IconButton }}
-        slotProps={{ root: { size: 'sm', variant: 'plain', color: 'neutral', 'aria-label': 'About pauses' } }}
+        slotProps={{ root: { size: 'sm', variant: 'plain', color: 'neutral', 'aria-label': ariaLabel } }}
       >
         <HelpOutlineRoundedIcon fontSize="small" />
       </MenuButton>
       <Menu placement="bottom-start" sx={{ zIndex: (theme) => theme.zIndex.tooltip, p: 1.25, maxWidth: 300 }}>
-        <Typography level="title-sm" sx={{ mb: 0.75 }}>Pauses</Typography>
-        <Stack spacing={0.75}>
+        <Typography level="title-sm" sx={{ mb: 0.75 }}>{title}</Typography>
+        <Stack spacing={0.75}>{children}</Stack>
+      </Menu>
+    </Dropdown>
+  )
+}
+
+/**
+ * The per-plate "Pauses" section rendered under the Objects list: layer pauses entered
+ * by print height (mm), mirroring the filament-change rows. Baked to PausePrint entries
+ * in `Metadata/custom_gcode_per_layer.xml` on save. Sized to share a row with
+ * {@link PlateFilamentChangesSection} (wrapping under it when the panel is narrow).
+ */
+export function PlatePausesSection({ pauses, onChange }: {
+  pauses: EditorPause[]
+  onChange: (pauses: EditorPause[]) => void
+}) {
+  return (
+    <Stack spacing={0.75} sx={{ flex: '1 1 150px', minWidth: 0 }}>
+      <Stack direction="row" spacing={0.25} alignItems="center">
+        <Typography level="title-sm">Pauses</Typography>
+        <SectionHelpPopup ariaLabel="About pauses" title="Pauses">
+          <Typography level="body-xs">
+            Stop the print at a height, e.g. to embed magnets or nuts, then resume from
+            the printer screen.
+          </Typography>
           <Typography level="body-xs">
             The printer stops just before it prints the layer that ends at the height you
-            enter, then waits for you to resume from the printer screen. With 0.2 mm layers,
-            a pause at 5.0 mm stops once 4.8 mm has printed.
+            enter. With 0.2 mm layers, a pause at 5.0 mm stops once 4.8 mm has printed.
           </Typography>
           <Typography level="body-xs">
             Each pause shows as an amber line on the models, and the height keeps working
@@ -1212,33 +1345,8 @@ function PauseHelpPopup() {
             Need an exact layer? Slice the plate, scrub the G-code preview to the layer you
             want, and enter the height shown next to the layer number.
           </Typography>
-        </Stack>
-      </Menu>
-    </Dropdown>
-  )
-}
-
-/**
- * The per-plate "Pauses" section rendered under the Objects list: layer pauses entered
- * by print height (mm), mirroring the filament-change rows. Baked to PausePrint entries
- * in `Metadata/custom_gcode_per_layer.xml` on save.
- */
-export function PlatePausesSection({ pauses, onChange }: {
-  pauses: EditorPause[]
-  onChange: (pauses: EditorPause[]) => void
-}) {
-  return (
-    <Stack spacing={0.75} sx={{ mt: 1 }}>
-      <Stack direction="row" spacing={0.25} alignItems="center">
-        <Typography level="title-sm">Pauses</Typography>
-        <PauseHelpPopup />
+        </SectionHelpPopup>
       </Stack>
-      {pauses.length === 0 && (
-        <Typography level="body-xs" textColor="text.tertiary">
-          Stop the print at a height, e.g. to embed magnets or nuts, then resume from the
-          printer.
-        </Typography>
-      )}
       {pauses.map((pause, index) => (
         <Stack key={index} direction="row" spacing={0.75} alignItems="center">
           <Input
@@ -1252,11 +1360,8 @@ export function PlatePausesSection({ pauses, onChange }: {
               if (!Number.isFinite(next) || next <= 0) return
               onChange(pauses.map((entry, i) => (i === index ? { z: next } : entry)))
             }}
-            sx={{ width: 110, flexShrink: 0 }}
+            sx={{ flex: 1, minWidth: 84 }}
           />
-          <Typography level="body-xs" textColor="text.tertiary" sx={{ flex: 1, minWidth: 0 }}>
-            before this layer prints
-          </Typography>
           <IconButton
             size="sm"
             variant="plain"
@@ -1279,6 +1384,106 @@ export function PlatePausesSection({ pauses, onChange }: {
         sx={{ alignSelf: 'flex-start' }}
       >
         Add pause
+      </Button>
+    </Stack>
+  )
+}
+
+/**
+ * The per-plate "Filament changes" section: layer-based whole-plate material swaps
+ * entered by print height (mm), baked to tool-change entries in
+ * `Metadata/custom_gcode_per_layer.xml` on save. Shares a row with
+ * {@link PlatePausesSection}, so the row keeps a compact swatch+id material select
+ * (the open listbox still shows the full material names).
+ */
+export function PlateFilamentChangesSection({ changes, filamentOptions, onChange }: {
+  changes: EditorFilamentChange[]
+  filamentOptions: FilamentOption[]
+  onChange: (changes: EditorFilamentChange[]) => void
+}) {
+  return (
+    <Stack spacing={0.75} sx={{ flex: '1 1 190px', minWidth: 0 }}>
+      <Stack direction="row" spacing={0.25} alignItems="center">
+        <Typography level="title-sm">Filament changes</Typography>
+        <SectionHelpPopup ariaLabel="About filament changes" title="Filament changes">
+          <Typography level="body-xs">
+            Swap to another material at a print height. The whole plate changes colour
+            from that layer up.
+          </Typography>
+          <Typography level="body-xs">
+            Need an exact layer? Slice the plate, scrub the G-code preview to the layer you
+            want, and enter the height shown next to the layer number.
+          </Typography>
+        </SectionHelpPopup>
+      </Stack>
+      {changes.map((change, index) => (
+        <Stack key={index} direction="row" spacing={0.75} alignItems="center">
+          <Input
+            size="sm"
+            type="number"
+            value={change.z}
+            endDecorator="mm"
+            slotProps={{ input: { min: 0.2, step: 0.2, 'aria-label': 'Change height' } }}
+            onChange={(event) => {
+              const next = Number.parseFloat(event.target.value)
+              if (!Number.isFinite(next) || next <= 0) return
+              onChange(changes.map((entry, i) => (i === index ? { ...entry, z: next } : entry)))
+            }}
+            sx={{ flex: 1, minWidth: 84 }}
+          />
+          <Select<number>
+            size="sm"
+            value={change.filamentId}
+            onChange={(_event, value) => {
+              if (value == null) return
+              onChange(changes.map((entry, i) => (i === index ? { ...entry, filamentId: value } : entry)))
+            }}
+            renderValue={(selected) => {
+              const option = filamentOptions.find((entry) => entry.id === selected?.value)
+              if (!option) return null
+              return (
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  <Box sx={{ width: 12, height: 12, borderRadius: '3px', flexShrink: 0, bgcolor: option.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
+                  <span>{option.id}</span>
+                </Stack>
+              )
+            }}
+            slotProps={{ button: { 'aria-label': 'Change to material' } }}
+            sx={{ minWidth: 64, flexShrink: 0 }}
+          >
+            {filamentOptions.map((option) => (
+              <Option key={option.id} value={option.id}>
+                <FilamentOptionContent option={option} />
+              </Option>
+            ))}
+          </Select>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label="Remove filament change"
+            onClick={() => onChange(changes.filter((_, i) => i !== index))}
+          >
+            <CloseRoundedIcon />
+          </IconButton>
+        </Stack>
+      ))}
+      <Button
+        size="sm"
+        variant="soft"
+        startDecorator={<AddRoundedIcon />}
+        onClick={() => {
+          const lastZ = changes[changes.length - 1]?.z ?? 0
+          const lastFilament = changes[changes.length - 1]?.filamentId
+          const nextOption = filamentOptions.find((option) => option.id !== (lastFilament ?? filamentOptions[0]?.id))
+          onChange([
+            ...changes,
+            { z: Math.round((lastZ + 1) * 10) / 10, filamentId: nextOption?.id ?? filamentOptions[0]?.id ?? 1 }
+          ])
+        }}
+        sx={{ alignSelf: 'flex-start' }}
+      >
+        Add change
       </Button>
     </Stack>
   )

@@ -104,7 +104,8 @@ import { webPluginRegistry } from './plugin/registry'
 import { registerBuiltinPlugins } from './plugin/builtin'
 import { buildChromeCssVars } from './theme/buildTheme'
 import { auroraChrome, auroraTheme, defaultChrome, theme } from './theme/theme'
-import { platformAuroraChrome, platformAuroraTheme, platformChrome, platformTheme } from './theme/platformTheme'
+import { flatThemeVariants, isFlatAppTheme } from './theme/flatThemes'
+import { platformAuroraChrome, platformAuroraTheme, platformChrome, platformFlatThemeVariants, platformTheme } from './theme/platformTheme'
 
 const baseCoreTabs: ReadonlyArray<ShellTab> = [
   { value: '/get-started', label: 'Get started', mobileIcon: <ChecklistRoundedIcon /> },
@@ -750,16 +751,23 @@ export function App() {
     canUsePlatformWorkspace,
     authRouteState
   })
-  const workspaceChrome = effectiveAppTheme === 'aurora'
-    ? (usesPlatformTheme ? platformAuroraChrome : auroraChrome)
-    : (usesPlatformTheme ? platformChrome : defaultChrome)
+  const flatThemeVariant = isFlatAppTheme(effectiveAppTheme)
+    ? (usesPlatformTheme ? platformFlatThemeVariants : flatThemeVariants)[effectiveAppTheme]
+    : null
+  const workspaceChrome = flatThemeVariant
+    ? flatThemeVariant.chrome
+    : effectiveAppTheme === 'aurora'
+      ? (usesPlatformTheme ? platformAuroraChrome : auroraChrome)
+      : (usesPlatformTheme ? platformChrome : defaultChrome)
   const workspaceChromeVars = useMemo(
     () => buildChromeCssVars(workspaceChrome),
     [workspaceChrome]
   )
-  const workspaceTheme = effectiveAppTheme === 'aurora'
-    ? (usesPlatformTheme ? platformAuroraTheme : auroraTheme)
-    : (usesPlatformTheme ? platformTheme : theme)
+  const workspaceTheme = flatThemeVariant
+    ? flatThemeVariant.theme
+    : effectiveAppTheme === 'aurora'
+      ? (usesPlatformTheme ? platformAuroraTheme : auroraTheme)
+      : (usesPlatformTheme ? platformTheme : theme)
   const usesPublicChrome = isWorkspaceSelectionRoute || isConnectBridgeRoute || isMarketingRoute || isPublicInfoRoute
   const shellTabs = usesPublicChrome ? [] : tabs
   const shellWorkspaceLabel = usesPublicChrome ? undefined : (inPlatformMode ? 'Platform' : undefined)

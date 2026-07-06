@@ -90,6 +90,16 @@ are baked with the chosen subtype instead of `normal_part`). Retyped parts rende
 translucent volumes and per-part process overrides apply inside them, exactly like
 added modifier volumes.
 
+`partTransforms` carries part-placement edits (moving / rotating / scaling a BAKED part
+inside its object — e.g. repositioning a support blocker after a save): keyed by
+objectId+componentObjectId with the part's new object-local 12-number matrix. The writer
+rewrites the part's `<component transform>` — the placement BambuStudio and the CLI
+slicer actually load into the volume (verified against the BambuStudio reader:
+`model_settings`'s `matrix` metadata only feeds `volume->source.transform`) — and
+mirrors the `matrix` metadata (row-major 4x4) when present so a later BambuStudio
+re-save doesn't compound a stale source record. Placement is geometry-level, shared by
+every placed instance of the object.
+
 `meshReplacements` carries BambuStudio "Replace with…" swaps: each `{objectId, importId}`
 records that an in-project object's mesh was replaced by a staged import. The replaced
 object's placed instances reference the import (so the original object drops out of the

@@ -215,6 +215,15 @@ export interface EditorState {
    * `SceneEdit.partTypeChanges` / `SceneEdit.importPartTypes`.
    */
   partTypeChanges?: Record<string, SceneEditPartSubtype>
+  /**
+   * Part-placement changes made this session (moving/rotating/scaling a part inside its
+   * object with the gizmo), keyed by {@link supportPaintKey} (`objectId:componentObjectId`).
+   * Each value is the part's new OBJECT-LOCAL 3MF matrix (12 numbers, column-major 3x3 +
+   * translation). The change is also reflected onto every instance's `part.transform` so
+   * rebuilds and thumbnails render from one source. Cloned by {@link cloneEditorState};
+   * emitted as `SceneEdit.partTransforms`.
+   */
+  partTransforms?: Record<string, number[]>
 }
 
 /** A new volume added inside an object this session (Bambu "Add negative part/..."). */
@@ -709,6 +718,7 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     partFilaments: collectPartFilaments(state),
     partProcessOverrides: collectPartProcessOverrides(state),
     partTypeChanges: collectPartTypeChanges(state),
+    partTransforms: collectPartTransforms(state),
     importPartFilaments: collectImportPartFilaments(state),
     importPartProcessOverrides: collectImportPartProcessOverrides(state),
     importPartTypes: collectImportPartTypes(state),
@@ -888,6 +898,27 @@ function collectPartTypeChanges(state: EditorState): SceneEdit['partTypeChanges'
     if (!Number.isInteger(objectId) || !Number.isInteger(componentObjectId)) continue
     if (!placedObjectIds.has(objectId)) continue
     out.push({ objectId, componentObjectId, subtype })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/** Part-placement changes for parts whose in-project object is still placed (keyed objectId:componentId). */
+function collectPartTransforms(state: EditorState): SceneEdit['partTransforms'] {
+  if (!state.partTransforms) return undefined
+  const placedObjectIds = new Set<number>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
+    }
+  }
+  const out: NonNullable<SceneEdit['partTransforms']> = []
+  for (const [key, matrix] of Object.entries(state.partTransforms)) {
+    const [objectIdRaw, componentRaw] = key.split(':')
+    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
+    const componentObjectId = Number.parseInt(componentRaw ?? '', 10)
+    if (!Number.isInteger(objectId) || !Number.isInteger(componentObjectId)) continue
+    if (!placedObjectIds.has(objectId) || matrix.length !== 12) continue
+    out.push({ objectId, componentObjectId, matrix: [...matrix] })
   }
   return out.length > 0 ? out : undefined
 }
@@ -1116,6 +1147,13 @@ export function cloneEditorState(state: EditorState): EditorState {
       }
       : {}),
     ...(state.partTypeChanges ? { partTypeChanges: { ...state.partTypeChanges } } : {}),
+    ...(state.partTransforms
+      ? {
+        partTransforms: Object.fromEntries(
+          Object.entries(state.partTransforms).map(([key, matrix]) => [key, [...matrix]])
+        )
+      }
+      : {}),
     ...(state.brimEars
       ? {
         brimEars: Object.fromEntries(

@@ -2,7 +2,12 @@ import { extendTheme } from '@mui/joy/styles'
 import { modalDialogAutoScrollStyles } from '../lib/modalDialogLayout'
 
 export interface PrintStreamThemePalette {
-  primary: Record<number, string>
+  /**
+   * 50-900 color scale, optionally extended with Joy palette overrides such
+   * as `solidBg`/`solidColor` for themes whose solid-primary controls do not
+   * derive from the scale (e.g. the flat themes' deep accent fills).
+   */
+  primary: Record<number | string, string>
   warning: Record<number, string>
   neutral: Record<number, string>
   chrome: {
@@ -324,8 +329,11 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
             },
             '&.Mui-selected': {
               color: 'var(--joy-palette-primary-100)',
-              backgroundColor: 'rgba(20, 136, 106, 0.22)',
-              boxShadow: 'inset 0 0 0 1px rgba(141, 255, 216, 0.18)'
+              // Palette-driven so alternate accent colors (e.g. graphite's lime)
+              // tint their tabs correctly; matches the previous hardcoded teal
+              // exactly for the default/aurora palettes (600 = #14886a, 200 = #8dffd8).
+              backgroundColor: 'color-mix(in srgb, var(--joy-palette-primary-600) 22%, transparent)',
+              boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--joy-palette-primary-200) 18%, transparent)'
             }
           }
         }

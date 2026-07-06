@@ -1,10 +1,11 @@
 /**
- * Joy UI theme.
+ * Joy UI themes: Default and Aurora.
  *
- * Mirrors the `game-is-up` reference aesthetic: dark, atmospheric palette
- * with high-contrast surfaces, soft inset highlights on interactive
+ * Both mirror the `game-is-up` reference aesthetic: dark, atmospheric
+ * palette with high-contrast surfaces, soft inset highlights on interactive
  * controls, and tab/card overrides that read consistently across phone,
- * tablet, and desktop viewports.
+ * tablet, and desktop viewports. The flat theme family (Graphite variants,
+ * Slate, Code Dark) lives in `flatThemes.ts`.
  */
 import { createAppTheme } from './buildTheme'
 

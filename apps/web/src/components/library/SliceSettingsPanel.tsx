@@ -227,7 +227,17 @@ export interface SliceMaterialsSnapshot {
  * its Objects tab). Both modes share one `controller` instance, so edits in
  * either surface update the same state.
  */
-export function SliceSettingsPanel({ controller, mode }: { controller: SliceSettingsController; mode: 'simple' | 'editor'; activePlateIndex?: number }) {
+export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
+  controller: SliceSettingsController
+  mode: 'simple' | 'editor'
+  activePlateIndex?: number
+  /**
+   * Caller-owned sections rendered after the Materials block (once slicer data is
+   * ready) — the editor mounts its per-plate filament-change/pause sections here so
+   * they sit with the other print configuration instead of under the object list.
+   */
+  afterMaterials?: React.ReactNode
+}) {
   const {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview,
     tenantSlug, navigate, onClose,
@@ -713,6 +723,7 @@ export function SliceSettingsPanel({ controller, mode }: { controller: SliceSett
           )})}
         </Stack>
       )}
+      {afterMaterials}
       </>)}
     </>
   )

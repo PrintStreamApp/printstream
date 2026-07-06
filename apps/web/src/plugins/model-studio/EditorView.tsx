@@ -27,7 +27,6 @@ import {
   DialogActions,
   Drawer,
   IconButton,
-  Input,
   Link,
   ModalClose,
   ModalDialog,
@@ -42,7 +41,6 @@ import {
   Tooltip,
   Typography
 } from '@mui/joy'
-import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import OpenWithRoundedIcon from '@mui/icons-material/OpenWith'
 import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import ViewListRoundedIcon from '@mui/icons-material/ViewListRounded'
@@ -83,7 +81,8 @@ import {
   createThreeMfPartObject,
   disposeObject3D,
   getGeometryTrianglePaint,
-  isModifierVolumeSubtype
+  isModifierVolumeSubtype,
+  threeMfTransformFromMatrix
 } from './lib/threeMfScene'
 import { arrangePlateItems, FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
 import { PRIMITIVE_LABELS, primitivePartSoup, primitiveTriangleSoup, type PrimitiveKind } from './lib/primitives'
@@ -180,11 +179,11 @@ import {
 } from './editorGeometry'
 import {
   AddModelMenu,
-  FilamentOptionContent,
   GizmoToolbar,
   isImportableLibraryFile,
   KeyboardHelpButton,
   ModelList,
+  PlateFilamentChangesSection,
   PlatePausesSection,
   PlateThumbnailStrip,
   SaveSplitButton,
@@ -518,6 +517,13 @@ function EditorView({
   const [selectedAddedPartKey, setSelectedAddedPartKey] = useState<string | null>(null)
   const selectedAddedPartKeyRef = useRef(selectedAddedPartKey)
   selectedAddedPartKeyRef.current = selectedAddedPartKey
+  // Existing baked part (objectId+componentObjectId) currently holding the transform
+  // gizmo — the counterpart of selectedAddedPartKey for parts already in the 3MF.
+  // Placement edits are geometry-level: they apply to every instance of the object and
+  // are emitted as SceneEdit.partTransforms.
+  const [selectedBakedPart, setSelectedBakedPart] = useState<{ objectId: number; componentObjectId: number } | null>(null)
+  const selectedBakedPartRef = useRef(selectedBakedPart)
+  selectedBakedPartRef.current = selectedBakedPart
   const [viewerError, setViewerError] = useState<string | null>(null)
   // True while the active plate's models are still being built into the 3D scene.
   const [viewportBuilding, setViewportBuilding] = useState(false)
@@ -985,6 +991,7 @@ function EditorView({
     setSelectedKey(key)
     setExtraSelectedKeys((current) => (current.length > 0 ? [] : current))
     setPartSelection((current) => (current ? null : current))
+    setSelectedBakedPart((current) => (current ? null : current))
     if (key) objectAnchorKeyRef.current = key
   }, [])
   const selectExclusiveRef = useRef(selectExclusive)
@@ -994,6 +1001,7 @@ function EditorView({
     const primary = selectedKeyRef.current
     const extras = extraSelectedKeysRef.current
     setPartSelection((current) => (current ? null : current))
+    setSelectedBakedPart((current) => (current ? null : current))
     objectAnchorKeyRef.current = key
     if (primary === key) {
       const [next, ...rest] = extras
@@ -1037,6 +1045,13 @@ function EditorView({
         return ownerId === current.objectId
       })
       return prunePartSelection(current, owner ? owner.parts.map((part) => part.componentObjectId) : null)
+    })
+    setSelectedBakedPart((current) => {
+      if (!current) return current
+      const stillExists = state?.plates.some((plate) => plate.instances.some((instance) =>
+        instance.source.kind === 'object' && instance.objectId === current.objectId
+        && instance.parts.some((part) => part.componentObjectId === current.componentObjectId)))
+      return stillExists ? current : null
     })
   }, [state])
   const gizmoModeRef = useRef<GizmoMode>(gizmoMode)
@@ -1255,10 +1270,14 @@ function EditorView({
           const partColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || part.color || meshColor
           const partGroup = createThreeMfPartObject(geometry, {
             color: partColor,
-            transform: partTransform,
             clearanceTransform: placement.clone().multiply(partTransform),
             subtype: part.subtype
           })
+          // The part matrix lives on the GROUP (children stay part-local) so the part
+          // gizmo renders where the part actually sits — attached to an identity group
+          // it appeared at the object's origin, over the main part. Write-backs stay
+          // layout-agnostic: they read group.matrix x child matrix.
+          partGroup.applyMatrix4(partTransform)
           // Part identity for the part-selection highlight (owner comes from the
           // enclosing instance group's key; see syncPartSelectionBoxes).
           partGroup.userData.partRef = { componentObjectId: part.componentObjectId }
@@ -1415,7 +1434,7 @@ function EditorView({
   const refreshAddedPartMeshesRef = useRef(refreshAddedPartMeshes)
   refreshAddedPartMeshesRef.current = refreshAddedPartMeshes
 
-  /** Persist a gizmo-dragged part mesh's transform into the editor state. */
+  /** Persist a gizmo-dragged ADDED part mesh's transform into the editor state. */
   const writeBackAddedPart = useCallback((mesh: THREE.Object3D) => {
     const state = stateRef.current
     const key = mesh.userData.addedPartKey
@@ -1430,8 +1449,59 @@ function EditorView({
       }
     }
   }, [])
-  const writeBackAddedPartRef = useRef(writeBackAddedPart)
-  writeBackAddedPartRef.current = writeBackAddedPart
+
+  /**
+   * Persist a gizmo-dragged BAKED part group's placement. The group carries the drag
+   * delta (its children carry the baked matrix), so the part's new object-local matrix
+   * is delta x baked. The placement is geometry-level: it is written to
+   * `state.partTransforms` (for the SceneEdit) and every instance's `part.transform`
+   * (for rebuilds/thumbnails), and mirrored live onto the other instances' part groups.
+   */
+  const writeBackBakedPart = useCallback((partGroup: THREE.Object3D) => {
+    const selected = selectedBakedPartRef.current
+    const state = stateRef.current
+    const ref = partGroup.userData.partRef as { componentObjectId: number } | undefined
+    if (!selected || !state || !ref || ref.componentObjectId !== selected.componentObjectId) return
+    const mesh = partGroup.children.find((child) => (child as THREE.Mesh).isMesh === true)
+    if (!mesh) return
+    partGroup.updateMatrix()
+    mesh.updateMatrix()
+    const effective = new THREE.Matrix4().multiplyMatrices(partGroup.matrix, mesh.matrix)
+    const matrix = threeMfTransformFromMatrix(effective)
+    if (!state.partTransforms) state.partTransforms = {}
+    state.partTransforms[supportPaintKey(selected.objectId, selected.componentObjectId)] = matrix
+    for (const plate of state.plates) {
+      for (const instance of plate.instances) {
+        if (instance.source.kind !== 'object' || instance.objectId !== selected.objectId) continue
+        const part = instance.parts.find((entry) => entry.componentObjectId === selected.componentObjectId)
+        if (part) part.transform = [...matrix]
+      }
+    }
+    // Mirror the drag delta onto the other instances' matching part groups (their child
+    // matrices equal the dragged one's, so the same delta lands on the same placement).
+    for (const instance of activePlateRef.current?.instances ?? []) {
+      if (instance.source.kind !== 'object' || instance.objectId !== selected.objectId) continue
+      const group = groupByKeyRef.current.get(instance.key)
+      if (!group) continue
+      group.traverse((node) => {
+        if (node === partGroup) return
+        const nodeRef = node.userData.partRef as { componentObjectId: number } | undefined
+        if (nodeRef && nodeRef.componentObjectId === selected.componentObjectId) {
+          node.position.copy(partGroup.position)
+          node.quaternion.copy(partGroup.quaternion)
+          node.scale.copy(partGroup.scale)
+        }
+      })
+    }
+  }, [])
+
+  /** Gizmo write-back dispatch: session-added parts by key, baked parts by partRef. */
+  const writeBackPartMesh = useCallback((mesh: THREE.Object3D) => {
+    if (typeof mesh.userData.addedPartKey === 'string') writeBackAddedPart(mesh)
+    else if (mesh.userData.partRef != null) writeBackBakedPart(mesh)
+  }, [writeBackAddedPart, writeBackBakedPart])
+  const writeBackPartMeshRef = useRef(writeBackPartMesh)
+  writeBackPartMeshRef.current = writeBackPartMesh
 
   // ---- Brim ears -----------------------------------------------------------------
 
@@ -1589,13 +1659,15 @@ function EditorView({
     selectExclusiveRef,
     toggleAdditiveSelectionRef,
     selectedAddedPartKeyRef,
+    selectedBakedPartRef,
+    setSelectedBakedPart,
     setSelectionHighlightRef,
     gizmoModeRef,
     setGizmoModeRef,
     bakeExactMatrixRef,
     syncSelectedTransformRef,
     setRotationReadoutRef,
-    writeBackAddedPartRef,
+    writeBackPartMeshRef,
     activePaintChannelRef,
     paintBrushModeRef,
     paintBrushRadiusRef,
@@ -1624,18 +1696,43 @@ function EditorView({
     writeBackGroupTransform
   })
 
-  /** Mirror a group's transform into the manual-input panel (plate-local frame). */
+  /**
+   * Mirror a transform into the manual-input panel: an instance group's plate-local TRS,
+   * or — when the gizmo holds a part (added mesh / baked part group) — the part's
+   * OBJECT-local placement, BambuStudio's "Volume Operations" behaviour.
+   */
   const syncSelectedTransform = useCallback((object: THREE.Object3D) => {
-    const rotation = rotorOf(object).rotation
-    setSelectedTransform({
-      position: { x: object.position.x, y: object.position.y, z: object.position.z },
-      rotationDeg: {
-        x: THREE.MathUtils.radToDeg(rotation.x),
-        y: THREE.MathUtils.radToDeg(rotation.y),
-        z: THREE.MathUtils.radToDeg(rotation.z)
-      },
-      scalePct: { x: object.scale.x * 100, y: object.scale.y * 100, z: object.scale.z * 100 }
-    })
+    const fromTrs = (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => {
+      setSelectedTransform({
+        position: { x: position.x, y: position.y, z: position.z },
+        rotationDeg: {
+          x: THREE.MathUtils.radToDeg(rotation.x),
+          y: THREE.MathUtils.radToDeg(rotation.y),
+          z: THREE.MathUtils.radToDeg(rotation.z)
+        },
+        scalePct: { x: scale.x * 100, y: scale.y * 100, z: scale.z * 100 }
+      })
+    }
+    if (typeof object.userData.addedPartKey === 'string') {
+      // Added part mesh: its local TRS IS the object-local placement.
+      fromTrs(object.position, object.rotation as THREE.Euler, object.scale)
+      return
+    }
+    if (object.userData.partRef != null) {
+      // Baked part group: effective placement = drag delta x baked child matrix.
+      const mesh = object.children.find((child) => (child as THREE.Mesh).isMesh === true)
+      if (!mesh) return
+      object.updateMatrix()
+      mesh.updateMatrix()
+      const effective = new THREE.Matrix4().multiplyMatrices(object.matrix, mesh.matrix)
+      const position = new THREE.Vector3()
+      const quaternion = new THREE.Quaternion()
+      const scale = new THREE.Vector3()
+      effective.decompose(position, quaternion, scale)
+      fromTrs(position, new THREE.Euler().setFromQuaternion(quaternion, 'XYZ'), scale)
+      return
+    }
+    fromTrs(object.position, rotorOf(object).rotation, object.scale)
   }, [])
   syncSelectedTransformRef.current = syncSelectedTransform
 
@@ -1881,7 +1978,10 @@ function EditorView({
     const transform = transformRef.current
     if (!transform) return
     const group = selectedKey ? groupByKeyRef.current.get(selectedKey) : null
-    setSelectionHighlightRef.current?.(group ?? null)
+    // With a part on the gizmo, drop the object-level selection box (BambuStudio's
+    // volume selection): only the part's own highlight shows, so the whole object —
+    // and especially the main part — no longer reads as selected.
+    setSelectionHighlightRef.current?.(selectedAddedPartKey || selectedBakedPart ? null : group ?? null)
     if (!group) {
       transform.detach()
       setSelectedTransform(null)
@@ -1893,6 +1993,9 @@ function EditorView({
     // to the inner rotor (so it spins the model); move/scale attach to the outer
     // group (so scaling is along the bed axes, and the gizmo's scale handles aren't
     // rotated).
+    // The manual-input panel mirrors whatever the gizmo holds: the object, or a selected
+    // part's object-local placement (BambuStudio's "Volume Operations").
+    let panelTarget: THREE.Object3D = group
     if (gizmoMode === 'layFace' || gizmoMode === 'cut' || gizmoMode === 'brimEars' || gizmoMode === 'measure' || paintChannelForGizmoMode(gizmoMode) !== null) {
       transform.detach()
     } else if (selectedAddedPartKey) {
@@ -1904,6 +2007,25 @@ function EditorView({
       if (partMesh) {
         transform.attach(partMesh)
         transform.setMode(gizmoMode)
+        panelTarget = partMesh
+      } else {
+        transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
+        transform.setMode(gizmoMode)
+      }
+    } else if (selectedBakedPart) {
+      // A selected baked part takes the gizmo via its part GROUP: the group starts at
+      // identity (its children carry the baked matrix), so the gizmo drags a delta and
+      // the edge outlines/paint overlays follow. writeBackBakedPart composes the delta
+      // with the child matrix into the part's new object-local placement.
+      let partGroup: THREE.Object3D | null = null
+      group.traverse((node) => {
+        const ref = node.userData.partRef as { componentObjectId: number } | undefined
+        if (!partGroup && ref && ref.componentObjectId === selectedBakedPart.componentObjectId) partGroup = node
+      })
+      if (partGroup) {
+        transform.attach(partGroup)
+        transform.setMode(gizmoMode)
+        panelTarget = partGroup
       } else {
         transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
         transform.setMode(gizmoMode)
@@ -1912,8 +2034,8 @@ function EditorView({
       transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
       transform.setMode(gizmoMode)
     }
-    syncSelectedTransform(group)
-  }, [selectedKey, gizmoMode, selectedAddedPartKey, syncSelectedTransform])
+    syncSelectedTransform(panelTarget)
+  }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, syncSelectedTransform])
 
   const reattachGizmoRef = useRef(reattachGizmo)
   reattachGizmoRef.current = reattachGizmo
@@ -1923,9 +2045,22 @@ function EditorView({
     reattachGizmo()
   }, [reattachGizmo])
 
-  // Selecting a different instance always drops back to object-level transform.
+  // Selecting a different instance drops back to object-level transform — unless the
+  // selected part belongs to the newly selected instance's object (the added-part list
+  // row selects the instance and the part together; clearing here would undo it).
   useEffect(() => {
-    setSelectedAddedPartKey(null)
+    setSelectedAddedPartKey((current) => {
+      if (!current) return current
+      const instance = activePlateRef.current?.instances.find((entry) => entry.key === selectedKey)
+      const belongs = instance && instance.source.kind === 'object'
+        && (stateRef.current?.addedParts?.[instance.objectId] ?? []).some((part) => part.key === current)
+      return belongs ? current : null
+    })
+    setSelectedBakedPart((current) => {
+      if (!current) return current
+      const instance = activePlateRef.current?.instances.find((entry) => entry.key === selectedKey)
+      return instance && instance.source.kind === 'object' && instance.objectId === current.objectId ? current : null
+    })
   }, [selectedKey])
 
   // Re-dim instances whose print toggle changed, without rebuilding the plate.
@@ -2229,14 +2364,44 @@ function EditorView({
     else selectExclusive(key)
   }, [toggleAdditiveSelection, selectExclusive])
 
-  // Part-row selection (BambuStudio volume-mode, rules in lib/selectionModel.ts): plain
-  // click selects one part, Ctrl toggles siblings, Shift ranges between siblings, and a
-  // part of a different object CONVERTS the selection. Entering part mode always leaves
-  // object mode.
-  const handleSelectPart = useCallback((objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }) => {
+  // Part-row selection. A PLAIN click on an in-project object's part selects the part
+  // for transform (BambuStudio's volume click): the instance stays selected and the part
+  // takes the gizmo, so it can be moved/rotated/scaled. Ctrl/Shift enter the BULK part
+  // selection (rules in lib/selectionModel.ts): Ctrl toggles siblings, Shift ranges
+  // between siblings, a part of a different object CONVERTS the selection, and bulk mode
+  // always leaves object mode.
+  const handleSelectPart = useCallback((objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => {
+    if (!modifiers.additive && !modifiers.range) {
+      const instance = stateRef.current?.plates.flatMap((plate) => plate.instances)
+        .find((entry) => entry.key === instanceKey)
+      if (instance && instance.source.kind === 'object') {
+        // Clicking the already-gizmo'd part steps back up to the whole object.
+        const current = selectedBakedPartRef.current
+        if (current && current.objectId === objectId && current.componentObjectId === componentObjectId
+          && selectedKeyRef.current === instanceKey) {
+          setSelectedBakedPart(null)
+          return
+        }
+        selectExclusive(instanceKey)
+        setSelectedAddedPartKey(null)
+        setSelectedBakedPart({ objectId, componentObjectId })
+        partAnchorRef.current = { objectId, componentObjectId }
+        if (!['translate', 'rotate', 'scale'].includes(gizmoModeRef.current)) setGizmoMode('translate')
+        return
+      }
+      // Import-backed rows render no per-part meshes (no gizmo target); fall through to
+      // the bulk selection so the row still highlights and bulk actions work.
+    }
     setSelectedKey(null)
     setExtraSelectedKeys((current) => (current.length > 0 ? [] : current))
+    setSelectedAddedPartKey(null)
     setPartSelection((current) => {
+      // A part already holding the gizmo seeds the bulk set, so gizmo-select then
+      // Ctrl-click builds a two-part selection instead of dropping the first part.
+      const baked = selectedBakedPartRef.current
+      const seeded = current ?? (baked && baked.objectId === objectId
+        ? { objectId, componentObjectIds: [baked.componentObjectId] }
+        : current)
       if (modifiers.range) {
         const owner = stateRef.current?.plates.flatMap((plate) => plate.instances).find((instance) => {
           const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
@@ -2246,15 +2411,16 @@ function EditorView({
         return rangePartSelection(objectId, ordered, partAnchorRef.current, componentObjectId)
       }
       partAnchorRef.current = { objectId, componentObjectId }
-      if (modifiers.additive) return togglePartInSelection(current, objectId, componentObjectId)
+      if (modifiers.additive) return togglePartInSelection(seeded, objectId, componentObjectId)
       // Plain click on the sole selected part deselects it (parity with object rows).
-      if (current && current.objectId === objectId
-        && current.componentObjectIds.length === 1 && current.componentObjectIds[0] === componentObjectId) {
+      if (seeded && seeded.objectId === objectId
+        && seeded.componentObjectIds.length === 1 && seeded.componentObjectIds[0] === componentObjectId) {
         return null
       }
       return { objectId, componentObjectIds: [componentObjectId] }
     })
-  }, [])
+    setSelectedBakedPart((current) => (current ? null : current))
+  }, [selectExclusive])
 
   // Right-click on list rows: keep the selection when clicking a member (bulk menu),
   // otherwise select just the clicked row first — same rule as the viewport.
@@ -2574,20 +2740,30 @@ function EditorView({
     setState((current) => (current ? { ...current } : current))
   }, [refreshAddedPartMeshes, recordHistoryRef])
 
-  /** Remove the currently selected added part volume. */
-  const handleRemoveAddedPart = useCallback(() => {
+  /** Remove an added part volume by key (default: the currently selected one). */
+  const handleRemoveAddedPart = useCallback((key?: string) => {
     const state = stateRef.current
-    const key = selectedAddedPartKeyRef.current
-    if (!state?.addedParts || !key) return
+    const target = key ?? selectedAddedPartKeyRef.current
+    if (!state?.addedParts || !target) return
     recordHistoryRef.current?.()
     for (const [objectId, parts] of Object.entries(state.addedParts)) {
-      const next = parts.filter((part) => part.key !== key)
+      const next = parts.filter((part) => part.key !== target)
       if (next.length !== parts.length) state.addedParts[Number(objectId)] = next
     }
-    setSelectedAddedPartKey(null)
+    if (selectedAddedPartKeyRef.current === target) setSelectedAddedPartKey(null)
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
+    // addedParts is mutated in place; refresh the state identity so the list rows re-render.
+    setState((current) => (current ? { ...current } : current))
   }, [refreshAddedPartMeshes, recordHistoryRef])
+
+  /** Select an added part from its list row: select its instance and hand it the gizmo. */
+  const handleSelectAddedPartRow = useCallback((instanceKey: string, partKey: string) => {
+    selectExclusive(instanceKey)
+    setSelectedAddedPartKey(partKey)
+    // The added-part gizmo/panel only exist in the transform modes.
+    if (!['translate', 'rotate', 'scale'].includes(gizmoModeRef.current)) setGizmoMode('translate')
+  }, [selectExclusive])
 
   /**
    * Assemble (the inverse of "Split to objects"): merge every selected object into ONE
@@ -3066,27 +3242,85 @@ function EditorView({
     regenerateActivePlateThumbnail()
   }, [recordHistory, bakeExactMatrix, writeBackGroupTransform, syncSelectedTransform, regenerateActivePlateThumbnail])
 
+  /** The scene object of the part currently holding the gizmo (added mesh or baked part group). */
+  const selectedPartObject = useCallback((): THREE.Object3D | null => {
+    const key = selectedKeyRef.current
+    const group = key ? groupByKeyRef.current.get(key) : null
+    if (!group) return null
+    const addedKey = selectedAddedPartKeyRef.current
+    const baked = selectedBakedPartRef.current
+    if (!addedKey && !baked) return null
+    let found: THREE.Object3D | null = null
+    group.traverse((node) => {
+      if (found) return
+      if (addedKey) {
+        if (node.userData.addedPartKey === addedKey) found = node
+      } else if (baked) {
+        const ref = node.userData.partRef as { componentObjectId: number } | undefined
+        if (ref && ref.componentObjectId === baked.componentObjectId) found = node
+      }
+    })
+    return found
+  }, [])
+
+  /**
+   * Apply a manual-input edit to the selected PART's object-local placement (BambuStudio's
+   * "Volume Operations" panel semantics): decompose the effective placement, let the
+   * mutator adjust it, then persist — an added part carries TRS directly, a baked part
+   * gets the recomposed delta on its part group (which writeBackBakedPart then bakes into
+   * state and mirrors onto the other instances). Returns false when no part is selected.
+   */
+  const mutateSelectedPart = useCallback((mutate: (trs: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }) => void): boolean => {
+    const part = selectedPartObject()
+    if (!part) return false
+    recordHistory()
+    if (typeof part.userData.addedPartKey === 'string') {
+      mutate({ position: part.position, rotation: part.rotation as THREE.Euler, scale: part.scale })
+      writeBackAddedPart(part)
+    } else {
+      const mesh = part.children.find((child) => (child as THREE.Mesh).isMesh === true)
+      if (!mesh) return true
+      part.updateMatrix()
+      mesh.updateMatrix()
+      const effective = new THREE.Matrix4().multiplyMatrices(part.matrix, mesh.matrix)
+      const position = new THREE.Vector3()
+      const quaternion = new THREE.Quaternion()
+      const scale = new THREE.Vector3()
+      effective.decompose(position, quaternion, scale)
+      const rotation = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ')
+      mutate({ position, rotation, scale })
+      const desired = new THREE.Matrix4().compose(position, new THREE.Quaternion().setFromEuler(rotation), scale)
+      const delta = desired.multiply(mesh.matrix.clone().invert())
+      delta.decompose(part.position, part.quaternion, part.scale)
+      writeBackBakedPart(part)
+    }
+    syncSelectedTransform(part)
+    regenerateActivePlateThumbnail()
+    return true
+  }, [selectedPartObject, recordHistory, writeBackAddedPart, writeBackBakedPart, syncSelectedTransform, regenerateActivePlateThumbnail])
+
   const applyManualPosition = useCallback((axis: 'x' | 'y' | 'z', value: number) => {
     if (!Number.isFinite(value)) return
+    if (mutateSelectedPart(({ position }) => { position[axis] = value })) return
     mutateSelectedGroup((group) => { group.position[axis] = value })
-  }, [mutateSelectedGroup])
+  }, [mutateSelectedPart, mutateSelectedGroup])
 
   const applyManualRotation = useCallback((axis: 'x' | 'y' | 'z', degrees: number) => {
     if (!Number.isFinite(degrees)) return
+    if (mutateSelectedPart(({ rotation }) => { rotation[axis] = THREE.MathUtils.degToRad(degrees) })) return
     mutateSelectedGroup((group) => { rotorOf(group).rotation[axis] = THREE.MathUtils.degToRad(degrees) })
-  }, [mutateSelectedGroup])
+  }, [mutateSelectedPart, mutateSelectedGroup])
 
   const applyManualScale = useCallback((axis: 'x' | 'y' | 'z', percent: number) => {
     if (!Number.isFinite(percent) || percent <= 0) return
     const factor = percent / 100
-    mutateSelectedGroup((group) => {
-      if (uniformScale) {
-        group.scale.set(factor, factor, factor)
-      } else {
-        group.scale[axis] = factor
-      }
-    })
-  }, [mutateSelectedGroup, uniformScale])
+    const scaleAxes = (scale: THREE.Vector3) => {
+      if (uniformScale) scale.set(factor, factor, factor)
+      else scale[axis] = factor
+    }
+    if (mutateSelectedPart(({ scale }) => scaleAxes(scale))) return
+    mutateSelectedGroup((group) => scaleAxes(group.scale))
+  }, [mutateSelectedPart, mutateSelectedGroup, uniformScale])
 
   // ---- Keyboard transforms ---------------------------------------------------
   // Arrow keys nudge X/Y on the bed (Shift = coarse, Ctrl/Cmd = fine); [ and ]
@@ -3120,22 +3354,36 @@ function EditorView({
       if (!key) return
 
       const step = event.shiftKey ? KEY_MOVE_STEP_LARGE : (event.ctrlKey || event.metaKey) ? KEY_MOVE_STEP_FINE : KEY_MOVE_STEP
+      // With a part on the gizmo, arrows/rotate act on the PART (BambuStudio moves the
+      // selected volume); otherwise on the object selection.
+      const nudge = (dx: number, dy: number) => {
+        if (mutateSelectedPart(({ position }) => { position.x += dx; position.y += dy })) return
+        nudgeSelection(dx, dy)
+      }
+      const rotateZ = (radians: number) => {
+        if (mutateSelectedPart(({ rotation }) => { rotation.z += radians })) return
+        mutateSelectedGroup((group) => { rotorOf(group).rotation.z += radians })
+      }
       switch (event.key) {
         case 'ArrowLeft':
-          nudgeSelection(-step, 0); break
+          nudge(-step, 0); break
         case 'ArrowRight':
-          nudgeSelection(step, 0); break
+          nudge(step, 0); break
         case 'ArrowUp':
-          nudgeSelection(0, step); break
+          nudge(0, step); break
         case 'ArrowDown':
-          nudgeSelection(0, -step); break
+          nudge(0, -step); break
         case '[':
-          mutateSelectedGroup((group) => { rotorOf(group).rotation.z += KEY_ROTATE_STEP }); break
+          rotateZ(KEY_ROTATE_STEP); break
         case ']':
-          mutateSelectedGroup((group) => { rotorOf(group).rotation.z -= KEY_ROTATE_STEP }); break
+          rotateZ(-KEY_ROTATE_STEP); break
         case 'Delete':
         case 'Backspace':
-          handleDelete(key); break
+          // With a baked part selected, Delete would surprisingly remove the WHOLE
+          // object (baked parts can't be deleted); step back to the object instead.
+          if (selectedBakedPartRef.current) setSelectedBakedPart(null)
+          else handleDelete(key)
+          break
         default:
           return
       }
@@ -3143,7 +3391,7 @@ function EditorView({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [mutateSelectedGroup, handleDelete, nudgeSelection, undoRef, redoRef])
+  }, [mutateSelectedGroup, mutateSelectedPart, handleDelete, nudgeSelection, undoRef, redoRef])
 
   const handleAddPlate = useCallback(() => {
     // Compute the new (contiguous) index from current state, NOT inside the setState updater —
@@ -3566,7 +3814,7 @@ function EditorView({
                       the gizmo; click the model body to go back to the whole object.
                     </Typography>
                     <Stack direction="row" spacing={0.75} justifyContent="space-between">
-                      <Button size="sm" variant="plain" color="danger" onClick={handleRemoveAddedPart}>
+                      <Button size="sm" variant="plain" color="danger" onClick={() => handleRemoveAddedPart()}>
                         Remove part
                       </Button>
                       <Stack direction="row" spacing={0.75}>
@@ -3689,6 +3937,9 @@ function EditorView({
                 {selectedTransform && (
                   <TransformPanel
                     transform={selectedTransform}
+                    // With a part on the gizmo the values are the PART's placement inside
+                    // its object (and edits apply to every copy) — say so.
+                    heading={selectedAddedPartKey || selectedBakedPart ? 'Part placement (within the object)' : undefined}
                     uniformScale={uniformScale}
                     onToggleUniformScale={setUniformScale}
                     onPosition={applyManualPosition}
@@ -3709,6 +3960,7 @@ function EditorView({
                       selectedKey={selectedKey}
                       extraSelectedKeys={extraSelectedKeys}
                       partSelection={partSelection}
+                      selectedBakedPart={selectedBakedPart}
                       onSelect={handleSelect}
                       onSelectPart={handleSelectPart}
                       onObjectContextMenu={handleObjectRowContextMenu}
@@ -3723,6 +3975,12 @@ function EditorView({
                       onTogglePrintable={handleTogglePrintable}
                       onChangePartType={(objectId, componentObjectId, subtype) =>
                         handleChangePartTypes([{ objectId, componentObjectId }], subtype)}
+                      addedPartsFor={(instance) => effectiveAddedParts(stateRef.current, instance)}
+                      selectedAddedPartKey={selectedAddedPartKey}
+                      onSelectAddedPart={handleSelectAddedPartRow}
+                      onChangeAddedPartType={handleChangeAddedPartType}
+                      onRemoveAddedPart={handleRemoveAddedPart}
+                      onEditAddedPartSettings={perObject ? setEditingPartKey : undefined}
                       perObject={perObject ? {
                         // Baked objects from the slice index PLUS each not-yet-saved import's
                         // synthetic object id, so per-object process is editable before any save.
@@ -3742,96 +4000,29 @@ function EditorView({
                     />
                   )}
                 </Sheet>
-                {filamentOptions.length > 1 && activePlate && (
-                  <Stack spacing={0.75} sx={{ mt: 1 }}>
-                    <Typography level="title-sm">Filament changes</Typography>
-                    {effectiveFilamentChanges(activePlate).length === 0 && (
-                      <Typography level="body-xs" textColor="text.tertiary">
-                        Swap to another material at a print height — the whole plate changes colour
-                        from that layer up.
-                      </Typography>
-                    )}
-                    {effectiveFilamentChanges(activePlate).map((change, index) => (
-                      <Stack key={index} direction="row" spacing={0.75} alignItems="center">
-                        <Input
-                          size="sm"
-                          type="number"
-                          value={change.z}
-                          endDecorator="mm"
-                          slotProps={{ input: { min: 0.2, step: 0.2, 'aria-label': 'Change height' } }}
-                          onChange={(event) => {
-                            const next = Number.parseFloat(event.target.value)
-                            if (!Number.isFinite(next) || next <= 0) return
-                            setActivePlateFilamentChanges(effectiveFilamentChanges(activePlate).map((entry, i) => (
-                              i === index ? { ...entry, z: next } : entry
-                            )))
-                          }}
-                          sx={{ width: 110, flexShrink: 0 }}
-                        />
-                        <Select<number>
-                          size="sm"
-                          value={change.filamentId}
-                          onChange={(_event, value) => {
-                            if (value == null) return
-                            setActivePlateFilamentChanges(effectiveFilamentChanges(activePlate).map((entry, i) => (
-                              i === index ? { ...entry, filamentId: value } : entry
-                            )))
-                          }}
-                          renderValue={(selected) => {
-                            const option = filamentOptions.find((entry) => entry.id === selected?.value)
-                            return option ? <FilamentOptionContent option={option} /> : null
-                          }}
-                          sx={{ flex: 1, minWidth: 0 }}
-                        >
-                          {filamentOptions.map((option) => (
-                            <Option key={option.id} value={option.id}>
-                              <FilamentOptionContent option={option} />
-                            </Option>
-                          ))}
-                        </Select>
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="neutral"
-                          aria-label="Remove filament change"
-                          onClick={() => {
-                            setActivePlateFilamentChanges(effectiveFilamentChanges(activePlate).filter((_, i) => i !== index))
-                          }}
-                        >
-                          <CloseRoundedIcon />
-                        </IconButton>
-                      </Stack>
-                    ))}
-                    <Button
-                      size="sm"
-                      variant="soft"
-                      startDecorator={<AddRoundedIcon />}
-                      onClick={() => {
-                        const current = effectiveFilamentChanges(activePlate)
-                        const lastZ = current[current.length - 1]?.z ?? 0
-                        const lastFilament = current[current.length - 1]?.filamentId
-                        const nextOption = filamentOptions.find((option) => option.id !== (lastFilament ?? filamentOptions[0]?.id))
-                        setActivePlateFilamentChanges([
-                          ...current,
-                          { z: Math.round((lastZ + 1) * 10) / 10, filamentId: nextOption?.id ?? filamentOptions[0]?.id ?? 1 }
-                        ])
-                      }}
-                      sx={{ alignSelf: 'flex-start' }}
-                    >
-                      Add filament change
-                    </Button>
-                  </Stack>
-                )}
-                {activePlate && (
-                  <PlatePausesSection
-                    pauses={effectivePauses(activePlate)}
-                    onChange={setActivePlatePauses}
-                  />
-                )}
               </>
             )
+            // Per-plate layer G-code sections (filament changes + pauses), compact and
+            // side by side (wrapping when narrow). They live on the SETTINGS tab right
+            // after Materials — they configure the print like the rest of that tab, and
+            // under the object list they squeezed it out of its vertical space.
+            const plateGcodeSections = activePlate ? (
+              <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                {filamentOptions.length > 1 && (
+                  <PlateFilamentChangesSection
+                    changes={effectiveFilamentChanges(activePlate)}
+                    filamentOptions={filamentOptions}
+                    onChange={setActivePlateFilamentChanges}
+                  />
+                )}
+                <PlatePausesSection
+                  pauses={effectivePauses(activePlate)}
+                  onChange={setActivePlatePauses}
+                />
+              </Stack>
+            ) : null
             const settingsPanel = sliceConfigForPanel
-              ? <SliceSettingsPanel controller={sliceConfigForPanel} mode="editor" activePlateIndex={activePlateIndex} />
+              ? <SliceSettingsPanel controller={sliceConfigForPanel} mode="editor" activePlateIndex={activePlateIndex} afterMaterials={plateGcodeSections} />
               : null
 
             if (isMobile) {
@@ -3879,6 +4070,8 @@ function EditorView({
                     <ModalClose />
                     <Box sx={{ p: 1.5, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
                       {objectsContent}
+                      {/* Without slice settings there is no Settings tab to host these. */}
+                      {!sliceConfig && plateGcodeSections}
                     </Box>
                   </Drawer>
                 </>
@@ -3932,6 +4125,8 @@ function EditorView({
                   ) : (
                     <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1, overflow: 'auto' }}>
                       {objectsContent}
+                      {/* Without slice settings there is no Settings tab to host these. */}
+                      {plateGcodeSections}
                     </Box>
                   )}
                 </Box>

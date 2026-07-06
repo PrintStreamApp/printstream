@@ -109,6 +109,9 @@ export interface EditorSceneParams {
   selectExclusiveRef: MutableRefObject<(key: string | null) => void>
   toggleAdditiveSelectionRef: MutableRefObject<(key: string) => void>
   selectedAddedPartKeyRef: MutableRefObject<string | null>
+  /** Existing baked part currently holding the gizmo (counterpart of selectedAddedPartKey). */
+  selectedBakedPartRef: MutableRefObject<{ objectId: number; componentObjectId: number } | null>
+  setSelectedBakedPart: Dispatch<SetStateAction<{ objectId: number; componentObjectId: number } | null>>
   setSelectionHighlightRef: MutableRefObject<((group: THREE.Object3D | null) => void) | null>
   // Gizmo + transform write-back.
   gizmoModeRef: MutableRefObject<GizmoMode>
@@ -116,7 +119,8 @@ export interface EditorSceneParams {
   bakeExactMatrixRef: MutableRefObject<(group: THREE.Object3D) => void>
   syncSelectedTransformRef: MutableRefObject<((object: THREE.Object3D) => void) | null>
   setRotationReadoutRef: MutableRefObject<((angleDeg: number | null) => void) | null>
-  writeBackAddedPartRef: MutableRefObject<(mesh: THREE.Object3D) => void>
+  /** Persist a gizmo-dragged part's placement (session-added part mesh or baked part group). */
+  writeBackPartMeshRef: MutableRefObject<(mesh: THREE.Object3D) => void>
   // Paint + brim ears.
   activePaintChannelRef: MutableRefObject<TrianglePaintChannel | null>
   paintBrushModeRef: MutableRefObject<SupportPaintBrushMode>
@@ -195,13 +199,15 @@ export function useEditorScene(params: EditorSceneParams): void {
     selectExclusiveRef,
     toggleAdditiveSelectionRef,
     selectedAddedPartKeyRef,
+    selectedBakedPartRef,
+    setSelectedBakedPart,
     setSelectionHighlightRef,
     gizmoModeRef,
     setGizmoModeRef,
     bakeExactMatrixRef,
     syncSelectedTransformRef,
     setRotationReadoutRef,
-    writeBackAddedPartRef,
+    writeBackPartMeshRef,
     activePaintChannelRef,
     paintBrushModeRef,
     paintBrushRadiusRef,
@@ -395,7 +401,10 @@ export function useEditorScene(params: EditorSceneParams): void {
     // build stamps on them, and bounds use the group's transformed AABB (cheap path).
     const partSelectionBoxes = new Map<string, THREE.Box3Helper>()
     const syncPartSelectionBoxes = () => {
+      // The bulk part selection, or the single baked part currently holding the gizmo.
+      const baked = selectedBakedPartRef.current
       const selection = partSelectionRef.current
+        ?? (baked ? { objectId: baked.objectId, componentObjectIds: [baked.componentObjectId] } : null)
       const wanted = new Map<string, THREE.Object3D>()
       if (selection) {
         for (const instance of activePlateRef.current?.instances ?? []) {
@@ -524,10 +533,10 @@ export function useEditorScene(params: EditorSceneParams): void {
       if (panelSyncTick % PANEL_SYNC_EVERY === 0) syncSelectedTransformRef.current?.(group)
     }
 
-    /** The part mesh the gizmo is attached to, when transforming an added part volume. */
+    /** The part the gizmo is attached to: an added part volume's mesh or a baked part's group. */
     const attachedPartMesh = (): THREE.Object3D | null => {
       const target = (transform as unknown as { object?: THREE.Object3D }).object
-      return target && typeof target.userData.addedPartKey === 'string' ? target : null
+      return target && (typeof target.userData.addedPartKey === 'string' || target.userData.partRef != null) ? target : null
     }
 
     // Extras co-moved by the TRANSLATE gizmo (multi-select): per-group offsets from the
@@ -573,7 +582,9 @@ export function useEditorScene(params: EditorSceneParams): void {
         snapGuides.visible = false
         setRotationReadoutRef.current?.(null)
         if (!dragging) {
-          writeBackAddedPartRef.current?.(partMesh)
+          writeBackPartMeshRef.current?.(partMesh)
+          // Push the exact final placement to the manual panel (mid-drag syncs are throttled).
+          syncSelectedTransformRef.current?.(partMesh)
           regenerateActiveThumbnailRef.current?.()
         }
         return
@@ -609,7 +620,8 @@ export function useEditorScene(params: EditorSceneParams): void {
     const onObjectChange = () => {
       const partMesh = attachedPartMesh()
       if (partMesh) {
-        writeBackAddedPartRef.current?.(partMesh)
+        writeBackPartMeshRef.current?.(partMesh)
+        throttledPanelSync(partMesh)
         return
       }
       const outer = selectedOuterGroup()
@@ -648,6 +660,9 @@ export function useEditorScene(params: EditorSceneParams): void {
     // A motionless click on a multi-selection member collapses the selection to it on
     // release; any real drag keeps the multi-selection.
     let collapseClickCandidate: { key: string; x: number; y: number } | null = null
+    // BambuStudio drill-down: a motionless click on an already-selected multi-part object
+    // selects the baked PART under the cursor on release; a drag moves the whole object.
+    let bakedPartClickCandidate: { part: { objectId: number; componentObjectId: number }; x: number; y: number } | null = null
     /** Capture co-drag offsets for every selected group except the grabbed one. */
     const beginSelectionCoDrag = (grabbedKey: string) => {
       bodyDragExtras = allSelectedKeysRef.current()
@@ -982,10 +997,25 @@ export function useEditorScene(params: EditorSceneParams): void {
         if (typeof partKey === 'string') {
           // Select (or keep) the part; its movement happens via the gizmo only, so
           // never fall through to the object body-drag.
+          setSelectedBakedPart(null)
           setSelectedAddedPartKey(partKey)
           return
         }
         if (selectedAddedPartKeyRef.current) setSelectedAddedPartKey(null)
+        // BambuStudio drill-down: a MOTIONLESS click on an already-selected multi-part
+        // object selects the baked part under the cursor (resolved on pointer-up, so a
+        // drag still moves the whole object). Single-part objects stay object-level.
+        const partRef = firstMesh?.object.parent?.userData.partRef as { componentObjectId: number } | undefined
+        if (partRef && extraSelectedKeysRef.current.length === 0) {
+          const instance = activePlateRef.current?.instances.find((entry) => entry.key === key)
+          if (instance && instance.source.kind === 'object' && instance.parts.length > 1) {
+            bakedPartClickCandidate = {
+              part: { objectId: instance.objectId, componentObjectId: partRef.componentObjectId },
+              x: event.clientX,
+              y: event.clientY
+            }
+          }
+        }
       }
 
       // Place on face: rotate the object so the clicked face lies flat on the bed.
@@ -1148,6 +1178,15 @@ export function useEditorScene(params: EditorSceneParams): void {
         const moved = Math.hypot(event.clientX - collapseClickCandidate.x, event.clientY - collapseClickCandidate.y)
         if (moved < 5) selectExclusiveRef.current(collapseClickCandidate.key)
         collapseClickCandidate = null
+      }
+      // A motionless click on a selected multi-part object drills into the baked part.
+      if (bakedPartClickCandidate) {
+        const moved = Math.hypot(event.clientX - bakedPartClickCandidate.x, event.clientY - bakedPartClickCandidate.y)
+        if (moved < 5) {
+          setSelectedAddedPartKey(null)
+          setSelectedBakedPart(bakedPartClickCandidate.part)
+        }
+        bakedPartClickCandidate = null
       }
       bodyDragExtras = []
       if (towerDragObject) {

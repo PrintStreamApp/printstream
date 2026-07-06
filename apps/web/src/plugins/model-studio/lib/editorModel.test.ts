@@ -4,6 +4,7 @@ import { libraryThreeMfSceneSchema, threeMfIndexSchema, type StagedImport } from
 import * as THREE from 'three'
 import {
   buildSceneEdit,
+  cloneEditorState,
   decomposeInstanceTransform,
   exactTransformIfShearing,
   duplicateInstance,
@@ -115,6 +116,28 @@ test('buildSceneEdit routes part-type changes to partTypeChanges (objects) and i
   const edit = buildSceneEdit(state)
   assert.deepEqual(edit.partTypeChanges, [{ objectId: 7, componentObjectId: 5, subtype: 'support_blocker' }])
   assert.deepEqual(edit.importPartTypes, [{ importId: 'imp-3', partIndex: 1, subtype: 'modifier_part' }])
+})
+
+test('buildSceneEdit emits partTransforms for placed objects only, and cloneEditorState copies them', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const objectInstance = instanceFromStagedImport(STAGED)
+  objectInstance.source = { kind: 'object' }
+  objectInstance.objectId = 7
+  state.plates[0]!.instances.push(objectInstance)
+  const matrix = [1, 0, 0, 0, 1, 0, 0, 0, 2, 10, 4, 2]
+  state.partTransforms = {
+    '7:5': matrix,
+    // A change on an object no longer placed must not be emitted.
+    '99:1': [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
+  }
+
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.partTransforms, [{ objectId: 7, componentObjectId: 5, matrix }])
+
+  // History snapshots must not share the live matrix arrays.
+  const clone = cloneEditorState(state)
+  assert.deepEqual(clone.partTransforms?.['7:5'], matrix)
+  assert.notEqual(clone.partTransforms?.['7:5'], matrix)
 })
 
 test('buildSceneEdit emits importId for import-backed instances and objectId otherwise', () => {

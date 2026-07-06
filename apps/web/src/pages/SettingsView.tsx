@@ -23,6 +23,7 @@ import { PluginManagerSection } from '../components/PluginManagerSection'
 import { apiFetch } from '../lib/apiClient'
 import { authQueryKeys, resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
 import { CORE_LANDING_PAGE_OPTIONS, type LandingPageOption } from '../lib/landingPageOptions'
+import { appThemeOptions } from '../theme/flatThemes'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildTenantWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
@@ -275,7 +276,7 @@ export function SettingsView({
 
           <GeneralSettingCard
             title="Theme"
-            description="Choose between the current default appearance and an alternate Aurora background treatment."
+            description="Choose the app's appearance: the default look, the Aurora background treatment, or one of the flat styles (Graphite accents, Slate, Code Dark)."
             resetDisabled={deviceAppThemeOverride == null && !(canManageSettings && sharedAppTheme !== 'default')}
             onReset={() => {
               if (canManageSettings) onSetSharedAppTheme('default')
@@ -291,8 +292,9 @@ export function SettingsView({
                   onSetSharedAppTheme(value)
                 }}
               >
-                <Option value="default">Default theme</Option>
-                <Option value="aurora">Aurora theme</Option>
+                {appThemeOptions.map((option) => (
+                  <Option key={option.value} value={option.value}>{option.label} theme</Option>
+                ))}
               </Select>
             </GeneralSettingSelectRow>
 
@@ -309,8 +311,9 @@ export function SettingsView({
                 }}
               >
                 <Option value="follow-default">Follow default setting</Option>
-                <Option value="default">Default theme on this device</Option>
-                <Option value="aurora">Aurora theme on this device</Option>
+                {appThemeOptions.map((option) => (
+                  <Option key={option.value} value={option.value}>{option.label} theme on this device</Option>
+                ))}
               </Select>
             </GeneralSettingSelectRow>
 

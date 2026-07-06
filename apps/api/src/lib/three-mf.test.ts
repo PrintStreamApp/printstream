@@ -1119,6 +1119,149 @@ test('writeArrangedThreeMf writes printable="0" for skipped instances and readSc
   }
 })
 
+test('partFilaments on SOME parts round-trips without painting the untouched parts', async () => {
+  // Regression: an object whose parts carry no extruder metadata (they inherit), with a
+  // filament assigned to only SOME parts. The reader used to report the first assigned
+  // part's filament as the INSTANCE filament, so on reload the editor seeded the untouched
+  // parts with the reassigned sibling's material — and the next save baked it onto them.
+  const modelXml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<model xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">',
+    '  <resources>',
+    '    <object id="3" type="model"><components>'
+      + '<component p:path="/3D/Objects/object_3.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>'
+      + '<component p:path="/3D/Objects/object_3.model" objectid="2" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>'
+      + '</components></object>',
+    '    <object id="11" type="model"><components><component p:path="/3D/Objects/object_11.model" objectid="4" transform="1 0 0 0 1 0 0 0 1 0 0 0"/></components></object>',
+    '  </resources>',
+    '  <build>',
+    '    <item objectid="3" transform="1 0 0 0 1 0 0 0 1 -40 0 0" printable="1"/>',
+    '    <item objectid="11" transform="1 0 0 0 1 0 0 0 1 40 0 0" printable="1"/>',
+    '  </build>',
+    '</model>'
+  ].join('\n')
+  const modelSettingsXml = [
+    '<config>',
+    '  <object id="3"><metadata key="name" value="Assembly"/>'
+      + '<part id="1" subtype="normal_part"><metadata key="name" value="Main"/></part>'
+      + '<part id="2" subtype="normal_part"><metadata key="name" value="Trim"/></part></object>',
+    '  <object id="11"><metadata key="name" value="Lid"/><part id="4" subtype="normal_part"><metadata key="name" value="Lid part"/></part></object>',
+    '  <plate>',
+    '    <metadata key="plater_id" value="1"/>',
+    '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/></model_instance>',
+    '    <model_instance><metadata key="object_id" value="11"/><metadata key="instance_id" value="0"/></model_instance>',
+    '  </plate>',
+    '</config>'
+  ].join('\n')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-part-filament-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'arranged.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(modelXml, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(modelSettingsXml, 'utf8')]
+    ])
+
+    // Assign filament 2 to ONE part of the assembly and filament 3 to the lid's only part.
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 3, plateIndex: 1, position: { x: -40, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+        { objectId: 11, plateIndex: 1, position: { x: 40, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      partFilaments: [
+        { objectId: 3, componentObjectId: 2, filamentId: 2 },
+        { objectId: 11, componentObjectId: 4, filamentId: 3 }
+      ]
+    }
+    await writeArrangedThreeMf(sourcePath, outputPath, edit)
+
+    const scene = await readSceneManifest(outputPath, 1)
+    const partFilament = (componentObjectId: number) =>
+      scene.parts.find((part) => part.objectId === componentObjectId)?.filamentId ?? null
+    // The reassigned part carries filament 2; the untouched sibling stays unassigned.
+    assert.equal(partFilament(2), 2)
+    assert.equal(partFilament(1), null)
+    // The instance is NOT uniformly assigned, so it reports no instance-level filament —
+    // the editor must not seed the untouched part from a sibling's assignment.
+    assert.equal(scene.instances.find((entry) => entry.objectId === 3)?.filamentId, null)
+    // A uniformly-assigned object still reports its filament at the instance level.
+    assert.equal(partFilament(4), 3)
+    assert.equal(scene.instances.find((entry) => entry.objectId === 11)?.filamentId, 3)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('partTransforms rewrite the component transform and mirror the matrix metadata', async () => {
+  // Moving/scaling a baked part: the authoritative placement is the part's <component
+  // transform>; the model_settings `matrix` metadata (BambuStudio's source-record,
+  // row-major 4x4) must be mirrored when present so a BambuStudio re-save doesn't
+  // compound a stale record.
+  const modelXml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<model xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">',
+    '  <resources>',
+    '    <object id="3" type="model"><components>'
+      + '<component p:path="/3D/Objects/object_3.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>'
+      + '<component p:path="/3D/Objects/object_3.model" objectid="2" transform="1 0 0 0 1 0 0 0 1 5 0 0"/>'
+      + '</components></object>',
+    '  </resources>',
+    '  <build>',
+    '    <item objectid="3" transform="1 0 0 0 1 0 0 0 1 -40 0 0" printable="1"/>',
+    '  </build>',
+    '</model>'
+  ].join('\n')
+  const modelSettingsXml = [
+    '<config>',
+    '  <object id="3"><metadata key="name" value="Assembly"/>'
+      + '<part id="1" subtype="normal_part"><metadata key="name" value="Main"/></part>'
+      + '<part id="2" subtype="support_blocker"><metadata key="name" value="Blocker"/>'
+      + '<metadata key="matrix" value="1 0 0 5 0 1 0 0 0 0 1 0 0 0 0 1"/></part></object>',
+    '  <plate>',
+    '    <metadata key="plater_id" value="1"/>',
+    '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/></model_instance>',
+    '  </plate>',
+    '</config>'
+  ].join('\n')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-part-transform-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'arranged.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(modelXml, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(modelSettingsXml, 'utf8')]
+    ])
+
+    // Move the blocker to (10, 4, 2) and scale it 2x on Z (column-major 3x3 + translation).
+    const matrix = [1, 0, 0, 0, 1, 0, 0, 0, 2, 10, 4, 2]
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 3, plateIndex: 1, position: { x: -40, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      partTransforms: [{ objectId: 3, componentObjectId: 2, matrix }]
+    }
+    await writeArrangedThreeMf(sourcePath, outputPath, edit)
+
+    const rewrittenModel = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    assert.match(rewrittenModel, /objectid="2"[^>]*transform="1 0 0 0 1 0 0 0 2 10 4 2"/)
+    // The untouched sibling keeps its transform.
+    assert.match(rewrittenModel, /objectid="1"[^>]*transform="1 0 0 0 1 0 0 0 1 0 0 0"/)
+    // The matrix metadata is mirrored in ROW-major 4x4 layout.
+    const rewrittenSettings = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    assert.match(rewrittenSettings, /<metadata key="matrix" value="1 0 0 10 0 1 0 4 0 0 2 2 0 0 0 1"\/>/)
+
+    // Reopening the file yields the moved part placement.
+    const scene = await readSceneManifest(outputPath, 1)
+    const parts = scene.instances.find((entry) => entry.objectId === 3)?.parts ?? []
+    assert.deepEqual(parts.find((part) => part.componentObjectId === 2)?.transform, matrix)
+    assert.deepEqual(parts.find((part) => part.componentObjectId === 1)?.transform, [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('embedPlateThumbnails writes/replaces per-plate PNGs while preserving other entries', async () => {
   const { embedPlateThumbnails } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-embed-'))

@@ -7,6 +7,7 @@
  */
 import {
   appLandingPageSettingSchema,
+  appThemeSettingSchema,
   type AppLandingPageSetting,
   type AppThemeSetting
 } from '@printstream/shared'
@@ -58,7 +59,12 @@ export function parseNullableBoolean(raw: string): boolean | null {
 export function parseNullableAppThemeSetting(raw: string): AppThemeSetting | null {
   try {
     const parsed = JSON.parse(raw) as unknown
-    return parsed === 'default' || parsed === 'aurora' || parsed === null ? parsed : null
+    if (parsed === null) {
+      return null
+    }
+
+    const result = appThemeSettingSchema.safeParse(parsed)
+    return result.success ? result.data : null
   } catch {
     return null
   }

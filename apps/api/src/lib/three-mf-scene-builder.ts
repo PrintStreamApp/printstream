@@ -15,7 +15,7 @@
  */
 import { createWriteStream } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
+import { isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTransform, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
 import { sliceExtruderForNozzleId, stringArray } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
@@ -717,6 +717,12 @@ function buildEditedThreeMfDocuments(
     modelSettingsXml = applyPartTypeChanges(modelSettingsXml, edit.partTypeChanges)
   }
 
+  if (edit.partTransforms && edit.partTransforms.length > 0) {
+    const applied = applyPartTransforms(modelXml, modelSettingsXml, edit.partTransforms)
+    modelXml = applied.modelXml
+    modelSettingsXml = applied.modelSettingsXml
+  }
+
   if (edit.objectNames && edit.objectNames.length > 0) {
     const namesByObjectId = new Map<number, string>()
     for (const override of edit.objectNames) {
@@ -967,6 +973,63 @@ export function applyPartTypeChanges(modelSettingsXml: string, changes: SceneEdi
       return `<part${partAttrs} subtype="${escapeXmlAttribute(subtype)}">`
     })
   })
+}
+
+/**
+ * Apply part-placement changes (move/rotate/scale a part inside its object). The
+ * authoritative placement — what BambuStudio and the CLI slicer load into the volume's
+ * transformation — is the part's `<component transform>` in the 3D model (12 numbers,
+ * column-major 3x3 + translation), so that is rewritten. The `matrix` metadata in the
+ * part's `model_settings.config` block (16 numbers, ROW-major 4x4) is only BambuStudio's
+ * source-record (`volume->source.transform`); it is mirrored to the same matrix when
+ * present so a later BambuStudio re-save doesn't compound a stale record. The placement
+ * is a property of the object's part, shared by every placed instance, so it is keyed by
+ * objectId + componentObjectId.
+ */
+export function applyPartTransforms(
+  modelXml: string,
+  modelSettingsXml: string,
+  partTransforms: SceneEditPartTransform[]
+): { modelXml: string; modelSettingsXml: string } {
+  const byObjectPart = new Map<number, Map<number, number[]>>()
+  for (const change of partTransforms) {
+    let parts = byObjectPart.get(change.objectId)
+    if (!parts) { parts = new Map(); byObjectPart.set(change.objectId, parts) }
+    parts.set(change.componentObjectId, change.matrix)
+  }
+  const nextModelXml = modelXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
+    const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
+    const parts = byObjectPart.get(objectId)
+    if (!parts) return objectBlock
+    return objectBlock.replace(/<component\b([^>]*)\/>/g, (componentTag, componentAttrs: string) => {
+      const matrix = parts.get(Number.parseInt(parseAttrs(componentAttrs).objectid ?? '', 10))
+      if (!matrix) return componentTag
+      const transform = matrix.map(formatThreeMfTransformValue).join(' ')
+      if (/\btransform="[^"]*"/.test(componentAttrs)) {
+        return `<component${componentAttrs.replace(/\btransform="[^"]*"/, `transform="${transform}"`)}/>`
+      }
+      return `<component${componentAttrs} transform="${transform}"/>`
+    })
+  })
+  const nextModelSettingsXml = modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
+    const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
+    const parts = byObjectPart.get(objectId)
+    if (!parts) return objectBlock
+    return objectBlock.replace(/<part\b([^>]*)>[\s\S]*?<\/part>/g, (partBlock, partAttrs: string) => {
+      const matrix = parts.get(Number.parseInt(parseAttrs(partAttrs).id ?? '', 10))
+      if (!matrix || !/<metadata\s+key="matrix"/.test(partBlock)) return partBlock
+      // Column-major 12 -> row-major 4x4 16 (BambuStudio's transform3d_from_string layout).
+      const m = (index: number) => formatThreeMfTransformValue(matrix[index] ?? 0)
+      const rowMajor = [
+        m(0), m(3), m(6), m(9),
+        m(1), m(4), m(7), m(10),
+        m(2), m(5), m(8), m(11),
+        '0', '0', '0', '1'
+      ].join(' ')
+      return partBlock.replace(/<metadata\s+key="matrix"\s+value="[^"]*"\s*\/>/, `<metadata key="matrix" value="${rowMajor}"/>`)
+    })
+  })
+  return { modelXml: nextModelXml, modelSettingsXml: nextModelSettingsXml }
 }
 
 /**
