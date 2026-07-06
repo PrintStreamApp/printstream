@@ -87,8 +87,7 @@ export function BridgeSettingsSection() {
             <Typography level="body-sm">
               A bridge links the printers on your local network to PrintStream and stores your library
               files. Because it owns that connection and your files, it needs to stay running on an
-              always-on machine near your printers — a Raspberry Pi or any computer that&apos;s left on
-              works well.
+              always-on machine near your printers — any computer that stays powered on works.
             </Typography>
           </Stack>
           <ConnectivityGuideButton />

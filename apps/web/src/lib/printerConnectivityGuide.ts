@@ -25,7 +25,7 @@ export const PRINTER_CONNECTIVITY_STEPS: PrinterConnectivityStep[] = [
   {
     id: 'bridge',
     title: 'A bridge on your printers’ network',
-    body: 'The bridge is a small service that runs on the same local network as your printers and connects outward to PrintStream. Because it only dials out, nothing on your network is exposed to the internet and no port forwarding is needed. Any always-on machine works: a Raspberry Pi or a computer that stays on is plenty.'
+    body: 'The bridge is a small service that runs on the same local network as your printers and connects outward to PrintStream. Because it only dials out, nothing on your network is exposed to the internet and no port forwarding is needed. Any computer that stays powered on works.'
   },
   {
     id: 'lan-mode',

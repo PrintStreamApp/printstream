@@ -36,7 +36,7 @@ export function BridgeInstallCard({ downloads, detectedPlatformKey, serverUrl }:
         {isMac ? (
           <Typography level="body-sm" textColor="text.tertiary" sx={{ mb: 1 }}>
             There is no native macOS build — run the bridge with Docker, or install it on an
-            always-on Windows or Linux machine (a Raspberry Pi works well).
+            always-on Windows or Linux machine.
           </Typography>
         ) : null}
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
