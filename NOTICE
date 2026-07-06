@@ -1,0 +1,17 @@
+PrintStream is licensed under the PolyForm Noncommercial License 1.0.0.
+
+You may use, modify, and share PrintStream for any noncommercial purpose.
+Commercial use is not granted by this license; all commercial rights are
+reserved by the copyright holder. For a commercial license, contact the
+copyright holder named below.
+
+Required Notice: Copyright (c) 2026 Ryan Ewen
+
+PrintStream bundles and depends on third-party open-source software that
+remains under its own separate license. See the THIRD-PARTY-NOTICES.txt file in
+each app directory (apps/web, apps/api, apps/slicer, apps/bridge) for the
+bundled npm dependencies, and apps/slicer/THIRD-PARTY-SLICERS.md for the
+AGPL-3.0 slicer engines (Bambu Studio / OrcaSlicer) that the slicer sidecar
+invokes. Those components are licensed to you under their own terms, not under
+the PolyForm Noncommercial License in the LICENSE file.
+
