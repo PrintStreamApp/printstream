@@ -13,6 +13,7 @@ import { Printer3dRoundedIcon } from '../components/Printer3dRoundedIcon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { LIBRARY_UPLOAD_PERMISSION, CAMERA_VIEW_PERMISSION, JOBS_DELETE_PERMISSION, JOBS_VIEW_PERMISSION, PRINTERS_CONTROL_PERMISSION, PRINTERS_MANAGE_PERMISSION, PRINTERS_VIEW_PERMISSION, PRINTER_STORAGE_DOWNLOAD_PERMISSION, PRINTER_STORAGE_VIEW_PERMISSION, PRINTS_DISPATCH_PERMISSION, type BridgeListResponse, defaultPrinterViewSort, extractErrorMessage, type Permission, type DiscoveredPrinter, type LibraryFile, type PrintDispatchJob, type PrintJob, type PrinterStatsResponse, type PrinterCardContentSettings, type Printer, type PrinterModel, type StartOrderPrintInput, type PrinterStatus, type SlicingCapabilities, type SlicingJobResponse, type PrinterView, type PrinterViewInput, type PrinterViewSort } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
+import { prefetchSlicingProfiles } from '../lib/slicingProfilesQuery'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
@@ -329,6 +330,11 @@ export function PrintersView() {
     queryFn: ({ signal }) => apiFetch<SlicingCapabilities>('/api/slicing/capabilities', { signal }),
     enabled: authBootstrapQuery.isSuccess ? (canDispatchPrints && canUploadLibrary && !showNoConnectedBridgesPlaceholder) : false
   })
+  // Warm the slicer profile catalogue before a print-from-library flow opens the slice dialog.
+  const slicingCapabilitiesData = slicingCapabilitiesQuery.data
+  useEffect(() => {
+    prefetchSlicingProfiles(queryClient, slicingCapabilitiesData)
+  }, [queryClient, slicingCapabilitiesData])
   const jobsQuery = useQuery({
     queryKey: ['jobs'],
     queryFn: ({ signal }) => apiFetch<{ jobs: PrintJob[] }>('/api/jobs', { signal }),
@@ -1642,6 +1648,9 @@ export function PrintersView() {
 
       {sliceTarget && (
         <SliceFileModal
+          // Re-mount per file: the dialog's per-file state (materials, one-shot default
+          // seeding) must not survive a target swap. See LibraryView's mount.
+          key={sliceTarget.file.id}
           file={sliceTarget.file}
           printers={printersQuery.data?.printers ?? []}
           printerStatuses={status ?? {}}

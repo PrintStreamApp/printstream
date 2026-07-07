@@ -81,8 +81,15 @@ export function BridgeSettingsSection() {
   return (
     <Stack spacing={1.5}>
       <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
-        <Stack spacing={0.75} alignItems="flex-start">
-          <Stack spacing={0.25}>
+        <Stack
+          direction="row"
+          useFlexGap
+          flexWrap="wrap"
+          spacing={1.5}
+          alignItems="center"
+          sx={{ flex: 1 }}
+        >
+          <Stack spacing={0.25} sx={{ flex: '1 1 260px' }}>
             <Typography level="title-sm">What a bridge does</Typography>
             <Typography level="body-sm">
               A bridge links the printers on your local network to PrintStream and stores your library
@@ -90,7 +97,7 @@ export function BridgeSettingsSection() {
               always-on machine near your printers — any computer that stays powered on works.
             </Typography>
           </Stack>
-          <ConnectivityGuideButton />
+          <ConnectivityGuideButton sx={{ ml: 'auto' }} />
         </Stack>
       </Alert>
 

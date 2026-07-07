@@ -22,6 +22,7 @@ import { buildLibraryFileMetaTags, isUnslicedThreeMfFile } from '../../lib/libra
 import { invalidateLibraryQueries } from '../../lib/libraryQueryInvalidation'
 import { toast } from '../../lib/toast'
 import { BackAwareModal as Modal } from '../BackAwareModal'
+import { DialogFileTitle } from '../DialogFileTitle'
 import { usePromptDialog } from '../PromptDialogProvider'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 
@@ -124,8 +125,7 @@ export function FileHistoryDialog({
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 720, width: '100%' }}>
-        <Typography level="h4">Version history</Typography>
-        <Typography level="body-sm" textColor="text.tertiary">{formatLibraryFileName(file.name)}</Typography>
+        <DialogFileTitle title="Version history" fileName={formatLibraryFileName(file.name)} />
         <ScrollableDialogBody sx={{ px: 0 }}>
           {historyQuery.isLoading && (
             <Stack alignItems="center" justifyContent="center" sx={{ py: 4 }}>

@@ -1,7 +1,7 @@
 import React from 'react'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
-import { Card, Stack, Typography } from '@mui/joy'
-import { extractErrorMessage, type AuthManagementStatus } from '@printstream/shared'
+import { Alert, Card, Stack, Typography } from '@mui/joy'
+import { extractErrorMessage, type AppThemeSetting, type AuthManagementStatus } from '@printstream/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AuthAccessSection } from '../components/AuthAccessSection'
@@ -10,16 +10,40 @@ import { PluginManagerSection } from '../components/PluginManagerSection'
 import { PlatformAuthSummarySection } from '../components/PlatformAuthSummarySection'
 import { apiFetch } from '../lib/apiClient'
 import { authQueryKeys, resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
+import { ThemeSettingCard } from '../components/settings/ThemeSettingCard'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { LogsPanel } from './LogsView'
 
-type PlatformSubview = 'root' | 'authentication' | 'plugins' | 'logs' | 'auth-users' | 'auth-roles'
+type PlatformSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'logs' | 'auth-users' | 'auth-roles'
 
 /**
  * Dedicated workspace for platform-wide operations.
+ *
+ * The theme props mirror the workspace Settings view: the shared value is
+ * the platform-scoped `/api/settings` record (the API stores tenantless
+ * requests under a `platform:` key prefix) and the device override is the
+ * platform-specific localStorage key owned by App.
  */
-export function PlatformView() {
+export function PlatformView({
+  sharedAppTheme,
+  deviceAppThemeOverride,
+  sharedSettingsError,
+  sharedSettingsSaving,
+  sharedSettingsSaveError,
+  onSetSharedAppTheme,
+  onSetDeviceAppTheme,
+  onClearDeviceAppThemeOverride
+}: {
+  sharedAppTheme: AppThemeSetting
+  deviceAppThemeOverride: AppThemeSetting | null
+  sharedSettingsError: string | null
+  sharedSettingsSaving: boolean
+  sharedSettingsSaveError: string | null
+  onSetSharedAppTheme: (value: AppThemeSetting) => void
+  onSetDeviceAppTheme: (value: AppThemeSetting) => void
+  onClearDeviceAppThemeOverride: () => void
+}) {
   const location = useLocation()
   const navigate = useNavigate()
   const authBootstrapQuery = useAuthBootstrapQuery()
@@ -33,6 +57,7 @@ export function PlatformView() {
   const canViewAuth = authState?.canViewAuth ?? false
   const canManageAuthProviders = authState?.canManageAuthProviders ?? false
   const showsAuthenticationSection = authState?.showsAuthenticationSection ?? false
+  const canManageSettings = bootstrapCapabilities?.canManageSettings ?? false
   const canManageSupportAccess = bootstrapCapabilities?.canManageSupportAccess ?? false
   const canManagePlugins = bootstrapCapabilities?.canManagePlugins ?? false
   const canViewLogs = bootstrapCapabilities?.canViewLogs ?? false
@@ -59,6 +84,11 @@ export function PlatformView() {
 
       {visibleSubview === 'root' ? (
         <Stack spacing={1.5}>
+          <PlatformOverviewCard
+            title="General"
+            description="Appearance and interface preferences for the platform workspace."
+            onAction={() => navigate('/platform/settings/general')}
+          />
           {showsAuthenticationSection && (
             <PlatformOverviewCard
               title="Authentication"
@@ -80,11 +110,32 @@ export function PlatformView() {
               onAction={() => navigate('/platform/settings/logs')}
             />
           )}
-          {!showsAuthenticationSection && !canManagePlugins && !canViewLogs && (
-            <Typography level="body-sm" textColor="text.tertiary">
-              No platform settings are available with the current permissions.
-            </Typography>
+        </Stack>
+      ) : visibleSubview === 'general' ? (
+        <Stack spacing={1.5}>
+          <NestedViewHeader
+            crumbs={[
+              { label: 'Platform settings', onClick: () => navigate('/platform/settings') },
+              { label: 'General' }
+            ]}
+            description="Appearance and interface preferences for the platform workspace."
+          />
+
+          {(sharedSettingsError || sharedSettingsSaveError) && (
+            <Alert color="danger">
+              {sharedSettingsSaveError ?? sharedSettingsError}
+            </Alert>
           )}
+
+          <ThemeSettingCard
+            sharedAppTheme={sharedAppTheme}
+            deviceAppThemeOverride={deviceAppThemeOverride}
+            canManageSettings={canManageSettings}
+            sharedSettingsSaving={sharedSettingsSaving}
+            onSetSharedAppTheme={onSetSharedAppTheme}
+            onSetDeviceAppTheme={onSetDeviceAppTheme}
+            onClearDeviceAppThemeOverride={onClearDeviceAppThemeOverride}
+          />
         </Stack>
       ) : visibleSubview === 'auth-users' || visibleSubview === 'auth-roles' ? (
         <Stack spacing={2}>
@@ -205,6 +256,7 @@ export function PlatformView() {
 
 function resolvePlatformSubview(pathname: string): PlatformSubview {
   if (pathname === '/platform/settings' || pathname === '/platform/settings/') return 'root'
+  if (pathname === '/platform/settings/general') return 'general'
   if (pathname === '/platform/settings/authentication') return 'authentication'
   if (pathname === '/platform/settings/plugins') return 'plugins'
   if (pathname === '/platform/settings/logs') return 'logs'

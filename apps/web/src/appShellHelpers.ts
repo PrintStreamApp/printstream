@@ -13,6 +13,18 @@ import {
 } from '@printstream/shared'
 
 export const DEVICE_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override'
+/**
+ * Platform surfaces keep their own device override so a theme chosen inside
+ * a tenant workspace never restyles the platform workspace (and vice versa).
+ */
+export const DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override.platform'
+/**
+ * Cache of the last theme background the app painted ({ background, color }
+ * JSON). The index.html pre-bundle script applies it before first paint so
+ * the boot splash matches the theme that loads afterwards instead of
+ * flashing a mismatched backdrop.
+ */
+export const BOOT_BACKGROUND_CACHE_KEY = 'printstream.appearance.bootBackground'
 export const DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX = 'printstream.general.landingPage.override'
 export const DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX = 'printstream.general.navTabOrder.override'
 export const DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY = 'bambu.general.unconstrainedWidth.override'
@@ -45,6 +57,19 @@ export function catchAllRouteDecision(input: {
   if (!input.isKnownPluginRoute) return 'redirect-home'
   if (input.pluginCatalogResolving) return 'wait'
   return input.hasPluginState ? 'defer-to-plugin-handling' : 'redirect-home'
+}
+
+/**
+ * Resolve which nav tab owns the current route: the tab whose value equals the
+ * path or is an ancestor segment of it (longest match wins, so nested tab
+ * values beat their parents). Views outside every tab's subtree (e.g.
+ * `/suggestions` in a tenant workspace) resolve to null so no tab is
+ * highlighted, rather than falling back to a default tab.
+ */
+export function resolveActiveNavTab(tabValues: ReadonlyArray<string>, appPathname: string): string | null {
+  return tabValues
+    .filter((value) => appPathname === value || appPathname.startsWith(`${value}/`))
+    .sort((left, right) => right.length - left.length)[0] ?? null
 }
 
 export function parseNullableBoolean(raw: string): boolean | null {

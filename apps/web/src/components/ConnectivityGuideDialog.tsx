@@ -4,7 +4,8 @@ import {
   LAN_ONLY_MODE_TRADEOFF,
   MANAGED_BRIDGE_STEP,
   PRINTER_CONNECTIVITY_INTRO,
-  PRINTER_CONNECTIVITY_STEPS
+  PRINTER_CONNECTIVITY_STEPS,
+  PRINTER_CONNECTIVITY_STEPS_LEAD
 } from '../lib/printerConnectivityGuide'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { BackAwareModal } from './BackAwareModal'
@@ -30,7 +31,7 @@ export function ConnectivityGuideDialog({ onClose }: { onClose: () => void }) {
         <ScrollableDialogBody sx={{ mt: 1, p: 0 }}>
           <Stack spacing={1.5}>
             <Typography level="body-sm" textColor="text.tertiary">
-              {PRINTER_CONNECTIVITY_INTRO}
+              {PRINTER_CONNECTIVITY_INTRO} {PRINTER_CONNECTIVITY_STEPS_LEAD}
             </Typography>
             <Stack spacing={1.25}>
               {steps.map((step, index) => (

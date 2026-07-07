@@ -28,7 +28,6 @@ import type {
   SceneEditFilament,
   SlicingCapabilities,
   SlicingManualProfileTarget,
-  SlicingProfilesResponse,
   ThreeMfIndex
 } from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -83,10 +82,10 @@ import {
   resolveSliceDialogNozzleDiameterOptions,
   resolveSliceDialogSourcePrinterModel,
   resolveSliceDialogTargetPrinterModel,
-  slicingProfilesResponseIsUsable,
   type LoadedMaterialSource,
   type SliceMaterialOption
 } from '../../lib/sliceProfileMatching'
+import { slicingProfilesQueryOptions } from '../../lib/slicingProfilesQuery'
 import { estimateRemainGrams } from '../../lib/slotRemaining'
 import { useMobileViewport } from '../useMobileViewport'
 import { LibraryDestinationDialog } from '../LibraryDestinationDialog'
@@ -209,30 +208,11 @@ export function SliceFileModal({
   const [selectedSlicerTargetId, setSelectedSlicerTargetId] = useState(() => capabilities?.defaultTargetId ?? capabilities?.targets[0]?.id ?? '')
   const selectedSlicerTarget = slicerTargets.find((target) => target.id === selectedSlicerTargetId) ?? null
   const shouldLoadSlicingProfiles = configured && selectedSlicerTargetId.length > 0
+  // Shared definition (key, usability check, retry/staleness) so views can PREFETCH the
+  // same cache entry before this dialog opens — see `lib/slicingProfilesQuery.ts`.
   const slicingProfilesQuery = useQuery({
-    queryKey: ['slicing-profiles', selectedSlicerTargetId],
-    queryFn: async ({ signal }) => {
-      const params = new URLSearchParams()
-      params.set('targetId', selectedSlicerTargetId)
-      const result = await apiFetch<SlicingProfilesResponse>(`/api/slicing/profiles?${params.toString()}`, { signal })
-      // A response with no builtin presets means the slicer answered before its bundled `*_full/`
-      // preset dirs were indexed (restart / still initializing) and only the workspace's custom
-      // profiles came back. Caching that strands the editor on a custom-only catalogue — see
-      // `slicingProfilesResponseIsUsable` for the full failure mode (Slice disabled; loaded materials
-      // mislabelling, e.g. PETG slots showing as "PLA Basic"). Throw so React Query retries with
-      // backoff and surfaces a retryable error if it persists, rather than poisoning the cache.
-      if (!slicingProfilesResponseIsUsable(result.profiles)) {
-        throw new Error('Couldn’t load slicer profiles — the slicer may be restarting. Reopen the editor to try again.')
-      }
-      return result
-    },
-    enabled: shouldLoadSlicingProfiles,
-    // The slicer's preset catalogue is effectively static per image, so keep it fresh for a few
-    // minutes: reopening the editor reuses the cached profiles instead of refetching the whole
-    // catalogue (which otherwise also blocks the plate/geometry load gated behind it).
-    staleTime: 5 * 60_000,
-    retry: 5,
-    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000)
+    ...slicingProfilesQueryOptions(selectedSlicerTargetId),
+    enabled: shouldLoadSlicingProfiles
   })
   const profiles = slicingProfilesQuery.data?.profiles ?? EMPTY_SLICING_PROFILES
   // "Should have profiles but don't yet" — not merely "the query is actively fetching". The slicer
@@ -479,6 +459,27 @@ export function SliceFileModal({
     const firstModel = ensurePrinterModelOptions(file.compatiblePrinterModels, selectedPrinter?.model, machineProfiles)[0]
     if (firstModel) setManualPrinterModel(firstModel)
   }, [file.compatiblePrinterModels, machineProfiles, manualPrinterModel, selectedPrinter?.model, targetMode])
+  // Seed the target printer model from the project's own index the moment it loads — NOT
+  // gated on the (slow) profile catalogue like the full baked-defaults effect below. On a
+  // fresh upload `file.compatiblePrinterModels` can still be empty, so the initial model
+  // falls back to the user's first printer; that guess must be replaced by accurate project
+  // data as soon as it exists, not once profiles finish resolving.
+  const [bakedTargetModelSeeded, setBakedTargetModelSeeded] = useState(false)
+  useEffect(() => {
+    if (!bakedIndex || bakedTargetModelSeeded) return
+    if (!manualPrinterModelTouchedRef.current && bakedIndex.compatiblePrinterModels[0]) {
+      setManualPrinterModel(bakedIndex.compatiblePrinterModels[0])
+    }
+    setBakedTargetModelSeeded(true)
+  }, [bakedIndex, bakedTargetModelSeeded])
+  // The full editor's bed override. The editor must never render a bed from the pre-index
+  // fallback guess: until the project's own model has been seeded (or the user explicitly
+  // chose a target — a real printer, or a touched model select), pass no override so the
+  // editor's scene falls back to the project's embedded settings, which is the accurate
+  // bed by definition.
+  const editorTargetPrinterModel = targetMode === 'realPrinter' || manualPrinterModelTouchedRef.current || bakedTargetModelSeeded
+    ? targetPrinterModel
+    : undefined
   useEffect(() => {
     if (!bakedIndex || appliedBakedDefaultsRef.current || waitingForSlicingProfiles) return
     const preserveManualPrinterSelection = targetMode === 'manualProfile' && manualPrinterModelTouchedRef.current
@@ -986,7 +987,7 @@ export function SliceFileModal({
     slicing: submitting && (submitAction === 'print' || submitAction === 'slice'),
     sliceConfig: sliceController,
     initialPlateIndex: Number.parseInt(plateNumber, 10),
-    targetPrinterModel,
+    targetPrinterModel: editorTargetPrinterModel,
     objectOverrideCount,
     hasPlateObjects,
     canEditSettings: Boolean(selectedProcessProfile && selectedSlicerTargetId),

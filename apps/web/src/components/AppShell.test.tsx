@@ -155,6 +155,23 @@ test('AppShell can render a chooser shell without nav tabs or workspace footer l
   assert.ok(view.getByText('Choose a workspace'))
 })
 
+test('AppShell highlights no tab when activeTab is null', () => {
+  const view = renderWithProviders(
+    <AppShell
+      tabs={tabs}
+      activeTab={null}
+      currentPath="/suggestions"
+      onTabChange={() => {}}
+    >
+      <div>Body</div>
+    </AppShell>
+  )
+
+  for (const tab of view.getAllByRole('tab')) {
+    assert.equal(tab.getAttribute('aria-selected'), 'false')
+  }
+})
+
 test('AppShell renders the signed-in user name as an account button without the email address', () => {
   let openAccountCount = 0
   const view = renderWithProviders(

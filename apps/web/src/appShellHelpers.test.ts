@@ -1,6 +1,26 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { catchAllRouteDecision } from './appShellHelpers'
+import { catchAllRouteDecision, resolveActiveNavTab } from './appShellHelpers'
+
+const NAV_TABS = ['/printers', '/library', '/settings']
+
+test('resolveActiveNavTab matches the tab route itself and its children', () => {
+  assert.equal(resolveActiveNavTab(NAV_TABS, '/printers'), '/printers')
+  assert.equal(resolveActiveNavTab(NAV_TABS, '/printers/abc-123'), '/printers')
+  assert.equal(resolveActiveNavTab(NAV_TABS, '/settings/bridges'), '/settings')
+})
+
+test('resolveActiveNavTab prefers the longest matching tab for nested tab values', () => {
+  assert.equal(resolveActiveNavTab(['/platform', '/platform/suggestions'], '/platform/suggestions/42'), '/platform/suggestions')
+})
+
+test('resolveActiveNavTab highlights nothing for routes outside every tab subtree', () => {
+  // e.g. Suggestions opened from a tenant workspace: no nav tab owns it.
+  assert.equal(resolveActiveNavTab(NAV_TABS, '/suggestions'), null)
+  assert.equal(resolveActiveNavTab(NAV_TABS, '/'), null)
+  // Sibling paths that merely share a prefix are not children of the tab.
+  assert.equal(resolveActiveNavTab(NAV_TABS, '/printers-archive'), null)
+})
 
 test('catchAllRouteDecision redirects genuinely unknown paths home', () => {
   // Not a plugin route: redirect home regardless of catalog state.

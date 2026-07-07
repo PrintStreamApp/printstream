@@ -6,10 +6,11 @@
  * eligible printer", auto-constrained to the sliced model), instead of the print
  * setup's forced printer selection.
  */
-import { useCallback, useState, type ComponentProps } from 'react'
+import { useCallback, useEffect, useState, type ComponentProps } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { LibraryFile, Printer, PrinterStatus, QueueOrderLink, SlicingCapabilities, SlicingJobResponse } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
+import { prefetchSlicingProfiles } from '../../lib/slicingProfilesQuery'
 import { SliceFileModal } from '../../components/library/SliceFileModal'
 import { SliceThenPrintModal } from '../../components/library/SliceThenPrintModal'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
@@ -61,6 +62,11 @@ export function SliceToQueueFlow({
     queryKey: ['slicing-capabilities'],
     queryFn: ({ signal }) => apiFetch<SlicingCapabilities>('/api/slicing/capabilities', { signal })
   })
+  // Warm the slicer profile catalogue before the queue's slice dialog needs it.
+  const slicingCapabilitiesData = slicingCapabilitiesQuery.data
+  useEffect(() => {
+    prefetchSlicingProfiles(queryClient, slicingCapabilitiesData)
+  }, [queryClient, slicingCapabilitiesData])
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   const statusQuery = useQuery<Record<string, PrinterStatus>>({
     queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey),
@@ -121,6 +127,9 @@ export function SliceToQueueFlow({
   return (
     <>
       <SliceFileModal
+        // Re-mount per file: the dialog's per-file state (materials, one-shot default
+        // seeding) must not survive a target swap. See LibraryView's mount.
+        key={file.id}
         file={file}
         printers={printersQuery.data.printers}
         printerStatuses={statusQuery.data ?? {}}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { STEP_TESSELLATION, detectImportFormat, meshToBinaryStl, parseStlMesh } from './mesh-import.js'
+import { STEP_TESSELLATION, detectImportFormat, meshToBinaryStl, parseStlMesh, weldImportedMeshVertices } from './mesh-import.js'
 
 /** Build a minimal binary STL containing the given triangles (each 3 xyz vertices). */
 function buildBinaryStl(triangles: number[][][]): Buffer {
@@ -74,4 +74,30 @@ test('meshToBinaryStl round-trips through parseStlMesh', () => {
   const reparsed = parseStlMesh(meshToBinaryStl(original))
   assert.equal(reparsed.indices.length, 3)
   assert.deepEqual(reparsed.bounds, original.bounds)
+})
+
+test('parseStlMesh welds shared vertices into indexed geometry', () => {
+  // Two triangles sharing the edge (10,0,0)-(0,10,0): 6 soup corners, 4 real vertices.
+  // Unwelded meshes reach the 3MF as index-level triangle soup, which BambuStudio's
+  // index-based contour chaining mangles (small inlaid features slice broken).
+  const stl = buildBinaryStl([
+    [[0, 0, 0], [10, 0, 0], [0, 10, 0]],
+    [[10, 0, 0], [10, 10, 0], [0, 10, 0]]
+  ])
+  const mesh = parseStlMesh(stl)
+  assert.equal(mesh.positions.length, 4 * 3)
+  assert.equal(mesh.indices.length, 6)
+  // Shared corners reference the same vertex index in both triangles.
+  assert.equal(mesh.indices[1], mesh.indices[3])
+  assert.equal(mesh.indices[2], mesh.indices[5])
+})
+
+test('weldImportedMeshVertices drops triangles degenerate after welding', () => {
+  const mesh = weldImportedMeshVertices({
+    positions: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2, 0, 2, 3],
+    bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } }
+  })
+  assert.equal(mesh.positions.length, 3 * 3)
+  assert.deepEqual(mesh.indices, [0, 1, 2])
 })

@@ -37,6 +37,8 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { AppShell, type ShellTab } from './components/AppShell'
 import {
   DEVICE_APP_THEME_OVERRIDE_KEY,
+  DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY,
+  BOOT_BACKGROUND_CACHE_KEY,
   DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX,
   DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX,
   DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY,
@@ -45,6 +47,7 @@ import {
   parseNullableAppThemeSetting,
   parseNullableBoolean,
   parseNullableNavTabOrder,
+  resolveActiveNavTab,
   tenantScopedRoutePath
 } from './appShellHelpers'
 import { orderNavTabs } from './lib/navTabOrder'
@@ -283,6 +286,11 @@ export function App() {
   )
   const [deviceAppThemeOverride, setDeviceAppThemeOverride] = useLocalStorageState<AppThemeSetting | null>(
     DEVICE_APP_THEME_OVERRIDE_KEY,
+    null,
+    parseNullableAppThemeSetting
+  )
+  const [devicePlatformAppThemeOverride, setDevicePlatformAppThemeOverride] = useLocalStorageState<AppThemeSetting | null>(
+    DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY,
     null,
     parseNullableAppThemeSetting
   )
@@ -742,15 +750,20 @@ export function App() {
   const sharedUnconstrainedWidth = generalSettingsQuery.data?.unconstrainedWidth ?? false
   const sharedAppTheme = generalSettingsQuery.data?.appTheme ?? 'default'
   const effectiveUnconstrainedWidth = deviceUnconstrainedWidthOverride ?? sharedUnconstrainedWidth
-  const effectiveAppTheme = deviceAppThemeOverride ?? sharedAppTheme
-  const activeTab = tabs
-    .filter((tab) => appPathname.startsWith(tab.value))
-    .sort((left, right) => right.value.length - left.value.length)[0]?.value ?? defaultTab
+  const activeTab = resolveActiveNavTab(tabs.map((tab) => tab.value), appPathname)
   const usesPlatformTheme = shouldUsePlatformAuthTheme({
     hasTenantContext,
     canUsePlatformWorkspace,
     authRouteState
   })
+  // Marketing and public info pages are brand surfaces with no theme
+  // setting, so they always render the default theme. Platform surfaces use
+  // their own device override paired with the platform-scoped shared setting
+  // (`/api/settings` resolves the `platform:` scope there); tenant surfaces
+  // keep the workspace override.
+  const effectiveAppTheme: AppThemeSetting = (isMarketingRoute || isPublicInfoRoute)
+    ? 'default'
+    : (usesPlatformTheme ? devicePlatformAppThemeOverride : deviceAppThemeOverride) ?? sharedAppTheme
   const flatThemeVariant = isFlatAppTheme(effectiveAppTheme)
     ? (usesPlatformTheme ? platformFlatThemeVariants : flatThemeVariants)[effectiveAppTheme]
     : null
@@ -857,6 +870,26 @@ export function App() {
       document.documentElement.style.setProperty(key, value)
     }
   }, [workspaceChromeVars])
+
+  // Keep the browser/PWA chrome color on the painted theme, and cache the
+  // theme background so the next boot's splash (index.html pre-bundle script)
+  // matches it instead of flashing a mismatched backdrop. Brand surfaces
+  // (marketing/public info) force the Default theme and do not represent the
+  // user's choice, so they update the meta tag but never overwrite the cache.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const themeBodyColor = workspaceTheme.colorSchemes.dark.palette.background.body
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeBodyColor)
+    if (isMarketingRoute || isPublicInfoRoute) return
+    try {
+      window.localStorage.setItem(BOOT_BACKGROUND_CACHE_KEY, JSON.stringify({
+        background: workspaceChrome.bodyBackground,
+        color: themeBodyColor
+      }))
+    } catch {
+      /* best-effort; private browsing or full storage just keeps the neutral boot tone */
+    }
+  }, [workspaceChrome, workspaceTheme, isMarketingRoute, isPublicInfoRoute])
 
   useEffect(() => {
     if (!shouldAutoSelectOnlyTenantWorkspace) {
@@ -1088,7 +1121,20 @@ export function App() {
                   path="/platform/settings/*"
                   element={renderProtectedElement(
                     canUsePlatformWorkspace
-                      ? (inPlatformMode ? <PlatformView /> : <Navigate to={tenantSettingsPath} replace />)
+                      ? (inPlatformMode
+                          ? (
+                              <PlatformView
+                                sharedAppTheme={sharedAppTheme}
+                                deviceAppThemeOverride={devicePlatformAppThemeOverride}
+                                sharedSettingsError={generalSettingsQuery.error ? extractErrorMessage(generalSettingsQuery.error) : null}
+                                sharedSettingsSaving={updateGeneralSettings.isPending}
+                                sharedSettingsSaveError={updateGeneralSettings.error ? extractErrorMessage(updateGeneralSettings.error) : null}
+                                onSetSharedAppTheme={(appTheme) => updateGeneralSettings.mutate({ appTheme })}
+                                onSetDeviceAppTheme={setDevicePlatformAppThemeOverride}
+                                onClearDeviceAppThemeOverride={() => setDevicePlatformAppThemeOverride(null)}
+                              />
+                            )
+                          : <Navigate to={tenantSettingsPath} replace />)
                       : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                   )}
                 />

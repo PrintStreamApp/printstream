@@ -19,7 +19,14 @@ export interface PrinterConnectivityStep {
 
 /** One-line framing for the guide, shared by the dialog and marketing surfaces. */
 export const PRINTER_CONNECTIVITY_INTRO =
-  'PrintStream talks to your Bambu printers directly over your own network, with no traffic routed through Bambu’s cloud. That needs three things.'
+  'PrintStream talks to your Bambu printers directly over your own network, with no traffic routed through Bambu’s cloud.'
+
+/**
+ * Lead-in for the three connectivity steps. Only render this where the steps
+ * actually follow (the guide dialog, marketing "How it works"); surfaces that
+ * show the intro alone (e.g. Get started) skip it.
+ */
+export const PRINTER_CONNECTIVITY_STEPS_LEAD = 'That needs three things.'
 
 export const PRINTER_CONNECTIVITY_STEPS: PrinterConnectivityStep[] = [
   {

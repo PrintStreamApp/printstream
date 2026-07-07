@@ -1,7 +1,8 @@
 :root {
   color-scheme: dark;
   font-family: 'IBM Plex Sans', sans-serif;
-  background-color: #070b14;
+  /* Neutral boot tone; the active theme overrides this (see index.html). */
+  background-color: #121419;
   --app-safe-top: env(safe-area-inset-top, 0px);
   --app-safe-bottom: env(safe-area-inset-bottom, 0px);
   --app-titlebar-height: env(titlebar-area-height, 0px);
@@ -16,7 +17,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: var(--printstream-body-background, radial-gradient(circle at top left, #0f5444 0%, #304159 100%));
+  background: var(--printstream-body-background, #121419);
   background-repeat: no-repeat;
   background-attachment: fixed;
 }

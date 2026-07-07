@@ -2,7 +2,10 @@ import CelebrationRoundedIcon from '@mui/icons-material/CelebrationRounded'
 import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
+import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import RouterRoundedIcon from '@mui/icons-material/RouterRounded'
+import SupportAgentRoundedIcon from '@mui/icons-material/SupportAgentRounded'
+import TipsAndUpdatesRoundedIcon from '@mui/icons-material/TipsAndUpdatesRounded'
 import VisibilityOffRoundedIcon from '@mui/icons-material/VisibilityOffRounded'
 import type { GeneralSettings, TenantStatsResponse } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -14,12 +17,15 @@ import { Printer3dRoundedIcon } from '../components/Printer3dRoundedIcon'
 import { usePromptDialog } from '../components/PromptDialogProvider'
 import { apiFetch } from '../lib/apiClient'
 import { PRINTER_CONNECTIVITY_INTRO } from '../lib/printerConnectivityGuide'
+import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildTenantWorkspacePath, buildWorkspaceSelectionPath, parseWorkspacePathname } from '../lib/workspaceRoute'
 
 /**
  * Workspace onboarding page. Shows the quick-start checklist for a fresh
- * workspace and serves as its default landing page until someone with
- * settings access dismisses it (a shared, workspace-wide choice).
+ * workspace, plus a short "Good to know" tips list (theme customization and,
+ * on cloud installs, the support-access privacy toggle), and serves as the
+ * default landing page until someone with settings access dismisses it (a
+ * shared, workspace-wide choice).
  */
 export function GetStartedView({
   canOpenSettings,
@@ -32,6 +38,9 @@ export function GetStartedView({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { confirm } = usePromptDialog()
+  // Support access is a cloud-only concept; self-hosted installs have no
+  // support users who could enter the workspace, so the tip is dropped there.
+  const { selfHosted } = useRuntimePolicy()
   const tenantSlug = parseWorkspacePathname(location.pathname).tenantSlug
   const statsQuery = useQuery({
     queryKey: ['tenant-stats'],
@@ -73,9 +82,16 @@ export function GetStartedView({
       </Stack>
 
       <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
-        <Stack spacing={0.75} alignItems="flex-start">
-          <Typography level="body-sm">{PRINTER_CONNECTIVITY_INTRO}</Typography>
-          <ConnectivityGuideButton />
+        <Stack
+          direction="row"
+          useFlexGap
+          flexWrap="wrap"
+          spacing={1.5}
+          alignItems="center"
+          sx={{ flex: 1 }}
+        >
+          <Typography level="body-sm" sx={{ flex: '1 1 260px' }}>{PRINTER_CONNECTIVITY_INTRO}</Typography>
+          <ConnectivityGuideButton sx={{ ml: 'auto' }} />
         </Stack>
       </Alert>
 
@@ -104,6 +120,23 @@ export function GetStartedView({
               actionTo={resolveQuickStartHref(item.id, canOpenSettings, item.complete, workspacePath)}
             />
           ))}
+          <Typography level="title-md" startDecorator={<TipsAndUpdatesRoundedIcon />} sx={{ pt: 1 }}>
+            Good to know
+          </Typography>
+          <QuickStartCard
+            icon={<PaletteRoundedIcon />}
+            title="Make it yours"
+            description="Choose from several themes to change how the app looks. Set a shared theme for the whole workspace, or override it just for this device, in General settings."
+            actionTo={canOpenSettings ? workspacePath('/settings/general') : undefined}
+          />
+          {!selfHosted && (
+            <QuickStartCard
+              icon={<SupportAgentRoundedIcon />}
+              title="Keep it private"
+              description="Support staff can enter this workspace to help when something goes wrong. If you do not need that, turn off support access in Authentication settings."
+              actionTo={canOpenSettings ? workspacePath('/settings/authentication') : undefined}
+            />
+          )}
           {canManageSettings && (
             <Stack direction="row" sx={{ pt: 1 }}>
               <Button

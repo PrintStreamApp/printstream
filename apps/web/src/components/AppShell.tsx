@@ -29,7 +29,8 @@ export interface ShellTab<TValue extends string = string> {
 
 interface AppShellProps<TValue extends string> {
   tabs: ReadonlyArray<ShellTab<TValue>>
-  activeTab: TValue
+  /** Tab owning the current route, or null when the route is outside every tab's subtree (no tab highlighted). */
+  activeTab: TValue | null
   currentPath: string
   onTabChange: (tab: TValue) => void
   onOpenAccount?: () => void

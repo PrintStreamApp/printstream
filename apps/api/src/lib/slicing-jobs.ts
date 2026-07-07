@@ -22,6 +22,7 @@ import { persistLibraryFileFromLocalPath } from './library-files.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from './three-mf.js'
+import { healUnweldedThreeMfMeshes } from './three-mf-mesh-weld.js'
 import { resolveSceneEditImports } from './import-store.js'
 import type { ResolvedSlicingProfileFile } from './slicing-profiles.js'
 import { withTenantRequestContext, type RequestTenantSummary } from './tenant-context.js'
@@ -481,6 +482,28 @@ export class SlicingJobs {
           objectProcessOverrides: objectProcessOverrides && Object.keys(objectProcessOverrides).length > 0 ? objectProcessOverrides : undefined
         })
         sourcePath = filteredPath
+      }
+
+      // Heal index-level triangle-soup meshes (older editor imports) before slicing:
+      // BambuStudio chains layer contours by vertex index, so unwelded meshes fall into
+      // its 2mm gap-closing heuristic and small features (inlaid text) slice mangled.
+      // No-op (no copy) for projects whose meshes are already welded, and best-effort
+      // overall — a heal failure must never fail a slice that would previously have run.
+      {
+        const weldedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-weld-'))
+        const weldedPath = path.join(weldedDir, path.basename(job.sourceFileName) || 'source.3mf')
+        let healed = false
+        try {
+          healed = await healUnweldedThreeMfMeshes(sourcePath, weldedPath)
+        } catch (error) {
+          this.logJobEvent(job, 'warn', `Mesh weld pre-pass skipped: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        if (healed) {
+          rewrittenSourcePaths.push(weldedPath)
+          sourcePath = weldedPath
+        } else {
+          await rm(weldedDir, { recursive: true, force: true }).catch(() => undefined)
+        }
       }
       while (true) {
         const slicerJobId = buildSlicerAttemptJobId(job.id, retryAttempt)

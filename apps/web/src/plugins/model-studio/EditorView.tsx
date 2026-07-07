@@ -69,10 +69,11 @@ import { buildApiUrl } from '../../lib/apiUrl'
 import { toast } from '../../lib/toast'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
+import { DialogFileTitle } from '../../components/DialogFileTitle'
 import { EmptyState } from '../../components/EmptyState'
 import { LibraryFilePickerDialog } from '../../components/LibraryFilePickerDialog'
 import { LibraryDestinationDialog } from '../../components/LibraryDestinationDialog'
-import { splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
+import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import {
@@ -3528,10 +3529,10 @@ function EditorView({
         layout="center"
         // A large centred dialog with equal margins on all four sides.
         sx={{
-          width: '92vw',
-          height: '92dvh',
-          maxWidth: '92vw',
-          maxHeight: '92dvh',
+          width: '96vw',
+          height: '96dvh',
+          maxWidth: '96vw',
+          maxHeight: '96dvh',
           p: { xs: 1.5, sm: 2 },
           display: 'flex',
           flexDirection: 'column',
@@ -3540,7 +3541,12 @@ function EditorView({
         }}
       >
         <ModalClose onClick={handleCloseRequest} sx={{ top: 12, right: 12 }} />
-        <Typography level="h4" sx={{ mb: 1 }}>{isNewProject ? 'New Project' : 'Edit Project'}</Typography>
+        {/* The project's name (hidden for the New Project scaffold, whose generated name is meaningless). */}
+        <DialogFileTitle
+          title={isNewProject ? 'New Project' : 'Edit Project'}
+          fileName={!isNewProject && baseFileQuery.data ? formatLibraryFileName(baseFileQuery.data.file.name) : null}
+          sx={{ mb: 1 }}
+        />
 
         {loadError ? (
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>

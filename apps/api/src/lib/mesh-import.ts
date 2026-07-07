@@ -44,6 +44,46 @@ export interface ImportedMeshPart {
 const MAX_IMPORT_TRIANGLES = 5_000_000
 
 /**
+ * Weld exact-duplicate vertex positions into shared indexed vertices (dropping triangles
+ * degenerate after the weld). STL is triangle soup by definition and OCCT tessellates each
+ * BRep face independently, so without this every imported mesh reaches the 3MF as an
+ * index-level soup — and BambuStudio's slicer chains layer contours by vertex/edge INDEX
+ * (`chain_open_polylines_exact`), dumping a soup mesh entirely into its 2mm proximity
+ * gap-closing heuristic. That mis-stitches small features: zero-clearance inlays (text
+ * pockets) print fused/unfilled, looking like the wall generator is broken. Exact equality
+ * is the right tolerance — duplicated corners are written from the same source floats.
+ */
+export function weldImportedMeshVertices(mesh: ImportedMesh): ImportedMesh {
+  const vertexCount = Math.floor(mesh.positions.length / 3)
+  const keyToIndex = new Map<string, number>()
+  const remap = new Uint32Array(vertexCount)
+  const positions: number[] = []
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    const x = mesh.positions[vertex * 3] ?? 0
+    const y = mesh.positions[vertex * 3 + 1] ?? 0
+    const z = mesh.positions[vertex * 3 + 2] ?? 0
+    const key = `${x},${y},${z}`
+    let index = keyToIndex.get(key)
+    if (index == null) {
+      index = positions.length / 3
+      keyToIndex.set(key, index)
+      positions.push(x, y, z)
+    }
+    remap[vertex] = index
+  }
+  if (positions.length === mesh.positions.length) return mesh
+  const indices: number[] = []
+  for (let triangle = 0; triangle + 2 < mesh.indices.length; triangle += 3) {
+    const a = remap[mesh.indices[triangle] ?? 0] ?? 0
+    const b = remap[mesh.indices[triangle + 1] ?? 0] ?? 0
+    const c = remap[mesh.indices[triangle + 2] ?? 0] ?? 0
+    if (a === b || b === c || c === a) continue
+    indices.push(a, b, c)
+  }
+  return { ...mesh, positions, indices }
+}
+
+/**
  * Reject a mesh whose triangle count exceeds the import budget. The STL parsers
  * cap their input directly; STEP is tessellated by OCCT (WASM) with no inherent
  * output bound, so its produced triangle count must be checked here before the
@@ -73,11 +113,11 @@ export async function parseImportedMesh(buffer: Buffer, format: StagedImportForm
   throw new Error(`Unsupported import format: ${format}`)
 }
 
-/** Parse a binary or ASCII STL into a (non-indexed) triangle mesh. */
+/** Parse a binary or ASCII STL into an indexed (vertex-welded) triangle mesh. */
 export function parseStlMesh(buffer: Buffer): ImportedMesh {
   const mesh = isBinaryStl(buffer) ? parseBinaryStl(buffer) : parseAsciiStl(buffer)
   if (mesh.indices.length === 0) throw new Error('STL contained no triangles')
-  return mesh
+  return weldImportedMeshVertices(mesh)
 }
 
 /**
@@ -198,7 +238,7 @@ function occtMeshToImportedMesh(mesh: { attributes: { position: { array: number[
     positions.push(x, y, z)
     accumulator.add(x, y, z)
   }
-  return { positions, indices: [...mesh.index.array], bounds: accumulator.bounds() }
+  return weldImportedMeshVertices({ positions, indices: [...mesh.index.array], bounds: accumulator.bounds() })
 }
 
 /** Concatenate meshes into one (re-basing each mesh's indices), recomputing the combined bounds. */

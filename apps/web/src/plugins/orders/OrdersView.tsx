@@ -33,6 +33,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
+import { prefetchSlicingProfiles } from '../../lib/slicingProfilesQuery'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { type DirectorySortDirection } from '../../components/DirectoryControls'
@@ -198,6 +199,11 @@ export function OrdersView() {
     queryFn: ({ signal }) => apiFetch<SlicingCapabilities>('/api/slicing/capabilities', { signal }),
     enabled: authBootstrapQuery.isSuccess ? (canStartOrderPrint && canSliceFiles) : false
   })
+  // Warm the slicer profile catalogue before an order's start-print flow opens the slice dialog.
+  const slicingCapabilitiesData = slicingCapabilitiesQuery.data
+  useEffect(() => {
+    prefetchSlicingProfiles(queryClient, slicingCapabilitiesData)
+  }, [queryClient, slicingCapabilitiesData])
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   const printerStatusQuery = useQuery<Record<string, PrinterStatus>>({
     queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey),
@@ -655,6 +661,9 @@ export function OrdersView() {
 
       {canStartOrderPrint && sliceTarget && printersQuery.data && (
         <SliceFileModal
+          // Re-mount per file: the dialog's per-file state (materials, one-shot default
+          // seeding) must not survive a target swap. See LibraryView's mount.
+          key={sliceTarget.file.id}
           file={sliceTarget.file}
           printers={printersQuery.data.printers}
           printerStatuses={printerStatusQuery.data ?? {}}

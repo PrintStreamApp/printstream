@@ -54,6 +54,7 @@ import {
 } from '@printstream/shared'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../lib/apiClient'
+import { prefetchSlicingProfiles } from '../lib/slicingProfilesQuery'
 import { buildApiUrl } from '../lib/apiUrl'
 import { invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
@@ -288,6 +289,12 @@ export function LibraryView() {
       return data?.configured && !data.healthy ? 4000 : false
     }
   })
+  // Warm the slicer profile catalogue in the background as soon as the slicer is known
+  // healthy, so opening the slice dialog / editor doesn't sit on "Loading slicer data…".
+  const slicingCapabilitiesData = slicingCapabilitiesQuery.data
+  useEffect(() => {
+    prefetchSlicingProfiles(queryClient, slicingCapabilitiesData)
+  }, [queryClient, slicingCapabilitiesData])
 
   const allFolders = useMemo(() => foldersQuery.data?.folders ?? [], [foldersQuery.data])
   const browseData = browseQuery.data
@@ -1480,6 +1487,10 @@ export function LibraryView() {
 
       {canUploadLibrary && sliceTarget && (
         <SliceFileModal
+          // Re-mount on a different file/version: the dialog holds per-file state (material
+          // colors/nozzles, one-shot baked-defaults guards) that must never survive a target
+          // swap — a reused instance shows the PREVIOUS project's materials. Mirrors EditorView.
+          key={`${sliceTarget.id}:${sliceVersionId ?? 'current'}`}
           file={sliceTarget}
           flow={sliceFlow}
           isNewProject={sliceTargetIsNewProject}

@@ -1661,12 +1661,15 @@ function buildDefaultOutputFileName(sourceFileName: string): string {
 }
 
 function normalizeOutputFileName(fileName: string): string {
-  // Spaces are valid in the output file name and are passed to the slicer CLI
-  // as a single argv token (spawn is invoked without a shell, and the args
-  // template is tokenized before {outputFileName} is substituted), so preserve
-  // them instead of collapsing to underscores. Only strip path separators and
-  // characters the printer firmware rejects.
-  const safe = fileName.replace(/[\\/]/g, '_').replace(/[^\w. -]+/g, '_')
+  // Spaces, brackets, and most ASCII punctuation are valid in the output file name
+  // (BambuStudio itself exports names like "Mount (landscape).gcode.3mf"); the name is
+  // passed to the slicer CLI as a single argv token (spawn is invoked without a shell,
+  // and the args template is tokenized before {outputFileName} is substituted). Strip
+  // only path separators, FAT-reserved characters, and non-printable/non-ASCII — the
+  // same set as the API's normalizeOutputFileName and sanitizeRemoteName; this name is
+  // reported back and REPLACES the caller's requested output name, so anything stripped
+  // here disfigures the library file name (e.g. "(ABS)" used to become "_ABS_").
+  const safe = fileName.replace(/[\\/<>:"|?*]/g, '_').replace(/[^\x20-\x7e]+/g, '_')
   return isDirectPrintableFileName(safe) ? safe : `${safe.replace(/\.3mf$/i, '')}.gcode.3mf`
 }
 
@@ -1836,7 +1839,29 @@ async function sweepStaleWorkDirs(): Promise<void> {
   if (removed > 0) console.log(`[slicer] swept ${removed} stale work dir${removed === 1 ? '' : 's'} at startup`)
 }
 
+/**
+ * Prewarm the builtin-profile catalogue for every target at startup. Building it cold
+ * means reading + parsing thousands of preset JSONs (and their `inherits` chains), which
+ * otherwise lands on the FIRST `/profiles` request after a (re)start — the "Loading slicer
+ * data…" wait in the web dialog. The mtime-signature cache in `listBuiltinProfiles` keeps
+ * every later request cheap; this just moves the cold build off the request path.
+ */
+async function prewarmBuiltinProfiles(): Promise<void> {
+  try {
+    const registry = await getSlicerTargetRegistry()
+    for (const target of registry.targets) {
+      const startedAt = Date.now()
+      const profiles = await listBuiltinProfiles(target.profileDir)
+      console.log(`[slicer] prewarmed ${profiles.length} builtin profiles for ${target.id} in ${Date.now() - startedAt}ms`)
+    }
+  } catch (error) {
+    // Best-effort: a failed prewarm just means the first request pays the cold build.
+    console.warn('[slicer] builtin profile prewarm failed:', error instanceof Error ? error.message : error)
+  }
+}
+
 void sweepStaleWorkDirs()
+void prewarmBuiltinProfiles()
 http.createServer({ maxHeaderSize: SLICE_MAX_HEADER_BYTES }, app).listen(env.SLICER_PORT, () => {
   console.log(`PrintStream slicer listening on ${env.SLICER_PORT}`)
   if (!env.SLICER_SERVICE_TOKEN) {

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Chip, CircularProgress, DialogContent, DialogTitle, Divider, IconButton, LinearProgress, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
+import { Alert, Box, Chip, CircularProgress, DialogContent, Divider, IconButton, LinearProgress, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded'
+import OpenInFullRoundedIcon from '@mui/icons-material/OpenInFullRounded'
+import CloseFullscreenRoundedIcon from '@mui/icons-material/CloseFullscreenRounded'
 import { useQuery } from '@tanstack/react-query'
 import type { LibraryFile, LibraryThreeMfScene, ThreeMfIndex } from '@printstream/shared'
 import * as THREE from 'three'
@@ -12,6 +14,7 @@ import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { buildLayeredGcodePreview, GCODE_FEATURE_COLORS, GCODE_FEATURE_NAMES, parseGcodeLayers, type GcodeStats, type LayeredGcodePreview } from './lib/gcodePreview'
 import { formatSecondsDuration } from '../../lib/time'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
+import { DialogFileTitle } from '../../components/DialogFileTitle'
 import { LibraryPlateCardPicker } from '../../components/LibraryPlateSelect'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { formatLibraryFileName } from '../../lib/libraryDisplay'
@@ -93,6 +96,14 @@ export function PreviewView(props: Record<string, unknown>) {
   // bambu.editor.plateStripCollapsed preference but is tracked separately.
   const [plateStripCollapsed, setPlateStripCollapsed] = useLocalStorageState(
     'bambu.preview.plateStripCollapsed',
+    false,
+    (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
+    String
+  )
+  // Expanded mode sizes the dialog like the full editor (96vw/96dvh) and lets the
+  // viewer fill the freed height instead of keeping its fixed dvh band.
+  const [maximized, setMaximized] = useLocalStorageState(
+    'bambu.preview.maximized',
     false,
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String
@@ -468,6 +479,10 @@ export function PreviewView(props: Record<string, unknown>) {
       }
     }
     window.addEventListener('resize', onResize)
+    // The container also resizes without a window resize (the expand/shrink toggle,
+    // the plate strip collapsing in expanded mode), so watch it directly too.
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : null
+    resizeObserver?.observe(container)
 
     return () => {
       if (applyViewPresetRef.current === applyViewPreset) {
@@ -477,6 +492,7 @@ export function PreviewView(props: Record<string, unknown>) {
       loadAbortController.abort()
       cancelAnimationFrame(frame)
       window.removeEventListener('resize', onResize)
+      resizeObserver?.disconnect()
       controls.dispose()
       renderer.dispose()
       viewCube.dispose()
@@ -563,16 +579,39 @@ export function PreviewView(props: Record<string, unknown>) {
   const heading = isMeshPreviewMode(previewMode) ? '3D preview' : '3D plate preview'
   const showPlatePicker = !isMeshPreviewMode(previewMode) && plates.length > 0
 
+  // Expanded mode pins the dialog to the full editor's footprint (96vw/96dvh) and
+  // switches the body from a scrolling column to a flex column so the viewer fills
+  // the freed height (no scrolling needed at a fixed dialog height).
+  const BodyContainer = maximized ? DialogContent : ScrollableDialogBody
+
   return (
     <Modal open onClose={onClose}>
-      <ScrollableModalDialog variant="outlined" sx={{ width: { xs: '100%', md: 1120 }, maxWidth: '100%' }}>
+      <ScrollableModalDialog
+        variant="outlined"
+        sx={maximized
+          // minHeight, not height: inside ModalOverflow, Joy pins a centered dialog to
+          // `height: max-content` (higher specificity than sx), which would collapse the
+          // flex body; min-height wins over that at computed-value time.
+          ? { width: '96vw', maxWidth: '100%', minHeight: '96dvh' }
+          : { width: { xs: '100%', md: 1120 }, maxWidth: '100%' }}
+      >
+        <Tooltip title={maximized ? 'Shrink preview' : 'Expand preview'}>
+          <IconButton
+            aria-label={maximized ? 'Shrink preview' : 'Expand preview'}
+            variant="plain"
+            color="neutral"
+            size="sm"
+            onClick={() => setMaximized(!maximized)}
+            sx={{ position: 'absolute', top: 12, right: 52, zIndex: 2 }}
+          >
+            {maximized ? <CloseFullscreenRoundedIcon fontSize="small" /> : <OpenInFullRoundedIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
         <ModalClose onClick={onClose} sx={{ top: 12, right: 12 }} />
-        <DialogTitle>{heading}</DialogTitle>
-        <DialogContent>
-          {file ? formatLibraryFileName(file.name) : 'Inspect the selected file in 3D without leaving the library.'}
-        </DialogContent>
-        <ScrollableDialogBody sx={{ pt: 1.5 }}>
-          <Stack spacing={1.5} sx={{ minWidth: 0 }}>
+        {/* Extra right padding clears both header icons (expand/shrink + close). */}
+        <DialogFileTitle title={heading} fileName={file ? formatLibraryFileName(file.name) : null} sx={{ pr: 12 }} />
+        <BodyContainer sx={{ pt: 1.5, ...(maximized ? { flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column' } : null) }}>
+          <Stack spacing={1.5} sx={{ minWidth: 0, ...(maximized ? { flex: 1, minHeight: 0 } : null) }}>
             {showPlatePicker && fileId && (
               <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
                 <Box sx={{ width: '100%', minWidth: 0 }}>
@@ -593,7 +632,9 @@ export function PreviewView(props: Record<string, unknown>) {
             <Sheet
               variant="soft"
               sx={{
-                height: { xs: '50dvh', sm: '62dvh' },
+                // Expanded: fill whatever height the plate strip leaves; normal: fixed band.
+                height: maximized ? 'auto' : { xs: '50dvh', sm: '62dvh' },
+                flex: maximized ? 1 : 'initial',
                 minHeight: { xs: 300, sm: 360 },
                 position: 'relative',
                 overflow: 'hidden',
@@ -763,7 +804,7 @@ export function PreviewView(props: Record<string, unknown>) {
               </Box>
             </Sheet>
           </Stack>
-        </ScrollableDialogBody>
+        </BodyContainer>
       </ScrollableModalDialog>
     </Modal>
   )

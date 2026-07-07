@@ -23,7 +23,8 @@ import { PluginManagerSection } from '../components/PluginManagerSection'
 import { apiFetch } from '../lib/apiClient'
 import { authQueryKeys, resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
 import { CORE_LANDING_PAGE_OPTIONS, type LandingPageOption } from '../lib/landingPageOptions'
-import { appThemeOptions } from '../theme/flatThemes'
+import { DeviceOverrideNotice, GeneralSettingCard, GeneralSettingSelectRow } from '../components/settings/GeneralSettingControls'
+import { ThemeSettingCard } from '../components/settings/ThemeSettingCard'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildTenantWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
@@ -31,8 +32,6 @@ import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { LicenseSettingsSection } from './LicenseSettingsSection'
 import { LogsPanel } from './LogsView'
 
-type ThemeSettingSelectValue = AppThemeSetting
-type DeviceThemeSettingSelectValue = 'follow-default' | ThemeSettingSelectValue
 type LandingPageSettingSelectValue = AppLandingPageSetting
 type DeviceLandingPageSettingSelectValue = 'follow-default' | LandingPageSettingSelectValue
 type WidthSettingSelectValue = 'centered' | 'full-width'
@@ -149,8 +148,6 @@ export function SettingsView({
   const authManagementStatusError = authManagementStatusQuery.error
     ? extractErrorMessage(authManagementStatusQuery.error)
     : null
-  const sharedThemeSelectValue: ThemeSettingSelectValue = sharedAppTheme
-  const deviceThemeSelectValue: DeviceThemeSettingSelectValue = deviceAppThemeOverride ?? 'follow-default'
   const sharedLandingPageSelectValue: LandingPageSettingSelectValue = sharedLandingPage
   const deviceLandingPageSelectValue: DeviceLandingPageSettingSelectValue = deviceLandingPageOverride ?? 'follow-default'
   const sharedWidthSelectValue: WidthSettingSelectValue = sharedUnconstrainedWidth ? 'full-width' : 'centered'
@@ -274,56 +271,15 @@ export function SettingsView({
             </Alert>
           )}
 
-          <GeneralSettingCard
-            title="Theme"
-            description="Choose the app's appearance: the default look, the Aurora background treatment, or one of the flat styles (Graphite accents, Slate, Code Dark)."
-            resetDisabled={deviceAppThemeOverride == null && !(canManageSettings && sharedAppTheme !== 'default')}
-            onReset={() => {
-              if (canManageSettings) onSetSharedAppTheme('default')
-              onClearDeviceAppThemeOverride()
-            }}
-          >
-            <GeneralSettingSelectRow label="Default setting" helper="Shared default applied to devices that do not have their own override.">
-              <Select<ThemeSettingSelectValue>
-                value={sharedThemeSelectValue}
-                disabled={sharedSettingsSaving}
-                onChange={(_event, value) => {
-                  if (!value) return
-                  onSetSharedAppTheme(value)
-                }}
-              >
-                {appThemeOptions.map((option) => (
-                  <Option key={option.value} value={option.value}>{option.label} theme</Option>
-                ))}
-              </Select>
-            </GeneralSettingSelectRow>
-
-            <GeneralSettingSelectRow label="This device" helper="Saved in this browser only. Choose follow default to inherit the shared setting.">
-              <Select<DeviceThemeSettingSelectValue>
-                value={deviceThemeSelectValue}
-                onChange={(_event, value) => {
-                  if (!value) return
-                  if (value === 'follow-default') {
-                    onClearDeviceAppThemeOverride()
-                    return
-                  }
-                  onSetDeviceAppTheme(value)
-                }}
-              >
-                <Option value="follow-default">Follow default setting</Option>
-                {appThemeOptions.map((option) => (
-                  <Option key={option.value} value={option.value}>{option.label} theme on this device</Option>
-                ))}
-              </Select>
-            </GeneralSettingSelectRow>
-
-            {deviceAppThemeOverride != null && (
-              <DeviceOverrideNotice
-                message="This device is currently using its own theme setting instead of the shared default."
-                onClear={onClearDeviceAppThemeOverride}
-              />
-            )}
-          </GeneralSettingCard>
+          <ThemeSettingCard
+            sharedAppTheme={sharedAppTheme}
+            deviceAppThemeOverride={deviceAppThemeOverride}
+            canManageSettings={canManageSettings}
+            sharedSettingsSaving={sharedSettingsSaving}
+            onSetSharedAppTheme={onSetSharedAppTheme}
+            onSetDeviceAppTheme={onSetDeviceAppTheme}
+            onClearDeviceAppThemeOverride={onClearDeviceAppThemeOverride}
+          />
 
           <GeneralSettingCard
             title="Default page"
@@ -671,101 +627,6 @@ function SettingsOverviewCard({
         </Typography>
       </Stack>
     </Card>
-  )
-}
-
-function GeneralSettingCard({
-  title,
-  description,
-  onReset,
-  resetDisabled = false,
-  children
-}: {
-  title: string
-  description: string
-  /** When provided, a "Reset to default" button is shown opposite the title. */
-  onReset?: () => void
-  resetDisabled?: boolean
-  children: React.ReactNode
-}) {
-  return (
-    <Card variant="outlined">
-      <CardContent>
-        <Stack spacing={1.5}>
-          <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
-            <Box sx={{ minWidth: 0 }}>
-              <Typography level="title-md">{title}</Typography>
-              <Typography level="body-sm" textColor="text.tertiary">
-                {description}
-              </Typography>
-            </Box>
-            {onReset && (
-              <Button
-                size="sm"
-                variant="plain"
-                color="neutral"
-                startDecorator={<RestartAltRoundedIcon />}
-                disabled={resetDisabled}
-                onClick={onReset}
-                sx={{ flexShrink: 0 }}
-              >
-                Reset to default
-              </Button>
-            )}
-          </Stack>
-          <Stack spacing={1.25}>
-            {children}
-          </Stack>
-        </Stack>
-      </CardContent>
-    </Card>
-  )
-}
-
-function GeneralSettingSelectRow({
-  label,
-  helper,
-  children
-}: {
-  label: string
-  helper: string
-  children: React.ReactNode
-}) {
-  return (
-    <Stack
-      direction={{ xs: 'column', sm: 'row' }}
-      spacing={1}
-      alignItems={{ xs: 'stretch', sm: 'center' }}
-      justifyContent="space-between"
-    >
-      <Stack spacing={0.35} sx={{ minWidth: 0, flex: 1 }}>
-        <FormLabel>{label}</FormLabel>
-        <Typography level="body-xs" textColor="text.tertiary">
-          {helper}
-        </Typography>
-      </Stack>
-      <FormControl size="sm" sx={{ width: { xs: '100%', sm: 240 }, flexShrink: 0 }}>
-        {children}
-      </FormControl>
-    </Stack>
-  )
-}
-
-function DeviceOverrideNotice({ message, onClear }: { message: string; onClear: () => void }) {
-  return (
-    <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: 'wrap' }}>
-      <Typography level="body-xs" textColor="text.tertiary">
-        {message}
-      </Typography>
-      <Button
-        size="sm"
-        variant="plain"
-        color="neutral"
-        onClick={onClear}
-      >
-        Use shared setting on this device
-      </Button>
-    </Stack>
   )
 }
 

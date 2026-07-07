@@ -20,8 +20,12 @@
       :root {
         color-scheme: dark;
         font-family: 'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        background-color: #070b14;
-        --printstream-body-background: radial-gradient(circle at top left, #0f5444 0%, #304159 100%);
+        /* Neutral dark boot background: the theme is user-selectable, so before the app
+           paints we show either the cached last-used theme background (pre-bundle script
+           below) or this neutral tone that sits between all themes — never a themed
+           gradient that could clash with what loads next. */
+        background-color: #121419;
+        --printstream-body-background: #121419;
         --app-splash-panel-radius: 16px;
         --app-splash-logo-radius: 16px;
         --app-safe-top: env(safe-area-inset-top, 0px);
@@ -63,7 +67,7 @@
         display: grid;
         place-items: center;
         padding: max(24px, var(--app-top-inset)) 20px max(24px, var(--app-safe-bottom));
-        background: radial-gradient(circle at top left, #0f5444 0%, #304159 100%);
+        background: var(--printstream-body-background);
         transition: visibility 220ms ease;
       }
 
@@ -241,12 +245,28 @@
     <script>
       /* Decide marketing-vs-app BEFORE any bundle loads, so a public marketing page never paints the
          app-boot splash. Kept in sync with src/private/cloud/marketingRoutes.ts; the public export
-         empties this list (OSS ships no marketing site) so a self-hosted "/" keeps its boot splash. */
+         empties this list (OSS ships no marketing site) so a self-hosted "/" keeps its boot splash.
+         Marketing pages are brand surfaces and keep the Default theme's backdrop; app boots instead
+         restore the background the last-used theme painted (cached by App in localStorage) so the
+         splash matches the theme that appears afterwards. First-ever loads keep the neutral tone. */
       (function () {
         try {
           var PS_MARKETING_PATHS = [];
           if (PS_MARKETING_PATHS.indexOf(window.location.pathname) !== -1) {
             document.documentElement.classList.add('ps-marketing-boot');
+            document.documentElement.style.setProperty('--printstream-body-background', 'radial-gradient(circle at top left, #0f5444 0%, #304159 100%)');
+            return;
+          }
+          var raw = window.localStorage.getItem('printstream.appearance.bootBackground');
+          if (!raw) return;
+          var parsed = JSON.parse(raw);
+          if (parsed && typeof parsed.background === 'string' && parsed.background.length <= 600) {
+            document.documentElement.style.setProperty('--printstream-body-background', parsed.background);
+          }
+          if (parsed && typeof parsed.color === 'string' && parsed.color.length <= 100) {
+            document.documentElement.style.backgroundColor = parsed.color;
+            var themeColorMeta = document.querySelector('meta[name="theme-color"]');
+            if (themeColorMeta) themeColorMeta.setAttribute('content', parsed.color);
           }
         } catch (e) {}
       })();

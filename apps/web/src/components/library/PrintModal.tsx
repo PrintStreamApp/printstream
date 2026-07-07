@@ -53,6 +53,7 @@ import {
 } from '../../lib/plateClearing'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { BackAwareModal as Modal } from '../BackAwareModal'
+import { DialogFileTitle } from '../DialogFileTitle'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { PrinterMapping } from './PrinterMapping'
 import { PrintStartOptionsFields } from './PrintStartOptionsFields'
@@ -866,17 +867,13 @@ export function PrintModal({
     <>
       <Modal open onClose={dismissCurrentStep}>
         <ScrollableModalDialog sx={{ maxWidth: 640, width: '100%' }}>
-        <Typography level="h4">{title ?? 'Send to printer'}</Typography>
+        <DialogFileTitle title={title ?? 'Send to printer'} fileName={formatLibraryFileName(file.name)} />
         <Stack
           direction={{ xs: 'column', sm: 'row' }}
           spacing={1}
           alignItems={{ xs: 'flex-start', sm: 'center' }}
-          justifyContent="space-between"
           sx={{ mb: 1, minWidth: 0 }}
         >
-          <Typography level="body-sm" textColor="text.tertiary" sx={{ minWidth: 0 }}>
-            {formatLibraryFileName(file.name)}
-          </Typography>
           {(compatiblePrinterModels.length > 0 || activePlate?.plateType || activePlate?.nozzleSizes.length) ? (
             <Stack
               direction="row"
