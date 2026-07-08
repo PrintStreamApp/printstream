@@ -72,6 +72,20 @@ export function getBridgeReleaseManifest(
   _channel?: string,
   options: { releasesDir?: string, assetOrigin?: string | null } = {}
 ): BridgeReleaseManifest {
+  // Self-hosted bundles update lock-step with the app: the bridge ships inside
+  // the bundle and must never converge to a separately-promoted build. Advertise
+  // no installable `current` so a bundled bridge's updater has nothing to act on
+  // even if one were ever wired in — the lock-step guarantee then holds at the
+  // manifest layer, not only by the bundled bridge using the image-pull driver.
+  // Mirrors the self-hosted short-circuit in `resolveBridgeUpdateStatus`.
+  if (isSelfHostedDeployment()) {
+    return bridgeReleaseManifestSchema.parse({
+      schemaVersion: 2,
+      generatedAt: new Date(0).toISOString(),
+      minimumSupportedProtocol: CURRENT_BRIDGE_PROTOCOL_VERSION,
+      current: null
+    })
+  }
   const releasesDir = options.releasesDir ?? env.BRIDGE_RELEASES_DIR
   const pointer = readCurrentBridgeBuildPointer(releasesDir)
   const current = pointer ? mergePublishedBuildFragments(releasesDir, pointer) : null

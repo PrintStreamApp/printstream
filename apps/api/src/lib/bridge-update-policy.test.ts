@@ -84,6 +84,27 @@ test('getBridgeReleaseManifest announces the promoted build with merged fragment
   }
 })
 
+test('getBridgeReleaseManifest advertises no build on a self-hosted bundle', async () => {
+  const releasesDir = await mkdtemp(path.join(tmpdir(), 'bridge-builds-'))
+  const previous = env.SELF_HOSTED
+  env.SELF_HOSTED = true
+  try {
+    // Even with a promoted build present on disk, a self-hosted server must not
+    // advertise an installable `current`: the bundled bridge is lockstep with
+    // the app and has nothing to converge to. This is the manifest-layer half of
+    // the lockstep guarantee, so it does not rely on the bundled bridge's driver.
+    await writePointer(releasesDir)
+    await writeFile(path.join(releasesDir, `bridge-${FP.slice(0, 12)}.release.json`), JSON.stringify(bundleFragment()), 'utf8')
+
+    const manifest = getBridgeReleaseManifest(undefined, { releasesDir })
+    assert.equal(manifest.schemaVersion, 2)
+    assert.equal(manifest.current, null)
+  } finally {
+    env.SELF_HOSTED = previous
+    await rm(releasesDir, { recursive: true, force: true })
+  }
+})
+
 test('getBridgeReleaseManifest rewrites release-asset URLs to the requesting origin', async () => {
   const releasesDir = await mkdtemp(path.join(tmpdir(), 'bridge-builds-'))
   try {
