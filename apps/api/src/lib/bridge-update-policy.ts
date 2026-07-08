@@ -17,6 +17,7 @@ import {
 } from '@printstream/shared'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { isSelfHostedDeployment } from './deployment-mode.js'
 import { env } from './env.js'
 
 const CURRENT_BRIDGE_PROTOCOL_VERSION = 1
@@ -140,6 +141,17 @@ function resolveBridgeUpdateStatus(
   bridge: BridgeVersionMetadata,
   pointer: CurrentBridgeBuildPointer | null
 ): BridgeUpdateStatus {
+  // Self-hosted (OSS Docker stack and native SEA) ships the bridge inside the
+  // application bundle, so it is lockstep with the server by construction and
+  // cannot update independently — the whole bundle updates as a unit. The
+  // release-pointer drift comparison below is a cloud-only concept (it drives
+  // separately-installed home bridges that legitimately self-update), so a
+  // bundled bridge is definitionally `current`. Reporting anything else would
+  // surface a "Bridge needs updating" banner (with an update action the user
+  // cannot apply) and can block printing via `assertBridgeAllowsPrinting`.
+  if (isSelfHostedDeployment()) {
+    return 'current'
+  }
   if (bridge.updateStatus === 'unsupported') {
     return bridge.updateStatus
   }

@@ -112,6 +112,7 @@ async function withDiscordApp(
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
+    registerSlotFilamentResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 

@@ -37,7 +37,9 @@ export function SlicingToasts() {
     const now = Date.now()
     return jobs
       .filter((job) => isActiveSlicingJob(job) || now - Date.parse(job.updatedAt) <= RECENT_MS)
-      .filter((job) => !dismissed.has(job.id) || isActiveSlicingJob(job))
+      // Once dismissed, stay dismissed — even for an "active" job. A stale/stuck toast (client
+      // missed the completion event) would otherwise be un-dismissable, leaving only Cancel.
+      .filter((job) => !dismissed.has(job.id))
       .filter((job) => !suppressedJobIds.has(job.id))
       .slice(0, MAX_TOASTS)
   }, [dismissed, jobs, suppressedJobIds])

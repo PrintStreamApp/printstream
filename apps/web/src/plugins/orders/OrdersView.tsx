@@ -40,6 +40,7 @@ import { type DirectorySortDirection } from '../../components/DirectoryControls'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { ConfirmActionDialog } from '../../components/ConfirmActionDialog'
 import { SliceFileModal } from '../../components/library/SliceFileModal'
+import { buildCreateSlicingJobBody } from '../../lib/libraryViewHelpers'
 import { SliceThenPrintModal } from '../../components/library/SliceThenPrintModal'
 import { PrintModal } from '../../components/library/PrintModal'
 import { isUnslicedThreeMfFile } from '../../lib/libraryFileTags'
@@ -249,39 +250,11 @@ export function OrdersView() {
       orderTarget: PrintTargetState
       action: SliceFlowSubmitAction
     } & SliceFlowSubmitInput) => {
-      const body = {
+      const body = buildCreateSlicingJobBody(input, {
         sourceFileId: input.orderTarget.file.id,
-        slicerTargetId: input.slicerTargetId,
-        target: input.target.mode === 'realPrinter'
-          ? {
-              mode: 'realPrinter',
-              printerId: input.target.printerId,
-              printerProfileId: input.target.printerProfileId,
-              plateType: input.target.plateType,
-              nozzleDiameters: input.target.nozzleDiameters,
-              toolheads: input.target.toolheads,
-              processProfileId: input.target.processProfileId,
-              processSettingOverrides: input.target.processSettingOverrides,
-              filamentMappings: input.target.filamentMappings
-            }
-          : {
-              mode: 'manualProfile',
-              printerProfileId: input.target.printerProfileId,
-              printerModel: input.target.printerModel ?? 'unknown',
-              plateType: input.target.plateType,
-              nozzleDiameters: input.target.nozzleDiameters,
-              toolheads: input.target.toolheads,
-              processProfileId: input.target.processProfileId,
-              processSettingOverrides: input.target.processSettingOverrides,
-              filamentMappings: input.target.filamentMappings
-            },
-        outputFileName: input.outputFileName,
         outputFolderId: null,
-        hiddenOutput: true,
-        plate: input.plate,
-        selectedObjectIds: input.selectedObjectIds,
-        objectProcessOverrides: input.objectProcessOverrides
-      }
+        hiddenOutput: true
+      })
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
     onSuccess: async (response, variables) => {

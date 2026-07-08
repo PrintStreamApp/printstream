@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { FilamentSpool } from '@printstream/shared'
 import {
-  applyFilters, sortSpools, groupSpools, spoolTitle, formatLoadedLocation, deriveFacets, EMPTY_FILTERS
+  applyFilters, sortSpools, groupSpools, spoolTitle, spoolIdentityLabel, findLoadedSpoolForSlot,
+  friendlyColorName, formatLoadedLocation, deriveFacets, EMPTY_FILTERS
 } from './filters'
 
 function makeSpool(overrides: Partial<FilamentSpool> = {}): FilamentSpool {
@@ -48,6 +49,44 @@ function makeSpool(overrides: Partial<FilamentSpool> = {}): FilamentSpool {
 test('spoolTitle combines brand, material and colour', () => {
   assert.equal(spoolTitle(makeSpool()), 'Bambu PLA — Scarlet Red')
   assert.equal(spoolTitle(makeSpool({ brand: null, colorName: null, colorHex: null })), 'PLA')
+})
+
+test('spoolIdentityLabel is brand + material, without colour', () => {
+  assert.equal(spoolIdentityLabel(makeSpool({ brand: "Michael's", filamentType: 'PLA', materialSubtype: null })), "Michael's PLA")
+  assert.equal(spoolIdentityLabel(makeSpool({ brand: 'Bambu', filamentType: 'PLA', materialSubtype: 'PLA Matte' })), 'Bambu PLA Matte')
+  assert.equal(spoolIdentityLabel(makeSpool({ brand: null, filamentType: 'PETG', materialSubtype: null })), 'PETG')
+})
+
+test('findLoadedSpoolForSlot matches a manually-assigned custom spool by location (not RFID)', () => {
+  const loaded = makeSpool({ id: 'm', brand: "Michael's", bambuUuid: null, loadedPrinterId: 'p1', loadedAmsId: 0, loadedSlotId: 3 })
+  const other = makeSpool({ id: 'o', loadedPrinterId: 'p1', loadedAmsId: 0, loadedSlotId: 1 })
+  const spools = [other, loaded]
+  assert.equal(findLoadedSpoolForSlot(spools, { printerId: 'p1', amsId: 0, slotId: 3 })?.id, 'm')
+  // wrong slot / printer / no match -> null
+  assert.equal(findLoadedSpoolForSlot(spools, { printerId: 'p1', amsId: 0, slotId: 2 }), null)
+  assert.equal(findLoadedSpoolForSlot(spools, { printerId: 'p9', amsId: 0, slotId: 3 }), null)
+})
+
+test('findLoadedSpoolForSlot matches an external tray (null slot) and guards missing inputs', () => {
+  const ext = makeSpool({ id: 'e', loadedPrinterId: 'p1', loadedAmsId: 254, loadedSlotId: null })
+  assert.equal(findLoadedSpoolForSlot([ext], { printerId: 'p1', amsId: 254, slotId: null })?.id, 'e')
+  assert.equal(findLoadedSpoolForSlot([ext], { printerId: undefined, amsId: 254, slotId: null }), null)
+  assert.equal(findLoadedSpoolForSlot(undefined, { printerId: 'p1', amsId: 254, slotId: null }), null)
+})
+
+test('friendlyColorName only uses Bambu palette names for Bambu spools', () => {
+  // A stored name always wins.
+  assert.equal(friendlyColorName(makeSpool({ colorName: 'My White' })), 'My White')
+  // Custom (non-Bambu, no preset tray) white resolves to the plain common name, not "Jade White".
+  assert.equal(
+    friendlyColorName(makeSpool({ brand: 'Polymaker', trayInfoIdx: null, colorName: null, colorHex: '#FFFFFF' })),
+    'White'
+  )
+  // A Bambu spool (preset tray) keeps Bambu's catalogue name for the same hex.
+  assert.equal(
+    friendlyColorName(makeSpool({ brand: 'Bambu', trayInfoIdx: 'GFA00', colorName: null, colorHex: '#FFFFFF' })),
+    'Jade White'
+  )
 })
 
 test('applyFilters honours search, type, and status', () => {

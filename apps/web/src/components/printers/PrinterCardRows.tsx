@@ -22,6 +22,8 @@ import {
   resolveFilamentDisplay
 } from '../../lib/filamentColor'
 import { amsUnitLetter } from '../../lib/printerTrayMapping'
+import { withDisabledActionReason } from './printerActionHelpers'
+import { PluginSlot } from '../../plugin/PluginSlot'
 import {
   externalSpoolLabel,
   filamentPresetLabel,
@@ -32,19 +34,25 @@ import {
 export function AmsUnitRow({
   unit,
   compact = false,
+  printerId,
+  printerModel,
   onRefresh,
   onOpenDrying,
   onEditSlot,
   onRescanSlot,
+  rescanSlotDisabledReason,
   onResetSlot,
   slotActionsDisabled = false
 }: {
   unit: AmsUnit
   compact?: boolean
+  printerId?: string
+  printerModel?: string
   onRefresh?: () => void
   onOpenDrying?: () => void
   onEditSlot?: (slot: AmsSlot) => void
   onRescanSlot?: (slot: AmsSlot) => void
+  rescanSlotDisabledReason?: (slot: AmsSlot) => string | null
   onResetSlot?: (slot: AmsSlot) => void
   slotActionsDisabled?: boolean
 }) {
@@ -214,7 +222,7 @@ export function AmsUnitRow({
           const isActive = slot.active
           const filament = resolveFilamentDisplay(slot)
           const compactFilamentType = resolveCompactFilamentTypeLabel(
-            filamentPresetLabel(slot.trayInfoIdx, filament.material, slot.filamentType)
+            filamentPresetLabel(slot.trayInfoIdx, filament.material, slot.filamentType, { trayUuid: slot.trayUuid })
             ?? slot.filamentType
             ?? filament.material
           )
@@ -253,7 +261,7 @@ export function AmsUnitRow({
               disableFocusListener
               disableTouchListener
               open={activeTooltipSlot === slot.slot && !contextMenuOpenForSlot && !tooltipSuppressedForSlot}
-              title={<AmsSlotTooltipBody slot={slot} slotLabel={slotLabel} />}
+              title={<AmsSlotTooltipBody slot={slot} slotLabel={slotLabel} printerId={printerId} amsId={unit.unitId} slotId={slot.slot} />}
               sx={{ maxWidth: 280, p: 0 }}
             >
               <Box
@@ -463,9 +471,9 @@ export function AmsUnitRow({
               <EditRoundedIcon /> Edit
             </MenuItem>
           )}
-          {onRescanSlot && (
+          {onRescanSlot && withDisabledActionReason(
             <MenuItem
-              disabled={slotActionsDisabled}
+              disabled={slotActionsDisabled || Boolean(rescanSlotDisabledReason?.(contextMenu.slot))}
               onClick={() => {
                 const slot = contextMenu.slot
                 closeContextMenu()
@@ -473,7 +481,8 @@ export function AmsUnitRow({
               }}
             >
               <RefreshRoundedIcon /> Rescan
-            </MenuItem>
+            </MenuItem>,
+            slotActionsDisabled ? null : rescanSlotDisabledReason?.(contextMenu.slot) ?? null
           )}
           {onResetSlot && (
             <MenuItem
@@ -487,6 +496,21 @@ export function AmsUnitRow({
               <RestartAltRoundedIcon /> Reset
             </MenuItem>
           )}
+          {printerId && (
+            <PluginSlot
+              name="printer.amsSlot.menuItems"
+              context={{
+                printerId,
+                printerModel,
+                amsId: unit.unitId,
+                slotId: contextMenu.slot.slot,
+                filamentType: contextMenu.slot.filamentType,
+                trayInfoIdx: contextMenu.slot.trayInfoIdx,
+                label: `AMS ${amsUnitLetter(unit.unitId)} slot ${contextMenu.slot.slot + 1}${contextMenu.slot.filamentType ? ` (${contextMenu.slot.filamentType})` : ''}`,
+                onSelected: closeContextMenu
+              }}
+            />
+          )}
         </Menu>
       )}
     </Stack>
@@ -497,17 +521,19 @@ export function ExternalSpoolRow({
   spool,
   spoolCount,
   compact = false,
-  onEdit
+  onEdit,
+  printerId
 }: {
   spool: ExternalSpool
   spoolCount: number
   compact?: boolean
   onEdit?: () => void
+  printerId?: string
 }) {
   const label = externalSpoolLabel(spool.amsId, spoolCount)
   const filament = resolveFilamentDisplay(spool)
   const compactFilamentType = resolveCompactFilamentTypeLabel(
-    filamentPresetLabel(spool.trayInfoIdx, filament.material, spool.filamentType)
+    filamentPresetLabel(spool.trayInfoIdx, filament.material, spool.filamentType, { trayUuid: spool.trayUuid })
     ?? spool.filamentType
     ?? filament.material
   )
@@ -561,7 +587,7 @@ export function ExternalSpoolRow({
         variant="outlined"
         placement="top"
         arrow
-        title={<ExternalSpoolTooltipBody spool={spool} label={label} />}
+        title={<ExternalSpoolTooltipBody spool={spool} label={label} printerId={printerId} />}
         sx={{ maxWidth: 280, p: 0 }}
       >
         <Box

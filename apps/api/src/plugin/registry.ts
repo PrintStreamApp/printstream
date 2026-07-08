@@ -31,6 +31,7 @@ import { prisma } from '../lib/prisma.js'
 import { printerEvents } from '../lib/printer-events.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { printGuards } from '../lib/print-guards.js'
+import { slotFilamentResolvers, type SlotFilamentResolver } from '../lib/slot-filament-registry.js'
 import { wsBroadcaster } from '../lib/ws-server.js'
 import { blockedPluginsForTenant, planGatedPluginNames } from '../lib/plugin-plan-gate.js'
 import { broadcastPluginSettingsChanged, broadcastPluginsChanged } from '../lib/ws-resource-events.js'
@@ -336,6 +337,15 @@ export class PluginRegistry {
       },
       registerAuthProvider: (provider) => {
         const off = authProviderRegistry.register(provider)
+        entry.shutdownHandlers.push(off)
+        return off
+      },
+      registerSlotFilamentResolver: (resolver) => {
+        // Only answer for tenants this plugin is enabled for, mirroring print guards — a
+        // disabled filament plugin must not leak spool associations into other plugins.
+        const scopedResolver: SlotFilamentResolver = (query) =>
+          this.isEnabledForTenant(entry, query.tenantId) ? resolver(query) : Promise.resolve(null)
+        const off = slotFilamentResolvers.register(scopedResolver)
         entry.shutdownHandlers.push(off)
         return off
       }

@@ -116,6 +116,7 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
       if (existing) {
         const data: Record<string, unknown> = { lastSeenAt: new Date() }
         let meaningful = false
+        let locationChanged = false
         if (
           existing.loadedPrinterId !== status.printerId ||
           existing.loadedAmsId !== presence.amsId ||
@@ -126,6 +127,7 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
           data.loadedSlotId = presence.slotId
           data.loadedAt = new Date()
           meaningful = true
+          locationChanged = true
         }
         if (existing.archivedAt) {
           data.archivedAt = null
@@ -146,6 +148,19 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
         }
         await rootPrisma.filamentSpool.updateMany({ where: { id: existing.id, tenantId }, data })
         if (meaningful) mutated = true
+        if (locationChanged && presence.slotId != null) {
+          context.printerEvents.emit('ams-slot.filament-loaded', {
+            tenantId,
+            printerId: status.printerId,
+            amsId: presence.amsId,
+            slotId: presence.slotId,
+            spoolId: existing.id,
+            brand: (data.brand as string | undefined) ?? existing.brand,
+            filamentType: existing.filamentType,
+            materialSubtype: existing.materialSubtype,
+            colorName: existing.colorName
+          })
+        }
         continue
       }
 

@@ -4,6 +4,13 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { buildBridgeUpdateSummary, getBridgeReleaseManifest } from './bridge-update-policy.js'
+import { env } from './env.js'
+
+// Pin the deployment mode: `resolveBridgeUpdateStatus` short-circuits to `current`
+// when `isSelfHostedDeployment()` is true, which the public open-core build is by
+// default (no `src/private`). These cases exercise the cloud drift/compatibility
+// logic, so force cloud mode; the self-hosted case below overrides locally.
+env.SELF_HOSTED = false
 
 const FP = 'a'.repeat(64)
 const OTHER_FP = 'b'.repeat(64)
@@ -176,6 +183,30 @@ test('buildBridgeUpdateSummary preserves a reported hold-back while fingerprints
     assert.equal(summary.status, 'updateHeldBack')
     assert.equal(summary.manualUpdateCommand, 'printstream-bridge update apply')
   } finally {
+    await rm(releasesDir, { recursive: true, force: true })
+  }
+})
+
+test('buildBridgeUpdateSummary reports a bundled self-hosted bridge as current regardless of drift', async () => {
+  const releasesDir = await mkdtemp(path.join(tmpdir(), 'bridge-builds-'))
+  const previous = env.SELF_HOSTED
+  env.SELF_HOSTED = true
+  try {
+    await writePointer(releasesDir)
+    // A fingerprint mismatch (would be `updateAvailable` on cloud), a drifted
+    // runner ABI (would be `runnerUpdateRequired`), and a self-reported
+    // `unsupported` status all collapse to `current`: the bundled bridge is
+    // lockstep with the app and has no independent update to surface or apply.
+    const drifted = buildBridgeUpdateSummary({
+      releaseFingerprint: OTHER_FP,
+      protocolVersion: 1,
+      runnerAbiVersion: 'old-runner',
+      updateStatus: 'unsupported'
+    }, { releasesDir })
+    assert.equal(drifted.status, 'current')
+    assert.equal(drifted.manualUpdateCommand, null)
+  } finally {
+    env.SELF_HOSTED = previous
     await rm(releasesDir, { recursive: true, force: true })
   }
 })

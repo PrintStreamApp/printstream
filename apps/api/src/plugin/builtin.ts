@@ -17,6 +17,7 @@ import { plateClearingPlugin } from '../plugins/plate-clearing/index.js'
 import { firmwareUpdatesPlugin } from '../plugins/firmware-updates/index.js'
 import { ordersPlugin } from '../plugins/orders/index.js'
 import { filamentManagerPlugin } from '../plugins/filament-manager/index.js'
+import { calibrationPlugin } from '../plugins/calibration/index.js'
 import { printQueuePlugin } from '../plugins/print-queue/index.js'
 import { homeAssistantPlugin } from '../plugins/home-assistant/index.js'
 
@@ -97,6 +98,12 @@ export async function registerBuiltinPlugins(): Promise<void> {
     tenantAccess: 'controlled'
   })
   await pluginRegistry.register(filamentManagerPlugin, {
+    defaultEnabled: true,
+    runtimeSurfaces: ['tenant'],
+    managerSurfaces: ['platform', 'tenant'],
+    tenantAccess: 'controlled'
+  })
+  await pluginRegistry.register(calibrationPlugin, {
     defaultEnabled: true,
     runtimeSurfaces: ['tenant'],
     managerSurfaces: ['platform', 'tenant'],

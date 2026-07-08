@@ -13,6 +13,7 @@ import {
 } from '@mui/joy'
 import { useQuery } from '@tanstack/react-query'
 import {
+  amsTrayIndex,
   findFilamentCompatibilityIssues,
   formatNozzleLabel,
   getPrinterPrintOptionCapabilities,
@@ -627,7 +628,7 @@ function buildStorageTrayGroups(status: PrinterStatus | undefined): StorageTrayG
       key: `ams-${unit.unitId}`,
       label: groupLabel,
       trays: unit.slots.map((slot) => ({
-        mappingValue: unit.unitId * 4 + slot.slot,
+        mappingValue: amsTrayIndex(unit.type, unit.unitId, slot.slot),
         key: `ams-${unit.unitId}-${slot.slot}`,
         kind: 'ams',
         label: `Slot ${slot.slot + 1}`,

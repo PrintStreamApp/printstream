@@ -16,6 +16,7 @@
  * than rejected so firmware updates do not break the connection.
  */
 import {
+  amsUnitTypeFromCode,
   getPrinterDisplayCapabilities,
   getPrinterPrintStartOptions,
   getPrinterControlCapabilities,
@@ -69,6 +70,7 @@ export function makeOfflineStatus(printer: Printer): PrinterStatus {
     nozzleTemp: null,
     nozzleTarget: null,
     nozzles: [],
+    nozzleRack: null,
     chamberTemp: null,
     chamberTarget: null,
     fanGearSpeed: null,
@@ -406,6 +408,8 @@ export function parseReport(value: unknown, printer: Printer, currentStatus?: Pr
       delta.nozzleTarget = primaryNozzle.targetTemp
     }
   }
+  const nozzleRack = parseNozzleRack(print, currentStatus?.nozzleRack ?? null)
+  if (nozzleRack !== undefined) delta.nozzleRack = nozzleRack
   assignChamberTemperature(delta, print, printer.model)
   assignFanSpeed(delta, 'fanGearSpeed', print.fan_gear)
   assignFanSpeed(delta, 'partFanPercent', print.cooling_fan_speed)
@@ -971,8 +975,13 @@ function parseAms(
       const nextTemperature = 'temp' in entry
         ? parseAmsTemperature(entry.temp, previousUnit?.temperature ?? null)
         : previousUnit?.temperature ?? null
+      // DevAmsType code lives in `info` bits 0-3; when a delta omits `info`,
+      // keep the type resolved from an earlier report. Drives the global
+      // tray-index math (AMS HT / N3S units number their trays 128+).
+      const unitType = amsType != null ? amsUnitTypeFromCode(amsType) : previousUnit?.type ?? 'unknown'
       const nextUnit: PrinterStatus['ams'][number] = {
         unitId,
+        type: unitType,
         nozzleId: amsNozzleMap?.get(unitId) ?? previousUnit?.nozzleId ?? null,
         supportDrying: amsType === 3 || amsType === 4 || previousUnit?.supportDrying === true,
         dryTimeRemainingMinutes: dryTime,
@@ -1777,6 +1786,114 @@ function parseNozzles(
   ]
 }
 
+
+const RACK_STATUS_BY_CODE: Record<number, NonNullable<PrinterStatus['nozzleRack']>['status']> = {
+  0: 'idle',
+  1: 'hotendCentre',
+  2: 'toolheadCentre',
+  3: 'calibrateHotendRack',
+  4: 'cutMaterial',
+  5: 'unlockHotend',
+  6: 'liftHotendRack',
+  7: 'placeHotend',
+  8: 'pickHotend',
+  9: 'lockHotend'
+}
+
+const RACK_POSITION_BY_CODE: Record<number, NonNullable<PrinterStatus['nozzleRack']>['position']> = {
+  0: 'unknown',
+  1: 'aTop',
+  2: 'bTop',
+  3: 'centre'
+}
+
+/**
+ * Parse a nozzle `type` token into material/flow. Bambu reports either a plain
+ * material name (`hardened_steel`) or a coded string (`HH01`); try the plain
+ * form first, then fall back to the shared code parser.
+ */
+function parseNozzleMaterialToken(value: unknown): Omit<InstalledNozzleSpec, 'diameter'> | null {
+  const raw = stringOrNull(value)
+  if (!raw) return null
+  const material = raw.toLowerCase() === 'hardened_steel'
+    ? 'hardened-steel' as const
+    : raw.toLowerCase() === 'stainless_steel'
+      ? 'stainless-steel' as const
+      : raw.toLowerCase() === 'tungsten_carbide'
+        ? 'tungsten-carbide' as const
+        : null
+  if (material) return { typeCode: raw, material, flow: null }
+  return parseNozzleTypeInfo(raw)
+}
+
+/**
+ * H2C nozzle-changer (rack) state, from `device.nozzle` (the nozzle list, each
+ * entry's `id` low nibble = nozzle id, next nibble = a parked-in-rack flag) plus
+ * `device.holder` (rack motion state/position). Mirrors BambuStudio's
+ * `DevNozzleSystemParser`.
+ *
+ * Returns `undefined` when the report carries no nozzle-system data so the prior
+ * rack state is preserved across partial MQTT deltas, and only yields a non-null
+ * rack once the printer shows a rack marker (a `holder` block, a parked nozzle,
+ * or a previously-seen rack) — so non-H2C machines never surface a rack.
+ *
+ * NOTE: `device.nozzle.info[]` is already consumed by `parseInstalledNozzleSpecs`,
+ * but the rack flag, `holder` block, and swap ids have NOT been verified against
+ * a live H2C report yet. Keep this defensive.
+ */
+function parseNozzleRack(
+  print: Record<string, unknown>,
+  previous: PrinterStatus['nozzleRack']
+): PrinterStatus['nozzleRack'] | undefined {
+  const device = isObject(print.device) ? print.device : null
+  const nozzleJson = device && isObject(device.nozzle) ? device.nozzle : null
+  const holderJson = device && isObject(device.holder) ? device.holder : null
+  if (!nozzleJson && !holderJson) return undefined
+
+  let sawRackMarker = previous != null || holderJson != null
+  let nozzles = previous?.nozzles ?? []
+  if (nozzleJson && Array.isArray(nozzleJson.info)) {
+    const parsed: NonNullable<PrinterStatus['nozzleRack']>['nozzles'] = []
+    for (const entry of nozzleJson.info.filter(isObject)) {
+      const idRaw = numberOrNull(entry.id)
+      if (idRaw === null) continue
+      const onRack = ((idRaw >> 4) & 0xf) === 1
+      if (onRack) sawRackMarker = true
+      const typeInfo = parseNozzleMaterialToken(entry.type)
+      parsed.push({
+        nozzleId: idRaw & 0xf,
+        onRack,
+        diameter: parseReportedNozzleDiameter(entry.diameter) ?? parseReportedNozzleDiameter(entry.dia) ?? null,
+        typeCode: typeInfo?.typeCode ?? null,
+        material: typeInfo?.material ?? null,
+        flow: typeInfo?.flow ?? null,
+        wear: numberOrNull(entry.wear),
+        loadedFilamentColor: 'color_m' in entry ? parseTrayColor(entry.color_m) : null
+      })
+    }
+    // Mounted nozzles first, then the rack, each ordered by nozzle id.
+    parsed.sort((left, right) => (left.onRack === right.onRack ? left.nozzleId - right.nozzleId : left.onRack ? 1 : -1))
+    nozzles = parsed
+  }
+
+  if (!sawRackMarker) return undefined
+
+  return {
+    status: holderJson
+      ? RACK_STATUS_BY_CODE[numberOrNull(holderJson.stat) ?? -1] ?? 'unknown'
+      : previous?.status ?? 'unknown',
+    position: holderJson
+      ? RACK_POSITION_BY_CODE[numberOrNull(holderJson.pos) ?? 0] ?? 'unknown'
+      : previous?.position ?? 'unknown',
+    replacingFromNozzleId: nozzleJson && 'src_id' in nozzleJson
+      ? numberOrNull(nozzleJson.src_id)
+      : previous?.replacingFromNozzleId ?? null,
+    replacingToNozzleId: nozzleJson && 'tar_id' in nozzleJson
+      ? numberOrNull(nozzleJson.tar_id)
+      : previous?.replacingToNozzleId ?? null,
+    nozzles
+  }
+}
 
 function parseInstalledNozzleSpecs(device: Record<string, unknown> | null): Map<number, InstalledNozzleSpec> {
   const specs = new Map<number, InstalledNozzleSpec>()

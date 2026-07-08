@@ -17,6 +17,7 @@ import {
   type PrinterModel,
   type PrinterStatus
 } from './printer.js'
+import { amsTrayIndex } from './ams-tray-index.js'
 import { isPrinterModelCompatible } from './print-compatibility.js'
 
 // ---------------------------------------------------------------------------
@@ -36,7 +37,7 @@ export interface QueueRequiredFilament {
 
 /** A filament currently loaded on a printer, flattened across AMS units + external spools. */
 export interface QueueLoadedSlot {
-  /** Bambu tray index: `amsUnitId * 4 + slot` for AMS trays, or `254`/`255` for external spools. */
+  /** Bambu global tray index (see `amsTrayIndex`) for AMS trays, or `254`/`255` for external spools. */
   trayIndex: number
   filamentType: string | null
   color: string | null
@@ -73,7 +74,7 @@ export function loadedSlotsFromStatus(status: PrinterStatus): QueueLoadedSlot[] 
   for (const unit of status.ams) {
     for (const slot of unit.slots) {
       slots.push({
-        trayIndex: unit.unitId * 4 + slot.slot,
+        trayIndex: amsTrayIndex(unit.type, unit.unitId, slot.slot),
         filamentType: slot.filamentType,
         color: slot.color,
         remainPercent: slot.remainPercent,

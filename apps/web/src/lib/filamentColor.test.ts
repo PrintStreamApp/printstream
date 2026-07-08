@@ -33,6 +33,7 @@ test('resolveFilamentColorName falls back to the primary palette color when colo
       color: null,
       colors: ['#0086D6FF'],
       trayName: 'PLA',
+      trayUuid: '0F674662BC86478AA008E7CCAD3B3A2A',
       filamentType: 'PLA'
     }),
     'Cyan'
@@ -80,6 +81,7 @@ test('resolveFilamentColorName prefers material-specific names for shared hex co
       color: '#FFFFFF',
       trayName: 'PETG Translucent',
       trayInfoIdx: 'GFG01',
+      trayUuid: '0F674662BC86478AA008E7CCAD3B3A2A',
       filamentType: 'PETG Translucent'
     }),
     'Clear'
@@ -134,6 +136,7 @@ test('resolveFilamentDisplay resolves single-color Bambu tray codes from preset 
       color: '#F55A74',
       trayName: 'A00-P2',
       trayInfoIdx: 'GFA00',
+      trayUuid: '0F674662BC86478AA008E7CCAD3B3A2A',
       filamentType: 'PLA Basic'
     }),
     'Pink'
@@ -164,15 +167,44 @@ test('resolveFilamentColorName uses common color names for non-Bambu preset bran
   )
 })
 
-test('resolveFilamentColorName still uses Bambu-specific names for Bambu presets', () => {
+test('resolveFilamentColorName still uses Bambu-specific names for scanned Bambu spools', () => {
   assert.equal(
     resolveFilamentColorName({
       color: '#FFFFFF',
       trayName: 'PLA Basic',
       trayInfoIdx: 'GFA00',
+      trayUuid: '0F674662BC86478AA008E7CCAD3B3A2A',
       filamentType: 'PLA Basic'
     }),
     'Jade White'
+  )
+})
+
+test('resolveFilamentColorName uses common names for custom filament assigned a Bambu preset without an RFID tag', () => {
+  // A custom spool mapped to "Bambu PLA Basic" for slicing (trayInfoIdx GFA00) but with no scanned
+  // RFID tag is not genuine Bambu filament, so its white reads "White", never "Jade White".
+  assert.equal(
+    resolveFilamentColorName({
+      color: '#FFFFFF',
+      trayName: null,
+      trayInfoIdx: 'GFA00',
+      trayUuid: null,
+      filamentType: 'PLA'
+    }),
+    'White'
+  )
+})
+
+test('resolveFilamentColorName uses common names for custom filament with no preset or RFID tag', () => {
+  assert.equal(
+    resolveFilamentColorName({
+      color: '#FFFFFF',
+      trayName: null,
+      trayInfoIdx: null,
+      trayUuid: null,
+      filamentType: 'PLA'
+    }),
+    'White'
   )
 })
 
@@ -182,6 +214,7 @@ test('resolveFilamentDisplay prefers the preset-derived support material over th
       color: '#000000',
       trayName: 'Support for PLA/PETG',
       trayInfoIdx: 'GFS05',
+      trayUuid: '0F674662BC86478AA008E7CCAD3B3A2A',
       filamentType: 'PLA'
     }),
     {
@@ -199,6 +232,7 @@ test('resolveFilamentSwatchName only returns actual color names, not fallback tr
       color: '#000000',
       trayName: 'Support for PLA/PETG',
       trayInfoIdx: 'GFS05',
+      trayUuid: '0F674662BC86478AA008E7CCAD3B3A2A',
       filamentType: 'PLA'
     }),
     'Nature'
@@ -210,6 +244,17 @@ test('resolveFilamentSwatchName only returns actual color names, not fallback tr
       filamentType: 'PLA'
     }),
     null
+  )
+  // Custom filament mapped to a Bambu preset but without an RFID tag stays a plain colour.
+  assert.equal(
+    resolveFilamentSwatchName({
+      color: '#FFFFFF',
+      trayName: null,
+      trayInfoIdx: 'GFA00',
+      trayUuid: null,
+      filamentType: 'PLA'
+    }),
+    'White'
   )
 })
 
@@ -229,6 +274,24 @@ test('resolveProjectFilamentColorName uses sliced material context before naming
       filamentType: 'PLA'
     }),
     'Jade White'
+  )
+  // Generic and custom-brand filament keep plain common names even though the type maps to a
+  // Bambu material — a white "Generic PLA" or a user's own brand is "White", not "Jade White".
+  assert.equal(
+    resolveProjectFilamentColorName({
+      color: '#FFFFFF',
+      filamentName: 'Generic PLA',
+      filamentType: 'PLA'
+    }),
+    'White'
+  )
+  assert.equal(
+    resolveProjectFilamentColorName({
+      color: '#FFFFFF',
+      filamentName: "Michael's",
+      filamentType: 'PLA'
+    }),
+    'White'
   )
 })
 

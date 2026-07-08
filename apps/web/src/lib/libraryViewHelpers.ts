@@ -18,6 +18,7 @@
  * copies in `printersViewHelpers.ts` / `printerViewConstants.ts`. These are
  * deliberate per-view copies, not a shared contract; do not dedupe them.
  */
+import { z } from 'zod'
 import type {
   ExternalSpool,
   FilamentCompatibilityIssue,
@@ -32,7 +33,9 @@ import type {
   SlicingProfileSummary,
   ThreeMfProjectFilament
 } from '@printstream/shared'
+import { createSlicingJobSchema } from '@printstream/shared'
 import {
+  amsTrayIndex,
   formatNozzleDiameterLabel,
   formatNozzleLabel,
   getPrinterControlCapabilities,
@@ -315,7 +318,7 @@ export function buildPrinterTrayGroups(status: PrinterStatus | undefined): Print
         formatNozzleLabel(unit.nozzleId, 'long', nozzleCount)
       ].filter(Boolean).join(' · '),
       trays: unit.slots.map((slot) => ({
-        mappingValue: unit.unitId * 4 + slot.slot,
+        mappingValue: amsTrayIndex(unit.type, unit.unitId, slot.slot),
         key: `ams-${unit.unitId}-${slot.slot}`,
         kind: 'ams',
         label: `Slot ${slot.slot + 1}`,
@@ -454,4 +457,68 @@ export type SliceFileSubmitInput = {
   objectProcessOverrides?: Record<string, Record<string, string | string[]>>
   /** Edited multi-plate arrangement from the interactive 3D editor; authoritative when present. */
   sceneEdit?: SceneEdit
+}
+
+/**
+ * Per-caller fields the slice/print dialog does not carry: which file (and optional archived
+ * version) to slice, where the output lands, and whether it is hidden. Everything object-shaped
+ * (object selection, per-object overrides, scene edit, target) comes from the shared dialog input.
+ */
+export type CreateSlicingJobBodyExtras = {
+  sourceFileId: string
+  sourceVersionId?: string | null
+  outputFolderId?: string | null
+  hiddenOutput?: boolean
+}
+
+/**
+ * Build the `POST /api/slicing/jobs` request body from a dialog submit payload.
+ *
+ * Every slice/print entry point (library, printers, orders, print queue) emits the same
+ * `SliceFileSubmitInput`; funnelling them all through this one builder keeps the wire shape in
+ * lockstep. Hand-building the body per call site is how the printers flow silently dropped
+ * `selectedObjectIds` and printed deselected objects — the object-selection, per-object override,
+ * and `sceneEdit` fields are fixed here so no caller can omit them again. The genuinely per-caller
+ * differences (archived source version, output destination, hidden-output rule) are passed as
+ * `extras`.
+ */
+export function buildCreateSlicingJobBody(
+  input: SliceFileSubmitInput,
+  extras: CreateSlicingJobBodyExtras
+): z.input<typeof createSlicingJobSchema> {
+  return {
+    sourceFileId: extras.sourceFileId,
+    sourceVersionId: extras.sourceVersionId ?? undefined,
+    slicerTargetId: input.slicerTargetId,
+    target: input.target.mode === 'realPrinter'
+      ? {
+          mode: 'realPrinter',
+          printerId: input.target.printerId ?? '',
+          printerProfileId: input.target.printerProfileId,
+          plateType: input.target.plateType,
+          nozzleDiameters: input.target.nozzleDiameters,
+          toolheads: input.target.toolheads,
+          processProfileId: input.target.processProfileId,
+          processSettingOverrides: input.target.processSettingOverrides,
+          filamentMappings: input.target.filamentMappings
+        }
+      : {
+          mode: 'manualProfile',
+          printerProfileId: input.target.printerProfileId,
+          printerModel: input.target.printerModel ?? 'unknown',
+          plateType: input.target.plateType,
+          nozzleDiameters: input.target.nozzleDiameters,
+          toolheads: input.target.toolheads,
+          processProfileId: input.target.processProfileId,
+          processSettingOverrides: input.target.processSettingOverrides,
+          filamentMappings: input.target.filamentMappings
+        },
+    outputFileName: input.outputFileName,
+    outputFolderId: extras.outputFolderId ?? null,
+    hiddenOutput: extras.hiddenOutput,
+    plate: input.plate,
+    selectedObjectIds: input.selectedObjectIds,
+    objectProcessOverrides: input.objectProcessOverrides,
+    sceneEdit: input.sceneEdit
+  }
 }

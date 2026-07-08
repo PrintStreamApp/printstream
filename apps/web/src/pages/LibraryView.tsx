@@ -101,6 +101,7 @@ import { LibraryMetadataFilters } from '../components/library/LibraryMetadataFil
 import { PaginatedLibraryBrowser } from '../components/library/PaginatedLibraryBrowser'
 import { useLibrarySelection } from '../hooks/useLibrarySelection'
 import {
+  buildCreateSlicingJobBody,
   LIBRARY_GROUP_KEY,
   LIBRARY_PAGE_SIZE_OPTIONS,
   LIBRARY_SORT_KEY,
@@ -468,43 +469,14 @@ export function LibraryView() {
       action: SliceFileSubmitAction
       keepDialogOpen?: boolean
     } & SliceFileSubmitInput) => {
-      const body = {
+      const body = buildCreateSlicingJobBody(input, {
         sourceFileId: input.file.id,
         sourceVersionId: input.versionId ?? undefined,
-        slicerTargetId: input.slicerTargetId,
-        target: input.target.mode === 'realPrinter'
-          ? {
-              mode: 'realPrinter',
-              printerId: input.target.printerId,
-              printerProfileId: input.target.printerProfileId,
-              plateType: input.target.plateType,
-              nozzleDiameters: input.target.nozzleDiameters,
-              toolheads: input.target.toolheads,
-              processProfileId: input.target.processProfileId,
-              processSettingOverrides: input.target.processSettingOverrides,
-              filamentMappings: input.target.filamentMappings
-            }
-          : {
-              mode: 'manualProfile',
-              printerProfileId: input.target.printerProfileId,
-              printerModel: input.target.printerModel ?? 'unknown',
-              plateType: input.target.plateType,
-              nozzleDiameters: input.target.nozzleDiameters,
-              toolheads: input.target.toolheads,
-              processProfileId: input.target.processProfileId,
-              processSettingOverrides: input.target.processSettingOverrides,
-              filamentMappings: input.target.filamentMappings
-            },
-        outputFileName: input.outputFileName,
         // 'print' discards the output (hidden, no folder); 'slice' keeps it hidden but
         // in the chosen folder so "Save to library" only has to un-hide it.
         outputFolderId: input.action === 'print' ? null : (input.outputFolderId ?? null),
-        hiddenOutput: input.action === 'print' || input.action === 'slice',
-        plate: input.plate,
-        selectedObjectIds: input.selectedObjectIds,
-        objectProcessOverrides: input.objectProcessOverrides,
-        sceneEdit: input.sceneEdit
-      }
+        hiddenOutput: input.action === 'print' || input.action === 'slice'
+      })
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
     onSuccess: async (response, variables) => {

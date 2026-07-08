@@ -28,6 +28,7 @@ import type { PluginCatalogEntry, PluginManagementEntry, PluginSurface, PluginTe
 import type { PrinterEventBus } from '../lib/printer-events.js'
 import type { RegisteredAuthProvider, RegisteredAuthProviderResolver } from '../lib/auth-registry.js'
 import type { PrintGuard } from '../lib/print-guards.js'
+import type { SlotFilamentResolver } from '../lib/slot-filament-registry.js'
 import type { TenantScopedPrismaClient } from '../lib/prisma.js'
 import type { WsBroadcaster } from '../lib/ws-server.js'
 
@@ -94,6 +95,14 @@ export interface ApiPluginContext {
    * The registry entry is automatically removed when the plugin stops.
    */
   registerAuthProvider(provider: RegisteredAuthProvider | RegisteredAuthProviderResolver): () => void
+  /**
+   * Register a resolver that maps an AMS slot to the filament/spool loaded in
+   * it. A plugin owning filament inventory registers one; other plugins consult
+   * `slotFilamentResolvers` to learn a slot's spool without importing this one.
+   * The resolver is only consulted for tenants this plugin is enabled for, and
+   * is removed automatically when the plugin stops.
+   */
+  registerSlotFilamentResolver(resolver: SlotFilamentResolver): () => void
 }
 
 export interface ApiPlugin {

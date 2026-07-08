@@ -47,6 +47,8 @@ model Tenant {
   orderPrints        OrderPrint[]
   filamentSpools     FilamentSpool[]
   filamentSpoolUsages FilamentSpoolUsage[]
+  calibrationRuns    CalibrationRun[]
+  calibrationResults CalibrationResult[]
   queueItems         QueueItem[]
   auditLogs          AuditLog[]
   stats              TenantStats?
@@ -1023,6 +1025,90 @@ model FilamentSpoolUsage {
 
   @@index([tenantId, spoolId, recordedAt])
   @@index([tenantId, jobId])
+}
+
+/// One run of a slicer-generated calibration print (the `calibration` plugin):
+/// the wizard's state machine from slicing a generated test through printing it
+/// to the user entering a measured result. `kind` is 'pressureAdvance' (a K-value
+/// tower) or 'flowRatio' (a flow patch plate, pass 1 or 2). `parametersJson`
+/// holds the typed test parameters (PA start/end/step, or flow current-ratio +
+/// pass); `measuredJson` holds what the user reported (best band height in mm, or
+/// selected patch offset). Cross-entity links (`printerId`, `spoolId`,
+/// `slicingJobId`, `outputFileId`) are soft references — the run survives a
+/// printer/spool/file delete as history, mirroring `FilamentSpoolUsage.jobId`.
+model CalibrationRun {
+  id              String    @id @default(cuid())
+  tenantId        String
+  /// 'pressureAdvance' | 'flowRatio'.
+  kind            String
+  /// 'slicing' | 'readyToPrint' | 'printing' | 'awaitingResult' | 'saved' | 'discarded' | 'failed'.
+  status          String    @default("slicing")
+  // Target printer + AMS slot the test filament is loaded in.
+  printerId       String?
+  printerModel    String
+  nozzleDiameter  String
+  amsId           Int?
+  slotId          Int?
+  // Filament identity snapshot at run time (seeds the save step's identity match).
+  spoolId         String?
+  brand           String?
+  filamentType    String?
+  materialSubtype String?
+  colorName       String?
+  // Typed test parameters (PA start/end/step, or flow current-ratio + pass).
+  parametersJson  Json
+  // Pipeline linkage: the slicing job and its hidden sliced artifact.
+  slicingJobId    String?
+  outputFileId    String?
+  errorMessage    String?
+  // Result: the user's raw measurement and the value computed from it.
+  measuredJson    Json?
+  resultValue     Float?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, printerId])
+  @@index([tenantId, spoolId])
+}
+
+/// A saved calibration value applied automatically when its filament is used
+/// (the `calibration` plugin). Keyed by `printerModel` + `nozzleDiameter` because
+/// a PA/flow value is portable across printers of the same model and nozzle.
+/// `scope` is 'spool' (one specific `spoolId`) or 'identity' (every spool whose
+/// brand/type/subtype/color match the non-null identity fields here — a null
+/// field is a wildcard, so the save step's ticked "match criteria" chips decide
+/// generality). `spoolId`/`runId` are soft references. Dedupe (one result per
+/// target) is enforced in the store, not by a DB unique across nullable columns.
+model CalibrationResult {
+  id              String    @id @default(cuid())
+  tenantId        String
+  /// 'pressureAdvance' | 'flowRatio'.
+  kind            String
+  /// K value (pressureAdvance) or flow ratio (flowRatio).
+  value           Float
+  // Where it applies: portable across printers of this model + nozzle size.
+  printerModel    String
+  nozzleDiameter  String
+  /// 'spool' | 'identity'.
+  scope           String
+  spoolId         String?
+  // Identity match (scope='identity'); a null field is ignored (wildcard).
+  brand           String?
+  filamentType    String?
+  materialSubtype String?
+  colorName       String?
+  // Provenance: the run that produced this value.
+  runId           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, kind, printerModel, nozzleDiameter])
+  @@index([tenantId, spoolId])
 }
 
 /// A queued print waiting to be dispatched (the `print-queue` plugin). One shared,

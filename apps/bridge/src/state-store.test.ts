@@ -3,7 +3,7 @@ import { afterEach, test } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { clearBridgeCredentials, loadBridgeState, writeBridgeState } from './state-store.js'
+import { CorruptBridgeStateError, clearBridgeCredentials, loadBridgeState, writeBridgeState } from './state-store.js'
 
 let dir: string | null = null
 
@@ -45,6 +45,34 @@ test('loadBridgeState backfills installationId for a legacy file, preserving cre
   // The backfilled id is written through so it survives the next credential reset.
   const persisted = JSON.parse(readFileSync(file, 'utf8'))
   assert.equal(persisted.installationId, state.installationId)
+})
+
+test('loadBridgeState refuses to mint a new identity for a corrupt file, preserving it', async () => {
+  const file = newStateFile()
+  writeFileSync(file, '{ this is not valid json')
+
+  await assert.rejects(loadBridgeState(file), CorruptBridgeStateError)
+
+  // The corrupt file is left in place (so restarts keep failing loudly rather than
+  // silently re-provisioning) and a backup copy is preserved for recovery.
+  assert.equal(readFileSync(file, 'utf8'), '{ this is not valid json')
+  assert.equal(readFileSync(`${file}.corrupt`, 'utf8'), '{ this is not valid json')
+})
+
+test('loadBridgeState treats an empty (truncated) file as corruption, not a first run', async () => {
+  const file = newStateFile()
+  writeFileSync(file, '')
+
+  await assert.rejects(loadBridgeState(file), CorruptBridgeStateError)
+})
+
+test('writeBridgeState replaces atomically and leaves no temp file behind', async () => {
+  const file = newStateFile()
+  await writeBridgeState(file, { installationId: 'install-1', bridgeId: 'b1', runtimeToken: 't1' })
+
+  const persisted = JSON.parse(readFileSync(file, 'utf8'))
+  assert.equal(persisted.installationId, 'install-1')
+  assert.throws(() => readFileSync(`${file}.tmp`, 'utf8'))
 })
 
 test('clearBridgeCredentials drops credentials but keeps the installationId', async () => {

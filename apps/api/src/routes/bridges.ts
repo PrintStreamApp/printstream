@@ -35,6 +35,7 @@ import { listBridgeStandaloneDownloads } from '../lib/bridge-standalone-download
 import { buildBridgeUpdateSummary, resolveBridgeAssetOrigin } from '../lib/bridge-update-policy.js'
 import { syncBridgePrinterConfig } from '../lib/bridge-printer-config.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
+import { isSelfHostedDeployment } from '../lib/deployment-mode.js'
 import { conflict, notFound } from '../lib/http-error.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { toPrinterDto } from '../lib/printer-record.js'
@@ -45,6 +46,14 @@ import { broadcastBridgesChanged, broadcastPrinterViewsChanged } from '../lib/ws
 export const bridgesRouter = express.Router()
 
 const BRIDGE_HEARTBEAT_INTERVAL_SECONDS = 15
+
+/**
+ * Returned by the bridge update actions on self-hosted deployments, where the
+ * bridge ships inside the application bundle and updates only when the whole
+ * bundle is updated. There is no independent bridge update to check or apply.
+ */
+const SELF_HOSTED_BUNDLE_UPDATE_MESSAGE =
+  'This bridge is part of the PrintStream bundle and updates with the application. Update the whole deployment to update the bridge.'
 
 bridgesRouter.use(requireRequestPermission(SETTINGS_MANAGE_PERMISSION))
 
@@ -338,6 +347,14 @@ bridgesRouter.get('/:id/debug-capture/download', async (request, response) => {
 
 bridgesRouter.post('/:id/update/check', async (request, response) => {
   const bridge = await loadTenantBridgeForUpdate(request)
+  if (isSelfHostedDeployment()) {
+    response.json(bridgeUpdateActionResponseSchema.parse({
+      accepted: false,
+      status: 'current',
+      message: SELF_HOSTED_BUNDLE_UPDATE_MESSAGE
+    }))
+    return
+  }
   const checkedAt = new Date()
   const update = buildBridgeUpdateSummary({
     ...bridge,
@@ -363,6 +380,14 @@ bridgesRouter.post('/:id/update/check', async (request, response) => {
 
 bridgesRouter.post('/:id/update/start', async (request, response) => {
   const bridge = await loadTenantBridgeForUpdate(request)
+  if (isSelfHostedDeployment()) {
+    response.json(bridgeUpdateActionResponseSchema.parse({
+      accepted: false,
+      status: 'current',
+      message: SELF_HOSTED_BUNDLE_UPDATE_MESSAGE
+    }))
+    return
+  }
   const update = buildBridgeUpdateSummary(bridge)
   if (update.status === 'imageUpdateRequired' || update.status === 'runnerUpdateRequired') {
     response.json(bridgeUpdateActionResponseSchema.parse({

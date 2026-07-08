@@ -152,6 +152,7 @@ test('parseFirmwareStatusEvent accepts printer status events and ignores others'
     nozzleTemp: null,
     nozzleTarget: null,
     nozzles: [],
+    nozzleRack: null,
     chamberTemp: null,
     chamberTarget: null,
     fanGearSpeed: null,

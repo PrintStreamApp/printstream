@@ -9,7 +9,14 @@
  *   - `filterTrayGroupsForFilament` (drop trays whose nozzle can't feed a
  *     filament, then drop emptied groups),
  *   - `sanitizeTrayMapping` (trim trailing unset entries off a mapping array),
- *   - `amsUnitLetter` (0-based AMS unit id -> spreadsheet-style letter).
+ *   - `amsUnitLetter` (0-based AMS unit id -> spreadsheet-style letter), now
+ *     re-exported from `@printstream/shared`'s `ams-tray-index` so the labelling
+ *     (including the AMS HT 128+ band) stays in one place.
+ *
+ * The global tray index a slot maps to for `ams_mapping` is NOT computed here:
+ * use `amsTrayIndex()` from `@printstream/shared` (the single source of truth,
+ * mirroring BambuStudio's `GetTrayIndexMap`) rather than `unitId * 4 + slotId`,
+ * which is wrong for AMS HT (N3S) units.
  *
  * The tray-group BUILDERS, the default-mapping seeding, the compatibility-issue
  * computation, and the picker COMPONENTS still differ between the two sites and
@@ -68,17 +75,9 @@ export function sanitizeTrayMapping(mapping: number[] | undefined): number[] | u
 }
 
 /**
- * Spreadsheet-style letter for a 0-based AMS unit id: 0->A, 25->Z, 26->AA, ...
- * Multi-letter rollover matters for setups with more than 26 AMS units; a bare
- * `String.fromCharCode(65 + unitId)` produces non-letters past unit 25.
+ * Spreadsheet-style letter for a 0-based AMS unit id (0->A, 25->Z, 26->AA, ...),
+ * with AMS HT (N3S) units in the 128+ band folded back to A-Y. Re-exported from
+ * the shared `ams-tray-index` module so the labelling stays in one place; kept
+ * exported here because many web components import it from this module.
  */
-export function amsUnitLetter(unitId: number): string {
-  if (!Number.isFinite(unitId) || unitId < 0) return String(unitId)
-  let n = Math.floor(unitId)
-  let label = ''
-  do {
-    label = String.fromCharCode(65 + (n % 26)) + label
-    n = Math.floor(n / 26) - 1
-  } while (n >= 0)
-  return label
-}
+export { amsUnitLetter } from '@printstream/shared'

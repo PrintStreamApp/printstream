@@ -276,6 +276,7 @@ function makeStatus(overrides: Partial<PrinterStatus>): PrinterStatus {
     nozzleTemp: null,
     nozzleTarget: null,
     nozzles: [],
+    nozzleRack: null,
     chamberTemp: null,
     chamberTarget: null,
     fanGearSpeed: null,

@@ -189,17 +189,17 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
           <Stack spacing={1.25}>
             {error && <Alert color="danger" variant="soft">{error}</Alert>}
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
-              <FormControl sx={{ flex: 1 }}>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Brand</FormLabel>
                 <FieldAutocomplete options={brandOptions} value={form.brand} onChange={set('brand')} placeholder="Bambu, Polymaker…" />
               </FormControl>
-              <FormControl sx={{ flex: 1 }} required>
+              <FormControl sx={{ flex: 1, minWidth: 0 }} required>
                 <FormLabel>Material</FormLabel>
                 <FieldAutocomplete options={materialOptions} value={form.filamentType} onChange={set('filamentType')} placeholder="PLA" />
               </FormControl>
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
-              <FormControl sx={{ flex: 1 }}>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Variant</FormLabel>
                 <FieldAutocomplete options={variantOptions} value={form.materialSubtype} onChange={set('materialSubtype')} placeholder="PLA Silk, Matte…" />
               </FormControl>
@@ -225,21 +225,21 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
               )}
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
-              <FormControl sx={{ flex: 1 }}>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Net weight (g)</FormLabel>
                 <Input type="number" value={form.netWeightGrams} onChange={(e) => set('netWeightGrams')(e.target.value)} />
               </FormControl>
-              <FormControl sx={{ flex: 1 }}>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Remaining (g)</FormLabel>
                 <Input type="number" value={form.remainingGrams} onChange={(e) => set('remainingGrams')(e.target.value)} />
               </FormControl>
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
-              <FormControl sx={{ flex: 1 }}>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Vendor</FormLabel>
                 <FieldAutocomplete options={vendorOptions} value={form.vendor} onChange={set('vendor')} placeholder="Where you bought it" />
               </FormControl>
-              <FormControl sx={{ flex: 1 }}>
+              <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Cost</FormLabel>
                 <Input type="number" startDecorator="$" value={form.costDollars} onChange={(e) => set('costDollars')(e.target.value)} />
               </FormControl>

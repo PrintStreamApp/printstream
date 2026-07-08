@@ -12,6 +12,16 @@
  */
 import { z } from 'zod'
 import { auditLogEntrySchema } from './logs.js'
+import { AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
+
+/**
+ * AMS generation for a unit. Derived by the status parser from the MQTT
+ * `ams[].info` DevAmsType code; drives the global tray-index math in
+ * `ams-tray-index.ts`. See {@link AmsUnitType} for the value meanings.
+ */
+export const amsUnitTypeSchema: z.ZodType<AmsUnitType> = z.enum(
+  AMS_UNIT_TYPES as unknown as [AmsUnitType, ...AmsUnitType[]]
+)
 
 export const printerModelSchema = z.enum([
   'X1',
@@ -247,6 +257,13 @@ export type PrinterAmsDryingPhase = z.infer<typeof printerAmsDryingPhaseSchema>
 
 export const amsUnitSchema = z.object({
   unitId: z.number().int().min(0),
+  /**
+   * AMS generation (classic AMS, AMS 2 Pro, AMS HT, ...). Determines how a slot
+   * maps to a global tray index for `ams_mapping`; use `amsTrayIndex()` from
+   * `ams-tray-index.ts` rather than recomputing `unitId * 4 + slotId`, which is
+   * wrong for AMS HT (N3S) units whose ids run 128-152.
+   */
+  type: amsUnitTypeSchema,
   /** Physical extruder/nozzle this AMS unit feeds on dual-nozzle machines, when known. */
   nozzleId: z.number().int().min(0).nullable(),
   /** AMS 2 Pro / AMS HT units expose remote drying controls. */
@@ -347,11 +364,14 @@ export type PrinterPressureAdvanceProfilesResponse = z.infer<typeof printerPress
 
 /**
  * Print-dispatch tray mapping values. Standard AMS trays use the global tray
- * index (`ams_id * 4 + slot_id`), while external spools use Bambu's virtual
- * tray ids (`255` main/right, `254` deputy/left).
+ * index computed by `amsTrayIndex()` (classic `ams_id * 4 + slot_id` = 0-15, but
+ * AMS HT / N3S units run 128-152), while external spools use Bambu's virtual
+ * tray ids (`255` main/right, `254` deputy/left). Validation defers to
+ * `isPhysicalAmsTrayIndex` so the accepted ranges stay in one place — an old flat
+ * `max(15)` cap silently rejected every H2/H2D print that touched an AMS HT slot.
  */
 export const printerTrayMappingSchema = z.union([
-  z.number().int().min(0).max(15),
+  z.number().int().refine(isPhysicalAmsTrayIndex, { message: 'Invalid AMS tray index' }),
   virtualTrayAmsIdSchema
 ])
 export type PrinterTrayMapping = z.infer<typeof printerTrayMappingSchema>
@@ -370,6 +390,73 @@ export const printerNozzleSchema = z.object({
   targetTemp: z.number().nullable()
 })
 export type PrinterNozzle = z.infer<typeof printerNozzleSchema>
+
+/**
+ * H2C nozzle-changer (rack/magazine) support. The H2C has one static left nozzle
+ * and a swappable right-side nozzle system: a rack holding spare hotends the
+ * printer auto-swaps mid-print. Bambu reports this under `device.nozzle` (the
+ * nozzle list, each flagged mounted-vs-in-rack) plus `device.holder` (rack
+ * motion state). Only H2C-class machines report a rack; on everything else
+ * `PrinterStatus.nozzleRack` stays `null` and no rack UI renders.
+ *
+ * This is a read-only status surface. Bambu exposes no "load nozzle N now"
+ * command (swaps are automatic during prints), so we intentionally model state,
+ * not a manual swap action.
+ *
+ * NOTE: the wire shapes here mirror BambuStudio's `DevNozzleSystemParser`
+ * (`DevNozzleSystem.cpp`) but have NOT yet been verified against a live H2C
+ * report. Keep the parser defensive.
+ */
+export const nozzleRackStatusSchema = z.enum([
+  'idle',
+  'hotendCentre',
+  'toolheadCentre',
+  'calibrateHotendRack',
+  'cutMaterial',
+  'unlockHotend',
+  'liftHotendRack',
+  'placeHotend',
+  'pickHotend',
+  'lockHotend',
+  'unknown'
+])
+export type NozzleRackStatus = z.infer<typeof nozzleRackStatusSchema>
+
+export const nozzleRackPositionSchema = z.enum(['unknown', 'aTop', 'bTop', 'centre'])
+export type NozzleRackPosition = z.infer<typeof nozzleRackPositionSchema>
+
+/** A single hotend, whether currently mounted on a toolhead or parked in the rack. */
+export const nozzleRackSlotSchema = z.object({
+  /** Physical nozzle id (`device.nozzle.info[].id` low nibble). */
+  nozzleId: z.number().int().min(0),
+  /** True when parked in the rack (a spare); false when mounted on a toolhead. */
+  onRack: z.boolean(),
+  /** Nozzle diameter in mm as a string, e.g. `0.4`. */
+  diameter: z.string().nullable(),
+  /** Raw Bambu nozzle type token/code when present (e.g. `hardened_steel` or `HH01`). */
+  typeCode: z.string().nullable(),
+  material: printerNozzleMaterialSchema.nullable(),
+  flow: printerNozzleFlowSchema.nullable(),
+  /** Raw wear metric the printer reports for the nozzle, if any (units unverified). */
+  wear: z.number().nullable(),
+  /** Normalized `#RRGGBB` of the filament last associated with this nozzle, if reported. */
+  loadedFilamentColor: z.string().nullable()
+})
+export type NozzleRackSlot = z.infer<typeof nozzleRackSlotSchema>
+
+export const nozzleRackSchema = z.object({
+  /** Current rack motion state. */
+  status: nozzleRackStatusSchema,
+  /** Reported rack carriage position. */
+  position: nozzleRackPositionSchema,
+  /** Nozzle id being swapped out during an in-progress change, when reported. */
+  replacingFromNozzleId: z.number().int().min(0).nullable(),
+  /** Nozzle id being swapped in during an in-progress change, when reported. */
+  replacingToNozzleId: z.number().int().min(0).nullable(),
+  /** Every known hotend, mounted and parked, sorted by nozzle id. */
+  nozzles: z.array(nozzleRackSlotSchema)
+})
+export type NozzleRack = z.infer<typeof nozzleRackSchema>
 
 export const printerConnectionWarningCodeSchema = z.enum([
   'localConnectionFailed',
@@ -434,6 +521,12 @@ export const printerStatusSchema = z.object({
   nozzleTarget: z.number().nullable(),
   /** Per-extruder nozzle temperatures when the printer reports them. */
   nozzles: z.array(printerNozzleSchema),
+  /**
+   * H2C nozzle-changer state (rack of swappable hotends). `null` on machines
+   * without a nozzle rack, which is every model except the H2C. See
+   * {@link nozzleRackSchema}.
+   */
+  nozzleRack: nozzleRackSchema.nullable(),
   chamberTemp: z.number().nullable(),
   chamberTarget: z.number().nullable(),
   fanGearSpeed: z.number().nullable(),

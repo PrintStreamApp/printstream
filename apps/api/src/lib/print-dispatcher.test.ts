@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { env } from './env.js'
 import { HttpError } from './http-error.js'
 import { rootPrisma } from './prisma.js'
 import { printDispatcher, getRemotePrintTarget, prunePlateAmsMapping, sanitizeRemoteName, buildProjectFilePrintCommand } from './print-dispatcher.js'
 import { usePrismaStubs } from '../test-utils/prisma-stubs.js'
+
+// Pin cloud mode: `assertBridgeAllowsPrinting` skips its update block entirely
+// when `isSelfHostedDeployment()` is true, which the public open-core build is by
+// default (no `src/private`). The bridge-update-block cases below assert the cloud
+// behavior; the self-hosted case overrides locally.
+env.SELF_HOSTED = false
 
 const stubPrisma = usePrismaStubs()
 
@@ -341,6 +348,25 @@ test('assertBridgeAllowsPrinting rejects dispatch through a bridge that needs up
       (error) => error instanceof HttpError && /needs to be updated/i.test(error.message),
       `status ${status} should block dispatch`
     )
+  }
+})
+
+test('assertBridgeAllowsPrinting never blocks on a self-hosted bundle, even for a blocking status', async () => {
+  // The bundled bridge is lockstep with the app; a stale self-reported status
+  // must not refuse dispatch (the print would silently never reach Jobs) for an
+  // update the operator cannot apply independently of the whole bundle.
+  const previous = env.SELF_HOSTED
+  env.SELF_HOSTED = true
+  try {
+    for (const status of ['updateRequired', 'runnerUpdateRequired', 'unsupported']) {
+      stubPrisma(rootPrisma.bridge, 'findFirst', async () => ({ name: 'Home', updateStatus: status }))
+      await assert.doesNotReject(
+        () => printDispatcher.assertBridgeAllowsPrinting('bridge-1', 'tenant-1'),
+        `self-hosted should not block on status ${status}`
+      )
+    }
+  } finally {
+    env.SELF_HOSTED = previous
   }
 })
 

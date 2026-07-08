@@ -21,9 +21,11 @@
  * External deps: none beyond the printer event bus and Prisma.
  */
 import type { ApiPlugin } from '../../plugin/types.js'
+import { rootPrisma } from '../../lib/prisma.js'
 import { registerFilamentManagerRoutes } from './routes.js'
 import { createStatusObserver } from './status-sync.js'
 import { createConsumptionObserver } from './consumption.js'
+import { findLoadedSpoolIdentity } from './store.js'
 
 export const filamentManagerPlugin: ApiPlugin = {
   name: 'filament-manager',
@@ -37,9 +39,17 @@ export const filamentManagerPlugin: ApiPlugin = {
 
     context.printerEvents.on('status', onStatus)
     context.printerEvents.on('print-job.finished', onJobFinished)
+
+    // Expose "which spool is loaded in this slot" to other plugins (calibration ties a run to the
+    // loaded spool) without them importing this plugin. Uses rootPrisma with an explicit tenant
+    // filter since the resolver runs outside a per-request scope.
+    const offResolver = context.registerSlotFilamentResolver(({ tenantId, printerId, amsId, slotId }) =>
+      findLoadedSpoolIdentity(rootPrisma, tenantId, printerId, amsId, slotId))
+
     context.onShutdown(() => {
       context.printerEvents.off('status', onStatus)
       context.printerEvents.off('print-job.finished', onJobFinished)
+      offResolver()
     })
   }
 }

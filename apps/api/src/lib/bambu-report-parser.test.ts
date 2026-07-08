@@ -48,6 +48,87 @@ test('parseReport extracts ota as firmwareVersion and every module as firmwareMo
   ])
 })
 
+test('parseReport resolves AMS unit type from the info DevAmsType code', () => {
+  // `info` bits 0-3 carry the DevAmsType code: 1 = classic AMS, 4 = N3S (AMS HT).
+  // The H2C/H2D number AMS HT units from 128, and their global tray index is the
+  // unit id itself — so the type must survive onto the normalized unit.
+  const delta = parseReport(
+    {
+      print: {
+        ams: {
+          ams: [
+            { id: 0, info: '1', tray: [{ id: 0 }] },
+            { id: 128, info: '4', tray: [{ id: 0 }] }
+          ]
+        }
+      }
+    },
+    printer
+  )
+
+  const classic = delta?.ams?.find((unit) => unit.unitId === 0)
+  const ht = delta?.ams?.find((unit) => unit.unitId === 128)
+  assert.equal(classic?.type, 'ams')
+  assert.equal(ht?.type, 'ams-ht')
+})
+
+test('parseReport preserves a resolved AMS type when a later delta omits info', () => {
+  const first = parseReport(
+    { print: { ams: { ams: [{ id: 128, info: '4', tray: [{ id: 0 }] }] } } },
+    printer
+  )
+  const current = { ...makeOfflineStatus(printer), ams: first?.ams ?? [] }
+  // A follow-up report without `info` must not downgrade the type to 'unknown'.
+  const second = parseReport(
+    { print: { ams: { ams: [{ id: 128, tray: [{ id: 0 }] }] } } },
+    printer,
+    current
+  )
+  assert.equal(second?.ams?.find((unit) => unit.unitId === 128)?.type, 'ams-ht')
+})
+
+test('parseReport parses the H2C nozzle rack (mounted + parked hotends)', () => {
+  const delta = parseReport(
+    {
+      print: {
+        device: {
+          // id low nibble = nozzle id; next nibble = parked-in-rack flag.
+          nozzle: {
+            info: [
+              { id: 0, diameter: 0.4, type: 'hardened_steel' },
+              { id: 0x11, diameter: 0.6, type: 'stainless_steel' }
+            ]
+          },
+          holder: { stat: 0, pos: 3 }
+        }
+      }
+    },
+    printer
+  )
+
+  const rack = delta?.nozzleRack
+  assert.equal(rack?.status, 'idle')
+  assert.equal(rack?.position, 'centre')
+  assert.equal(rack?.nozzles.length, 2)
+  // Mounted nozzle sorts before the parked one.
+  assert.deepEqual(
+    rack?.nozzles.map((nozzle) => ({ id: nozzle.nozzleId, onRack: nozzle.onRack, diameter: nozzle.diameter, material: nozzle.material })),
+    [
+      { id: 0, onRack: false, diameter: '0.4', material: 'hardened-steel' },
+      { id: 1, onRack: true, diameter: '0.6', material: 'stainless-steel' }
+    ]
+  )
+})
+
+test('parseReport leaves nozzleRack null for a printer with no rack markers', () => {
+  const delta = parseReport(
+    { print: { device: { nozzle: { info: [{ id: 0, diameter: 0.4, type: 'hardened_steel' }] } } } },
+    printer
+  )
+  // A plain nozzle list with no parked nozzle and no holder is not a rack.
+  assert.equal('nozzleRack' in (delta ?? {}), false)
+})
+
 test('parseReport reports modules even when no ota entry is present', () => {
   const delta = parseReport(
     {

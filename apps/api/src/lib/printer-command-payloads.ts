@@ -12,6 +12,8 @@
  * pressure-advance-profiles route, so it is exported alongside the translator.
  */
 import {
+  AMS_HT_TRAY_INDEX_MIN,
+  amsTrayIndex,
   getPrinterControlCapabilities,
   printerCommandSchema,
   printerModelSchema,
@@ -32,6 +34,22 @@ function resolveAmsChangeFilamentTarget(amsId: number, slotId: number): number {
     return trayId === 0 ? amsId : trayId
   }
   return amsId
+}
+
+/**
+ * Global `tray_id` for an AMS slot in a `print` command, resolving the unit's
+ * AMS generation from live status so AMS HT (N3S, ids 128-152) units get their
+ * id-as-tray-index numbering instead of `amsId * 4 + slotId`. Falls back to the
+ * id band when the unit isn't in status yet. See `amsTrayIndex` for the rules.
+ */
+function resolveCommandTrayId(
+  status: ReturnType<typeof printerManager.getStatus>,
+  amsId: number,
+  slotId: number
+): number {
+  const unitType = status?.ams.find((unit) => unit.unitId === amsId)?.type
+    ?? (amsId >= AMS_HT_TRAY_INDEX_MIN ? 'ams-ht' : 'ams')
+  return amsTrayIndex(unitType, amsId, slotId)
 }
 
 export function commandToMqttPayloads(
@@ -327,7 +345,7 @@ export function commandToMqttPayloads(
       return [{
         print: {
           command: 'extrusion_cali_sel',
-          tray_id: command.amsId * 4 + command.slotId,
+          tray_id: resolveCommandTrayId(status, command.amsId, command.slotId),
           ams_id: command.amsId,
           slot_id: command.slotId,
           cali_idx: command.caliIdx,
@@ -346,7 +364,7 @@ export function commandToMqttPayloads(
           nozzle_diameter: command.nozzleDiameter,
           filaments: [
             {
-              tray_id: command.amsId * 4 + command.slotId,
+              tray_id: resolveCommandTrayId(status, command.amsId, command.slotId),
               ams_id: command.amsId,
               slot_id: command.slotId,
               extruder_id: command.extruderId,
@@ -381,7 +399,7 @@ export function commandToMqttPayloads(
       return [{
         print: {
           command: 'extrusion_cali_set',
-          tray_id: command.amsId * 4 + command.slotId,
+          tray_id: resolveCommandTrayId(status, command.amsId, command.slotId),
           k_value: command.kValue.toFixed(6),
           n_coef: '1.400000'
         }

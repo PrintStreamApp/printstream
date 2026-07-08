@@ -23,7 +23,7 @@ import type {
   ThreeMfIndex,
   ThreeMfPlate
 } from '@printstream/shared'
-import { formatNozzleLabel, getPrinterControlCapabilities, printerModelSchema } from '@printstream/shared'
+import { amsTrayIndex, formatNozzleLabel, getPrinterControlCapabilities, printerModelSchema } from '@printstream/shared'
 import {
   KNOWN_BAMBU_PRINTER_MODEL_KEYS,
   bambuModelKeysAreCompatible,
@@ -754,7 +754,7 @@ export function buildLoadedPrinterMaterialOptions(
       const display = resolveFilamentDisplay(slot)
       const label = preset.profile ? formatSlicingProfileDisplayName(preset.profile) : preset.name ?? fallbackLabel
       const color = normalizeSliceFilamentColor(slot.color ?? slot.colors[0] ?? null)
-      const trayId = unit.unitId * 4 + slot.slot
+      const trayId = amsTrayIndex(unit.type, unit.unitId, slot.slot)
       options.push({
         id: `loaded:ams:${unit.unitId}:${slot.slot}:${preset.profile?.id ?? preset.name ?? fallbackLabel}:${color}`,
         label,

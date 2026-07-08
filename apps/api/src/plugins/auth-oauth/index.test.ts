@@ -56,6 +56,7 @@ test('auth-oauth authorize redirects to the provider authorization endpoint with
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
+    registerSlotFilamentResolver() { return () => undefined },
     registerAuthProvider(provider) {
       void Promise.resolve(typeof provider === 'function' ? provider() : provider)
         .then((resolved) => {
@@ -137,6 +138,7 @@ test('auth-oauth provider metadata clears setupRequired once the workspace setup
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
+    registerSlotFilamentResolver() { return () => undefined },
     registerAuthProvider(provider) {
       void Promise.resolve(typeof provider === 'function' ? provider() : provider)
         .then((resolved) => {
@@ -199,6 +201,7 @@ test('auth-oauth config reads and writes tenant-scoped settings independently fr
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
+    registerSlotFilamentResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 

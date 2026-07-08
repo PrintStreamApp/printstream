@@ -8,9 +8,11 @@ import { Stack } from '@mui/joy'
 import SpeedRoundedIcon from '@mui/icons-material/SpeedRounded'
 import AirRoundedIcon from '@mui/icons-material/AirRounded'
 import MeetingRoomRoundedIcon from '@mui/icons-material/MeetingRoomRounded'
+import SwapVertRoundedIcon from '@mui/icons-material/SwapVertRounded'
 import type { PrinterCardContentSettings, PrinterStatus } from '@printstream/shared'
 import { DualTempReadout, HeaterThermometerIcon, MetricChip, TempReadout } from './PrinterMetricChips'
 import { formatDuctMode, printerNozzles, speedLabel } from '../../lib/printersViewHelpers'
+import { formatNozzleSlotHardware, summarizeNozzleRack } from '../../lib/nozzleRackHelpers'
 
 export interface PrinterCardMetricsProps {
   status: PrinterStatus
@@ -107,6 +109,24 @@ export function PrinterCardMetrics({
           value={`Duct ${formatDuctMode(status.ductMode)}`}
         />
       )}
+      {status.nozzleRack ? (() => {
+        const summary = summarizeNozzleRack(status.nozzleRack)
+        const mountedLabel = summary.mounted.map(formatNozzleSlotHardware).join(', ')
+        const rackLabel = summary.spares.map(formatNozzleSlotHardware).join(', ')
+        const tooltip = [
+          mountedLabel ? `Loaded: ${mountedLabel}` : null,
+          rackLabel ? `Rack: ${rackLabel}` : null
+        ].filter(Boolean).join('. ') || 'Nozzle changer'
+        return (
+          <MetricChip
+            icon={<SwapVertRoundedIcon fontSize="inherit" />}
+            ariaLabel={`Nozzle changer: ${summary.chipLabel}`}
+            value={summary.chipLabel}
+            tooltipTitle={tooltip}
+            onClick={canOpenControls ? onOpenTemperatureControls : undefined}
+          />
+        )
+      })() : null}
     </Stack>
   )
 }

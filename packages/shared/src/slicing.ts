@@ -108,7 +108,13 @@ const slicingBaseTargetSchema = z.object({
    * Per-slice process (quality) setting overrides. Sparse map of changed keys
    * applied on top of the resolved process profile before slicing.
    */
-  processSettingOverrides: processSettingOverridesSchema.optional()
+  processSettingOverrides: processSettingOverridesSchema.optional(),
+  /**
+   * Per-slice filament setting overrides (e.g. `filament_flow_ratio`). Sparse map
+   * of changed keys applied on top of every resolved filament profile before
+   * slicing — used to apply a saved flow-ratio calibration at slice time.
+   */
+  filamentSettingOverrides: processSettingOverridesSchema.optional()
 })
 
 export const slicingRealPrinterTargetSchema = slicingBaseTargetSchema.extend({

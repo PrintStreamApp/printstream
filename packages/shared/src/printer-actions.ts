@@ -316,6 +316,49 @@ export function getAmsUnloadFilamentAvailability(
   return allowPrinterAction()
 }
 
+/**
+ * Whether an AMS slot's RFID tag can be re-read right now.
+ *
+ * The AMS can only spin a slot past its inline tag reader when the toolhead it
+ * feeds has no filament loaded: while any filament is loaded into that toolhead
+ * (including mid-print) the feed path is occupied and the printer silently
+ * ignores an `ams_get_rfid` request. Mirrors BambuStudio, which blocks the same
+ * action and tells the user to unload first. On multi-nozzle machines the block
+ * is scoped to the nozzle this slot's AMS unit feeds; when the nozzle mapping is
+ * unknown (single-nozzle machines report none) it falls back to treating any
+ * loaded source as blocking, matching the printer's machine-wide behavior.
+ */
+export function getAmsRescanAvailability(
+  status: PrinterFilamentActionStatus | null | undefined,
+  amsId: number,
+  slotId: number
+): PrinterActionAvailability {
+  if (status?.online !== true) return blockPrinterAction('Rescan is only available while the printer is connected')
+
+  const unit = status.ams.find((entry) => entry.unitId === amsId)
+  const slot = unit?.slots.find((entry) => entry.slot === slotId)
+  if (!unit || !slot) return blockPrinterAction('Selected AMS slot is unavailable')
+
+  const busyReason = filamentActionBusyReason(status)
+  if (busyReason) return blockPrinterAction(busyReason)
+
+  // Sources feed a shared toolhead when they map to the same nozzle, or when
+  // either side's nozzle is unknown (fall back to machine-wide, as a
+  // single-nozzle printer reports no mapping).
+  const targetNozzle = unit.nozzleId
+  const feedsSameToolhead = (sourceNozzle: number | null): boolean =>
+    targetNozzle == null || sourceNozzle == null || sourceNozzle === targetNozzle
+
+  const filamentLoadedToToolhead =
+    status.ams.some((entry) => feedsSameToolhead(entry.nozzleId) && entry.slots.some((entrySlot) => entrySlot.active))
+    || status.externalSpools.some((spool) => feedsSameToolhead(spool.nozzleId) && spool.active)
+  if (filamentLoadedToToolhead) {
+    return blockPrinterAction('Filament is loaded to the toolhead and blocks the tag reader. Unload it first, then rescan.')
+  }
+
+  return allowPrinterAction()
+}
+
 export function getExternalSpoolLoadAvailability(
   status: PrinterFilamentActionStatus | null | undefined,
   amsId: number

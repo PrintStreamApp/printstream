@@ -50,7 +50,7 @@ import {
   type PrinterViewStateFilter
 } from '@printstream/shared'
 import { formatEtaFromNow, formatMinutesDuration } from './time'
-import { isRawTrayCode, resolveCompactFilamentTypeLabel } from './filamentColor'
+import { hasBambuRfidTag, isRawTrayCode, resolveCompactFilamentTypeLabel } from './filamentColor'
 import { BAMBU_FILAMENT_PRESETS, filamentTypeDefaults } from '../data/filamentSetupCatalog'
 import { BAMBU_FILAMENT_PRESET_NAMES } from '../data/bambuFilamentPresets'
 import { type DirectoryViewMode } from '../components/DirectoryControls'
@@ -420,13 +420,30 @@ export function formatDispatchProgress(job: PrintDispatchJob): string {
 }
 
 /** Convert a 0-based AMS unit id to its Bambu letter label (0 -> A, 1 -> B, ...). */
-export function filamentPresetLabel(trayInfoIdx: string | null | undefined, fallbackMaterial: string | null, fallbackType: string | null | undefined): string | null {
+/**
+ * Human label for a slot/spool's filament. Bambu preset names (e.g. "Bambu PLA Basic") — and the
+ * "Bambu <material>" fallback — are only surfaced for a genuinely identified Bambu spool (an RFID
+ * `trayUuid`). A custom filament that was merely assigned a Bambu slicing preset (`trayInfoIdx`)
+ * reads as its plain filament type, so it is not mislabelled as a Bambu product. Pass the slot's
+ * `trayUuid` via `options`.
+ */
+export function filamentPresetLabel(
+  trayInfoIdx: string | null | undefined,
+  fallbackMaterial: string | null,
+  fallbackType: string | null | undefined,
+  options: { trayUuid?: string | null } = {}
+): string | null {
   const presetName = trayInfoIdx ? BAMBU_FILAMENT_PRESET_NAMES[trayInfoIdx] : null
-  if (presetName) return presetName
-  if (fallbackMaterial) return `Bambu ${fallbackMaterial}`
-
   const filamentType = fallbackType?.trim() ?? ''
-  return filamentType || null
+
+  if (hasBambuRfidTag(options.trayUuid)) {
+    if (presetName) return presetName
+    if (fallbackMaterial) return `Bambu ${fallbackMaterial}`
+    return filamentType || null
+  }
+
+  // Non-RFID slot: never present a Bambu-branded preset name for custom filament.
+  return filamentType || fallbackMaterial || null
 }
 
 /**

@@ -16,6 +16,7 @@ import type { WebPlugin } from '../../plugin/types'
 import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
 import { FilamentManagerSettingsPanel } from './SettingsPanel'
 import { SlotEditorActions } from './SlotEditorActions'
+import { AmsSlotFilamentIdentity } from './AmsSlotFilamentIdentity'
 import { FilamentView } from './FilamentView'
 import { FilamentStatsCards } from './FilamentStatsCards'
 
@@ -35,6 +36,7 @@ export const filamentManagerPlugin: WebPlugin = {
   slots: [
     { name: 'ams.slotEditor', component: SlotEditorActions },
     { name: 'externalSpool.editor', component: SlotEditorActions },
+    { name: 'printer.amsSlot.filamentIdentity', component: AmsSlotFilamentIdentity },
     { name: 'stats.cards', component: FilamentStatsCards }
   ]
 }

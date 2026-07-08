@@ -3,8 +3,10 @@
  *
  * Each renders a bambuddy-style header band tinted with the loaded filament's
  * actual colour (with a contrasting text colour) plus a detail block with the
- * preset, tray name, and remaining estimate. Both are pure presentational
- * components driven entirely by props.
+ * preset, tray name, and remaining estimate. The filament label is exposed through
+ * the `printer.amsSlot.filamentIdentity` plugin slot: when a plugin (filament-manager)
+ * has a spool linked to the slot it renders that spool's real identity in place of the
+ * printer's generic preset label; otherwise the core preset label is shown unchanged.
  */
 import { Stack, Typography } from '@mui/joy'
 import type { AmsSlot, ExternalSpool } from '@printstream/shared'
@@ -17,10 +19,17 @@ import {
   resolveFilamentSwatchName
 } from '../../lib/filamentColor'
 import { filamentPresetLabel } from '../../lib/printersViewHelpers'
+import { PluginSlot } from '../../plugin/PluginSlot'
 
-export function AmsSlotTooltipBody({ slot, slotLabel }: { slot: AmsSlot; slotLabel: string }) {
+export function AmsSlotTooltipBody({ slot, slotLabel, printerId, amsId, slotId }: {
+  slot: AmsSlot
+  slotLabel: string
+  printerId?: string
+  amsId?: number
+  slotId?: number
+}) {
   const filament = resolveFilamentDisplay(slot)
-  const presetLabel = filamentPresetLabel(slot.trayInfoIdx, filament.material, slot.filamentType)
+  const presetLabel = filamentPresetLabel(slot.trayInfoIdx, filament.material, slot.filamentType, { trayUuid: slot.trayUuid })
   const colorName = resolveFilamentSwatchName(slot)
   const hasFilament = hasLoadedFilament(slot.filamentType, slot.color, slot.colors, {
     trayInfoIdx: slot.trayInfoIdx,
@@ -75,9 +84,11 @@ export function AmsSlotTooltipBody({ slot, slotLabel }: { slot: AmsSlot; slotLab
       <Stack spacing={0.5} sx={{ px: 1.25, py: 1 }}>
         {hasFilament ? (
           <>
-            <Typography level="body-sm">
-              {presetLabel ?? 'Unknown filament'}
-            </Typography>
+            <PluginSlot
+              name="printer.amsSlot.filamentIdentity"
+              context={{ printerId, amsId, slotId }}
+              fallback={<Typography level="body-sm">{presetLabel ?? 'Unknown filament'}</Typography>}
+            />
             {slot.trayName && slot.trayName !== slot.filamentType && slot.trayName !== presetLabel && slot.trayName !== colorName && !isRawTrayCode(slot.trayName) && (
               <Typography level="body-xs" textColor="text.tertiary">
                 {slot.trayName}
@@ -97,9 +108,9 @@ export function AmsSlotTooltipBody({ slot, slotLabel }: { slot: AmsSlot; slotLab
   )
 }
 
-export function ExternalSpoolTooltipBody({ spool, label }: { spool: ExternalSpool; label: string }) {
+export function ExternalSpoolTooltipBody({ spool, label, printerId }: { spool: ExternalSpool; label: string; printerId?: string }) {
   const filament = resolveFilamentDisplay(spool)
-  const presetLabel = filamentPresetLabel(spool.trayInfoIdx, filament.material, spool.filamentType)
+  const presetLabel = filamentPresetLabel(spool.trayInfoIdx, filament.material, spool.filamentType, { trayUuid: spool.trayUuid })
   const colorName = resolveFilamentSwatchName(spool)
   const hasFilament = hasLoadedFilament(spool.filamentType, spool.color, spool.colors, {
     trayInfoIdx: spool.trayInfoIdx,
@@ -147,9 +158,11 @@ export function ExternalSpoolTooltipBody({ spool, label }: { spool: ExternalSpoo
       <Stack spacing={0.5} sx={{ px: 1.25, py: 1 }}>
         {hasFilament ? (
           <>
-            <Typography level="body-sm">
-              {presetLabel ?? 'Unknown filament'}
-            </Typography>
+            <PluginSlot
+              name="printer.amsSlot.filamentIdentity"
+              context={{ printerId, amsId: spool.amsId, slotId: null }}
+              fallback={<Typography level="body-sm">{presetLabel ?? 'Unknown filament'}</Typography>}
+            />
             {spool.trayName && spool.trayName !== spool.filamentType && spool.trayName !== presetLabel && spool.trayName !== colorName && !isRawTrayCode(spool.trayName) && (
               <Typography level="body-xs" textColor="text.tertiary">
                 {spool.trayName}

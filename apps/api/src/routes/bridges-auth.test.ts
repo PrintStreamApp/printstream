@@ -9,9 +9,17 @@ import { SETTINGS_MANAGE_PERMISSION, inactiveBridgeDebugCaptureStatus } from '@p
 import { bridgesRouter } from './bridges.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
+import { env } from '../lib/env.js'
 import { HttpError } from '../lib/http-error.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
 import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
+
+// Pin cloud mode: the bridge update routes and `buildBridgeUpdateSummary`
+// short-circuit to a `current`/no-op result when `isSelfHostedDeployment()` is
+// true, which the public open-core build is by default (no `src/private`). These
+// cases assert the cloud drift/summary + install-RPC behavior; the self-hosted
+// no-op is covered by its own cases below, which override locally.
+env.SELF_HOSTED = false
 
 const p = prisma as unknown as Record<string, Record<string, unknown>>
 const rp = rootPrisma as unknown as Record<string, Record<string, unknown>>
@@ -604,6 +612,58 @@ test('bridge update start asks the connected bridge to install an app update', a
   assert.equal(persisted.data.updateStatus, 'current')
   assert.ok(persisted.data.lastUpdateCheckAt instanceof Date)
   assert.equal(persisted.data.lastUpdateError, null)
+})
+
+const SELF_HOSTED_BUNDLE_UPDATE_MESSAGE =
+  'This bridge is part of the PrintStream bundle and updates with the application. Update the whole deployment to update the bridge.'
+
+test('bridge update check/start are inert no-ops on a self-hosted bundle', async () => {
+  // The bundled bridge is lockstep with the app; the update actions must not
+  // persist a status or contact the bridge — they return a "updates with the
+  // bundle" no-op before doing any work.
+  const previous = env.SELF_HOSTED
+  env.SELF_HOSTED = true
+  prisma.bridge.findUnique = ((async () => ({
+    id: 'bridge-1',
+    version: '0.1.0',
+    releaseFingerprint: 'f'.repeat(64),
+    protocolVersion: 1,
+    runnerAbiVersion: 'node22-ffmpeg7-v1',
+    updateChannel: 'stable',
+    updateStatus: null,
+    latestAvailableVersion: null,
+    lastUpdateCheckAt: null,
+    lastUpdateError: null
+  })) as unknown) as typeof prisma.bridge.findUnique
+  let persistCalled = false
+  prisma.bridge.update = ((async () => { persistCalled = true; return {} }) as unknown) as typeof prisma.bridge.update
+  let rpcCalled = false
+  bridgeSessionManager.isConnected = (() => true) as typeof bridgeSessionManager.isConnected
+  bridgeSessionManager.requestRpc = (async () => { rpcCalled = true; return { accepted: true, status: 'current' } }) as typeof bridgeSessionManager.requestRpc
+
+  try {
+    await withBridgesApp({
+      authEnabled: true,
+      actor: { type: 'user', userId: 'user-1' },
+      permissions: [SETTINGS_MANAGE_PERMISSION],
+      runtimePolicy: { demoMode: false }
+    }, async (baseUrl) => {
+      for (const action of ['check', 'start']) {
+        const response = await fetch(`${baseUrl}/api/bridges/bridge-1/update/${action}`, { method: 'POST' })
+        assert.equal(response.status, 200)
+        assert.deepEqual(await response.json(), {
+          accepted: false,
+          status: 'current',
+          message: SELF_HOSTED_BUNDLE_UPDATE_MESSAGE
+        }, `update/${action} should return the bundle no-op`)
+      }
+    })
+
+    assert.equal(persistCalled, false, 'self-hosted update actions must not persist a status')
+    assert.equal(rpcCalled, false, 'self-hosted update start must not contact the bridge')
+  } finally {
+    env.SELF_HOSTED = previous
+  }
 })
 
 test('bridge rename requires settings manage permission', async () => {

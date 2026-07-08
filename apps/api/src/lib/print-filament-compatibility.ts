@@ -7,6 +7,8 @@
  * silently dispatch obvious material mismatches.
  */
 import {
+  amsTrayIndex,
+  amsUnitLetter,
   buildRequiredNozzleDiametersByExtruder,
   findFilamentCompatibilityIssues,
   findNozzleDiameterCompatibilityIssues,
@@ -158,7 +160,7 @@ function buildTrayLookup(status: PrinterStatus): Map<number, { filamentType: str
 
   for (const unit of status.ams) {
     for (const slot of unit.slots) {
-      trays.set(unit.unitId * 4 + slot.slot, {
+      trays.set(amsTrayIndex(unit.type, unit.unitId, slot.slot), {
         filamentType: slot.filamentType,
         label: `AMS ${amsUnitLetter(unit.unitId)} Slot ${slot.slot + 1}`,
         nozzleId: unit.nozzleId
@@ -278,13 +280,3 @@ function externalSpoolLabel(amsId: number, spoolCount: number): string {
   return 'Ext'
 }
 
-function amsUnitLetter(unitId: number): string {
-  if (!Number.isFinite(unitId) || unitId < 0) return String(unitId)
-  let n = Math.floor(unitId)
-  let label = ''
-  do {
-    label = String.fromCharCode(65 + (n % 26)) + label
-    n = Math.floor(n / 26) - 1
-  } while (n >= 0)
-  return label
-}

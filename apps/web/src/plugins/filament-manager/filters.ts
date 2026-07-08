@@ -50,9 +50,12 @@ export const STATUS_COLORS: Record<FilamentSpoolStatus, 'success' | 'primary' | 
   archived: 'neutral'
 }
 
-export function friendlyColorName(spool: Pick<FilamentSpool, 'colorName' | 'colorHex' | 'filamentType'>): string | null {
+export function friendlyColorName(spool: Pick<FilamentSpool, 'colorName' | 'colorHex' | 'filamentType' | 'brand'>): string | null {
   if (spool.colorName) return spool.colorName
-  return resolveProjectFilamentColorName({ color: spool.colorHex, filamentName: null, filamentType: spool.filamentType })
+  // Resolve Bambu's palette names (e.g. "Jade White") only for Bambu-branded spools; a custom
+  // spool reads as its plain common name ("White"). The brand — not a slicing preset that can be
+  // attached to any filament — is the source of truth, so it is passed as the resolver's name.
+  return resolveProjectFilamentColorName({ color: spool.colorHex, filamentName: spool.brand, filamentType: spool.filamentType })
     ?? spool.colorHex
 }
 
@@ -62,6 +65,31 @@ export function spoolTitle(spool: FilamentSpool): string {
   const left = [spool.brand, material].filter(Boolean).join(' ')
   const color = friendlyColorName(spool)
   return color ? `${left || material} — ${color}` : (left || material)
+}
+
+/** Brand + material identity for a loaded spool, e.g. "Michael's PLA" (no colour; the AMS tooltip
+ * already shows the colour separately). Falls back to the bare material when brand is unset. */
+export function spoolIdentityLabel(spool: Pick<FilamentSpool, 'brand' | 'filamentType' | 'materialSubtype'>): string {
+  const material = spool.materialSubtype ?? spool.filamentType
+  return [spool.brand, material].filter(Boolean).join(' ') || material
+}
+
+/**
+ * Find the spool the filament-manager has recorded as loaded into a specific AMS slot or external
+ * tray, matched by loaded LOCATION (not RFID) so a manually-assigned custom spool is found too.
+ * `slotId` is null for external trays. Returns the first match, or null.
+ */
+export function findLoadedSpoolForSlot(
+  spools: readonly FilamentSpool[] | undefined | null,
+  target: { printerId: string | null | undefined; amsId: number | null | undefined; slotId: number | null | undefined }
+): FilamentSpool | null {
+  if (!spools || !target.printerId || target.amsId == null) return null
+  const targetSlot = target.slotId ?? null
+  return spools.find((spool) =>
+    spool.loadedPrinterId === target.printerId
+    && spool.loadedAmsId === target.amsId
+    && (spool.loadedSlotId ?? null) === targetSlot
+  ) ?? null
 }
 
 export function formatGrams(grams: number): string {

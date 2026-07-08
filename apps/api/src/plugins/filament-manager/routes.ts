@@ -164,6 +164,19 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
       metadata: { spoolId: row.id, printerId: parsed.data.printerId, amsId: parsed.data.amsId, slotId: parsed.data.slotId ?? null }
     })
     broadcastSpoolsChanged(context, tenantId)
+    if (parsed.data.slotId != null) {
+      context.printerEvents.emit('ams-slot.filament-loaded', {
+        tenantId,
+        printerId: parsed.data.printerId,
+        amsId: parsed.data.amsId,
+        slotId: parsed.data.slotId,
+        spoolId: row.id,
+        brand: row.brand,
+        filamentType: row.filamentType,
+        materialSubtype: row.materialSubtype,
+        colorName: row.colorName
+      })
+    }
     response.json(toSpoolDto(row))
   })
 

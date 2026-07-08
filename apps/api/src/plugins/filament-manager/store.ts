@@ -252,6 +252,34 @@ export async function readFilamentUsageStats(
   return { totalGramsUsed, byType, byBrand }
 }
 
+/**
+ * Identity of the spool currently loaded in a specific AMS slot, or `null` when
+ * no tracked spool maps to it. Backs the shared slot-filament resolver so other
+ * plugins (e.g. calibration) can tie work to the loaded spool without importing
+ * this one. Most-recently-loaded row wins if more than one somehow claims a slot.
+ */
+export async function findLoadedSpoolIdentity(
+  db: AnyPrismaClient,
+  tenantId: string,
+  printerId: string,
+  amsId: number,
+  slotId: number
+): Promise<{ spoolId: string; brand: string | null; filamentType: string; materialSubtype: string | null; colorName: string | null } | null> {
+  const spool = await db.filamentSpool.findFirst({
+    where: { tenantId, loadedPrinterId: printerId, loadedAmsId: amsId, loadedSlotId: slotId, deletedAt: null },
+    select: { id: true, brand: true, filamentType: true, materialSubtype: true, colorName: true },
+    orderBy: { loadedAt: 'desc' }
+  })
+  if (!spool) return null
+  return {
+    spoolId: spool.id,
+    brand: spool.brand,
+    filamentType: spool.filamentType,
+    materialSubtype: spool.materialSubtype,
+    colorName: spool.colorName
+  }
+}
+
 /** Append a consumption-ledger row. Positive `grams` = filament consumed. */
 export async function recordUsage(
   db: AnyPrismaClient,

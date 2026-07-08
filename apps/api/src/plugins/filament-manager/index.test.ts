@@ -99,10 +99,15 @@ test('trayIndexToSlot maps AMS global indices and external trays', () => {
   assert.deepEqual(trayIndexToSlot(3), { amsId: 0, slotId: 3 })
   assert.deepEqual(trayIndexToSlot(5), { amsId: 1, slotId: 1 })
   assert.deepEqual(trayIndexToSlot(15), { amsId: 3, slotId: 3 })
+  // AMS HT (N3S) units on the H2C/H2D number their trays from 128; the unit id
+  // is the global tray index and the slot is always 0.
+  assert.deepEqual(trayIndexToSlot(128), { amsId: 128, slotId: 0 })
+  assert.deepEqual(trayIndexToSlot(152), { amsId: 152, slotId: 0 })
   assert.deepEqual(trayIndexToSlot(254), { amsId: 254, slotId: null })
   assert.deepEqual(trayIndexToSlot(255), { amsId: 255, slotId: null })
   assert.equal(trayIndexToSlot(-1), null)
-  assert.equal(trayIndexToSlot(16), null)
+  // The gap between the regular band (<=127) and the AMS HT band (128-152).
+  assert.equal(trayIndexToSlot(160), null)
 })
 
 test('parseAmsMapping handles valid, null, and malformed input', () => {

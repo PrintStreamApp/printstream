@@ -14,7 +14,7 @@ import {
   bambuSwatchForHex,
   type BambuColorSwatch
 } from '../data/bambuColors.js'
-import { filamentPresetBrandFromId, filamentPresetNameFromId } from '../data/bambuFilamentPresets.js'
+import { brandFromPresetName, filamentPresetBrandFromId, filamentPresetNameFromId } from '../data/bambuFilamentPresets.js'
 import { findBambuEncodedMultiColor, findBambuEncodedMultiColorAlias } from '../data/bambuEncodedMultiColors.js'
 
 export interface ResolvedFilamentDisplay {
@@ -242,6 +242,19 @@ export function resolveFilamentColorSwatches(
   return { swatches: COMMON_FILAMENT_COLOR_SWATCHES, usesCommonFallback: true }
 }
 
+/**
+ * A genuine Bambu spool is identified by a readable RFID tag (`trayUuid`), which the AMS only
+ * reports for real Bambu filament. Only such spools — not a user-assigned Bambu slicing preset
+ * (`trayInfoIdx`), which can be attached to any physical filament — should surface Bambu's
+ * marketing colour names (e.g. "Jade White"). Custom/third-party filament reads as its plain
+ * common colour ("White"). This mirrors the `trayUuid != null` "scanned spool" checks used across
+ * the AMS UI (`PrinterCardRows`, `AmsSlotEditModal`, remaining-weight estimates).
+ */
+export function hasBambuRfidTag(trayUuid: string | null | undefined): boolean {
+  const value = trayUuid?.trim() ?? ''
+  return value.length > 0 && !/^0+$/.test(value)
+}
+
 export function resolveFilamentDisplay(input: FilamentColorInput): ResolvedFilamentDisplay {
   const trayInfoIdx = input.trayInfoIdx?.trim() ?? ''
   const material = resolveDisplayMaterial(trayInfoIdx, input.filamentType)
@@ -249,7 +262,7 @@ export function resolveFilamentDisplay(input: FilamentColorInput): ResolvedFilam
   const primaryColor = normalizeHexColor(input.color) ?? palette[0] ?? null
   const trayCode = normalizeTrayCode(input.trayName)
   const presetBrand = filamentPresetBrandFromId(trayInfoIdx)
-  const shouldUseBambuColorNames = presetBrand == null || presetBrand === 'Bambu'
+  const shouldUseBambuColorNames = hasBambuRfidTag(input.trayUuid) && (presetBrand == null || presetBrand === 'Bambu')
   const trayName = input.trayName?.trim() ?? ''
   const filamentType = input.filamentType?.trim() ?? ''
   const suppressRepeatedTrayName = Boolean(filamentType && shouldSuppressRepeatedTrayLabel(trayName, filamentType))
@@ -315,6 +328,14 @@ export function resolveFilamentColorName(input: FilamentColorInput): string | nu
   return resolveFilamentDisplay(input).name
 }
 
+/**
+ * Colour label for a filament known by its preset/brand name (slicing options, queued jobs, spool
+ * library) rather than a live AMS tray. Bambu's marketing colour names apply only when the filament
+ * is Bambu-branded — its `filamentName` resolves to the "Bambu" brand (e.g. "Bambu PLA Basic").
+ * A generic or custom filament ("Generic PLA", a user's own brand) keeps its plain common colour
+ * name even though its type maps to a Bambu material, so custom white PLA reads "White", not
+ * "Jade White". Pass the brand as `filamentName` when there is no sliced preset name.
+ */
 export function resolveProjectFilamentColorName(input: {
   color: string | null | undefined
   filamentName: string | null | undefined
@@ -323,11 +344,13 @@ export function resolveProjectFilamentColorName(input: {
   const primaryColor = normalizeHexColor(input.color)
   if (!primaryColor) return null
 
-  const material = bambuMaterialFromPresetName(input.filamentName?.trim() ?? '')
-    ?? resolveBambuMaterial(input.filamentType)
-  if (material) {
-    const swatch = bambuSwatchForHex(primaryColor, material)
-    if (swatch) return swatch.name
+  const name = input.filamentName?.trim() ?? ''
+  if (brandFromPresetName(name) === 'Bambu') {
+    const material = bambuMaterialFromPresetName(name) ?? resolveBambuMaterial(input.filamentType)
+    if (material) {
+      const swatch = bambuSwatchForHex(primaryColor, material)
+      if (swatch) return swatch.name
+    }
   }
 
   return commonFilamentColorName(primaryColor)
@@ -341,7 +364,7 @@ export function resolveFilamentSwatchName(input: FilamentColorInput): string | n
   if (!primaryColor) return null
 
   const presetBrand = filamentPresetBrandFromId(trayInfoIdx)
-  const shouldUseBambuColorNames = presetBrand == null || presetBrand === 'Bambu'
+  const shouldUseBambuColorNames = hasBambuRfidTag(input.trayUuid) && (presetBrand == null || presetBrand === 'Bambu')
   if (shouldUseBambuColorNames) {
     const swatch = bambuSwatchForHex(primaryColor, material)
     if (swatch) return swatch.name

@@ -31,6 +31,7 @@ import {
   type PermissionScope,
   PRINTER_EXTRUDER_CONTROL_MIN_TEMP_C,
   getAmsLoadFilamentAvailability,
+  getAmsRescanAvailability,
   getAmsUnloadFilamentAvailability,
   getConfirmAmsFilamentExtrudedAvailability,
   getExternalSpoolLoadAvailability,
@@ -934,6 +935,9 @@ function validatePrinterControlCommand(
     case 'deleteAmsPressureAdvanceProfile':
     case 'setAmsKValue':
       requireLiveControlConnection(status, 'Pressure advance control')
+      return
+    case 'rescanAmsSlot':
+      requirePrinterActionAvailability(getAmsRescanAvailability(status, command.amsId, command.slotId))
       return
     case 'loadAmsFilament':
       requirePrinterActionAvailability(getAmsLoadFilamentAvailability(status, command.amsId, command.slotId))

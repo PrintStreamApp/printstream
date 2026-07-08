@@ -61,6 +61,7 @@ async function buildSignInApp(options: { user: SignInUser; enabled?: boolean }):
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
+    registerSlotFilamentResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 

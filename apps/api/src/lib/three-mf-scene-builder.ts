@@ -305,9 +305,15 @@ export interface ImportedObjectInput {
   parts?: Array<{ name: string; mesh: ImportedMesh }>
 }
 
+// The `Application: BambuStudio-…` metadata is what makes BambuStudio recognize the file as its
+// own project (`is_bbl_3mf`). Without it the CLI refuses per-plate slicing ("not support to slice
+// plate N, reset to 0") and drops per-plate custom G-code — so a from-scratch project (new-project
+// scaffold or a generated calibration plate) must carry it, exactly like a saved Bambu file does.
 const NEW_PROJECT_MODEL_XML = [
   '<?xml version="1.0" encoding="UTF-8"?>',
   '<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">',
+  '  <metadata name="Application">BambuStudio-02.07.01.57</metadata>',
+  '  <metadata name="BambuStudio:3mfVersion">1</metadata>',
   '  <resources>',
   '  </resources>',
   '  <build>',
@@ -1430,13 +1436,28 @@ export interface BuildEditedThreeMfResult {
    * the replacement's baked object before slicing.
    */
   replacedObjectIds: Array<{ originalObjectId: number; bakedObjectId: number }>
+  /**
+   * For each staged import baked into the output, the `object_id` its geometry was written as.
+   * Lets a caller that generated geometry programmatically (e.g. the calibration plugin) key
+   * per-object process overrides — such as `print_flow_ratio` per patch — onto the baked objects.
+   */
+  importObjectIds: Array<{ importId: string; objectId: number }>
 }
 
 export async function buildEditedThreeMf(
   baseSourcePath: string | null,
   outputPath: string,
   edit: SceneEdit,
-  imports: ImportedObjectInput[] = []
+  imports: ImportedObjectInput[] = [],
+  options: {
+    /**
+     * Additional archive entries to write verbatim (name → content), added after the
+     * standard entries so a caller can inject a sidecar the SceneEdit contract does not
+     * model — e.g. the calibration plugin's raw `custom_gcode_per_layer.xml` for a
+     * pressure-advance tower. On a base-file build these replace a same-named source entry.
+     */
+    extraEntries?: Array<{ name: string; content: string }>
+  } = {}
 ): Promise<BuildEditedThreeMfResult> {
   let baseModelXml = NEW_PROJECT_MODEL_XML
   let baseModelSettingsXml = NEW_PROJECT_MODEL_SETTINGS_XML
@@ -1485,6 +1506,10 @@ export async function buildEditedThreeMf(
   const replacedObjectIds = (edit.meshReplacements ?? []).flatMap((replacement) => {
     const bakedObjectId = documents.importIdToObjectId.get(replacement.importId)
     return bakedObjectId != null ? [{ originalObjectId: replacement.objectId, bakedObjectId }] : []
+  })
+  const importObjectIds = imports.flatMap((imported) => {
+    const objectId = documents.importIdToObjectId.get(imported.importId)
+    return objectId != null ? [{ importId: imported.importId, objectId }] : []
   })
 
   // Triangle paint (support + seam brushes): rewrite painted parts' triangle attributes.
@@ -1544,6 +1569,12 @@ export async function buildEditedThreeMf(
     if (customGcodeContent !== null) {
       transforms.set(CUSTOM_GCODE_PER_LAYER_ENTRY, () => customGcodeContent)
     }
+    // Caller-supplied sidecars replace a same-named source entry (transform) and are added
+    // when the source lacks them (extraEntries), mirroring the brim/custom-gcode handling.
+    for (const entry of options.extraEntries ?? []) {
+      transforms.set(entry.name, () => entry.content)
+      extraEntries.push(entry)
+    }
     // Painted parts whose meshes live in per-object sub-entries (Bambu's 3D/Objects/*.model).
     // One transform per entry composes every channel that touches it.
     const paintedEntryPaths = new Set(paintChannels.flatMap((channel) => [...channel.byEntry.keys()]))
@@ -1599,7 +1630,7 @@ export async function buildEditedThreeMf(
       }
     }
     await rewriteThreeMfEntries(baseSourcePath, outputPath, transforms, extraEntries)
-    return { replacedObjectIds }
+    return { replacedObjectIds, importObjectIds }
   }
 
   await writeFreshThreeMf(outputPath, [
@@ -1608,9 +1639,10 @@ export async function buildEditedThreeMf(
     { name: '3D/3dmodel.model', content: modelXml },
     { name: 'Metadata/model_settings.config', content: modelSettingsXml },
     ...(brimEarPointsContent ? [{ name: BRIM_EAR_POINTS_ENTRY, content: brimEarPointsContent }] : []),
-    ...(customGcodeContent ? [{ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent }] : [])
+    ...(customGcodeContent ? [{ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent }] : []),
+    ...(options.extraEntries ?? [])
   ])
-  return { replacedObjectIds }
+  return { replacedObjectIds, importObjectIds }
 }
 
 /**

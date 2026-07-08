@@ -126,10 +126,11 @@ const baseCoreTabs: ReadonlyArray<ShellTab> = [
   }
 ]
 
-// Default left-to-right order for the leading plugin tabs (Queue, then Orders);
-// any other plugin tab falls back to alphabetical after these. The final
-// interleaving with core tabs is governed by DEFAULT_NAV_TAB_ORDER.
-const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/queue', '/orders']
+// Default left-to-right order for the leading plugin tabs (Queue, Orders, Filament,
+// then Calibration — Calibration sits after Filament); any other plugin tab falls
+// back to alphabetical after these. The final interleaving with core tabs is
+// governed by DEFAULT_NAV_TAB_ORDER.
+const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/queue', '/orders', '/filament', '/calibration']
 
 // Register built-in plugins when this (lazy-loaded) app-shell chunk first loads — moved out of
 // main.tsx so a cold load of a marketing page never pulls in the plugin graph. Runs once at module

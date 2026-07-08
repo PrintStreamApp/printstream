@@ -72,7 +72,7 @@ Then open `http://<your-server>:8080`. A default workspace is created automatica
 
 ## Plugins
 
-Optional features ship as plugins you can switch on per workspace: sign-in providers (passkeys/email codes, OAuth/OIDC), the 3D model studio (project editor + previews), server-side slicing helpers, production orders, notifications (browser push, Discord, ntfy), firmware updates, plate-clearing confirmation, and the Home Assistant bridge. Third-party plugins can be uploaded from the plugin manager.
+Optional features ship as plugins you can switch on per workspace: sign-in providers (passkeys/email codes, OAuth/OIDC), the 3D model studio (project editor + previews), server-side slicing helpers, filament calibration (pressure-advance towers and flow-ratio plates), production orders, notifications (browser push, Discord, ntfy), firmware updates, plate-clearing confirmation, and the Home Assistant bridge. Third-party plugins can be uploaded from the plugin manager.
 
 ## Good to know
 

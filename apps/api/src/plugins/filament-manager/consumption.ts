@@ -14,7 +14,7 @@
  *
  * Runs outside a request context: `rootPrisma` with explicit tenant filters.
  */
-import type { Printer } from '@printstream/shared'
+import { trayIndexToAmsSlot, type Printer } from '@printstream/shared'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { printerManager } from '../../lib/printer-manager.js'
 import { rootPrisma } from '../../lib/prisma.js'
@@ -29,11 +29,14 @@ type JobFinishedEvent = {
   result: 'success' | 'failed' | 'cancelled'
 }
 
-/** Resolve a global tray index to a physical (amsId, slotId) pair. */
+/**
+ * Resolve a job's `amsMapping` global tray index to the physical `(amsId, slotId)`
+ * pair recorded on a loaded spool, so the right spool gets decremented. Defers to
+ * the shared {@link trayIndexToAmsSlot} so AMS HT (N3S, indices 128-152) and the
+ * classic `unitId * 4 + slotId` band stay in sync with the print-dispatch path.
+ */
 export function trayIndexToSlot(trayIndex: number): { amsId: number; slotId: number | null } | null {
-  if (trayIndex >= 254) return { amsId: trayIndex, slotId: null } // external virtual trays
-  if (trayIndex < 0 || trayIndex > 15) return null
-  return { amsId: Math.floor(trayIndex / 4), slotId: trayIndex % 4 }
+  return trayIndexToAmsSlot(trayIndex)
 }
 
 export function parseAmsMapping(value: string | null): number[] | null {

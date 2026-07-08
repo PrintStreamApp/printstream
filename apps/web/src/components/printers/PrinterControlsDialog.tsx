@@ -25,6 +25,7 @@ import {
 } from '@printstream/shared'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { DialogSection } from '../DialogSection'
+import { NozzleRackSection } from './NozzleRackSection'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { LightbulbIcon } from './PrinterGlyphs'
 import {
@@ -211,6 +212,8 @@ export function PrinterControlsDialog({
               )}
 
               {activeTab === 'temperature' && (
+                <>
+                {status.nozzleRack ? <NozzleRackSection rack={status.nozzleRack} /> : null}
                 <DialogSection title="Temperatures" wrapInSheet={false}>
                   <Sheet variant="soft" sx={{ p: 1.25, borderRadius: 'md' }}>
                     <Stack spacing={1}>
@@ -384,6 +387,7 @@ export function PrinterControlsDialog({
                     </Stack>
                   </Sheet>
                 </DialogSection>
+                </>
               )}
 
               {activeTab === 'fans' && hasFanControls && (

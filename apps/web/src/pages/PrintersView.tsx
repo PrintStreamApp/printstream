@@ -30,6 +30,7 @@ import { type DirectorySortDirection, type DirectoryViewMode } from '../componen
 import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
 import { MultiSelectOption } from '../components/MultiSelectOption'
 import { SliceFileModal } from '../components/library/SliceFileModal'
+import { buildCreateSlicingJobBody } from '../lib/libraryViewHelpers'
 import { SliceThenPrintModal } from '../components/library/SliceThenPrintModal'
 import { PrintModal } from '../components/library/PrintModal'
 import { useMobileViewport } from '../components/useMobileViewport'
@@ -602,35 +603,11 @@ export function PrintersView() {
       preferredPrinterId: string
       action: SliceFlowSubmitAction
     } & SliceFlowSubmitInput) => {
-      const body = {
+      const body = buildCreateSlicingJobBody(input, {
         sourceFileId: input.file.id,
-        slicerTargetId: input.slicerTargetId,
-        target: input.target.mode === 'realPrinter'
-          ? {
-              mode: 'realPrinter',
-              printerId: input.target.printerId,
-              printerProfileId: input.target.printerProfileId,
-              plateType: input.target.plateType,
-              nozzleDiameters: input.target.nozzleDiameters,
-              toolheads: input.target.toolheads,
-              processProfileId: input.target.processProfileId,
-              filamentMappings: input.target.filamentMappings
-            }
-          : {
-              mode: 'manualProfile',
-              printerProfileId: input.target.printerProfileId,
-              printerModel: input.target.printerModel ?? 'unknown',
-              plateType: input.target.plateType,
-              nozzleDiameters: input.target.nozzleDiameters,
-              toolheads: input.target.toolheads,
-              processProfileId: input.target.processProfileId,
-              filamentMappings: input.target.filamentMappings
-            },
-        outputFileName: input.outputFileName,
         outputFolderId: null,
-        hiddenOutput: input.action === 'print',
-        plate: input.plate
-      }
+        hiddenOutput: input.action === 'print'
+      })
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
     onSuccess: async (response, variables) => {

@@ -17,6 +17,7 @@ export const DEFAULT_NAV_TAB_ORDER: readonly string[] = [
   '/jobs',
   '/library',
   '/filament',
+  '/calibration',
   '/orders',
   '/stats'
 ]

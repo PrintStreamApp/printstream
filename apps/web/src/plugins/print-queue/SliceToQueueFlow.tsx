@@ -12,6 +12,7 @@ import type { LibraryFile, Printer, PrinterStatus, QueueOrderLink, SlicingCapabi
 import { apiFetch } from '../../lib/apiClient'
 import { prefetchSlicingProfiles } from '../../lib/slicingProfilesQuery'
 import { SliceFileModal } from '../../components/library/SliceFileModal'
+import { buildCreateSlicingJobBody } from '../../lib/libraryViewHelpers'
 import { SliceThenPrintModal } from '../../components/library/SliceThenPrintModal'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
 import { QueueItemDialog } from './QueueItemDialog'
@@ -79,39 +80,11 @@ export function SliceToQueueFlow({
 
   const startSlicingJob = useMutation({
     mutationFn: async (input: { action: SliceFlowSubmitAction } & SliceFlowSubmitInput) => {
-      const body = {
+      const body = buildCreateSlicingJobBody(input, {
         sourceFileId: file.id,
-        slicerTargetId: input.slicerTargetId,
-        target: input.target.mode === 'realPrinter'
-          ? {
-              mode: 'realPrinter',
-              printerId: input.target.printerId,
-              printerProfileId: input.target.printerProfileId,
-              plateType: input.target.plateType,
-              nozzleDiameters: input.target.nozzleDiameters,
-              toolheads: input.target.toolheads,
-              processProfileId: input.target.processProfileId,
-              processSettingOverrides: input.target.processSettingOverrides,
-              filamentMappings: input.target.filamentMappings
-            }
-          : {
-              mode: 'manualProfile',
-              printerProfileId: input.target.printerProfileId,
-              printerModel: input.target.printerModel ?? 'unknown',
-              plateType: input.target.plateType,
-              nozzleDiameters: input.target.nozzleDiameters,
-              toolheads: input.target.toolheads,
-              processProfileId: input.target.processProfileId,
-              processSettingOverrides: input.target.processSettingOverrides,
-              filamentMappings: input.target.filamentMappings
-            },
-        outputFileName: input.outputFileName,
         outputFolderId: null,
-        hiddenOutput: true,
-        plate: input.plate,
-        selectedObjectIds: input.selectedObjectIds,
-        objectProcessOverrides: input.objectProcessOverrides
-      }
+        hiddenOutput: true
+      })
       return apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
     onSuccess: async (response) => {

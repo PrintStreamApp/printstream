@@ -16,6 +16,7 @@ import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   getAmsLoadFilamentAvailability,
+  getAmsRescanAvailability,
   getAmsUnloadFilamentAvailability,
   printerPressureAdvanceProfilesResponseSchema,
   type AmsSlot,
@@ -85,6 +86,9 @@ export function AmsSlotEditModal({
   // canonical SplitButton example (anchor ref + open flag + Menu with
   // `anchorEl`) sidesteps the z-index quirks of `Dropdown` inside a Modal.
   const [rescanMenuOpen, setRescanMenuOpen] = useState(false)
+  // The pressure-advance + calibration surface lives behind a button in its own dialog to keep the
+  // main slot dialog uncluttered for people who never touch it.
+  const [tuningOpen, setTuningOpen] = useState(false)
   const rescanAnchorRef = useRef<HTMLDivElement>(null)
   useControlledMenuClickAway(rescanMenuOpen, 'slot-actions-menu', () => setRescanMenuOpen(false), [rescanAnchorRef])
 
@@ -414,6 +418,7 @@ export function AmsSlotEditModal({
     : null
   const loadFilamentAvailability = getAmsLoadFilamentAvailability(status, unit.unitId, slot.slot)
   const unloadFilamentAvailability = getAmsUnloadFilamentAvailability(status, unit.unitId, slot.slot)
+  const rescanAvailability = getAmsRescanAvailability(status, unit.unitId, slot.slot)
 
   type PresetOption = { id: string; label: string; brand: string }
   const presetOptions = useMemo<PresetOption[]>(() => [
@@ -444,7 +449,7 @@ export function AmsSlotEditModal({
     : 'Common filament colors'
   const normalizedColor = normalizeHex(color).toUpperCase()
   const detectedFilament = resolveFilamentDisplay(slot)
-  const detectedPresetLabel = filamentPresetLabel(slot.trayInfoIdx, detectedFilament.material, slot.filamentType)
+  const detectedPresetLabel = filamentPresetLabel(slot.trayInfoIdx, detectedFilament.material, slot.filamentType, { trayUuid: slot.trayUuid })
   const detectedColorName = detectedFilament.name
   const detectedHeaderBg = filamentBackground(detectedFilament.colors, slot.color, 'var(--joy-palette-neutral-700)')
   const detectedHeaderFg = filamentTextColor(detectedFilament.colors, slot.color, 'var(--joy-palette-text-primary)')
@@ -603,6 +608,34 @@ export function AmsSlotEditModal({
             </DialogSection>
           )}
 
+          <Button
+            size="sm"
+            variant="soft"
+            color="neutral"
+            sx={{ alignSelf: 'flex-start' }}
+            onClick={() => setTuningOpen(true)}
+          >
+            Pressure advance &amp; calibration…
+          </Button>
+
+          <Modal open={tuningOpen} onClose={() => setTuningOpen(false)}>
+            <ModalDialog sx={{ maxWidth: 480, width: '100%', maxHeight: '90dvh', overflow: 'auto' }}>
+              <Typography level="h4">Pressure advance &amp; calibration</Typography>
+              <Typography level="body-sm" textColor="text.tertiary">
+                AMS {amsUnitLetter(unit.unitId)}{slot.slot + 1}{slot.filamentType ? ` · ${slot.filamentType}` : ''}
+              </Typography>
+              <Stack spacing={2} sx={{ mt: 1 }}>
+                <PluginSlot
+                  name="printer.amsSlot.calibration"
+                  context={{
+                    printerId,
+                    amsId: unit.unitId,
+                    slotId: slot.slot,
+                    filamentType: slot.filamentType,
+                    trayInfoIdx: slot.trayInfoIdx,
+                    label: `AMS ${amsUnitLetter(unit.unitId)} slot ${slot.slot + 1}${slot.filamentType ? ` (${slot.filamentType})` : ''}`
+                  }}
+                />
           <DialogSection
             title="Pressure advance"
             description="Default uses the printer's built-in behavior. Profiles are tied to the selected filament preset and keep their own custom names."
@@ -721,6 +754,12 @@ export function AmsSlotEditModal({
                 )}
               </Stack>
             </DialogSection>
+                <Stack direction="row" justifyContent="flex-end" sx={{ pt: 0.5 }}>
+                  <Button variant="plain" color="neutral" onClick={() => setTuningOpen(false)}>Close</Button>
+                </Stack>
+              </Stack>
+            </ModalDialog>
+          </Modal>
 
           <DialogSection
             title="Filament actions"
@@ -769,15 +808,19 @@ export function AmsSlotEditModal({
           {error && <Typography color="danger" level="body-sm">{error}</Typography>}
           <Stack direction="row" spacing={1} justifyContent="space-between" sx={{ pt: 1 }}>
             {isBambuSpool ? (
-              <Button
-                variant="soft"
-                color="neutral"
-                startDecorator={<RefreshRoundedIcon />}
-                loading={rescan.isPending || rescanActive}
-                onClick={requestRescan}
-              >
-                Rescan
-              </Button>
+              withDisabledActionReason(
+                <Button
+                  variant="soft"
+                  color="neutral"
+                  startDecorator={<RefreshRoundedIcon />}
+                  loading={rescan.isPending || rescanActive}
+                  disabled={!rescanAvailability.allowed}
+                  onClick={requestRescan}
+                >
+                  Rescan
+                </Button>,
+                rescan.isPending || rescanActive ? null : rescanAvailability.reason
+              )
             ) : (
               <>
                 <ButtonGroup
@@ -786,13 +829,17 @@ export function AmsSlotEditModal({
                   color="neutral"
                   aria-label="rescan / reset slot"
                 >
-                  <Button
-                    startDecorator={<RefreshRoundedIcon />}
-                    loading={rescan.isPending || rescanActive}
-                    onClick={requestRescan}
-                  >
-                    Rescan
-                  </Button>
+                  {withDisabledActionReason(
+                    <Button
+                      startDecorator={<RefreshRoundedIcon />}
+                      loading={rescan.isPending || rescanActive}
+                      disabled={!rescanAvailability.allowed}
+                      onClick={requestRescan}
+                    >
+                      Rescan
+                    </Button>,
+                    rescan.isPending || rescanActive ? null : rescanAvailability.reason
+                  )}
                   <IconButton
                     aria-controls={rescanMenuOpen ? 'slot-actions-menu' : undefined}
                     aria-expanded={rescanMenuOpen ? 'true' : undefined}

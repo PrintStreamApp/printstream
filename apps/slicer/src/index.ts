@@ -40,6 +40,7 @@ import { assertSupportedEmbeddedMachineSwitch, shouldUseEstimateModeMachineSwitc
 import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
 import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
 import { formatSlicePresetIncompatibilityError } from './slice-error.js'
+import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
 import { mergeInheritedMachineProfile, repairEstimateModeProjectSettings } from './machine-switch-repair.js'
 import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
 import { resolveCustomProfileConfig } from './custom-profile-resolve.js'
@@ -237,6 +238,7 @@ app.post('/slice', async (request, response) => {
       plate: parsed.data.request.plate,
       profileFiles: parsed.data.profileFiles ?? [],
       processSettingOverrides: parsed.data.request.target.processSettingOverrides ?? {},
+      filamentSettingOverrides: parsed.data.request.target.filamentSettingOverrides ?? {},
       metadata: slicedArtifactMetadata,
       supportedFlags,
       rewroteProjectSettings: preparedInput.rewroteProjectSettings,
@@ -329,6 +331,7 @@ async function runCli(input: {
   plate: number
   profileFiles: SliceProfileFile[]
   processSettingOverrides: Record<string, string | string[]>
+  filamentSettingOverrides: Record<string, string | string[]>
   metadata: SlicedArtifactMetadata | null
   supportedFlags: ReadonlySet<string>
   rewroteProjectSettings: boolean
@@ -346,7 +349,7 @@ async function runCli(input: {
     rewroteProjectSettings: input.rewroteProjectSettings,
     useEstimateModeMachineSwitch: input.useEstimateModeMachineSwitch
   })
-  const profileArgs = await prepareProfileArgs(cliProfileFiles, path.dirname(input.outputPath), input.slicerTarget.profileDir, input.processSettingOverrides)
+  const profileArgs = await prepareProfileArgs(cliProfileFiles, path.dirname(input.outputPath), input.slicerTarget.profileDir, input.processSettingOverrides, input.filamentSettingOverrides)
   if (shouldUseAllPlateMergeFallback({
     plate: input.plate,
     outputFileName: input.outputFileName,
@@ -378,11 +381,30 @@ async function runCli(input: {
   const machineSwitchArgs = input.useEstimateModeMachineSwitch && supportedFlags.has('--estimate-mode')
     ? ['--estimate-mode']
     : []
+  // A "from scratch" scaffold 3MF (calibration prints) carries the BBL marker but no embedded
+  // project_settings.config, which segfaults the CLI's BBL-project loader. Synthesize one from the
+  // slice's own profiles so it loads; a no-op for real projects that already embed it.
+  const preparedInputPath = await ensureEmbeddedProjectSettings({
+    inputPath: input.inputPath,
+    cliPath: input.slicerTarget.cliPath,
+    appDir: input.slicerTarget.appDir ?? null,
+    profileArgs,
+    workDir: path.dirname(input.outputPath),
+    env: {
+      ...process.env,
+      HOME: input.bambuHomeDir,
+      XDG_CONFIG_HOME: input.bambuConfigDir,
+      XDG_CACHE_HOME: input.bambuCacheDir,
+      XDG_DATA_HOME: input.bambuDataDir
+    },
+    log: (message) => appendStructuredOutput(input.outputLines, 'system', message),
+    signal: input.signal
+  })
   const templateArgs = ensurePositionalInputArgument(
     stripUnsupportedFlagArguments(
       splitArgsTemplate(input.slicerTarget.cliArgsTemplate ?? env.SLICER_CLI_ARGS_TEMPLATE ?? '').map((value) => {
         return value
-          .replaceAll('{input}', input.inputPath)
+          .replaceAll('{input}', preparedInputPath)
           .replaceAll('{output}', input.outputPath)
           .replaceAll('{outputDir}', path.dirname(input.outputPath))
           .replaceAll('{outputFileName}', input.outputFileName)
@@ -396,13 +418,13 @@ async function runCli(input: {
       supportedFlags,
       ['--export-json']
     ),
-    input.inputPath
+    preparedInputPath
   )
   // Per-object selection: objects the user deselected (print/slice dialog or editor Printable
   // toggle) arrive as build items marked printable="0". The CLI only honors that via --skip-objects
   // (by identify_id), so translate it here. Empty when nothing is excluded.
-  const skipObjectArgs = buildSkipObjectsArgs(await deriveSkipObjectIdentifyIds(input.inputPath))
-  const inputArgIndex = templateArgs.indexOf(input.inputPath)
+  const skipObjectArgs = buildSkipObjectsArgs(await deriveSkipObjectIdentifyIds(preparedInputPath))
+  const inputArgIndex = templateArgs.indexOf(preparedInputPath)
   const args = inputArgIndex >= 0
     ? [...templateArgs.slice(0, inputArgIndex), ...machineSwitchArgs, ...profileArgs, ...skipObjectArgs, ...templateArgs.slice(inputArgIndex)]
     : [...templateArgs, ...machineSwitchArgs, ...profileArgs, ...skipObjectArgs]
@@ -1088,14 +1110,19 @@ async function prepareProfileArgs(
   profileFiles: SliceProfileFile[],
   workDir: string,
   profileDir: string,
-  processSettingOverrides: Record<string, string | string[]> = {}
+  processSettingOverrides: Record<string, string | string[]> = {},
+  filamentSettingOverrides: Record<string, string | string[]> = {}
 ): Promise<string[]> {
   const settingsPaths: string[] = []
   const filamentPaths: string[] = []
   const customDir = path.join(workDir, 'profiles')
 
   for (const profile of profileFiles) {
-    const overrides = profile.kind === 'process' ? processSettingOverrides : undefined
+    const overrides = profile.kind === 'process'
+      ? processSettingOverrides
+      : profile.kind === 'filament'
+        ? filamentSettingOverrides
+        : undefined
     const profilePath = await materializeProfileFile(profile, customDir, profileDir, overrides)
     if (profile.kind === 'filament') filamentPaths.push(profilePath)
     else settingsPaths.push(profilePath)

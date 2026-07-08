@@ -227,6 +227,7 @@ async function withBrowserNotificationsApp(
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
+    registerSlotFilamentResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 

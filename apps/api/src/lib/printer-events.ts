@@ -67,6 +67,23 @@ export interface PrinterEvents {
     tenantId: string | null
     recentCrashCount: number
   }) => void
+  /**
+   * A filament spool became loaded in an AMS slot (the `filament-manager` plugin
+   * emits on RFID auto-association and manual slot assignment). Carries the
+   * spool's identity so a listener (the `calibration` plugin) can look up and
+   * apply a saved calibration for that filament without importing filament-manager.
+   */
+  'ams-slot.filament-loaded': (event: {
+    tenantId: string
+    printerId: string
+    amsId: number
+    slotId: number
+    spoolId: string
+    brand: string | null
+    filamentType: string | null
+    materialSubtype: string | null
+    colorName: string | null
+  }) => void
 }
 
 export class PrinterEventBus extends EventEmitter {

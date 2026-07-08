@@ -47,6 +47,7 @@ const printingStatus = makeStatus({
   ams: [{
     unitId: 0,
     nozzleId: 0,
+    type: 'ams-2-pro' as const,
     supportDrying: true,
     dryTimeRemainingMinutes: 90,
     dryingActive: true,
@@ -140,6 +141,7 @@ function makeStatus(overrides: Partial<PrinterStatus>): PrinterStatus {
     nozzleTemp: null,
     nozzleTarget: null,
     nozzles: [],
+    nozzleRack: null,
     chamberTemp: null,
     chamberTarget: null,
     fanGearSpeed: null,
@@ -321,6 +323,9 @@ test('home-assistant skips tenant-scoped websocket events when the plugin is dis
     },
     onShutdown() {},
     registerPrintGuard() {
+      return () => {}
+    },
+    registerSlotFilamentResolver() {
       return () => {}
     },
     registerAuthProvider() {

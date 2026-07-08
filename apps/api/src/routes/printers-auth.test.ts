@@ -870,6 +870,7 @@ test('loadAmsFilament commands stay available during paused filament-runout reco
     ams: [{
       unitId: 0,
       nozzleId: 0,
+      type: 'ams' as const,
       supportDrying: false,
       dryTimeRemainingMinutes: null,
       dryingActive: false,

@@ -73,6 +73,8 @@ export const TENANT_SCOPED_MODELS = new Set([
   'OrderPrint',
   'FilamentSpool',
   'FilamentSpoolUsage',
+  'CalibrationRun',
+  'CalibrationResult',
   'QueueItem',
   'TenantStats',
   'PrinterStats',

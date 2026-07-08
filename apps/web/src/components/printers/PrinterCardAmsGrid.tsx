@@ -16,10 +16,15 @@ export interface PrinterCardAmsGridProps {
   showExternalSpools: boolean
   cardsPerRow: number
   submitting: boolean
+  /** Printer identity, forwarded to per-slot plugin slots (e.g. filament calibration). */
+  printerId: string
+  printerModel: string
   onRefresh?: () => void
   onOpenDrying?: (unitId: number) => void
   onEditSlot?: (unit: AmsUnit, slot: AmsSlot) => void
   onRescanSlot?: (unit: AmsUnit, slot: AmsSlot) => void
+  /** Resolves why a slot's rescan is currently unavailable (tooltip + disabled), or null when allowed. */
+  rescanSlotDisabledReason?: (unit: AmsUnit, slot: AmsSlot) => string | null
   onResetSlot?: (unit: AmsUnit, slot: AmsSlot) => void
   onEditExternalSpool?: (spool: ExternalSpool) => void
 }
@@ -31,10 +36,13 @@ export function PrinterCardAmsGrid({
   showExternalSpools,
   cardsPerRow,
   submitting,
+  printerId,
+  printerModel,
   onRefresh,
   onOpenDrying,
   onEditSlot,
   onRescanSlot,
+  rescanSlotDisabledReason,
   onResetSlot,
   onEditExternalSpool
 }: PrinterCardAmsGridProps) {
@@ -63,10 +71,13 @@ export function PrinterCardAmsGrid({
           <AmsUnitRow
             unit={unit}
             compact={amsUnitSlotSpan(unit) < 4}
+            printerId={printerId}
+            printerModel={printerModel}
             onRefresh={onRefresh}
             onOpenDrying={onOpenDrying ? () => onOpenDrying(unit.unitId) : undefined}
             onEditSlot={onEditSlot ? (slot) => onEditSlot(unit, slot) : undefined}
             onRescanSlot={onRescanSlot ? (slot) => onRescanSlot(unit, slot) : undefined}
+            rescanSlotDisabledReason={rescanSlotDisabledReason ? (slot) => rescanSlotDisabledReason(unit, slot) : undefined}
             onResetSlot={onResetSlot ? (slot) => onResetSlot(unit, slot) : undefined}
             slotActionsDisabled={submitting}
           />
@@ -87,6 +98,7 @@ export function PrinterCardAmsGrid({
             spoolCount={externalSpools.length}
             compact={cardsPerRow >= 4}
             onEdit={onEditExternalSpool ? () => onEditExternalSpool(spool) : undefined}
+            printerId={printerId}
           />
         </Box>
       ))}

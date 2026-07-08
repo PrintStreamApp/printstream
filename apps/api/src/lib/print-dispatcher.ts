@@ -36,6 +36,7 @@ import {
   printerModelSchema,
   type PrinterModel
 } from '@printstream/shared'
+import { isSelfHostedDeployment } from './deployment-mode.js'
 import { conflict } from './http-error.js'
 import { readLibraryProjectFilamentChips } from './library-three-mf.js'
 import { prisma, rootPrisma } from './prisma.js'
@@ -150,6 +151,12 @@ class PrintDispatcher {
    * the server-side backstop so a stale bridge cannot print even if the UI is bypassed.
    */
   async assertBridgeAllowsPrinting(bridgeId: string, tenantId: string): Promise<void> {
+    // On a self-hosted bundle the bridge ships with the app and is lockstep by
+    // construction, so its self-reported `updateStatus` must never gate printing
+    // (see `resolveBridgeUpdateStatus`). A stale/blocking value there would
+    // otherwise refuse dispatch before the job is even created — the print would
+    // never appear in Jobs — for an "update" the operator has no way to apply.
+    if (isSelfHostedDeployment()) return
     // `Bridge` is not in TENANT_SCOPED_MODELS, so we scope explicitly with the
     // caller's tenantId. rootPrisma is used deliberately (no auto-scoping needed for a
     // by-id lookup that already carries tenantId).

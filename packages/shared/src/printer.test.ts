@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   getAmsLoadFilamentAvailability,
+  getAmsRescanAvailability,
   getAmsUnloadFilamentAvailability,
   getCheckAssistantAvailability,
   getConfirmAmsFilamentExtrudedAvailability,
@@ -330,6 +331,7 @@ test('shared printer action availability exposes command precondition reasons', 
     ams: [{
       unitId: 0,
       nozzleId: 0,
+      type: 'ams',
       supportDrying: false,
       dryTimeRemainingMinutes: null,
       dryingActive: false,
@@ -388,6 +390,7 @@ test('shared printer action availability exposes command precondition reasons', 
     ams: [{
       unitId: 0,
       nozzleId: 0,
+      type: 'ams',
       supportDrying: false,
       dryTimeRemainingMinutes: null,
       dryingActive: false,
@@ -474,6 +477,7 @@ test('shared filament action availability validates AMS and external spool actio
   const idleAmsUnit = {
     unitId: 0,
     nozzleId: 0,
+    type: 'ams' as const,
     supportDrying: false,
     dryTimeRemainingMinutes: null,
     dryingActive: false,
@@ -526,6 +530,95 @@ test('shared filament action availability validates AMS and external spool actio
     allowed: true,
     reason: null
   })
+})
+
+test('AMS rescan availability blocks a slot rescan while filament is loaded to the toolhead it feeds', () => {
+  const slot = (over: Partial<{ slot: number; active: boolean }> = {}) => ({
+    slot: 1,
+    trayName: null,
+    filamentType: 'PLA',
+    color: null,
+    colors: [],
+    remainPercent: null,
+    active: false,
+    isReading: false,
+    trayInfoIdx: 'GFA00',
+    caliIdx: null,
+    k: null,
+    trayUuid: null,
+    ...over
+  })
+  const unit = (over: Partial<{ unitId: number; nozzleId: number | null }> = {}, slots = [slot()]) => ({
+    unitId: 0,
+    nozzleId: 0 as number | null,
+    type: 'ams' as const,
+    supportDrying: false,
+    dryTimeRemainingMinutes: null,
+    dryingActive: false,
+    dryFilament: null,
+    dryTemperature: null,
+    dryDurationHours: null,
+    humidityPercent: null,
+    humidityLevel: null,
+    temperature: null,
+    slots,
+    ...over
+  })
+  const base: NonNullable<Parameters<typeof getAmsRescanAvailability>[0]> = {
+    online: true,
+    stage: 'idle',
+    subStage: null,
+    deviceError: null,
+    hmsErrors: [],
+    filamentChange: { currentStepIndex: null, currentStepLabel: null, steps: [] },
+    ams: [unit()],
+    externalSpools: []
+  }
+
+  // Nothing loaded → allowed.
+  assert.deepEqual(getAmsRescanAvailability(base, 0, 1), { allowed: true, reason: null })
+
+  // Offline → blocked with a connection reason.
+  assert.deepEqual(getAmsRescanAvailability({ ...base, online: false }, 0, 1), {
+    allowed: false,
+    reason: 'Rescan is only available while the printer is connected'
+  })
+
+  // A tray loaded to the toolhead blocks rescanning any slot on that toolhead,
+  // including a different, idle slot.
+  const loaded = {
+    ...base,
+    ams: [unit({}, [slot({ slot: 1, active: true }), slot({ slot: 2 })])]
+  }
+  assert.equal(getAmsRescanAvailability(loaded, 0, 1).allowed, false)
+  assert.equal(getAmsRescanAvailability(loaded, 0, 2).allowed, false)
+  assert.match(getAmsRescanAvailability(loaded, 0, 2).reason ?? '', /loaded to the toolhead/)
+
+  // An active external spool on the same toolhead also blocks.
+  assert.equal(getAmsRescanAvailability({
+    ...base,
+    externalSpools: [{
+      amsId: 255 as const, nozzleId: 0, trayName: null, filamentType: 'PLA', color: null, colors: [],
+      remainPercent: null, active: true, trayInfoIdx: '', caliIdx: null, k: null, trayUuid: null
+    }]
+  }, 0, 1).allowed, false)
+
+  // Mid filament-change → blocked with the busy reason.
+  assert.deepEqual(getAmsRescanAvailability({
+    ...base,
+    filamentChange: { currentStepIndex: 1, currentStepLabel: 'Heating nozzle', steps: ['Heating nozzle'] }
+  }, 0, 1), { allowed: false, reason: 'Current extruder is busy changing filament' })
+
+  // Dual-nozzle: a tray loaded on nozzle 0 must not block rescanning a slot fed to nozzle 1.
+  const dual = {
+    ...base,
+    ams: [
+      unit({ unitId: 0, nozzleId: 0 }, [slot({ slot: 1, active: true })]),
+      unit({ unitId: 1, nozzleId: 1 }, [slot({ slot: 1 })])
+    ]
+  }
+  assert.equal(getAmsRescanAvailability(dual, 0, 1).allowed, false)
+  assert.deepEqual(getAmsRescanAvailability(dual, 1, 1), { allowed: true, reason: null })
 })
 
 test('printer input accepts mixed nozzle sizes for dual-nozzle models', () => {

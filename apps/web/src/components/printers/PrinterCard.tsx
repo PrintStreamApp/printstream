@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Printer3dRoundedIcon } from '../../components/Printer3dRoundedIcon'
-import { getPrinterCalibrationCapabilities, getPrinterDisplayCapabilities, getPrinterControlCapabilities, isPrinterActiveJobStage, isPrinterIdleCompatibleStage, type AmsSlot, type AmsUnit, type ExternalSpool, type PrintJob, type PrinterActivePrintObjects, type PrinterCardContentSettings, type Printer, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
+import { getAmsRescanAvailability, getPrinterCalibrationCapabilities, getPrinterDisplayCapabilities, getPrinterControlCapabilities, isPrinterActiveJobStage, isPrinterIdleCompatibleStage, type AmsSlot, type AmsUnit, type ExternalSpool, type PrintJob, type PrinterActivePrintObjects, type PrinterCardContentSettings, type Printer, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { usePluginCatalogQuery } from '../../lib/pluginCatalogQuery'
@@ -370,8 +370,11 @@ function PrinterCardComponent({
     ? (dispatchInProgress ? 'A print is already being dispatched to this printer. Wait for that transfer to finish or cancel it first.' : null)
     : 'Plate has not been confirmed cleared. Confirm in PrintStream before printing again.'
   const canPrint = canShowPrintAction && plateCleared && !dispatchInProgress
-  const canShowCalibrate = isOnline && (stage === 'idle' || stage === 'finished' || stage === 'failed' || stage === 'unknown' || stage == null) && Object.values(calibrationCapabilities).some(Boolean)
-  const canCalibrate = canShowCalibrate && plateCleared
+  // Show Calibrate whenever the printer model supports it; keep it visible but disabled while the
+  // printer is offline or busy (mid-print) rather than hiding the item, so its availability reads
+  // as a temporary state. `canCalibrate` is the enable gate: online, idle, and plate confirmed clear.
+  const canShowCalibrate = Object.values(calibrationCapabilities).some(Boolean)
+  const canCalibrate = canShowCalibrate && isOnline && isIdleLikeStage && plateCleared
   const canOpenControls = canControlPrinter && isOnline
   const canPrintFromPrinter = canPrint
   const openControlsDialog = useCallback((tab: PrinterControlsDialogTab = 'printer') => {
@@ -976,10 +979,13 @@ function PrinterCardComponent({
             showExternalSpools={showExternalSpools}
             cardsPerRow={cardsPerRow}
             submitting={sendCommand.isPending}
+            printerId={printer.id}
+            printerModel={printer.model}
             onRefresh={canControlPrinter ? () => sendCommand.mutate({ type: 'refresh' }) : undefined}
             onOpenDrying={canManagePrinter ? (unitId) => setAmsDryingUnitId(unitId) : undefined}
             onEditSlot={editAmsSlot}
             onRescanSlot={rescanAmsSlot}
+            rescanSlotDisabledReason={rescanAmsSlot ? (unit, slot) => getAmsRescanAvailability(status, unit.unitId, slot.slot).reason : undefined}
             onResetSlot={resetAmsSlot}
             onEditExternalSpool={canManagePrinter ? (spool) => setEditingExternalSpool(spool) : undefined}
           />
