@@ -55,7 +55,7 @@ export function registerCalibrationRoutes(context: ApiPluginContext, deps: Calib
   router.post('/runs/:id/print', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
     const tenantId = requireRequestTenantId(request)
     const runId = requireRouteParam(request.params.id, 'Calibration run id')
-    await printRun(prisma, tenantId, runId)
+    await printRun(deps, prisma, tenantId, runId)
     annotateRequestAuditLog(request, { action: 'print-calibration', resource: 'calibration run', summary: 'Dispatched a calibration print.', metadata: { runId } })
     response.status(202).json({ run: toCalibrationRunDto((await getRun(prisma, tenantId, runId))!) })
   })

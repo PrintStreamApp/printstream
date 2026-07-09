@@ -14,6 +14,7 @@ import { getBrowserEnv } from './lib/browserEnv'
 import { registerAppServiceWorker } from './lib/appUpdate'
 import { shouldSuppressGlobalErrorToast, shouldSuppressPassiveAuthQueryError } from './lib/queryErrorToast'
 import { extractDisabledPluginNameFromErrorMessage } from './lib/pluginSettings'
+import { PLUGIN_CATALOG_QUERY_KEY } from './lib/pluginCatalogQuery'
 import { isMarketingPath, marketingRoutePaths } from './lib/marketingManifest'
 import { dismissSplashScreenImmediately, setSplashScreenProgress } from './lib/splashScreen'
 import { toast } from './lib/toast'
@@ -67,21 +68,36 @@ bootProgress(58, 'Preparing')
 // have a single, consistent place users see failures. Individual call sites
 // can opt out by handling `onError` themselves and swallowing it (or by
 // catching directly when using `apiFetch` outside react-query).
-const reportError = (error: unknown): void => {
-  const message = extractErrorMessage(error, 'Something went wrong')
-  if (extractDisabledPluginNameFromErrorMessage(message)) return
-  toast.error(message)
+// A plugin was disabled out from under this client (a background query or a user action hit its now-
+// dead route). Refetch the catalog so its stale entry points (nav tab, slot actions) disappear
+// instead of lingering as buttons that do nothing. Returns the plugin name when it was such an error.
+const selfHealDisabledPlugin = (message: string): string | null => {
+  const disabled = extractDisabledPluginNameFromErrorMessage(message)
+  if (disabled) void queryClient.invalidateQueries({ queryKey: PLUGIN_CATALOG_QUERY_KEY })
+  return disabled
 }
 
 const reportQueryError = (error: unknown, query: { meta?: unknown }): void => {
   if (shouldSuppressGlobalErrorToast(query.meta)) return
   if (shouldSuppressPassiveAuthQueryError(error)) return
-  reportError(error)
+  const message = extractErrorMessage(error, 'Something went wrong')
+  // A background query hitting a disabled plugin self-heals silently — toasting dead-route errors the
+  // user never triggered would just be noise.
+  if (selfHealDisabledPlugin(message)) return
+  toast.error(message)
 }
 
 const reportMutationError = (error: unknown, _variables: unknown, _context: unknown, mutation: { meta?: unknown }): void => {
   if (shouldSuppressGlobalErrorToast(mutation.meta)) return
-  reportError(error)
+  const message = extractErrorMessage(error, 'Something went wrong')
+  // A user action fired at a since-disabled plugin: self-heal the UI AND tell them, so the click is
+  // not a silent no-op (the button just spins, then nothing happens).
+  const disabled = selfHealDisabledPlugin(message)
+  if (disabled) {
+    toast.error(`The ${disabled} plugin is disabled. Enable it in Settings, then try again.`)
+    return
+  }
+  toast.error(message)
 }
 
 const queryClient = new QueryClient({

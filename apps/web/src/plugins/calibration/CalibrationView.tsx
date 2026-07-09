@@ -25,6 +25,7 @@ import {
 } from './api'
 import { NewCalibrationDialog } from './NewCalibrationDialog'
 import { CalibrationResultDialog } from './CalibrationResultDialog'
+import { runTitle } from './runPresentation'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
 
 const STATUS_LABELS: Record<CalibrationRun['status'], { label: string; color: 'neutral' | 'primary' | 'success' | 'warning' | 'danger' }> = {
@@ -46,11 +47,6 @@ const NEXT_STEP: Record<CalibrationRun['status'], string | null> = {
   saved: null,
   discarded: null,
   failed: null
-}
-
-function runTitle(run: CalibrationRun): string {
-  if (run.parameters.kind === 'pressureAdvance') return 'Pressure advance tower'
-  return `Flow ratio — ${run.parameters.pass === 1 ? 'coarse' : 'fine'} (pass ${run.parameters.pass})`
 }
 
 export function CalibrationView() {

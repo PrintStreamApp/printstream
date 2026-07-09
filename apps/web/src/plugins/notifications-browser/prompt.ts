@@ -3,6 +3,7 @@ import type { ApiPluginInfo } from '../../lib/pluginSettings'
 const ENROLLMENT_PROMPT_DISMISSED_KEY = 'bambu.notifications-browser.enrollment-prompt-dismissed.v1'
 
 interface BrowserNotificationsSupportState {
+  secureContext: boolean
   notification: boolean
   serviceWorker: boolean
   pushManager: boolean
@@ -20,6 +21,7 @@ export function shouldShowBrowserNotificationEnrollmentPrompt(
   state: BrowserNotificationEnrollmentPromptState
 ): boolean {
   return state.pluginEnabled
+    && state.support.secureContext
     && state.support.notification
     && state.support.serviceWorker
     && state.support.pushManager

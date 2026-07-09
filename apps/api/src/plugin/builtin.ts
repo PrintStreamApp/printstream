@@ -104,7 +104,7 @@ export async function registerBuiltinPlugins(): Promise<void> {
     tenantAccess: 'controlled'
   })
   await pluginRegistry.register(calibrationPlugin, {
-    defaultEnabled: true,
+    defaultEnabled: false,
     runtimeSurfaces: ['tenant'],
     managerSurfaces: ['platform', 'tenant'],
     tenantAccess: 'controlled'

@@ -707,7 +707,13 @@ export const createSlicingJobSchema = z.object({
    * slicing, so moved/rotated/scaled/added/removed models and multi-plate layout changes are
    * honored. Mutually layered with `selectedObjectIds`/`plate` (the edit is authoritative when set).
    */
-  sceneEdit: sceneEditSchema.optional()
+  sceneEdit: sceneEditSchema.optional(),
+  /**
+   * Plate previews to embed as each plate's `Metadata/plate_N.png` in the sliced output, for slices
+   * with no `sceneEdit` to carry them (e.g. procedural calibration prints, which BambuStudio's CLI
+   * gives no useful preview). When `sceneEdit.plateThumbnails` is present it takes precedence.
+   */
+  plateThumbnails: z.array(sceneEditPlateThumbnailSchema).optional()
 })
 export type CreateSlicingJob = z.infer<typeof createSlicingJobSchema>
 

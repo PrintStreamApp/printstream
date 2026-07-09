@@ -14,7 +14,7 @@
  * `slotFilamentResolvers` seam (filled by whichever filament plugin is present),
  * with the printer's live AMS status filling any gaps.
  */
-import { printerModelSchema, type PrinterCommand, type PrinterPressureAdvanceProfile } from '@printstream/shared'
+import { amsTrayIndex, printerModelSchema, type PrinterCommand, type PrinterPressureAdvanceProfile } from '@printstream/shared'
 import type { ApiPlugin } from '../../plugin/types.js'
 import { rootPrisma } from '../../lib/prisma.js'
 import { slotFilamentResolvers } from '../../lib/slot-filament-registry.js'
@@ -60,6 +60,12 @@ const deps: CalibrationRunManagerDeps = {
   getSlotK(printerId, amsId, slotId) {
     const status = printerManager.getStatus(printerId)
     return status?.ams.find((unit) => unit.unitId === amsId)?.slots.find((entry) => entry.slot === slotId)?.k ?? null
+  },
+  resolveTrayIndex(printerId, amsId, slotId) {
+    const status = printerManager.getStatus(printerId)
+    const unit = status?.ams.find((entry) => entry.unitId === amsId)
+    if (!unit) return null
+    return amsTrayIndex(unit.type, amsId, slotId)
   },
   async applyPrinterKValue(input) {
     const status = printerManager.getStatus(input.printerId)

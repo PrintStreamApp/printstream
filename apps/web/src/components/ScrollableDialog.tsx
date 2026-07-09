@@ -69,8 +69,16 @@ function assignRef<T>(ref: React.ForwardedRef<T>, value: T | null) {
 
 /**
  * Scrollable body region paired with `ScrollableModalDialog`.
+ *
+ * `pinToBottom` anchors the scroll position at the bottom of the content for
+ * chat-style threads whose newest entry sits last: the body becomes a
+ * `column-reverse` flex container, whose scroll origin is the bottom edge, so
+ * the latest message is visible on open and stays pinned as more arrive — with
+ * no scroll-to-bottom JS (and none of its post-paint jump). When the content is
+ * shorter than the body it simply hugs the bottom, which is the expected
+ * chat-thread look.
  */
-export const ScrollableDialogBody = React.forwardRef<HTMLDivElement, DialogContentProps>(function ScrollableDialogBody({ sx, children, ...props }, ref) {
+export const ScrollableDialogBody = React.forwardRef<HTMLDivElement, DialogContentProps & { pinToBottom?: boolean }>(function ScrollableDialogBody({ sx, children, pinToBottom = false, ...props }, ref) {
   const bodyRef = React.useRef<HTMLDivElement | null>(null)
   const [hasVerticalOverflow, setHasVerticalOverflow] = React.useState(true)
 
@@ -118,6 +126,7 @@ export const ScrollableDialogBody = React.forwardRef<HTMLDivElement, DialogConte
           overflowX: 'hidden',
           overflowY: hasVerticalOverflow ? 'auto' : 'hidden',
           scrollbarGutter: hasVerticalOverflow ? 'stable' : 'auto',
+          ...(pinToBottom ? { display: 'flex', flexDirection: 'column-reverse' } : {}),
         },
         ...sxArray(sx)
       ]}

@@ -75,6 +75,14 @@ async function getCurrentSubscription(): Promise<PushSubscription | null> {
 }
 
 interface SupportState {
+  /**
+   * Whether the page is running in a secure context (HTTPS, or a
+   * `localhost` origin). Browsers gate Service Workers and the Push API
+   * on this, so over plain HTTP `serviceWorker`/`pushManager` below are
+   * also absent — we track it separately to explain *why* rather than
+   * blaming the browser.
+   */
+  secureContext: boolean
   notification: boolean
   serviceWorker: boolean
   pushManager: boolean
@@ -82,9 +90,10 @@ interface SupportState {
 
 export function detectBrowserNotificationsSupport(): SupportState {
   if (typeof window === 'undefined') {
-    return { notification: false, serviceWorker: false, pushManager: false }
+    return { secureContext: false, notification: false, serviceWorker: false, pushManager: false }
   }
   return {
+    secureContext: window.isSecureContext === true,
     notification: 'Notification' in window,
     serviceWorker: 'serviceWorker' in navigator,
     pushManager: 'PushManager' in window
@@ -96,6 +105,16 @@ export async function hasBrowserNotificationsSubscription(): Promise<boolean> {
 }
 
 export async function enableBrowserNotificationsOnCurrentDevice(): Promise<void> {
+  // Browsers only expose Service Workers and the Push API in a secure
+  // context, so a self-hosted instance served over plain HTTP can never
+  // subscribe. Fail early with an actionable message instead of letting
+  // the later `serviceWorker`/`PushManager` access throw a cryptic one.
+  if (typeof window !== 'undefined' && window.isSecureContext !== true) {
+    throw new Error(
+      'Browser notifications require a secure (HTTPS) connection. Serve PrintStream over HTTPS, then try again.'
+    )
+  }
+
   if (Notification.permission !== 'granted') {
     const result = await Notification.requestPermission()
     if (result !== 'granted') {
@@ -238,6 +257,16 @@ function BrowserNotificationsPanel() {
     } finally {
       setBusy(false)
     }
+  }
+
+  if (!support.secureContext) {
+    return (
+      <Alert color="warning" variant="soft" size="sm" startDecorator={<WarningAmberRoundedIcon />}>
+        Browser notifications need a secure (HTTPS) connection. This page is loaded over HTTP, so your
+        browser blocks the Service Worker and Push APIs they rely on. Serve PrintStream over HTTPS (or
+        reach it via localhost) to enable them.
+      </Alert>
+    )
   }
 
   if (!fullySupported) {

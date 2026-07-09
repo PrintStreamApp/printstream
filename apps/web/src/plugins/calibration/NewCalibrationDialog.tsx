@@ -5,7 +5,6 @@
  * from the slicer catalogue for the printer's model and can be overridden.
  */
 import { memo, useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
 import { Alert, Button, FormControl, FormLabel, Modal, ModalClose, Option, Select, Stack, Typography } from '@mui/joy'
 import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -13,6 +12,8 @@ import {
   DEFAULT_PA_TOWER,
   FLOW_PASS_1_OFFSETS,
   FLOW_PASS_2_OFFSETS,
+  amsUnitLetter,
+  type CalibrationRun,
   type CreateCalibrationRun,
   type Printer,
   type PrinterStatus,
@@ -21,7 +22,6 @@ import {
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
-import { buildTenantWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
 import {
   BAMBU_STUDIO_PLATE_TYPES,
   formatPlateTypeLabel,
@@ -30,11 +30,11 @@ import {
   isProcessProfileCompatible,
   slicingProfilesResponseIsUsable
 } from '../../lib/sliceProfileMatching'
-import { toast } from '../../lib/toast'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { DialogSection } from '../../components/DialogSection'
 import { NumberField } from './NumberField'
 import { calibrationKeys, startCalibrationRun } from './api'
+import { CalibrationSlicePrintModal } from './CalibrationSlicePrintModal'
 
 type TestKind = 'pressureAdvance' | 'flowPass1' | 'flowPass2'
 
@@ -66,9 +66,10 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
 }) {
   const queryClient = useQueryClient()
   const scopeKey = readCurrentWorkspaceScopeKey()
-  const navigate = useNavigate()
-  const location = useLocation()
 
+  // Once a run is started the dialog swaps to a slice-progress tracker (like the library's
+  // slice-then-print flow) instead of closing and leaving the user to watch a toast.
+  const [startedRun, setStartedRun] = useState<CalibrationRun | null>(null)
   const [printerId, setPrinterId] = useState<string>(() => lockedTarget?.printerId ?? printers[0]?.id ?? '')
   const [slotKey, setSlotKey] = useState<string>(() => (lockedTarget ? `${lockedTarget.amsId}:${lockedTarget.slotId}` : ''))
   const [test, setTest] = useState<TestKind>(lockedTest ?? 'pressureAdvance')
@@ -99,7 +100,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
       const slots = (status?.ams ?? []).flatMap((unit) => unit.slots.map((slot) => ({
         amsId: unit.unitId,
         slotId: slot.slot,
-        label: `AMS ${unit.unitId} · slot ${slot.slot + 1}${slot.filamentType ? ` (${slot.filamentType})` : ''}`,
+        label: `AMS ${amsUnitLetter(unit.unitId)} · slot ${slot.slot + 1}${slot.filamentType ? ` (${slot.filamentType})` : ''}`,
         filamentType: slot.filamentType
       })))
       // The printer's live reported nozzle(s). The persisted printer row's `currentNozzleDiameters`
@@ -218,18 +219,16 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
       }
       return startCalibrationRun(body)
     },
-    onSuccess: () => {
+    onSuccess: (run) => {
       void queryClient.invalidateQueries({ queryKey: calibrationKeys.runs })
-      toast.success('Calibration started — slicing now')
-      onClose()
-      // Take the user to the Calibration view where the run's live status and next step (print →
-      // measure → save) live — otherwise "Start" just closes the dialog and leaves them stranded
-      // wherever they launched it (often the printer's AMS slot dialog).
-      const { tenantSlug } = parseWorkspacePathname(location.pathname)
-      if (tenantSlug) navigate(buildTenantWorkspacePath(tenantSlug, '/calibration'))
+      // Hand off to the slice-progress tracker (rendered below) rather than closing — it carries the
+      // user through slicing to the Print action and then lands them on the Calibration page.
+      setStartedRun(run)
     }
     // Errors surface once via the global mutation error handler (main.tsx) — no local onError toast.
   })
+
+  if (startedRun) return <CalibrationSlicePrintModal run={startedRun} onClose={onClose} />
 
   return (
     <Modal open onClose={onClose}>
@@ -243,7 +242,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
             {lockedTarget ? (
               <DialogSection title="Filament" description="Calibrating the filament loaded in this slot.">
                 <Typography level="body-sm">
-                  {selectedPrinter?.name ?? 'Printer'} · {selectedSlot?.label || `AMS ${lockedTarget.amsId} · slot ${lockedTarget.slotId + 1}`}
+                  {selectedPrinter?.name ?? 'Printer'} · {selectedSlot?.label || `AMS ${amsUnitLetter(lockedTarget.amsId)} · slot ${lockedTarget.slotId + 1}`}
                 </Typography>
               </DialogSection>
             ) : (

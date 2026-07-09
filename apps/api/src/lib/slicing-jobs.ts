@@ -353,17 +353,21 @@ export class SlicingJobs {
         // thumbnail reflects the edited layout — BambuStudio's CLI won't regenerate thumbnails
         // for a project with explicit (editor-set) positions. Best-effort: a failure here must
         // not fail an otherwise-successful slice.
-        const plateThumbnails = job.request.sceneEdit?.plateThumbnails
+        // Editor renders take precedence; otherwise a caller with no sceneEdit (e.g. calibration)
+        // can supply plate covers directly on the request.
+        const plateThumbnails = job.request.sceneEdit?.plateThumbnails ?? job.request.plateThumbnails
         if (plateThumbnails && plateThumbnails.length > 0) {
           await embedPlateThumbnails(
             result.artifactPath,
             plateThumbnails.map((thumb) => ({ plateIndex: thumb.plateIndex, png: Buffer.from(thumb.png, 'base64') }))
           ).catch((error: unknown) => {
-            this.logJobEvent(job, 'warn', `Could not embed edited-layout thumbnails: ${(error as Error).message}`)
+            this.logJobEvent(job, 'warn', `Could not embed plate thumbnails: ${(error as Error).message}`)
           })
           // Drop the (large base64) thumbnails now they're consumed, so the persisted job state
           // doesn't carry them.
-          job.request = { ...job.request, sceneEdit: { ...job.request.sceneEdit!, plateThumbnails: undefined } }
+          job.request = job.request.sceneEdit
+            ? { ...job.request, sceneEdit: { ...job.request.sceneEdit, plateThumbnails: undefined } }
+            : { ...job.request, plateThumbnails: undefined }
         }
         // A cancel that landed during slicing/saving: don't persist the artifact the user
         // cancelled. (The finally block cleans the artifact temp dir.)

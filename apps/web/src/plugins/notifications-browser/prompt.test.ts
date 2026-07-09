@@ -23,6 +23,7 @@ function createApiPlugin(input: Partial<ApiPluginInfo> & Pick<ApiPluginInfo, 'na
 const supportedState: BrowserNotificationEnrollmentPromptState = {
   pluginEnabled: true,
   support: {
+    secureContext: true,
     notification: true,
     serviceWorker: true,
     pushManager: true
@@ -58,6 +59,13 @@ test('shouldShowBrowserNotificationEnrollmentPrompt only nudges supported, enabl
     shouldShowBrowserNotificationEnrollmentPrompt({
       ...supportedState,
       support: { ...supportedState.support, pushManager: false }
+    }),
+    false
+  )
+  assert.equal(
+    shouldShowBrowserNotificationEnrollmentPrompt({
+      ...supportedState,
+      support: { ...supportedState.support, secureContext: false }
     }),
     false
   )

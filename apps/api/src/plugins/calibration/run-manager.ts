@@ -33,6 +33,7 @@ import { resolveSlicingProfileFiles } from '../../lib/slicing-profiles.js'
 import { slicingJobs } from '../../lib/slicing-jobs.js'
 import { enqueueLibraryPrint } from '../../lib/library-printing.js'
 import { buildFlowRatioThreeMf, buildPressureAdvanceThreeMf } from './build-3mf.js'
+import { renderCalibrationCover } from './cover.js'
 import { createRun, findResolvableResults, getRun, saveResult, updateRun, type FilamentIdentity } from './store.js'
 
 /**
@@ -87,6 +88,22 @@ export interface CalibrationRunManagerDeps {
   applyPrinterKValue?(input: { printerId: string; printerModel: string; amsId: number; slotId: number; kValue: number; nozzleDiameter: string; identity: FilamentIdentity }): Promise<void>
   /** The K value the printer currently reports for a slot, if known (to skip a redundant push). */
   getSlotK?(printerId: string, amsId: number, slotId: number): number | null
+  /**
+   * The printer's global AMS tray index for a slot (unit-type aware), used to pin the calibration
+   * print to the selected tray. Returns null when the printer/slot is not in live status, in which
+   * case dispatch falls back to the printer's own default tray.
+   */
+  resolveTrayIndex?(printerId: string, amsId: number, slotId: number): number | null
+}
+
+/**
+ * The `amsMapping` for a single-filament calibration print pinned to a resolved global tray index,
+ * or `undefined` to omit `ams_mapping` and let the printer use its own default tray (e.g. when the
+ * slot is not in live status). The tower/plate always has exactly one filament (project id 1), so a
+ * present mapping is a single-element array.
+ */
+export function calibrationAmsMapping(trayIndex: number | null): number[] | undefined {
+  return trayIndex != null ? [trayIndex] : undefined
 }
 
 /** Whether to push a saved K: only when one resolved and it differs from what the slot already has. */
@@ -208,7 +225,10 @@ export async function startRun(
       },
       plate: 1,
       hiddenOutput: true,
-      outputFileName: `${label} (sliced).gcode.3mf`
+      outputFileName: `${label} (sliced).gcode.3mf`,
+      // BambuStudio's CLI renders no useful preview for the procedural calibration geometry, so embed
+      // a recognizable per-kind cover as the plate thumbnail (jobs/history/printer card read it).
+      plateThumbnails: [{ plateIndex: 1, png: renderCalibrationCover(kind).toString('base64') }]
     }
     const profileFiles = await resolveSlicingProfileFiles(tenantId, [
       { id: input.printerProfileId, kind: 'machine' },
@@ -274,18 +294,26 @@ export async function syncSliceStatus(db: AnyPrismaClient, tenantId: string, run
 }
 
 /** Dispatch a sliced calibration run to its printer. */
-export async function printRun(db: AnyPrismaClient, tenantId: string, runId: string): Promise<void> {
+export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaClient, tenantId: string, runId: string): Promise<void> {
   const run = await getRun(db, tenantId, runId)
   if (!run) throw notFound('Calibration run not found')
   const synced = await syncSliceStatus(db, tenantId, run)
   if (synced.status !== 'readyToPrint' || !synced.outputFileId || !synced.printerId) {
     throw conflict('This calibration run is not ready to print yet.')
   }
+  // Pin the single calibration filament to the exact AMS tray the user chose. Without an explicit
+  // ams_mapping the printer picks its own default tray (slot 1), so the test would print from the
+  // wrong slot. amsMapping is indexed by (projectFilamentId - 1); the tower/plate has one filament.
+  const trayIndex = synced.amsId != null && synced.slotId != null
+    ? deps.resolveTrayIndex?.(synced.printerId, synced.amsId, synced.slotId) ?? null
+    : null
+  const amsMapping = calibrationAmsMapping(trayIndex)
   await enqueueLibraryPrint({
     fileId: synced.outputFileId,
     printerId: synced.printerId,
     plate: 1,
     useAms: true,
+    ...(amsMapping ? { amsMapping } : {}),
     // Do not let the printer's own flow / dynamics calibration override the test.
     flowCalibration: 'off',
     filamentDynamicsCalibration: false,
