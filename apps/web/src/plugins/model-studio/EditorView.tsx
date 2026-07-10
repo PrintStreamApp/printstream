@@ -3454,11 +3454,18 @@ function EditorView({
     setActivePlateIndex(toIndex)
   }, [updatePlates])
 
-  // Bake the controller's desired filament list (Bambu-style add/remove of materials)
-  // into every SceneEdit the editor emits, so both save and slice carry the new set.
+  // Bake the controller's desired filament list (Bambu-style add/remove of materials) and its
+  // chosen plate type into every SceneEdit the editor emits, so both save and slice carry them.
+  // The plate type is stamped onto every plate: the Settings tab's selector is project-global
+  // (like BambuStudio's `curr_bed_type`) and the per-plate values seeded from the source are all
+  // that same global value, so a stale seed must not outlive a Settings-tab change.
   const buildSceneEditOut = useCallback((current: EditorState, options?: { thumbnails?: Array<{ plateIndex: number; png: string }> }): SceneEdit => {
     const base = buildSceneEdit(current)
-    const withFilaments = sliceConfig?.desiredFilaments ? { ...base, filaments: sliceConfig.desiredFilaments } : base
+    const plateType = sliceConfig?.plateType.trim()
+    const withPlateType = plateType
+      ? { ...base, plates: base.plates.map((plate) => ({ ...plate, plateType })) }
+      : base
+    const withFilaments = sliceConfig?.desiredFilaments ? { ...withPlateType, filaments: sliceConfig.desiredFilaments } : withPlateType
     // Attach freshly-captured plate previews (when provided) so the saved 3MF / sliced output's
     // thumbnail reflects the edited layout — the slicer CLI and the 3MF rewriter both reuse the
     // embedded PNG rather than regenerating it. Callers capture via captureAllPlateThumbnails().

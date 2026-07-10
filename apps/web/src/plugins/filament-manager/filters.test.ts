@@ -21,6 +21,7 @@ function makeSpool(overrides: Partial<FilamentSpool> = {}): FilamentSpool {
     colors: ['#C12E1F'],
     trayInfoIdx: 'GFA00',
     bambuUuid: null,
+    slicingPresetName: null,
     serial: null,
     nozzleTempMin: null,
     nozzleTempMax: null,

@@ -4,6 +4,13 @@
  * sees the computed value, then chooses how widely to save it: to this spool, or
  * to a filament identity (toggle which fields must match), and — for pressure
  * advance — optionally straight to the printer's own K profile.
+ *
+ * One button does everything: it always submits the CURRENT form measurement and
+ * then saves, so the previewed value and the saved value can never diverge. (A
+ * two-step Record-then-Save flow shipped first and burned a user: a reopened
+ * dialog reset its inputs but "Save" persisted the server's earlier measurement,
+ * saving a different K than the preview showed.) Reopening a measured run seeds
+ * the inputs from the recorded measurement for the same reason.
  */
 import { memo, useMemo, useState } from 'react'
 import { Alert, Button, Checkbox, FormControl, FormLabel, IconButton, Modal, ModalClose, Option, Radio, RadioGroup, Select, Stack, Tooltip, Typography } from '@mui/joy'
@@ -25,8 +32,11 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
   const queryClient = useQueryClient()
   const isFlow = run.parameters.kind === 'flowRatio'
 
-  const [heightMm, setHeightMm] = useState(0)
-  const [offset, setOffset] = useState<number>(() => (run.parameters.kind === 'flowRatio' ? (run.parameters.offsets[0] ?? 0) : 0))
+  const [heightMm, setHeightMm] = useState(() => (run.measurement?.kind === 'pressureAdvance' ? run.measurement.bestHeightMm : 0))
+  const [offset, setOffset] = useState<number>(() => {
+    if (run.measurement?.kind === 'flowRatio') return run.measurement.selectedOffset
+    return run.parameters.kind === 'flowRatio' ? (run.parameters.offsets[0] ?? 0) : 0
+  })
   const [scope, setScope] = useState<'spool' | 'identity'>(run.spoolId ? 'spool' : 'identity')
   const [match, setMatch] = useState({ brand: true, filamentType: true, materialSubtype: true, colorName: false })
 
@@ -37,18 +47,15 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: calibrationKeys.runs })
 
-  const submit = useMutation({
-    mutationFn: () => submitCalibrationMeasurement(run.id, {
-      measurement: run.parameters.kind === 'flowRatio'
-        ? { kind: 'flowRatio', selectedOffset: offset }
-        : { kind: 'pressureAdvance', bestHeightMm: heightMm }
-    }),
-    onSuccess: () => { void invalidate(); toast.success('Result recorded') }
-    // Errors surface once via the global mutation error handler (main.tsx) — no local onError toast.
-  })
-
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      // Always submit the measurement currently on screen before saving — never trust a
+      // previously recorded one — so the previewed value is the one that gets saved.
+      await submitCalibrationMeasurement(run.id, {
+        measurement: run.parameters.kind === 'flowRatio'
+          ? { kind: 'flowRatio', selectedOffset: offset }
+          : { kind: 'pressureAdvance', bestHeightMm: heightMm }
+      })
       const body: SaveCalibrationResult = { scope, applyToPrinter: !isFlow && applyToPrinter, ...(scope === 'identity' ? { match } : {}) }
       return saveCalibrationRun(run.id, body)
     },
@@ -62,7 +69,6 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
   })
 
   const [applyToPrinter, setApplyToPrinter] = useState(!isFlow)
-  const measurementSaved = run.resultValue != null
 
   return (
     <Modal open onClose={onClose}>
@@ -84,7 +90,7 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
                   </Select>
                 </FormControl>
               ) : (
-                <NumberField label="Best band height (mm)" value={heightMm} min={0} step={1} onChange={setHeightMm} />
+                <NumberField label="Best band height" value={heightMm} min={0} step={1} endDecorator="mm" onChange={setHeightMm} />
               )}
               <Alert color="primary" size="sm" sx={{ mt: 1 }}>
                 {isFlow ? `New flow ratio: ${computedValue.toFixed(3)}` : `Pressure advance K: ${computedValue.toFixed(4)}`}
@@ -137,11 +143,7 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
         </ScrollableDialogBody>
         <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 1 }}>
           <Button variant="plain" color="neutral" onClick={onClose}>Cancel</Button>
-          {!measurementSaved ? (
-            <Button onClick={() => submit.mutate()} loading={submit.isPending}>Record result</Button>
-          ) : (
-            <Button onClick={() => save.mutate()} loading={save.isPending}>Save</Button>
-          )}
+          <Button onClick={() => save.mutate()} loading={save.isPending}>Save result</Button>
         </Stack>
       </ScrollableModalDialog>
     </Modal>

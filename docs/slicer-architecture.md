@@ -32,6 +32,7 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | **Shared 3MF model** | shared | `packages/shared/src/slicing.ts` (`SceneEdit`, slicing job contracts), the scene/index schemas in `printer.ts` |
 | **Shared 3MF model** | api/bridge/shared | the `apps/api/src/lib/three-mf-*.ts` modules (read + write, re-exported via the `three-mf.ts` barrel); the pure **index** parse lives in `@printstream/shared/three-mf` and is shared by `three-mf-reader.ts` and the bridge's `apps/bridge/src/library-3mf.ts` (no hand-kept mirror) |
 | **Printer retarget** | shared/api | "Save as a different printer" — rewrites a project's machine + process settings (no slicing). `packages/shared/src/machine-retarget.ts`, `apps/api/src/lib/save-retarget.ts`. See `docs/project-printer-retarget.md` |
+| **Calibration** | api/web plugin | Builds disposable calibration prints (PA towers, flow plates) and runs them through the slicing pipeline + dispatcher. `apps/api/src/plugins/calibration/**`, `apps/web/src/plugins/calibration/**`. See "Calibration (plugin surface)" below |
 
 ## The `SceneEdit` contract (the seam)
 
@@ -177,8 +178,75 @@ per **instance** — build items appear in instance-id order, so an object with 
 and skipped items skips only the toggled instances, while an object whose items are all
 unprintable skips every instance.
 
+## Calibration (plugin surface)
+
+Filament calibration (`calibration` plugin: `apps/api/src/plugins/calibration/`,
+`apps/web/src/plugins/calibration/`) is a **consumer of the slicing pipeline**, not a
+third feature. It generates disposable calibration prints, runs them through the *same*
+job queue and print dispatcher as any other slice, and saves the measured result per
+filament identity for reuse. It never reaches into the editor or the pipeline internals —
+it builds a 3MF on disk and hands it to `POST /api/slicing/jobs` like everything else.
+
+Two calibration kinds, both built in `build-3mf.ts` from geometry in `geometry.ts`:
+
+| Kind | Geometry | How the swept variable is encoded | Slice-time process overrides |
+| --- | --- | --- | --- |
+| **Pressure advance** (`pressureAdvance`) | one `tower_with_seam` tower (`pressureAdvanceTower`) | a `Metadata/custom_gcode_per_layer.xml` sidecar injects `M400` + `M900 K…` at each height band, so K steps up the tower | `PA_TOWER_PROCESS_OVERRIDES` — rear seam, 2 walls, no top/infill, and a brim (see the brim invariant below) |
+| **Flow ratio** (`flowRatio`, pass 1/2) | a grid of patches (`flowRatioPlate`), one object per offset | each patch object carries its own `print_flow_ratio` metadata override (`currentFlowRatio * (100 + offset) / 100`) so one slice prints the whole ladder | `FLOW_PROCESS_OVERRIDES` — solid readable top surface at a neutral base flow |
+
+**Run lifecycle.** A `CalibrationRun` row tracks state `slicing → readyToPrint →
+printing → awaitingResult → saved` (or `discarded`/`failed`), managed by `run-manager.ts`.
+The build produces a **hidden** library 3MF; `run-manager` enqueues it on the slicing job
+queue (`processSettingOverrides` carry the per-kind overrides), reconciles the queue on
+read to advance `slicing → readyToPrint` (recording the job's `outputFileId` on the run),
+and dispatches through `print-dispatcher.ts` pinned to the chosen AMS tray via
+`ams_mapping` (`calibrationAmsMapping` + `trayIndexToAmsSlot`). The web wizard
+(`CalibrationSlicePrintModal`) tracks the slice inline and mirrors the library
+slice-result UI — shared `SliceEstimates` panel + a **Preview** button that opens the
+model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outputFileId`
+— but has no save-to-library (the run *is* the tracked entity).
+
+**Result application** (measured best band → reused on matching filament):
+
+- **Pressure advance K is printer-side, not slice-time.** `applyPrinterKValue` must
+  *create the K profile and then select it* on the tray — creating alone does not apply it
+  (see the hardware-verified note in the plugin). `autoApplyOnLoad` (on the
+  `ams-slot.filament-loaded` bus event) pushes a filament's saved K when it is loaded into
+  a slot, so a calibrated spool self-applies.
+- **Flow ratio is a saved value keyed by filament identity.** `store.ts` persists a
+  `CalibrationResult`; `resolution.ts` picks the best match by identity **specificity**
+  (RFID/brand/preset over bare type). Tying a run to the loaded spool uses the pull-based
+  `slotFilamentResolvers` registry (filled by `filament-manager`) — see the plugin guide.
+- **Not yet wired: the SliceFileModal "calibrated flow" chip.** A saved flow ratio is
+  *not* currently injected into an ordinary user print, and the slice dialog does not
+  surface that a calibrated value exists for the selected filament. Wiring it means baking
+  the resolved `filament_flow_ratio` into a normal slice **and** showing a chip in
+  `SliceFileModal` — a core-dialog change that needs slice verification, so it is a known
+  follow-up. (Pressure advance already reaches real prints via the printer-side path
+  above, so it needs no such chip.)
+
 ## Invariants
 
+- **A from-scratch project's settings must survive the save.** A new-project scaffold
+  (`buildEditedThreeMf(null, …)`) embeds no `Metadata/project_settings.config`, so the save path
+  synthesizes one: `buildEditedThreeMf` composes the filament / plate-type (`curr_bed_type`) /
+  prime-tower rewrites onto `'{}'` and writes the entry when the base has none, and the editor's
+  chosen machine rides the retarget path (built by the web even when the project has no source
+  model; `retargetSavedProjectMachine` upserts from an empty object). The slicer side has the
+  matching guard: `apps/slicer/src/project-settings-fallback.ts` completes an absent OR partial
+  embedded config via a genuine `--export-settings` merge (overlaying the project's own values),
+  because the CLI's BBL-project loader segfaults on structurally incomplete settings. Two
+  hard-won specifics: a PROJECT-PRESET slice (`project:process:…`) loads no external profiles at
+  all — the export args are derived from the preset names the embedded settings carry, resolved
+  against the slicer's builtin catalog — and the export must always cover the FILAMENT domain
+  (falling back to Generic PLA), because a filament-less export omits the per-filament override
+  arrays (`filament_retraction_length`, …) and the bare loader segfaults on those alone.
+- **Calibration PA-tower brim must be `outer_only`, never `brim_ears`.** In our
+  BambuStudio fork `brim_ears` is the *painted* brim type: it emits nothing unless manual
+  ear points are painted into `Metadata/brim_ear_points.txt`, which the tower has none of,
+  so a tall narrow tower would print with **no brim and poor adhesion**. `outer_only` is a
+  full automatic perimeter brim (BambuStudio's own tower recipe sets no brim at all; ours
+  adds one deliberately). See `PA_TOWER_PROCESS_OVERRIDES` in `run-manager.ts`.
 - **Shared 3MF index parser.** The parsed *index* shape is produced by one shared module,
   `@printstream/shared/three-mf`, consumed by both `apps/api/src/lib/three-mf-reader.ts` and
   `apps/bridge/src/library-3mf.ts`. Changing the index shape means editing that parser once,

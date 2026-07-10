@@ -1583,15 +1583,25 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
   let storageThreeMfIndex: Awaited<ReturnType<typeof readPrinterStorageThreeMfIndex>> | null = null
   if (path.extname(filePath).toLowerCase() === '.3mf') {
     storageThreeMfIndex = await readPrinterStorageThreeMfIndex(printer, filePath)
-    assertAutomaticPrintCompatibility({
-      index: storageThreeMfIndex,
-      plate: parsed.data.plate,
-      printerModel: printer.model,
-      printerStatus: printerManager.getStatus(printer.id),
-      useAms: parsed.data.useAms,
-      amsMapping: parsed.data.amsMapping,
-      allowIncompatibleFilament: parsed.data.allowIncompatibleFilament
-    })
+    try {
+      assertAutomaticPrintCompatibility({
+        index: storageThreeMfIndex,
+        plate: parsed.data.plate,
+        printerModel: printer.model,
+        printerStatus: printerManager.getStatus(printer.id),
+        useAms: parsed.data.useAms,
+        amsMapping: parsed.data.amsMapping,
+        allowIncompatibleFilament: parsed.data.allowIncompatibleFilament
+      })
+    } catch (error) {
+      // Mirror the library-print pre-flight logging: a rejection here starts no
+      // job, so this warn is the only server-side trace of why the print never
+      // began (self-hosted operators diagnose via docker logs).
+      console.warn(
+        `[dispatch] storage-print pre-flight rejected for printer ${printer.id} (${filePath}): ${(error as Error).message}`
+      )
+      throw error
+    }
   }
 
   const remoteName = filePath.replace(/^\//, '')

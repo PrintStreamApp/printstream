@@ -1,4 +1,5 @@
 import type { OrderTemplate, OrderTemplateVariantInput } from '@printstream/shared'
+import { randomUUID } from '../../lib/randomId'
 
 /**
  * Helpers for the orders template editor's grouped per-file draft state.
@@ -30,7 +31,7 @@ export interface TemplateDraftVariant {
 
 export function createEmptyTemplateDraftVariant(name = 'Default'): TemplateDraftVariant {
   return {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     name,
     items: [createEmptyTemplateDraftItem()]
   }
@@ -38,7 +39,7 @@ export function createEmptyTemplateDraftVariant(name = 'Default'): TemplateDraft
 
 export function createEmptyTemplateDraftItem(): TemplateDraftItem {
   return {
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     libraryFileId: '',
     libraryFileName: '',
     notes: '',
@@ -69,7 +70,7 @@ export function groupTemplateItems(items: OrderTemplate['items']): TemplateDraft
   }
 
   return Array.from(grouped.values(), ({ item, plateTotals }) => ({
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     ...item,
     plateQuantities: Array.from(plateTotals.entries())
       .map(([plate, quantity]) => ({ plate, quantity }))
@@ -83,7 +84,7 @@ export function groupTemplateVariants(variants: OrderTemplate['variants']): Temp
   }
 
   return variants.map((variant) => ({
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     name: variant.name,
     items: groupTemplateItems(variant.items)
   }))

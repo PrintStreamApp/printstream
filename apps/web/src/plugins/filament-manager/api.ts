@@ -4,6 +4,7 @@
  * the spool list locally for instant feedback; the WS `plugin.event` sync
  * (`useFilamentSync`) keeps other open clients in step.
  */
+import { useCallback } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   type FilamentSpool,
@@ -16,6 +17,8 @@ import {
   type SpoolAssignInput
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
+import type { SlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
+import { findLoadedSpoolForSlot } from './filters'
 
 export const SPOOLS_QUERY_KEY = ['filament-manager', 'spools'] as const
 export const FILAMENT_STATS_QUERY_KEY = ['filament-manager', 'stats'] as const
@@ -37,15 +40,42 @@ export function useFilamentStatsQuery(enabled: boolean) {
   })
 }
 
-export function useSpoolsQuery() {
+export function useSpoolsQuery(enabled = true) {
   return useQuery<FilamentSpool[]>({
     queryKey: SPOOLS_QUERY_KEY,
     queryFn: async ({ signal }) => {
       const data = await apiFetch<FilamentSpoolList>(`${BASE}/spools?includeArchived=true`, { signal })
       return data.spools
     },
+    enabled,
     staleTime: 30_000
   })
+}
+
+/**
+ * Loaded-spool lookup for the core `slotFilamentIdentity` registry: joins the
+ * spool list by loaded location (printer + AMS + slot) and returns the spool's
+ * identity fields in the canonical resolver's shape. Registered from the
+ * plugin's `init`; `enabled` (plugin active for the tenant) gates the fetch.
+ */
+export function useLoadedSpoolIdentityLookup(enabled: boolean): SlotFilamentIdentityLookup {
+  const spoolsQuery = useSpoolsQuery(enabled)
+  const spools = spoolsQuery.data
+  return useCallback((printerId, amsId, slotId) => {
+    const spool = findLoadedSpoolForSlot(spools, { printerId, amsId, slotId })
+    if (!spool) return null
+    return {
+      spoolId: spool.id,
+      brand: spool.brand,
+      filamentType: spool.filamentType,
+      materialSubtype: spool.materialSubtype,
+      colorName: spool.colorName,
+      colorHex: spool.colorHex,
+      slicingPresetName: spool.slicingPresetName,
+      remainingGrams: Math.round(spool.remainingGrams),
+      remainPercent: spool.remainPercent
+    }
+  }, [spools])
 }
 
 export function useSpoolUsageQuery(id: string | null) {

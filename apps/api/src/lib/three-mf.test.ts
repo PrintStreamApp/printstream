@@ -9,6 +9,7 @@ import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
 import { applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
+import { rewriteThreeMfEntries } from './three-mf-internal.js'
 import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
 import type { SceneEdit, SceneEditFilament } from '@printstream/shared'
 
@@ -1780,6 +1781,118 @@ test('writeArrangedThreeMf persists a material profile change: filament_settings
     assert.deepEqual(settings.filament_type, ['PETG', 'PETG'])
     // Slot 1 takes the new preset; slot 2 keeps its existing id (no explicit settingsId).
     assert.deepEqual(settings.filament_settings_id, ['Bambu PETG HF @BBL H2D 0.4 nozzle', 'Generic PETG'])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('saving from a settings-less new-project scaffold synthesizes project_settings.config (materials + plate type survive)', async () => {
+  // Regression: a new-project scaffold carries no Metadata/project_settings.config, and the
+  // filament/plate-type rewrites used to be registered only as copy-pass transforms of an
+  // EXISTING entry — so the first save of a new project silently dropped the chosen material
+  // and plate type, and the project reopened with defaults.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-scaffold-'))
+  const scaffoldPath = path.join(tempDir, 'scaffold.3mf')
+  const savedPath = path.join(tempDir, 'saved.3mf')
+  try {
+    // The scaffold exactly as POST /api/editor/new-project builds it: from scratch, empty edit.
+    await buildEditedThreeMf(null, scaffoldPath, { plates: [{ index: 1 }], instances: [] }, [])
+    await assert.rejects(readEntry(scaffoldPath, 'Metadata/project_settings.config'))
+
+    // First save: a material and a plate type were chosen in the editor.
+    const edit: SceneEdit = {
+      plates: [{ index: 1, plateType: 'textured_pei_plate' }],
+      instances: [],
+      filaments: [{ color: '#00AE42', type: 'PLA', settingsId: 'Bambu PLA Basic @BBL P1P' }]
+    }
+    await buildEditedThreeMf(scaffoldPath, savedPath, edit, [])
+
+    const settings = await readProjectSettings(savedPath)
+    assert.deepEqual(settings.filament_colour, ['#00AE42'])
+    assert.deepEqual(settings.filament_type, ['PLA'])
+    assert.deepEqual(settings.filament_settings_id, ['Bambu PLA Basic @BBL P1P'])
+    // Canonicalized to BambuStudio's serialized enum value.
+    assert.equal(settings.curr_bed_type, 'Textured PEI Plate')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('a from-scratch build with filaments embeds project_settings.config directly', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-freshsettings-'))
+  const outputPath = path.join(tempDir, 'fresh.3mf')
+  try {
+    const edit: SceneEdit = {
+      plates: [{ index: 1, plateType: 'cool_plate' }],
+      instances: [],
+      filaments: [{ color: '#112233', type: 'PETG' }]
+    }
+    await buildEditedThreeMf(null, outputPath, edit, [])
+    const settings = await readProjectSettings(outputPath)
+    assert.deepEqual(settings.filament_colour, ['#112233'])
+    assert.equal(settings.curr_bed_type, 'Cool Plate')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('writeArrangedThreeMf persists a plate-type change on a project with existing settings', async () => {
+  // Regression: no save path ever wrote `curr_bed_type`, so a plate-type change in the editor
+  // was lost on reopen even for projects WITH embedded settings (the source value was copied
+  // verbatim and won).
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-platetype-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'replated.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(ARRANGE_MODEL_XML, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(FILAMENT_MODEL_SETTINGS_XML, 'utf8')],
+      ['Metadata/project_settings.config', Buffer.from(FILAMENT_PROJECT_SETTINGS_JSON, 'utf8')]
+    ])
+    const edit: SceneEdit = {
+      plates: [{ index: 1, plateType: 'Cool Plate' }],
+      instances: [
+        { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ]
+    }
+    await writeArrangedThreeMf(sourcePath, outputPath, edit)
+    const settings = await readProjectSettings(outputPath)
+    assert.equal(settings.curr_bed_type, 'Cool Plate')
+    // The rest of the settings survive the rewrite untouched.
+    assert.deepEqual(settings.filament_colour, ['#FF0000', '#00FF00'])
+    assert.deepEqual(settings.nozzle_temperature, ['220', '240'])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('rewriteThreeMfEntries upserts appendEntries: appended when absent, transform wins when present', async () => {
+  // The machine-retarget write path relies on this to give a settings-less scaffold save its
+  // project_settings.config while never duplicating the entry on a normal project.
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-upsert-'))
+  const withoutPath = path.join(tempDir, 'without.3mf')
+  const withPath = path.join(tempDir, 'with.3mf')
+  const appendedPath = path.join(tempDir, 'appended.3mf')
+  const transformedPath = path.join(tempDir, 'transformed.3mf')
+  try {
+    const entryName = 'Metadata/project_settings.config'
+    await writeZipFixture(withoutPath, [['3D/3dmodel.model', Buffer.from('<model/>', 'utf8')]])
+    await rewriteThreeMfEntries(withoutPath, appendedPath, {}, [{ name: entryName, content: '{"appended":true}' }])
+    assert.equal((await readEntry(appendedPath, entryName)).toString('utf8'), '{"appended":true}')
+
+    await writeZipFixture(withPath, [
+      ['3D/3dmodel.model', Buffer.from('<model/>', 'utf8')],
+      [entryName, Buffer.from('{"original":true}', 'utf8')]
+    ])
+    await rewriteThreeMfEntries(
+      withPath,
+      transformedPath,
+      { [entryName]: () => '{"transformed":true}' },
+      [{ name: entryName, content: '{"appended":true}' }]
+    )
+    assert.equal((await readEntry(transformedPath, entryName)).toString('utf8'), '{"transformed":true}')
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

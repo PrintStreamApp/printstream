@@ -54,11 +54,6 @@ services:
       API_PORT: 4000
       DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/printstream?schema=public}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:8080}
-      CLOUDFLARE_EMAIL_ACCOUNT_ID: ${CLOUDFLARE_EMAIL_ACCOUNT_ID:-}
-      CLOUDFLARE_EMAIL_API_TOKEN: ${CLOUDFLARE_EMAIL_API_TOKEN:-}
-      CLOUDFLARE_EMAIL_FROM_EMAIL: ${CLOUDFLARE_EMAIL_FROM_EMAIL:-}
-      CLOUDFLARE_EMAIL_FROM_NAME: ${CLOUDFLARE_EMAIL_FROM_NAME:-}
-      AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES: ${AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES:-}
       LIBRARY_DIR: /data/library
       # Bridge release artifacts (published by CI, promoted by deploys) live in
       # the repo checkout and are bind-mounted so the API can serve them.

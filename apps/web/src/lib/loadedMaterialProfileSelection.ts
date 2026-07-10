@@ -1,9 +1,11 @@
-import type { SlicingProfileSummary } from '@printstream/shared'
+import { normalizeFilamentFamily, type SlicingProfileSummary } from '@printstream/shared'
 import { filamentPresetNameFromId } from '../data/bambuFilamentPresets'
 
 interface LoadedMaterialProfileSelectionInput {
   trayName: string | null
   trayInfoIdx: string | null
+  /** The tray's reported filament type ("PLA"); vetoes profiles of a different family. */
+  trayFilamentType: string | null
   mappedPresetName: string | null
   selectedMachineProfile: SlicingProfileSummary | null
   selectedPrinterModel: string
@@ -13,6 +15,13 @@ interface LoadedMaterialProfileSelectionInput {
  * Prefer the most printer-specific compatible filament profile for an AMS slot.
  * BambuStudio first syncs against the tray's filament id, then upgrades to a
  * compatible printer-specific preset for the selected machine when available.
+ *
+ * A profile is only eligible when the tray actually identifies it: its filament
+ * family must not conflict with the tray's reported type, and at least one
+ * identity signal (filament id, preset/tray name, family, or type agreement)
+ * must score. Machine compatibility alone never selects a profile — that is
+ * what used to label an unidentified custom PLA tray with whichever
+ * machine-compatible profile sorted first (e.g. "ASA - Custom").
  */
 export function pickLoadedMaterialProfile(
   profiles: SlicingProfileSummary[],
@@ -22,6 +31,7 @@ export function pickLoadedMaterialProfile(
   const normalizedTrayName = normalizeProfileText(input.trayName ?? '')
   const normalizedMappedPresetName = normalizeProfileText(input.mappedPresetName ?? '')
   const normalizedPresetFamily = normalizeProfileFamily(input.mappedPresetName ?? input.trayName ?? '')
+  const trayTypeFamily = normalizeFilamentFamily(input.trayFilamentType)
 
   let best: SlicingProfileSummary | null = null
   let bestScore = 0
@@ -32,6 +42,7 @@ export function pickLoadedMaterialProfile(
       normalizedTrayName,
       normalizedMappedPresetName,
       normalizedPresetFamily,
+      trayTypeFamily,
       selectedMachineProfile: input.selectedMachineProfile,
       selectedPrinterModel: input.selectedPrinterModel
     })
@@ -65,29 +76,47 @@ function scoreLoadedMaterialProfile(
     normalizedTrayName: string
     normalizedMappedPresetName: string
     normalizedPresetFamily: string
+    trayTypeFamily: string | null
     selectedMachineProfile: SlicingProfileSummary | null
     selectedPrinterModel: string
   }
 ): number {
-  let score = 0
   const normalizedName = normalizeProfileText(profile.name)
 
+  // Hard veto: a profile of a different filament family can never represent the
+  // tray, no matter how machine-compatible it is (PLA tray ≠ ASA profile).
+  const profileTypeFamily = normalizeFilamentFamily(profile.filamentType ?? null)
+  if (input.trayTypeFamily && profileTypeFamily && profileTypeFamily !== input.trayTypeFamily) {
+    return 0
+  }
+
+  let identityScore = 0
   if (
     input.normalizedTrayInfoIdx
     && (profile.filamentIds ?? []).some((id) => normalizeProfileText(id) === input.normalizedTrayInfoIdx)
   ) {
-    score += 40
+    identityScore += 40
   }
   if (input.normalizedMappedPresetName && normalizedName === input.normalizedMappedPresetName) {
-    score += 25
+    identityScore += 25
   }
   if (input.normalizedTrayName && normalizedName === input.normalizedTrayName) {
-    score += 20
+    identityScore += 20
   }
   if (input.normalizedPresetFamily && normalizeProfileFamily(profile.name) === input.normalizedPresetFamily) {
-    score += 10
+    identityScore += 10
+  }
+  // Weak identity: the profile's own filament family agrees with the tray's
+  // reported type — lets a custom "PLA" tray pick a PLA profile for the machine.
+  if (input.trayTypeFamily && profileTypeFamily && profileTypeFamily === input.trayTypeFamily) {
+    identityScore += 15
   }
 
+  // No identity signal at all → not selectable; machine bonuses only rank
+  // among profiles the tray already identifies.
+  if (identityScore === 0) return 0
+
+  let score = identityScore
   const exactMachineMatch = matchesExactMachineProfile(profile, input.selectedMachineProfile)
   if (exactMachineMatch) score += 100
   if (matchesSelectedMachineProfile(profile, input.selectedMachineProfile, input.selectedPrinterModel)) {
@@ -147,7 +176,8 @@ function normalizeProfileFamily(value: string): string {
   return normalizeProfileText(base)
 }
 
-function normalizeProfileText(value: string): string {
+/** Case/punctuation-insensitive profile-name normalization (also used to match a spool's stored preset name). */
+export function normalizeProfileText(value: string): string {
   return value.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ')
 }
 

@@ -85,6 +85,7 @@ import {
   type LoadedMaterialSource,
   type SliceMaterialOption
 } from '../../lib/sliceProfileMatching'
+import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { slicingProfilesQueryOptions } from '../../lib/slicingProfilesQuery'
 import { estimateRemainGrams } from '../../lib/slotRemaining'
 import { useMobileViewport } from '../useMobileViewport'
@@ -372,9 +373,15 @@ export function SliceFileModal({
   // loaded-material data, so the material dropdown doesn't lose scroll position
   // or typed input while the printer streams temperature/progress updates.
   const stableLoadedMaterialSource = useDeepStableValue(loadedMaterialSource)
+  // Tracked-spool identity (filament-manager registry): loaded-material rows
+  // label a tracked custom spool as itself ("Michael's PLA"), not the preset.
+  const resolveSlotFilament = useSlotFilamentIdentityLookup()
   const loadedMaterialOptions = useMemo(
-    () => buildLoadedPrinterMaterialOptions(stableLoadedMaterialSource, compatibleFilamentProfiles, selectedMachineProfile, selectedPrinterModel),
-    [compatibleFilamentProfiles, selectedMachineProfile, selectedPrinterModel, stableLoadedMaterialSource]
+    () => buildLoadedPrinterMaterialOptions(stableLoadedMaterialSource, compatibleFilamentProfiles, selectedMachineProfile, selectedPrinterModel, {
+      printerId: printerId ?? null,
+      resolveSpool: resolveSlotFilament
+    }),
+    [compatibleFilamentProfiles, printerId, resolveSlotFilament, selectedMachineProfile, selectedPrinterModel, stableLoadedMaterialSource]
   )
   const materialOptions = useMemo(
     () => buildSliceMaterialOptions(compatibleFilamentProfiles, loadedMaterialOptions),
@@ -841,12 +848,15 @@ export function SliceFileModal({
 
   // Manual-profile target for the editor's "save as a different printer" flow. Only built when
   // the selected machine is cross-model with the project's source, so saving a same-model project
-  // never round-trips the slicer. Always a manualProfile shape (the slicer only needs the target
-  // machine to switch to); printerModel resolves a real printer's model or the manual selection.
+  // never round-trips the slicer. A project with NO source machine (a new-project scaffold, which
+  // embeds no project_settings) always builds a target so its first save persists the chosen
+  // machine — otherwise the printer pick silently vanishes on reopen. Always a manualProfile shape
+  // (the slicer only needs the target machine to switch to); printerModel resolves a real
+  // printer's model or the manual selection.
   const retargetTarget: SlicingManualProfileTarget | null = (
     printerProfileId.length > 0
     && processProfileId.length > 0
-    && Boolean(sourcePrinterModel) && Boolean(targetPrinterModel)
+    && Boolean(targetPrinterModel)
     && sourcePrinterModel !== targetPrinterModel
   )
     ? {
@@ -1147,8 +1157,11 @@ export function SliceFileModal({
                 <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{group.label}</Typography>
                 {group.options.map((option) => {
                   const tray = option.trayId != null ? printerTrayMap.get(option.trayId) : undefined
-                  // Only RFID/Bambu spools report a reliable remaining figure.
-                  const remainGrams = tray && tray.trayUuid != null ? estimateRemainGrams(tray.remainPercent) : null
+                  // Remaining: the tracked spool's figure first (covers non-RFID custom
+                  // filament); otherwise only RFID/Bambu spools report a reliable estimate.
+                  const remainGrams = option.remainingGrams
+                    ?? (tray && tray.trayUuid != null ? estimateRemainGrams(tray.remainPercent) : null)
+                  const remainPercent = option.remainPercent ?? tray?.remainPercent
                   // Pre-fold "brand + type" so the brand isn't doubled when the label already carries it,
                   // then hand the whole identity to the shared label as the name (type left to the label).
                   const brandLabel = option.brand && !option.label.toLowerCase().includes(option.brand.toLowerCase())
@@ -1168,11 +1181,11 @@ export function SliceFileModal({
                       <FilamentOptionLabel
                         color={option.color}
                         colors={option.colors}
-                        colorName={tray ? resolveFilamentDisplay(tray).name : null}
+                        colorName={option.colorName ?? (tray ? resolveFilamentDisplay(tray).name : null)}
                         filamentName={brandLabel}
                         swatchLabel={option.slotLabel}
                         remainingGrams={remainGrams}
-                        remainPercent={tray?.remainPercent}
+                        remainPercent={remainPercent}
                       />
                     </Sheet>
                   )

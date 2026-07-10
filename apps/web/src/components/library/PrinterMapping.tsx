@@ -17,7 +17,8 @@ import {
   type PrinterStatus,
   type ThreeMfProjectFilament
 } from '@printstream/shared'
-import { filamentBackground, filamentTextColor, resolveFilamentDisplay, resolveProjectFilamentColorName } from '../../lib/filamentColor'
+import { filamentBackground, filamentIdentityLabel, filamentTextColor, resolveFilamentIdentity, resolveProjectFilamentColorName } from '../../lib/filamentColor'
+import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { formatFilamentRemaining } from '../../lib/filamentSufficiency'
 import { getSlotRemainingState } from '../../lib/slotRemaining'
 import {
@@ -153,6 +154,7 @@ export function PrinterMapping({
                     <SlotOptionLabel
                       tray={tray}
                       trays={printerTrays}
+                      printerId={printer.id}
                       nozzleCount={nozzleCount}
                       requiredFilamentType={filament.filamentType}
                       requiredNozzleId={filament.nozzleId ?? null}
@@ -206,6 +208,7 @@ export function PrinterMapping({
                           <SlotOptionLabel
                             tray={tray}
                             trays={printerTrays}
+                            printerId={printer.id}
                             nozzleCount={nozzleCount}
                             requiredFilamentType={filament.filamentType}
                             requiredNozzleId={filament.nozzleId ?? null}
@@ -265,6 +268,7 @@ export function PrinterMapping({
 function SlotOptionLabel({
   tray,
   trays,
+  printerId,
   nozzleCount,
   requiredFilamentType,
   requiredNozzleId,
@@ -273,6 +277,7 @@ function SlotOptionLabel({
 }: {
   tray: PrinterTrayOption
   trays: readonly PrinterTrayOption[]
+  printerId?: string | null
   nozzleCount?: number | null
   requiredFilamentType?: string | null
   requiredNozzleId?: number | null
@@ -281,11 +286,20 @@ function SlotOptionLabel({
 }) {
   const hasFilament = trayHasLoadedFilament(tray)
   const unknownSpool = trayHasUnknownSpool(tray)
-  const filament = resolveFilamentDisplay(tray)
-  const brandLabel = filament.material ? `Bambu ${filament.material}` : tray.filamentType
+  // Canonical identity label: a tracked spool names the slot as itself
+  // ("Michael's PLA · White"); otherwise "Bambu PLA Basic · Jade White" only
+  // for genuine (RFID) Bambu trays; custom filament reads as its type + common
+  // colour ("PLA · White") — never a fabricated "Bambu <family>" brand claim.
+  const resolveSlotFilament = useSlotFilamentIdentityLookup()
+  const spool = resolveSlotFilament(
+    printerId,
+    tray.kind === 'ams' ? tray.amsUnitId ?? null : tray.mappingValue,
+    tray.kind === 'ams' ? tray.amsSlotId ?? null : null
+  )
+  const identity = resolveFilamentIdentity({ ...tray, spool })
   const filamentDetail = unknownSpool
     ? 'Unknown spool'
-    : [brandLabel ?? 'Empty', filament.name].filter(Boolean).join(' · ')
+    : filamentIdentityLabel(identity) ?? 'Empty'
   const remainingState = getSlotRemainingState({
     tray,
     trays,
@@ -295,10 +309,12 @@ function SlotOptionLabel({
     autoRefillEnabled
   })
   const remainGrams = remainingState.remainGrams
-  // Only spools with a readable RFID/Bambu tag (trayUuid) report remaining; third-party
-  // spools have no reliable figure, so we omit the estimate rather than show a guess.
-  const remainingDetail =
-    hasFilament && tray.trayUuid != null && tray.remainPercent != null && remainGrams != null
+  // Remaining: the tracked spool's figure first (filament-manager covers non-RFID
+  // custom spools); otherwise only RFID/Bambu spools report a reliable estimate —
+  // untracked third-party filament shows nothing rather than a guess.
+  const remainingDetail = hasFilament && spool?.remainingGrams != null
+    ? formatFilamentRemaining(spool.remainingGrams, spool.remainPercent ?? null)
+    : hasFilament && tray.trayUuid != null && tray.remainPercent != null && remainGrams != null
       ? formatFilamentRemaining(remainGrams, tray.remainPercent)
       : null
   const typeMismatch = Boolean(
@@ -318,8 +334,8 @@ function SlotOptionLabel({
     : nozzleMismatch
       ? `Incompatible nozzle: requires ${formatNozzleLabel(requiredNozzleId ?? null, 'short', nozzleCount) ?? 'the target nozzle'}${tray.nozzleId != null ? `, slot is ${formatNozzleLabel(tray.nozzleId, 'short', nozzleCount)}` : ''}.`
       : null
-  const badgeBackground = filamentBackground(filament.colors, tray.color, 'var(--joy-palette-neutral-800)')
-  const badgeForeground = filamentTextColor(filament.colors, tray.color, 'var(--joy-palette-text-primary)')
+  const badgeBackground = filamentBackground(identity.colors, tray.color, 'var(--joy-palette-neutral-800)')
+  const badgeForeground = filamentTextColor(identity.colors, tray.color, 'var(--joy-palette-text-primary)')
   return (
     <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
       <Box

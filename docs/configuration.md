@@ -2,6 +2,8 @@
 
 See `.env.dev.example` in the workspace root for local development and `.env.server.example` for the server stack. Those files intentionally list only the vars a typical install sets; every other key has a working default and can simply be added to your workspace-root `.env` to override. This table is the complete, overridable reference:
 
+> **Email delivery is not configured here.** Point PrintStream at your own SMTP server in the app itself (Settings > Plugins > the SMTP email plugin); email-backed features (password reset, email notifications) need no environment variables.
+
 | Variable | Default | Description |
 |---|---|---|
 | `API_PORT` | `4000` | API HTTP port. |
@@ -25,11 +27,6 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `SECRETS_KEY` | *(unset)* | Master key for encrypting sensitive stored settings at rest (currently OAuth client secrets) via AES-256-GCM. Any non-empty string works (it is hashed to a 32-byte key). When unset, those settings are stored unencrypted and a warning is logged — **set this in production**. Existing plaintext values keep working and are re-encrypted on next write. Treat it as a secret; rotating it makes previously-encrypted values unreadable (re-enter them). |
 | `AUDIT_LOG_RETENTION_DAYS` | `365` | How long durable audit-log rows are retained before scheduled maintenance prunes them. Raise for stricter compliance retention. |
 | `CSP_ENFORCE` | `false` | When `true`, the Content-Security-Policy is enforced (`Content-Security-Policy`); when `false` it is sent report-only (`Content-Security-Policy-Report-Only`). Roll out report-only first, confirm no violations in the browser console, then set `true`. |
-| `CLOUDFLARE_EMAIL_ACCOUNT_ID` | *(unset)* | Cloudflare account ID for Email Sending. Required for local-auth one-time email codes outside demo mode. |
-| `CLOUDFLARE_EMAIL_API_TOKEN` | *(unset)* | Cloudflare API token with Email Sending permission. Treat this as a secret and rotate it if exposed. |
-| `CLOUDFLARE_EMAIL_FROM_EMAIL` | *(unset)* | Verified sender address for Cloudflare Email Sending. |
-| `CLOUDFLARE_EMAIL_FROM_NAME` | *(unset)* | From display name for Cloudflare Email Sending. |
-| `AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES` | `15` | Expiry window for local-auth one-time email codes. |
 | `SELF_HOSTED` | *(derived from the build)* | Forces the deployment to identify as self-hosted/OSS (`true`) or cloud (`false`), overriding the default (derived from whether the private cloud modules are present). Self-hosted registers the email/password provider (`auth-password`) and hides the cloud platform-admin, marketing, and support-access surfaces; cloud registers passkeys + email codes (`auth-local`) and OIDC SSO (`auth-oauth`). Leave unset in real deployments; set `true` to run the OSS build from the full source tree. |
 | `LIBRARY_DIR` | `./data/library` | Directory where uploaded `.3mf`/`.gcode`/`.stl`/`.step` files are stored. |
 | `LIBRARY_MAX_UPLOAD_BYTES` | `1073741824` | Maximum accepted library upload size in bytes (default 1 GiB). |

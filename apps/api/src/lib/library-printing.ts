@@ -101,7 +101,16 @@ export async function enqueueLibraryPrintSource(
   input: PrintFromLibrary,
   source: LibraryPrintSource
 ): Promise<PrintDispatchJob> {
-  const { printer, index } = await assertLibraryPrintSourceReady(input, source)
+  // Log pre-flight rejections: they abort BEFORE a dispatch job exists, so
+  // nothing appears in the Jobs list and — if the client mishandles the 4xx —
+  // the user sees a print that "silently never starts". This line is the only
+  // server-side trace of why (self-hosted operators read it via docker logs).
+  const { printer, index } = await assertLibraryPrintSourceReady(input, source).catch((error: unknown) => {
+    console.warn(
+      `[dispatch] pre-flight rejected for printer ${input.printerId} (${source.name}): ${(error as Error).message}`
+    )
+    throw error
+  })
 
   try {
     const plateName = resolveRequestedPlateName(source.name, index, input.plate)
@@ -123,6 +132,9 @@ export async function enqueueLibraryPrintSource(
       isMultiPlate: index ? index.plates.length > 1 : true
     }, printer)
   } catch (error) {
+    console.warn(
+      `[dispatch] enqueue rejected for printer ${input.printerId} (${source.name}): ${(error as Error).message}`
+    )
     if (error instanceof HttpError) throw error
     throw badRequest((error as Error).message || 'Failed to enqueue print')
   }

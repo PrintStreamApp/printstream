@@ -70,11 +70,15 @@ export function readEntry(
  * UTF-8 text and passed through its transform. Generalizes the single-entry rewrite so one copy pass
  * can edit several entries at once (e.g. `Metadata/model_settings.config` AND `3D/3dmodel.model` for
  * slice-time object customization). An empty `transforms` map produces a verbatim copy.
+ * `appendEntries` are added after the copy pass, but ONLY the ones the source did not already
+ * contain (a transform still wins for an existing entry) — use it to upsert an entry that may be
+ * absent, e.g. `project_settings.config` on a settings-less new-project scaffold.
  */
 export function rewriteThreeMfEntries(
   sourcePath: string,
   outputPath: string,
-  transforms: Record<string, (xml: string) => string>
+  transforms: Record<string, (xml: string) => string>,
+  appendEntries: Array<{ name: string; content: string }> = []
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     yauzl.open(sourcePath, { lazyEntries: true }, (openError, sourceZip) => {
@@ -104,9 +108,20 @@ export function rewriteThreeMfEntries(
       output.on('error', finish)
       output.on('finish', () => finish())
 
+      // A 3MF reader rejects archives with duplicate entry names, so track what the copy
+      // pass wrote and only append the entries the source did not already contain.
+      const writtenNames = new Set<string>()
       sourceZip.on('error', finish)
-      sourceZip.on('end', () => outputZip.end())
+      sourceZip.on('end', () => {
+        for (const extra of appendEntries) {
+          if (writtenNames.has(extra.name)) continue
+          writtenNames.add(extra.name)
+          outputZip.addBuffer(Buffer.from(extra.content, 'utf8'), extra.name)
+        }
+        outputZip.end()
+      })
       sourceZip.on('entry', (entry: Entry) => {
+        writtenNames.add(entry.fileName)
         const transform = transforms[entry.fileName]
         if (transform) {
           readZipEntryBuffer(sourceZip, entry).then(

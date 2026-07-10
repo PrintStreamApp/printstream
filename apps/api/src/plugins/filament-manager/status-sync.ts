@@ -16,7 +16,7 @@
  * tenant filter on every query. A per-printer signature skips DB work when the
  * relevant slot state has not changed since the last frame.
  */
-import type { PrinterStatus } from '@printstream/shared'
+import { resolveFilamentIdentity, type PrinterStatus } from '@printstream/shared'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { printerManager } from '../../lib/printer-manager.js'
 import { rootPrisma } from '../../lib/prisma.js'
@@ -73,8 +73,10 @@ export function collectPresences(status: PrinterStatus): SlotPresence[] {
 }
 
 export function signature(presences: SlotPresence[]): string {
+  // Colour + preset id are part of the signature so a corrected late RFID read
+  // (e.g. colour arriving after a placeholder #000000) re-triggers the sync.
   return presences
-    .map((p) => `${p.amsId}:${p.slotId ?? 'x'}:${p.trayUuid}:${p.remainPercent ?? 'x'}`)
+    .map((p) => `${p.amsId}:${p.slotId ?? 'x'}:${p.trayUuid}:${p.remainPercent ?? 'x'}:${p.color ?? 'x'}:${p.trayInfoIdx ?? 'x'}`)
     .sort()
     .join('|')
 }
@@ -139,6 +141,54 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
           data.brand = 'Bambu'
           meaningful = true
         }
+        // Printer-observed facts are refreshed on every sighting: the first
+        // capture can be wrong (colour reads as #000000 while the RFID scan is
+        // still in flight) and used to be frozen forever. User-editable
+        // identity (colorName/materialSubtype/filamentType) is only BACKFILLED
+        // when missing, never overwritten.
+        const identity = resolveFilamentIdentity({
+          color: presence.color,
+          colors: presence.colors,
+          trayName: null,
+          trayInfoIdx: presence.trayInfoIdx,
+          filamentType: presence.filamentType,
+          trayUuid: presence.trayUuid
+        })
+        if (presence.color && identity.colorHex && existing.colorHex !== identity.colorHex) {
+          data.colorHex = identity.colorHex
+          data.colorsJson = serializeColors(presence.colors)
+          // The stored colour name described the OLD colour; re-derive it unless
+          // the user typed their own (conservative check: replace only when the
+          // stored name is empty or equals what we would have derived before).
+          const previousDerivedName = resolveFilamentIdentity({
+            color: existing.colorHex,
+            colors: [],
+            trayName: null,
+            trayInfoIdx: existing.trayInfoIdx,
+            filamentType: existing.filamentType,
+            trayUuid: presence.trayUuid
+          }).colorName
+          if (!existing.colorName || existing.colorName === previousDerivedName) {
+            data.colorName = identity.colorName
+          }
+          meaningful = true
+        }
+        if (presence.trayInfoIdx && existing.trayInfoIdx !== presence.trayInfoIdx) {
+          data.trayInfoIdx = presence.trayInfoIdx
+          meaningful = true
+        }
+        if (!existing.materialSubtype && identity.subtype) {
+          data.materialSubtype = identity.subtype
+          meaningful = true
+        }
+        if (!existing.colorName && identity.colorName && data.colorName === undefined) {
+          data.colorName = identity.colorName
+          meaningful = true
+        }
+        if (existing.filamentType === 'Unknown' && presence.filamentType) {
+          data.filamentType = presence.filamentType
+          meaningful = true
+        }
         if (existing.remainSource === 'printer') {
           const target = remainGramsFromPercent(presence.remainPercent, existing.netWeightGrams)
           if (target != null && Math.round(existing.remainingGrams) !== target) {
@@ -156,9 +206,9 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
             slotId: presence.slotId,
             spoolId: existing.id,
             brand: (data.brand as string | undefined) ?? existing.brand,
-            filamentType: existing.filamentType,
-            materialSubtype: existing.materialSubtype,
-            colorName: existing.colorName
+            filamentType: (data.filamentType as string | undefined) ?? existing.filamentType,
+            materialSubtype: (data.materialSubtype as string | undefined) ?? existing.materialSubtype,
+            colorName: (data.colorName as string | undefined) ?? existing.colorName
           })
         }
         continue
@@ -166,12 +216,26 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
 
       if (autoAdd) {
         const netWeightGrams = 1000
+        // Canonical identity fills the human-facing fields the tray encodes —
+        // materialSubtype from the preset id ("PLA Basic") and the marketing
+        // colour name ("Jade White") — so calibration/queue matching and every
+        // display surface see the same identity this spool was born with.
+        const identity = resolveFilamentIdentity({
+          color: presence.color,
+          colors: presence.colors,
+          trayName: null,
+          trayInfoIdx: presence.trayInfoIdx,
+          filamentType: presence.filamentType,
+          trayUuid: presence.trayUuid
+        })
         await rootPrisma.filamentSpool.create({
           data: {
             tenantId,
             brand: 'Bambu',
             filamentType: presence.filamentType ?? 'Unknown',
-            colorHex: presence.color,
+            materialSubtype: identity.subtype,
+            colorName: identity.colorName,
+            colorHex: identity.colorHex ?? presence.color,
             colorsJson: serializeColors(presence.colors),
             trayInfoIdx: presence.trayInfoIdx,
             bambuUuid: presence.trayUuid,

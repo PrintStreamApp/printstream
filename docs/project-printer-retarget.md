@@ -16,7 +16,10 @@ touches no geometry.
 
 Entry point: the editor's save (`apps/api/src/routes/editor.ts`) calls
 `retargetSavedProjectMachine` (`apps/api/src/lib/save-retarget.ts`) when the save request carries a
-`retarget` target (the web sends one only when the selected machine is cross-model with the source).
+`retarget` target (the web sends one when the selected machine is cross-model with the source, and
+**always for a project with no source machine** — a new-project scaffold embeds no
+`project_settings.config`, so its first save must persist the chosen machine this way; such a
+project retargets from an empty settings object, the machine/process profiles supplying every field).
 Steps:
 
 1. **Resolve the target machine profile.** `slicerClient.resolveMachineConfig` → the slicer's
@@ -39,8 +42,9 @@ Steps:
    then applies the user's per-slice process overrides on top. Process keys are disjoint from machine
    keys, so this composes cleanly after step 2. **Best-effort**: if the process can't be resolved (e.g.
    a project-embedded preset), the machine retarget still stands.
-4. **Write it back** into the 3MF (`rewriteModelSettingsThreeMf` targeting `project_settings.config`),
-   copying every other entry verbatim.
+4. **Write it back** into the 3MF (`rewriteThreeMfEntries` targeting `project_settings.config` —
+   an upsert: the entry is appended when the settings-less source has none to transform), copying
+   every other entry verbatim.
 
 ### What carries over (and what doesn't)
 
@@ -61,7 +65,8 @@ directory (see below).
 ### Triggers and known limitations
 
 The web (`LibraryView` `retargetTarget`) builds a retarget only when the selected machine's **canonical
-model** differs from the project's source model, so a same-model save never round-trips the slicer.
+model** differs from the project's source model — or when the project has **no source model at all**
+(a new-project scaffold) — so a same-model save never round-trips the slicer.
 Consequences to be aware of:
 
 - **Same model, different nozzle** (e.g. X1C 0.4 → X1C 0.6): not currently retargeted — the saved

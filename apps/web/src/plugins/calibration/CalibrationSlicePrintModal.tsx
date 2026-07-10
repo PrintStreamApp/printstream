@@ -10,16 +10,19 @@
  * On close (any exit) it routes to the Calibration page so the user lands where
  * the run lives instead of back on wherever they launched it from.
  */
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Chip, CircularProgress, DialogActions, LinearProgress, Sheet, Stack, Typography } from '@mui/joy'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
+import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { CalibrationRun } from '@printstream/shared'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
+import { SliceEstimates } from '../../components/library/SliceEstimates'
+import { PluginSlot } from '../../plugin/PluginSlot'
 import { toast } from '../../lib/toast'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
 import { buildTenantWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
@@ -29,7 +32,6 @@ import {
   getLatestSlicingProgressFrame,
   slicingStatusColor
 } from '../../lib/slicingJobPresentation'
-import { formatSecondsDuration } from '../../lib/time'
 import { calibrationKeys, fetchCalibrationRuns, isCalibrationRunActive, printCalibrationRun } from './api'
 import { runTitle } from './runPresentation'
 
@@ -47,6 +49,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
+  const [previewing, setPreviewing] = useState(false)
 
   // Authoritative run lifecycle (slicing -> readyToPrint -> printing) comes from the runs list, which
   // reconciles the slice queue on read; the slicing job only supplies the live progress bar detail.
@@ -93,16 +96,8 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
   const isReady = run.status === 'readyToPrint'
   const isFailed = run.status === 'failed'
 
-  const metadata = job?.metadata
-  const stats: Array<{ label: string; value: string }> = []
-  if (isReady && metadata?.estimatedPrintTimeSeconds != null && metadata.estimatedPrintTimeSeconds >= 1) {
-    stats.push({ label: 'Estimated print time', value: formatSecondsDuration(metadata.estimatedPrintTimeSeconds) })
-  }
-  if (isReady && metadata?.estimatedFilamentWeightGrams != null) {
-    stats.push({ label: 'Material used', value: `${metadata.estimatedFilamentWeightGrams.toFixed(1)} g` })
-  }
-
   return (
+    <>
     <Modal open onClose={handleClose}>
       <ScrollableModalDialog sx={{ maxWidth: 520, width: '100%' }}>
         <Typography level="h4">Calibration</Typography>
@@ -144,15 +139,21 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
                     </Typography>
                   </>
                 )}
-                {stats.length > 0 && (
-                  <Stack spacing={0.5}>
-                    {stats.map((stat) => (
-                      <Stack key={stat.label} direction="row" justifyContent="space-between" spacing={2}>
-                        <Typography level="body-sm" textColor="text.tertiary">{stat.label}</Typography>
-                        <Typography level="body-sm" fontWeight="md">{stat.value}</Typography>
-                      </Stack>
-                    ))}
-                  </Stack>
+                {isReady && (
+                  <SliceEstimates metadata={job?.metadata} filamentMappings={job?.target.filamentMappings} />
+                )}
+                {isReady && run.outputFileId && (
+                  <Button
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    size="sm"
+                    startDecorator={<VisibilityRoundedIcon />}
+                    onClick={() => setPreviewing(true)}
+                    sx={{ width: { xs: '100%', sm: 'auto' }, alignSelf: { sm: 'flex-start' } }}
+                  >
+                    Preview
+                  </Button>
                 )}
                 {isFailed && run.errorMessage && (
                   <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{run.errorMessage}</Alert>
@@ -176,5 +177,16 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
         </DialogActions>
       </ScrollableModalDialog>
     </Modal>
+    {/* Sliced-toolpath preview of the run's hidden output file; the model-studio plugin
+        renders it on top of this dialog, mirroring the library slice-result flow. */}
+    <PluginSlot
+      name="library.overlays"
+      context={{
+        previewFileId: previewing && isReady ? run.outputFileId : null,
+        previewPlateIndex: 1,
+        onPreviewClose: () => setPreviewing(false)
+      }}
+    />
+    </>
   )
 }

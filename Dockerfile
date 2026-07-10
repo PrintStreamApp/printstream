@@ -5,7 +5,15 @@
 # open-core image identical (no divergence). Runs as the unprivileged `node`
 # user. PostgreSQL lives in the compose `db` service; `/data` stores library
 # files, plugin storage, and other API-owned assets.
-FROM node:22-bookworm-slim AS base
+#
+# NODE_VERSION is pinned to the EXACT version the SEA builds embed
+# (DEFAULT_NODE_VERSION in packages/sea-runtime/scripts/build-harness.mjs) so
+# every distribution ships the same runtime; bump BOTH together, deliberately.
+# A floating `node:22` tag once let an image rebuild silently absorb a Node
+# patch (22.23.x) whose TLS regression broke H2D FTPS only on Docker installs
+# while SEA bridges kept working — never again.
+ARG NODE_VERSION=22.22.3
+FROM node:${NODE_VERSION}-bookworm-slim AS base
 WORKDIR /app
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl ca-certificates curl ffmpeg \

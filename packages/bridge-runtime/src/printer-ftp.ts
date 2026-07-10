@@ -5,6 +5,17 @@
  * Developer/LAN mode. Files placed at the root are addressable from
  * MQTT print commands as `ftp:///<filename>`. Auth uses the same
  * `bblp` / access-code pair as MQTT.
+ *
+ * Invariant (H2-series): the H2D's vsftpd runs `require_ssl_reuse` — every
+ * data connection must RESUME the control connection's TLS session or the
+ * printer rejects the transfer ("522 SSL connection failed: session reuse
+ * required") and closes the control socket. basic-ftp tries to satisfy this,
+ * but it upgrades an already-connected plain socket and Node's `tls.connect`
+ * silently ignores the `session` option on that wrapped-socket path. So
+ * `pasvForceControlHost` opens TLS data connections itself with a FRESH
+ * `tls.connect` (which honors `session`), pinned to the control connection's
+ * negotiated protocol so a TLS 1.2 session is never offered to a TLS 1.3
+ * handshake. Older printers (P1/X1/A1) don't require reuse but accept it.
  */
 import { Client as FtpClient, type FileInfo, type FTPContext, type FTPResponse } from 'basic-ftp'
 // `connectForPassiveTransfer`/`parsePasvResponse` are runtime exports of the
@@ -18,7 +29,7 @@ import type { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Writable } from 'node:stream'
-import type { TLSSocket } from 'node:tls'
+import { connect as tlsConnect, TLSSocket, type ConnectionOptions } from 'node:tls'
 import { createAbortError, throwIfAborted, type Printer } from '@printstream/shared'
 import { beginFtpActivity } from './printer-transport-arbitration.js'
 
@@ -41,10 +52,100 @@ type TunableSocket = (Socket | TLSSocket) & {
 }
 
 /**
+ * Latest TLS 1.3 session ticket seen on a control socket. TLS 1.3 delivers
+ * resumable sessions via post-handshake `'session'` events (`getSession()` is
+ * only meaningful for <= TLS 1.2), so `openFtp` records the newest ticket here
+ * for the data-connection opener to resume with.
+ */
+const controlSessionTickets = new WeakMap<TLSSocket, Buffer>()
+
+/** Track TLS 1.3 session tickets for later data-connection resumption. */
+function trackControlSessionTickets(socket: TLSSocket): void {
+  socket.on('session', (ticket: Buffer) => {
+    controlSessionTickets.set(socket, ticket)
+  })
+}
+
+/**
+ * TLS options for a passive data connection that RESUMES the control
+ * connection's session (required by H2-series vsftpd, see module header).
+ * Pins the protocol to the control connection's negotiated version: a session
+ * can only resume into a handshake of the same TLS version, and unpinned the
+ * H2D negotiates TLS 1.2 on control but TLS 1.3 on data. Pure so the option
+ * shape is unit-testable.
+ */
+/** `tls.connect` forwards `family` to `net.connect`, but the typings omit it. */
+type DataConnectionOptions = ConnectionOptions & { family?: number }
+
+export function buildResumingDataConnectionOptions(
+  base: DataConnectionOptions,
+  control: Pick<TLSSocket, 'getProtocol' | 'getSession'>,
+  latestTicket: Buffer | undefined
+): DataConnectionOptions {
+  const protocol = control.getProtocol()
+  const session = protocol === 'TLSv1.3' ? latestTicket : control.getSession() ?? undefined
+  return {
+    ...base,
+    ...(protocol === 'TLSv1.2' || protocol === 'TLSv1.3'
+      ? { minVersion: protocol, maxVersion: protocol }
+      : {}),
+    ...(session ? { session } : {})
+  }
+}
+
+/**
+ * Open the TLS data connection for a passive transfer with session
+ * resumption. Deliberately NOT basic-ftp's connect-then-upgrade: Node's
+ * `tls.connect` ignores the `session` option when wrapping an existing
+ * socket, which is exactly why basic-ftp's own reuse attempt never works. A
+ * fresh `tls.connect` honors it.
+ *
+ * Resolves on TCP `'connect'` (ClientHello is on the wire), not
+ * `'secureConnect'`: the printer completes the data handshake only after the
+ * transfer command arrives on the control connection, so waiting for the
+ * handshake here would deadlock.
+ */
+function openResumingDataConnection(
+  ftp: FTPContext,
+  host: string,
+  port: number
+): Promise<TLSSocket> {
+  const control = ftp.socket as TLSSocket
+  const options = buildResumingDataConnectionOptions(
+    { ...ftp.tlsOptions, host, port, family: ftp.ipFamily },
+    control,
+    controlSessionTickets.get(control)
+  )
+  return new Promise<TLSSocket>((resolve, reject) => {
+    const socket = tlsConnect(options)
+    const handleError = (error: Error) => {
+      socket.destroy()
+      error.message = "Can't open data connection in passive mode: " + error.message
+      reject(error)
+    }
+    const handleTimeout = () => {
+      handleError(new Error(`Timeout when trying to open data connection to ${host}:${port}`))
+    }
+    socket.once('error', handleError)
+    socket.setTimeout(ftp.timeout)
+    socket.on('timeout', handleTimeout)
+    socket.once('connect', () => {
+      // Hand ownership to the transfer task: it attaches its own error and
+      // timeout handling (the timeout itself stays armed, as in basic-ftp).
+      socket.removeListener('error', handleError)
+      socket.removeListener('timeout', handleTimeout)
+      ftp.dataSocket = socket
+      resolve(socket)
+    })
+  })
+}
+
+/**
  * PASV strategy that ignores the host returned by the server and
  * reuses the control-connection IP for the data socket. Mirrors
  * basic-ftp's `enterPassiveModeIPv4_forceControlHostIP`, which is
- * declared in the type defs but not exported at runtime.
+ * declared in the type defs but not exported at runtime — plus TLS
+ * session resumption on the data connection (see module header).
  */
 async function pasvForceControlHost(ftp: FTPContext): Promise<FTPResponse> {
   const res = await ftp.request('PASV')
@@ -53,7 +154,11 @@ async function pasvForceControlHost(ftp: FTPContext): Promise<FTPResponse> {
   if (!controlHost) {
     throw new Error("Control socket is disconnected, can't get remote address.")
   }
-  await connectForPassiveTransfer(controlHost, port, ftp)
+  if (ftp.socket instanceof TLSSocket) {
+    await openResumingDataConnection(ftp, controlHost, port)
+  } else {
+    await connectForPassiveTransfer(controlHost, port, ftp)
+  }
   return res
 }
 
@@ -185,6 +290,9 @@ async function openFtp(printer: Printer, transport: PrinterFtpTransportSettings 
     secureOptions: { rejectUnauthorized: false }
   })
   applySocketTuning(client.ftp.socket as TunableSocket | undefined, settings)
+  if (client.ftp.socket instanceof TLSSocket) {
+    trackControlSessionTickets(client.ftp.socket)
+  }
   client.prepareTransfer = (ftp) => pasvForceControlHostWithTuning(ftp, settings)
   return client
 }

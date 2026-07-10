@@ -14,16 +14,23 @@
  */
 import type { WebPlugin } from '../../plugin/types'
 import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
+import { registerSlotFilamentIdentityHook } from '../../lib/slotFilamentIdentity'
 import { FilamentManagerSettingsPanel } from './SettingsPanel'
 import { SlotEditorActions } from './SlotEditorActions'
 import { AmsSlotFilamentIdentity } from './AmsSlotFilamentIdentity'
 import { FilamentView } from './FilamentView'
 import { FilamentStatsCards } from './FilamentStatsCards'
+import { useLoadedSpoolIdentityLookup } from './api'
 
 export const filamentManagerPlugin: WebPlugin = {
   name: 'filament-manager',
   version: '0.1.0',
   description: 'Track filament spools, what is loaded where, and how much is left.',
+  // Core print/slice dialogs resolve the loaded spool's identity through the
+  // slotFilamentIdentity registry (pull-based, like the API's slot resolver) so
+  // a tracked custom spool labels as itself ("Michael's PLA") without core
+  // importing this plugin.
+  init: () => registerSlotFilamentIdentityHook('filament-manager', useLoadedSpoolIdentityLookup),
   settingsPanel: FilamentManagerSettingsPanel,
   routes: [
     {

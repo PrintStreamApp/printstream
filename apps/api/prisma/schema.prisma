@@ -967,6 +967,10 @@ model FilamentSpool {
   // Preset / RFID identity
   trayInfoIdx     String?                          // Bambu filament preset id (e.g. "GFA00")
   bambuUuid       String?                          // RFID serial (tray_uuid); auto-add dedupe key
+  // Slicing preset (filament profile NAME from the catalogue) this spool slices
+  // with — the BambuStudio "pick an existing preset for third-party filament"
+  // step, done once on the spool. Null = auto-match at slice time.
+  slicingPresetName String?
   serial          String?                          // manual serial for non-Bambu spools
   nozzleTempMin   Int?
   nozzleTempMax   Int?

@@ -350,15 +350,38 @@ async function runCli(input: {
     useEstimateModeMachineSwitch: input.useEstimateModeMachineSwitch
   })
   const profileArgs = await prepareProfileArgs(cliProfileFiles, path.dirname(input.outputPath), input.slicerTarget.profileDir, input.processSettingOverrides, input.filamentSettingOverrides)
+  // A "from scratch" scaffold 3MF (calibration prints, new-project saves) carries the BBL marker
+  // but no — or only a partial — embedded project_settings.config, which segfaults the CLI's
+  // BBL-project loader. Synthesize/complete it from the slice's own profiles so it loads; a no-op
+  // for real projects that already embed a complete one. Runs before the all-plate branch so a
+  // multi-plate scaffold's per-plate slices load too.
+  const preparedInputPath = await ensureEmbeddedProjectSettings({
+    inputPath: input.inputPath,
+    cliPath: input.slicerTarget.cliPath,
+    appDir: input.slicerTarget.appDir ?? null,
+    profileArgs,
+    profileDir: input.slicerTarget.profileDir,
+    workDir: path.dirname(input.outputPath),
+    env: {
+      ...process.env,
+      HOME: input.bambuHomeDir,
+      XDG_CONFIG_HOME: input.bambuConfigDir,
+      XDG_CACHE_HOME: input.bambuCacheDir,
+      XDG_DATA_HOME: input.bambuDataDir
+    },
+    log: (message) => appendStructuredOutput(input.outputLines, 'system', message),
+    signal: input.signal
+  })
   if (shouldUseAllPlateMergeFallback({
     plate: input.plate,
     outputFileName: input.outputFileName,
     printerModel: input.metadata?.printerModel ?? null
   })) {
-    const plateIds = await readPlateIdsFromModelSettings(input.inputPath)
+    const plateIds = await readPlateIdsFromModelSettings(preparedInputPath)
     if (plateIds.length > 1) {
       await runMergedAllPlateFallback({
         ...input,
+        inputPath: preparedInputPath,
         plateIds,
         profileArgs
       })
@@ -372,6 +395,7 @@ async function runCli(input: {
     const machineSwitchProfileName = input.machineSwitchProfileName
     await runEstimateModeMachineSwitch({
       ...input,
+      inputPath: preparedInputPath,
       machineSwitchProfileName,
       profileArgs
     })
@@ -381,25 +405,6 @@ async function runCli(input: {
   const machineSwitchArgs = input.useEstimateModeMachineSwitch && supportedFlags.has('--estimate-mode')
     ? ['--estimate-mode']
     : []
-  // A "from scratch" scaffold 3MF (calibration prints) carries the BBL marker but no embedded
-  // project_settings.config, which segfaults the CLI's BBL-project loader. Synthesize one from the
-  // slice's own profiles so it loads; a no-op for real projects that already embed it.
-  const preparedInputPath = await ensureEmbeddedProjectSettings({
-    inputPath: input.inputPath,
-    cliPath: input.slicerTarget.cliPath,
-    appDir: input.slicerTarget.appDir ?? null,
-    profileArgs,
-    workDir: path.dirname(input.outputPath),
-    env: {
-      ...process.env,
-      HOME: input.bambuHomeDir,
-      XDG_CONFIG_HOME: input.bambuConfigDir,
-      XDG_CACHE_HOME: input.bambuCacheDir,
-      XDG_DATA_HOME: input.bambuDataDir
-    },
-    log: (message) => appendStructuredOutput(input.outputLines, 'system', message),
-    signal: input.signal
-  })
   const templateArgs = ensurePositionalInputArgument(
     stripUnsupportedFlagArguments(
       splitArgsTemplate(input.slicerTarget.cliArgsTemplate ?? env.SLICER_CLI_ARGS_TEMPLATE ?? '').map((value) => {

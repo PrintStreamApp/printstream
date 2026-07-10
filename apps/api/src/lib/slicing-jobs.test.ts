@@ -470,6 +470,74 @@ test('slicing jobs retry when compatibility fallback matches generated builtin:m
   })
 })
 
+test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, then fail', async () => {
+  // Exit 139 (SIGSEGV) et al. happen intermittently under qemu emulation on inputs that slice
+  // clean when re-run; one bounded retry absorbs the flake without masking a deterministic crash.
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const runJobIds: string[] = []
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.run = (async (input) => {
+    runJobIds.push(input.jobId)
+    throw new SlicerServiceError('Slicer CLI exited with code 139', [])
+  }) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    profileFiles: [
+      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab P1S 0.4 nozzle' }
+    ],
+    request: makeRequest()
+  })
+
+  await waitFor(async () => {
+    const current = jobs.get('tenant-1', job.id)
+    assert.equal(current.status, 'failed')
+    // Exactly one retry: two run attempts with distinct attempt job ids, then the crash surfaces.
+    assert.equal(runJobIds.length, 2)
+    assert.notEqual(runJobIds[0], runJobIds[1])
+    assert.equal(current.output.some((entry) => entry.text.includes('Retrying slice after the slicer engine crashed mid-run')), true)
+    assert.match(current.error ?? '', /exited with code 139/)
+  })
+})
+
+test('slicing jobs do not crash-retry ordinary non-signal slicer failures', async () => {
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  let runs = 0
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.run = (async () => {
+    runs += 1
+    throw new SlicerServiceError('Slicer CLI exited with code 1', [])
+  }) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    profileFiles: [
+      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab P1S 0.4 nozzle' }
+    ],
+    request: makeRequest()
+  })
+
+  await waitFor(async () => {
+    const current = jobs.get('tenant-1', job.id)
+    assert.equal(current.status, 'failed')
+    assert.equal(runs, 1)
+  })
+})
+
 test('slicing jobs preserve manual machine/profile selections on retry after builtin machine removal', async () => {
   const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
   const runJobIds: string[] = []

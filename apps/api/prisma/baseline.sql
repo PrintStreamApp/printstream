@@ -666,6 +666,7 @@ CREATE TABLE "FilamentSpool" (
     "colorsJson" TEXT,
     "trayInfoIdx" TEXT,
     "bambuUuid" TEXT,
+    "slicingPresetName" TEXT,
     "serial" TEXT,
     "nozzleTempMin" INTEGER,
     "nozzleTempMax" INTEGER,

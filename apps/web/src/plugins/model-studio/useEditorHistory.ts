@@ -109,23 +109,23 @@ export function useEditorHistory({
   const restoreMaterialsRef = useRef(sliceConfig?.restoreMaterials)
   restoreMaterialsRef.current = sliceConfig?.restoreMaterials
 
-  // Material profile/colour/nozzle edits are not snapshotted for undo, so they stay dirty
-  // until save (sticky), unlike scene edits which clear when fully undone.
-  const markMaterialDirty = useCallback(() => {
+  // Material profile/colour/nozzle and plate-type edits are not snapshotted for undo, so they
+  // stay dirty until save (sticky), unlike scene edits which clear when fully undone.
+  const markSettingsDirty = useCallback(() => {
     modelRef.current!.markNonUndoableDirty()
     syncFlags()
   }, [syncFlags])
 
   // The "Choose material" picker Modal is rendered by the host slice dialog (which stays mounted
   // behind the editor), so a pick there calls the controller's raw `handleMaterialOptionChange` and
-  // bypasses the markMaterialDirty-wrapped copy below. Register it as the controller's material-edit
+  // bypasses the markSettingsDirty-wrapped copy below. Register it as the controller's material-edit
   // listener so those picks still light the Save button.
   useEffect(() => {
     const ref = sliceConfig?.materialEditListenerRef
     if (!ref) return
-    ref.current = markMaterialDirty
+    ref.current = markSettingsDirty
     return () => { ref.current = null }
-  }, [sliceConfig, markMaterialDirty])
+  }, [sliceConfig, markSettingsDirty])
   // A pending cross-model retarget (selected machine differs from the project's source) is
   // itself unsaved work, so it enables Save. Derived, not a marked flag: once saved, the
   // project's source model matches the target and `retargetTarget` clears on its own — the
@@ -220,14 +220,16 @@ export function useEditorHistory({
         recordMaterialsHistory()
         sliceConfig.onRemoveFilament(projectFilamentId)
       },
-      // Material profile/colour/nozzle edits feed `desiredFilaments` into the saved 3MF, so
-      // they count as unsaved changes; they are not snapshotted for undo (the controller owns
-      // that), so they only need to flip the sticky dirty flag for the Save button.
-      handleMaterialOptionChange: (projectFilamentId, option) => { markMaterialDirty(); sliceConfig.handleMaterialOptionChange(projectFilamentId, option) },
-      setFilamentColors: (value) => { markMaterialDirty(); sliceConfig.setFilamentColors(value) },
-      setFilamentToolheadIds: (value) => { markMaterialDirty(); sliceConfig.setFilamentToolheadIds(value) }
+      // Material profile/colour/nozzle edits feed `desiredFilaments` — and the plate type feeds
+      // the plates' `plateType` (written as `curr_bed_type`) — into the saved 3MF, so they count
+      // as unsaved changes; they are not snapshotted for undo (the controller owns that), so
+      // they only need to flip the sticky dirty flag for the Save button.
+      handleMaterialOptionChange: (projectFilamentId, option) => { markSettingsDirty(); sliceConfig.handleMaterialOptionChange(projectFilamentId, option) },
+      setFilamentColors: (value) => { markSettingsDirty(); sliceConfig.setFilamentColors(value) },
+      setFilamentToolheadIds: (value) => { markSettingsDirty(); sliceConfig.setFilamentToolheadIds(value) },
+      setPlateType: (value) => { markSettingsDirty(); sliceConfig.setPlateType(value) }
     }
-  }, [sliceConfig, recordMaterialsHistory, markMaterialDirty, usedFilamentIds, supportOnlyFilamentIds])
+  }, [sliceConfig, recordMaterialsHistory, markSettingsDirty, usedFilamentIds, supportOnlyFilamentIds])
 
   return {
     dirtyRef,

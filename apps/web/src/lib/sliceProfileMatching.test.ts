@@ -169,3 +169,132 @@ test('falls back to project filament chips when no 3MF index is available', () =
     [[1, 'Red', true], [2, 'Blue', true]]
   )
 })
+
+// Loaded-material option identity: the row must be named by the FILAMENT's own
+// identity (tracked spool > tray), never by a machine-matched profile's vendor.
+test('buildLoadedPrinterMaterialOptions labels a tracked custom spool as itself', async () => {
+  const { buildLoadedPrinterMaterialOptions } = await import('./sliceProfileMatching')
+  const source = {
+    ams: [{
+      unitId: 0,
+      nozzleId: null,
+      type: 0,
+      slots: [{
+        slot: 1,
+        trayName: null,
+        filamentType: 'PLA',
+        color: '#FFFFFF',
+        colors: ['#FFFFFF'],
+        remainPercent: null,
+        active: false,
+        isReading: false,
+        occupied: true,
+        trayInfoIdx: null,
+        caliIdx: null,
+        trayUuid: null,
+        k: null
+      }]
+    }],
+    externalSpools: [],
+    nozzleCount: 1
+  } as never
+  const options = buildLoadedPrinterMaterialOptions(source, [], null, 'P1S', {
+    printerId: 'printer-1',
+    resolveSpool: (printerId, amsId, slotId) =>
+      printerId === 'printer-1' && amsId === 0 && slotId === 1
+        ? { spoolId: 'spool-1', brand: "Michael's", filamentType: 'PLA', materialSubtype: null, colorName: 'White', colorHex: '#FFFFFF', remainingGrams: 420, remainPercent: 42 }
+        : null
+  })
+  assert.equal(options.length, 1)
+  assert.equal(options[0]!.label, "Michael's PLA")
+  assert.equal(options[0]!.brand, "Michael's")
+  assert.equal(options[0]!.colorName, 'White')
+  // Tracked remaining flows through so non-RFID spools show a figure.
+  assert.equal(options[0]!.remainingGrams, 420)
+  assert.equal(options[0]!.remainPercent, 42)
+  assert.ok(options[0]!.metadata?.includes('White'))
+})
+
+test('buildLoadedPrinterMaterialOptions with no tracked spool labels a custom tray by its own identity', async () => {
+  const { buildLoadedPrinterMaterialOptions } = await import('./sliceProfileMatching')
+  const source = {
+    ams: [{
+      unitId: 0,
+      nozzleId: null,
+      type: 0,
+      slots: [{
+        slot: 0,
+        trayName: null,
+        filamentType: 'PLA',
+        color: '#FFFFFF',
+        colors: ['#FFFFFF'],
+        remainPercent: null,
+        active: false,
+        isReading: false,
+        occupied: true,
+        trayInfoIdx: null,
+        caliIdx: null,
+        trayUuid: null,
+        k: null
+      }]
+    }],
+    externalSpools: [],
+    nozzleCount: 1
+  } as never
+  const options = buildLoadedPrinterMaterialOptions(source, [], null, 'P1S', {
+    printerId: 'printer-1',
+    resolveSpool: () => null
+  })
+  assert.equal(options.length, 1)
+  assert.equal(options[0]!.label, 'PLA')
+  assert.equal(options[0]!.brand, '')
+  assert.ok(options[0]!.metadata?.includes('White'))
+})
+
+test('a spool pinned to a slicing preset uses it (matched by display name) over the auto-match', async () => {
+  const { buildLoadedPrinterMaterialOptions } = await import('./sliceProfileMatching')
+  const profiles: SlicingProfileSummary[] = [
+    { id: 'builtin:filament:generic-pla-h2d', source: 'builtin', kind: 'filament', name: 'Generic PLA @BBL H2D', filamentType: 'PLA', compatiblePrinters: ['Bambu Lab H2D 0.4 nozzle'] },
+    { id: 'custom:filament:pla-basic-custom', source: 'custom', kind: 'filament', name: 'PLA Basic - Custom', filamentType: 'PLA', compatiblePrinters: ['Bambu Lab H2D 0.4 nozzle'] }
+  ]
+  const source = {
+    ams: [{
+      unitId: 0,
+      nozzleId: null,
+      type: 0,
+      slots: [{
+        slot: 1,
+        trayName: null,
+        filamentType: 'PLA',
+        color: '#FFFFFF',
+        colors: ['#FFFFFF'],
+        remainPercent: null,
+        active: false,
+        isReading: false,
+        occupied: true,
+        trayInfoIdx: null,
+        caliIdx: null,
+        trayUuid: null,
+        k: null
+      }]
+    }],
+    externalSpools: [],
+    nozzleCount: 1
+  } as never
+  const options = buildLoadedPrinterMaterialOptions(source, profiles, null, 'H2D', {
+    printerId: 'printer-1',
+    resolveSpool: () => ({
+      spoolId: 'spool-1',
+      brand: "Michael's",
+      filamentType: 'PLA',
+      materialSubtype: null,
+      colorName: 'White',
+      colorHex: '#FFFFFF',
+      slicingPresetName: 'PLA Basic - Custom'
+    })
+  })
+  assert.equal(options.length, 1)
+  assert.equal(options[0]!.label, "Michael's PLA")
+  assert.equal(options[0]!.profileId, 'custom:filament:pla-basic-custom')
+  assert.equal(options[0]!.presetLabel, 'PLA Basic - Custom')
+})

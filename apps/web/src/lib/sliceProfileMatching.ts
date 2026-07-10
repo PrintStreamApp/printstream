@@ -31,8 +31,9 @@ import {
   normalizeBambuStudioPrinterModelOption,
   resolveBambuPrinterModelAliases
 } from './bambuPrinterModels'
-import { resolveFilamentDisplay } from './filamentColor'
-import { resolveLoadedMaterialPreset } from './loadedMaterialProfileSelection'
+import { resolveFilamentIdentity } from './filamentColor'
+import type { SlotFilamentIdentityLookup } from './slotFilamentIdentity'
+import { normalizeProfileText, resolveLoadedMaterialPreset } from './loadedMaterialProfileSelection'
 import { formatSlicingProfileDisplayName, pickMachineDefaultFilamentProfile, pickSlicingProfileByBakedName } from './slicingProfileSelection'
 import { amsUnitLetter } from './printerTrayMapping'
 
@@ -152,6 +153,21 @@ export type SliceMaterialOption = {
    * profile options, which aren't tied to a physical slot.
    */
   slotLabel: string | null
+  /**
+   * Display name of the slicing preset actually behind this option ("Generic PLA"),
+   * for loaded options whose label names the FILAMENT (e.g. a tracked spool) rather
+   * than the preset. `null` when no preset resolved.
+   */
+  presetLabel: string | null
+  /** Canonical colour name of the loaded filament ("White", "Jade White"). */
+  colorName: string | null
+  /**
+   * Remaining quantity from the TRACKED spool (filament-manager) — covers non-RFID
+   * custom spools the printer cannot estimate. Null when untracked; callers may
+   * fall back to the RFID tray estimate.
+   */
+  remainingGrams: number | null
+  remainPercent: number | null
 }
 
 export function pickMachineProfileForPrinter(profiles: SlicingProfileSummary[], printer?: Printer | null): SlicingProfileSummary | null {
@@ -706,9 +722,27 @@ export function buildSliceMaterialOptions(profiles: SlicingProfileSummary[], loa
     nozzleId: null,
     toolheadId: null,
     metadata: formatSlicingProfileMetadata(profile),
-    slotLabel: null
+    slotLabel: null,
+    presetLabel: formatSlicingProfileDisplayName(profile),
+    colorName: null,
+    remainingGrams: null,
+    remainPercent: null
   }))
   return [...loadedMaterials, ...dedupeSliceMaterialProfileOptions(profileOptions)]
+}
+
+/**
+ * Find a filament profile by name — full name or vendor-stripped display name —
+ * e.g. a spool's pinned slicing preset. Display-name matching lets a pin like
+ * "Generic PLA" resolve to whichever machine-compatible variant is in the
+ * (already machine-filtered) list, so pins stay portable across printers.
+ */
+function findProfileByName(profiles: SlicingProfileSummary[], name: string | null | undefined): SlicingProfileSummary | null {
+  const normalized = name ? normalizeProfileText(name) : ''
+  if (!normalized) return null
+  return profiles.find((profile) => profile.kind === 'filament' && normalizeProfileText(profile.name) === normalized)
+    ?? profiles.find((profile) => profile.kind === 'filament' && normalizeProfileText(formatSlicingProfileDisplayName(profile)) === normalized)
+    ?? null
 }
 
 export function dedupeSliceMaterialProfileOptions(options: SliceMaterialOption[]): SliceMaterialOption[] {
@@ -735,7 +769,9 @@ export function buildLoadedPrinterMaterialOptions(
   source: LoadedMaterialSource | null,
   profiles: SlicingProfileSummary[],
   selectedMachineProfile: SlicingProfileSummary | null,
-  selectedPrinterModel: string
+  selectedPrinterModel: string,
+  /** Tracked-spool resolution (core slotFilamentIdentity registry); optional so pure callers/tests can omit it. */
+  spoolContext?: { printerId: string | null; resolveSpool: SlotFilamentIdentityLookup } | null
 ): SliceMaterialOption[] {
   if (!source) return []
   const options: SliceMaterialOption[] = []
@@ -745,64 +781,111 @@ export function buildLoadedPrinterMaterialOptions(
     for (const slot of unit.slots) {
       if (slot.occupied === false || !hasLoadedMaterialDetails(slot.trayName, slot.filamentType, slot.color)) continue
       const fallbackLabel = slot.trayName?.trim() || slot.filamentType?.trim() || `AMS ${unit.unitId + 1} slot ${slot.slot + 1}`
-      const preset = resolveLoadedMaterialPreset(profiles, {
-        trayName: slot.trayName,
-        trayInfoIdx: slot.trayInfoIdx,
-        selectedMachineProfile,
-        selectedPrinterModel
-      })
-      const display = resolveFilamentDisplay(slot)
-      const label = preset.profile ? formatSlicingProfileDisplayName(preset.profile) : preset.name ?? fallbackLabel
-      const color = normalizeSliceFilamentColor(slot.color ?? slot.colors[0] ?? null)
+      // The FILAMENT's own resolved identity — tracked spool first, then the
+      // tray — is authoritative for who the filament is (label, brand, colour
+      // naming); a matched profile only decides which slicing preset to use.
+      // Deriving the brand/label from the profile is what labelled custom
+      // filament "Bambu Lab ..." and unlocked marketing colours.
+      const spool = spoolContext?.resolveSpool(spoolContext.printerId, unit.unitId, slot.slot) ?? null
+      const identity = resolveFilamentIdentity({ ...slot, spool })
+      // A spool pinned to a slicing preset uses it outright (the caller's profile
+      // list is already machine-filtered, so an incompatible pin simply doesn't
+      // resolve and falls back to the auto-match).
+      const pinnedProfile = findProfileByName(profiles, spool?.slicingPresetName)
+      const preset = pinnedProfile
+        ? { name: pinnedProfile.name, profile: pinnedProfile }
+        : resolveLoadedMaterialPreset(profiles, {
+            trayName: slot.trayName,
+            trayInfoIdx: slot.trayInfoIdx,
+            trayFilamentType: slot.filamentType,
+            selectedMachineProfile,
+            selectedPrinterModel
+          })
+      const identityMaterial = identity.presetName
+        ?? ([identity.brand, identity.subtype ?? identity.type].filter(Boolean).join(' ') || null)
+      // A tracked spool names the row outright ("Michael's PLA"); otherwise the
+      // matched preset names it, with the tray identity as the last fallback.
+      const label = spool
+        ? identityMaterial ?? fallbackLabel
+        : preset.profile ? formatSlicingProfileDisplayName(preset.profile) : identityMaterial ?? fallbackLabel
+      const color = normalizeSliceFilamentColor(identity.colorHex ?? slot.color ?? slot.colors[0] ?? null)
       const trayId = amsTrayIndex(unit.type, unit.unitId, slot.slot)
       options.push({
         id: `loaded:ams:${unit.unitId}:${slot.slot}:${preset.profile?.id ?? preset.name ?? fallbackLabel}:${color}`,
         label,
         group,
         materialType: resolveLoadedMaterialType(slot.filamentType, preset.profile, preset.name ?? label),
-        brand: preset.profile?.filamentVendor ?? extractMaterialBrand(preset.name ?? label),
+        brand: identity.brand ?? '',
         profileId: preset.profile?.id ?? null,
-        material: preset.name ?? slot.filamentType?.trim() ?? label,
+        material: preset.profile ? preset.name ?? label : identityMaterial ?? slot.filamentType?.trim() ?? label,
         color,
-        colors: slot.colors,
+        colors: identity.colors.length > 0 ? identity.colors : slot.colors,
         source: 'ams',
         trayId,
         nozzleId: unit.nozzleId,
         toolheadId: unit.nozzleId != null ? buildSliceToolheadId(unit.nozzleId) : null,
-        metadata: [`Slot ${slot.slot + 1}`, display.name].filter(Boolean).join(' - '),
-        slotLabel: `${amsUnitLetter(unit.unitId)}${slot.slot + 1}`
+        metadata: [
+          `Slot ${slot.slot + 1}`,
+          identity.colorName,
+          spool && preset.profile ? formatSlicingProfileDisplayName(preset.profile) : null
+        ].filter(Boolean).join(' - '),
+        slotLabel: `${amsUnitLetter(unit.unitId)}${slot.slot + 1}`,
+        presetLabel: preset.profile ? formatSlicingProfileDisplayName(preset.profile) : null,
+        colorName: identity.colorName,
+        remainingGrams: spool?.remainingGrams ?? null,
+        remainPercent: spool?.remainPercent ?? null
       })
     }
   }
   for (const spool of source.externalSpools) {
     if (!hasLoadedMaterialDetails(spool.trayName, spool.filamentType, spool.color)) continue
     const fallbackLabel = spool.trayName?.trim() || spool.filamentType?.trim() || 'External spool'
-    const preset = resolveLoadedMaterialPreset(profiles, {
-      trayName: spool.trayName,
-      trayInfoIdx: spool.trayInfoIdx,
-      selectedMachineProfile,
-      selectedPrinterModel
-    })
-    const display = resolveFilamentDisplay(spool)
-    const label = preset.profile ? formatSlicingProfileDisplayName(preset.profile) : preset.name ?? fallbackLabel
-    const color = normalizeSliceFilamentColor(spool.color ?? spool.colors[0] ?? null)
+    // Same rule as AMS slots: the filament's identity (tracked spool first,
+    // then the tray) names the row; the matched profile only supplies the
+    // slicing preset. External spools track with a null slot id.
+    const trackedSpool = spoolContext?.resolveSpool(spoolContext.printerId, spool.amsId, null) ?? null
+    const identity = resolveFilamentIdentity({ ...spool, spool: trackedSpool })
+    const pinnedProfile = findProfileByName(profiles, trackedSpool?.slicingPresetName)
+    const preset = pinnedProfile
+      ? { name: pinnedProfile.name, profile: pinnedProfile }
+      : resolveLoadedMaterialPreset(profiles, {
+          trayName: spool.trayName,
+          trayInfoIdx: spool.trayInfoIdx,
+          trayFilamentType: spool.filamentType,
+          selectedMachineProfile,
+          selectedPrinterModel
+        })
+    const identityMaterial = identity.presetName
+      ?? ([identity.brand, identity.subtype ?? identity.type].filter(Boolean).join(' ') || null)
+    const label = trackedSpool
+      ? identityMaterial ?? fallbackLabel
+      : preset.profile ? formatSlicingProfileDisplayName(preset.profile) : identityMaterial ?? fallbackLabel
+    const color = normalizeSliceFilamentColor(identity.colorHex ?? spool.color ?? spool.colors[0] ?? null)
     const sourceLabel = spool.amsId === 254 ? 'Left external spool' : spool.amsId === 255 ? 'Right external spool' : 'External spool'
     options.push({
       id: `loaded:external:${spool.amsId}:${preset.profile?.id ?? preset.name ?? fallbackLabel}:${color}`,
       label,
       group: formatPrinterMaterialSourceGroup(sourceLabel, spool.nozzleId, nozzleCount),
       materialType: resolveLoadedMaterialType(spool.filamentType, preset.profile, preset.name ?? label),
-      brand: preset.profile?.filamentVendor ?? extractMaterialBrand(preset.name ?? label),
+      brand: identity.brand ?? '',
       profileId: preset.profile?.id ?? null,
-      material: preset.name ?? spool.filamentType?.trim() ?? label,
+      material: preset.profile ? preset.name ?? label : identityMaterial ?? spool.filamentType?.trim() ?? label,
       color,
-      colors: spool.colors,
+      colors: identity.colors.length > 0 ? identity.colors : spool.colors,
       source: 'externalSpool',
       trayId: spool.amsId,
       nozzleId: spool.nozzleId,
       toolheadId: spool.nozzleId != null ? buildSliceToolheadId(spool.nozzleId) : null,
-      metadata: [sourceLabel, display.name].filter(Boolean).join(' - '),
-      slotLabel: source.externalSpools.length > 1 ? (spool.amsId === 255 ? 'Ext-R' : 'Ext-L') : 'Ext'
+      metadata: [
+        sourceLabel,
+        identity.colorName,
+        trackedSpool && preset.profile ? formatSlicingProfileDisplayName(preset.profile) : null
+      ].filter(Boolean).join(' - '),
+      slotLabel: source.externalSpools.length > 1 ? (spool.amsId === 255 ? 'Ext-R' : 'Ext-L') : 'Ext',
+      presetLabel: preset.profile ? formatSlicingProfileDisplayName(preset.profile) : null,
+      colorName: identity.colorName,
+      remainingGrams: trackedSpool?.remainingGrams ?? null,
+      remainPercent: trackedSpool?.remainPercent ?? null
     })
   }
   return options

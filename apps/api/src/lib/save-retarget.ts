@@ -18,7 +18,7 @@ import { applyProcessProfileToProjectSettings, retargetProjectSettingsToMachine,
 import { conflict } from './http-error.js'
 import { slicerClient } from './slicer-client.js'
 import { resolveSlicingProfileFiles } from './slicing-profiles.js'
-import { readEntry, rewriteModelSettingsThreeMf } from './three-mf-internal.js'
+import { readEntry, rewriteModelSettingsThreeMf, rewriteThreeMfEntries } from './three-mf-internal.js'
 
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
 const SLICE_INFO_ENTRY = 'Metadata/slice_info.config'
@@ -46,8 +46,8 @@ export interface RetargetSavedProjectInput {
 
 /**
  * Returns the path to a retargeted project 3MF. Throws an {@link HttpError} (409) with a
- * user-facing message when the target machine cannot be resolved or the project carries no
- * settings to rewrite.
+ * user-facing message when the target machine cannot be resolved or the project's embedded
+ * settings are unreadable. A project with NO embedded settings retargets from scratch.
  */
 export async function retargetSavedProjectMachine(input: RetargetSavedProjectInput): Promise<string> {
   const [machineFile] = await resolveSlicingProfileFiles(input.tenantId, [
@@ -66,15 +66,18 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
     throw conflict(`Could not load the ${formatModel(input.retarget.printerModel)} machine profile to retarget this project.`)
   }
 
+  // A project with no embedded settings (a new-project scaffold whose save carried no
+  // project_settings rewrites) retargets from an empty object — the resolved machine and
+  // process profiles supply every field, exactly like BambuStudio picking a printer for a
+  // fresh project.
   const projectSettingsRaw = await readEntry(input.arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
-  if (!projectSettingsRaw || projectSettingsRaw.length === 0) {
-    throw conflict('This project has no embedded printer settings to retarget.')
-  }
-  let projectSettings: Record<string, unknown>
-  try {
-    projectSettings = JSON.parse(projectSettingsRaw.toString('utf8')) as Record<string, unknown>
-  } catch {
-    throw conflict('This project’s embedded printer settings could not be read.')
+  let projectSettings: Record<string, unknown> = {}
+  if (projectSettingsRaw && projectSettingsRaw.length > 0) {
+    try {
+      projectSettings = JSON.parse(projectSettingsRaw.toString('utf8')) as Record<string, unknown>
+    } catch {
+      throw conflict('This project’s embedded printer settings could not be read.')
+    }
   }
 
   let retargeted = retargetProjectSettingsToMachine(projectSettings, machineConfig, {
@@ -94,9 +97,16 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   const outDir = await mkdtemp(path.join(tmpdir(), 'printstream-retarget-'))
   const stagePath = path.join(outDir, 'stage-project-settings.3mf')
   const outPath = path.join(outDir, path.basename(input.fileName) || 'retargeted.3mf')
-  // Two passes (each a no-op for an absent entry): rewrite the machine/process project_settings,
-  // then clear the source printer's stale slice_info `printer_model_id` so the chips read as H2D only.
-  await rewriteModelSettingsThreeMf(input.arrangedPath, stagePath, () => JSON.stringify(retargeted), PROJECT_SETTINGS_ENTRY)
+  // Two passes: upsert the machine/process project_settings (appended when the settings-less
+  // source has no entry to transform), then clear the source printer's stale slice_info
+  // `printer_model_id` (a no-op when absent) so the chips read as the target model only.
+  const retargetedJson = JSON.stringify(retargeted)
+  await rewriteThreeMfEntries(
+    input.arrangedPath,
+    stagePath,
+    { [PROJECT_SETTINGS_ENTRY]: () => retargetedJson },
+    [{ name: PROJECT_SETTINGS_ENTRY, content: retargetedJson }]
+  )
   await rewriteModelSettingsThreeMf(stagePath, outPath, stripSliceInfoPrinterModelId, SLICE_INFO_ENTRY)
   return outPath
 }

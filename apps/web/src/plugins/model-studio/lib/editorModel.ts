@@ -23,6 +23,7 @@ import type {
   StagedImport,
   ThreeMfIndex
 } from '@printstream/shared'
+import { randomUUID } from '../../../lib/randomId'
 import { createThreeMfMatrix } from './threeMfScene'
 import { importMeshUrl } from './editorImports'
 
@@ -272,14 +273,9 @@ export function supportPaintKey(objectId: number, componentObjectId: number): st
 
 const DEFAULT_BED = { minX: -128, maxX: 128, minY: -128, maxY: 128, excludeAreas: [] as Array<{ polygon: Array<{ x: number; y: number }>; label: string | null }> }
 
-let keyCounter = 0
 /** Generate a unique, stable key for an editor instance. */
 export function nextInstanceKey(): string {
-  keyCounter += 1
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return `instance-${Date.now()}-${keyCounter}`
+  return randomUUID()
 }
 
 let syntheticObjectIdCounter = 0

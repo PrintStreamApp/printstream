@@ -66,6 +66,8 @@ function writableData(input: Partial<SpoolCreateInput>): Prisma.FilamentSpoolUnc
   if (input.colors !== undefined) data.colorsJson = serializeColors(input.colors)
   assign('trayInfoIdx', input.trayInfoIdx ?? undefined)
   assign('bambuUuid', input.bambuUuid ?? undefined)
+  // Explicit null must CLEAR the preset (revert to auto-match), so no `?? undefined` collapse.
+  if (input.slicingPresetName !== undefined) data.slicingPresetName = input.slicingPresetName
   assign('serial', input.serial ?? undefined)
   assign('nozzleTempMin', input.nozzleTempMin ?? undefined)
   assign('nozzleTempMax', input.nozzleTempMax ?? undefined)

@@ -52,11 +52,15 @@ const FLOW_PROCESS_OVERRIDES: Record<string, string> = {
 }
 
 /**
- * Process overrides for the pressure-advance tower, taken verbatim from OrcaSlicer's PA-tower recipe
- * (`Plater::_calib_pa_tower`): rear seam so the read faces stay clean, 2 walls with no top/infill so
- * only the signal-carrying outer wall prints (cheap + readable), and brim ears to anchor the tall,
- * narrow tower (needed on low-tack plates / stringy materials, harmless otherwise). The matching
- * geometry is OrcaSlicer's own tower footprint (see `pressureAdvanceTower`).
+ * Process overrides for the pressure-advance tower. The read-face settings follow BambuStudio's
+ * PA-tower recipe (`Plater::_calib_pa_tower`): rear seam so the read faces stay clean, 2 walls with
+ * no top/infill so only the signal-carrying outer wall prints (cheap + readable). The matching
+ * geometry is the tower footprint (see `pressureAdvanceTower`).
+ *
+ * The brim is our own addition to anchor the tall, narrow tower on low-tack plates / stringy
+ * materials (BambuStudio's recipe sets no brim). It must be `outer_only`, a full automatic
+ * perimeter brim: `brim_ears` is the *painted* brim type in this fork and emits nothing unless
+ * manual ear points are painted into `Metadata/brim_ear_points.txt`, which the tower has none of.
  */
 const PA_TOWER_PROCESS_OVERRIDES: Record<string, string> = {
   seam_position: 'back',
@@ -64,8 +68,8 @@ const PA_TOWER_PROCESS_OVERRIDES: Record<string, string> = {
   top_shell_layers: '0',
   bottom_shell_layers: '0',
   sparse_infill_density: '0%',
-  brim_type: 'brim_ears',
-  brim_width: '6',
+  brim_type: 'outer_only',
+  brim_width: '3',
   brim_object_gap: '0',
   alternate_extra_wall: '0'
 }
@@ -129,12 +133,23 @@ export async function autoApplyOnLoad(
   } catch {
     return
   }
+  // When the spool carries no colour name, fall back to the same slot-derived colour label
+  // used at run creation (resolveSlotFilament), so identity matching on colour stays
+  // symmetric between save time and apply time.
+  let colorName = event.colorName
+  if (colorName == null) {
+    try {
+      colorName = (await deps.resolveSlotFilament(db, event.tenantId, event.printerId, event.amsId, event.slotId)).colorName
+    } catch {
+      // keep null — colour simply doesn't constrain the match
+    }
+  }
   const identity: FilamentIdentity & { spoolId: string | null } = {
     spoolId: event.spoolId,
     brand: event.brand,
     filamentType: event.filamentType,
     materialSubtype: event.materialSubtype,
-    colorName: event.colorName
+    colorName
   }
   const saved = await resolveSavedValue(db, event.tenantId, 'pressureAdvance', printer.model, printer.nozzleDiameter, identity)
   const currentK = deps.getSlotK?.(event.printerId, event.amsId, event.slotId) ?? null

@@ -408,7 +408,10 @@ export function AmsSlotEditModal({
 
   // Lets the filament-manager plugin's "Pick from library" populate the form.
   const applyFilamentFromLibrary = useCallback((values: { filamentType?: string | null; colorHex?: string | null; trayInfoIdx?: string | null }) => {
-    if (typeof values.trayInfoIdx === 'string') setTrayInfoIdx(values.trayInfoIdx)
+    // A spool with no preset id must CLEAR the slot's previous trayInfoIdx (custom
+    // filament, empty idx) — silently keeping the old id left e.g. a stale ASA
+    // preset id on a slot re-assigned to custom PLA, mislabelling it everywhere.
+    if ('trayInfoIdx' in values) setTrayInfoIdx(values.trayInfoIdx ?? '')
     if (values.filamentType) setType(values.filamentType)
     if (values.colorHex) setColor(values.colorHex)
   }, [])

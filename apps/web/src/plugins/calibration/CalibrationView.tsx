@@ -141,7 +141,19 @@ export function CalibrationView() {
                 </Box>
                 <Chip size="sm" variant="soft" color={badge.color}>{badge.label}</Chip>
                 {run.status === 'readyToPrint' ? <Button size="sm" onClick={() => printRun.mutate(run.id)} loading={printRun.isPending}>Print</Button> : null}
-                {run.status === 'awaitingResult' || (run.status === 'saved' && run.resultValue == null) ? <Button size="sm" onClick={() => setResultRun(run)}>Enter result</Button> : null}
+                {/* A saved run stays editable: the dialog resubmits the on-screen measurement and
+                    the result store upserts (re-applying to the printer), so a mis-entered
+                    measurement can be corrected without reprinting the test. */}
+                {run.status === 'awaitingResult' || run.status === 'saved' ? (
+                  <Button
+                    size="sm"
+                    variant={run.status === 'saved' && run.resultValue != null ? 'outlined' : 'solid'}
+                    color={run.status === 'saved' && run.resultValue != null ? 'neutral' : 'primary'}
+                    onClick={() => setResultRun(run)}
+                  >
+                    {run.status === 'saved' && run.resultValue != null ? 'Edit result' : 'Enter result'}
+                  </Button>
+                ) : null}
                 <IconButton size="sm" variant="plain" color="danger" aria-label="Delete run" onClick={() => removeRun.mutate(run.id)}><DeleteRoundedIcon /></IconButton>
               </Card>
             )

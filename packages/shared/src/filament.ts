@@ -45,6 +45,8 @@ const spoolWritableShape = {
   colors: z.array(filamentHexColorSchema).max(16).optional(),
   trayInfoIdx: optionalText(32).optional(),
   bambuUuid: optionalText(64).optional(),
+  /** Slicing preset (filament profile name) this spool slices with; null = auto-match at slice time. */
+  slicingPresetName: optionalText(200).optional(),
   serial: optionalText(80).optional(),
   nozzleTempMin: tempSchema.nullable().optional(),
   nozzleTempMax: tempSchema.nullable().optional(),
@@ -109,6 +111,8 @@ export const filamentSpoolSchema = z.object({
   colors: z.array(z.string()),
   trayInfoIdx: z.string().nullable(),
   bambuUuid: z.string().nullable(),
+  /** Slicing preset (filament profile name) this spool slices with; null = auto-match. */
+  slicingPresetName: z.string().nullable(),
   serial: z.string().nullable(),
   nozzleTempMin: z.number().nullable(),
   nozzleTempMax: z.number().nullable(),

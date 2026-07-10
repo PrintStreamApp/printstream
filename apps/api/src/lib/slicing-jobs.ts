@@ -509,6 +509,7 @@ export class SlicingJobs {
           await rm(weldedDir, { recursive: true, force: true }).catch(() => undefined)
         }
       }
+      let crashRetryUsed = false
       while (true) {
         const slicerJobId = buildSlicerAttemptJobId(job.id, retryAttempt)
         job.activeSlicerJobId = slicerJobId
@@ -522,6 +523,18 @@ export class SlicingJobs {
             signal
           })
         } catch (error) {
+          // A signal-death exit (segfault et al.) gets ONE retry with unchanged inputs: under
+          // qemu emulation the engine crashes intermittently on runs that slice clean when
+          // re-run, and a single flake otherwise fails the whole job.
+          if (!crashRetryUsed && isTransientSlicerCrashExit(error)) {
+            crashRetryUsed = true
+            retryAttempt += 1
+            const retryMessage = 'Retrying slice after the slicer engine crashed mid-run'
+            this.touch(job, retryMessage)
+            this.logJobEvent(job, 'warn', retryMessage)
+            broadcastSlicingChanged(job.tenantId)
+            continue
+          }
           const fallbackKinds = collectUnsupportedBuiltinProfileKinds(error)
           if (fallbackKinds.size === 0 && isLikelyBuiltinProfileCompatibilityExit(error)) {
             fallbackKinds.add('machine')
@@ -1152,6 +1165,17 @@ function collectUnsupportedBuiltinProfileKinds(error: unknown): Set<ResolvedSlic
 function isLikelyBuiltinProfileCompatibilityExit(error: unknown): boolean {
   if (!(error instanceof SlicerServiceError)) return false
   return /Slicer CLI exited with code 239/i.test(error.message)
+}
+
+/**
+ * A slicer CLI death by signal — exit 128+N (134 SIGABRT … 139 SIGSEGV). BambuStudio under qemu
+ * emulation (arm64 dev/self-host machines) segfaults intermittently on runs whose inputs slice
+ * clean when retried, so one bounded retry absorbs the flake; a deterministic crash still fails
+ * the job on the second attempt (including on native x86, where these exits are always real).
+ */
+export function isTransientSlicerCrashExit(error: unknown): boolean {
+  if (!(error instanceof SlicerServiceError)) return false
+  return /Slicer CLI exited with code 13[4-9]\b/i.test(error.message)
 }
 
 export const slicingJobs = new SlicingJobs()

@@ -6,8 +6,9 @@
  * regenerates the `3D/3dmodel.model` build items plus the `model_settings.config` plates/instances
  * so moved/rotated/scaled/cloned/re-plated objects and per-object printability are honored at slice
  * time; existing geometry is copied verbatim. {@link writeArrangedThreeMf} is the thin in-project
- * wrapper (no foreign imports). Filament-set and prime-tower edits are applied to
- * `project_settings.config`. {@link threeMfTransformFromTRS} is the exact inverse of the reader's
+ * wrapper (no foreign imports). Filament-set, plate-type, and prime-tower edits are applied to
+ * `project_settings.config` (synthesized from scratch when the base carries none — the
+ * new-project-scaffold case). {@link threeMfTransformFromTRS} is the exact inverse of the reader's
  * scene decomposition, so an unedited round-trip reproduces the source placement.
  *
  * Depends on the reader for parse helpers and on three-mf-internal for ZIP I/O; nothing depends on
@@ -15,7 +16,7 @@
  */
 import { createWriteStream } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTransform, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
+import { canonicalCurrBedType, isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTransform, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
 import { sliceExtruderForNozzleId, stringArray } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
@@ -1544,6 +1545,13 @@ export async function buildEditedThreeMf(
   const customGcodeContent = edit.filamentChanges !== undefined || edit.pauses !== undefined
     ? mergeCustomGcodePerLayer(baseCustomGcodeXml, edit.filamentChanges, edit.pauses)
     : null
+  // Compose project_settings.config rewrites: filament set first (add/remove materials), then the
+  // per-slot dual-nozzle assignment, the plate type, and per-plate prime-tower corners. When the
+  // base carries no project_settings.config (a new-project scaffold), the composed result is
+  // synthesized from an empty settings object instead — otherwise the material / plate-type /
+  // prime-tower choices would silently vanish on save (transforms only fire on existing entries).
+  const projectSettingsTransforms = buildProjectSettingsTransforms(edit)
+  const applyProjectSettings = (json: string) => projectSettingsTransforms.reduce((acc, transform) => transform(acc), json)
 
   if (baseSourcePath) {
     // Copy the base archive, replacing the two edited entries (and adding model_settings if absent).
@@ -1594,22 +1602,15 @@ export async function buildEditedThreeMf(
         if (parsed && typeof parsed === 'object') physicalExtruderMap = stringArray((parsed as Record<string, unknown>).physical_extruder_map)
       } catch { /* not JSON we can read; leave the nozzle map empty */ }
     }
-    // Compose project_settings.config rewrites: filament set first (add/remove materials), then the
-    // per-slot dual-nozzle assignment, then per-plate prime-tower corners.
-    const projectSettingsTransforms: Array<(xml: string) => string> = []
-    if (edit.filaments && edit.filaments.length > 0) {
-      const filaments = edit.filaments
-      projectSettingsTransforms.push((xml) => applyFilamentList(xml, filaments))
-      projectSettingsTransforms.push((xml) => applyNozzleAssignmentToProjectSettings(xml, filaments))
-    }
-    if (edit.plates.some((plate) => plate.primeTower)) {
-      projectSettingsTransforms.push((xml) => applyPrimeTowerSettings(xml, edit))
-    }
     if (projectSettingsTransforms.length > 0) {
-      transforms.set(
-        'Metadata/project_settings.config',
-        (xml) => projectSettingsTransforms.reduce((acc, transform) => transform(acc), xml)
-      )
+      if (projectSettingsJson !== null) {
+        transforms.set('Metadata/project_settings.config', applyProjectSettings)
+      } else {
+        // No entry in the base to transform in the copy pass — synthesize one. (If the source
+        // somehow does carry the entry despite the failed read above, the copy pass writes the
+        // source entry and this extra is skipped by the duplicate-name guard.)
+        extraEntries.push({ name: 'Metadata/project_settings.config', content: applyProjectSettings('{}') })
+      }
     }
     // slice_info.config: move each reassigned filament's group_id onto the chosen nozzle so a
     // reopened sliced project reflects the new assignment (group ids outrank filament_nozzle_map
@@ -1638,11 +1639,54 @@ export async function buildEditedThreeMf(
     { name: '_rels/.rels', content: THREE_MF_RELS_XML },
     { name: '3D/3dmodel.model', content: modelXml },
     { name: 'Metadata/model_settings.config', content: modelSettingsXml },
+    ...(projectSettingsTransforms.length > 0 ? [{ name: 'Metadata/project_settings.config', content: applyProjectSettings('{}') }] : []),
     ...(brimEarPointsContent ? [{ name: BRIM_EAR_POINTS_ENTRY, content: brimEarPointsContent }] : []),
     ...(customGcodeContent ? [{ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent }] : []),
     ...(options.extraEntries ?? [])
   ])
   return { replacedObjectIds, importObjectIds }
+}
+
+/**
+ * The ordered `project_settings.config` rewrites a SceneEdit calls for: the filament set
+ * (add/remove materials) and per-slot dual-nozzle assignment, the plate type, and per-plate
+ * prime-tower corners. Empty when the edit touches none of them.
+ */
+function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: string) => string> {
+  const transforms: Array<(json: string) => string> = []
+  if (edit.filaments && edit.filaments.length > 0) {
+    const filaments = edit.filaments
+    transforms.push((json) => applyFilamentList(json, filaments))
+    transforms.push((json) => applyNozzleAssignmentToProjectSettings(json, filaments))
+  }
+  const plateType = edit.plates.find((plate) => plate.plateType)?.plateType
+  if (plateType) {
+    transforms.push((json) => applyProjectPlateType(json, plateType))
+  }
+  if (edit.plates.some((plate) => plate.primeTower)) {
+    transforms.push((json) => applyPrimeTowerSettings(json, edit))
+  }
+  return transforms
+}
+
+/**
+ * Persist the editor's chosen plate type as the project-global `curr_bed_type` (normalized to
+ * BambuStudio's serialized enum value). Without this, a plate-type change in the editor only
+ * lives in the UI: the source's `curr_bed_type` is copied verbatim and wins on reopen.
+ */
+function applyProjectPlateType(projectSettingsJson: string, plateType: string): string {
+  const canonical = canonicalCurrBedType(plateType)
+  if (!canonical) return projectSettingsJson
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(projectSettingsJson)
+  } catch {
+    return projectSettingsJson
+  }
+  if (!parsed || typeof parsed !== 'object') return projectSettingsJson
+  const record = parsed as Record<string, unknown>
+  record.curr_bed_type = canonical
+  return JSON.stringify(record)
 }
 
 /**

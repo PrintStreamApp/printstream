@@ -14,7 +14,7 @@
  * `slotFilamentResolvers` seam (filled by whichever filament plugin is present),
  * with the printer's live AMS status filling any gaps.
  */
-import { amsTrayIndex, printerModelSchema, type PrinterCommand, type PrinterPressureAdvanceProfile } from '@printstream/shared'
+import { amsTrayIndex, filamentColorLabel, printerModelSchema, type PrinterCommand, type PrinterPressureAdvanceProfile } from '@printstream/shared'
 import type { ApiPlugin } from '../../plugin/types.js'
 import { rootPrisma } from '../../lib/prisma.js'
 import { slotFilamentResolvers } from '../../lib/slot-filament-registry.js'
@@ -47,14 +47,16 @@ const deps: CalibrationRunManagerDeps = {
     const slot = status?.ams.find((unit) => unit.unitId === amsId)?.slots.find((entry) => entry.slot === slotId)
     // Prefer the tracked spool's rich identity (brand/colour/subtype + spoolId, so the run can be
     // saved "for this spool") when a filament plugin resolves the slot; fall back to the printer's
-    // live tray for the fields it reports when no spool is tracked.
+    // live tray for the fields it reports when no spool is tracked. The colour fallback derives a
+    // human label from the tray's colour hex ("White", or the hex itself) — never `trayName`,
+    // which is a material sub-brand / raw tray code (e.g. "A00-B9"), not a colour.
     const spool = await slotFilamentResolvers.resolve({ tenantId, printerId, amsId, slotId })
     return {
       spoolId: spool?.spoolId ?? null,
       brand: spool?.brand ?? null,
       filamentType: spool?.filamentType ?? slot?.filamentType ?? null,
       materialSubtype: spool?.materialSubtype ?? null,
-      colorName: spool?.colorName ?? slot?.trayName ?? null
+      colorName: spool?.colorName ?? filamentColorLabel(slot?.color) ?? null
     }
   },
   getSlotK(printerId, amsId, slotId) {

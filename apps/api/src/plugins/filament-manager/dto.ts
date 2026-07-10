@@ -68,6 +68,7 @@ export function toSpoolDto(row: SpoolRowWithPrinter): FilamentSpool {
     colors: parseColors(row.colorsJson),
     trayInfoIdx: row.trayInfoIdx,
     bambuUuid: row.bambuUuid,
+    slicingPresetName: row.slicingPresetName,
     serial: row.serial,
     nozzleTempMin: row.nozzleTempMin,
     nozzleTempMax: row.nozzleTempMax,

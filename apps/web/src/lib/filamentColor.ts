@@ -1,64 +1,40 @@
 /**
- * Resolve Bambu filament color labels and palettes for AMS UI.
- *
- * Exact Bambu multi-color matches are resolved from `trayInfoIdx + colors`
- * first, then from single-color swatches, and finally from meaningful tray
- * names. Raw `tray_id_name` shorthand such as `A00-G0` is exposed as metadata
- * (`rawTrayCode`) but should not become the primary human-facing label unless
- * a stronger match exists.
+ * Web adapter over the canonical filament identity resolution in
+ * `@printstream/shared` (filament-identity.ts / bambu-colors.ts /
+ * bambu-filament-presets.ts). The resolvers, the genuine-Bambu gate, and the
+ * Bambu catalogues all live in shared so the API resolves identically; this
+ * module re-exports them for existing web imports and keeps only the
+ * web-specific presentation helpers (CSS backgrounds, compact labels, swatch
+ * pickers, perceptual colour distance for "nearest match" ranking).
  */
 import {
+  COMMON_FILAMENT_COLOR_SWATCHES,
   bambuColorsForMaterial,
-  bambuMaterialFromPresetName,
-  bambuMaterialFromType,
-  bambuSwatchForHex,
-  type BambuColorSwatch
-} from '../data/bambuColors.js'
-import { brandFromPresetName, filamentPresetBrandFromId, filamentPresetNameFromId } from '../data/bambuFilamentPresets.js'
-import { findBambuEncodedMultiColor, findBambuEncodedMultiColorAlias } from '../data/bambuEncodedMultiColors.js'
+  commonFilamentColorName,
+  normalizeFilamentPalette,
+  normalizeHexColor,
+  type FilamentColorSwatchOption
+} from '@printstream/shared'
 
-export interface ResolvedFilamentDisplay {
-  name: string | null
-  material: string | null
-  colors: string[]
-  rawTrayCode: string | null
-}
-
-interface FilamentColorInput {
-  color: string | null | undefined
-  colors?: readonly string[] | null | undefined
-  trayName: string | null | undefined
-  trayInfoIdx?: string | null | undefined
-  filamentType: string | null | undefined
-  trayUuid?: string | null | undefined
-}
-
-export type FilamentColorSwatchOption = Pick<BambuColorSwatch, 'name' | 'hex'>
-
-export const COMMON_FILAMENT_COLOR_SWATCHES: FilamentColorSwatchOption[] = [
-  { name: 'White', hex: '#FFFFFF' },
-  { name: 'Black', hex: '#000000' },
-  { name: 'Light Gray', hex: '#D0D3D4' },
-  { name: 'Gray', hex: '#8A8F98' },
-  { name: 'Silver', hex: '#B7BCC3' },
-  { name: 'Natural', hex: '#E6DDCC' },
-  { name: 'Beige', hex: '#D9C3A5' },
-  { name: 'Brown', hex: '#7A4B2F' },
-  { name: 'Red', hex: '#C7372F' },
-  { name: 'Orange', hex: '#F47A20' },
-  { name: 'Yellow', hex: '#F2D230' },
-  { name: 'Green', hex: '#2FA84F' },
-  { name: 'Olive', hex: '#6B7A2B' },
-  { name: 'Blue', hex: '#1F5FBF' },
-  { name: 'Navy', hex: '#1F355E' },
-  { name: 'Cyan', hex: '#35C7D9' },
-  { name: 'Purple', hex: '#7C4DAD' },
-  { name: 'Pink', hex: '#E67AAE' }
-]
-
-const COMMON_FILAMENT_COLOR_ALIASES: Record<string, string> = {
-  '#00FFFF': 'Cyan'
-}
+// Canonical resolution lives in @printstream/shared — re-exported here for existing consumers.
+export {
+  COMMON_FILAMENT_COLOR_SWATCHES,
+  commonFilamentColorName,
+  filamentColorLabel,
+  filamentIdentityLabel,
+  hasBambuRfidTag,
+  isGenuineBambuTray,
+  isRawTrayCode,
+  resolveFilamentColorName,
+  resolveFilamentDisplay,
+  resolveFilamentIdentity,
+  resolveFilamentSwatchName,
+  resolveProjectFilamentColorName,
+  type FilamentColorInput,
+  type ResolvedFilamentDisplay,
+  type ResolvedFilamentIdentity
+} from '@printstream/shared'
+export type { FilamentColorSwatchOption }
 
 /**
  * Curated set of filament material types for constrained pickers (e.g. the queue's one-off custom
@@ -82,14 +58,6 @@ export const COMMON_FILAMENT_TYPES = [
   'PC-CF',
   'PET-CF'
 ] as const
-
-export function commonFilamentColorName(hex: string | null | undefined): string | null {
-  const normalized = normalizeHexColor(hex)
-  if (!normalized) return null
-  return COMMON_FILAMENT_COLOR_SWATCHES.find((swatch) => swatch.hex === normalized)?.name
-    ?? COMMON_FILAMENT_COLOR_ALIASES[normalized]
-    ?? null
-}
 
 /**
  * Replace any `#RRGGBB` hex codes embedded in a human-facing string with a friendly
@@ -242,137 +210,6 @@ export function resolveFilamentColorSwatches(
   return { swatches: COMMON_FILAMENT_COLOR_SWATCHES, usesCommonFallback: true }
 }
 
-/**
- * A genuine Bambu spool is identified by a readable RFID tag (`trayUuid`), which the AMS only
- * reports for real Bambu filament. Only such spools — not a user-assigned Bambu slicing preset
- * (`trayInfoIdx`), which can be attached to any physical filament — should surface Bambu's
- * marketing colour names (e.g. "Jade White"). Custom/third-party filament reads as its plain
- * common colour ("White"). This mirrors the `trayUuid != null` "scanned spool" checks used across
- * the AMS UI (`PrinterCardRows`, `AmsSlotEditModal`, remaining-weight estimates).
- */
-export function hasBambuRfidTag(trayUuid: string | null | undefined): boolean {
-  const value = trayUuid?.trim() ?? ''
-  return value.length > 0 && !/^0+$/.test(value)
-}
-
-export function resolveFilamentDisplay(input: FilamentColorInput): ResolvedFilamentDisplay {
-  const trayInfoIdx = input.trayInfoIdx?.trim() ?? ''
-  const material = resolveDisplayMaterial(trayInfoIdx, input.filamentType)
-  const palette = normalizePalette(input.colors, input.color)
-  const primaryColor = normalizeHexColor(input.color) ?? palette[0] ?? null
-  const trayCode = normalizeTrayCode(input.trayName)
-  const presetBrand = filamentPresetBrandFromId(trayInfoIdx)
-  const shouldUseBambuColorNames = hasBambuRfidTag(input.trayUuid) && (presetBrand == null || presetBrand === 'Bambu')
-  const trayName = input.trayName?.trim() ?? ''
-  const filamentType = input.filamentType?.trim() ?? ''
-  const suppressRepeatedTrayName = Boolean(filamentType && shouldSuppressRepeatedTrayLabel(trayName, filamentType))
-
-  if (trayInfoIdx && palette.length > 1) {
-    const encoded = findBambuEncodedMultiColor(trayInfoIdx, palette)
-      ?? (trayCode ? findBambuEncodedMultiColorAlias(trayInfoIdx, trayCode) : null)
-    if (encoded) {
-      return {
-        name: encoded.name,
-        material: encoded.material,
-        colors: encoded.colors,
-        rawTrayCode: trayCode
-      }
-    }
-  }
-
-  if (!shouldUseBambuColorNames && (!trayName || suppressRepeatedTrayName || trayCode)) {
-    const commonName = commonFilamentColorName(primaryColor)
-    if (commonName) {
-      return {
-        name: commonName,
-        material,
-        colors: palette.length > 0 ? palette : primaryColor ? [primaryColor] : [],
-        rawTrayCode: trayCode
-      }
-    }
-  }
-
-  const swatch = shouldUseBambuColorNames ? bambuSwatchForHex(primaryColor, material) : null
-  if (swatch) {
-    return {
-      name: swatch.name,
-      material: swatch.material,
-      colors: palette.length > 0 ? palette : [swatch.hex],
-      rawTrayCode: trayCode
-    }
-  }
-
-  if (!trayName) return { name: null, material, colors: palette, rawTrayCode: null }
-  if (suppressRepeatedTrayName) {
-    return { name: null, material, colors: palette, rawTrayCode: null }
-  }
-
-  if (trayCode) {
-    return {
-      name: resolveMaterialFallbackName(material, filamentType),
-      material,
-      colors: palette,
-      rawTrayCode: trayCode
-    }
-  }
-
-  return {
-    name: trayName,
-    material,
-    colors: palette,
-    rawTrayCode: trayCode
-  }
-}
-
-export function resolveFilamentColorName(input: FilamentColorInput): string | null {
-  return resolveFilamentDisplay(input).name
-}
-
-/**
- * Colour label for a filament known by its preset/brand name (slicing options, queued jobs, spool
- * library) rather than a live AMS tray. Bambu's marketing colour names apply only when the filament
- * is Bambu-branded — its `filamentName` resolves to the "Bambu" brand (e.g. "Bambu PLA Basic").
- * A generic or custom filament ("Generic PLA", a user's own brand) keeps its plain common colour
- * name even though its type maps to a Bambu material, so custom white PLA reads "White", not
- * "Jade White". Pass the brand as `filamentName` when there is no sliced preset name.
- */
-export function resolveProjectFilamentColorName(input: {
-  color: string | null | undefined
-  filamentName: string | null | undefined
-  filamentType: string | null | undefined
-}): string | null {
-  const primaryColor = normalizeHexColor(input.color)
-  if (!primaryColor) return null
-
-  const name = input.filamentName?.trim() ?? ''
-  if (brandFromPresetName(name) === 'Bambu') {
-    const material = bambuMaterialFromPresetName(name) ?? resolveBambuMaterial(input.filamentType)
-    if (material) {
-      const swatch = bambuSwatchForHex(primaryColor, material)
-      if (swatch) return swatch.name
-    }
-  }
-
-  return commonFilamentColorName(primaryColor)
-}
-
-export function resolveFilamentSwatchName(input: FilamentColorInput): string | null {
-  const trayInfoIdx = input.trayInfoIdx?.trim() ?? ''
-  const material = resolveDisplayMaterial(trayInfoIdx, input.filamentType)
-  const palette = normalizePalette(input.colors, input.color)
-  const primaryColor = normalizeHexColor(input.color) ?? palette[0] ?? null
-  if (!primaryColor) return null
-
-  const presetBrand = filamentPresetBrandFromId(trayInfoIdx)
-  const shouldUseBambuColorNames = hasBambuRfidTag(input.trayUuid) && (presetBrand == null || presetBrand === 'Bambu')
-  if (shouldUseBambuColorNames) {
-    const swatch = bambuSwatchForHex(primaryColor, material)
-    if (swatch) return swatch.name
-  }
-
-  return commonFilamentColorName(primaryColor)
-}
-
 export function resolveCompactFilamentTypeLabel(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? ''
   if (!trimmed) return null
@@ -394,11 +231,11 @@ export function hasLoadedFilament(
   filamentType: string | null | undefined,
   color: string | null | undefined,
   colors?: readonly string[] | null | undefined,
-  options: Partial<Pick<FilamentColorInput, 'trayInfoIdx' | 'trayName' | 'trayUuid'>> & { occupied?: boolean | null | undefined; remainPercent?: number | null | undefined } = {}
+  options: { trayInfoIdx?: string | null; trayName?: string | null; trayUuid?: string | null; occupied?: boolean | null | undefined; remainPercent?: number | null | undefined } = {}
 ): boolean {
   return Boolean(
     (filamentType?.trim() ?? '')
-    || normalizePalette(colors, color).length > 0
+    || normalizeFilamentPalette(colors, color).length > 0
     || (options.trayInfoIdx?.trim() ?? '')
     || (options.trayName?.trim() ?? '')
     || (options.trayUuid?.trim() ?? '')
@@ -412,7 +249,7 @@ export function filamentBackground(
   fallbackColor: string | null | undefined,
   emptyColor = 'var(--joy-palette-neutral-800)'
 ): string {
-  const palette = normalizePalette(colors, fallbackColor)
+  const palette = normalizeFilamentPalette(colors, fallbackColor)
   if (palette.length === 0) return emptyColor
   if (palette.length === 1) return palette[0] ?? emptyColor
 
@@ -430,7 +267,7 @@ export function filamentTextColor(
   fallbackColor: string | null | undefined,
   emptyColor = 'var(--joy-palette-text-primary)'
 ): string {
-  const palette = normalizePalette(colors, fallbackColor)
+  const palette = normalizeFilamentPalette(colors, fallbackColor)
   if (palette.length === 0) return emptyColor
 
   const rgb = palette.reduce(
@@ -447,111 +284,6 @@ export function filamentTextColor(
   const luminance = (0.299 * (rgb.r / count) + 0.587 * (rgb.g / count) + 0.114 * (rgb.b / count)) / 255
   return luminance > 0.6 ? '#1a1a1a' : '#fff'
 }
-
-function resolveBambuMaterial(filamentType: string | null | undefined): string | null {
-  const value = filamentType?.trim() ?? ''
-  if (!value) return null
-  return bambuMaterialFromPresetName(value) ?? bambuMaterialFromType(value)
-}
-
-function resolveDisplayMaterial(trayInfoIdx: string, filamentType: string | null | undefined): string | null {
-  const presetMaterial = bambuMaterialFromPresetName(filamentPresetNameFromId(trayInfoIdx) ?? '')
-  return presetMaterial ?? resolveBambuMaterial(filamentType)
-}
-
-function normalizePalette(
-  colors: readonly string[] | null | undefined,
-  fallbackColor: string | null | undefined
-): string[] {
-  const normalized = (colors ?? [])
-    .map((entry) => normalizeHexColor(entry))
-    .filter((entry): entry is string => entry != null)
-
-  const unique = normalized.filter((entry, index) => normalized.indexOf(entry) === index)
-  if (unique.length > 0) return unique
-
-  const fallback = normalizeHexColor(fallbackColor)
-  return fallback ? [fallback] : []
-}
-
-function normalizeHexColor(value: string | null | undefined): string | null {
-  if (!value) return null
-  const trimmed = value.trim().toUpperCase()
-  const hex = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed
-  if (!/^[0-9A-F]{6}(?:[0-9A-F]{2})?$/.test(hex)) return null
-  return `#${hex.slice(0, 6)}`
-}
-
-function normalizeTrayCode(value: string | null | undefined): string | null {
-  const trimmed = value?.trim().toUpperCase() ?? ''
-  return /^[A-Z]\d{2}-[A-Z]\d+$/.test(trimmed) ? trimmed : null
-}
-
-function shouldSuppressRepeatedTrayLabel(trayName: string, filamentType: string): boolean {
-  if (trayName.localeCompare(filamentType, undefined, { sensitivity: 'accent' }) !== 0) return false
-
-  return GENERIC_FILAMENT_LABELS.has(filamentType.trim().toUpperCase())
-}
-
-export function isRawTrayCode(value: string | null | undefined): boolean {
-  return normalizeTrayCode(value) != null
-}
-
-function resolveMaterialFallbackName(material: string | null, filamentType: string): string | null {
-  if (!material) return null
-
-  const normalizedType = filamentType.trim().toUpperCase()
-  if (normalizedType === 'PLA-S' && material === 'Support for PLA') return material
-  if (normalizedType === 'SUPPORT' && material.includes('Support')) return material
-  return null
-}
-
-const GENERIC_FILAMENT_LABELS = new Set([
-  'ABS',
-  'ABS-GF',
-  'ASA',
-  'ASA AERO',
-  'ASA-CF',
-  'PA',
-  'PA6-CF',
-  'PA6-GF',
-  'PAHT-CF',
-  'PC',
-  'PC FR',
-  'PC-FR',
-  'PET-CF',
-  'PETG',
-  'PETG BASIC',
-  'PETG HF',
-  'PETG TRANSLUCENT',
-  'PETG-CF',
-  'PLA',
-  'PLA AERO',
-  'PLA BASIC',
-  'PLA DYNAMIC',
-  'PLA GALAXY',
-  'PLA GLOW',
-  'PLA LITE',
-  'PLA MARBLE',
-  'PLA MATTE',
-  'PLA METAL',
-  'PLA SILK',
-  'PLA SILK+',
-  'PLA SPARKLE',
-  'PLA TOUGH',
-  'PLA TOUGH+',
-  'PLA WOOD',
-  'PLA-CF',
-  'PPA-CF',
-  'PPS-CF',
-  'PVA',
-  'TPU',
-  'TPU 85A',
-  'TPU 90A',
-  'TPU 95A',
-  'TPU 95A HF',
-  'TPU FOR AMS'
-])
 
 const COMPACT_FILAMENT_TYPE_ORDER = [
   'PAHT-CF',

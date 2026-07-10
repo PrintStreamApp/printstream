@@ -1678,7 +1678,11 @@ libraryRouter.post('/:id/print', requireRequestPermission(PRINTS_DISPATCH_PERMIS
   const fileId = requireRouteParam(request.params.id, 'File id')
   const parsed = printFromLibrarySchema.omit({ fileId: true }).safeParse(request.body)
   if (!parsed.success) {
-    throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid print payload')
+    const reason = parsed.error.issues[0]?.message ?? 'Invalid print payload'
+    // A boundary rejection starts no job (nothing in the Jobs list), so log the
+    // reason — e.g. "Invalid AMS tray index" — for self-hosted diagnosis.
+    console.warn(`[dispatch] print payload rejected for file ${fileId}: ${reason}`)
+    throw badRequest(reason)
   }
   const job = await enqueueLibraryPrint({
     fileId,

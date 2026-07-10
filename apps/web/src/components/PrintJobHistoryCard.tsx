@@ -2,7 +2,9 @@ import { Box, Card, CardContent, Chip, Stack, Tooltip, Typography, type ColorPal
 import type { ReactNode } from 'react'
 import type { PrintJob } from '@printstream/shared'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { bambuSwatchForHex, readableTextColor } from '../data/bambuColors'
+import { bambuMaterialFromPresetName, readableTextColor } from '../data/bambuColors'
+import { brandFromPresetName } from '../data/bambuFilamentPresets'
+import { resolveProjectFilamentColorName } from '../lib/filamentColor'
 import { formatJobDispatchDetails } from '../lib/jobHistory'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { formatDateTime, formatSecondsDuration } from '../lib/time'
@@ -237,12 +239,15 @@ function formatActivityActor(entry: PrintJob['activity'][number]): string {
 }
 
 function FilamentTooltipBody({ label, color }: { label: string; color: string | null }) {
-  const swatch = bambuSwatchForHex(color)
+  // Bambu marketing names only when the filament's own name is Bambu-branded —
+  // a bare hex must not resolve to another family's marketing colour.
+  const bambuMaterial = brandFromPresetName(label.trim()) === 'Bambu' ? bambuMaterialFromPresetName(label) : null
   const headerBg = color ?? 'var(--joy-palette-neutral-800)'
   const headerFg = color ? readableTextColor(color) : 'var(--joy-palette-text-primary)'
-  const colorLabel = swatch?.name ?? (color ? 'Custom colour' : 'No colour')
-  const materialLabel = swatch ? `Bambu ${swatch.material}` : 'Project filament'
-  const basicType = extractBasicFilamentType(label, swatch?.material ?? null)
+  const colorLabel = resolveProjectFilamentColorName({ color, filamentName: label, filamentType: null })
+    ?? (color ? 'Custom colour' : 'No colour')
+  const materialLabel = bambuMaterial ? `Bambu ${bambuMaterial}` : 'Project filament'
+  const basicType = extractBasicFilamentType(label, bambuMaterial)
 
   return (
     <Stack

@@ -657,6 +657,13 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                     placeholder="Choose a material profile"
                     onChange={(option) => handleMaterialOptionChange(filament.projectFilamentId, option)}
                   />
+                  {/* The field itself shows the preset in effect; only flag the case
+                      where a loaded filament resolved to NO preset at all. */}
+                  {selectedOption && selectedOption.source !== 'manual' && !selectedOption.profileId && (
+                    <FormHelperText sx={{ color: 'warning.400' }}>
+                      No preset matches this filament — pick one from the list.
+                    </FormHelperText>
+                  )}
                 </FormControl>
                 <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ flex: '1 1 100%', minWidth: 0, width: '100%' }}>
                   <FormControl sx={{ flex: '1 1 0', minWidth: 0 }}>
@@ -795,11 +802,17 @@ function SliceMaterialAutocomplete({
   placeholder: string
   onChange: (option: SliceMaterialOption | null) => void
 }) {
-  const [inputValue, setInputValue] = useState(value?.label ?? '')
+  // The FIELD shows the slicing preset actually in effect — choosing a loaded
+  // filament ("Michael's PLA") sets type/preset/colour and the field reads the
+  // matched preset ("PLA Basic - Custom"), BambuStudio-style. The filament name
+  // still labels the option rows below, where the choice is made.
+  const displayValue = value ? value.presetLabel ?? value.label : ''
+  const [inputValue, setInputValue] = useState(displayValue)
 
   useEffect(() => {
-    setInputValue(value?.label ?? '')
-  }, [value?.id, value?.label])
+    setInputValue(displayValue)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seed only when the selection changes
+  }, [value?.id, displayValue])
 
   return (
     <Autocomplete

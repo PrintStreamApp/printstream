@@ -15,11 +15,15 @@ import {
   Alert, Autocomplete, Box, Button, DialogActions, DialogTitle, FormControl, FormLabel, Input, Stack, Textarea, Typography
 } from '@mui/joy'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
-import { extractErrorMessage, type FilamentSpool, type SpoolCreateInput } from '@printstream/shared'
+import { useQuery } from '@tanstack/react-query'
+import { extractErrorMessage, normalizeFilamentFamily, type FilamentSpool, type SlicingCapabilities, type SpoolCreateInput } from '@printstream/shared'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { ColorSwatchPicker } from '../../components/ColorSwatchPicker'
+import { apiFetch } from '../../lib/apiClient'
 import { COMMON_FILAMENT_COLOR_SWATCHES, commonFilamentColorName, resolveFilamentColorSwatches } from '../../lib/filamentColor'
+import { slicingProfilesQueryOptions } from '../../lib/slicingProfilesQuery'
+import { formatSlicingProfileDisplayName } from '../../lib/slicingProfileSelection'
 import { bambuColorName, bambuMaterialFromPresetName, bambuMaterialFromType } from '../../data/bambuColors'
 import { useSpoolMutations, useSpoolsQuery } from './api'
 import { FILAMENT_BRAND_SUGGESTIONS, FILAMENT_MATERIAL_SUGGESTIONS, FILAMENT_VARIANT_SUGGESTIONS } from './constants'
@@ -34,6 +38,7 @@ type FormState = {
   vendor: string
   costDollars: string
   notes: string
+  slicingPresetName: string
 }
 
 type FieldOption = { label: string; group: string }
@@ -48,7 +53,8 @@ function initialState(spool: FilamentSpool | null): FormState {
     remainingGrams: spool ? String(Math.round(spool.remainingGrams)) : '1000',
     vendor: spool?.vendor ?? '',
     costDollars: spool?.costCents != null ? (spool.costCents / 100).toFixed(2) : '',
-    notes: spool?.notes ?? ''
+    notes: spool?.notes ?? '',
+    slicingPresetName: spool?.slicingPresetName ?? ''
   }
 }
 
@@ -130,6 +136,36 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
   const variantOptions = useMemo(() => buildOptions(spools.map((s) => s.materialSubtype ?? ''), FILAMENT_VARIANT_SUGGESTIONS), [spools])
   const vendorOptions = useMemo(() => buildOptions(spools.map((s) => s.vendor ?? ''), []), [spools])
 
+  // Slicing-preset picker options: filament profiles from the slicer catalogue,
+  // deduped by display name (machine variants collapse to one entry — the pin is
+  // matched by display name at slice time, so it stays portable across printers)
+  // and narrowed to the spool's material family once one is typed.
+  const capabilitiesQuery = useQuery({
+    queryKey: ['slicing-capabilities'],
+    queryFn: ({ signal }) => apiFetch<SlicingCapabilities>('/api/slicing/capabilities', { signal }),
+    enabled: open
+  })
+  const profilesTargetId = capabilitiesQuery.data?.configured && capabilitiesQuery.data.healthy
+    ? capabilitiesQuery.data.defaultTargetId ?? capabilitiesQuery.data.targets[0]?.id ?? null
+    : null
+  const profilesQuery = useQuery({
+    ...slicingProfilesQueryOptions(profilesTargetId ?? 'none'),
+    enabled: open && profilesTargetId != null
+  })
+  const presetOptions = useMemo(() => {
+    const family = normalizeFilamentFamily(form.filamentType)
+    const names = new Map<string, string>()
+    for (const profile of profilesQuery.data?.profiles ?? []) {
+      if (profile.kind !== 'filament') continue
+      if (family && normalizeFilamentFamily(profile.filamentType ?? null) !== family) continue
+      const display = formatSlicingProfileDisplayName(profile)
+      if (!names.has(display.toLowerCase())) names.set(display.toLowerCase(), display)
+    }
+    return [...names.values()]
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }))
+      .map((label) => ({ label, group: family ? `${form.filamentType.trim().toUpperCase()} presets` : 'Presets' }))
+  }, [form.filamentType, profilesQuery.data?.profiles])
+
   const validColorHex = /^#[0-9A-Fa-f]{6}$/.test(form.colorHex) ? form.colorHex : '#888888'
   const normalizedColorHex = validColorHex.toUpperCase()
 
@@ -168,7 +204,8 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
       vendor: form.vendor.trim() || null,
       costCents: cost != null && !Number.isNaN(cost) ? cost : null,
       currency: cost != null && !Number.isNaN(cost) ? 'USD' : null,
-      notes: form.notes.trim() || null
+      notes: form.notes.trim() || null,
+      slicingPresetName: form.slicingPresetName.trim() || null
     }
     try {
       if (spool) await update.mutateAsync({ id: spool.id, input: payload })
@@ -224,6 +261,20 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
                 <Typography level="body-xs" textColor="text.tertiary">Known colour: {knownColorName}</Typography>
               )}
             </Stack>
+            <FormControl>
+              <FormLabel>Slicing preset</FormLabel>
+              <FieldAutocomplete
+                options={presetOptions}
+                value={form.slicingPresetName}
+                onChange={set('slicingPresetName')}
+                placeholder="Automatic (match at slice time)"
+              />
+              <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
+                The existing filament profile this spool slices with — like picking a preset for
+                third-party filament in Bambu Studio, but remembered on the spool. Leave empty to
+                auto-match by material type.
+              </Typography>
+            </FormControl>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
               <FormControl sx={{ flex: 1, minWidth: 0 }}>
                 <FormLabel>Net weight (g)</FormLabel>
