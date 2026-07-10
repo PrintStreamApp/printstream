@@ -6,10 +6,11 @@
  * plugin only owns Discord-specific delivery (embed colour, payload
  * shape).
  *
- * Configuration is tenant-scoped: each tenant stores its own webhook
- * URL via `context.settings.forTenant(tenantId)`. Notifications are
- * only delivered to the webhook belonging to the tenant that owns the
- * printer the event originated from.
+ * Configuration is scoped: each tenant stores its own webhook URL via
+ * `context.settings.forTenant(tenantId)`, and the platform workspace stores
+ * one in the plugin's base store for platform-scope events (bridge crashes,
+ * operator events). Notifications only go to the webhook of the scope the
+ * event belongs to.
  */
 import type { ApiPlugin } from '../../plugin/types.js'
 import {
@@ -19,7 +20,7 @@ import {
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { badRequest } from '../../lib/http-error.js'
-import { requireRequestTenantId } from '../../lib/request-helpers.js'
+import { messageNotificationScope, requestNotificationScope } from '../../lib/notification-scope.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
 import { env } from '../../lib/env.js'
 
@@ -41,18 +42,16 @@ export const notificationsDiscordPlugin: ApiPlugin = {
   description: 'Forward printer notifications to a Discord webhook.',
   async register(context) {
     context.router.get('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const tenantId = requireRequestTenantId(request)
-      const tenantSettings = context.settings.forTenant(tenantId)
-      const webhookUrl = await tenantSettings.get('webhookUrl')
+      const scope = requestNotificationScope(context, request)
+      const webhookUrl = await scope.settings.get('webhookUrl')
       response.json({ webhookConfigured: Boolean(webhookUrl) })
     })
 
     context.router.put('/webhook', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const tenantId = requireRequestTenantId(request)
-      const tenantSettings = context.settings.forTenant(tenantId)
+      const scope = requestNotificationScope(context, request)
       const value = typeof request.body?.webhookUrl === 'string' ? request.body.webhookUrl.trim() : ''
       if (!value) {
-        await tenantSettings.delete('webhookUrl')
+        await scope.settings.delete('webhookUrl')
         // The webhook URL is a secret; only record whether one is configured.
         annotateRequestAuditLog(request, {
           action: 'update-discord-webhook',
@@ -66,7 +65,7 @@ export const notificationsDiscordPlugin: ApiPlugin = {
       if (!WEBHOOK_PATTERN.test(value)) {
         throw badRequest('Not a valid Discord webhook URL')
       }
-      await tenantSettings.set('webhookUrl', value)
+      await scope.settings.set('webhookUrl', value)
       annotateRequestAuditLog(request, {
         action: 'update-discord-webhook',
         resource: 'Discord notification webhook',
@@ -79,9 +78,8 @@ export const notificationsDiscordPlugin: ApiPlugin = {
     const off = subscribePrinterNotifications(
       context.printerEvents,
       async (message) => {
-        if (!message.tenantId) return
-        const tenantSettings = context.settings.forTenant(message.tenantId)
-        const webhookUrl = await tenantSettings.get('webhookUrl')
+        const scope = messageNotificationScope(context, message.tenantId)
+        const webhookUrl = await scope.settings.get('webhookUrl')
         if (!webhookUrl) return
         // Discord embeds need an absolute URL for the image; relative
         // paths get silently dropped. We attach via embed only when

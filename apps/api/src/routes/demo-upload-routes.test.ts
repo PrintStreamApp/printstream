@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import { PLUGINS_MANAGE_PERMISSION, type Permission } from '@printstream/shared'
 import { adminPluginsRouter } from './admin-plugins.js'
+import * as adminPluginsGuards from './admin-plugins.js'
 import { libraryRouter } from './library.js'
 import { printersRouter } from './printers.js'
 import { HttpError } from '../lib/http-error.js'
@@ -71,6 +72,30 @@ test('plugin upload returns 403 in demo mode', async () => {
     assert.equal(response.status, 403)
     assert.deepEqual(await response.json(), { error: 'File uploads are disabled in the public demo.' })
   })
+})
+
+test('plugin upload guard blocks hosted deployments and passes self-hosted ones', () => {
+  const { createSelfHostedPluginUploadGuard } = adminPluginsGuards
+
+  let error: unknown = null
+  createSelfHostedPluginUploadGuard(() => false)(
+    {} as never,
+    {} as never,
+    (caught?: unknown) => {
+      error = caught ?? null
+    }
+  )
+  assert.ok(error instanceof HttpError && error.statusCode === 403, 'cloud deployments are blocked')
+
+  let passed = false
+  createSelfHostedPluginUploadGuard(() => true)(
+    {} as never,
+    {} as never,
+    (caught?: unknown) => {
+      passed = caught == null
+    }
+  )
+  assert.equal(passed, true, 'self-hosted deployments pass through')
 })
 
 test('printer storage upload returns 403 in demo mode', async () => {

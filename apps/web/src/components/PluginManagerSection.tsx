@@ -87,6 +87,18 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
     }
   })
 
+  const setPlatformEnabled = useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      apiFetch(`/api/admin/plugins/${name}/platform-enabled`, {
+        method: 'POST',
+        body: { enabled }
+      }),
+    onSuccess: async (_data, variables) => {
+      await invalidatePluginRelatedQueries(queryClient)
+      toast.success(pluginToggleMessage(variables.name, variables.enabled))
+    }
+  })
+
   const install = useMutation({
     mutationFn: (name: string) => apiFetch(`/api/admin/plugins/${name}/install`, { method: 'POST' }),
     onSuccess: () => invalidatePluginRelatedQueries(queryClient)
@@ -149,6 +161,7 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
     install.variables
     ?? uninstall.variables
     ?? setEnabled.variables?.name
+    ?? setPlatformEnabled.variables?.name
     ?? setTenantAvailability.variables?.name
     ?? setTenantEnabled.variables?.name
 
@@ -174,7 +187,7 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
 
   return (
     <Stack spacing={1.5}>
-      {isPlatformManager && demoMode && (
+      {isPlatformManager && selfHosted && demoMode && (
         <Typography level="body-sm" textColor="text.tertiary">
           Plugin uploads are disabled in the public demo.
         </Typography>
@@ -189,7 +202,8 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
         <Typography level="body-sm" textColor="text.tertiary">
           {installedCount} of {(isPlatformManager ? tenantEntries : visibleEntries).length} installed
         </Typography>
-        {isPlatformManager && (
+        {/* External plugin installs are self-hosted only; hosted deployments ship every plugin with the codebase. */}
+        {isPlatformManager && selfHosted && (
           <Stack direction="row" spacing={1} alignItems="center">
             {!demoMode && (
               <>
@@ -241,6 +255,7 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
             surface={surface}
             pendingName={pendingName}
             setEnabled={setEnabled.mutate}
+            setPlatformEnabled={setPlatformEnabled.mutate}
             install={install.mutate}
             uninstall={setConfirmUninstall}
             installPending={install.isPending}
@@ -254,6 +269,7 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
             surface={surface}
             pendingName={pendingName}
             setEnabled={setEnabled.mutate}
+            setPlatformEnabled={setPlatformEnabled.mutate}
             install={install.mutate}
             uninstall={setConfirmUninstall}
             installPending={install.isPending}
@@ -340,6 +356,7 @@ function PluginSectionCard({
   showHeader = true,
   pendingName,
   setEnabled,
+  setPlatformEnabled,
   install,
   uninstall,
   installPending,
@@ -356,6 +373,8 @@ function PluginSectionCard({
   showHeader?: boolean
   pendingName: string | undefined
   setEnabled: (input: { name: string; enabled: boolean }) => void
+  /** Platform-scope toggle; only provided by the platform manager. */
+  setPlatformEnabled?: (input: { name: string; enabled: boolean }) => void
   install: (name: string) => void
   uninstall: (name: string) => void
   installPending: boolean
@@ -364,6 +383,7 @@ function PluginSectionCard({
   renderExtra?: (entry: MergedPluginEntry) => ReactNode
   emptyMessage?: string
 }) {
+  const { selfHosted } = useRuntimePolicy()
   const [expandedDetails, setExpandedDetails] = useState<Set<string>>(() => new Set())
 
   if (entries.length === 0) {
@@ -410,17 +430,21 @@ function PluginSectionCard({
           // togglable, with the reason stated instead of a dead switch.
           const planBlocked = entry.api?.planBlocked === true
           const tenantManaged = entry.api?.tenantAccess === 'controlled'
+          const platformCapable = entry.api?.runtimeSurfaces.includes('platform') ?? false
+          // In the platform manager the main switch is the plugin's own
+          // platform/global enablement: platform-capable plugins toggle their
+          // platform scope; tenant-only plugins that are not tenant-managed
+          // toggle their global flag. Tenant-managed tenant-only plugins are
+          // toggled by each workspace instead.
           const togglable = entry.api != null && installed && (
             isPlatformManager
-              ? !tenantManaged
+              ? (platformCapable || !tenantManaged)
               : available
           )
-          const showToggle = entry.api != null && installed && (
-            isPlatformManager
-              ? !tenantManaged
-              : available
-          )
-          const canInstall = isPlatformManager && entry.api != null
+          const showToggle = togglable
+          // Install/uninstall are self-hosted operations; hosted deployments
+          // manage plugins purely with the enable toggles.
+          const canInstall = isPlatformManager && entry.api != null && selfHosted
           const Panel = entry.web?.settingsPanel
           const showPanel = shouldRenderPluginSettingsPanel(entry, 'manager') && (!isPlatformManager || !tenantManaged)
           const isNotificationSettingsPlugin = isNotificationPlugin(entry.name)
@@ -436,7 +460,9 @@ function PluginSectionCard({
             </Typography>
           ) : isPlatformManager && tenantManaged ? (
             <Typography level="body-sm" textColor="text.tertiary">
-              Tenant workspaces decide whether to turn this plugin on. The platform only controls whether it is available and whether it starts enabled for them.
+              {platformCapable
+                ? 'Tenant workspaces decide whether to turn this plugin on for themselves; the toggle above controls only the platform workspace. Availability and the tenant default are set below.'
+                : 'Tenant workspaces decide whether to turn this plugin on. The platform only controls whether it is available and whether it starts enabled for them.'}
             </Typography>
           ) : planBlocked ? (
             <Typography level="body-sm" textColor="text.tertiary">
@@ -450,7 +476,7 @@ function PluginSectionCard({
             </Typography>
           ) : isNotificationSettingsPlugin ? (
             <Typography level="body-sm" textColor="text.tertiary">
-              Configure this notification channel in the Notifications section below.
+              Configure this notification channel in the settings page&apos;s Notifications section.
             </Typography>
           ) : (
             <Typography level="body-sm" textColor="text.tertiary">
@@ -494,13 +520,20 @@ function PluginSectionCard({
                       {showToggle && (
                         <Stack direction="row" spacing={1} alignItems="center" justifyContent={{ xs: 'space-between', md: 'flex-end' }} sx={{ width: { xs: '100%', md: 'auto' } }}>
                           <Typography level="body-sm" textColor="text.tertiary">
-                            {installed && enabled ? 'Enabled' : 'Disabled'}
+                            {isPlatformManager && platformCapable && tenantManaged
+                              ? (entry.api?.platformEnabled ? 'Enabled in platform' : 'Disabled in platform')
+                              : installed && enabled ? 'Enabled' : 'Disabled'}
                           </Typography>
                           <Switch
-                            checked={installed && enabled}
+                            checked={isPlatformManager && platformCapable
+                              ? (installed && (entry.api?.platformEnabled ?? false))
+                              : installed && enabled}
                             disabled={!togglable || planBlocked || busy}
                             onChange={(event) => {
-                              if (entry.api && installed) {
+                              if (!entry.api || !installed) return
+                              if (isPlatformManager && platformCapable && setPlatformEnabled) {
+                                setPlatformEnabled({ name: entry.name, enabled: event.target.checked })
+                              } else {
                                 setEnabled({ name: entry.name, enabled: event.target.checked })
                               }
                             }}

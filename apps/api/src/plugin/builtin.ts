@@ -63,22 +63,34 @@ export async function registerBuiltinPlugins(): Promise<void> {
     tenantAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsNtfyPlugin, {
-    runtimeSurfaces: ['tenant'],
+    // Notification channels run on both surfaces: tenant workspaces deliver
+    // printer events; the platform workspace delivers platform-scope events
+    // (bridge crashes, deployment-registered operator events).
+    runtimeSurfaces: ['platform', 'tenant'],
     managerSurfaces: ['platform', 'tenant'],
     tenantAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsDiscordPlugin, {
-    runtimeSurfaces: ['tenant'],
+    // Notification channels run on both surfaces: tenant workspaces deliver
+    // printer events; the platform workspace delivers platform-scope events
+    // (bridge crashes, deployment-registered operator events).
+    runtimeSurfaces: ['platform', 'tenant'],
     managerSurfaces: ['platform', 'tenant'],
     tenantAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsBrowserPlugin, {
-    runtimeSurfaces: ['tenant'],
+    // Notification channels run on both surfaces: tenant workspaces deliver
+    // printer events; the platform workspace delivers platform-scope events
+    // (bridge crashes, deployment-registered operator events).
+    runtimeSurfaces: ['platform', 'tenant'],
     managerSurfaces: ['platform', 'tenant'],
     tenantAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsEmailPlugin, {
-    runtimeSurfaces: ['tenant'],
+    // Notification channels run on both surfaces: tenant workspaces deliver
+    // printer events; the platform workspace delivers platform-scope events
+    // (bridge crashes, deployment-registered operator events).
+    runtimeSurfaces: ['platform', 'tenant'],
     managerSurfaces: ['platform', 'tenant'],
     tenantAccess: 'controlled'
   })

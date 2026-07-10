@@ -1,10 +1,10 @@
 /**
- * Per-tenant opt-in storage for the email notifications channel.
- *
- * Mirrors `notifications-browser`'s per-tenant subscription list, but stores only
- * the opted-in user ids (the address comes from the user's account at send time).
+ * Opt-in subscriber storage for notification channels: a JSON array of the
+ * opted-in user ids in a plugin setting store (the address comes from the
+ * user's account at send time). The tenant email channel stores it per tenant
+ * (`settings.forTenant`); the cloud platform channel uses its base store.
  */
-import type { PluginSettingStore } from '../../plugin/types.js'
+import type { PluginSettingStore } from '../plugin/types.js'
 
 const SUBSCRIBERS_KEY = 'subscribers'
 

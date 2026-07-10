@@ -5,8 +5,9 @@
  * URL. Message formatting is delegated to the shared notification
  * helper so this plugin only owns delivery semantics.
  *
- * Configuration is tenant-scoped: each tenant stores its own topic URL
- * via `context.settings.forTenant(tenantId)`. The server-wide
+ * Configuration is scoped: each tenant stores its own topic URL via
+ * `context.settings.forTenant(tenantId)`, and the platform workspace stores
+ * one in the plugin's base store for platform-scope events. The server-wide
  * `NTFY_TOPIC_URL` env is honored as a fallback ONLY in single-box
  * managed-bridge self-hosting (see `globalTopicFallback`); in a
  * multi-tenant cloud it is ignored, since one shared topic would leak
@@ -21,7 +22,7 @@ import { badRequest } from '../../lib/http-error.js'
 import { assertSafeOutboundUrl } from '../../lib/outbound-url-guard.js'
 import { isManagedBridgeMode } from '../../lib/managed-bridge.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
-import { requireRequestTenantId } from '../../lib/request-helpers.js'
+import { messageNotificationScope, requestNotificationScope } from '../../lib/notification-scope.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
 
 /** Bound outbound webhook POSTs so a slow/unreachable host can't wedge delivery. */
@@ -51,18 +52,16 @@ export const notificationsNtfyPlugin: ApiPlugin = {
   description: 'Forward printer notifications to a ntfy-style HTTP topic.',
   async register(context) {
     context.router.get('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const tenantId = requireRequestTenantId(request)
-      const tenantSettings = context.settings.forTenant(tenantId)
-      const topicUrl = (await tenantSettings.get('topicUrl')) ?? globalTopicFallback()
+      const scope = requestNotificationScope(context, request)
+      const topicUrl = (await scope.settings.get('topicUrl')) ?? globalTopicFallback()
       response.json({ enabled: Boolean(topicUrl), topicConfigured: Boolean(topicUrl) })
     })
 
     context.router.put('/topic', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const tenantId = requireRequestTenantId(request)
-      const tenantSettings = context.settings.forTenant(tenantId)
+      const scope = requestNotificationScope(context, request)
       const value = typeof request.body?.topicUrl === 'string' ? request.body.topicUrl.trim() : ''
       if (!value) {
-        await tenantSettings.delete('topicUrl')
+        await scope.settings.delete('topicUrl')
         // The topic URL is a secret; only record whether one is configured.
         annotateRequestAuditLog(request, {
           action: 'update-ntfy-topic',
@@ -81,7 +80,7 @@ export const notificationsNtfyPlugin: ApiPlugin = {
       } catch (error) {
         throw badRequest(error instanceof Error ? error.message : 'Invalid ntfy topic URL.')
       }
-      await tenantSettings.set('topicUrl', value)
+      await scope.settings.set('topicUrl', value)
       annotateRequestAuditLog(request, {
         action: 'update-ntfy-topic',
         resource: 'ntfy notification topic',
@@ -94,9 +93,8 @@ export const notificationsNtfyPlugin: ApiPlugin = {
     const off = subscribePrinterNotifications(
       context.printerEvents,
       async (message) => {
-        if (!message.tenantId) return
-        const tenantSettings = context.settings.forTenant(message.tenantId)
-        const topicUrl = (await tenantSettings.get('topicUrl')) ?? globalTopicFallback()
+        const scope = messageNotificationScope(context, message.tenantId)
+        const topicUrl = (await scope.settings.get('topicUrl')) ?? globalTopicFallback()
         if (!topicUrl) return
         // Re-check at delivery: the env fallback is operator-supplied and a stored
         // value could predate this guard. Skip (don't throw) on an unsafe target.

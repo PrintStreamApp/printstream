@@ -21,9 +21,22 @@ import { isSelfHostedDeployment } from './deployment-mode.js'
 import { env } from './env.js'
 
 const CURRENT_BRIDGE_PROTOCOL_VERSION = 1
-const DOCKER_RUNNER_ABI_VERSION = 'node22-ffmpeg7-v1'
+/**
+ * Docker runner ABI family. Legacy images report the bare `node22-ffmpeg7-v1`;
+ * bundle-self-update images embed the EXACT pinned Node version
+ * (`node22.22.3-ffmpeg7-v1`) so an app bundle can only ever be installed onto a
+ * runner with an identical runtime — new JS silently running on a different
+ * Node patch is the skew class behind the H2D FTPS incident (nodejs/node#64402).
+ * Both spellings are protocol-compatible with the server, so both stay
+ * supported here; the exact-match gating happens in the bridge's bundle driver.
+ */
+const DOCKER_RUNNER_ABI_PATTERN = /^node22(?:\.\d+\.\d+)?-ffmpeg7-v1$/
 const STANDALONE_RUNNER_ABI_VERSION = 'sea-node22-v1'
-const SUPPORTED_RUNNER_ABI_VERSIONS = [DOCKER_RUNNER_ABI_VERSION, STANDALONE_RUNNER_ABI_VERSION]
+
+/** Whether a reported runner ABI belongs to a family this server supports. */
+export function isSupportedRunnerAbiVersion(runnerAbiVersion: string): boolean {
+  return DOCKER_RUNNER_ABI_PATTERN.test(runnerAbiVersion) || runnerAbiVersion === STANDALONE_RUNNER_ABI_VERSION
+}
 /** Written by the deploy to promote the build matching the server checkout. */
 export const CURRENT_BRIDGE_BUILD_POINTER_FILE = 'current-bridge-build.json'
 
@@ -175,7 +188,7 @@ function resolveBridgeUpdateStatus(
   if (bridge.protocolVersion < CURRENT_BRIDGE_PROTOCOL_VERSION) {
     return 'updateRequired'
   }
-  if (!SUPPORTED_RUNNER_ABI_VERSIONS.includes(bridge.runnerAbiVersion)) {
+  if (!isSupportedRunnerAbiVersion(bridge.runnerAbiVersion)) {
     return 'runnerUpdateRequired'
   }
   if (!bridge.releaseFingerprint) {

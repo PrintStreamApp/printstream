@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { buildBridgeUpdateSummary, getBridgeReleaseManifest } from './bridge-update-policy.js'
+import { buildBridgeUpdateSummary, getBridgeReleaseManifest, isSupportedRunnerAbiVersion } from './bridge-update-policy.js'
 import { env } from './env.js'
 
 // Pin the deployment mode: `resolveBridgeUpdateStatus` short-circuits to `current`
@@ -230,6 +230,20 @@ test('buildBridgeUpdateSummary reports a bundled self-hosted bridge as current r
     env.SELF_HOSTED = previous
     await rm(releasesDir, { recursive: true, force: true })
   }
+})
+
+test('isSupportedRunnerAbiVersion accepts both Docker ABI spellings and the SEA ABI', () => {
+  // Legacy images report the bare family string; bundle-self-update images
+  // embed the exact pinned Node version. Both must stay print-compatible —
+  // rejecting the legacy spelling would blanket-block every existing Docker
+  // bridge (`runnerUpdateRequired` blocks printing).
+  assert.equal(isSupportedRunnerAbiVersion('node22-ffmpeg7-v1'), true)
+  assert.equal(isSupportedRunnerAbiVersion('node22.22.3-ffmpeg7-v1'), true)
+  assert.equal(isSupportedRunnerAbiVersion('node22.99.0-ffmpeg7-v1'), true)
+  assert.equal(isSupportedRunnerAbiVersion('sea-node22-v1'), true)
+  assert.equal(isSupportedRunnerAbiVersion('node20-ffmpeg7-v1'), false)
+  assert.equal(isSupportedRunnerAbiVersion('node22-ffmpeg8-v1'), false)
+  assert.equal(isSupportedRunnerAbiVersion('old-runner'), false)
 })
 
 test('buildBridgeUpdateSummary keeps protocol and runner compatibility gates', async () => {

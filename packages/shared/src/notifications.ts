@@ -139,3 +139,42 @@ export const notificationMessageSchema = z.object({
   imageUrl: z.string().optional()
 })
 export type NotificationMessage = z.infer<typeof notificationMessageSchema>
+
+/**
+ * A platform-scope notification template (operator events, e.g. a bridge
+ * crash or deployment-registered events). Unlike the printer-event templates
+ * the event set is dynamic — deployments register their own definitions — so
+ * `event` is an open string validated server-side against the registry.
+ */
+export const platformNotificationTemplateSchema = z.object({
+  event: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  title: z.string(),
+  body: z.string(),
+  /** `{{variable}}` names available to this event's template. */
+  variables: z.array(z.string()),
+  /** True when a stored override exists (reset restores `defaults`). */
+  customized: z.boolean(),
+  defaults: z.object({
+    enabled: z.boolean(),
+    title: z.string(),
+    body: z.string()
+  })
+})
+export type PlatformNotificationTemplate = z.infer<typeof platformNotificationTemplateSchema>
+
+export const platformNotificationTemplateListResponseSchema = z.object({
+  templates: z.array(platformNotificationTemplateSchema)
+})
+export type PlatformNotificationTemplateListResponse = z.infer<typeof platformNotificationTemplateListResponseSchema>
+
+export const platformNotificationTemplateUpdateSchema = z.object({
+  enabled: z.boolean().optional(),
+  title: z.string().trim().min(1).max(200).optional(),
+  body: z.string().max(4000).optional()
+}).refine(
+  (value) => value.enabled !== undefined || value.title !== undefined || value.body !== undefined,
+  'Expected at least one template field to update.'
+)
+export type PlatformNotificationTemplateUpdate = z.infer<typeof platformNotificationTemplateUpdateSchema>

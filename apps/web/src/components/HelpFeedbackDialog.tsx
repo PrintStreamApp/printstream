@@ -2,23 +2,26 @@
  * "Help & feedback" dialog: starts a support conversation with the PrintStream
  * team (feedback, bug report, or question), available to every signed-in user.
  * On the hosted deployment it opens a two-way conversation via
- * `POST /api/support/conversations`, and the `help.conversations` plugin slot
- * below the form lists the user's existing conversations so replies are
- * readable from the same footer button (the Account → Messages composer passes
+ * `POST /api/support/conversations` — with markdown support and optional file
+ * attachments — and the `help.conversations` plugin slot below the form lists
+ * the user's existing conversations so replies are readable from the same
+ * footer button (the Account → Messages composer passes
  * `showConversations={false}` because that page already shows the list).
  * Self-hosted installs cannot reach the platform, so the same form composes a
  * prefilled email to `SUPPORT_CONTACT_EMAIL` in the user's mail app instead.
  */
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Box, Button, DialogTitle, FormControl, FormLabel, Radio, RadioGroup, Stack, Textarea, Typography } from '@mui/joy'
+import { Box, Button, DialogTitle, FormControl, FormHelperText, FormLabel, Radio, RadioGroup, Stack, Textarea, Typography } from '@mui/joy'
 import { SUPPORT_CONTACT_EMAIL, type CreateSupportConversationRequest } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { toast } from '../lib/toast'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
+import { useSupportAttachmentDrafts } from '../hooks/useSupportAttachmentDrafts'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
+import { SupportAttachmentsField } from './SupportAttachmentsField'
 
 type HelpKind = CreateSupportConversationRequest['kind']
 
@@ -50,7 +53,8 @@ export function HelpFeedbackDialog({
   const [message, setMessage] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const canSubmit = message.trim().length > 0
+  const attachmentDrafts = useSupportAttachmentDrafts('/api/support/attachments')
+  const canSubmit = message.trim().length > 0 && !attachmentDrafts.uploading
 
   const submit = async () => {
     if (selfHosted) {
@@ -66,7 +70,12 @@ export function HelpFeedbackDialog({
     try {
       await apiFetch('/api/support/conversations', {
         method: 'POST',
-        body: { kind, message: message.trim(), pageUrl: window.location.pathname }
+        body: {
+          kind,
+          message: message.trim(),
+          pageUrl: window.location.pathname,
+          attachmentIds: attachmentDrafts.attachmentIds
+        }
       })
       // Refresh every mounted conversation list (this dialog's slot and
       // Account → Messages) so the new thread appears without a reload.
@@ -125,7 +134,10 @@ export function HelpFeedbackDialog({
                   placeholder={KIND_PLACEHOLDERS[kind]}
                   onChange={(event) => setMessage(event.target.value)}
                 />
+                {!selfHosted && <FormHelperText>Markdown is supported.</FormHelperText>}
               </FormControl>
+              {/* Self-hosted submissions become a mailto: draft, which cannot carry uploads. */}
+              {!selfHosted && <SupportAttachmentsField drafts={attachmentDrafts} disabled={submitting} />}
               {error && <Typography color="danger" level="body-sm">{error}</Typography>}
             </Box>
             {showConversations && <StaticPluginSlot name="help.conversations" />}

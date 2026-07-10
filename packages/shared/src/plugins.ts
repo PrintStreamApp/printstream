@@ -23,6 +23,8 @@ export const pluginCatalogEntrySchema = z.object({
   source: pluginSourceSchema,
   installed: z.boolean(),
   enabled: z.boolean(),
+  /** Platform-workspace enablement; null/absent when the plugin has no platform surface. */
+  platformEnabled: z.boolean().nullable().optional(),
   runtimeSurfaces: z.array(pluginSurfaceSchema).min(1),
   managerSurfaces: z.array(pluginSurfaceSchema).min(1),
   tenantAccess: pluginTenantAccessSchema,

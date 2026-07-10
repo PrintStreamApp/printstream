@@ -36,7 +36,6 @@ import {
   DialogTitle,
   FormControl,
   FormLabel,
-  Link,
   LinearProgress,
   MenuItem,
   ModalDialog,
@@ -50,13 +49,12 @@ import {
   PRINTERS_MANAGE_PERMISSION,
   PRINTERS_VIEW_PERMISSION
 } from '@printstream/shared'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import type { WebPlugin } from '../../plugin/types'
 import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { wsClient } from '../../lib/wsClient'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
+import { Markdown } from '../../components/Markdown'
 import {
   firmwareChipColor,
   firmwareStillPendingInstall,
@@ -212,70 +210,10 @@ function FirmwareReleaseNotes({ markdown }: { markdown: string }) {
         borderRadius: 'sm',
         backgroundColor: 'background.level1',
         border: '1px solid',
-        borderColor: 'divider',
-        '& > :first-child': { mt: 0 },
-        '& > :last-child': { mb: 0 },
-        '& p': { my: 0.75 },
-        '& ul, & ol': { my: 0.75, pl: 3 },
-        '& li + li': { mt: 0.375 },
-        '& h1, & h2, & h3, & h4': { mt: 1.25, mb: 0.5, fontSize: 'md', fontWeight: 'lg' },
-        '& code': {
-          px: 0.375,
-          py: 0.125,
-          borderRadius: 'xs',
-          fontFamily: 'monospace',
-          fontSize: '0.85em',
-          backgroundColor: 'background.level2'
-        },
-        '& pre': {
-          my: 1,
-          p: 1,
-          borderRadius: 'sm',
-          overflow: 'auto',
-          backgroundColor: 'background.level2'
-        },
-        '& pre code': {
-          p: 0,
-          backgroundColor: 'transparent'
-        },
-        '& blockquote': {
-          my: 1,
-          pl: 1.25,
-          borderLeft: '3px solid',
-          borderColor: 'neutral.outlinedBorder',
-          color: 'text.secondary'
-        },
-        '& hr': {
-          my: 1.25,
-          border: 'none',
-          borderTop: '1px solid',
-          borderColor: 'divider'
-        },
-        '& table': {
-          width: '100%',
-          my: 1,
-          borderCollapse: 'collapse'
-        },
-        '& th, & td': {
-          p: 0.5,
-          border: '1px solid',
-          borderColor: 'divider',
-          textAlign: 'left'
-        }
+        borderColor: 'divider'
       }}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ node: _node, children, href, title }) => (
-            <Link href={href} title={title} target="_blank" rel="noreferrer">
-              {children}
-            </Link>
-          )
-        }}
-      >
-        {markdown}
-      </ReactMarkdown>
+      <Markdown>{markdown}</Markdown>
     </Box>
   )
 }

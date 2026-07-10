@@ -47,6 +47,13 @@ interface RegisteredPlugin {
   source: PluginSource
   installed: boolean
   enabled: boolean
+  /**
+   * Platform-scope enablement. For plugins with their own platform bit
+   * (dual-surface tenant-'controlled' plugins, whose `enabled` means the
+   * tenant default) this is persisted separately under `_platformEnabled`;
+   * for every other platform-capable plugin it mirrors `enabled`.
+   */
+  platformEnabled: boolean
   active: boolean
   runtimeSurfaces: PluginSurface[]
   managerSurfaces: PluginSurface[]
@@ -61,13 +68,14 @@ interface RegisteredPlugin {
 }
 
 const ENABLED_KEY = '_enabled'
+const PLATFORM_ENABLED_KEY = '_platformEnabled'
 const INSTALLED_KEY = '_installed'
 const TENANT_DEFAULT_ALLOWED_KEY = '_tenantDefaultAllowed'
 const TENANT_DEFAULT_ENABLED_KEY = '_tenantDefaultEnabled'
 const TENANT_ENABLED_OVERRIDE_PREFIX = '_tenantEnabled:'
 const LEGACY_TENANT_OVERRIDE_PREFIX = '_tenantAllowed:'
 /** Internal keys that are never cleared on uninstall. */
-const RESERVED_KEYS = new Set([ENABLED_KEY, INSTALLED_KEY, TENANT_DEFAULT_ALLOWED_KEY, TENANT_DEFAULT_ENABLED_KEY])
+const RESERVED_KEYS = new Set([ENABLED_KEY, PLATFORM_ENABLED_KEY, INSTALLED_KEY, TENANT_DEFAULT_ALLOWED_KEY, TENANT_DEFAULT_ENABLED_KEY])
 
 export class PluginRegistry {
   private readonly registered = new Map<string, RegisteredPlugin>()
@@ -98,6 +106,7 @@ export class PluginRegistry {
       source: options.source ?? 'builtin',
       installed: true,
       enabled: true,
+      platformEnabled: true,
       active: false,
       runtimeSurfaces,
       managerSurfaces,
@@ -154,6 +163,10 @@ export class PluginRegistry {
     const enabledByDefault = options.defaultEnabled ?? isPluginEnabledByDefault(await this.getDefaultEnableMode())
     entry.installed = options.forceInstalled ?? (installedRaw == null ? true : installedRaw !== 'false')
     entry.enabled = options.forceEnabled ?? (enabledRaw == null ? enabledByDefault : enabledRaw !== 'false')
+    const platformEnabledRaw = await settings.get(PLATFORM_ENABLED_KEY)
+    entry.platformEnabled = options.forceEnabled ?? (platformEnabledRaw == null
+      ? (hasOwnPlatformBit(entry) ? enabledByDefault : entry.enabled)
+      : platformEnabledRaw !== 'false')
     entry.tenantAvailability = await this.loadTenantAvailability(plugin.name, {
       allowed: entry.tenantAccess === 'controlled',
       enabledByDefault: entry.enabled
@@ -319,7 +332,12 @@ export class PluginRegistry {
       prisma,
       printerEvents,
       ws: wsBroadcaster,
-      isEnabledForTenant: (tenantId) => this.isEnabledForTenant(entry, tenantId),
+      // `null` asks about the PLATFORM scope: enabled there when the plugin
+      // runs on the platform surface and is platform-enabled. Tenant ids keep
+      // the per-tenant controlled/override semantics.
+      isEnabledForTenant: (tenantId) => tenantId === null
+        ? entry.installed && entry.runtimeSurfaces.includes('platform') && this.isPlatformEnabled(entry)
+        : this.isEnabledForTenant(entry, tenantId),
       router: entry.pluginRouter,
       settings: createSettingStore(entry.plugin.name),
       onShutdown: (handler) => entry.shutdownHandlers.push(handler),
@@ -387,7 +405,7 @@ export class PluginRegistry {
     if (!entry.installed) {
       return false
     }
-    if (entry.runtimeSurfaces.includes('platform') && entry.enabled) {
+    if (entry.runtimeSurfaces.includes('platform') && this.isPlatformEnabled(entry)) {
       return true
     }
     if (!entry.runtimeSurfaces.includes('tenant')) {
@@ -450,6 +468,7 @@ export class PluginRegistry {
       source: entry.source,
       installed: entry.installed,
       enabled: entry.installed && entry.enabled,
+      platformEnabled: entry.runtimeSurfaces.includes('platform') ? this.isPlatformEnabled(entry) : null,
       runtimeSurfaces: entry.runtimeSurfaces,
       managerSurfaces: entry.managerSurfaces,
       tenantAccess: entry.tenantAccess,
@@ -471,6 +490,7 @@ export class PluginRegistry {
       source: entry.source,
       installed: entry.installed,
       enabled: entry.installed && this.isEnabledInRequestContext(entry, request),
+      platformEnabled: entry.runtimeSurfaces.includes('platform') ? this.isPlatformEnabled(entry) : null,
       runtimeSurfaces: entry.runtimeSurfaces,
       managerSurfaces: entry.managerSurfaces,
       tenantAccess: entry.tenantAccess,
@@ -501,12 +521,45 @@ export class PluginRegistry {
       return false
     }
     if (surface === 'platform') {
-      return entry.enabled
+      return entry.runtimeSurfaces.includes('platform') ? this.isPlatformEnabled(entry) : entry.enabled
     }
     if (entry.tenantAccess === 'always') {
       return entry.enabled
     }
     return this.isEnabledForTenant(entry, request.tenant?.id ?? null)
+  }
+
+  /** Platform-scope enablement (see `RegisteredPlugin.platformEnabled`). */
+  private isPlatformEnabled(entry: RegisteredPlugin): boolean {
+    if (!entry.installed || !entry.runtimeSurfaces.includes('platform')) return false
+    return hasOwnPlatformBit(entry) ? entry.platformEnabled : entry.enabled
+  }
+
+  /**
+   * Toggle a plugin for the platform workspace. For plugins whose `enabled`
+   * flag already IS the platform switch (platform-only or tenantAccess
+   * 'always'), this delegates to `setEnabled`; dual-surface controlled
+   * plugins get their own persisted bit so the tenant default stays
+   * independent.
+   */
+  async setPlatformEnabled(name: string, enabled: boolean): Promise<PluginInfo> {
+    const entry = this.registered.get(name)
+    if (!entry) throw new Error(`Unknown plugin: ${name}`)
+    if (!entry.installed) throw new Error(`Plugin is not installed: ${name}`)
+    if (!entry.runtimeSurfaces.includes('platform')) {
+      throw new Error(`Plugin does not run on the platform surface: ${name}`)
+    }
+    if (!hasOwnPlatformBit(entry)) {
+      return await this.setEnabled(name, enabled)
+    }
+    if (entry.platformEnabled === enabled) return this.toInfo(entry)
+
+    const settings = createSettingStore(name)
+    await settings.set(PLATFORM_ENABLED_KEY, enabled ? 'true' : 'false')
+    entry.platformEnabled = enabled
+    await this.reconcileActivation(entry)
+    broadcastPluginsChanged()
+    return this.toInfo(entry)
   }
 
   private isEnabledForTenant(entry: RegisteredPlugin, tenantId: string | null): boolean {
@@ -612,6 +665,17 @@ function createSettingStore(pluginName: string, keyPrefix?: string, broadcastTen
 }
 
 export const pluginRegistry = new PluginRegistry()
+
+/**
+ * Whether the plugin keeps a dedicated platform-enable bit: dual-surface
+ * tenant-'controlled' plugins, where `enabled` means "enabled by default for
+ * tenant workspaces" and cannot double as the platform switch.
+ */
+function hasOwnPlatformBit(entry: Pick<RegisteredPlugin, 'runtimeSurfaces' | 'tenantAccess'>): boolean {
+  return entry.runtimeSurfaces.includes('platform')
+    && entry.runtimeSurfaces.includes('tenant')
+    && entry.tenantAccess === 'controlled'
+}
 
 function normalizePluginSurfaces(input: PluginSurface[]): PluginSurface[] {
   const out = Array.from(new Set(input))

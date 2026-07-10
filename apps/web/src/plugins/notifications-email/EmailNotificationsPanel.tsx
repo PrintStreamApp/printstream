@@ -9,6 +9,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../../lib/apiClient'
+import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { extractErrorMessage } from '@printstream/shared'
 
 interface EmailNotificationsStatus {
@@ -20,6 +21,9 @@ const QUERY_KEY = ['plugin-settings', 'notifications-email']
 
 export function EmailNotificationsPanel() {
   const queryClient = useQueryClient()
+  // The panel renders on both surfaces; the platform workspace (no tenant
+  // context) opts into platform events rather than a workspace's print events.
+  const isPlatformScope = useAuthBootstrapQuery().data?.tenant == null
   const query = useQuery({
     queryKey: QUERY_KEY,
     queryFn: () => apiFetch<EmailNotificationsStatus>('/api/plugins/notifications-email')
@@ -53,9 +57,11 @@ export function EmailNotificationsPanel() {
 
       <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', gap: 2, alignItems: 'center' }}>
         <Stack spacing={0.25} sx={{ minWidth: 0 }}>
-          <FormLabel sx={{ m: 0 }}>Email me print notifications</FormLabel>
+          <FormLabel sx={{ m: 0 }}>{isPlatformScope ? 'Email me platform notifications' : 'Email me print notifications'}</FormLabel>
           <Typography level="body-xs" textColor="text.tertiary">
-            Sent to your account email for this workspace&apos;s print events.
+            {isPlatformScope
+              ? 'Sent to your account email for platform events.'
+              : "Sent to your account email for this workspace's print events."}
           </Typography>
         </Stack>
         <Switch

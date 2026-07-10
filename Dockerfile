@@ -69,23 +69,36 @@ RUN npm run build --workspace @printstream/shared \
 # (no Prisma, web, or API deps), so we esbuild-bundle its runtime entry into a
 # single file (bundle-docker.mjs) and ship it on the base image — which already
 # carries the ffmpeg the camera relay needs — instead of copying the full
-# workspace node_modules the combined `runtime` stage does. Updates ship by image
-# pull (no in-place self-updater). The combined image can still run the bridge via
-# its `bridge` role; this is the dedicated, smaller alternative. Build with
+# workspace node_modules the combined `runtime` stage does. The entrypoint is the
+# LAUNCHER, which activates signed single-file app bundles from /data/releases
+# (in-place self-update, lockstep with the paired server) and falls back to the
+# image-baked runner; base-image drift still ships by image pull. The combined
+# image can still run the bridge via its `bridge` role (no self-update there);
+# this is the dedicated, smaller alternative. Build with
 # `docker build --target bridge`.
 FROM build AS bridge-build
 RUN node apps/bridge/scripts/bundle-docker.mjs
 
 FROM base AS bridge
+ARG NODE_VERSION
 ENV NODE_ENV=production
+# Enable the bundle self-update driver (the launcher below can activate what it
+# installs) and converge automatically, matching the standalone packaging.
+ENV BRIDGE_BUNDLE_SELF_UPDATE=true
+ENV BRIDGE_AUTO_UPDATE=true
+# The runner ABI embeds the EXACT pinned Node version: an app bundle installs
+# only onto a runner with an identical runtime, so new JS never runs on a
+# different Node than it was built for (see the NODE_VERSION note at the top).
+ENV BRIDGE_RUNNER_ABI_VERSION=node${NODE_VERSION}-ffmpeg7-v1
 WORKDIR /app
 # Library files, bridge state, and other bridge-owned assets live under /data.
 RUN mkdir -p /data && chown -R node:node /data
 COPY --chown=node:node --from=bridge-build /app/apps/bridge/dist/bridge-runner.cjs /app/bridge-runner.cjs
+COPY --chown=node:node --from=bridge-build /app/apps/bridge/dist/bridge-launcher.cjs /app/bridge-launcher.cjs
 # Build identity for the footer version/update hint (env.ts reads it from cwd).
 COPY --chown=node:node --from=bridge-build /app/bridge-build-metadata.json /app/bridge-build-metadata.json
 USER node
-ENTRYPOINT ["node", "/app/bridge-runner.cjs"]
+ENTRYPOINT ["node", "/app/bridge-launcher.cjs"]
 
 FROM base AS runtime
 ENV NODE_ENV=production

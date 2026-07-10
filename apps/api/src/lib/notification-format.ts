@@ -410,16 +410,31 @@ export function subscribePrinterNotifications(
     })()
   }
 
+  const onPlatformNotification = (event: { message: NotificationMessage }) => {
+    void (async () => {
+      try {
+        // Platform-scope messages carry no tenant; channels deliver them
+        // through their platform configuration when enabled there.
+        if (options.shouldHandleTenantId && !options.shouldHandleTenantId(event.message.tenantId ?? null)) return
+        await safeHandler(event.message)
+      } catch (error) {
+        options.onError?.(error)
+      }
+    })()
+  }
+
   bus.on('print-job.finished', onJobFinished)
   bus.on('print-job.started', onJobStarted)
   bus.on('status', onStatus)
   bus.on('bridge.crashed', onBridgeCrashed)
+  bus.on('platform.notification', onPlatformNotification)
 
   return () => {
     bus.off('print-job.finished', onJobFinished)
     bus.off('print-job.started', onJobStarted)
     bus.off('status', onStatus)
     bus.off('bridge.crashed', onBridgeCrashed)
+    bus.off('platform.notification', onPlatformNotification)
   }
 }
 

@@ -58,9 +58,11 @@ export interface ApiPluginContext {
   printerEvents: PrinterEventBus
   ws: WsBroadcaster
   /**
-   * Whether this plugin is currently enabled for the given tenant runtime.
+   * Whether this plugin is currently enabled for the given scope.
    * Background listeners and printer-event handlers should consult this
-   * before doing tenant-scoped work outside the HTTP router.
+   * before doing scoped work outside the HTTP router. `null` asks about the
+   * platform (tenantless) scope: true when the plugin runs on the platform
+   * surface and is platform-enabled.
    */
   isEnabledForTenant?(tenantId: string | null): boolean
   /**

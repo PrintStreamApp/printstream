@@ -372,16 +372,23 @@ export const bridgeBuildSchema = z.object({
   releasedAt: z.string().datetime(),
   notesUrl: z.string().url().nullable(),
   /**
-   * Legacy Docker app bundle (zip of dist). No build publishes one anymore —
-   * Docker bridges update by image pull, not in place — so this is always
-   * `null` now; kept nullable for wire compatibility with older manifests.
+   * Docker app bundle: the slim bridge image's single esbuild-bundled runner
+   * file, published gzipped. `sha256`/`sizeBytes`/`signature` describe the
+   * DECOMPRESSED file (same convention as `binaries`). The slim image's
+   * launcher activates it in place; `null` when no bundle is published (older
+   * manifests, or builds that only shipped standalone binaries).
    */
   bundle: z.object({
     url: z.string().url(),
     sha256: z.string().min(1),
     signature: z.string().min(1),
     sizeBytes: z.number().int().nonnegative(),
-    /** Minimum Docker runner ABI required to run this app bundle. */
+    /**
+     * Docker runner ABI this bundle requires — an EXACT match with the
+     * image-baked `BRIDGE_RUNNER_ABI_VERSION` (which embeds the pinned Node
+     * version), so a bundle never runs on a different runtime than it was
+     * built for.
+     */
     minimumRunnerAbiVersion: z.string().min(1).optional()
   }).nullable(),
   /**

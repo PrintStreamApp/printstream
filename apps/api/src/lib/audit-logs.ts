@@ -47,6 +47,8 @@ export interface RequestAuditLogAnnotation {
   tenantId?: string | null
   metadata?: AuditLogMetadata
   requiredPermissions?: string[]
+  /** When true, the request is deliberately excluded from the audit trail (see {@link skipRequestAuditLog}). */
+  skip?: boolean
 }
 
 interface AuditLogRowShape {
@@ -85,6 +87,9 @@ export function installAuditLogCapture() {
     }
 
     response.on('finish', () => {
+      if (request.auditLog?.skip) {
+        return
+      }
       if (!AUDITED_METHODS.has(snapshot.method) && !hasExplicitReadAuditAnnotation(request.auditLog)) {
         return
       }
@@ -153,6 +158,20 @@ export function annotateRequestAuditLog(
       ...(request.auditLog?.metadata ?? {}),
       ...(input.metadata ?? {})
     }
+  }
+}
+
+/**
+ * Excludes the current request from the durable audit trail. Reserve this for
+ * high-frequency endpoints with no audit value (per-notification dismissal
+ * syncs, polling-style mutations) where a row per request would be noise —
+ * the analogue of the path-based skips in {@link shouldSkipAuditLog}, but
+ * declared by the owning route so plugins do not leak paths into this module.
+ */
+export function skipRequestAuditLog(request: Request): void {
+  request.auditLog = {
+    ...(request.auditLog ?? {}),
+    skip: true
   }
 }
 

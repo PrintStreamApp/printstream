@@ -829,6 +829,20 @@ CREATE TABLE "SupportMessage" (
 );
 
 -- CreateTable
+CREATE TABLE "SupportAttachment" (
+    "id" TEXT NOT NULL,
+    "messageId" TEXT,
+    "uploaderUserId" TEXT NOT NULL,
+    "filename" TEXT NOT NULL,
+    "contentType" TEXT NOT NULL,
+    "sizeBytes" INTEGER NOT NULL,
+    "data" BYTEA NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SupportAttachment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "Suggestion" (
     "id" TEXT NOT NULL,
     "title" TEXT NOT NULL,
@@ -876,6 +890,7 @@ CREATE TABLE "BetaInviteCode" (
     "usedAt" TIMESTAMP(3),
     "usedByEmail" TEXT,
     "usedByTenantId" TEXT,
+    "issuedToEmail" TEXT,
 
     CONSTRAINT "BetaInviteCode_pkey" PRIMARY KEY ("id")
 );
@@ -1241,6 +1256,12 @@ CREATE INDEX "SupportConversation_status_lastMessageAt_idx" ON "SupportConversat
 CREATE INDEX "SupportMessage_conversationId_createdAt_idx" ON "SupportMessage"("conversationId", "createdAt");
 
 -- CreateIndex
+CREATE INDEX "SupportAttachment_messageId_idx" ON "SupportAttachment"("messageId");
+
+-- CreateIndex
+CREATE INDEX "SupportAttachment_createdAt_idx" ON "SupportAttachment"("createdAt");
+
+-- CreateIndex
 CREATE INDEX "Suggestion_createdAt_idx" ON "Suggestion"("createdAt");
 
 -- CreateIndex
@@ -1260,6 +1281,9 @@ CREATE UNIQUE INDEX "BetaInviteCode_code_key" ON "BetaInviteCode"("code");
 
 -- CreateIndex
 CREATE INDEX "BetaInviteCode_createdAt_idx" ON "BetaInviteCode"("createdAt");
+
+-- CreateIndex
+CREATE INDEX "BetaInviteCode_issuedToEmail_idx" ON "BetaInviteCode"("issuedToEmail");
 
 -- CreateIndex
 CREATE INDEX "PendingRegistration_email_expiresAt_idx" ON "PendingRegistration"("email", "expiresAt");
@@ -1482,6 +1506,9 @@ ALTER TABLE "QueueItem" ADD CONSTRAINT "QueueItem_lastPrintJobId_fkey" FOREIGN K
 
 -- AddForeignKey
 ALTER TABLE "SupportMessage" ADD CONSTRAINT "SupportMessage_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "SupportConversation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SupportAttachment" ADD CONSTRAINT "SupportAttachment_messageId_fkey" FOREIGN KEY ("messageId") REFERENCES "SupportMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "SuggestionVote" ADD CONSTRAINT "SuggestionVote_suggestionId_fkey" FOREIGN KEY ("suggestionId") REFERENCES "Suggestion"("id") ON DELETE CASCADE ON UPDATE CASCADE;

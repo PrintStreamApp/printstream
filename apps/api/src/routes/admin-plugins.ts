@@ -20,6 +20,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { rm } from 'node:fs/promises'
 import { z } from 'zod'
+import { isSelfHostedDeployment } from '../lib/deployment-mode.js'
 import { pluginRegistry } from '../plugin/registry.js'
 import {
   PluginInstallError,
@@ -27,6 +28,7 @@ import {
   uninstallExternalPlugin
 } from '../plugin/installer.js'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
+import { requireRouteParam } from '../lib/request-helpers.js'
 import { assertRequestPermission } from '../lib/authorization.js'
 import { assertFileUploadsAllowed } from '../lib/demo-mode.js'
 import { badRequest, forbidden, notFound } from '../lib/http-error.js'
@@ -93,13 +95,37 @@ adminPluginsRouter.post('/:name/enabled', async (request, response) => {
   response.json({ plugin: info })
 })
 
-adminPluginsRouter.post('/:name/install', async (request, response) => {
+adminPluginsRouter.post('/:name/platform-enabled', async (request, response) => {
+  if (typeof request.body?.enabled !== 'boolean') {
+    throw badRequest('Expected { enabled: boolean }')
+  }
   const existing = pluginRegistry.get(request.params.name)
+  if (!existing) throw notFound('Plugin not found')
+  try {
+    const info = await pluginRegistry.setPlatformEnabled(request.params.name, request.body.enabled)
+    annotateRequestAuditLog(request, {
+      action: request.body.enabled ? 'enable-plugin-platform' : 'disable-plugin-platform',
+      resource: 'plugin',
+      summary: `${request.body.enabled ? 'Enabled' : 'Disabled'} plugin ${existing.name} for the platform workspace.`,
+      metadata: {
+        pluginName: existing.name,
+        enabled: request.body.enabled
+      }
+    })
+    response.json({ plugin: info })
+  } catch (error) {
+    throw badRequest(error instanceof Error ? error.message : 'Could not update the plugin.')
+  }
+})
+
+adminPluginsRouter.post('/:name/install', requireSelfHostedPluginAdministration, async (request, response) => {
+  const name = requireRouteParam(request.params.name, 'name')
+  const existing = pluginRegistry.get(name)
   if (!existing) throw notFound('Plugin not found')
   if (existing.source !== 'builtin') {
     throw badRequest('External plugins are installed via /upload')
   }
-  const info = await pluginRegistry.install(request.params.name)
+  const info = await pluginRegistry.install(name)
   annotateRequestAuditLog(request, {
     action: 'install-plugin',
     resource: 'plugin',
@@ -111,8 +137,9 @@ adminPluginsRouter.post('/:name/install', async (request, response) => {
   response.json({ plugin: info })
 })
 
-adminPluginsRouter.post('/:name/uninstall', async (request, response) => {
-  const existing = pluginRegistry.get(request.params.name)
+adminPluginsRouter.post('/:name/uninstall', requireSelfHostedPluginAdministration, async (request, response) => {
+  const name = requireRouteParam(request.params.name, 'name')
+  const existing = pluginRegistry.get(name)
   if (!existing) throw notFound('Plugin not found')
   // Destructive: the HTTP verb is POST, but this removes the plugin.
   annotateRequestAuditLog(request, {
@@ -125,11 +152,11 @@ adminPluginsRouter.post('/:name/uninstall', async (request, response) => {
     }
   })
   if (existing.source === 'builtin') {
-    const info = await pluginRegistry.uninstall(request.params.name)
+    const info = await pluginRegistry.uninstall(name)
     response.json({ plugin: info })
     return
   }
-  await uninstallExternalPlugin(request.params.name)
+  await uninstallExternalPlugin(name)
   response.json({ plugin: null })
 })
 
@@ -151,7 +178,37 @@ adminPluginsRouter.put('/:name/tenant-availability', async (request, response) =
   response.json({ plugin: info })
 })
 
-adminPluginsRouter.post('/upload', requireFileUploadsAllowed, upload.single('package'), async (request, response) => {
+/**
+ * External plugin installs are a self-hosted capability only: on the hosted
+ * cloud every plugin ships with the codebase, and operator-uploaded code must
+ * not run in the multi-tenant deployment. Exported with an injectable check
+ * so both branches stay testable regardless of the test run's SELF_HOSTED.
+ */
+/**
+ * Install/uninstall (like uploads below) are self-hosted operations: hosted
+ * deployments manage plugins purely with the enable toggles, so the plugin
+ * set always matches the shipped codebase.
+ */
+function requireSelfHostedPluginAdministration(_request: Request, _response: Response, next: NextFunction): void {
+  if (!isSelfHostedDeployment()) {
+    next(forbidden('Plugin install and uninstall are only available on self-hosted deployments; use the enable toggles instead.'))
+    return
+  }
+  next()
+}
+
+export function createSelfHostedPluginUploadGuard(isSelfHosted: () => boolean) {
+  return function requireSelfHostedPluginUploads(_request: Request, _response: Response, next: NextFunction): void {
+    if (!isSelfHosted()) {
+      next(forbidden('Plugin uploads are only available on self-hosted deployments.'))
+      return
+    }
+    next()
+  }
+}
+
+// Demo gate first so demo visitors get the demo-specific message.
+adminPluginsRouter.post('/upload', requireFileUploadsAllowed, createSelfHostedPluginUploadGuard(isSelfHostedDeployment), upload.single('package'), async (request, response) => {
   if (!request.file) throw badRequest('No file uploaded under field "package"')
   const tmpPath = path.resolve(request.file.path)
   try {

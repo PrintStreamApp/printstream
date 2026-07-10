@@ -1,11 +1,14 @@
 /**
- * Editable notification templates panel.
+ * Editable notification templates panel, shared by both notification scopes.
  *
  * Each template trigger is shown as a compact row with the current
  * title/body. Editing happens in a focused Modal dialog so the page
  * stays scannable when many triggers exist. The server is the source
  * of truth (and owns the defaults), so this component is mostly a
- * controlled-form wrapper around `/api/notifications/templates`.
+ * controlled-form wrapper around `/api/notifications/templates` (tenant
+ * print events) or `/api/notifications/platform-templates` (platform
+ * operator events — a dynamic, deployment-registered set with no snapshot
+ * media; the panel renders nothing when the deployment registers none).
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -27,34 +30,61 @@ import {
   Typography
 } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { NotificationTemplate, NotificationTemplateUpdate } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { ConfirmActionDialog } from './ConfirmActionDialog'
 import { DialogSection } from './DialogSection'
 
+/**
+ * Structural template shape covering both scopes: the tenant print-event
+ * templates carry `includeSnapshot`; platform templates do not.
+ */
+export interface EditableNotificationTemplate {
+  event: string
+  label: string
+  enabled: boolean
+  title: string
+  body: string
+  variables: string[]
+  customized: boolean
+  defaults: { title: string; body: string }
+  includeSnapshot?: boolean
+}
+
 interface TemplateListResponse {
-  templates: NotificationTemplate[]
+  templates: EditableNotificationTemplate[]
 }
 
 interface TemplateResponse {
-  template: NotificationTemplate
+  template: EditableNotificationTemplate
 }
 
-export function NotificationTemplatesPanel() {
+export type NotificationTemplateScope = 'tenant' | 'platform'
+
+function templatesEndpoint(scope: NotificationTemplateScope): string {
+  return scope === 'platform' ? '/api/notifications/platform-templates' : '/api/notifications/templates'
+}
+
+export function NotificationTemplatesPanel({ scope = 'tenant' }: { scope?: NotificationTemplateScope } = {}) {
   const query = useQuery({
-    queryKey: ['notification-templates'],
-    queryFn: () => apiFetch<TemplateListResponse>('/api/notifications/templates')
+    queryKey: ['notification-templates', scope],
+    queryFn: ({ signal }) => apiFetch<TemplateListResponse>(templatesEndpoint(scope), { signal })
   })
-  const [editing, setEditing] = useState<NotificationTemplate | null>(null)
+  const [editing, setEditing] = useState<EditableNotificationTemplate | null>(null)
+
+  // The platform event set is deployment-registered and may be empty (OSS
+  // registers none today); hide the whole section rather than an empty card.
+  if (scope === 'platform' && !query.isLoading && !query.error && (query.data?.templates.length ?? 0) === 0) {
+    return null
+  }
 
   return (
     <Stack spacing={1.5}>
       <Typography level="body-sm" textColor="text.tertiary">
-        Customise the title, body, and media sent for each notification event.
-        Templates are shared by every notification channel (ntfy, Discord,
-        browser push). Use <code>{'{{variable}}'}</code> placeholders to insert
-        printer or job details.
+        {scope === 'platform'
+          ? 'Customise the title and body sent for each platform event. Templates are shared by every notification channel configured for the platform workspace. Use '
+          : 'Customise the title, body, and media sent for each notification event. Templates are shared by every notification channel (ntfy, Discord, browser push). Use '}
+        <code>{'{{variable}}'}</code> placeholders to insert event details.
       </Typography>
       {query.isLoading && <Typography level="body-sm">Loading…</Typography>}
       {query.error && (
@@ -77,6 +107,7 @@ export function NotificationTemplatesPanel() {
       </Card>
 
       <TemplateEditorDialog
+        scope={scope}
         template={editing}
         onClose={() => setEditing(null)}
       />
@@ -85,7 +116,7 @@ export function NotificationTemplatesPanel() {
 }
 
 interface TemplateRowProps {
-  template: NotificationTemplate
+  template: EditableNotificationTemplate
   onEdit: () => void
 }
 
@@ -129,11 +160,12 @@ function TemplateRow({ template, onEdit }: TemplateRowProps) {
 }
 
 interface TemplateEditorDialogProps {
-  template: NotificationTemplate | null
+  scope: NotificationTemplateScope
+  template: EditableNotificationTemplate | null
   onClose: () => void
 }
 
-function TemplateEditorDialog({ template, onClose }: TemplateEditorDialogProps) {
+function TemplateEditorDialog({ scope, template, onClose }: TemplateEditorDialogProps) {
   const queryClient = useQueryClient()
   const [enabled, setEnabled] = useState(false)
   const [title, setTitle] = useState('')
@@ -148,7 +180,7 @@ function TemplateEditorDialog({ template, onClose }: TemplateEditorDialogProps) 
     setEnabled(template.enabled)
     setTitle(template.title)
     setBody(template.body)
-    setIncludeSnapshot(template.includeSnapshot)
+    setIncludeSnapshot(template.includeSnapshot ?? false)
     setError(null)
   }, [template])
 
@@ -158,20 +190,20 @@ function TemplateEditorDialog({ template, onClose }: TemplateEditorDialogProps) 
       enabled !== template.enabled ||
       title !== template.title ||
       body !== template.body ||
-      includeSnapshot !== template.includeSnapshot
+      includeSnapshot !== (template.includeSnapshot ?? false)
     )
   }, [template, enabled, title, body, includeSnapshot])
 
   const save = useMutation({
-    mutationFn: (update: NotificationTemplateUpdate) => {
+    mutationFn: (update: { enabled: boolean; title: string; body: string; includeSnapshot?: boolean }) => {
       if (!template) throw new Error('No template selected')
       return apiFetch<TemplateResponse>(
-        `/api/notifications/templates/${encodeURIComponent(template.event)}`,
+        `${templatesEndpoint(scope)}/${encodeURIComponent(template.event)}`,
         { method: 'PUT', body: update }
       )
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['notification-templates'] })
+      void queryClient.invalidateQueries({ queryKey: ['notification-templates', scope] })
       onClose()
     },
     onError: (caught: Error) => setError(caught.message)
@@ -181,12 +213,12 @@ function TemplateEditorDialog({ template, onClose }: TemplateEditorDialogProps) 
     mutationFn: () => {
       if (!template) throw new Error('No template selected')
       return apiFetch<TemplateResponse>(
-        `/api/notifications/templates/${encodeURIComponent(template.event)}`,
+        `${templatesEndpoint(scope)}/${encodeURIComponent(template.event)}`,
         { method: 'DELETE' }
       )
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['notification-templates'] })
+      void queryClient.invalidateQueries({ queryKey: ['notification-templates', scope] })
       onClose()
     },
     onError: (caught: Error) => setError(caught.message)
@@ -247,6 +279,7 @@ function TemplateEditorDialog({ template, onClose }: TemplateEditorDialogProps) 
                   </Stack>
                 </DialogSection>
 
+                {scope === 'tenant' && (
                 <DialogSection
                   title="Media"
                   description="Attach a chamber-camera frame when the selected printer supports it and the channel can display media."
@@ -265,6 +298,7 @@ function TemplateEditorDialog({ template, onClose }: TemplateEditorDialogProps) 
                     />
                   </Stack>
                 </DialogSection>
+                )}
 
                 <DialogSection
                   title="Variables"
@@ -305,7 +339,7 @@ function TemplateEditorDialog({ template, onClose }: TemplateEditorDialogProps) 
               color="primary"
               disabled={busy || !dirty}
               loading={save.isPending}
-              onClick={() => save.mutate({ enabled, title, body, includeSnapshot })}
+              onClick={() => save.mutate({ enabled, title, body, ...(scope === 'tenant' ? { includeSnapshot } : {}) })}
             >
               Save
             </Button>
@@ -315,7 +349,11 @@ function TemplateEditorDialog({ template, onClose }: TemplateEditorDialogProps) 
         <ConfirmActionDialog
           open={confirmResetOpen}
           title="Reset notification template?"
-          description={template ? `Reset "${template.label}" to its default title, body, enabled state, and snapshot setting? Your custom version will be removed.` : ''}
+          description={template
+            ? scope === 'tenant'
+              ? `Reset "${template.label}" to its default title, body, enabled state, and snapshot setting? Your custom version will be removed.`
+              : `Reset "${template.label}" to its default title, body, and enabled state? Your custom version will be removed.`
+            : ''}
           confirmLabel="Reset to default"
           pending={reset.isPending}
           error={error}

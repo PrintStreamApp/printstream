@@ -13,18 +13,45 @@ import {
 } from '../lib/pluginSettings'
 import { webPluginRegistry } from '../plugin/registry'
 
-export function NotificationChannelsPanel() {
+/**
+ * The notification channel entries renderable in the current workspace
+ * context (tenant or platform): installed + enabled `notifications-*`
+ * plugins with a settings panel. Shared with hosts that need the count
+ * before deciding to show a Notifications section at all.
+ */
+export function useNotificationChannelEntries() {
   const pluginCatalogQuery = usePluginCatalogQuery({ suppressGlobalErrorToast: true })
-  const channels = mergePlugins(pluginCatalogQuery.data?.plugins ?? [], webPluginRegistry.list())
+  // A channel's web panel talks to its API plugin, so the plugin must exist
+  // in the CURRENT surface's catalog. Web-only merged entries default to
+  // installed/enabled/available, which would mount the other surface's
+  // panels here (tenant channels on the platform view and vice versa) and
+  // toast "Plugin unavailable in this workspace" from their status queries.
+  const present = mergePlugins(pluginCatalogQuery.data?.plugins ?? [], webPluginRegistry.list())
     .filter((entry): entry is MergedPluginEntry => isNotificationPlugin(entry.name))
+    .filter((entry) => entry.api != null)
+  // Channels that exist in this context, enabled or not — hosts use this to
+  // decide whether a Notifications section exists at all (the panel's own
+  // "enable a plugin" empty state covers the none-enabled case).
+  const availableChannels = present.filter((entry) =>
+    Boolean(entry.api?.installed && entry.api.availableInCurrentContext))
+  const channels = present
     .filter((entry) => shouldRenderPluginSettingsPanel(entry, 'notifications'))
     .sort(compareNotificationPluginEntries)
+  return { pluginCatalogQuery, channels, availableChannels }
+}
+
+export function NotificationChannelsPanel({
+  description = 'Configure how each device or destination receives print alerts. Browser push is per device, while Discord and ntfy deliver through their configured destinations.'
+}: {
+  /** Section intro copy; the default describes the tenant print channels. */
+  description?: string
+} = {}) {
+  const { pluginCatalogQuery, channels } = useNotificationChannelEntries()
 
   return (
     <Stack spacing={1.5}>
       <Typography level="body-sm" textColor="text.tertiary">
-        Configure how each device or destination receives print alerts. Browser push is per device,
-        while Discord and ntfy deliver through their configured destinations.
+        {description}
       </Typography>
       <Alert color="primary" variant="soft" startDecorator={<InfoOutlinedIcon />}>
         Channel availability reflects installed plugins on this host plus any device-specific setup each channel requires.

@@ -95,7 +95,9 @@ The plugin system is part of the foundation, not an add-on. The motivation is si
 - Each plugin receives a scoped `router` automatically mounted at `/api/plugins/<name>`, a scoped key/value `settings` store backed by the `Setting` table, a `logger`, the `PrinterEventBus`, the WS broadcaster, the Prisma client, plus `registerPrintGuard()`, `registerAuthProvider()`, and `registerSlotFilamentResolver()` hooks.
 - Plugins must register cleanup with `context.onShutdown(...)` for any subscription or external connection.
 - Plugins must not import each other. Coordinate through the event bus (change notifications) or a shared core registry (on-demand lookups: print guards, auth providers, slot-filament resolvers).
-- Third-party plugins can be uploaded via `/api/admin/plugins/upload` and are installed into `PLUGINS_DIR`.
+- Plugin routes participate in the durable audit trail like core routes: mutating or privileged endpoints enrich their `AuditLog` entry via `annotateRequestAuditLog` (never placing secrets — tokens, access codes, push-endpoint/webhook URLs — in metadata); a high-frequency endpoint with no audit value opts out explicitly via `skipRequestAuditLog`.
+- Third-party plugins can be uploaded via `/api/admin/plugins/upload` and are installed into `PLUGINS_DIR` — on self-hosted deployments only. Hosted deployments run only plugins that ship with the codebase and manage them purely with the enable toggles: install, uninstall, and upload routes all require a self-hosted deployment.
+- Plugins that run on the platform surface carry an independent platform-workspace enable toggle (`platformEnabled` in the catalog; for dual-surface tenant-controlled plugins it is stored separately from the tenant-default flag).
 
 The platform-facing plugin APIs are split intentionally:
 

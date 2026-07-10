@@ -4,8 +4,8 @@
  * Resolves a same-origin download URL for a release asset and verifies the
  * release signing scheme (an Ed25519 signature over the artifact's sha256 hex).
  * The standalone (SEA) self-updater uses these to download and verify its own
- * binary; the Docker bridge updates by image pull and has no self-update, so
- * nothing here stages or activates anything on disk.
+ * binary; the slim Docker bridge's bundle updater uses them for its signed app
+ * bundle. Nothing here stages or activates anything on disk.
  */
 import { createHash, createPublicKey, verify } from 'node:crypto'
 

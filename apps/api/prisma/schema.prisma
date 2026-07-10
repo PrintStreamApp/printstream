@@ -1243,8 +1243,32 @@ model SupportMessage {
   createdAt      DateTime @default(now())
 
   conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  attachments  SupportAttachment[]
 
   @@index([conversationId, createdAt])
+}
+
+/// A file attached to a support message (cloud-only). Bytes live in the row —
+/// attachments are small (capped per file/message at the route boundary) and
+/// platform-wide durable user data, so they cascade-delete with the
+/// conversation and need no filesystem coordination. Uploaded ahead of the
+/// message (`messageId` is null until the send claims it, verified against
+/// `uploaderUserId`); unclaimed rows are swept after a TTL.
+model SupportAttachment {
+  id             String   @id @default(cuid())
+  /// Null until a message send claims the upload.
+  messageId      String?
+  uploaderUserId String
+  filename       String
+  contentType    String
+  sizeBytes      Int
+  data           Bytes
+  createdAt      DateTime @default(now())
+
+  message SupportMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([createdAt])
 }
 
 /// Product suggestion board post (cloud-only). Not tenant-owned — the board is
@@ -1318,10 +1342,14 @@ model BetaInviteCode {
   usedAt         DateTime?
   usedByEmail    String?
   usedByTenantId String?
+  /// Set when the code was auto-issued to a beta signup; duplicate signups
+  /// for the same address re-send this code instead of minting another.
+  issuedToEmail  String?
 
   pendingRegistrations PendingRegistration[]
 
   @@index([createdAt])
+  @@index([issuedToEmail])
 }
 
 /// An in-flight self-registration awaiting email-code confirmation

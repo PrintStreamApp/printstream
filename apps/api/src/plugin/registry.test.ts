@@ -108,6 +108,80 @@ test('plugin auth providers are exposed in bootstrap data only while the plugin 
   }
 })
 
+test('dual-surface controlled channels have an independent platform-enable bit', async () => {
+  const registry = new PluginRegistry()
+  const originalSetting = prisma.setting
+  const originalTenantFindMany = prisma.tenant.findMany
+  const store = new Map<string, string>()
+
+  Object.defineProperty(prisma, 'setting', {
+    configurable: true,
+    value: {
+      ...originalSetting,
+      findUnique: async ({ where }: { where: { key: string } }) => {
+        const value = store.get(where.key)
+        return value == null ? null : { key: where.key, value }
+      },
+      count: async () => 0,
+      upsert: async ({ where, create, update }: { where: { key: string }; create: { key: string; value: string }; update: { value: string } }) => {
+        store.set(where.key, update.value ?? create.value)
+        return { key: where.key, value: store.get(where.key) ?? create.value }
+      },
+      findMany: async () => [],
+      deleteMany: async () => ({ count: 0 })
+    }
+  })
+  prisma.tenant.findMany = ((async () => []) as unknown) as typeof prisma.tenant.findMany
+
+  try {
+    let registrations = 0
+    let lastContextPlatformEnabled: boolean | undefined
+    // Mirrors the notification channels: tenant-'controlled' (where `enabled`
+    // means the tenant default) but also running a platform side, whose
+    // enablement is its own persisted bit.
+    await registry.register({
+      name: 'notifications-test-channel',
+      async register(context) {
+        registrations += 1
+        lastContextPlatformEnabled = context.isEnabledForTenant?.(null)
+      }
+    }, {
+      runtimeSurfaces: ['platform', 'tenant'],
+      managerSurfaces: ['platform', 'tenant'],
+      tenantAccess: 'controlled',
+      defaultEnabled: false
+    })
+
+    // Fresh install with defaultEnabled false: platform scope starts off.
+    assert.equal(registrations, 0, 'not active until platform-enabled or a tenant enables it')
+    let platformEntry = registry.listCatalog({ tenant: null })[0]
+    assert.equal(platformEntry?.enabled, false)
+    assert.equal(platformEntry?.platformEnabled, false)
+    assert.equal(platformEntry?.availableInCurrentContext, true)
+
+    // Enabling for the platform activates the plugin without touching the
+    // tenant default.
+    await registry.setPlatformEnabled('notifications-test-channel', true)
+    assert.equal(registrations, 1, 'platform enable activates the plugin')
+    assert.equal(lastContextPlatformEnabled, true)
+    assert.equal(store.get('plugin:notifications-test-channel:_platformEnabled'), 'true')
+
+    platformEntry = registry.listCatalog({ tenant: null })[0]
+    assert.equal(platformEntry?.enabled, true)
+    assert.equal(platformEntry?.platformEnabled, true)
+
+    const tenantEntry = registry.listCatalog({ tenant: { id: 'tenant-1' } as never })[0]
+    assert.equal(tenantEntry?.enabled, false, 'tenant scope still honors the tenant default')
+    assert.equal(store.get('plugin:notifications-test-channel:_enabled'), undefined, 'tenant default flag untouched')
+  } finally {
+    Object.defineProperty(prisma, 'setting', {
+      configurable: true,
+      value: originalSetting
+    })
+    prisma.tenant.findMany = originalTenantFindMany
+  }
+})
+
 test('controlled tenant plugins use platform policy for availability and tenant-local enablement', async () => {
   const registry = new PluginRegistry()
   const originalSetting = prisma.setting
@@ -172,6 +246,7 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       source: 'builtin',
       installed: true,
       enabled: false,
+      platformEnabled: null,
       runtimeSurfaces: ['tenant'],
       managerSurfaces: ['platform', 'tenant'],
       tenantAccess: 'controlled',
@@ -185,6 +260,7 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       source: 'builtin',
       installed: true,
       enabled: false,
+      platformEnabled: null,
       runtimeSurfaces: ['tenant'],
       managerSurfaces: ['platform', 'tenant'],
       tenantAccess: 'controlled',
@@ -200,6 +276,7 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       source: 'builtin',
       installed: true,
       enabled: true,
+      platformEnabled: null,
       runtimeSurfaces: ['tenant'],
       managerSurfaces: ['platform', 'tenant'],
       tenantAccess: 'controlled',
@@ -217,6 +294,7 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       source: 'builtin',
       installed: true,
       enabled: false,
+      platformEnabled: null,
       runtimeSurfaces: ['tenant'],
       managerSurfaces: ['platform', 'tenant'],
       tenantAccess: 'controlled',
@@ -230,6 +308,7 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       source: 'builtin',
       installed: true,
       enabled: true,
+      platformEnabled: null,
       runtimeSurfaces: ['tenant'],
       managerSurfaces: ['platform', 'tenant'],
       tenantAccess: 'controlled',

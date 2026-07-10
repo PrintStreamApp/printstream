@@ -7,7 +7,7 @@
  * and gives plugins a stable subscription surface.
  */
 import { EventEmitter } from 'node:events'
-import type { DiscoveredPrinter, Printer, PrinterStatus } from '@printstream/shared'
+import type { DiscoveredPrinter, NotificationMessage, Printer, PrinterStatus } from '@printstream/shared'
 
 export interface PrinterEvents {
   'status': (status: PrinterStatus) => void
@@ -67,6 +67,13 @@ export interface PrinterEvents {
     tenantId: string | null
     recentCrashCount: number
   }) => void
+  /**
+   * A pre-rendered platform-scope notification (operator events: no owning
+   * tenant). Emitted by `lib/platform-notification-events.ts`; the channel
+   * plugins deliver it through their platform-scope configuration. The
+   * message's `tenantId` is intentionally unset.
+   */
+  'platform.notification': (event: { message: NotificationMessage }) => void
   /**
    * A filament spool became loaded in an AMS slot (the `filament-manager` plugin
    * emits on RFID auto-association and manual slot assignment). Carries the

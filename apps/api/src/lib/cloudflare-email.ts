@@ -11,6 +11,8 @@ interface CloudflareEmailInput {
   html?: string
   fromEmail?: string
   fromName?: string | null
+  /** Reply-To address, e.g. the operator inbox on no-reply sends. */
+  replyTo?: string
 }
 
 interface CloudflareEmailConfig {
@@ -61,7 +63,8 @@ export function createCloudflareEmailSender(config: CloudflareEmailConfig, fetch
         from: formatEmailAddress(fromEmail, fromName),
         subject: input.subject,
         text: input.text,
-        ...(input.html ? { html: input.html } : {})
+        ...(input.html ? { html: input.html } : {}),
+        ...(input.replyTo ? { reply_to: input.replyTo } : {})
       })
     })
 

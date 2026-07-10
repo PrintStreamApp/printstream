@@ -5,7 +5,7 @@ import { afterEach, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { annotateRequestAuditLog, installAuditLogCapture, noteRequestAuditPermission } from './audit-logs.js'
+import { annotateRequestAuditLog, installAuditLogCapture, noteRequestAuditPermission, skipRequestAuditLog } from './audit-logs.js'
 import type { RequestAuthContext } from './auth-context.js'
 import { rootPrisma } from './prisma.js'
 import { wsBroadcaster } from './ws-server.js'
@@ -246,6 +246,27 @@ test('audit middleware can force workspace changes into platform-scoped logs', a
   })
 })
 
+test('audit middleware skips mutating requests that opt out via skipRequestAuditLog', async () => {
+  let called = false
+
+  rootPrisma.auditLog.create = (async () => {
+    called = true
+    return { id: 'audit-6' } as never
+  }) as unknown as typeof rootPrisma.auditLog.create
+
+  await withAuditApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/plugins/notifications-browser/dismissals`, { method: 'POST' })
+    assert.equal(response.status, 202)
+  })
+
+  assert.equal(called, false)
+})
+
 test('audit middleware ignores read-only requests that only note required permissions', async () => {
   let called = false
 
@@ -315,6 +336,10 @@ async function withAuditApp(
   })
   app.post('/api/tenants', (_request, response) => {
     response.status(201).json({ ok: true })
+  })
+  app.post('/api/plugins/notifications-browser/dismissals', (request, response) => {
+    skipRequestAuditLog(request)
+    response.status(202).json({ ok: true })
   })
 
   const server = await listen(app)

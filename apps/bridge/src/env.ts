@@ -93,6 +93,11 @@ const envSchema = z.object({
   // a pre-release bridge against the production server without being pulled to
   // the published build).
   BRIDGE_DISABLE_SELF_UPDATE: z.coerce.boolean().default(false),
+  // Baked true only in the slim Docker bridge image (whose launcher entrypoint
+  // activates signed single-file app bundles from the releases dir). The
+  // combined app image's bridge role and source runs leave it off and keep the
+  // report-only image-pull driver.
+  BRIDGE_BUNDLE_SELF_UPDATE: z.coerce.boolean().default(false),
   BRIDGE_RELEASES_DIR: z.string().default('/data/releases'),
   BRIDGE_UPDATE_PUBLIC_KEY: z.string().trim().optional(),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development')

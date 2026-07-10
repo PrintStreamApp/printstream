@@ -1,9 +1,9 @@
-import { Box, ModalClose, ModalDialog, Stack, Tooltip, Typography } from '@mui/joy'
+import { Box, Stack, Tooltip, Typography } from '@mui/joy'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { PrintJob } from '@printstream/shared'
 import { buildApiUrl } from '../lib/apiUrl'
-import { BackAwareModal as Modal } from './BackAwareModal'
+import { ImageLightbox } from './ImageLightbox'
 
 export function JobHistoryMedia({
   job,
@@ -131,26 +131,7 @@ function HistoryMediaTile({
       </Stack>
 
       {dialogOpen && canOpen && imageUrl && (
-        <Modal open onClose={() => setDialogOpen(false)}>
-          <ModalDialog sx={{ p: 1.5, width: { xs: '95vw', sm: '90vw', md: '70vw' }, maxWidth: 720 }}>
-            <ModalClose />
-            <Typography level="title-md" sx={{ mb: 1 }} noWrap>{label}</Typography>
-            <Box
-              component="img"
-              src={imageUrl}
-              alt={alt}
-              sx={{
-                width: '100%',
-                maxHeight: '75vh',
-                height: 'auto',
-                objectFit: 'contain',
-                display: 'block',
-                borderRadius: 'sm',
-                backgroundColor: 'var(--joy-palette-neutral-800)'
-              }}
-            />
-          </ModalDialog>
-        </Modal>
+        <ImageLightbox src={imageUrl} alt={alt} title={label} onClose={() => setDialogOpen(false)} />
       )}
     </>
   )

@@ -10,25 +10,22 @@ import type { NotificationMessage } from '@printstream/shared'
 import { env } from '../../lib/env.js'
 import { isEmailDeliveryConfigured, sendEmail } from '../../lib/email-delivery.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
-import { readEmailSubscribers } from './subscribers.js'
+import { messageNotificationScope } from '../../lib/notification-scope.js'
+import { readEmailSubscribers } from '../../lib/notification-subscribers.js'
 
-/** Builds the printer-notification handler that emails opted-in workspace members. */
+/** Builds the notification handler that emails the scope's opted-in users. */
 export function createEmailNotificationHandler(context: ApiPluginContext) {
   return async function handle(message: NotificationMessage): Promise<void> {
-    if (!message.tenantId) return
     // Skip cheaply when no transport can deliver (e.g. OSS before SMTP is set up).
     if (!(await isEmailDeliveryConfigured())) return
 
-    const subscriberIds = await readEmailSubscribers(context.settings.forTenant(message.tenantId))
+    const scope = messageNotificationScope(context, message.tenantId)
+    const subscriberIds = await readEmailSubscribers(scope.settings)
     if (subscriberIds.length === 0) return
 
-    const members = await context.prisma.authTenantMembership.findMany({
-      where: { tenantId: message.tenantId, userId: { in: subscriberIds }, loginDisabled: false },
-      select: { user: { select: { email: true } } }
-    })
-    const recipients = [...new Set(
-      members.map((member) => member.user?.email).filter((email): email is string => Boolean(email))
-    )]
+    const recipients = scope.tenantId
+      ? await resolveTenantRecipients(context, scope.tenantId, subscriberIds)
+      : await resolvePlatformRecipients(context, subscriberIds)
     if (recipients.length === 0) return
 
     const html = buildEmailHtml(message)
@@ -41,6 +38,26 @@ export function createEmailNotificationHandler(context: ApiPluginContext) {
       }
     }
   }
+}
+
+/** Opted-in members of the tenant, filtered to current enabled memberships. */
+async function resolveTenantRecipients(context: ApiPluginContext, tenantId: string, subscriberIds: string[]): Promise<string[]> {
+  const members = await context.prisma.authTenantMembership.findMany({
+    where: { tenantId, userId: { in: subscriberIds }, loginDisabled: false },
+    select: { user: { select: { email: true } } }
+  })
+  return [...new Set(
+    members.map((member) => member.user?.email).filter((email): email is string => Boolean(email))
+  )]
+}
+
+/** Opted-in platform users; a revoked platform flag stops delivery even if the opt-in row lingers. */
+async function resolvePlatformRecipients(context: ApiPluginContext, subscriberIds: string[]): Promise<string[]> {
+  const users = await context.prisma.authUser.findMany({
+    where: { id: { in: subscriberIds }, isPlatformUser: true },
+    select: { email: true }
+  })
+  return [...new Set(users.map((user) => user.email).filter((email): email is string => Boolean(email)))]
 }
 
 function buildEmailHtml(message: NotificationMessage): string {

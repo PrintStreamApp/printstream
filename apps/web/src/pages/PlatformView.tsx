@@ -6,6 +6,8 @@ import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AuthAccessSection } from '../components/AuthAccessSection'
 import { NestedViewHeader } from '../components/NestedViewHeader'
+import { NotificationChannelsPanel, useNotificationChannelEntries } from '../components/NotificationChannelsPanel'
+import { NotificationTemplatesPanel } from '../components/NotificationTemplatesPanel'
 import { PluginManagerSection } from '../components/PluginManagerSection'
 import { PlatformAuthSummarySection } from '../components/PlatformAuthSummarySection'
 import { apiFetch } from '../lib/apiClient'
@@ -15,7 +17,9 @@ import { resolveSettingsAuthState } from '../lib/settingsAuth'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { LogsPanel } from './LogsView'
 
-type PlatformSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'logs' | 'auth-users' | 'auth-roles'
+type PlatformSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'auth-users' | 'auth-roles'
+
+const PLATFORM_NOTIFICATIONS_DESCRIPTION = 'Platform event notifications for operators: beta signups, new workspaces, and your delivery opt-in.'
 
 /**
  * Dedicated workspace for platform-wide operations.
@@ -61,6 +65,10 @@ export function PlatformView({
   const canManageSupportAccess = bootstrapCapabilities?.canManageSupportAccess ?? false
   const canManagePlugins = bootstrapCapabilities?.canManagePlugins ?? false
   const canViewLogs = bootstrapCapabilities?.canViewLogs ?? false
+  // The Notifications section exists when any notification channel runs on
+  // the platform surface (enabled or not — the panel's empty state guides
+  // enabling); deployments with none hide the section entirely.
+  const hasPlatformNotificationChannels = useNotificationChannelEntries().availableChannels.length > 0
   const authManagementStatusQuery = useQuery({
     queryKey: authQueryKeys.managementStatus(authScopeKey),
     queryFn: () => apiFetch<AuthManagementStatus>('/api/auth/status'),
@@ -101,6 +109,13 @@ export function PlatformView({
               title="Plugins"
               description="Manage platform-only plugins and control which tenant plugins are available in each workspace."
               onAction={() => navigate('/platform/settings/plugins')}
+            />
+          )}
+          {hasPlatformNotificationChannels && (
+            <PlatformOverviewCard
+              title="Notifications"
+              description={PLATFORM_NOTIFICATIONS_DESCRIPTION}
+              onAction={() => navigate('/platform/settings/notifications')}
             />
           )}
           {canViewLogs && (
@@ -227,6 +242,18 @@ export function PlatformView({
             </Typography>
           )}
         </Stack>
+      ) : visibleSubview === 'notifications' ? (
+        <Stack spacing={1.5}>
+          <NestedViewHeader
+            crumbs={[
+              { label: 'Platform settings', onClick: () => navigate('/platform/settings') },
+              { label: 'Notifications' }
+            ]}
+            description={PLATFORM_NOTIFICATIONS_DESCRIPTION}
+          />
+          <NotificationChannelsPanel description="Configure how platform events reach you. Each channel delivers through its platform-scope configuration, separate from any workspace's setup." />
+          <NotificationTemplatesPanel scope="platform" />
+        </Stack>
       ) : visibleSubview === 'plugins' ? (
         <Stack spacing={1.5}>
           <NestedViewHeader
@@ -259,6 +286,7 @@ function resolvePlatformSubview(pathname: string): PlatformSubview {
   if (pathname === '/platform/settings/general') return 'general'
   if (pathname === '/platform/settings/authentication') return 'authentication'
   if (pathname === '/platform/settings/plugins') return 'plugins'
+  if (pathname === '/platform/settings/notifications') return 'notifications'
   if (pathname === '/platform/settings/logs') return 'logs'
   if (pathname === '/platform/settings/auth/users') return 'auth-users'
   if (pathname === '/platform/settings/auth/roles') return 'auth-roles'
