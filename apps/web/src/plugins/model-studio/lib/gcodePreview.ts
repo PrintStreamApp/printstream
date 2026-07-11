@@ -526,63 +526,155 @@ const TRAVEL_COLOR = 0x6f8194
 const WALL_ROLES = new Set([0, 1, 2, 3, 11, 15])
 
 /**
- * Build a volumetric extrusion mesh: each segment becomes a boxed ribbon (top + two side faces)
- * at its real width and layer height, vertex-coloured by feature type — so the print reads like
- * Bambu Studio's preview rather than flat lines. Consecutive segments of the same path (shared
- * endpoint, same feature/height, near width) are welded into one continuous tube with a mitered
- * joint ring, every open tube end is capped, and shading uses smooth per-vertex normals — without
- * this, curved walls (arcs tessellated into short segments) show wedge gaps at every bend,
- * see-through holes at line ends, and one visible shading facet per segment. One merged
- * indexed geometry; the layer slider just moves the index draw range (O(1), no rebuilds). Travel
- * moves stay thin lines, hidden by default.
+ * Bead cross-section swept along each move: a closed rounded profile (flat bottom on the
+ * layer below, bevelled/rounded top) defined once as perp offset `u` in [-1,1] x halfWidth,
+ * height `v` in [0,1] x layerHeight, plus the outward normal of a matching ellipse. Normals
+ * are explicit and SMOOTH: ring vertices shared between welded sections carry the mitered
+ * direction, so a curved wall shades continuously like a cylinder instead of showing one
+ * facet per G-code segment.
  */
-export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcodePreview {
-  const group = new THREE.Group()
+const PROFILE: ReadonlyArray<readonly [u: number, v: number, nu: number, nv: number]> = [
+  [-1.0, 0.0, -0.447, -0.894], [1.0, 0.0, 0.447, -0.894], // flat bottom on the layer below
+  [0.88, 0.55, 0.975, 0.222], [0.45, 1.0, 0.22, 0.975],   // right wall + right top slope
+  [-0.45, 1.0, -0.22, 0.975], [-0.88, 0.55, -0.975, 0.222] // left top slope + left wall
+]
+
+/** Linear-space 0-255 RGB per feature colour (vertex colours bypass sRGB conversion). */
+function buildRoleRGB(): ReadonlyArray<readonly [number, number, number]> {
+  return GCODE_FEATURE_COLORS.map((hex) => {
+    const c = new THREE.Color(hex).convertSRGBToLinear()
+    return [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)] as const
+  })
+}
+
+const WELD_EPSILON = 1e-3 // mm; endpoints of one path come from the same parsed values
+// Bambu varies LINE_WIDTH slightly between wall moves; welds survive small changes by
+// tapering the tube through an averaged joint ring instead of breaking into capped beads.
+const WELD_WIDTH_TOLERANCE = 0.1 // mm
+// Sharper joints than this fall back to capped ends (the miter offset would spike).
+const MITER_DOT_MIN = 0.5
+// Below this XY length a segment is degenerate: skipped, and it breaks any weld run.
+const DEGENERATE_SEGMENT_LENGTH = 1e-4
+
+interface ExtrusionGeometryBuild {
+  geometry: THREE.BufferGeometry
+  /** Cumulative index count at the END of each layer (drives the layer slider draw range). */
+  layerIndexEnd: number[]
+  /**
+   * Cumulative emitted-move count at the end of each layer (the bead mesh skips
+   * degenerate segments, so this can differ from the parsed segment count).
+   */
+  layerMoveEnd: number[]
+  /** Draw-range end after the given emitted move (within-layer scrub boundaries). */
+  moveEndIndex: (move: number) => number
+}
+
+/**
+ * Build the merged extrusion mesh (see {@link buildLayeredGcodePreview}). Two passes over
+ * the parsed segments: the first records each joint's weld/miter decision and counts
+ * exactly how many vertices/indices the welded tubes and caps need; the second fills
+ * exact-size buffers. (The previous single pass allocated the no-weld worst case — four
+ * rings per segment — which over-allocated hundreds of MB on a dense multi-hour plate and
+ * kept it alive via subarray views.) Vertex data is quantized where precision allows:
+ * int8 normalized normals, uint8 normalized colours, uint8 macro-up flags, and a uint16
+ * index when the mesh is small enough; positions stay float32.
+ *
+ * Deliberately a separate function from buildLayeredGcodePreview: V8 gives all closures
+ * created in a scope ONE shared context, so if this work ran inline, the preview's
+ * returned closures would pin every intermediate array here for the preview's lifetime.
+ */
+function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBuild {
   const pos = parsed.extrusionPositions
   const widths = parsed.extrusionWidths
   const heights = parsed.extrusionHeights
   const roles = parsed.extrusionRoles
   const segCount = pos.length / 6 // 2 vertices (6 floats) per segment
-
-  // Each segment is a bead swept along the move: a closed rounded cross-section (flat bottom on
-  // the layer below, bevelled/rounded top) extruded from A to B. The cross-section is defined
-  // once (perp offset `u` in [-1,1] x halfWidth, height `v` in [0,1] x layerHeight, plus the
-  // outward normal of a matching ellipse) and swept. Normals are explicit and SMOOTH: ring
-  // vertices shared between welded sections carry the mitered direction, so a curved wall shades
-  // continuously like a cylinder instead of showing one facet per G-code segment.
-  const PROFILE: ReadonlyArray<readonly [u: number, v: number, nu: number, nv: number]> = [
-    [-1.0, 0.0, -0.447, -0.894], [1.0, 0.0, 0.447, -0.894], // flat bottom on the layer below
-    [0.88, 0.55, 0.975, 0.222], [0.45, 1.0, 0.22, 0.975],   // right wall + right top slope
-    [-0.45, 1.0, -0.22, 0.975], [-0.88, 0.55, -0.975, 0.222] // left top slope + left wall
-  ]
   const P = PROFILE.length
-  // Welding only reduces ring use; each cap adds one duplicated ring (axial normals) + a fan.
-  const positions = new Float32Array(segCount * P * 4 * 3)
-  const normals = new Float32Array(segCount * P * 4 * 3)
-  const colors = new Float32Array(segCount * P * 4 * 3)
-  const macroUps = new Float32Array(segCount * P * 4)
-  const indices = new Uint32Array(segCount * (P * 6 + (P - 2) * 6))
+
+  // Pass 1: weld/miter decision per segment — STORED, so pass 2 cannot diverge from the
+  // counted sizes — plus the exact vertex/index totals.
+  const jointWeld = new Uint8Array(segCount)
+  const jointPx = new Float32Array(segCount)
+  const jointPy = new Float32Array(segCount)
+  const jointHalfW = new Float32Array(segCount)
+  let vertexCount = 0
+  let indexCount = 0
+  for (let layer = 0; layer < parsed.layerCount; layer++) {
+    const startSeg = (layer > 0 ? parsed.extrusionLayerEnd[layer - 1]! : 0) / 2
+    const endSeg = parsed.extrusionLayerEnd[layer]! / 2
+    let weldedFromPrev = false
+    for (let seg = startSeg; seg < endSeg; seg++) {
+      const o = seg * 6
+      const ax = pos[o]!, ay = pos[o + 1]!, az = pos[o + 2]!
+      const bx = pos[o + 3]!, by = pos[o + 4]!
+      const segDx = bx - ax, segDy = by - ay
+      const len = Math.hypot(segDx, segDy)
+      if (len < DEGENERATE_SEGMENT_LENGTH) { weldedFromPrev = false; continue }
+      const nx = -segDy / len, ny = segDx / len // perpendicular unit (in the bed plane)
+
+      // Does the NEXT segment continue this path? (Shared endpoint, same feature/height, a near
+      // width, and a joint shallow enough to miter.) If so, the shared ring is emitted once with
+      // the mitered perp and reused — the tube stays continuous instead of leaving a wedge gap
+      // at the bend; a small width change tapers smoothly through the averaged joint ring.
+      if (seg + 1 < endSeg) {
+        const n = (seg + 1) * 6
+        const sameAttrs = roles[seg + 1] === roles[seg] &&
+          Math.abs(widths[seg + 1]! - widths[seg]!) < WELD_WIDTH_TOLERANCE &&
+          Math.abs(heights[seg + 1]! - heights[seg]!) < 1e-6
+        const sharedPoint = Math.abs(pos[n]! - bx) < WELD_EPSILON &&
+          Math.abs(pos[n + 1]! - by) < WELD_EPSILON &&
+          Math.abs(pos[n + 2]! - az) < WELD_EPSILON
+        if (sameAttrs && sharedPoint) {
+          let ndx = pos[n + 3]! - pos[n]!, ndy = pos[n + 4]! - pos[n + 1]!
+          const nlen = Math.hypot(ndx, ndy)
+          if (nlen >= DEGENERATE_SEGMENT_LENGTH) {
+            ndx /= nlen; ndy /= nlen
+            let mx = nx + -ndy, my = ny + ndx // sum of the two unit perps
+            const mlen = Math.hypot(mx, my)
+            if (mlen > 1e-4) {
+              mx /= mlen; my /= mlen
+              const cosHalf = mx * nx + my * ny
+              if (cosHalf > MITER_DOT_MIN) {
+                // Widen the joint ring by 1/cos(θ/2) so the bead walls stay flush through the bend.
+                jointWeld[seg] = 1
+                jointPx[seg] = mx
+                jointPy[seg] = my
+                jointHalfW[seg] = ((widths[seg]! || DEFAULT_EXTRUSION_WIDTH) + (widths[seg + 1]! || DEFAULT_EXTRUSION_WIDTH)) / 4 / cosHalf
+              }
+            }
+          }
+        }
+      }
+
+      const weldNext = jointWeld[seg] === 1
+      // Start ring + its cap ring unless welded into; end ring always; end cap ring unless welding on.
+      vertexCount += (weldedFromPrev ? 0 : 2 * P) + P + (weldNext ? 0 : P)
+      // P side quads; a (P-2)-triangle cap fan per open end.
+      indexCount += P * 6 + (weldedFromPrev ? 0 : (P - 2) * 3) + (weldNext ? 0 : (P - 2) * 3)
+      weldedFromPrev = weldNext
+    }
+  }
+
+  // Pass 2: fill the exact-size buffers.
+  const positions = new Float32Array(vertexCount * 3)
+  const normals = new Int8Array(vertexCount * 3)
+  const colors = new Uint8Array(vertexCount * 3)
+  const macroUps = new Uint8Array(vertexCount)
+  const indices = vertexCount > 65536 ? new Uint32Array(indexCount) : new Uint16Array(indexCount)
   const layerIndexEnd: number[] = []
-  // Per emitted move: cumulative index count after it (for within-layer scrubbing), plus the
-  // cumulative emitted-move count at the end of each layer (degenerate segments are skipped,
-  // so this can differ from the parsed segment count).
   const moveIndexEnd: number[] = []
   const layerMoveEnd: number[] = []
   let vCount = 0
   let iCount = 0
 
-  // Precompute the linear-space RGB for each feature colour (vertex colours bypass sRGB conversion).
-  const roleRGB = GCODE_FEATURE_COLORS.map((hex) => {
-    const c = new THREE.Color(hex).convertSRGBToLinear()
-    return [c.r, c.g, c.b] as const
-  })
+  const roleRGB = buildRoleRGB()
 
-  let cr = 1, cg = 1, cb = 1
+  let cr = 255, cg = 255, cb = 255
   let macroUp = 0
   const pushVertex = (x: number, y: number, z: number, nx: number, ny: number, nz: number): number => {
     const o = vCount * 3
     positions[o] = x; positions[o + 1] = y; positions[o + 2] = z
-    normals[o] = nx; normals[o + 1] = ny; normals[o + 2] = nz
+    normals[o] = Math.round(nx * 127); normals[o + 1] = Math.round(ny * 127); normals[o + 2] = Math.round(nz * 127)
     colors[o] = cr; colors[o + 1] = cg; colors[o + 2] = cb
     macroUps[vCount] = macroUp
     return vCount++
@@ -617,13 +709,6 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
     return base
   }
 
-  const WELD_EPSILON = 1e-3 // mm; endpoints of one path come from the same parsed values
-  // Bambu varies LINE_WIDTH slightly between wall moves; welds survive small changes by
-  // tapering the tube through an averaged joint ring instead of breaking into capped beads.
-  const WELD_WIDTH_TOLERANCE = 0.1 // mm
-  // Sharper joints than this fall back to capped ends (the miter offset would spike).
-  const MITER_DOT_MIN = 0.5
-
   for (let layer = 0; layer < parsed.layerCount; layer++) {
     const startSeg = (layer > 0 ? parsed.extrusionLayerEnd[layer - 1]! : 0) / 2
     const endSeg = parsed.extrusionLayerEnd[layer]! / 2
@@ -635,9 +720,9 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
       const bx = pos[o + 3]!, by = pos[o + 4]!
       let dx = bx - ax, dy = by - ay
       const len = Math.hypot(dx, dy)
-      if (len < 1e-4) { weldRingBase = -1; continue }
+      if (len < DEGENERATE_SEGMENT_LENGTH) { weldRingBase = -1; continue }
       dx /= len; dy /= len
-      const nx = -dy, ny = dx // perpendicular unit (in the bed plane)
+      const nx = -dy, ny = dx
       const halfW = (widths[seg]! || DEFAULT_EXTRUSION_WIDTH) / 2
       const layerHeight = heights[seg]! || DEFAULT_LAYER_HEIGHT
       const bot = az - layerHeight
@@ -645,40 +730,11 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
       cr = rgb[0]; cg = rgb[1]; cb = rgb[2]
       macroUp = WALL_ROLES.has(roles[seg]!) ? 0 : 1
 
-      // Does the NEXT segment continue this path? (Shared endpoint, same feature/height, a near
-      // width, and a joint shallow enough to miter.) If so, the shared ring is emitted once with
-      // the mitered perp and reused — the tube stays continuous instead of leaving a wedge gap
-      // at the bend; a small width change tapers smoothly through the averaged joint ring.
-      let weldNext = false
-      let endPx = nx, endPy = ny, endHalfW = halfW
-      if (seg + 1 < endSeg) {
-        const n = (seg + 1) * 6
-        const sameAttrs = roles[seg + 1] === roles[seg] &&
-          Math.abs(widths[seg + 1]! - widths[seg]!) < WELD_WIDTH_TOLERANCE &&
-          Math.abs(heights[seg + 1]! - heights[seg]!) < 1e-6
-        const sharedPoint = Math.abs(pos[n]! - bx) < WELD_EPSILON &&
-          Math.abs(pos[n + 1]! - by) < WELD_EPSILON &&
-          Math.abs(pos[n + 2]! - az) < WELD_EPSILON
-        if (sameAttrs && sharedPoint) {
-          let ndx = pos[n + 3]! - pos[n]!, ndy = pos[n + 4]! - pos[n + 1]!
-          const nlen = Math.hypot(ndx, ndy)
-          if (nlen >= 1e-4) {
-            ndx /= nlen; ndy /= nlen
-            let mx = nx + -ndy, my = ny + ndx // sum of the two unit perps
-            const mlen = Math.hypot(mx, my)
-            if (mlen > 1e-4) {
-              mx /= mlen; my /= mlen
-              const cosHalf = mx * nx + my * ny
-              if (cosHalf > MITER_DOT_MIN) {
-                // Widen the joint ring by 1/cos(θ/2) so the bead walls stay flush through the bend.
-                weldNext = true
-                endPx = mx; endPy = my
-                endHalfW = ((widths[seg]! || DEFAULT_EXTRUSION_WIDTH) + (widths[seg + 1]! || DEFAULT_EXTRUSION_WIDTH)) / 4 / cosHalf
-              }
-            }
-          }
-        }
-      }
+      // Joint decision from pass 1 (identical by construction).
+      const weldNext = jointWeld[seg] === 1
+      const endPx = weldNext ? jointPx[seg]! : nx
+      const endPy = weldNext ? jointPy[seg]! : ny
+      const endHalfW = weldNext ? jointHalfW[seg]! : halfW
 
       const startBase = weldRingBase >= 0 ? weldRingBase : pushRing(ax, ay, nx, ny, halfW, bot, layerHeight)
       if (weldRingBase < 0) pushCap(startBase, -dx, -dy)
@@ -697,17 +753,43 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
     layerMoveEnd.push(moveIndexEnd.length)
   }
 
-  // Trim to the slots actually used (degenerate segments were skipped) so the bounding box
-  // (used for centering/framing) ignores the zeroed tail.
-  const extrusionGeometry = new THREE.BufferGeometry()
-  extrusionGeometry.setAttribute('position', new THREE.BufferAttribute(positions.subarray(0, vCount * 3), 3))
-  extrusionGeometry.setAttribute('normal', new THREE.BufferAttribute(normals.subarray(0, vCount * 3), 3))
-  extrusionGeometry.setAttribute('color', new THREE.BufferAttribute(colors.subarray(0, vCount * 3), 3))
-  extrusionGeometry.setAttribute('aMacroUp', new THREE.BufferAttribute(macroUps.subarray(0, vCount), 1))
-  extrusionGeometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, iCount), 1))
+  // A silent mismatch would render garbage from misaligned buffers; fail loudly instead.
+  if (vCount !== vertexCount || iCount !== indexCount) {
+    throw new Error(`G-code preview geometry mismatch: emitted ${vCount}/${iCount} vertices/indices, counted ${vertexCount}/${indexCount}`)
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3, true))
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3, true))
+  geometry.setAttribute('aMacroUp', new THREE.BufferAttribute(macroUps, 1))
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1))
+  return { geometry, layerIndexEnd, layerMoveEnd, moveEndIndex: (move) => moveIndexEnd[move] ?? 0 }
+}
+
+/**
+ * Build a volumetric extrusion mesh: each segment becomes a boxed ribbon (top + two side faces)
+ * at its real width and layer height, vertex-coloured by feature type — so the print reads like
+ * Bambu Studio's preview rather than flat lines. Consecutive segments of the same path (shared
+ * endpoint, same feature/height, near width) are welded into one continuous tube with a mitered
+ * joint ring, every open tube end is capped, and shading uses smooth per-vertex normals — without
+ * this, curved walls (arcs tessellated into short segments) show wedge gaps at every bend,
+ * see-through holes at line ends, and one visible shading facet per segment. One merged
+ * indexed geometry; the layer slider just moves the index draw range (O(1), no rebuilds). Travel
+ * moves stay thin lines, hidden by default.
+ *
+ * Memory contract: the CPU-side buffer arrays are FREED after the renderer uploads them
+ * (onUpload) — callers must do any bounds/raycast work that reads vertex data before the
+ * first render, and a lost WebGL context must be recovered by rebuilding the preview, not
+ * by three's automatic restore (which would re-upload from the freed arrays).
+ */
+export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcodePreview {
+  const group = new THREE.Group()
+  const build = buildExtrusionGeometry(parsed)
   const material = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.82, metalness: 0.0 })
-  applyMoireFade(material, representativeLayerHeight(heights), medianPositive(widths, DEFAULT_EXTRUSION_WIDTH))
-  const extrusion = new THREE.Mesh(extrusionGeometry, material)
+  applyMoireFade(material, representativeLayerHeight(parsed.extrusionHeights), medianPositive(parsed.extrusionWidths, DEFAULT_EXTRUSION_WIDTH))
+  const extrusion = new THREE.Mesh(build.geometry, material)
+  const { geometry: extrusionGeometry, layerIndexEnd, layerMoveEnd, moveEndIndex } = build
   extrusion.frustumCulled = false
 
   const travelGeometry = new THREE.BufferGeometry()
@@ -718,14 +800,47 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   group.add(extrusion)
   group.add(travel)
 
+  // Copy the small per-layer tables out of `parsed` — the closures below must not
+  // reference `parsed` itself, or they'd pin the multi-MB parse arrays (positions,
+  // widths, roles) in memory for the preview's whole lifetime.
+  const layerCount = parsed.layerCount
+  const layerZ = parsed.layerZ
+  const travelLayerEnd = parsed.travelLayerEnd
+
+  // Precompute bounds BEFORE registering the onUpload frees below. The renderer's sort
+  // pass lazily computes a null boundingSphere during projectObject — AFTER
+  // objects.update() has already uploaded and freed the arrays earlier in the same
+  // frame — so a lazy compute would read a null array, throw, and kill the render loop
+  // on the object's first frame. Precomputed bounds also make the caller's framing
+  // (Box3.setFromObject) free.
+  extrusionGeometry.computeBoundingBox()
+  extrusionGeometry.computeBoundingSphere()
+  travelGeometry.computeBoundingBox()
+  travelGeometry.computeBoundingSphere()
+
+  // Free each CPU-side buffer once the renderer has uploaded it: layer/move scrubbing
+  // only adjusts draw ranges and nothing raycasts the toolpath mesh, so the arrays are
+  // never read back. This halves the preview's steady-state footprint. (See the memory
+  // contract in the function JSDoc.)
+  const releaseArray = function (this: THREE.BufferAttribute) {
+    ;(this as unknown as { array: unknown }).array = null
+  } as unknown as () => void
+  const extrusionIndex = extrusionGeometry.getIndex()
+  const uploadOnce = [
+    ...Object.values(extrusionGeometry.attributes),
+    ...(extrusionIndex ? [extrusionIndex] : []),
+    travelGeometry.getAttribute('position')
+  ]
+  for (const attribute of uploadOnce) (attribute as THREE.BufferAttribute).onUpload(releaseArray)
+
   const layerMoveCount = (layer: number): number => {
-    const clamped = Math.max(0, Math.min(layer, parsed.layerCount - 1))
+    const clamped = Math.max(0, Math.min(layer, layerCount - 1))
     const start = clamped > 0 ? layerMoveEnd[clamped - 1]! : 0
     return (layerMoveEnd[clamped] ?? 0) - start
   }
 
   const setVisibleLayers: LayeredGcodePreview['setVisibleLayers'] = (topLayer, options) => {
-    const clamped = Math.max(0, Math.min(topLayer, parsed.layerCount - 1))
+    const clamped = Math.max(0, Math.min(topLayer, layerCount - 1))
     const single = options?.single ?? false
     const start = single && clamped > 0 ? layerIndexEnd[clamped - 1]! : 0
     let end = layerIndexEnd[clamped] ?? 0
@@ -734,14 +849,14 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
       const firstMove = clamped > 0 ? layerMoveEnd[clamped - 1]! : 0
       const lastMove = firstMove + Math.max(0, Math.floor(options.moveEnd)) - 1
       end = lastMove >= firstMove
-        ? moveIndexEnd[lastMove]!
+        ? moveEndIndex(lastMove)
         : (clamped > 0 ? layerIndexEnd[clamped - 1]! : 0)
     }
     extrusionGeometry.setDrawRange(start, Math.max(0, end - start))
 
     if (options?.showTravel) {
-      const travelStart = clamped > 0 ? parsed.travelLayerEnd[clamped - 1]! : 0
-      const travelEnd = parsed.travelLayerEnd[clamped] ?? 0
+      const travelStart = clamped > 0 ? travelLayerEnd[clamped - 1]! : 0
+      const travelEnd = travelLayerEnd[clamped] ?? 0
       travel.visible = travelEnd > travelStart
       travelGeometry.setDrawRange(travelStart, Math.max(0, travelEnd - travelStart))
     } else {
@@ -749,14 +864,14 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
     }
   }
   // Default: whole print, no travel moves.
-  setVisibleLayers(parsed.layerCount - 1)
+  setVisibleLayers(layerCount - 1)
 
   return {
     object: group,
-    layerCount: parsed.layerCount,
+    layerCount,
     setVisibleLayers,
     moveCount: layerMoveCount,
-    layerZ: (layer: number) => parsed.layerZ[Math.max(0, Math.min(layer, parsed.layerCount - 1))] ?? 0,
+    layerZ: (layer: number) => layerZ[Math.max(0, Math.min(layer, layerCount - 1))] ?? 0,
     dispose: () => {
       extrusionGeometry.dispose()
       travelGeometry.dispose()

@@ -61,8 +61,22 @@ Set `MANAGED_BRIDGE=false` to turn this off: the bundled bridge then waits to be
 
 > SSDP auto-discovery needs LAN multicast, which the default Docker bridge network does not forward. If the bundled bridge does not discover printers, switch the `bridge` service to `network_mode: host` and point `BRIDGE_SERVER_URL` at a host-reachable API address — or add printers by host/serial/access-code instead. The provisioning token is unaffected; it travels over the shared volume, not the network.
 
-## Reverse proxy
+## Reverse proxy and HTTPS
 
 A reverse proxy is optional now that the `api` service serves the app directly — point your browser at the published port and you are done. For TLS, a custom domain, or fronting the stack at the edge, put a proxy in front; it has a single upstream (the `api` service) for `/`, `/api`, and `/ws`. The host-level config used in front of the app stack is intentionally kept server-local as `nginx.conf` and ignored by git; a tracked reference version lives at `nginx.conf.example` — copy or adapt that file. Library uploads use chunked requests so large 3MF/G-code files can pass through request-size-limited proxies such as Cloudflare; keep the proxy body-size limit aligned with the API's upload ceiling for non-library upload routes and any direct-to-origin use.
 
 If you front the stack with any reverse proxy (nginx, Caddy, Traefik, Cloudflare Tunnel, ...) set `TRUST_PROXY` on the api container so `req.ip` and `req.protocol` reflect the real client. `1` means "a single proxy hop"; you can also pass an integer or a comma-separated IP/CIDR list.
+
+### What you lose over plain HTTP
+
+Serving PrintStream over plain `http://` works: monitoring, control, the library, printing, and slicing are all unaffected. But browsers restrict several web platform features to **secure contexts** (HTTPS, or `localhost`), so an HTTP install loses:
+
+- **Browser push notifications.** The Push API and the service worker it depends on only exist on secure origins, so the browser-push channel can never subscribe. The in-app notification settings explain this when it applies. Discord and ntfy notifications are delivered server-side and keep working.
+- **Installing PrintStream as an app (PWA).** Browsers only offer home-screen / desktop install for HTTPS origins. The site still works in a normal tab.
+- **Automatic updates of open tabs.** The service worker is what notices a new server version and refreshes clients onto it. Over HTTP it never registers, so after you update the server, open tabs and bookmarked "installed" pages keep running the old bundle until someone reloads them (a hard refresh if the browser has cached stale assets). Being even one version behind a server update can break live features, so plan on reloading every client after an upgrade.
+- **Passkey sign-in.** WebAuthn is secure-context-only, so passkey registration and sign-in are unavailable and those options disappear from the auth screens. Email codes and OAuth/OIDC sign-in still work, though many identity providers also require HTTPS redirect URLs for non-localhost apps.
+- **Copy-to-clipboard buttons.** The asynchronous clipboard API is secure-context-only, so the copy buttons on code/command blocks silently do nothing; select and copy by hand instead.
+
+`http://localhost` and `http://127.0.0.1` are treated as secure contexts by browsers, so a same-machine install gets all of the above without TLS. For anything reached over the network, the fix is a TLS-terminating reverse proxy in front of the stack, as described above (plus `TRUST_PROXY`).
+
+One certificate caveat: the certificate must be one the browser actually trusts. A self-signed certificate that shows a warning page does **not** count even after you click through it; browsers refuse to register service workers over an untrusted certificate, so push notifications and automatic updates stay broken. Use a publicly trusted certificate (Let's Encrypt via Caddy, Traefik, or certbot), or for a LAN-only install, an internal CA (e.g. `mkcert`) whose root is installed on every device that opens the app.

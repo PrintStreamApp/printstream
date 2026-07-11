@@ -114,6 +114,9 @@ export function createPlateThumbnailRenderer(): PlateThumbnailRenderer {
     },
     dispose() {
       renderer.dispose()
+      // Deterministically free the WebGL context (dispose() leaves it for canvas GC,
+      // and lingering contexts count against the browser's live-context cap).
+      renderer.forceContextLoss()
     }
   }
 }

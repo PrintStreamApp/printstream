@@ -175,11 +175,12 @@ test('buildLayeredGcodePreview welds contiguous same-bead segments into one tube
   // 2 tube sections (P quads = P*6 indices each) + 2 end caps ((P-2)*3 indices each).
   assert.equal(geometry.getIndex()!.count, 2 * P * 6 + 2 * (P - 2) * 3)
   // Every vertex carries a unit normal (smooth shading; no flat-shaded facet banding).
+  // Normals are stored int8-normalized, so allow the quantization error (~1/127 per axis).
   const normals = geometry.getAttribute('normal')
   assert.equal(normals.count, geometry.getAttribute('position').count)
   for (let i = 0; i < normals.count; i++) {
     const len = Math.hypot(normals.getX(i), normals.getY(i), normals.getZ(i))
-    assert.ok(Math.abs(len - 1) < 1e-2, `normal ${i} not unit length: ${len}`)
+    assert.ok(Math.abs(len - 1) < 2.5e-2, `normal ${i} not unit length: ${len}`)
   }
   preview.dispose()
 })
@@ -291,6 +292,63 @@ test('buildLayeredGcodePreview patches the material with the anti-moire normal f
   assert.ok(Math.abs(shader.uniforms.uBeadWidth!.value - 0.5) < 1e-6)
   assert.ok(shader.vertexShader.includes('vBeadWorld = '), 'vertex stage must export the world-position varying')
   assert.ok(shader.fragmentShader.includes('repeatsPerPixel'), 'fragment stage must apply the fade')
+  preview.dispose()
+})
+
+test('buildLayeredGcodePreview allocates exact-size quantized buffers', () => {
+  // Mix of welded (90-degree miter), weld-broken (sharp width jump), and isolated segments
+  // so the counting pre-pass is exercised across every branch.
+  const gcode = [
+    'G90', 'M82',
+    '; LAYER_HEIGHT: 0.2',
+    '; LINE_WIDTH: 0.42',
+    '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2',
+    'G1 X10 Y0 E1',
+    'G1 X10 Y10 E2',
+    '; LINE_WIDTH: 0.8',
+    'G1 X20 Y10 E3',
+  ].join('\n')
+
+  const preview = buildLayeredGcodePreview(parseGcodeLayers(gcode))
+  const geometry = extrusionGeometry(preview)
+  const positions = geometry.getAttribute('position') as THREE.BufferAttribute
+  const normals = geometry.getAttribute('normal') as THREE.BufferAttribute
+  const colors = geometry.getAttribute('color') as THREE.BufferAttribute
+  const index = geometry.getIndex()!
+  // The backing ArrayBuffers are trimmed to what welding/caps actually used — the previous
+  // worst-case allocation (4 rings per segment) retained the full oversized buffers on
+  // dense plates via subarray views.
+  assert.equal((positions.array as Float32Array).buffer.byteLength, positions.count * 3 * 4)
+  assert.ok(normals.array instanceof Int8Array && normals.normalized, 'normals are int8-normalized')
+  assert.equal((normals.array as Int8Array).buffer.byteLength, normals.count * 3)
+  assert.ok(colors.array instanceof Uint8Array && colors.normalized, 'colours are uint8-normalized')
+  assert.equal((colors.array as Uint8Array).buffer.byteLength, colors.count * 3)
+  assert.ok(index.array instanceof Uint16Array, 'small meshes use a uint16 index')
+  assert.equal((index.array as Uint16Array).buffer.byteLength, index.count * 2)
+  preview.dispose()
+})
+
+test('buildLayeredGcodePreview precomputes bounds so freed CPU arrays are never re-read', () => {
+  // The renderer frees the CPU arrays after upload (onUpload); its sort pass lazily
+  // computes a null boundingSphere in the SAME frame, after the free — so the builder
+  // must leave every geometry with bounds already computed.
+  const gcode = [
+    'G90', 'M82',
+    '; LAYER_HEIGHT: 0.2',
+    '; LINE_WIDTH: 0.42',
+    '; FEATURE: Outer wall',
+    'G1 X0 Y0 Z0.2',
+    'G1 X10 Y0 E1',
+    'G0 X0 Y0',
+  ].join('\n')
+
+  const preview = buildLayeredGcodePreview(parseGcodeLayers(gcode))
+  for (const child of preview.object.children) {
+    const geometry = (child as THREE.Mesh).geometry
+    assert.ok(geometry.boundingSphere, `${child.type} boundingSphere precomputed`)
+    assert.ok(geometry.boundingBox, `${child.type} boundingBox precomputed`)
+  }
   preview.dispose()
 })
 

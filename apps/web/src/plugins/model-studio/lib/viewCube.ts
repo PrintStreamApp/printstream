@@ -234,6 +234,10 @@ export function createViewCube(
         }
       })
       renderer.dispose()
+      // dispose() alone leaves the WebGL context alive until the canvas is garbage-
+      // collected; browsers cap live contexts (~8-16) and evict the OLDEST when the cap
+      // is hit — which kills an unrelated healthy viewer. Release it deterministically.
+      renderer.forceContextLoss()
     }
   }
 }

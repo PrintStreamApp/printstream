@@ -19,6 +19,7 @@ import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { toast } from '../lib/toast'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { useSupportAttachmentDrafts } from '../hooks/useSupportAttachmentDrafts'
+import { useSupportImagePaste } from '../hooks/useSupportImagePaste'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { SupportAttachmentsField } from './SupportAttachmentsField'
@@ -54,6 +55,7 @@ export function HelpFeedbackDialog({
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const attachmentDrafts = useSupportAttachmentDrafts('/api/support/attachments')
+  const handleImagePaste = useSupportImagePaste(attachmentDrafts, setMessage)
   const canSubmit = message.trim().length > 0 && !attachmentDrafts.uploading
 
   const submit = async () => {
@@ -133,8 +135,9 @@ export function HelpFeedbackDialog({
                   maxRows={10}
                   placeholder={KIND_PLACEHOLDERS[kind]}
                   onChange={(event) => setMessage(event.target.value)}
+                  slotProps={selfHosted ? undefined : { textarea: { onPaste: handleImagePaste } }}
                 />
-                {!selfHosted && <FormHelperText>Markdown is supported.</FormHelperText>}
+                {!selfHosted && <FormHelperText>Markdown is supported. Paste images to attach them.</FormHelperText>}
               </FormControl>
               {/* Self-hosted submissions become a mailto: draft, which cannot carry uploads. */}
               {!selfHosted && <SupportAttachmentsField drafts={attachmentDrafts} disabled={submitting} />}

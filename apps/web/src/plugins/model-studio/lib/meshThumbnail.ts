@@ -72,9 +72,26 @@ function release(): void {
 
 interface StlRenderer {
   render(geometry: THREE.BufferGeometry): string
+  dispose(): void
 }
 
 let renderer: StlRenderer | null = null
+
+// Idle release: the singleton renderer holds a live WebGL context (contexts count against
+// the browser's ~8-16 live-context cap and hold GPU memory), so drop it after the library
+// view has gone quiet instead of keeping it for the whole session. The next thumbnail
+// request just recreates it.
+const RENDERER_IDLE_DISPOSE_MS = 60_000
+let rendererIdleTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleRendererIdleDispose(): void {
+  if (rendererIdleTimer) clearTimeout(rendererIdleTimer)
+  rendererIdleTimer = setTimeout(() => {
+    rendererIdleTimer = null
+    renderer?.dispose()
+    renderer = null
+  }, RENDERER_IDLE_DISPOSE_MS)
+}
 
 function getRenderer(): StlRenderer {
   if (renderer) return renderer
@@ -122,7 +139,14 @@ function getRenderer(): StlRenderer {
       camera.updateProjectionMatrix()
 
       gl.render(scene, camera)
+      scheduleRendererIdleDispose()
       return gl.domElement.toDataURL('image/png')
+    },
+    dispose() {
+      material.dispose()
+      gl.dispose()
+      // Free the context deterministically; dispose() alone waits for canvas GC.
+      gl.forceContextLoss()
     }
   }
   return renderer

@@ -18,8 +18,21 @@ import { buildThreeMfMeshGroup, disposeObject3D } from './threeMfScene'
 // would churn GL contexts (browsers cap how many are live). render() is synchronous, so a single
 // shared renderer is safe to reuse across the (sequential) render calls.
 let sharedRenderer: ReturnType<typeof createPlateThumbnailRenderer> | null = null
+
+// Idle release: the shared renderer pins a live WebGL context (browsers cap live contexts
+// at ~8-16 and evict the oldest past the cap), so drop it once the library view has gone
+// quiet. The next fallback thumbnail simply recreates it.
+const RENDERER_IDLE_DISPOSE_MS = 60_000
+let rendererIdleTimer: ReturnType<typeof setTimeout> | null = null
+
 function getSharedThumbnailRenderer() {
   if (!sharedRenderer) sharedRenderer = createPlateThumbnailRenderer()
+  if (rendererIdleTimer) clearTimeout(rendererIdleTimer)
+  rendererIdleTimer = setTimeout(() => {
+    rendererIdleTimer = null
+    sharedRenderer?.dispose()
+    sharedRenderer = null
+  }, RENDERER_IDLE_DISPOSE_MS)
   return sharedRenderer
 }
 

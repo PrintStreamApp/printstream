@@ -65,7 +65,8 @@ export function useSupportAttachmentDrafts(uploadPath: string) {
   const [drafts, setDrafts] = useState<SupportAttachmentDraft[]>([])
   const nextKeyRef = useRef(0)
 
-  const addFiles = useCallback((files: Iterable<File>) => {
+  /** Accepts files up to the per-message cap; returns the drafts it created. */
+  const addFiles = useCallback((files: Iterable<File>): SupportAttachmentDraft[] => {
     // Called from event handlers, so the closure state is current; the cap
     // re-check inside the updater is only a safety net. A draft trimmed by
     // that net leaves its upload unclaimed, which the server sweeps.
@@ -77,7 +78,7 @@ export function useSupportAttachmentDrafts(uploadPath: string) {
         ? { status: 'error' as const, error: `Larger than the ${formatBytes(SUPPORT_ATTACHMENT_MAX_BYTES)} limit.` }
         : { status: 'uploading' as const })
     }))
-    if (newDrafts.length === 0) return
+    if (newDrafts.length === 0) return []
     setDrafts((current) => [...current, ...newDrafts].slice(0, SUPPORT_ATTACHMENTS_MAX_PER_MESSAGE))
     for (const draft of newDrafts) {
       if (draft.status !== 'uploading') continue
@@ -91,6 +92,7 @@ export function useSupportAttachmentDrafts(uploadPath: string) {
             entry.key === draft.key ? { ...entry, status: 'error' as const, error: (error as Error).message } : entry))
         })
     }
+    return newDrafts
   }, [drafts.length, uploadPath])
 
   const remove = useCallback((key: string) => {

@@ -25,7 +25,6 @@
   "devDependencies": {
     "@types/node": "^22.13.14",
     "resedit": "^3.0.2",
-    "typescript": "^5.8.3",
     "yauzl": "^3.3.0"
   }
 }

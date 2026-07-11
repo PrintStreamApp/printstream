@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Chip, CircularProgress, DialogContent, Divider, IconButton, LinearProgress, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
+import { Alert, Box, Button, Chip, CircularProgress, DialogContent, Divider, IconButton, LinearProgress, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded'
 import OpenInFullRoundedIcon from '@mui/icons-material/OpenInFullRounded'
@@ -25,6 +25,7 @@ import {
   disposeObject3D
 } from './lib/threeMfScene'
 import { fetchModelBytes, fetchModelText } from './lib/modelFetch'
+import { acquireOverlayViewerHold } from './lib/overlayViewerHold'
 import { MESH_PREVIEW_COLOR } from './lib/meshThumbnail'
 import { parseStlGeometryAsync, parseThreeMfModelEntryAsync } from './lib/meshParseClient'
 import {
@@ -45,6 +46,36 @@ const PREVIEW_HOME_VIEW_DIRECTION = (() => {
   const length = Math.hypot(x, y, z) || 1
   return { x: x / length, y: y / length, z: z / length }
 })()
+
+/**
+ * The viewer's persistent renderer rig. Created ONCE per modal open (per preview mode) and
+ * reused across plate switches and query-state flips — WebGL contexts are a capped
+ * browser-wide resource, so only the previewed content is swapped per load, never the
+ * renderer/canvas. The framing fields are mutable shared state between the rig's resize
+ * handler and the content loader (which learns the model bounds).
+ */
+interface PreviewRig {
+  scene: THREE.Scene
+  camera: THREE.OrthographicCamera | THREE.PerspectiveCamera
+  controls: OrbitControls
+  /** Floor grid shown in mesh (STL/STEP) mode; the content load rests it under the model. */
+  stlGrid: THREE.GridHelper | null
+  /** Camera distance used by {@link applyViewPreset}; set from the loaded model's bounds. */
+  viewDistance: number
+  /** Ortho half-extent framing the plated 3MF scene (kept in sync with resizes). */
+  platedFrameRadius: number
+  /** Bounds of the framed plated content; null until a plated scene has loaded. */
+  platedContentSize: THREE.Vector3 | null
+  applyViewPreset: (preset: ViewPreset) => void
+  syncViewCubeOrientation: () => void
+  /**
+   * Request a redraw. Rendering is on-demand: the loop only draws when the camera moved
+   * (OrbitControls 'change') or something marked the scene dirty — a static preview costs
+   * no GPU time. Content changes (object attach, streamed part, draw-range scrub, resize)
+   * must invalidate.
+   */
+  invalidate: () => void
+}
 
 /**
  * Modal 3D previewer for STL files, plated 3MF projects, and
@@ -74,7 +105,12 @@ export function PreviewView(props: Record<string, unknown>) {
   // in off the main thread (worker-parsed), so this drives an "N of M" bar like the full editor.
   // null = no streaming in progress (single-mesh modes never set it).
   const [sceneProgress, setSceneProgress] = useState<{ done: number; total: number } | null>(null)
-  const applyViewPresetRef = useRef<((preset: ViewPreset) => void) | null>(null)
+  // The persistent renderer rig (see PreviewRig). Held in state so the content effect
+  // below re-runs once the rig exists.
+  const [rig, setRig] = useState<PreviewRig | null>(null)
+  // Bumped by the "Reload 3D view" action after a lost WebGL context to rebuild the rig.
+  const [rigGeneration, setRigGeneration] = useState(0)
+  const [contextLost, setContextLost] = useState(false)
   // Layered G-code preview (sliced-file navigation): the built preview is held in a ref
   // so the layer slider adjusts draw ranges without re-running the heavy viewer effect.
   const gcodePreviewRef = useRef<LayeredGcodePreview | null>(null)
@@ -153,8 +189,243 @@ export function PreviewView(props: Record<string, unknown>) {
     }
   }, [plates, previewMode, requestedPlateIndex, selectedPlate])
 
+  // Renderer rig lifecycle: one WebGL context pair (viewer + view cube) per open, torn
+  // down only when the modal closes, the preview mode changes (different camera/renderer
+  // options), or the containers remount. Plate switches and query-state flips reuse it —
+  // recreating contexts on those churned against the browser's live-context cap, and the
+  // resulting oldest-context eviction is what "crashed" this viewer or the editor under it.
   useEffect(() => {
-    if (!open || !viewerContainer || !viewCubeContainer) return
+    if (!open || !viewerContainer || !viewCubeContainer || !previewMode) return
+
+    const isThreeMfScene = previewMode === '3mf'
+    const isPlatedPreview = previewMode === '3mf' || previewMode === 'plate-gcode'
+
+    const container = viewerContainer
+    const scene = new THREE.Scene()
+    scene.background = new THREE.Color('#0d1322')
+
+    const initialAspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
+    // Only the plated 3MF scene uses an orthographic camera; the G-code preview uses a
+    // perspective camera (45° FOV) so it matches the full editor's camera, not a flat ortho view.
+    const camera = isThreeMfScene
+      ? new THREE.OrthographicCamera(-initialAspect, initialAspect, 1, -1, 0.1, 5000)
+      : new THREE.PerspectiveCamera(45, initialAspect, 0.1, 5000)
+    // Every preview mode renders a Z-up world (the floor grid / plate surface is built for +Z up), so
+    // set camera.up BEFORE the first frame. Previously only the plated modes did this, so an STL/STEP
+    // preview rendered its first frames with three's default Y-up and the floor grid flashed as a
+    // vertical wall until the model finished loading and applyViewPreset('iso') corrected the camera.
+    camera.up.set(BAMBU_THREE_MF_ISO_UP.x, BAMBU_THREE_MF_ISO_UP.y, BAMBU_THREE_MF_ISO_UP.z)
+    if (isPlatedPreview) {
+      camera.position.set(150, 150, 200)
+    } else {
+      // Open mesh previews already pointing down the iso corner so the bed reads as a floor on frame
+      // one; attachObject re-frames to the model bounds (same iso preset) once the mesh loads.
+      const isoDirection = VIEW_PRESET_CONFIG.iso.direction
+      camera.position.set(isoDirection.x * 200, isoDirection.y * 200, isoDirection.z * 200)
+    }
+
+    // Log depth only for the plated 3MF scene, whose coincident coplanar part surfaces
+    // z-fight across the wide depth range. G-code toolpaths have no such geometry, and
+    // logarithmic depth writes gl_FragDepth — which disables early-Z rejection, a real
+    // per-fragment cost when the toolpath mesh runs to millions of double-sided triangles.
+    let renderer: THREE.WebGLRenderer
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: isThreeMfScene })
+    } catch {
+      // The browser refused a context (GPU process still recovering from a crash, or the
+      // device is out of contexts). Land on the same overlay as a mid-session loss so the
+      // user can retry, instead of throwing into the route error boundary.
+      setContextLost(true)
+      return
+    }
+    // Cap DPR at 2 (matching the editor / view cube) to bound GPU/battery cost
+    // on high-DPI phones and 4K displays.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
+    renderer.shadowMap.enabled = isThreeMfScene
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    container.appendChild(renderer.domElement)
+
+    const controls = new OrbitControls(camera, renderer.domElement)
+    controls.enableDamping = true
+    controls.dampingFactor = 0.28
+    controls.enablePan = true
+
+    let needsRender = true
+    const rigState: PreviewRig = {
+      scene,
+      camera,
+      controls,
+      stlGrid: null,
+      viewDistance: 200,
+      platedFrameRadius: 1,
+      platedContentSize: null,
+      applyViewPreset: () => undefined,
+      syncViewCubeOrientation: () => undefined,
+      invalidate: () => {
+        needsRender = true
+      }
+    }
+    // Camera movement (user orbit/pan/zoom, damping tail, and programmatic moves detected
+    // by controls.update()) marks the frame dirty.
+    controls.addEventListener('change', rigState.invalidate)
+
+    const applyPlatedOrthoProjection = () => {
+      if (!(camera instanceof THREE.OrthographicCamera)) return
+      const aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
+      const halfHeight = aspect >= 1 ? rigState.platedFrameRadius : rigState.platedFrameRadius / aspect
+      const halfWidth = aspect >= 1 ? rigState.platedFrameRadius * aspect : rigState.platedFrameRadius
+      camera.left = -halfWidth
+      camera.right = halfWidth
+      camera.top = halfHeight
+      camera.bottom = -halfHeight
+      camera.updateProjectionMatrix()
+    }
+
+    rigState.applyViewPreset = (preset: ViewPreset) => {
+      const config = VIEW_PRESET_CONFIG[preset]
+      if (camera instanceof THREE.OrthographicCamera && rigState.platedContentSize) {
+        const aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
+        rigState.platedFrameRadius = Math.max(computePlatedOrthoFrameRadius(rigState.platedContentSize, aspect, preset), 30)
+        applyPlatedOrthoProjection()
+      }
+      camera.up.set(config.up.x, config.up.y, config.up.z)
+      camera.position.set(
+        rigState.viewDistance * config.direction.x,
+        rigState.viewDistance * config.direction.y,
+        rigState.viewDistance * config.direction.z
+      )
+      camera.lookAt(0, 0, 0)
+      controls.target.set(0, 0, 0)
+      controls.update()
+    }
+
+    const viewCube = createViewCube(viewCubeContainer, (preset) => {
+      rigState.applyViewPreset(preset)
+      viewCube.sync(camera)
+    })
+    rigState.syncViewCubeOrientation = () => {
+      viewCube.sync(camera)
+    }
+
+    scene.add(new THREE.HemisphereLight(0xffffff, isPlatedPreview ? 0x5d646b : 0x202030, isPlatedPreview ? 1.05 : 0.9))
+    const dir = new THREE.DirectionalLight(0xffffff, isPlatedPreview ? 0.5 : 0.6)
+    dir.position.set(1, 1, 1)
+    if (isThreeMfScene) {
+      dir.castShadow = true
+      dir.shadow.mapSize.set(2048, 2048)
+      dir.shadow.camera.near = 50
+      dir.shadow.camera.far = 800
+      dir.shadow.camera.left = -260
+      dir.shadow.camera.right = 260
+      dir.shadow.camera.top = 260
+      dir.shadow.camera.bottom = -260
+      dir.shadow.bias = -0.0004
+      dir.shadow.normalBias = 0.04
+    }
+    scene.add(dir)
+    if (!isPlatedPreview) {
+      // THREE.GridHelper lies in the XZ plane (Three's default Y-up world). This
+      // preview is Z-up (applyViewPreset('iso') sets camera.up to +Z), so an
+      // unrotated grid stands up as a vertical wall beside the model. Rotate it
+      // into the XY plane so it reads as a horizontal floor; it is lowered to the
+      // model's base once the mesh loads (size is unknown until then).
+      const stlGrid = new THREE.GridHelper(320, 16, 0x2a6f66, 0x223042)
+      stlGrid.rotation.x = Math.PI / 2
+      scene.add(stlGrid)
+      rigState.stlGrid = stlGrid
+    } else {
+      const keyLight = new THREE.DirectionalLight(0xfff2d8, 0.36)
+      keyLight.position.set(-1.15, 0.8, 1.6)
+      scene.add(keyLight)
+
+      // Underside lift stays, but in near-neutral grey: the previous saturated
+      // blues (0x7bc5ff / 0x5d98d1) tinted glossy angled faces visibly blue.
+      const underLight = new THREE.DirectionalLight(0xb9c4cc, 0.12)
+      underLight.position.set(-0.35, 0.2, -1)
+      scene.add(underLight)
+
+      const underFill = new THREE.AmbientLight(0x9aa4ad, 0.12)
+      scene.add(underFill)
+    }
+
+    let frame = 0
+    const animate = () => {
+      // update() re-applies damping and detects external camera moves; it fires 'change'
+      // (-> invalidate) only when the camera actually moved, so an idle preview skips the
+      // render below entirely — no steady-state GPU cost.
+      controls.update()
+      if (needsRender) {
+        needsRender = false
+        viewCube.sync(camera)
+        renderer.render(scene, camera)
+      }
+      frame = requestAnimationFrame(animate)
+    }
+    animate()
+
+    // A lost context (GPU pressure, driver reset, background reclaim) leaves the canvas
+    // permanently black with no event to the app by default. Surface it with a reload
+    // action instead: the retry bumps rigGeneration, which rebuilds the rig AND the
+    // content (the content effect depends on the rig), so nothing relies on three's
+    // automatic restore path (the G-code preview frees its CPU-side buffers after upload,
+    // which that path would need).
+    const onContextLost = (event: Event) => {
+      event.preventDefault()
+      cancelAnimationFrame(frame)
+      setContextLost(true)
+    }
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost)
+
+    const onResize = () => {
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+      renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
+      if (camera instanceof THREE.PerspectiveCamera) {
+        camera.aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
+        camera.updateProjectionMatrix()
+      } else {
+        applyPlatedOrthoProjection()
+      }
+      rigState.invalidate()
+    }
+    window.addEventListener('resize', onResize)
+    // The container also resizes without a window resize (the expand/shrink toggle,
+    // the plate strip collapsing in expanded mode), so watch it directly too.
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : null
+    resizeObserver?.observe(container)
+
+    // Pause the editor's render loop (when this modal sits above it) for as long as this
+    // viewer owns a live renderer — two full scenes must not render concurrently.
+    const releaseOverlayHold = acquireOverlayViewerHold()
+
+    setRig(rigState)
+
+    return () => {
+      releaseOverlayHold()
+      setRig(null)
+      cancelAnimationFrame(frame)
+      // Before forceContextLoss below, which fires webglcontextlost on our own canvas —
+      // the handler must not misread our deliberate teardown as a GPU failure.
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost)
+      window.removeEventListener('resize', onResize)
+      resizeObserver?.disconnect()
+      controls.removeEventListener('change', rigState.invalidate)
+      controls.dispose()
+      renderer.dispose()
+      // Release the context immediately: contexts left to GC count against the browser's
+      // live-context cap, and hitting the cap evicts the OLDEST live context — killing a
+      // healthy viewer (often the editor scene under this modal).
+      renderer.forceContextLoss()
+      viewCube.dispose()
+      container.removeChild(renderer.domElement)
+      viewCubeContainer.replaceChildren()
+    }
+  }, [open, previewMode, viewerContainer, viewCubeContainer, rigGeneration])
+
+  // Content lifecycle: fetch/parse/attach the previewed object into the persistent rig's
+  // scene. Runs per plate switch and per query resolution; never touches the renderer.
+  useEffect(() => {
+    if (!open) return
 
     const isThreeMfScene = previewMode === '3mf'
     const isPlatedPreview = previewMode === '3mf' || previewMode === 'plate-gcode'
@@ -186,129 +457,10 @@ export function PreviewView(props: Record<string, unknown>) {
       return
     }
 
-    const container = viewerContainer
-    const scene = new THREE.Scene()
-    scene.background = new THREE.Color('#0d1322')
-
-    const initialAspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
-    // Only the plated 3MF scene uses an orthographic camera; the G-code preview uses a
-    // perspective camera (45° FOV) so it matches the full editor's camera, not a flat ortho view.
-    const useOrthographicCamera = isThreeMfScene
-    const camera = useOrthographicCamera
-      ? new THREE.OrthographicCamera(-initialAspect, initialAspect, 1, -1, 0.1, 5000)
-      : new THREE.PerspectiveCamera(45, initialAspect, 0.1, 5000)
-    // Every preview mode renders a Z-up world (the floor grid / plate surface is built for +Z up), so
-    // set camera.up BEFORE the first frame. Previously only the plated modes did this, so an STL/STEP
-    // preview rendered its first frames with three's default Y-up and the floor grid flashed as a
-    // vertical wall until the model finished loading and applyViewPreset('iso') corrected the camera.
-    camera.up.set(BAMBU_THREE_MF_ISO_UP.x, BAMBU_THREE_MF_ISO_UP.y, BAMBU_THREE_MF_ISO_UP.z)
-    if (isPlatedPreview) {
-      camera.position.set(150, 150, 200)
-    } else {
-      // Open mesh previews already pointing down the iso corner so the bed reads as a floor on frame
-      // one; attachObject re-frames to the model bounds (same iso preset) once the mesh loads.
-      const isoDirection = VIEW_PRESET_CONFIG.iso.direction
-      camera.position.set(isoDirection.x * 200, isoDirection.y * 200, isoDirection.z * 200)
-    }
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: isPlatedPreview })
-    // Cap DPR at 2 (matching the editor / view cube) to bound GPU/battery cost
-    // on high-DPI phones and 4K displays.
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-    renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
-    renderer.shadowMap.enabled = isThreeMfScene
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap
-    container.appendChild(renderer.domElement)
-
-    const controls = new OrbitControls(camera, renderer.domElement)
-    controls.enableDamping = true
-    controls.dampingFactor = 0.28
-    controls.enablePan = true
-
-    let platedFrameRadius = 1
-    let platedContentSize: THREE.Vector3 | null = null
-    let viewDistance = 200
-
-    const applyPlatedOrthoProjection = () => {
-      if (!(camera instanceof THREE.OrthographicCamera)) return
-      const aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
-      const halfHeight = aspect >= 1 ? platedFrameRadius : platedFrameRadius / aspect
-      const halfWidth = aspect >= 1 ? platedFrameRadius * aspect : platedFrameRadius
-      camera.left = -halfWidth
-      camera.right = halfWidth
-      camera.top = halfHeight
-      camera.bottom = -halfHeight
-      camera.updateProjectionMatrix()
-    }
-
-    const applyViewPreset = (preset: ViewPreset) => {
-      const config = VIEW_PRESET_CONFIG[preset]
-      if (camera instanceof THREE.OrthographicCamera && platedContentSize) {
-        const aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
-        platedFrameRadius = Math.max(computePlatedOrthoFrameRadius(platedContentSize, aspect, preset), 30)
-        applyPlatedOrthoProjection()
-      }
-      camera.up.set(config.up.x, config.up.y, config.up.z)
-      camera.position.set(
-        viewDistance * config.direction.x,
-        viewDistance * config.direction.y,
-        viewDistance * config.direction.z
-      )
-      camera.lookAt(0, 0, 0)
-      controls.target.set(0, 0, 0)
-      controls.update()
-    }
-
-    applyViewPresetRef.current = applyViewPreset
-
-    const viewCube = createViewCube(viewCubeContainer, (preset) => {
-      applyViewPreset(preset)
-      viewCube.sync(camera)
-    })
-    const syncViewCubeOrientation = () => {
-      viewCube.sync(camera)
-    }
-
-    scene.add(new THREE.HemisphereLight(0xffffff, isPlatedPreview ? 0x5d646b : 0x202030, isPlatedPreview ? 1.05 : 0.9))
-    const dir = new THREE.DirectionalLight(0xffffff, isPlatedPreview ? 0.5 : 0.6)
-    dir.position.set(1, 1, 1)
-    if (isThreeMfScene) {
-      dir.castShadow = true
-      dir.shadow.mapSize.set(2048, 2048)
-      dir.shadow.camera.near = 50
-      dir.shadow.camera.far = 800
-      dir.shadow.camera.left = -260
-      dir.shadow.camera.right = 260
-      dir.shadow.camera.top = 260
-      dir.shadow.camera.bottom = -260
-      dir.shadow.bias = -0.0004
-      dir.shadow.normalBias = 0.04
-    }
-    scene.add(dir)
-    let stlGrid: THREE.GridHelper | null = null
-    if (!isPlatedPreview) {
-      // THREE.GridHelper lies in the XZ plane (Three's default Y-up world). This
-      // preview is Z-up (applyViewPreset('iso') sets camera.up to +Z), so an
-      // unrotated grid stands up as a vertical wall beside the model. Rotate it
-      // into the XY plane so it reads as a horizontal floor; it is lowered to the
-      // model's base once the mesh loads (size is unknown until then).
-      stlGrid = new THREE.GridHelper(320, 16, 0x2a6f66, 0x223042)
-      stlGrid.rotation.x = Math.PI / 2
-      scene.add(stlGrid)
-    } else {
-      const keyLight = new THREE.DirectionalLight(0xfff2d8, 0.36)
-      keyLight.position.set(-1.15, 0.8, 1.6)
-      scene.add(keyLight)
-
-      // Underside lift stays, but in near-neutral grey: the previous saturated
-      // blues (0x7bc5ff / 0x5d98d1) tinted glossy angled faces visibly blue.
-      const underLight = new THREE.DirectionalLight(0xb9c4cc, 0.12)
-      underLight.position.set(-0.35, 0.2, -1)
-      scene.add(underLight)
-
-      const underFill = new THREE.AmbientLight(0x9aa4ad, 0.12)
-      scene.add(underFill)
-    }
+    // The rig effect above creates the rig once the preview mode is known; this effect
+    // re-runs when it lands (rig is a dependency).
+    if (!rig) return
+    const { scene, camera, controls } = rig
 
     let previewObject: THREE.Object3D | null = null
     let cancelled = false
@@ -339,18 +491,18 @@ export function PreviewView(props: Record<string, unknown>) {
       scene.add(object)
 
       const size = box.getSize(new THREE.Vector3())
-      if (stlGrid) {
+      if (rig.stlGrid) {
         // Rest the floor grid under the now-centred model.
-        stlGrid.position.z = -size.z / 2
+        rig.stlGrid.position.z = -size.z / 2
       }
       const sphere = box.getBoundingSphere(new THREE.Sphere())
       const maxDimension = Math.max(size.x, size.y, size.z, 20)
       const distance = isPlatedPreview
         ? Math.max(sphere.radius * 3, maxDimension * 2, 120)
         : Math.max(maxDimension * 1.6, 80)
-      viewDistance = distance
+      rig.viewDistance = distance
       if (camera instanceof THREE.OrthographicCamera) {
-        platedContentSize = size.clone()
+        rig.platedContentSize = size.clone()
         camera.near = Math.max(distance / 20, 0.8)
         camera.far = Math.max(distance * 6, 1200)
       } else {
@@ -363,17 +515,18 @@ export function PreviewView(props: Record<string, unknown>) {
         // the full editor's view rather than the iso corner. Orbit/view-cube still work after.
         camera.up.set(BAMBU_THREE_MF_ISO_UP.x, BAMBU_THREE_MF_ISO_UP.y, BAMBU_THREE_MF_ISO_UP.z)
         camera.position.set(
-          PREVIEW_HOME_VIEW_DIRECTION.x * viewDistance,
-          PREVIEW_HOME_VIEW_DIRECTION.y * viewDistance,
-          PREVIEW_HOME_VIEW_DIRECTION.z * viewDistance
+          PREVIEW_HOME_VIEW_DIRECTION.x * distance,
+          PREVIEW_HOME_VIEW_DIRECTION.y * distance,
+          PREVIEW_HOME_VIEW_DIRECTION.z * distance
         )
         camera.lookAt(0, 0, 0)
         controls.target.set(0, 0, 0)
         controls.update()
       } else {
-        applyViewPreset('iso')
+        rig.applyViewPreset('iso')
       }
-      syncViewCubeOrientation()
+      rig.syncViewCubeOrientation()
+      rig.invalidate()
       setViewerState({ loading: false, error: null })
     }
 
@@ -440,7 +593,10 @@ export function PreviewView(props: Record<string, unknown>) {
       const plateGroup = buildPlatePreviewBed(sceneData)
       attachObject(plateGroup)
       void streamThreeMfSceneParts(resourceBase, sceneData, plateGroup, loadAbortController.signal, (done, total) => {
-        if (!cancelled) setSceneProgress(done >= total ? null : { done, total })
+        if (cancelled) return
+        setSceneProgress(done >= total ? null : { done, total })
+        // Parts land in the scene without any camera move; redraw to show them.
+        rig.invalidate()
       }).then(
         () => {
           if (cancelled) return
@@ -449,9 +605,9 @@ export function PreviewView(props: Record<string, unknown>) {
           if (camera instanceof THREE.OrthographicCamera && previewObject) {
             const contentBox = new THREE.Box3().setFromObject(previewObject)
             if (!contentBox.isEmpty()) {
-              platedContentSize = contentBox.getSize(new THREE.Vector3())
-              applyViewPreset('iso')
-              syncViewCubeOrientation()
+              rig.platedContentSize = contentBox.getSize(new THREE.Vector3())
+              rig.applyViewPreset('iso')
+              rig.syncViewCubeOrientation()
             }
           }
         },
@@ -459,52 +615,19 @@ export function PreviewView(props: Record<string, unknown>) {
       )
     }
 
-    let frame = 0
-    const animate = () => {
-      controls.update()
-      syncViewCubeOrientation()
-      renderer.render(scene, camera)
-      frame = requestAnimationFrame(animate)
-    }
-    animate()
-
-    const onResize = () => {
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-      renderer.setSize(Math.max(container.clientWidth, 1), Math.max(container.clientHeight, 1))
-      if (camera instanceof THREE.PerspectiveCamera) {
-        camera.aspect = Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1)
-        camera.updateProjectionMatrix()
-      } else {
-        applyPlatedOrthoProjection()
-      }
-    }
-    window.addEventListener('resize', onResize)
-    // The container also resizes without a window resize (the expand/shrink toggle,
-    // the plate strip collapsing in expanded mode), so watch it directly too.
-    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onResize) : null
-    resizeObserver?.observe(container)
-
     return () => {
-      if (applyViewPresetRef.current === applyViewPreset) {
-        applyViewPresetRef.current = null
-      }
       cancelled = true
       loadAbortController.abort()
-      cancelAnimationFrame(frame)
-      window.removeEventListener('resize', onResize)
-      resizeObserver?.disconnect()
-      controls.dispose()
-      renderer.dispose()
-      viewCube.dispose()
       if (previewObject) {
         scene.remove(previewObject)
         disposeObject3D(previewObject)
+        rig.invalidate()
       }
       gcodePreviewRef.current = null
-      container.removeChild(renderer.domElement)
-      viewCubeContainer.replaceChildren()
     }
   }, [
+    rig,
+    open,
     file,
     fileId,
     resourceBase,
@@ -515,11 +638,8 @@ export function PreviewView(props: Record<string, unknown>) {
     sceneQuery.data,
     sceneQuery.error,
     sceneQuery.isLoading,
-    open,
     previewMode,
-    selectedPlate,
-    viewerContainer,
-    viewCubeContainer
+    selectedPlate
   ])
 
   // Track the scrubbable move count of the current top layer; changing layers resets the
@@ -537,7 +657,14 @@ export function PreviewView(props: Record<string, unknown>) {
       single: gcodeSingleLayer,
       moveEnd: gcodeMoveEnd ?? undefined
     })
-  }, [gcodeTopLayer, gcodeSingleLayer, gcodeMoveEnd, gcodeLayerCount])
+    // Draw ranges change what's on screen without a camera move; redraw.
+    rig?.invalidate()
+  }, [gcodeTopLayer, gcodeSingleLayer, gcodeMoveEnd, gcodeLayerCount, rig])
+
+  // A stale context-lost overlay must not survive a close/reopen of the modal.
+  useEffect(() => {
+    if (!open) setContextLost(false)
+  }, [open])
 
   // Keyboard scrubbing (Bambu-style): Up/Down step the visible top layer, Left/Right scrub
   // moves within that layer — mirroring the on-screen layer and move sliders. Active only
@@ -689,6 +816,31 @@ export function PreviewView(props: Record<string, unknown>) {
                 <Alert color="warning" variant="soft" sx={{ position: 'absolute', top: 16, left: 16, right: 16, zIndex: 1 }}>
                   {viewerState.error}
                 </Alert>
+              )}
+              {contextLost && (
+                // The WebGL context was reclaimed (GPU pressure, driver reset). The canvas
+                // is permanently blank until rebuilt, so offer an explicit reload instead
+                // of leaving a dead view.
+                <Stack
+                  spacing={1}
+                  alignItems="center"
+                  justifyContent="center"
+                  sx={{ position: 'absolute', inset: 0, zIndex: 2, bgcolor: 'rgba(8, 11, 20, 0.6)', backdropFilter: 'blur(2px)' }}
+                >
+                  <Typography level="body-sm" textColor="neutral.200">
+                    The 3D view was interrupted by the browser.
+                  </Typography>
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    onClick={() => {
+                      setContextLost(false)
+                      setRigGeneration((generation) => generation + 1)
+                    }}
+                  >
+                    Reload 3D view
+                  </Button>
+                </Stack>
               )}
               {previewMode === 'plate-gcode' && gcodeLayerCount > 1 && !viewerState.loading && !viewerState.error && (
                 <Sheet

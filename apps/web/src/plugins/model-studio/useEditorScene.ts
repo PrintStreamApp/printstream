@@ -4,15 +4,17 @@
  * loop, resize handling, and full disposal on teardown.
  *
  * Runs ONCE when the viewport container mounts (its dependency array is intentionally
- * just `[viewerContainer, viewCubeContainer]`). It reads every live editor value through
+ * just `[viewerContainer, viewCubeContainer]`, plus a context-loss rebuild counter). It
+ * reads every live editor value through
  * stable refs/callbacks passed in by {@link EditorView}, so the long-lived render loop
  * and event handlers always see current state without re-subscribing. The scene refs
  * themselves (scene/camera/orbit/transform/plateRoot/...) stay declared in EditorView —
  * other code reads them — and are threaded in here as params.
  */
-import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import * as THREE from 'three'
 import { OrbitControls, TransformControls } from 'three-stdlib'
+import { hasActiveOverlayViewer } from './lib/overlayViewerHold'
 import { disposeObject3D, type TrianglePaintChannel } from './lib/threeMfScene'
 import {
   EDITOR_HOME_VIEW_DIRECTION as EDITOR_HOME_VIEW,
@@ -172,6 +174,10 @@ export interface EditorSceneParams {
  * referenced EditorView locals now arrive through {@link EditorSceneParams}.
  */
 export function useEditorScene(params: EditorSceneParams): void {
+  // Bumped after a lost WebGL context to rebuild the whole scene rig (the content effects
+  // re-seed the plate when sceneReady cycles). Rate-capped in the loss handler.
+  const [contextGeneration, setContextGeneration] = useState(0)
+  const lastContextRebuildRef = useRef(0)
   const {
     viewerContainer,
     viewCubeContainer,
@@ -272,6 +278,19 @@ export function useEditorScene(params: EditorSceneParams): void {
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
     container.appendChild(renderer.domElement)
+
+    // A reclaimed WebGL context (GPU pressure, driver reset) leaves the canvas permanently
+    // black. Rebuild the scene once by re-running this effect via contextGeneration — but
+    // rate-capped: if the fresh context dies again within 30s, the device genuinely cannot
+    // host the scene right now and rebuild-looping would only make the pressure worse.
+    const onContextLost = (event: Event) => {
+      event.preventDefault()
+      const now = Date.now()
+      if (now - lastContextRebuildRef.current < 30_000) return
+      lastContextRebuildRef.current = now
+      setContextGeneration((generation) => generation + 1)
+    }
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost)
 
     const orbit = new OrbitControls(camera, renderer.domElement)
     orbit.enableDamping = true
@@ -1293,6 +1312,14 @@ export function useEditorScene(params: EditorSceneParams): void {
     }
     recomputeWarningsRef.current = runPlacementWarningRecompute
     const animate = () => {
+      // While a heavy overlay viewer (the 3D preview modal) is open above the editor, skip
+      // all per-frame work: the modal covers this viewport, and rendering two full scenes
+      // at once doubles the GPU load for nothing. The canvas keeps its last frame and the
+      // loop resumes on the first frame after the overlay closes.
+      if (hasActiveOverlayViewer()) {
+        frame = requestAnimationFrame(animate)
+        return
+      }
       orbit.update()
       // Any active drag (gizmo, object body, or purge tower). Drives both the cheaper
       // selection-box bounds below and the deferred placement-warning recompute further down.
@@ -1413,7 +1440,14 @@ export function useEditorScene(params: EditorSceneParams): void {
       disposeObject3D(plateRoot)
       scene.remove(plateRoot)
       scene.remove(transform as unknown as THREE.Object3D)
+      // Before forceContextLoss below, which fires webglcontextlost on our own canvas —
+      // a deliberate teardown must not be misread as a GPU failure and trigger a rebuild.
+      renderer.domElement.removeEventListener('webglcontextlost', onContextLost)
       renderer.dispose()
+      // Release the WebGL context now rather than at canvas GC time: browsers cap live
+      // contexts and evict the oldest when the cap is hit, so a lingering disposed
+      // context can get a healthy viewer's context killed.
+      renderer.forceContextLoss()
       container.removeChild(renderer.domElement)
       sceneRef.current = null
       cameraRef.current = null
@@ -1434,5 +1468,5 @@ export function useEditorScene(params: EditorSceneParams): void {
       importGeometryCache.clear()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewerContainer, viewCubeContainer])
+  }, [viewerContainer, viewCubeContainer, contextGeneration])
 }

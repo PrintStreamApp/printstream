@@ -9,16 +9,23 @@
  * sizes because this renders user-generated discussion content, not documents.
  */
 import { Box, Link } from '@mui/joy'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 export default function MarkdownContent({
   children,
-  colorInherit = false
+  colorInherit = false,
+  resolveUri
 }: {
   children: string
   /** Inherit the surrounding text colour (e.g. inside a solid chat bubble). */
   colorInherit?: boolean
+  /**
+   * Resolve app-specific URI schemes (e.g. `attachment:<id>` in support
+   * messages) to a fetchable URL; return null to fall back to the default
+   * sanitizing transform. Unresolved custom schemes render as their alt text.
+   */
+  resolveUri?: (uri: string) => string | null
 }) {
   return (
     <Box
@@ -60,12 +67,13 @@ export default function MarkdownContent({
         '& hr': { my: 1.25, border: 'none', borderTop: '1px solid', borderColor: colorInherit ? 'currentColor' : 'divider' },
         '& table': { display: 'block', width: 'fit-content', maxWidth: '100%', my: 1, borderCollapse: 'collapse', overflowX: 'auto' },
         '& th, & td': { p: 0.5, border: '1px solid', borderColor: colorInherit ? 'currentColor' : 'divider', textAlign: 'left' },
-        '& img': { maxWidth: '100%' },
+        '& img': { maxWidth: '100%', maxHeight: 240, borderRadius: 'sm', display: 'block', my: 0.75 },
         ...(colorInherit ? { color: 'inherit', '& a': { color: 'inherit', textDecoration: 'underline' } } : {})
       }}
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={(url) => resolveUri?.(url) ?? defaultUrlTransform(url)}
         components={{
           a: ({ node: _node, children: linkChildren, href, title }) => (
             <Link href={href} title={title} target="_blank" rel="noreferrer">

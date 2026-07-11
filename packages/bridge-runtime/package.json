@@ -26,7 +26,6 @@
     "mqtt": "^5.10.1"
   },
   "devDependencies": {
-    "@types/node": "^22.13.14",
-    "typescript": "^5.8.3"
+    "@types/node": "^22.13.14"
   }
 }

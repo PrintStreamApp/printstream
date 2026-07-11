@@ -12,11 +12,14 @@ const MarkdownContent = lazy(() => import('./MarkdownContent'))
 
 export function Markdown({
   children,
-  colorInherit = false
+  colorInherit = false,
+  resolveUri
 }: {
   children: string
   /** Inherit the surrounding text colour (e.g. inside a solid chat bubble). */
   colorInherit?: boolean
+  /** Resolve app-specific URI schemes (e.g. `attachment:<id>`); see MarkdownContent. */
+  resolveUri?: (uri: string) => string | null
 }) {
   return (
     <Suspense
@@ -26,7 +29,7 @@ export function Markdown({
         </Box>
       }
     >
-      <MarkdownContent colorInherit={colorInherit}>{children}</MarkdownContent>
+      <MarkdownContent colorInherit={colorInherit} resolveUri={resolveUri}>{children}</MarkdownContent>
     </Suspense>
   )
 }

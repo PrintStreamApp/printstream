@@ -251,7 +251,13 @@ const basePrisma = globalForPrisma.prisma ?? new PrismaClient({
  */
 export const rootPrisma = basePrisma
 
-export const prisma = basePrisma.$extends({
+// Typed as the plain PrismaClient: the extension below is behavior-only (query
+// interception), so the public surface is identical, and the inferred
+// DynamicClientExtension type is deep enough that the TS 7 native compiler
+// rejects it ("excessive stack depth") at every call site. If this extension
+// ever grows `result`/`model`/`client` components, the cast would hide their
+// added surface and must be revisited.
+export const prisma: PrismaClient = basePrisma.$extends({
   query: {
     $allModels: {
       async $allOperations({ model, operation, args, query }) {
@@ -322,7 +328,7 @@ export const prisma = basePrisma.$extends({
       }
     }
   }
-})
+}) as unknown as PrismaClient
 
 export type TenantScopedPrismaClient = typeof prisma
 export type AnyPrismaClient = PrismaClient | TenantScopedPrismaClient

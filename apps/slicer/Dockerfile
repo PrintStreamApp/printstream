@@ -16,7 +16,10 @@ FROM base AS build
 COPY package.json package-lock.json* tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY apps/slicer apps/slicer
-RUN npm install --workspace @printstream/slicer --workspace @printstream/shared
+# --include-workspace-root: the TypeScript compiler (the root tsc/tsc6 alias pair) lives in
+# the ROOT devDependencies since the TS7 toolchain change, so a workspace-scoped install
+# alone leaves the build stage without tsc.
+RUN npm install --include-workspace-root --workspace @printstream/slicer --workspace @printstream/shared
 RUN npm run build --workspace @printstream/shared && npm run build --workspace @printstream/slicer
 
 FROM base AS slicer-targets

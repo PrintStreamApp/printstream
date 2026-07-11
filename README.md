@@ -70,6 +70,8 @@ Then open `http://<your-server>:8080`. A default workspace is created automatica
 - Printers must have **LAN mode** enabled with their access code handy (Bambu printer screen → Settings → LAN Only Mode / access code). Newer Bambu firmware also requires **Developer Mode** (in the LAN Only Mode settings) before local apps such as PrintStream may connect.
 - Full details, reverse-proxy notes, the optional slicer service, and running the bridge on a separate machine: [docs/deployment.md](docs/deployment.md). All settings: [docs/configuration.md](docs/configuration.md).
 
+> **Serving over plain HTTP?** Everything printer-related works, but browsers reserve some features for HTTPS origins: browser push notifications, installing PrintStream as an app (PWA), automatic refresh of open tabs when you update the server, and passkey sign-in all need HTTPS (`http://localhost` counts as secure, so a same-machine install is unaffected). To get the full experience on a network address, put a TLS reverse proxy in front; see [Reverse proxy and HTTPS](docs/deployment.md#reverse-proxy-and-https).
+
 ## Plugins
 
 Optional features ship as plugins you can switch on per workspace: sign-in providers (passkeys/email codes, OAuth/OIDC), the 3D model studio (project editor + previews), server-side slicing helpers, filament calibration (pressure-advance towers and flow-ratio plates), production orders, notifications (browser push, Discord, ntfy), firmware updates, plate-clearing confirmation, and the Home Assistant bridge. Third-party plugins can be uploaded from the plugin manager.
