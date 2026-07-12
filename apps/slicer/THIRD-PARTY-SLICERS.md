@@ -26,6 +26,7 @@ official Bambu Lab GitHub releases:
 | 2.6.1.55   | https://github.com/bambulab/BambuStudio/releases/tag/v02.06.01.55               | https://github.com/bambulab/BambuStudio/tree/v02.06.01.55      |
 | 2.7.0.55   | https://github.com/bambulab/BambuStudio/releases/tag/v02.07.00.55               | https://github.com/bambulab/BambuStudio/tree/v02.07.00.55      |
 | 2.7.1.57   | https://github.com/bambulab/BambuStudio/releases/tag/v02.07.01.57               | https://github.com/bambulab/BambuStudio/tree/v02.07.01.57      |
+| 2.7.1.62   | https://github.com/bambulab/BambuStudio/releases/tag/v02.07.01.62               | https://github.com/bambulab/BambuStudio/tree/v02.07.01.62      |
 
 The slicer image also reads and re-emits Bambu Studio's bundled printer,
 process, and filament presets (`resources/profiles/BBL`). Those profiles are

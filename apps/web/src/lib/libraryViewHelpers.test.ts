@@ -87,3 +87,24 @@ test('buildCreateSlicingJobBody: passes through source version and unset object 
 	assert.equal(body.objectProcessOverrides, undefined)
 	assert.equal(body.sceneEdit, undefined)
 })
+
+test('getSelectedTrayWarningMessages: warns when the printer reports no storage (upload would fail)', async () => {
+  const { getSelectedTrayWarningMessages } = await import('./libraryViewHelpers')
+  const withoutStorage = getSelectedTrayWarningMessages({
+    mapping: [],
+    trayByMappingValue: new Map(),
+    filaments: [],
+    status: { sdCardPresent: false } as never
+  })
+  assert.equal(withoutStorage.length, 1)
+  assert.match(withoutStorage[0] ?? '', /no storage/)
+
+  // Unknown (null) storage state must NOT warn — the printer simply has not reported yet.
+  const unknownStorage = getSelectedTrayWarningMessages({
+    mapping: [],
+    trayByMappingValue: new Map(),
+    filaments: [],
+    status: { sdCardPresent: null } as never
+  })
+  assert.deepEqual(unknownStorage, [])
+})

@@ -113,6 +113,40 @@ export async function recordFinishedPrinterStats(jobId: string): Promise<void> {
   })
 }
 
+/**
+ * Store the user-entered lifetime-stats adjustment for a printer (usage from
+ * outside PrintStream's tracking, e.g. hours printed before it was added).
+ * Values are absolute replacements, not deltas; `undefined` leaves the stored
+ * value untouched. Keyed by serial like the tracked stats, so the adjustment
+ * survives printer removal and re-adoption.
+ */
+export async function setManualPrinterStats(input: {
+  tenantId: string
+  printerSerial: string
+  manualPrints?: number
+  manualPrintHours?: number
+}): Promise<void> {
+  const manualPrintDurationSeconds = input.manualPrintHours != null ? Math.round(input.manualPrintHours * 3600) : undefined
+  await prisma.printerStats.upsert({
+    where: {
+      tenantId_printerSerial: {
+        tenantId: input.tenantId,
+        printerSerial: input.printerSerial
+      }
+    },
+    create: {
+      tenantId: input.tenantId,
+      printerSerial: input.printerSerial,
+      manualTotalPrints: input.manualPrints ?? 0,
+      manualPrintDurationSeconds: manualPrintDurationSeconds ?? 0
+    },
+    update: {
+      ...(input.manualPrints !== undefined ? { manualTotalPrints: input.manualPrints } : {}),
+      ...(manualPrintDurationSeconds !== undefined ? { manualPrintDurationSeconds } : {})
+    }
+  })
+}
+
 export async function readPrinterStats(printerId: string): Promise<PrinterStatsResponse['stats'] | null> {
   const printer = await prisma.printer.findFirst({
     where: { id: printerId },
@@ -125,6 +159,8 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
   if (!printer) return null
 
   let row: {
+    manualTotalPrints: number
+    manualPrintDurationSeconds: number
     totalPrints: number
     successfulPrints: number
     failedPrints: number
@@ -152,6 +188,8 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
         }
       },
       select: {
+        manualTotalPrints: true,
+        manualPrintDurationSeconds: true,
         totalPrints: true,
         successfulPrints: true,
         failedPrints: true,
@@ -202,6 +240,8 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
       ? null
       : {
           ...legacyRow,
+          manualTotalPrints: 0,
+          manualPrintDurationSeconds: 0,
           failedPrintDurationSeconds: legacyBreakdown.failedPrintDurationSeconds,
           cancelledPrintDurationSeconds: legacyBreakdown.cancelledPrintDurationSeconds,
           successfulFilamentUsedGrams: legacyBreakdown.successfulFilamentUsedGrams,
@@ -227,14 +267,19 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
     cancelledFilamentUsedMeters: Number(row?.cancelledFilamentUsedMeters ?? 0)
   })
 
+  const manualPrints = row?.manualTotalPrints ?? 0
+  const manualPrintHours = secondsToHours(row?.manualPrintDurationSeconds ?? 0)
+
   return {
     printsInProgress: isPrinterActiveJobStage(printerManager.getStatus(printer.id)?.stage) ? 1 : 0,
-    totalPrints: row?.totalPrints ?? 0,
+    manualPrints,
+    manualPrintHours,
+    totalPrints: (row?.totalPrints ?? 0) + manualPrints,
     successfulPrints: row?.successfulPrints ?? 0,
     failedPrints: row?.failedPrints ?? 0,
     cancelledPrints: row?.cancelledPrints ?? 0,
     failedOrCancelledPrints: (row?.failedPrints ?? 0) + (row?.cancelledPrints ?? 0),
-    totalPrintHours: secondsToHours((row?.successfulPrintDurationSeconds ?? 0) + (row?.failedPrintDurationSeconds ?? 0) + (row?.cancelledPrintDurationSeconds ?? 0)),
+    totalPrintHours: manualPrintHours + secondsToHours((row?.successfulPrintDurationSeconds ?? 0) + (row?.failedPrintDurationSeconds ?? 0) + (row?.cancelledPrintDurationSeconds ?? 0)),
     successfulPrintHours: secondsToHours(row?.successfulPrintDurationSeconds ?? 0),
     failedPrintHours,
     cancelledPrintHours,

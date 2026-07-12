@@ -211,6 +211,7 @@ interface ThreeMfModelSettingsPlateScene {
 const IDENTITY_THREE_MF_TRANSFORM = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] as const
 export const LOGICAL_PART_PLATE_GAP = 1 / 5
 const RAW_SCENE_BED_DIMENSIONS_BY_PRINTER_MODEL: Partial<Record<PrinterModel, { width: number; depth: number }>> = {
+  X1: { width: 256, depth: 256 },
   X1C: { width: 256, depth: 256 },
   X1E: { width: 256, depth: 256 },
   P1S: { width: 256, depth: 256 },
@@ -218,6 +219,7 @@ const RAW_SCENE_BED_DIMENSIONS_BY_PRINTER_MODEL: Partial<Record<PrinterModel, { 
   P1P: { width: 256, depth: 256 },
   A1: { width: 256, depth: 256 },
   A1mini: { width: 180, depth: 180 },
+  A2L: { width: 330, depth: 320 },
   // Bed sizes from BambuStudio's per-model `printable_area`. The dual-nozzle models also
   // have per-extruder reach below — the bed width MUST match the extruder union or a
   // phantom unreachable strip appears past the last nozzle-only zone.

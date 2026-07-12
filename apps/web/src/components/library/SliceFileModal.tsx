@@ -54,7 +54,6 @@ import {
   buildInitialFilamentColorSelection,
   buildInitialFilamentMaterialOptionSelection,
   buildInitialFilamentToolheadSelection,
-  buildLegacyMachineSwitchWarning,
   buildLoadedPrinterMaterialOptions,
   buildProjectSlicingProfiles,
   buildSliceDialogProjectFilaments,
@@ -207,7 +206,6 @@ export function SliceFileModal({
   const slicerTargets = capabilities?.targets ?? EMPTY_SLICER_TARGETS
   const configured = Boolean(capabilities?.configured && capabilities?.healthy && slicerTargets.length > 0)
   const [selectedSlicerTargetId, setSelectedSlicerTargetId] = useState(() => capabilities?.defaultTargetId ?? capabilities?.targets[0]?.id ?? '')
-  const selectedSlicerTarget = slicerTargets.find((target) => target.id === selectedSlicerTargetId) ?? null
   const shouldLoadSlicingProfiles = configured && selectedSlicerTargetId.length > 0
   // Shared definition (key, usability check, retry/staleness) so views can PREFETCH the
   // same cache entry before this dialog opens — see `lib/slicingProfilesQuery.ts`.
@@ -735,14 +733,6 @@ export function SliceFileModal({
       plateNumber: Number.isInteger(selectedPlate) && selectedPlate > 0 ? selectedPlate : null
     })
   }, [file.name, plateMode, requiresSinglePlate, selectedPlate, selectedPlateOption?.name])
-  const legacyMachineSwitchWarning = useMemo(
-    () => buildLegacyMachineSwitchWarning({
-      sourcePrinterModel,
-      targetPrinterModel,
-      slicerTarget: selectedSlicerTarget
-    }),
-    [selectedSlicerTarget, sourcePrinterModel, targetPrinterModel]
-  )
   // The configuration form should not become interactive until the slicer capabilities, profiles,
   // and 3MF plate data have loaded and the embedded defaults are seeded — otherwise the user sees
   // values populate and change underneath them.
@@ -760,7 +750,6 @@ export function SliceFileModal({
     && selectedNozzleDiameters.length > 0
     && !missingFilamentProfile
     && !missingFilamentToolhead
-    && !legacyMachineSwitchWarning
     && (Boolean(sceneEdit) || (!requiresSinglePlate && plateMode === 'all') || (Number.isInteger(selectedPlate) && selectedPlate > 0))
     && (Boolean(sceneEdit) || !hasPlateObjects || selectedSliceObjectIds.size > 0)
     && (targetMode === 'realPrinter' ? printerId.length > 0 : true)
@@ -878,7 +867,7 @@ export function SliceFileModal({
   const sliceController: SliceSettingsController = {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview, isMobileViewport,
     tenantSlug, navigate, onClose,
-    slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId, legacyMachineSwitchWarning,
+    slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId,
     slicerStatus: {
       capabilitiesLoading,
       hasCapabilities: capabilities != null,
@@ -928,7 +917,6 @@ export function SliceFileModal({
     && selectedNozzleDiameters.length > 0
     && !missingFilamentProfile
     && !missingFilamentToolhead
-    && !legacyMachineSwitchWarning
     && (targetMode === 'realPrinter' ? printerId.length > 0 : true)
     && !submitting
 
@@ -947,7 +935,6 @@ export function SliceFileModal({
     nozzleDiameterCount: selectedNozzleDiameters.length,
     missingFilamentProfile,
     missingFilamentToolhead,
-    legacyMachineSwitchWarning,
     targetMode,
     printerId,
     submitting

@@ -15,7 +15,7 @@ import { isDirectPrintableFileName, type PrintJob, type PrinterStatsResponse } f
 import { BreakdownStatCard } from '../StatsCards'
 import { PrintJobHistoryCard } from '../PrintJobHistoryCard'
 import { formatPrinterStatsWholeNumber, formatPrinterStatsDecimal } from '../../lib/printersViewHelpers'
-import { SUCCESS_COLOR, FAILED_COLOR, CANCELLED_COLOR } from '../../lib/printerViewConstants'
+import { SUCCESS_COLOR, FAILED_COLOR, CANCELLED_COLOR, MANUAL_COLOR } from '../../lib/printerViewConstants'
 
 export function PrinterHistoryCard({
   job,
@@ -110,7 +110,7 @@ export function PrinterStatsCardGrid({
         icon={<QueryStatsRoundedIcon />}
         label="Total prints"
         primaryValue={formatPrinterStatsWholeNumber(stats.totalPrints)}
-        description="All recorded jobs for this printer across its lifetime in this workspace."
+        description="All recorded jobs for this printer across its lifetime in this workspace, plus any manually added usage."
         items={[
           {
             label: 'Successful',
@@ -129,7 +129,15 @@ export function PrinterStatsCardGrid({
             value: formatPrinterStatsWholeNumber(stats.cancelledPrints),
             amount: stats.cancelledPrints,
             color: CANCELLED_COLOR
-          }
+          },
+          ...(stats.manualPrints > 0
+            ? [{
+                label: 'Manually added',
+                value: formatPrinterStatsWholeNumber(stats.manualPrints),
+                amount: stats.manualPrints,
+                color: MANUAL_COLOR
+              }]
+            : [])
         ]}
       />
       <BreakdownStatCard
@@ -155,7 +163,15 @@ export function PrinterStatsCardGrid({
             value: `${formatPrinterStatsDecimal(stats.cancelledPrintHours)} h`,
             amount: stats.cancelledPrintHours,
             color: CANCELLED_COLOR
-          }
+          },
+          ...(stats.manualPrintHours > 0
+            ? [{
+                label: 'Manually added',
+                value: `${formatPrinterStatsDecimal(stats.manualPrintHours)} h`,
+                amount: stats.manualPrintHours,
+                color: MANUAL_COLOR
+              }]
+            : [])
         ]}
       />
       <BreakdownStatCard

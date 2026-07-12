@@ -24,10 +24,12 @@ import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
+  AMS_LITE_MIXED_TRAY_INDEX_OFFSET,
   bridgeUpdateBlocksPrinting,
   bridgeUpdateStatusSchema,
   getPrinterPrintStartOptions,
   formatBytes,
+  trayIndexToAmsSlot,
   type PrintDispatchJob,
   type PrintFromLibrary,
   type PrintNozzleOffsetCalibrationMode,
@@ -48,6 +50,8 @@ import {
   uploadFileToPrinter
 } from './printer-ftp.js'
 import { createSinglePlateThreeMf, readEntry } from './three-mf.js'
+import { plateSkipIdentifyIdsFromModelSettingsXml } from './three-mf-output.js'
+import { armPostStartObjectSkip } from './post-start-object-skip.js'
 import { printGuards } from './print-guards.js'
 import { type SnapshotLibraryFile } from './print-file-snapshots.js'
 import { registerPendingDispatchedPrintSource } from './dispatched-print-source-cache.js'
@@ -82,6 +86,14 @@ interface DispatchJobState {
   bridgeLibraryPath: string | null
   remoteName: string
   options: Omit<PrintFromLibrary, 'fileId' | 'printerId'>
+  /**
+   * Instance `identify_id`s to skip (resolved from the request's `skipObjects` object
+   * ids at enqueue time), or null when the user deselected nothing. Sent as the start
+   * command's `skip_objects` field (the primary mechanism — what Bambu Handy sends);
+   * because older firmware ignores that field, runJob also arms a one-shot post-start
+   * `skip_objects` fallback for the same ids.
+   */
+  postStartSkipObjectIds: number[] | null
   status: DispatchStatus
   progressMessage: string
   uploadAttempt: number
@@ -243,6 +255,7 @@ class PrintDispatcher {
     // nozzle the plate never uses (H2D error 0300-4010). Prune to the plate's actual
     // filaments; no-op for multi-filament plates and fail-safe if the plate can't be read.
     const amsMapping = await resolvePlateAmsMapping(sourceKind, localPath, input.plate, input.amsMapping)
+    const postStartSkipObjectIds = await resolvePostStartSkipObjectIds(sourceKind, localPath, input.plate, input.skipObjects)
 
     const now = new Date()
     const target = getRemotePrintTarget(fileName, sourceKind, input.plate, plateName, { isMultiPlate })
@@ -279,6 +292,7 @@ class PrintDispatcher {
         plate: input.plate,
         amsMapping
       },
+      postStartSkipObjectIds,
       status: 'queued',
       progressMessage: 'Waiting to send',
       uploadAttempt: 0,
@@ -454,12 +468,33 @@ class PrintDispatcher {
         return
       }
       const printPayload = buildPrintStartPayload(job)
+      // Log the full start command: when a print starts but misbehaves on-device
+      // (wrong tray fetched, mapping-table errors like 0701-8012), the exact
+      // mapping fields sent are the first thing support needs. No secrets ride
+      // in this payload (file names, plate refs, and option flags only).
+      console.log(`[dispatch] print start command for job ${job.id} (${job.printerName}): ${JSON.stringify(printPayload)}`)
       await registerPendingDispatchedPrintSource({
         printerId: job.printerId,
         jobId: job.id,
         localPath: job.localPath,
         sourceKind: job.sourceKind
       })
+      // The start command below carries `skip_objects` (the primary skip mechanism),
+      // but older firmware ignores that field, so also arm the post-start fallback
+      // BEFORE publishing so a fast printer status cannot report the job started in
+      // the gap. Safe to arm early: the hook only fires for this dispatch's own
+      // tracked job id, and it stands down when the status shows the firmware
+      // already honored the start-command skip.
+      const skipObjectIds = job.postStartSkipObjectIds ?? []
+      const disarmPostStartSkip = skipObjectIds.length > 0
+        ? armPostStartObjectSkip({
+          printerId: printer.id,
+          printerModel: printer.model,
+          dispatchJobId: job.id,
+          jobName: job.jobName,
+          objectIds: skipObjectIds
+        })
+        : null
       const startedJobId = await startTrackedPrintJob({
         jobId: job.id,
         printerId: job.printerId,
@@ -467,13 +502,25 @@ class PrintDispatcher {
         fileName: job.fileName,
         metadata: this.buildPendingStartMetadata(job),
         publish: () => printerManager.publishCommand(printer.id, { print: printPayload })
+      }).catch((error: unknown) => {
+        disarmPostStartSkip?.()
+        throw error
       })
       if (!startedJobId) {
+        disarmPostStartSkip?.()
         console.warn(`[dispatch] MQTT start command failed for printer ${job.printerId} (job ${job.id}): printer disconnected before start`)
         this.finish(job, 'failed', 'Printer disconnected before start command', 'Printer disconnected')
         return
       }
-      this.finish(job, 'sent', 'Start command sent')
+      // Note: skipObjectIds are per-INSTANCE identify_ids, so their count can
+      // exceed the number of deselected objects — keep the message countless.
+      this.finish(
+        job,
+        'sent',
+        skipObjectIds.length > 0
+          ? 'Start command sent; deselected objects will be skipped once the print starts'
+          : 'Start command sent'
+      )
     } catch (error) {
       if (job.cancelRequested) {
         // The upload was aborted by a cancel mid-transfer. Any partial bytes that
@@ -730,12 +777,56 @@ export interface ProjectFilePrintCommandInput {
   timelapse: boolean
   useAms: boolean
   amsMapping?: number[] | null
+  /**
+   * Instance `identify_id`s to exclude from the print, sent as the payload's
+   * `skip_objects` array (what Bambu Handy sends; there is an is_support_partskip
+   * capability bit, and firmware without it ignores the field — callers keep the
+   * post-start mid-print skip as a fallback). Omitted entirely when empty.
+   */
+  skipObjects?: number[] | null
+}
+
+/**
+ * Marks an `ams_mapping_2` entry as unmapped (BambuStudio uses `0xff` for both
+ * fields). Distinguished from an external virtual tray (`ams_id` 254/255) by the
+ * `slot_id`: virtual trays carry slot 0, unmapped entries carry 0xff.
+ */
+const AMS_MAPPING_2_UNSET = 0xff
+
+/**
+ * The v2 `ams_mapping_2` entry for a legacy global tray index. BambuStudio sends
+ * this `{ams_id, slot_id}` form alongside the legacy index array on every print
+ * (see `SelectMachineDialog::get_ams_mapping_result`), and H2C (Vortek rack)
+ * firmware requires it to build its runtime AMS mapping table: a legacy-only
+ * command starts printing but fails with 0701-8012 ("Failed to get AMS mapping
+ * table") at the first filament change that actually fetches from the AMS.
+ * Unused entries (-1 from plate pruning) become 0xff/0xff; external virtual
+ * trays (254/255) keep their id with slot 0, matching BambuStudio.
+ *
+ * The AMS Lite Mixed band (24-27) is deliberately sent as unset: those indices
+ * are ambiguous in reverse (`trayIndexToAmsSlot` reads them as regular unit 6),
+ * and a v2 pair that contradicts the correct legacy index would be worse than
+ * none — BambuStudio itself pairs real `ams_mapping` values with 0xff/0xff v2
+ * entries in its SD-resend invalid case, so firmware tolerates the combination.
+ */
+function amsMapping2Entry(trayIndex: number): { ams_id: number; slot_id: number } {
+  const liteMixedBand = trayIndex >= AMS_LITE_MIXED_TRAY_INDEX_OFFSET && trayIndex < AMS_LITE_MIXED_TRAY_INDEX_OFFSET + 4
+  const slot = liteMixedBand ? null : trayIndexToAmsSlot(trayIndex)
+  if (!slot) return { ams_id: AMS_MAPPING_2_UNSET, slot_id: AMS_MAPPING_2_UNSET }
+  return { ams_id: slot.amsId, slot_id: slot.slotId ?? 0 }
 }
 
 /**
  * Build the Bambu `project_file` MQTT print-start command. The single source
  * for this payload shape — the dispatcher and the printer-storage / reprint
  * routes all go through here so every print path sends an identical command.
+ * Object skipping rides in the payload's `skip_objects` array (see
+ * {@link ProjectFilePrintCommandInput.skipObjects}).
+ *
+ * The AMS mapping is sent in both wire forms, mirroring what BambuStudio's
+ * SD-card resend flow (the closest analog to our upload-then-start dispatch)
+ * sends to every model: the legacy `ams_mapping` global-tray-index array plus
+ * the v2 `ams_mapping_2` unit/slot pairs (see {@link amsMapping2Entry}).
  */
 export function buildProjectFilePrintCommand(input: ProjectFilePrintCommandInput): Record<string, unknown> {
   const printPayload: Record<string, unknown> = {
@@ -765,6 +856,10 @@ export function buildProjectFilePrintCommand(input: ProjectFilePrintCommandInput
   }
   if (input.amsMapping && input.amsMapping.length > 0) {
     printPayload.ams_mapping = input.amsMapping
+    printPayload.ams_mapping_2 = input.amsMapping.map(amsMapping2Entry)
+  }
+  if (input.skipObjects && input.skipObjects.length > 0) {
+    printPayload.skip_objects = input.skipObjects
   }
   return printPayload
 }
@@ -784,7 +879,8 @@ function buildPrintStartPayload(job: DispatchJobState): Record<string, unknown> 
     nozzleOffsetCalibration: job.options.nozzleOffsetCalibration,
     timelapse: job.options.timelapse,
     useAms: job.options.useAms,
-    amsMapping: job.options.amsMapping
+    amsMapping: job.options.amsMapping,
+    skipObjects: job.postStartSkipObjectIds
   })
 }
 
@@ -802,6 +898,46 @@ async function resolvePlateAmsMapping(
   if (!amsMapping || amsMapping.length === 0 || sourceKind !== '3mf' || !localPath || plate == null) return amsMapping
   const usedFilamentIndices = await readPlateUsedFilamentIndices(localPath, plate)
   return prunePlateAmsMapping(amsMapping, usedFilamentIndices)
+}
+
+/**
+ * Resolve the request's deselected plate objects (`skipObjects`, Bambu `object_id`s from the
+ * plates index) into the instance `identify_id`s the firmware keys object skipping on (both
+ * the start command's `skip_objects` field and the mid-print command), read from the source
+ * 3MF's `Metadata/model_settings.config`.
+ *
+ * Unlike the AMS-mapping prune above, this is NOT fail-safe-passthrough: the user explicitly
+ * deselected objects, so printing them anyway would violate intent and waste material. Any
+ * unresolvable selection (unreadable file, unknown object id, file without identify_ids, or a
+ * selection that would skip every object) rejects the dispatch with a clear error instead.
+ * Returns null when nothing was deselected.
+ */
+async function resolvePostStartSkipObjectIds(
+  sourceKind: '3mf' | 'gcode',
+  localPath: string | null,
+  plate: number,
+  skipObjects: number[] | undefined
+): Promise<number[] | null> {
+  if (!skipObjects || skipObjects.length === 0) return null
+  if (sourceKind !== '3mf') {
+    throw new Error('Object skipping is only available for sliced 3MF files')
+  }
+  const modelSettingsXml = localPath
+    ? await readEntry(localPath, 'Metadata/model_settings.config')
+      .then((buffer) => buffer.toString('utf8'))
+      .catch(() => null)
+    : null
+  if (!modelSettingsXml) {
+    throw new Error('Could not read the file to resolve the deselected objects. Try again, or print without deselecting objects.')
+  }
+  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(modelSettingsXml, plate, new Set(skipObjects))
+  if (mapped.unmatchedObjectIds.length > 0 || mapped.identifyIds.length === 0) {
+    throw new Error('Some deselected objects could not be matched on the selected plate. Re-open the print dialog and try again.')
+  }
+  if (mapped.identifyIds.length >= mapped.plateInstanceCount) {
+    throw new Error('Cannot skip every object on the plate. Keep at least one object selected.')
+  }
+  return mapped.identifyIds
 }
 
 /**

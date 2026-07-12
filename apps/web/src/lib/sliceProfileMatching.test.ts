@@ -298,3 +298,4 @@ test('a spool pinned to a slicing preset uses it (matched by display name) over 
   assert.equal(options[0]!.profileId, 'custom:filament:pla-basic-custom')
   assert.equal(options[0]!.presetLabel, 'PLA Basic - Custom')
 })
+

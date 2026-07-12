@@ -108,6 +108,11 @@ const envSchema = z.object({
   // (`Content-Security-Policy-Report-Only`, the safe default). Flip to true once a
   // deployment has confirmed report-only shows no violations.
   CSP_ENFORCE: booleanEnv(false),
+  // Origin of a first-party analytics tracker (e.g. a self-hosted Umami at
+  // `https://analytics.example.com`). Added to the CSP's `script-src` +
+  // `connect-src` so the tracker script and its event beacons survive
+  // enforcement. Leave unset when no cross-origin analytics is used.
+  CSP_ANALYTICS_ORIGIN: optionalStringEnv(),
   CLOUDFLARE_EMAIL_ACCOUNT_ID: optionalStringEnv(),
   CLOUDFLARE_EMAIL_API_TOKEN: optionalStringEnv(),
   CLOUDFLARE_EMAIL_FROM_EMAIL: z.preprocess((value) => {

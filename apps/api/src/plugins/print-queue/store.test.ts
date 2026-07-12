@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile } from '@prisma/client'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
-import { mergeAmsMapping, parseAmsMapping, parseRequiredFilaments, resolveQueueableLibraryFile, withUsedGramsFrom } from './store.js'
+import { mergeAmsMapping, parseAmsMapping, parsePrintOptions, parseRequiredFilaments, resolveQueueableLibraryFile, withUsedGramsFrom } from './store.js'
 
 type FakeRow = Pick<LibraryFile, 'id' | 'name' | 'hidden' | 'origin' | 'deletedAt'>
 
@@ -43,6 +43,20 @@ test('parseRequiredFilaments carries filamentName (brand) and tolerates bad inpu
   ])
   assert.deepEqual(parseRequiredFilaments(null), [])
   assert.deepEqual(parseRequiredFilaments('garbage'), [])
+})
+
+test('parsePrintOptions round-trips skipObjects so a queued selection survives store -> dispatch', () => {
+  // The create/update routes persist the options JSON verbatim and dispatch spreads
+  // parsePrintOptions(...) into the PrintFromLibrary input (buildQueueDispatchInput),
+  // so this parse is exactly what reaches enqueueLibraryPrint at dispatch time.
+  const stored = JSON.stringify({ timelapse: true, skipObjects: [3, 11] })
+  const options = parsePrintOptions(stored)
+  assert.deepEqual(options.skipObjects, [3, 11])
+  assert.equal(options.timelapse, true)
+  // Round-trip: re-serializing and re-parsing (an item edit) keeps the selection.
+  assert.deepEqual(parsePrintOptions(JSON.stringify(options)).skipObjects, [3, 11])
+  // Absent stays absent (dispatch sends no skip list).
+  assert.equal(parsePrintOptions(JSON.stringify({ timelapse: false })).skipObjects, undefined)
 })
 
 test('withUsedGramsFrom backfills slice grams onto a material override that omits them, by filament id', () => {

@@ -305,7 +305,12 @@ export const queueTargetSchema = z.object({
   .refine((target) => target.kind !== 'model' || !!target.model, { message: 'Pin a model to target a printer model' })
 export type QueueTarget = z.infer<typeof queueTargetSchema>
 
-/** Dispatch knobs stored per queued item (everything in PrintFromLibrary except what the queue owns). */
+/**
+ * Dispatch knobs stored per queued item (everything in PrintFromLibrary except what the
+ * queue owns). `skipObjects` rides along deliberately: it is plate-specific, so the
+ * update route drops a stored selection whenever an item's plate changes without a
+ * fresh options payload — a stale selection must never carry over to another plate.
+ */
 export const queuePrintOptionsSchema = printFromLibrarySchema.omit({
   fileId: true,
   printerId: true,

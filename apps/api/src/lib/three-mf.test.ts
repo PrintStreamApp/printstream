@@ -8,6 +8,7 @@ import { test } from 'node:test'
 import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
+import { plateSkipIdentifyIdsFromIndex, plateSkipIdentifyIdsFromModelSettingsXml } from './three-mf-output.js'
 import { applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
 import { rewriteThreeMfEntries } from './three-mf-internal.js'
 import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
@@ -83,7 +84,9 @@ test('buildThreeMfIndex merges slice-info and project settings metadata', () => 
   assert.deepEqual(index.plates[0]?.nozzleSizes, ['0.4', '0.6'])
   assert.equal(index.plates[0]?.filaments[0]?.nozzleId, 1)
   assert.equal(index.plates[0]?.filaments[0]?.chamberTemperature, 45)
-  assert.equal(index.plates[0]?.objects[0]?.name, 'Bracket')
+  // slice_info objects are keyed by identify_id, so the entry's own id doubles as its
+  // firmware skip handle.
+  assert.deepEqual(index.plates[0]?.objects[0], { id: 7, name: 'Bracket', identifyIds: [7] })
 })
 
 test('buildThreeMfIndex decodes XML entities in plate and object names', () => {
@@ -118,12 +121,12 @@ test('buildThreeMfIndex prefers model_settings object_id over slice_info identif
     '</config>'
   ].join('\n')
   const modelSettingsPlates = [
-    { index: 1, name: null, thumbnailFile: null, usedFilamentIds: [], objects: [{ id: 71, name: 'My Sign Draft.3mf' }] }
+    { index: 1, name: null, thumbnailFile: null, usedFilamentIds: [], objects: [{ id: 71, name: 'My Sign Draft.3mf', identifyIds: [48216] }] }
   ]
 
   const index = buildThreeMfIndex(sliceInfoXml, null, modelSettingsPlates, new Map())
 
-  assert.deepEqual(index.plates.find((plate) => plate.index === 1)?.objects, [{ id: 71, name: 'My Sign Draft.3mf' }])
+  assert.deepEqual(index.plates.find((plate) => plate.index === 1)?.objects, [{ id: 71, name: 'My Sign Draft.3mf', identifyIds: [48216] }])
 })
 
 test('buildThreeMfIndex parses string chamber temperatures from project settings', () => {
@@ -537,9 +540,12 @@ test('readPlateIndex exposes plate objects (by object_id) for unsliced model-set
     ])
 
     const index = await readPlateIndex(sourcePath)
+    // Each object also carries the identify_ids of its model_instances on the plate --
+    // the firmware skip handles -- so consumers can map object -> skip ids from the
+    // index alone, without re-reading the file.
     assert.deepEqual(index.plates[0]?.objects, [
-      { id: 3, name: 'Box' },
-      { id: 11, name: 'Lid' }
+      { id: 3, name: 'Box', identifyIds: [153] },
+      { id: 11, name: 'Lid', identifyIds: [204] }
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -549,6 +555,103 @@ test('readPlateIndex exposes plate objects (by object_id) for unsliced model-set
 test('plateObjectIdsFromModelSettingsXml reads the target plate object ids only', () => {
   assert.deepEqual([...plateObjectIdsFromModelSettingsXml(OBJECT_MODEL_SETTINGS_XML, 1)], [3, 11])
   assert.deepEqual([...plateObjectIdsFromModelSettingsXml(OBJECT_MODEL_SETTINGS_XML, 2)], [])
+})
+
+// Two plates; object 3 has TWO instances on plate 1 (identify_ids 153 and 154), and object 11
+// reappears on plate 2 under a different identify_id — plate scoping must never leak that one.
+const MULTI_INSTANCE_MODEL_SETTINGS_XML = [
+  '<config>',
+  '  <plate>',
+  '    <metadata key="plater_id" value="1"/>',
+  '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/><metadata key="identify_id" value="153"/></model_instance>',
+  '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="1"/><metadata key="identify_id" value="154"/></model_instance>',
+  '    <model_instance><metadata key="object_id" value="11"/><metadata key="instance_id" value="0"/><metadata key="identify_id" value="204"/></model_instance>',
+  '  </plate>',
+  '  <plate>',
+  '    <metadata key="plater_id" value="2"/>',
+  '    <model_instance><metadata key="object_id" value="11"/><metadata key="instance_id" value="1"/><metadata key="identify_id" value="205"/></model_instance>',
+  '  </plate>',
+  '</config>'
+].join('\n')
+
+test('plateSkipIdentifyIdsFromModelSettingsXml maps deselected object_ids to every plate instance identify_id', () => {
+  // identify_id is a different id space from object_id (the G-code "unique label id" the
+  // firmware's skip_objects keys on); deselecting object 3 must skip both of its instances.
+  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(MULTI_INSTANCE_MODEL_SETTINGS_XML, 1, new Set([3]))
+  assert.deepEqual(mapped.identifyIds, [153, 154])
+  assert.deepEqual(mapped.unmatchedObjectIds, [])
+  assert.equal(mapped.plateInstanceCount, 3)
+})
+
+test('plateSkipIdentifyIdsFromModelSettingsXml scopes to the requested plate', () => {
+  // Object 11 exists on both plates; a plate-2 skip must return plate 2's identify_id only.
+  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(MULTI_INSTANCE_MODEL_SETTINGS_XML, 2, new Set([11]))
+  assert.deepEqual(mapped.identifyIds, [205])
+  assert.equal(mapped.plateInstanceCount, 1)
+})
+
+test('plateSkipIdentifyIdsFromModelSettingsXml reports object ids with no instance on the plate', () => {
+  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(MULTI_INSTANCE_MODEL_SETTINGS_XML, 2, new Set([3, 11]))
+  assert.deepEqual(mapped.identifyIds, [205])
+  assert.deepEqual(mapped.unmatchedObjectIds, [3])
+})
+
+test('plateSkipIdentifyIdsFromModelSettingsXml treats an instance without identify_id as unmatched', () => {
+  const xml = [
+    '<config>',
+    '  <plate>',
+    '    <metadata key="plater_id" value="1"/>',
+    '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/></model_instance>',
+    '  </plate>',
+    '</config>'
+  ].join('\n')
+  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(xml, 1, new Set([3]))
+  assert.deepEqual(mapped.identifyIds, [])
+  assert.deepEqual(mapped.unmatchedObjectIds, [3])
+  assert.equal(mapped.plateInstanceCount, 1)
+})
+
+test('plateSkipIdentifyIdsFromIndex maps deselected plate objects through the parsed index', () => {
+  // Mirrors plateSkipIdentifyIdsFromModelSettingsXml but reads the already-parsed index —
+  // the storage-print flow's path. Object 3 has two instances on plate 1; object 11
+  // reappears on plate 2 under a different identify_id and must stay plate-scoped.
+  const index = {
+    plates: [
+      {
+        index: 1,
+        objects: [
+          { id: 3, name: 'Box', identifyIds: [153, 154] },
+          { id: 11, name: 'Lid', identifyIds: [204] }
+        ]
+      },
+      { index: 2, objects: [{ id: 11, name: 'Lid', identifyIds: [205] }] }
+    ]
+  }
+
+  const mapped = plateSkipIdentifyIdsFromIndex(index, 1, new Set([3]))
+  assert.deepEqual(mapped.identifyIds, [153, 154])
+  assert.deepEqual(mapped.unmatchedObjectIds, [])
+  assert.equal(mapped.plateInstanceCount, 3)
+
+  // Plate scoping: a plate-2 skip of object 11 returns plate 2's identify_id only.
+  assert.deepEqual(plateSkipIdentifyIdsFromIndex(index, 2, new Set([11])).identifyIds, [205])
+
+  // Unknown object ids and objects without identify_ids report as unmatched.
+  const unmatched = plateSkipIdentifyIdsFromIndex(index, 1, new Set([3, 99]))
+  assert.deepEqual(unmatched.identifyIds, [153, 154])
+  assert.deepEqual(unmatched.unmatchedObjectIds, [99])
+  const noHandles = {
+    plates: [{ index: 1, objects: [{ id: 5, name: 'Plain', identifyIds: [] as number[] }] }]
+  }
+  const withoutHandles = plateSkipIdentifyIdsFromIndex(noHandles, 1, new Set([5]))
+  assert.deepEqual(withoutHandles.unmatchedObjectIds, [5])
+  // A handle-less object still counts as occupying the plate (skip-everything guard).
+  assert.equal(withoutHandles.plateInstanceCount, 1)
+
+  // A missing plate matches nothing.
+  const missingPlate = plateSkipIdentifyIdsFromIndex(index, 9, new Set([3]))
+  assert.deepEqual(missingPlate.identifyIds, [])
+  assert.equal(missingPlate.plateInstanceCount, 0)
 })
 
 test('setBuildItemsUnprintableXml marks only the listed build items printable="0"', () => {
@@ -601,8 +704,8 @@ test('readPlateIndex backfills plate objects from model_settings when slice_info
 
     const index = await readPlateIndex(sourcePath)
     assert.deepEqual(index.plates[0]?.objects, [
-      { id: 3, name: 'Box' },
-      { id: 11, name: 'Lid' }
+      { id: 3, name: 'Box', identifyIds: [153] },
+      { id: 11, name: 'Lid', identifyIds: [204] }
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -2916,4 +3019,21 @@ test('buildEditedThreeMf emits a single model_settings.config when the source al
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+})
+
+test('extractSceneBed override resolves every canonical Bambu model key to a real bed (X1/A1mini regression)', async () => {
+  // The editor's bed override sends canonicalBambuModelKey output through
+  // printerModelSchema; X1 and A1 mini used to fall out of that round-trip and
+  // the editor silently kept the FILE's bed (e.g. an H2D 350x320) for them.
+  const { extractSceneBed } = await import('./three-mf-reader.js')
+  const expectBed = (model: string, width: number, depth: number) => {
+    const placement = extractSceneBed(null, null, model as never)
+    assert.equal(placement.bed.maxX - placement.bed.minX, width, `${model} width`)
+    assert.equal(placement.bed.maxY - placement.bed.minY, depth, `${model} depth`)
+  }
+  expectBed('X1', 256, 256)
+  expectBed('A1mini', 180, 180)
+  expectBed('A2L', 330, 320)
+  expectBed('X2D', 256, 256)
+  expectBed('H2D', 350, 320)
 })

@@ -174,7 +174,15 @@ export const printerInputSchema = printerBaseSchema
 export type PrinterInput = z.infer<typeof printerInputSchema>
 
 export const printerMutationInputSchema = printerBaseSchema.extend({
-  bridgeId: z.string().trim().min(1)
+  bridgeId: z.string().trim().min(1),
+  /**
+   * Manual lifetime-stats adjustments (usage from outside PrintStream's tracking,
+   * e.g. hours printed before the printer was added). Absolute values, not deltas;
+   * omitted fields leave the stored adjustment untouched. Hours are capped so the
+   * stored seconds stay well inside a 32-bit integer column.
+   */
+  manualPrints: z.number().int().nonnegative().max(1_000_000).optional(),
+  manualPrintHours: z.number().nonnegative().max(500_000).optional()
 })
 export type PrinterMutationInput = z.infer<typeof printerMutationInputSchema>
 
@@ -580,6 +588,13 @@ export const printerStatusSchema = z.object({
    */
   sdCardPresent: z.boolean().nullable(),
   /**
+   * Instance `identify_id`s the firmware reports as skipped for the current print
+   * (`print.s_obj`). Null until the printer has sent a state-bearing report — older
+   * firmware never does. Defaulted so payloads produced before this field existed
+   * still parse.
+   */
+  skippedObjectIds: z.array(z.number().int()).nullable().default(null),
+  /**
    * LAN connection-mode warnings from the bridge's periodic connection probe
    * (e.g. the printer is reachable but rejected the LAN connection because
    * LAN-only / developer mode is off). Empty when the connection looks healthy
@@ -663,7 +678,13 @@ export const printerCommandSchema = z.discriminatedUnion('type', [
     durationHours: z.number().int().min(1).max(24),
     rotateTray: z.boolean().default(false),
     coolingTemp: z.number().int().min(0).max(90).default(50),
-    closePowerConflict: z.boolean().default(false)
+    closePowerConflict: z.boolean().default(false),
+    /**
+     * Caller has seen the heat-distortion warnings for the filament loaded in
+     * the unit (see `assessAmsDryingRisk`) and chose to proceed anyway. The
+     * API rejects a risky temperature without this flag.
+     */
+    acknowledgeRisks: z.boolean().default(false)
   }),
   z.object({
     type: z.literal('stopAmsDrying'),
@@ -1247,7 +1268,17 @@ export const printFromLibrarySchema = z.object({
    * index or one of the external-spool virtual tray ids. Missing entries
    * fall back to the printer's default behavior.
    */
-  amsMapping: z.array(printerTrayMappingSchema).optional()
+  amsMapping: z.array(printerTrayMappingSchema).optional(),
+  /**
+   * Objects on the selected pre-sliced plate to EXCLUDE from the print, as the
+   * plate's `objects[].id` values (Bambu model `object_id`s from the plates
+   * index). Dispatch maps these to the plate instances' `identify_id`s and puts
+   * them in the start command's `skip_objects` field (what Bambu Handy sends);
+   * because older firmware ignores that field, it also arms a one-shot mid-print
+   * `skip_objects` fallback that fires once the job is confirmed running unless
+   * the status already reports the ids skipped (`s_obj`).
+   */
+  skipObjects: z.array(z.number().int().positive()).max(64).optional()
 })
 export type PrintFromLibrary = z.infer<typeof printFromLibrarySchema>
 
@@ -1309,7 +1340,14 @@ export type ThreeMfFilament = z.infer<typeof threeMfFilamentSchema>
 
 export const threeMfPlateObjectSchema = z.object({
   id: z.number().int().nonnegative(),
-  name: z.string()
+  name: z.string(),
+  /**
+   * Instance `identify_id`s of this object on the plate — the per-instance handles Bambu
+   * firmware keys `skip_objects` on (from `model_settings.config` model_instances, or the
+   * slice_info entry's own identify_id). Empty when the file carries none. Defaulted so
+   * payloads produced before this field existed still parse.
+   */
+  identifyIds: z.array(z.number().int()).default([])
 })
 export type ThreeMfPlateObject = z.infer<typeof threeMfPlateObjectSchema>
 
@@ -1410,6 +1448,14 @@ export const printerStoragePrintSchema = z.object({
   filamentDynamicsCalibration: z.boolean().default(false),
   nozzleOffsetCalibration: printNozzleOffsetCalibrationModeSchema.default('auto'),
   amsMapping: z.array(printerTrayMappingSchema).optional(),
-  allowIncompatibleFilament: z.boolean().default(false)
+  allowIncompatibleFilament: z.boolean().default(false),
+  /**
+   * Objects on the selected pre-sliced plate to EXCLUDE from the print, as the storage
+   * plates index's `objects[].id` values (same wire semantics as
+   * {@link printFromLibrarySchema}.skipObjects). The route maps them to instance
+   * `identify_id`s through that same index and sends them in the start command, with the
+   * mid-print fallback for firmware that ignores the start-command field.
+   */
+  skipObjects: z.array(z.number().int().positive()).max(64).optional()
 })
 export type PrinterStoragePrintInput = z.infer<typeof printerStoragePrintSchema>

@@ -20,6 +20,7 @@ import {
   queueSettingsSchema,
   type PrintFromLibrary,
   type QueueDryRunResult,
+  type QueuePrintOptions,
   type QueueRequiredFilament
 } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
@@ -198,7 +199,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         targetModel: parsed.data.target
           ? (parsed.data.target.kind === 'model' ? parsed.data.target.model ?? null : null)
           : undefined,
-        printOptionsJson: parsed.data.options !== undefined ? JSON.stringify(parsed.data.options) : undefined,
+        printOptionsJson: resolveUpdatedPrintOptionsJson(existing, parsed.data.options, plateIndex),
         requiredFilamentsJson,
         compatibleModelsJson: inspectedCompatibleModels !== undefined ? JSON.stringify(inspectedCompatibleModels) : undefined,
         plateType: inspectedPlateType !== undefined ? inspectedPlateType : undefined,
@@ -513,4 +514,23 @@ async function assertTargetPrinter(prisma: AnyPrismaClient, target: { kind: stri
 function normalizeLabel(value: string | null | undefined): string | null {
   const normalized = value?.trim()
   return normalized ? normalized : null
+}
+
+/**
+ * Stored print options for an item update. A per-object skip selection (`skipObjects`) is
+ * plate-specific, so a plate change without a fresh options payload strips the stored
+ * selection rather than silently carrying it over to a plate it was never chosen for.
+ * `undefined` = leave the column untouched.
+ */
+function resolveUpdatedPrintOptionsJson(
+  existing: Pick<QueueItemRow, 'printOptionsJson'>,
+  options: QueuePrintOptions | undefined,
+  changedPlateIndex: number | undefined
+): string | undefined {
+  if (options !== undefined) return JSON.stringify(options)
+  if (changedPlateIndex === undefined) return undefined
+  const stored = parsePrintOptions(existing.printOptionsJson)
+  if (!stored.skipObjects || stored.skipObjects.length === 0) return undefined
+  const { skipObjects: _dropped, ...rest } = stored
+  return JSON.stringify(rest)
 }

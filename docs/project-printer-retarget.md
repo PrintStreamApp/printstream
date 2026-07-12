@@ -7,10 +7,10 @@ printer to H2D, and saving — so the saved project opens and slices for the new
 does this **by rewriting the project's machine settings, not by re-slicing**, so the user's layout,
 arrangement, and filament selection are preserved exactly.
 
-This is distinct from the slicer's *cross-model machine switch* (`docs/slicer-cross-model-machine-switch.md`),
-which retargets **at slice time** as part of producing gcode. That path is a slicing operation and can
-reshape machine-derived geometry (wipe tower, plate). The retarget here is a pure settings rewrite and
-touches no geometry.
+The slicer's *cross-model machine switch* (`docs/slicer-cross-model-machine-switch.md`) is the
+**slice-time** twin of this operation: it applies the same `retargetProjectSettingsToMachine`
+rewrite to the slice input (plus a bed re-center for larger targets) before the CLI runs, so
+PrintStream — not the BambuStudio CLI — is the source of truth for machine changes in both flows.
 
 ## How it works
 

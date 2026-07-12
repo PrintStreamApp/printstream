@@ -383,7 +383,6 @@ export function getSelectedTrayWarningMessages(input: {
   mapping: number[]
   trayByMappingValue: Map<number, PrinterTrayOption>
   filaments: ThreeMfProjectFilament[]
-  timelapse: boolean
   status: PrinterStatus | undefined
 }): string[] {
   const warnings = new Set<string>()
@@ -405,8 +404,12 @@ export function getSelectedTrayWarningMessages(input: {
   if (hasAms && hasExternal) {
     warnings.add('This tray assignment mixes AMS slots and external spools. Review the mapping before printing.')
   }
-  if (input.timelapse && input.status?.sdCardPresent === false) {
-    warnings.add('Timelapse is enabled, but the printer reports no SD card.')
+  if (input.status?.sdCardPresent === false) {
+    // Without storage the FTPS upload fails after a long, opaque "Dispatch failed",
+    // so surface it while the user is still choosing the printer. Subsumes the
+    // former timelapse-specific storage note (no storage blocks the whole print,
+    // not just timelapse).
+    warnings.add('This printer reports no storage (SD card or USB drive). The print cannot be uploaded until storage is inserted.')
   }
 
   return Array.from(warnings)

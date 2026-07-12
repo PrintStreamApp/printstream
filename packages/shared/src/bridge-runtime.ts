@@ -668,7 +668,15 @@ export type BridgeLibraryDeleteParams = z.infer<typeof bridgeLibraryDeleteParams
 
 export const bridgeLibraryThreeMfObjectSchema = z.object({
   id: z.number().int().positive(),
-  name: z.string().min(1)
+  name: z.string().min(1),
+  /**
+   * `identify_id`s of this object's `model_instance`s on the plate — the per-instance
+   * handles Bambu firmware keys `skip_objects` on. From `model_settings.config` when the
+   * index is model-settings derived (one per instance), or the entry's own slice_info
+   * `identify_id` when slice_info supplied the objects. Empty when the file carries none.
+   * Defaulted so payloads from older bridges still parse.
+   */
+  identifyIds: z.array(z.number().int()).default([])
 })
 
 export type BridgeLibraryThreeMfObject = z.infer<typeof bridgeLibraryThreeMfObjectSchema>

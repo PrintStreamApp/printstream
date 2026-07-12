@@ -190,6 +190,8 @@ export function PrinterStorageModal({
       nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
       amsMapping?: PrinterTrayMapping[]
       allowIncompatibleFilament: boolean
+      /** Plate objects (`objects[].id`) to exclude from the print, when any were deselected. */
+      skipObjects?: number[]
     }) =>
       apiFetch<{ path: string }>(`/api/printers/${printerId}/storage/print`, {
         method: 'POST',
@@ -204,7 +206,8 @@ export function PrinterStorageModal({
           filamentDynamicsCalibration: false,
           nozzleOffsetCalibration: args.nozzleOffsetCalibration,
           amsMapping: args.amsMapping,
-          allowIncompatibleFilament: args.allowIncompatibleFilament
+          allowIncompatibleFilament: args.allowIncompatibleFilament,
+          ...(args.skipObjects && args.skipObjects.length > 0 ? { skipObjects: args.skipObjects } : {})
         }
       }),
     onSuccess: () => {

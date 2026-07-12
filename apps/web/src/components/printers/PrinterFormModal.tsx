@@ -6,10 +6,10 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { StaticPluginSlot } from '../../plugin/StaticPluginSlot'
-import { type BridgeSummary, type PrinterConnectionValidation, extractErrorMessage, formatNozzleDiameterLabel, getDetectedPrinterNozzleDiameters, mayRequireExternalStorageForActiveSkipObjects, isDirectPrintableFileName, resolvePrinterNozzleDiameters, type DiscoveredPrinter, type LibraryFile, type PrinterNozzleDiameterSelection, type Printer, type PrinterModel, type PrinterStatus } from '@printstream/shared'
+import { type BridgeSummary, type PrinterConnectionValidation, extractErrorMessage, formatNozzleDiameterLabel, getDetectedPrinterNozzleDiameters, mayRequireExternalStorageForActiveSkipObjects, isDirectPrintableFileName, resolvePrinterNozzleDiameters, type DiscoveredPrinter, type LibraryFile, type PrinterNozzleDiameterSelection, type Printer, type PrinterModel, type PrinterStatsResponse, type PrinterStatus } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
@@ -36,6 +36,13 @@ export interface PrinterFormValues {
   bridgeId: string
   currentPlateType: string | null
   currentNozzleDiameters: PrinterNozzleDiameterSelection[]
+  /**
+   * Manual lifetime-stats adjustments (usage from outside PrintStream's
+   * tracking). Only present in edit mode when the user changed them;
+   * omitted fields leave the stored adjustment untouched.
+   */
+  manualPrints?: number
+  manualPrintHours?: number
 }
 
 interface PrinterFormModalProps {
@@ -45,6 +52,8 @@ interface PrinterFormModalProps {
   deleting?: boolean
   error: string | null
   initialValues?: PrinterFormValues
+  /** Required in `edit` mode: loads the printer's stored manual stats adjustments. */
+  printerId?: string
   status?: PrinterStatus
   bridges?: BridgeSummary[]
   /** Discovered LAN printers, used in `add` mode to pre-fill the form. */
@@ -52,6 +61,28 @@ interface PrinterFormModalProps {
   onCancel: () => void
   onSubmit: (input: PrinterFormValues) => void
   onDelete?: () => void
+}
+
+/** Two-per-row form grid that collapses back to one column on phones. */
+function FieldPairRow({ children }: { children: React.ReactNode }) {
+  return (
+    <Box
+      sx={{
+        display: 'grid',
+        gap: 1.25,
+        gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' },
+        alignItems: 'start'
+      }}
+    >
+      {children}
+    </Box>
+  )
+}
+
+/** Prefill for the manual-stats inputs: hide zero (no adjustment) behind the placeholder. */
+function formatManualStatPrefill(value: number | undefined): string {
+  if (!value) return ''
+  return String(Math.round(value * 100) / 100)
 }
 
 const PRINTER_MODEL_GROUPS: Array<{ label: string; models: PrinterModel[] }> = [
@@ -186,6 +217,7 @@ export function PrinterFormModal({
   deleting = false,
   error,
   initialValues,
+  printerId,
   status,
   bridges = [],
   discovered = [],
@@ -204,6 +236,19 @@ export function PrinterFormModal({
   const [autoDetectNozzleHardware, setAutoDetectNozzleHardware] = useState(mode === 'add' && (initialValues?.currentNozzleDiameters.length ?? 0) === 0)
   const [connectionValidation, setConnectionValidation] = useState<PrinterConnectionValidation | null>(null)
   const [connectionValidationError, setConnectionValidationError] = useState<string | null>(null)
+  // Manual lifetime-stats adjustments live on the printer's stats row, not the
+  // printer record, so edit mode loads them separately. `null` input state means
+  // "untouched": the field shows the stored value and is omitted from the patch.
+  const [manualPrintsInput, setManualPrintsInput] = useState<string | null>(null)
+  const [manualPrintHoursInput, setManualPrintHoursInput] = useState<string | null>(null)
+  const manualStatsQuery = useQuery({
+    queryKey: ['printer-stats', printerId],
+    queryFn: ({ signal }) => apiFetch<PrinterStatsResponse>(`/api/printers/${printerId}/stats`, { signal }),
+    enabled: mode === 'edit' && printerId != null
+  })
+  const storedManualStats = manualStatsQuery.data?.stats
+  const manualPrintsValue = manualPrintsInput ?? formatManualStatPrefill(storedManualStats?.manualPrints)
+  const manualPrintHoursValue = manualPrintHoursInput ?? formatManualStatPrefill(storedManualStats?.manualPrintHours)
   // Managed-bridge installs own a single bundled bridge, so picking a
   // "connection location" is meaningless — auto-select it and hide the control.
   // Fall back to the picker if more than one bridge somehow exists.
@@ -348,6 +393,28 @@ export function PrinterFormModal({
       }
     }
 
+    // Only send manual-stats fields the user actually edited so an unloaded or
+    // untouched adjustment is never rewritten.
+    const manualStatsPatch: Pick<PrinterFormValues, 'manualPrints' | 'manualPrintHours'> = {}
+    if (mode === 'edit') {
+      if (manualPrintsInput != null) {
+        const parsedManualPrints = manualPrintsInput.trim() === '' ? 0 : Number(manualPrintsInput)
+        if (!Number.isInteger(parsedManualPrints) || parsedManualPrints < 0) {
+          toast.error('Manually added prints must be a whole number')
+          return
+        }
+        manualStatsPatch.manualPrints = parsedManualPrints
+      }
+      if (manualPrintHoursInput != null) {
+        const parsedManualHours = manualPrintHoursInput.trim() === '' ? 0 : Number(manualPrintHoursInput)
+        if (!Number.isFinite(parsedManualHours) || parsedManualHours < 0) {
+          toast.error('Manually added print hours must be zero or more')
+          return
+        }
+        manualStatsPatch.manualPrintHours = parsedManualHours
+      }
+    }
+
     const input: PrinterFormValues = {
       name,
       host: trimmedHost,
@@ -356,7 +423,8 @@ export function PrinterFormModal({
       model,
       bridgeId,
       currentPlateType,
-      currentNozzleDiameters: normalizedNozzleDiameters
+      currentNozzleDiameters: normalizedNozzleDiameters,
+      ...manualStatsPatch
     }
 
     onSubmit(input)
@@ -436,7 +504,7 @@ export function PrinterFormModal({
             ) : null}
 
             <DialogSection title="Printer">
-              <Stack spacing={1.25}>
+              <FieldPairRow>
                 <FormControl>
                   <FormLabel>Name</FormLabel>
                   <Input value={name} onChange={(event) => setName(event.target.value)} />
@@ -470,7 +538,7 @@ export function PrinterFormModal({
                     )}
                   </Select>
                 </FormControl>
-              </Stack>
+              </FieldPairRow>
             </DialogSection>
 
             <DialogSection
@@ -478,36 +546,60 @@ export function PrinterFormModal({
               description="Enter the printer address, serial, LAN access code, and the bridge that can reach it on the local network."
             >
               <Stack spacing={1.25}>
-                <FormControl>
-                  <FormLabel>IP / hostname</FormLabel>
-                  <Input value={host} onChange={(event) => {
-                    clearConnectionValidation()
-                    setHost(event.target.value)
-                  }} />
-                </FormControl>
-                <FormControl>
-                  <FormLabel>Serial</FormLabel>
-                  <Input value={serial} onChange={(event) => {
-                    clearConnectionValidation()
-                    setSerial(event.target.value)
-                  }} />
-                </FormControl>
-                <FormControl>
-                  <FormLabel>LAN access code</FormLabel>
-                  <Input
-                    value={accessCode}
-                    placeholder={mode === 'edit' ? 'Leave blank to keep the current code' : undefined}
-                    onChange={(event) => {
+                <FieldPairRow>
+                  <FormControl>
+                    <FormLabel>IP / hostname</FormLabel>
+                    <Input value={host} onChange={(event) => {
                       clearConnectionValidation()
-                      setAccessCode(event.target.value)
-                    }}
-                  />
-                  <FormHelperText>
-                    {mode === 'edit'
-                      ? 'The stored access code is hidden. Enter a new one only to change it.'
-                      : 'Shown on the printer screen with LAN Only Mode. Newer firmware also needs Developer Mode enabled.'}
-                  </FormHelperText>
-                </FormControl>
+                      setHost(event.target.value)
+                    }} />
+                  </FormControl>
+                  <FormControl>
+                    <FormLabel>Serial</FormLabel>
+                    <Input value={serial} onChange={(event) => {
+                      clearConnectionValidation()
+                      setSerial(event.target.value)
+                    }} />
+                  </FormControl>
+                </FieldPairRow>
+                <FieldPairRow>
+                  <FormControl>
+                    <FormLabel>LAN access code</FormLabel>
+                    <Input
+                      value={accessCode}
+                      placeholder={mode === 'edit' ? 'Leave blank to keep the current code' : undefined}
+                      onChange={(event) => {
+                        clearConnectionValidation()
+                        setAccessCode(event.target.value)
+                      }}
+                    />
+                    <FormHelperText>
+                      {mode === 'edit'
+                        ? 'The stored access code is hidden. Enter a new one only to change it.'
+                        : 'Shown on the printer screen with LAN Only Mode. Newer firmware also needs Developer Mode enabled.'}
+                    </FormHelperText>
+                  </FormControl>
+                  {!hideBridgePicker && (
+                    <FormControl required>
+                      <FormLabel>Connection location</FormLabel>
+                      <Select
+                        value={bridgeId || null}
+                        onChange={(_event, value) => {
+                          clearConnectionValidation()
+                          setBridgeId(value ?? '')
+                        }}
+                        placeholder={bridges.length > 0 ? 'Select a bridge' : 'No connected bridges available'}
+                      >
+                        {bridges.map((bridge) => (
+                          <Option key={bridge.id} value={bridge.id}>{bridge.name}</Option>
+                        ))}
+                      </Select>
+                      <FormHelperText>
+                        Choose the bridge that can reach this printer on the local network.
+                      </FormHelperText>
+                    </FormControl>
+                  )}
+                </FieldPairRow>
                 {mayRequireExternalStorageForActiveSkipObjects(model) ? (
                   <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
                     <Typography level="body-sm">
@@ -515,26 +607,6 @@ export function PrinterFormModal({
                     </Typography>
                   </Alert>
                 ) : null}
-                {!hideBridgePicker && (
-                  <FormControl required>
-                    <FormLabel>Connection location</FormLabel>
-                    <Select
-                      value={bridgeId || null}
-                      onChange={(_event, value) => {
-                        clearConnectionValidation()
-                        setBridgeId(value ?? '')
-                      }}
-                      placeholder={bridges.length > 0 ? 'Select a bridge' : 'No connected bridges available'}
-                    >
-                      {bridges.map((bridge) => (
-                        <Option key={bridge.id} value={bridge.id}>{bridge.name}</Option>
-                      ))}
-                    </Select>
-                    <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
-                      Choose the bridge that can reach this printer on the local network.
-                    </Typography>
-                  </FormControl>
-                )}
                 <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                   <Button
                     type="button"
@@ -598,73 +670,114 @@ export function PrinterFormModal({
                     This printer is currently reporting installed nozzle details live. Those detected values will be used for print checks and saved as the fallback when you save.
                   </Typography>
                 )}
-                <FormControl>
-                  <FormLabel>Current plate type (optional)</FormLabel>
-                  <Select
-                    value={currentPlateType}
-                    placeholder="Leave unset"
-                    onChange={(_event, value) => setCurrentPlateType(value && value !== '__unset__' ? value : null)}
-                  >
-                    <Option value="__unset__">Clear selection</Option>
-                    {COMMON_PLATE_TYPES.map((entry) => (
-                      <Option key={entry} value={entry}>{entry}</Option>
-                    ))}
-                  </Select>
-                  <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
-                    Leave this unset if you do not know the installed plate yet. You can save the printer now and set it later.
-                  </Typography>
-                </FormControl>
-                {isDualNozzleModel ? (
+                <FieldPairRow>
                   <FormControl>
-                    <FormLabel>Nozzle size</FormLabel>
+                    <FormLabel>Current plate type (optional)</FormLabel>
                     <Select
-                      value={sharedSelectedNozzleDiameter ?? '__unset__'}
-                      disabled={autoDetectNozzleHardware || sharedDetectedNozzleDiameter != null}
-                      onChange={(_event, value) => updateSharedNozzleDiameter(value && value !== '__unset__' ? value : null)}
+                      value={currentPlateType}
+                      placeholder="Leave unset"
+                      onChange={(_event, value) => setCurrentPlateType(value && value !== '__unset__' ? value : null)}
                     >
-                      <Option value="__unset__">Not set</Option>
-                      {NOZZLE_DIAMETER_OPTIONS.map((entry) => (
-                        <Option key={`shared-${entry}`} value={entry}>{formatNozzleDiameterLabel(entry) ?? entry}</Option>
+                      <Option value="__unset__">Clear selection</Option>
+                      {COMMON_PLATE_TYPES.map((entry) => (
+                        <Option key={entry} value={entry}>{entry}</Option>
                       ))}
                     </Select>
                     <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
-                      Applies to both nozzles. Bambu currently supports one installed nozzle size per dual-nozzle printer.
+                      Leave this unset if you do not know the installed plate yet. You can save the printer now and set it later.
                     </Typography>
-                    {sharedDetectedNozzleSummary && (
-                      <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
-                        Detected live: {sharedDetectedNozzleSummary}
-                      </Typography>
-                    )}
                   </FormControl>
-                ) : editableExtruderIds.map((extruderId) => {
-                  const detectedNozzle = detectedNozzleMap.get(extruderId)
-                  const selectedDiameter = detectedNozzleDiameterMap.get(extruderId)
-                    ?? currentNozzleDiameters.find((entry) => entry.extruderId === extruderId)?.diameter
-                    ?? null
-                  const hardwareSummary = detectedNozzle ? formatNozzleHardwareSummary(detectedNozzle) : null
-                  return (
-                    <FormControl key={extruderId}>
+                  {isDualNozzleModel ? (
+                    <FormControl>
                       <FormLabel>Nozzle size</FormLabel>
                       <Select
-                        value={selectedDiameter ?? '__unset__'}
-                        disabled={autoDetectNozzleHardware || detectedNozzleDiameterMap.has(extruderId)}
-                        onChange={(_event, value) => updateNozzleDiameter(extruderId, value && value !== '__unset__' ? value : null)}
+                        value={sharedSelectedNozzleDiameter ?? '__unset__'}
+                        disabled={autoDetectNozzleHardware || sharedDetectedNozzleDiameter != null}
+                        onChange={(_event, value) => updateSharedNozzleDiameter(value && value !== '__unset__' ? value : null)}
                       >
                         <Option value="__unset__">Not set</Option>
                         {NOZZLE_DIAMETER_OPTIONS.map((entry) => (
-                          <Option key={`${extruderId}-${entry}`} value={entry}>{formatNozzleDiameterLabel(entry) ?? entry}</Option>
+                          <Option key={`shared-${entry}`} value={entry}>{formatNozzleDiameterLabel(entry) ?? entry}</Option>
                         ))}
                       </Select>
-                      {hardwareSummary && (
+                      <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
+                        Applies to both nozzles. Bambu currently supports one installed nozzle size per dual-nozzle printer.
+                      </Typography>
+                      {sharedDetectedNozzleSummary && (
                         <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
-                          Detected live: {hardwareSummary}
+                          Detected live: {sharedDetectedNozzleSummary}
                         </Typography>
                       )}
                     </FormControl>
-                  )
-                })}
+                  ) : editableExtruderIds.map((extruderId) => {
+                    const detectedNozzle = detectedNozzleMap.get(extruderId)
+                    const selectedDiameter = detectedNozzleDiameterMap.get(extruderId)
+                      ?? currentNozzleDiameters.find((entry) => entry.extruderId === extruderId)?.diameter
+                      ?? null
+                    const hardwareSummary = detectedNozzle ? formatNozzleHardwareSummary(detectedNozzle) : null
+                    return (
+                      <FormControl key={extruderId}>
+                        <FormLabel>Nozzle size</FormLabel>
+                        <Select
+                          value={selectedDiameter ?? '__unset__'}
+                          disabled={autoDetectNozzleHardware || detectedNozzleDiameterMap.has(extruderId)}
+                          onChange={(_event, value) => updateNozzleDiameter(extruderId, value && value !== '__unset__' ? value : null)}
+                        >
+                          <Option value="__unset__">Not set</Option>
+                          {NOZZLE_DIAMETER_OPTIONS.map((entry) => (
+                            <Option key={`${extruderId}-${entry}`} value={entry}>{formatNozzleDiameterLabel(entry) ?? entry}</Option>
+                          ))}
+                        </Select>
+                        {hardwareSummary && (
+                          <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
+                            Detected live: {hardwareSummary}
+                          </Typography>
+                        )}
+                      </FormControl>
+                    )
+                  })}
+                </FieldPairRow>
               </Stack>
             </DialogSection>
+
+            {mode === 'edit' && (
+              <DialogSection
+                title="Lifetime stats"
+                description="PrintStream only counts prints it has seen. Add usage from outside that tracking, such as hours printed before this printer was added. It is included in the printer's lifetime totals."
+              >
+                <Stack spacing={1.25}>
+                  <FieldPairRow>
+                    <FormControl>
+                      <FormLabel>Manually added prints</FormLabel>
+                      <Input
+                        type="number"
+                        value={manualPrintsValue}
+                        placeholder="0"
+                        disabled={storedManualStats == null}
+                        slotProps={{ input: { min: 0, step: 1 } }}
+                        onChange={(event) => setManualPrintsInput(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>Manually added print hours</FormLabel>
+                      <Input
+                        type="number"
+                        value={manualPrintHoursValue}
+                        placeholder="0"
+                        disabled={storedManualStats == null}
+                        slotProps={{ input: { min: 0, step: 0.1 } }}
+                        onChange={(event) => setManualPrintHoursInput(event.target.value)}
+                      />
+                    </FormControl>
+                  </FieldPairRow>
+                  {manualStatsQuery.error ? (
+                    <Typography color="danger" level="body-sm">
+                      Could not load the current stats adjustments: {extractErrorMessage(manualStatsQuery.error)}
+                    </Typography>
+                  ) : null}
+                </Stack>
+              </DialogSection>
+            )}
           </Stack>
         </ScrollableDialogBody>
         {error && <Typography color="danger" level="body-sm">{error}</Typography>}

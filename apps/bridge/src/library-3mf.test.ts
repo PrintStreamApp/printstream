@@ -87,9 +87,11 @@ test('readBridgeLibraryThreeMfIndex exposes plate objects (by object_id) for uns
     ])
 
     const index = await readBridgeLibraryThreeMfIndex(sourcePath)
+    // These instances carry no identify_id (unsliced project), so the firmware skip
+    // handles are empty; sliced projects fill them from each model_instance.
     assert.deepEqual(index.plates[0]?.objects, [
-      { id: 3, name: 'Box' },
-      { id: 11, name: 'Lid' }
+      { id: 3, name: 'Box', identifyIds: [] },
+      { id: 11, name: 'Lid', identifyIds: [] }
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })

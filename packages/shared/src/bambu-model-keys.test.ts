@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { bambuModelKeysAreCompatible, canonicalBambuModelKey, normalizeBambuStudioPrinterModelOption, resolveBambuPrinterModelAliases } from './bambuPrinterModels.js'
+import { bambuModelKeysAreCompatible, canonicalBambuModelKey, normalizeBambuStudioPrinterModelOption, resolveBambuPrinterModelAliases } from './bambu-model-keys.js'
 
 test('normalizeBambuStudioPrinterModelOption maps raw H2D ids to the H2D label', () => {
   assert.equal(normalizeBambuStudioPrinterModelOption('O1D'), 'H2D')
@@ -36,6 +36,26 @@ test('bambuModelKeysAreCompatible does not gate unknown/non-Bambu models', () =>
 })
 
 test('bambuModelKeysAreCompatible rejects unrelated Bambu models', () => {
-  assert.equal(bambuModelKeysAreCompatible('A1', 'A1MINI'), false)
+  assert.equal(bambuModelKeysAreCompatible('A1', 'A1mini'), false)
   assert.equal(bambuModelKeysAreCompatible('H2D', 'X1C'), false)
+})
+test('canonicalBambuModelKey detects A1 with a word boundary (no trailing space)', () => {
+  assert.equal(canonicalBambuModelKey('Bambu Lab A1'), 'A1')
+  assert.equal(canonicalBambuModelKey('A1'), 'A1')
+  assert.equal(canonicalBambuModelKey('A11'), null)
+})
+
+test('bambuModelKeysAreCompatible treats X2D as cross-family with the X1C class', () => {
+  assert.equal(bambuModelKeysAreCompatible('P1S', 'X2D'), false)
+  assert.equal(bambuModelKeysAreCompatible('X1C', 'X2D'), false)
+  assert.equal(bambuModelKeysAreCompatible('X2D', 'X2D'), true)
+})
+
+test('canonicalBambuModelKey returns printerModelSchema enum keys (bed-override round-trip)', () => {
+  assert.equal(canonicalBambuModelKey('A1 mini'), 'A1mini')
+  assert.equal(canonicalBambuModelKey('Bambu Lab A1 mini 0.4 nozzle'), 'A1mini')
+  assert.equal(canonicalBambuModelKey('Bambu Lab X1 0.4 nozzle'), 'X1')
+  assert.equal(canonicalBambuModelKey('X1'), 'X1')
+  assert.equal(canonicalBambuModelKey('Bambu Lab X1 Carbon 0.4 nozzle'), 'X1C')
+  assert.equal(canonicalBambuModelKey('Bambu Lab A2L 0.4 nozzle'), 'A2L')
 })

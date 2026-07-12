@@ -6,22 +6,28 @@
  */
 import { useState } from 'react'
 import {
-  Box, Button, Checkbox, Chip, DialogActions, FormControl, FormLabel, Input, ListDivider, ModalClose, ModalDialog, Option, Select, Sheet, Stack, Typography
+  Alert, Box, Button, Checkbox, Chip, DialogActions, FormControl, FormHelperText, FormLabel, Input, ListDivider, ModalClose, ModalDialog, Option, Select, Sheet, Stack, Typography
 } from '@mui/joy'
-import { type AmsUnit, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
+import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
+import {
+  AMS_DRYING_FILAMENT_TYPES,
+  amsDryingTemperatureRange,
+  assessAmsDryingRisk,
+  clampDryingTemperature,
+  defaultAmsDryingProfile,
+  dryingCoolingTemperature,
+  dryingPresetForFilament,
+  formatAmsDryingRiskLabel,
+  type AmsUnit,
+  type PrinterCommand,
+  type PrinterStatus
+} from '@printstream/shared'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { DialogSection } from '../DialogSection'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { amsUnitLetter } from '../../lib/printerTrayMapping'
-import {
-  AMS_DRYING_FILAMENT_TYPES,
-  defaultAmsDryingProfile,
-  dryingCoolingTemperature,
-  dryingPresetForFilament,
-  formatAmsDryingPhaseDescription,
-  formatAmsDryingPhaseLabel,
-  formatRemaining
-} from '../../lib/printersViewHelpers'
+import { formatAmsDryingPhaseDescription, formatAmsDryingPhaseLabel } from '../../lib/amsDrying'
+import { formatRemaining } from '../../lib/printersViewHelpers'
 
 export function AmsSettingsModal({
   printerName,
@@ -186,11 +192,16 @@ export function AmsDryingModal({
   const parsedDurationHours = Number(durationHours)
   const dryingPhaseLabel = formatAmsDryingPhaseLabel(unit)
   const dryingPhaseDescription = formatAmsDryingPhaseDescription(unit)
+  const temperatureRange = amsDryingTemperatureRange(unit.type)
+  // Live: recomputes as tray state updates, so unloading a flagged spool
+  // clears the warning without reopening the dialog. Risks are advisory —
+  // starting anyway sends `acknowledgeRisks` so the API lets it through.
+  const dryingRisks = assessAmsDryingRisk(unit, parsedTemperature)
   const canStart =
     filamentType !== '' &&
     Number.isFinite(parsedTemperature) &&
-    parsedTemperature >= 30 &&
-    parsedTemperature <= 90 &&
+    parsedTemperature >= temperatureRange.min &&
+    parsedTemperature <= temperatureRange.max &&
     Number.isFinite(parsedDurationHours) &&
     parsedDurationHours >= 1 &&
     parsedDurationHours <= 24
@@ -199,7 +210,7 @@ export function AmsDryingModal({
     if (!nextValue) return
     const preset = dryingPresetForFilament(nextValue)
     setFilamentType(nextValue)
-    setTemperature(String(preset.temperature))
+    setTemperature(String(clampDryingTemperature(preset.temperature, temperatureRange)))
     setDurationHours(String(preset.durationHours))
   }
 
@@ -268,7 +279,9 @@ export function AmsDryingModal({
                       value={temperature}
                       onChange={(event) => setTemperature(event.target.value)}
                       endDecorator="°C"
+                      slotProps={{ input: { min: temperatureRange.min, max: temperatureRange.max } }}
                     />
+                    <FormHelperText>{`${temperatureRange.min} to ${temperatureRange.max}°C on this AMS`}</FormHelperText>
                   </FormControl>
                   <FormControl>
                     <FormLabel>Duration</FormLabel>
@@ -277,6 +290,7 @@ export function AmsDryingModal({
                       value={durationHours}
                       onChange={(event) => setDurationHours(event.target.value)}
                       endDecorator="h"
+                      slotProps={{ input: { min: 1, max: 24 } }}
                     />
                   </FormControl>
                 </Box>
@@ -285,6 +299,22 @@ export function AmsDryingModal({
                   checked={rotateTray}
                   onChange={(event) => setRotateTray(event.target.checked)}
                 />
+                {dryingRisks.length > 0 && (
+                  <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+                    <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+                      <Typography level="title-sm">Too hot for loaded filament</Typography>
+                      {dryingRisks.map((risk) => (
+                        <Typography key={risk.slot} level="body-sm">
+                          {formatAmsDryingRiskLabel(unit.unitId, risk)}
+                        </Typography>
+                      ))}
+                      <Typography level="body-sm">
+                        {'Unload the flagged filament or lower the temperature to dry safely. Starting anyway may deform it.'}
+                        {dryingRisks.some((risk) => risk.filamentType == null) ? ' Unidentified filament is treated as PLA.' : ''}
+                      </Typography>
+                    </Stack>
+                  </Alert>
+                )}
               </Stack>
             </DialogSection>
           )}
@@ -307,7 +337,8 @@ export function AmsDryingModal({
                 durationHours: Math.round(parsedDurationHours),
                 rotateTray,
                 coolingTemp: dryingCoolingTemperature(filamentType),
-                closePowerConflict: false
+                closePowerConflict: false,
+                acknowledgeRisks: dryingRisks.length > 0
               })}
             >
               Start drying

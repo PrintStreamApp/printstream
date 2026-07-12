@@ -108,10 +108,13 @@ export default defineConfig(({ command, mode }) => {
           "media-src 'self' data: blob:",
           "font-src 'self' data:",
           "style-src 'self' 'unsafe-inline' https://*.paddle.com",
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.paddle.com",
-          "connect-src 'self' ws: wss: https://*.paddle.com",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.paddle.com https://static.cloudflareinsights.com",
+          "connect-src 'self' ws: wss: https://*.paddle.com https://cloudflareinsights.com",
           "frame-src 'self' https://*.paddle.com",
-          "worker-src 'self' blob:"
+          "worker-src 'self' blob:",
+          // The Vite proxy forwards this to the local API's violation sink, so
+          // dev violations land in the API log like they do in production.
+          'report-uri /api/csp-report'
         ].join('; ')
       },
       // When the dev server runs from source behind a TLS-terminating reverse proxy

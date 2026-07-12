@@ -2,6 +2,13 @@ import { z } from 'zod'
 
 export const printerStatsSchema = z.object({
   printsInProgress: z.number().int().nonnegative(),
+  /**
+   * User-entered usage from outside PrintStream's tracking (edited on the printer).
+   * Already included in `totalPrints` / `totalPrintHours`; exposed separately so the
+   * UI can prefill the edit form and label the manual share of the totals.
+   */
+  manualPrints: z.number().int().nonnegative(),
+  manualPrintHours: z.number().nonnegative(),
   totalPrints: z.number().int().nonnegative(),
   successfulPrints: z.number().int().nonnegative(),
   failedPrints: z.number().int().nonnegative(),

@@ -31,7 +31,7 @@ import type {
  * Version of the parsed-index logic. Both apps key their caches on this (the bridge's in-memory LRU
  * and the API's derived-index cache), so bumping it once invalidates stale indexes everywhere.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 10
+export const THREE_MF_INDEX_PARSER_VERSION = 11
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -41,7 +41,9 @@ export interface ModelSettingsPlateMetadata {
   /** Filament ids (extruders) consumed by the objects on this plate, used to back-fill plate
    * filaments for UNSLICED projects whose plates carry no slice_info filament metadata yet. */
   usedFilamentIds: number[]
-  /** Objects (by Bambu `object_id`) placed on this plate, for slice-time object selection. */
+  /** Objects (by Bambu `object_id`) placed on this plate, for slice-time object selection.
+   * Each carries the `identify_id`s of its `model_instance`s on this plate (see
+   * {@link BridgeLibraryThreeMfObject}). */
   objects: BridgeLibraryThreeMfObject[]
 }
 
@@ -273,12 +275,16 @@ function parseSliceInfo(xml: string): BridgeLibraryThreeMfPlate[] {
     const objects: BridgeLibraryThreeMfObject[] = []
     for (const match of block.matchAll(/<object\b([^/>]*)\/?>(?:<\/object>)?/g)) {
       const attrs = parseAttrs(match[1] ?? '')
-      const idValue = parseInt(attrs.identify_id ?? attrs.id ?? '', 10)
+      const identifyIdValue = parseInt(attrs.identify_id ?? '', 10)
+      const idValue = Number.isFinite(identifyIdValue) ? identifyIdValue : parseInt(attrs.id ?? '', 10)
       const name = attrs.name?.trim()
       if (!name) continue
       objects.push({
         id: Number.isFinite(idValue) ? idValue : objects.length + 1,
-        name
+        name,
+        // slice_info lists one entry per instance keyed by identify_id, so when that
+        // attribute is present the entry's firmware skip handle is the id itself.
+        identifyIds: Number.isFinite(identifyIdValue) ? [identifyIdValue] : []
       })
     }
     const indexValue = parseInt(meta.get('index') ?? '0', 10)
@@ -802,7 +808,7 @@ export function parseModelSettingsPlates(xml: string, projectSettingsJson: strin
     const name = meta.get('plater_name')?.trim() ?? ''
     const usedFilamentIds = new Set<number>()
     const objects: BridgeLibraryThreeMfObject[] = []
-    const seenObjectIds = new Set<number>()
+    const objectsById = new Map<number, BridgeLibraryThreeMfObject>()
     for (const instanceBody of extractTagBlocks(block, 'model_instance')) {
       const objectId = Number.parseInt(instanceBody.match(/<metadata\s+key="object_id"\s+value="(\d+)"\s*\/>/)?.[1] ?? '', 10)
       if (!Number.isInteger(objectId) || objectId <= 0) continue
@@ -810,10 +816,18 @@ export function parseModelSettingsPlates(xml: string, projectSettingsJson: strin
         if (extruderId > 0) usedFilamentIds.add(extruderId)
       }
       // One entry per object (object_id), even when it has multiple instances on the plate;
-      // slice-time selection operates at object granularity.
-      if (!seenObjectIds.has(objectId)) {
-        seenObjectIds.add(objectId)
-        objects.push({ id: objectId, name: objectNamesById.get(objectId) ?? `Object ${objectId}` })
+      // slice-time selection operates at object granularity. Every instance's identify_id
+      // (the per-instance handle firmware `skip_objects` keys on) is collected onto the
+      // object's entry so consumers can map object -> skip handles without re-reading the file.
+      let object = objectsById.get(objectId)
+      if (!object) {
+        object = { id: objectId, name: objectNamesById.get(objectId) ?? `Object ${objectId}`, identifyIds: [] }
+        objectsById.set(objectId, object)
+        objects.push(object)
+      }
+      const identifyId = Number.parseInt(instanceBody.match(/<metadata\s+key="identify_id"\s+value="(\d+)"\s*\/>/)?.[1] ?? '', 10)
+      if (Number.isInteger(identifyId) && !object.identifyIds.includes(identifyId)) {
+        object.identifyIds.push(identifyId)
       }
     }
     out.push({

@@ -23,6 +23,8 @@ import { toast } from './toast'
 export const SUCCESS_COLOR = 'var(--joy-palette-success-500)'
 export const FAILED_COLOR = 'var(--joy-palette-danger-500)'
 export const CANCELLED_COLOR = 'var(--joy-palette-neutral-500)'
+// Manually added usage (user-entered stats adjustments) in breakdown charts.
+export const MANUAL_COLOR = 'var(--joy-palette-warning-500)'
 
 export const LIBRARY_VIEW_MODE_KEY = 'bambu.library.viewMode'
 export const LIBRARY_SORT_KEY = 'bambu.library.sort'

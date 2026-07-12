@@ -210,6 +210,8 @@ CREATE TABLE "PlatformStats" (
 CREATE TABLE "PrinterStats" (
     "tenantId" TEXT NOT NULL,
     "printerSerial" TEXT NOT NULL,
+    "manualTotalPrints" INTEGER NOT NULL DEFAULT 0,
+    "manualPrintDurationSeconds" INTEGER NOT NULL DEFAULT 0,
     "totalPrints" INTEGER NOT NULL DEFAULT 0,
     "successfulPrints" INTEGER NOT NULL DEFAULT 0,
     "failedPrints" INTEGER NOT NULL DEFAULT 0,

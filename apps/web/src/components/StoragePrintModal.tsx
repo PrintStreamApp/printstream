@@ -8,6 +8,8 @@
  * `onSubmit`/`onCancel`, so this dialog stays free of dispatch concerns.
  */
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { PrintObjectsSection } from './library/PrintObjectsSection'
+import { plateHasSliceData } from '../lib/sliceProfileMatching'
 import {
   Alert, Box, Button, Checkbox, DialogActions, FormControl, FormLabel, Option, Select, Stack, Tooltip, Typography
 } from '@mui/joy'
@@ -70,6 +72,8 @@ export function StoragePrintModal({
     nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
     amsMapping?: PrinterTrayMapping[]
     allowIncompatibleFilament: boolean
+    /** Plate objects (`objects[].id`) to exclude from the print, when any were deselected. */
+    skipObjects?: number[]
   }) => void
   onCancel: () => void
 }) {
@@ -136,6 +140,26 @@ export function StoragePrintModal({
     () => plates.find((entry) => entry.index === plate) ?? plates[0],
     [plates, plate]
   )
+  /**
+   * Per-object deselection (sliced plates with a real object list only). Deselected
+   * objects ride the request as `skipObjects`; the server maps them to instance
+   * identify_ids, sends them in the start command, and keeps a mid-print skip
+   * fallback armed for firmware that ignores the start-command field.
+   */
+  const plateObjects = useMemo(() => activePlate?.objects ?? [], [activePlate])
+  const showObjectSelection = plateHasSliceData(activePlate) && plateObjects.length >= 2
+  const [deselectedObjectIds, setDeselectedObjectIds] = useState<number[]>([])
+  const deselectedObjectIdSet = useMemo(() => new Set(deselectedObjectIds), [deselectedObjectIds])
+  const activePlateIndex = activePlate?.index ?? null
+  useEffect(() => {
+    setDeselectedObjectIds([])
+  }, [filePath, activePlateIndex])
+  const toggleObjectSelected = (objectId: number, selected: boolean) => {
+    setDeselectedObjectIds((current) => {
+      if (selected) return current.filter((id) => id !== objectId)
+      return current.includes(objectId) ? current : [...current, objectId]
+    })
+  }
   const filamentEntries = useMemo<ThreeMfProjectFilament[]>(() => {
     if (projectFilaments.length > 0) return projectFilaments
     return (activePlate?.filaments ?? []).map((filament) => ({
@@ -311,6 +335,13 @@ export function StoragePrintModal({
               </FormControl>
             </DialogSection>
           )}
+          {showObjectSelection && (
+            <PrintObjectsSection
+              objects={plateObjects}
+              deselectedIds={deselectedObjectIdSet}
+              onToggle={toggleObjectSelected}
+            />
+          )}
           {mappingCapable && (
             <DialogSection title="Filament mapping">
               <StoragePrinterMapping
@@ -464,16 +495,26 @@ export function StoragePrintModal({
         <DialogActions sx={{ pt: 1 }}>
           <Button variant="plain" onClick={onCancel} disabled={submitting}>Cancel</Button>
           <Button
-            onClick={() => onSubmit({
-              plate,
-              bedLevel,
-              vibrationCompensation,
-              flowCalibration,
-              timelapse,
-              nozzleOffsetCalibration,
-              amsMapping: sanitizeTrayMapping(mappings) as PrinterTrayMapping[] | undefined,
-              allowIncompatibleFilament
-            })}
+            onClick={() => {
+              // Filter to the active plate's objects so a stale id can never reach the request.
+              const skipObjects = showObjectSelection
+                ? deselectedObjectIds.filter((id) => plateObjects.some((object) => object.id === id))
+                : []
+              onSubmit({
+                // Submit the actually-selected plate's index: the picker can resolve to a
+                // plate whose number differs from the 1-based default (e.g. a single-plate
+                // sliced "Plate 2" output), and skipObjects are mapped against this plate.
+                plate: activePlate?.index ?? plate,
+                bedLevel,
+                vibrationCompensation,
+                flowCalibration,
+                timelapse,
+                nozzleOffsetCalibration,
+                amsMapping: sanitizeTrayMapping(mappings) as PrinterTrayMapping[] | undefined,
+                allowIncompatibleFilament,
+                ...(skipObjects.length > 0 ? { skipObjects } : {})
+              })
+            }}
             loading={submitting}
             disabled={
               (mappingCapable && !allMappingsComplete)

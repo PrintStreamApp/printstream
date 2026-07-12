@@ -87,7 +87,28 @@ export function retargetProjectSettingsToMachine(
   // project carries one, `compatible_printers` to the target machine preset.
   next.print_compatible_printers = [target.printerSettingsId]
   if (next.compatible_printers !== undefined) next.compatible_printers = [target.printerSettingsId]
+  // The CLI resolves the project's SYSTEM printer from inherits_group's LAST slot, not from
+  // printer_settings_id. A project saved with an inherited/custom machine preset keeps its old
+  // parent there (e.g. "Bambu Lab P1P 0.4 nozzle"), and CLIs from 2.7.1 on validate every loaded
+  // filament preset against that name — a stale slot fails the slice with "filament preset ... is
+  // not compatible with printer <old machine>". Blank it so the rewritten printer_settings_id is
+  // the system identity.
+  clearInheritsGroupSlot(next, 'machine')
   return repairEstimateModeProjectSettings(next, machineProfile)
+}
+
+/**
+ * Blanks one slot of Bambu's `different-settings` inheritance record:
+ * `inherits_group[0]` names the process preset's parent and the LAST entry the machine
+ * preset's parent (the filament slots sit in between). An empty slot means "this preset
+ * IS a system preset", making the CLI derive the system identity from the corresponding
+ * `*_settings_id` the retarget just wrote.
+ */
+function clearInheritsGroupSlot(record: ProfileRecord, slot: 'process' | 'machine'): void {
+  if (!Array.isArray(record.inherits_group) || record.inherits_group.length === 0) return
+  const inheritsGroup = [...record.inherits_group as string[]]
+  inheritsGroup[slot === 'process' ? 0 : inheritsGroup.length - 1] = ''
+  record.inherits_group = inheritsGroup
 }
 
 /**
@@ -108,7 +129,13 @@ export function applyProcessProfileToProjectSettings(
     next[key] = cloneValue(value)
   }
   const name = typeof processProfile.name === 'string' ? processProfile.name.trim() : ''
-  if (name) next.print_settings_id = name
+  if (name) {
+    next.print_settings_id = name
+    // Same staleness as the machine slot: slot 0 names the process preset's inherited
+    // parent, which would otherwise override the rewritten print_settings_id during the
+    // CLI's compatibility checks.
+    clearInheritsGroupSlot(next, 'process')
+  }
   for (const [key, value] of Object.entries(overrides)) {
     next[key] = cloneValue(value)
   }

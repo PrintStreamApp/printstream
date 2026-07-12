@@ -208,7 +208,6 @@ export interface SliceDisabledReasonInput {
   nozzleDiameterCount: number
   missingFilamentProfile: boolean
   missingFilamentToolhead: boolean
-  legacyMachineSwitchWarning: string | null
   targetMode: 'realPrinter' | 'manualProfile'
   printerId: string
   submitting: boolean
@@ -233,7 +232,6 @@ export function resolveSliceDisabledReason(input: SliceDisabledReasonInput): str
   if (input.nozzleDiameterCount === 0) return 'Choose a nozzle size.'
   if (input.missingFilamentProfile) return 'Assign a filament to every material slot.'
   if (input.missingFilamentToolhead) return 'Assign a nozzle to every material slot.'
-  if (input.legacyMachineSwitchWarning) return input.legacyMachineSwitchWarning
   if (input.targetMode === 'realPrinter' && input.printerId.length === 0) return 'Choose a printer to slice for.'
   if (input.submitting) return 'Slicing…'
   return 'Some slice settings are incomplete.'

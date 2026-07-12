@@ -3,9 +3,10 @@
  *
  * Owns the printers-dashboard data transforms that carry no React state:
  * the saved-view input shaping and sort encode/decode, the printer/state
- * filter + sort comparators, AMS/filament label derivations and drying
- * presets, HMS error-code formatting, dispatch/print-option status labels,
- * and the assorted value formatters the printer cards and dialogs render.
+ * filter + sort comparators, AMS/filament label derivations, HMS error-code
+ * formatting, dispatch/print-option status labels, and the assorted value
+ * formatters the printer cards and dialogs render. (AMS drying presets and
+ * safety checks live in `amsDrying.ts`.)
  *
  * Invariant: nothing here may touch React (no hooks, JSX, or component
  * state/props). These are deterministic helpers and constant tables so the
@@ -84,39 +85,6 @@ export const PRINTER_VIEW_SORT_OPTIONS: Array<{ value: PrinterViewSort; label: s
 export const AI_MONITORING_SENSITIVITY_OPTIONS: PrinterPrintOptionSensitivity[] = ['never_halt', 'low', 'medium', 'high']
 
 export const DETECTION_SENSITIVITY_OPTIONS: PrinterPrintOptionSensitivity[] = ['low', 'medium', 'high']
-
-export const AMS_DRYING_FILAMENT_TYPES = [
-  'PLA',
-  'PLA-CF',
-  'PETG',
-  'PETG-ESD',
-  'PETG-CF',
-  'ABS',
-  'ABS-GF',
-  'ASA',
-  'ASA-CF',
-  'TPU',
-  'PA',
-  'PA-CF',
-  'PAHT-CF',
-  'PA6-CF',
-  'PA6-GF',
-  'PA12-CF',
-  'PA612-CF',
-  'PPA',
-  'PPA-CF',
-  'PPA-GF',
-  'PC',
-  'PP',
-  'PE',
-  'PET-CF',
-  'PPS',
-  'PPS-CF',
-  'PVA',
-  'BVOH',
-  'HIPS',
-  'SUPPORT'
-] as const
 
 export type PrinterStateFilter = PrinterViewStateFilter
 
@@ -458,91 +426,6 @@ export function humidityLevelLabel(level: number): string {
     case 4: return 'Damp'
     case 5: return 'Wet'
     default: return 'Unknown'
-  }
-}
-
-export function normalizeAmsDryingFilamentType(filamentType: string): string {
-  const normalized = filamentType.trim().toUpperCase()
-  const exact = AMS_DRYING_FILAMENT_TYPES.find((entry) => entry === normalized)
-  if (exact) return exact
-
-  const partial = AMS_DRYING_FILAMENT_TYPES.find((entry) => normalized.includes(entry))
-  return partial ?? 'PLA'
-}
-
-export function dryingPresetForFilament(filamentType: string): {
-  temperature: number
-  durationHours: number
-  coolingTemp: number
-} {
-  const normalized = filamentType.trim().toUpperCase()
-  if (normalized.includes('TPU')) return { temperature: 65, durationHours: 12, coolingTemp: 40 }
-  if (normalized.includes('PETG')) return { temperature: 65, durationHours: 8, coolingTemp: 50 }
-  if (normalized.includes('ASA')) return { temperature: 75, durationHours: 8, coolingTemp: 60 }
-  if (normalized.includes('ABS')) return { temperature: 75, durationHours: 8, coolingTemp: 60 }
-  if (normalized.includes('PA') || normalized.includes('NYLON')) return { temperature: 80, durationHours: 12, coolingTemp: 65 }
-  if (normalized.includes('PC')) return { temperature: 75, durationHours: 10, coolingTemp: 60 }
-  if (normalized.includes('PVA')) return { temperature: 55, durationHours: 6, coolingTemp: 40 }
-  return { temperature: 55, durationHours: 8, coolingTemp: 45 }
-}
-
-export function defaultAmsDryingProfile(unit: AmsUnit): {
-  filamentType: string
-  temperature: number
-  durationHours: number
-  rotateTray: boolean
-} {
-  const detectedType = normalizeAmsDryingFilamentType(unit.dryFilament
-    ?? unit.slots.find((slot) => slot.filamentType && slot.filamentType.trim() !== '')?.filamentType
-    ?? 'PLA')
-  const preset = dryingPresetForFilament(detectedType)
-  const hasActiveTemperature = unit.dryTemperature != null && unit.dryTemperature >= 30
-  const hasActiveDuration = unit.dryDurationHours != null && unit.dryDurationHours >= 1
-  return {
-    filamentType: detectedType,
-    temperature: hasActiveTemperature ? Math.round(unit.dryTemperature!) : preset.temperature,
-    durationHours: hasActiveDuration ? unit.dryDurationHours! : preset.durationHours,
-    rotateTray: true
-  }
-}
-
-export function dryingCoolingTemperature(filamentType: string): number {
-  return dryingPresetForFilament(filamentType).coolingTemp
-}
-
-export function formatAmsDryingPhaseLabel(unit: AmsUnit): string {
-  switch (unit.dryingPhase) {
-    case 'starting':
-      return 'Starting'
-    case 'drying':
-      return 'Drying'
-    case 'cooling':
-      return 'Cooling down'
-    case 'finishing':
-      return 'Finishing'
-    case 'unknown':
-      return unit.dryingActive ? 'Drying active' : 'Idle'
-    case 'idle':
-    default:
-      return unit.dryingActive ? 'Drying active' : 'Idle'
-  }
-}
-
-export function formatAmsDryingPhaseDescription(unit: AmsUnit): string {
-  switch (unit.dryingPhase) {
-    case 'starting':
-      return 'The AMS is warming up and preparing the drying cycle.'
-    case 'drying':
-      return 'The drying cycle is actively removing moisture from the loaded filament.'
-    case 'cooling':
-      return 'The AMS is cooling down before it returns to idle.'
-    case 'finishing':
-      return 'The drying cycle is wrapping up and the AMS will return to idle shortly.'
-    case 'unknown':
-      return 'The AMS reports an active drying cycle.'
-    case 'idle':
-    default:
-      return 'The AMS is idle and ready for a new drying cycle.'
   }
 }
 

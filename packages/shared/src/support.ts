@@ -22,7 +22,7 @@ export const supportConversationKindSchema = z.enum(['feedback', 'bug', 'questio
 export type SupportConversationKind = z.infer<typeof supportConversationKindSchema>
 
 /** Hard cap on one support attachment upload. */
-export const SUPPORT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+export const SUPPORT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
 
 /** Most attachments a single support message may carry. */
 export const SUPPORT_ATTACHMENTS_MAX_PER_MESSAGE = 5

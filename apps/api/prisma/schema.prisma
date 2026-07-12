@@ -313,6 +313,11 @@ model PlatformStats {
 model PrinterStats {
   tenantId              String
   printerSerial         String
+  // User-entered usage from outside PrintStream's tracking (e.g. hours the printer
+  // ran before it was added). Kept separate from the tracked counters so automatic
+  // recording never mixes with manual adjustments; readers add them into totals.
+  manualTotalPrints     Int      @default(0)
+  manualPrintDurationSeconds Int @default(0)
   totalPrints           Int      @default(0)
   successfulPrints      Int      @default(0)
   failedPrints          Int      @default(0)

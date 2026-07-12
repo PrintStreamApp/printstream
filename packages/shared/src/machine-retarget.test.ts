@@ -97,3 +97,30 @@ test('applyProcessProfileToProjectSettings brings the process over, sets print_s
   assert.deepEqual(out.filament_settings_id, ['Bambu PLA Basic @BBL A1M']) // filament selection untouched
   assert.equal(out.name, undefined)
 })
+
+test('retarget blanks the inherited machine parent so the CLI derives the system printer from the new id', () => {
+  // A project saved with a CUSTOM machine preset carries its parent in inherits_group's
+  // machine (last) slot; 2.7.1+ CLIs validate loaded filaments against that name, so a
+  // stale "Bambu Lab P1P 0.4 nozzle" fails the slice after the retarget.
+  const out = retargetProjectSettingsToMachine({
+    ...a1Project,
+    inherits_group: ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', 'Bambu Lab P1P 0.4 nozzle']
+  }, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(out.inherits_group, ['0.20mm Standard @BBL A1M', 'Bambu PLA Basic @BBL A1M', ''])
+})
+
+test('applyProcessProfileToProjectSettings blanks the inherited process parent alongside print_settings_id', () => {
+  const out = applyProcessProfileToProjectSettings({
+    ...a1Project,
+    inherits_group: ['0.20mm Custom Standard', 'Bambu PLA Basic @BBL A1M', '']
+  }, {
+    name: '0.20mm Standard @BBL H2D',
+    type: 'process',
+    layer_height: '0.2'
+  })
+  assert.equal(out.print_settings_id, '0.20mm Standard @BBL H2D')
+  assert.deepEqual(out.inherits_group, ['', 'Bambu PLA Basic @BBL A1M', ''])
+})

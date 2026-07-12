@@ -271,7 +271,6 @@ function buildSliceDisabledReasonInput(overrides: Partial<SliceDisabledReasonInp
     nozzleDiameterCount: 1,
     missingFilamentProfile: false,
     missingFilamentToolhead: false,
-    legacyMachineSwitchWarning: null,
     targetMode: 'realPrinter',
     printerId: 'printer-1',
     submitting: false,
@@ -316,10 +315,3 @@ test('resolveSliceDisabledReason flags unmapped filament slots', () => {
   )
 })
 
-test('resolveSliceDisabledReason passes through a legacy machine-switch warning verbatim', () => {
-  const warning = 'Bambu Studio 2.7 cannot switch this X1C project directly to H2D.'
-  assert.equal(
-    resolveSliceDisabledReason(buildSliceDisabledReasonInput({ legacyMachineSwitchWarning: warning })),
-    warning
-  )
-})

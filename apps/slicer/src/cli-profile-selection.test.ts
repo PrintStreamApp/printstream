@@ -8,8 +8,7 @@ test('drops machine presets when slicing a rewritten 3MF directly', () => {
     { kind: 'process' },
     { kind: 'filament' }
   ], {
-    rewroteProjectSettings: true,
-    useEstimateModeMachineSwitch: false
+    rewroteProjectSettings: true
   })
 
   assert.deepEqual(selected, [
@@ -18,28 +17,12 @@ test('drops machine presets when slicing a rewritten 3MF directly', () => {
   ])
 })
 
-test('keeps machine presets when estimate-mode machine switch is active', () => {
-  const selected = selectCliProfileFiles([
-    { kind: 'machine' },
-    { kind: 'process' }
-  ], {
-    rewroteProjectSettings: true,
-    useEstimateModeMachineSwitch: true
-  })
-
-  assert.deepEqual(selected, [
-    { kind: 'machine' },
-    { kind: 'process' }
-  ])
-})
-
 test('keeps machine presets when project settings were not rewritten', () => {
   const selected = selectCliProfileFiles([
     { kind: 'machine' },
     { kind: 'process' }
   ], {
-    rewroteProjectSettings: false,
-    useEstimateModeMachineSwitch: false
+    rewroteProjectSettings: false
   })
 
   assert.deepEqual(selected, [

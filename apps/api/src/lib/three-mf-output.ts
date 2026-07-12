@@ -392,6 +392,87 @@ export function plateObjectIdsFromModelSettingsXml(xml: string, plate: number): 
   return ids
 }
 
+/** Result of mapping a plate's deselected `object_id`s to instance `identify_id`s. */
+export interface PlateSkipIdentifyIds {
+  /** `identify_id`s of every instance (on the plate) of the requested objects. */
+  identifyIds: number[]
+  /** Requested object ids with no matching instance on the plate (or no usable identify_id). */
+  unmatchedObjectIds: number[]
+  /** Total instances placed on the plate — lets callers refuse a skip-everything selection. */
+  plateInstanceCount: number
+}
+
+/**
+ * Map deselected plate objects (Bambu `object_id`s, the id space of the plates index's
+ * `objects[].id`) to the `identify_id`s of every one of their instances on `plate`, read from a
+ * `model_settings.config` XML string. `identify_id` is the per-instance handle Bambu keys
+ * mid-print `skip_objects` on (the G-code's "unique label id") — a DIFFERENT id space from
+ * `object_id` — so the post-start skip must send these, never the object ids themselves. Mirrors
+ * the object→identify translation the slicer service does for `--skip-objects`
+ * (`apps/slicer/src/skip-objects.ts`).
+ */
+export function plateSkipIdentifyIdsFromModelSettingsXml(
+  xml: string,
+  plate: number,
+  objectIds: ReadonlySet<number>
+): PlateSkipIdentifyIds {
+  const identifyIds: number[] = []
+  const matchedObjectIds = new Set<number>()
+  let plateInstanceCount = 0
+  for (const plateMatch of xml.matchAll(/<plate\b[^>]*>[\s\S]*?<\/plate>/g)) {
+    const block = plateMatch[0]
+    const plateId = Number(/<metadata\s+key="plater_id"\s+value="(\d+)"\s*\/>/.exec(block)?.[1])
+    if (plateId !== plate) continue
+    for (const instanceMatch of block.matchAll(/<model_instance\b[^>]*>[\s\S]*?<\/model_instance>/g)) {
+      const instance = instanceMatch[0]
+      const objectId = Number(/<metadata\s+key="object_id"\s+value="(\d+)"\s*\/>/.exec(instance)?.[1])
+      if (!Number.isInteger(objectId)) continue
+      plateInstanceCount += 1
+      if (!objectIds.has(objectId)) continue
+      const identifyId = Number(/<metadata\s+key="identify_id"\s+value="(\d+)"\s*\/>/.exec(instance)?.[1])
+      if (!Number.isInteger(identifyId)) continue
+      matchedObjectIds.add(objectId)
+      identifyIds.push(identifyId)
+    }
+  }
+  const unmatchedObjectIds = [...objectIds].filter((id) => !matchedObjectIds.has(id))
+  return { identifyIds, unmatchedObjectIds, plateInstanceCount }
+}
+
+/**
+ * Map deselected plate objects to instance `identify_id`s using an already-parsed 3MF
+ * index instead of re-reading `model_settings.config` — the storage-print flow's variant
+ * of {@link plateSkipIdentifyIdsFromModelSettingsXml}. `objectIds` are the plates index's
+ * own `objects[].id` values (whatever id space that index carries; the printer-storage
+ * index derives objects from slice_info, where the id is itself the identify_id), and each
+ * object's `identifyIds` supplies its firmware skip handles. An object without identify_ids
+ * counts as unmatched, and `plateInstanceCount` sums every object's instances so callers
+ * can refuse a skip-everything selection.
+ */
+export function plateSkipIdentifyIdsFromIndex(
+  // Structural subset of ThreeMfIndex so callers can pass any parsed index shape.
+  index: { plates: ReadonlyArray<{ index: number; objects: ReadonlyArray<{ id: number; identifyIds: ReadonlyArray<number> }> }> },
+  plate: number,
+  objectIds: ReadonlySet<number>
+): PlateSkipIdentifyIds {
+  const plateEntry = index.plates.find((entry) => entry.index === plate)
+  const identifyIds: number[] = []
+  const matchedObjectIds = new Set<number>()
+  let plateInstanceCount = 0
+  for (const object of plateEntry?.objects ?? []) {
+    // An object with no recorded instances still occupies the plate; count at least one
+    // so a "skip everything" selection cannot slip past the guard on identify-id count.
+    plateInstanceCount += Math.max(1, object.identifyIds.length)
+    if (!objectIds.has(object.id) || object.identifyIds.length === 0) continue
+    matchedObjectIds.add(object.id)
+    for (const identifyId of object.identifyIds) {
+      if (!identifyIds.includes(identifyId)) identifyIds.push(identifyId)
+    }
+  }
+  const unmatchedObjectIds = [...objectIds].filter((id) => !matchedObjectIds.has(id))
+  return { identifyIds, unmatchedObjectIds, plateInstanceCount }
+}
+
 /**
  * Mark the `<build><item>` entries of `unprintableObjectIds` as `printable="0"` in a
  * `3D/3dmodel.model` XML string (replacing an existing `printable` attribute or inserting one),

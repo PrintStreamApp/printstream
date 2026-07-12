@@ -14,6 +14,7 @@ import { installRequestContext, getCorrelationId } from './lib/request-context.j
 import { isMetricsEnabled, recordHttpRequest } from './lib/metrics.js'
 import { HttpError } from './lib/http-error.js'
 import { authRouter } from './routes/auth.js'
+import { cspReportRouter } from './routes/csp-report.js'
 import { healthRouter } from './routes/health.js'
 import { appRouter } from './routes/app.js'
 import { printersRouter } from './routes/printers.js'
@@ -113,7 +114,10 @@ app.use(helmet({ crossOriginResourcePolicy: false, contentSecurityPolicy: false 
 // allowing the camera/stream resource paths. Report-only by default (safe); set
 // CSP_ENFORCE=true to enforce. See content-security-policy.ts.
 const cspHeaderName = env.CSP_ENFORCE ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only'
-const cspHeaderValue = buildContentSecurityPolicy()
+const cspHeaderValue = buildContentSecurityPolicy({
+  analyticsOrigin: env.CSP_ANALYTICS_ORIGIN,
+  reportUri: '/api/csp-report'
+})
 app.use((_request: Request, response: Response, next: NextFunction) => {
   response.setHeader(cspHeaderName, cspHeaderValue)
   next()
@@ -125,6 +129,14 @@ app.use('/api', createRateLimitMiddleware({
   max: 1_800,
   skip: skipHealthChecks
 }))
+// CSP violation reports: browser-generated, unauthenticated, and bursty.
+// Mounted before the auth/audit middlewares and the general write limiter so a
+// report burst can't consume an anonymous IP's API write budget.
+app.use('/api/csp-report', createRateLimitMiddleware({
+  name: 'csp-report',
+  windowMs: 60_000,
+  max: 30
+}), cspReportRouter)
 // Capture the raw request buffer so webhook routes (e.g. Paddle billing in the
 // private cloud module) can verify HMAC signatures over the exact bytes received.
 app.use(express.json({

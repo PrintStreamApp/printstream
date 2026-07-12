@@ -112,6 +112,7 @@ export function makeOfflineStatus(printer: Printer): PrinterStatus {
     firmwareVersion: null,
     firmwareModules: [],
     sdCardPresent: null,
+    skippedObjectIds: null,
     connectionWarnings: [],
     observedAt: new Date().toISOString()
   }
@@ -352,6 +353,16 @@ export function parseReport(value: unknown, printer: Printer, currentStatus?: Pr
     } else if (typeof raw === 'number') {
       delta.sdCardPresent = raw !== 0
     }
+  }
+
+  // `s_obj` lists the instance identify_ids the firmware currently skips for the
+  // running print (partskip-capable firmware only). An empty array is a real state
+  // ("nothing skipped"), so it is applied too; a malformed value is ignored like any
+  // other unknown field. The status stays null until the printer first reports it.
+  if (Array.isArray(print.s_obj)) {
+    delta.skippedObjectIds = print.s_obj
+      .map((value) => intOrNull(value))
+      .filter((value): value is number => value !== null)
   }
 
   const printState = parsePrintState(print)

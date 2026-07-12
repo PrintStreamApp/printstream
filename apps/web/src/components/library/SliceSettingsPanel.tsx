@@ -76,7 +76,6 @@ export interface SliceSettingsController {
   slicerTargets: SlicingCapabilities['targets']
   selectedSlicerTargetId: string
   setSelectedSlicerTargetId: React.Dispatch<React.SetStateAction<string>>
-  legacyMachineSwitchWarning: string | null
   /** Slicer availability/loading state, surfaced as notices in the settings panel. */
   slicerStatus: {
     capabilitiesLoading: boolean
@@ -241,7 +240,7 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
   const {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview,
     tenantSlug, navigate, onClose,
-    slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId, legacyMachineSwitchWarning, slicerStatus,
+    slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId, slicerStatus,
     printers, selectedPrinter, lockedPreferredPrinter, targetMode, setTargetMode, setPrinterId,
     selectedPrinterModel, manualPrinterModelTouchedRef, setManualPrinterModel, printerModelOptions,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
@@ -312,11 +311,6 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
               ))}
             </Select>
           </FormControl>
-          {legacyMachineSwitchWarning && (
-            <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
-              {legacyMachineSwitchWarning}
-            </Alert>
-          )}
         </Stack>
       </Sheet>
       <Typography level="title-sm">Printer</Typography>

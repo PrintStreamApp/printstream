@@ -7,6 +7,7 @@
  * on the wire format.
  */
 import { Router } from 'express'
+import { randomUUID } from 'node:crypto'
 import { stat, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
@@ -61,6 +62,7 @@ import {
   startPrinterStorageDeleteJobSchema,
   printerStoragePrintSchema,
   supportsPrinterAirductMode,
+  validateAmsDryingStart,
   type ThreeMfIndex,
   type Printer,
   type PrinterStatus
@@ -92,7 +94,7 @@ import {
   getActivePrintJobAssets,
 } from '../lib/active-print-job-assets.js'
 import { choosePreferredExactPrinterFilePath } from '../lib/printer-file-path.js'
-import { readPrinterStats } from '../lib/printer-stats.js'
+import { readPrinterStats, setManualPrinterStats } from '../lib/printer-stats.js'
 import {
   resolveRelevantPrintJobId,
   startTrackedPrintJob
@@ -136,6 +138,8 @@ import {
 } from '../lib/print-dispatcher.js'
 import { calibrationOption } from '../lib/printer-calibration.js'
 import { commandToMqttPayloads, resolvePressureAdvanceCommandContext } from '../lib/printer-command-payloads.js'
+import { plateSkipIdentifyIdsFromIndex } from '../lib/three-mf-output.js'
+import { armPostStartObjectSkip } from '../lib/post-start-object-skip.js'
 import { startCalibrationJob } from '../lib/calibration-jobs.js'
 import { getDispatchedPrintSource } from '../lib/dispatched-print-source-cache.js'
 import { listPrinters } from '../lib/printer-list.js'
@@ -428,12 +432,20 @@ printersRouter.patch('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSION
         : {})
     }
   })
+  if (request.body.manualPrints !== undefined || request.body.manualPrintHours !== undefined) {
+    await setManualPrinterStats({
+      tenantId: updated.tenantId,
+      printerSerial: updated.serial,
+      manualPrints: parsed.data.manualPrints,
+      manualPrintHours: parsed.data.manualPrintHours
+    })
+  }
   const dto = toPrinterDto(updated)
   printerManager.update(dto, updated.tenantId, updated.bridgeId)
   await Promise.all(Array.from(new Set([existing.bridgeId, updated.bridgeId].filter((bridgeId): bridgeId is string => Boolean(bridgeId)))).map(syncBridgePrinterConfig))
   // Record which fields were edited. The LAN access code is a secret: never
   // record its value — only note that it changed.
-  const editableFields = ['name', 'host', 'serial', 'accessCode', 'model', 'bridgeId', 'currentPlateType', 'currentNozzleDiameters'] as const
+  const editableFields = ['name', 'host', 'serial', 'accessCode', 'model', 'bridgeId', 'currentPlateType', 'currentNozzleDiameters', 'manualPrints', 'manualPrintHours'] as const
   const changedFields = editableFields.filter((field) => request.body[field] !== undefined)
   annotateRequestAuditLog(request, {
     action: 'edit-printer',
@@ -787,6 +799,12 @@ function describePrinterCommandAuditMetadata(
     case 'setAmsFilamentBackup':
       return { enabled: command.enabled }
     case 'startAmsDrying':
+      return {
+        amsId: command.amsId,
+        temperature: command.temperature,
+        durationHours: command.durationHours,
+        acknowledgedRisks: command.acknowledgeRisks
+      }
     case 'stopAmsDrying':
       return { amsId: command.amsId }
     case 'rescanAmsSlot':
@@ -936,6 +954,14 @@ function validatePrinterControlCommand(
     case 'setAmsKValue':
       requireLiveControlConnection(status, 'Pressure advance control')
       return
+    case 'startAmsDrying': {
+      requireLiveControlConnection(status, 'AMS drying')
+      const unit = status?.ams.find((entry) => entry.unitId === command.amsId)
+      if (!unit) throw badRequest('AMS unit not found on this printer')
+      const rejection = validateAmsDryingStart(unit, command)
+      if (rejection) throw badRequest(rejection)
+      return
+    }
     case 'rescanAmsSlot':
       requirePrinterActionAvailability(getAmsRescanAvailability(status, command.amsId, command.slotId))
       return
@@ -1604,6 +1630,17 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
     }
   }
 
+  // Resolve deselected objects to the instance identify_ids the firmware skips on,
+  // through the same (cached) plates index the storage plates route serves — the ids the
+  // client selected against. Fail-loud like the library dispatcher: the user explicitly
+  // deselected objects, so printing them anyway would violate intent.
+  const skipIdentifyIds = resolveStorageSkipIdentifyIds(
+    sourceKind,
+    storageThreeMfIndex,
+    parsed.data.plate,
+    parsed.data.skipObjects
+  )
+
   const remoteName = filePath.replace(/^\//, '')
   const submissionId = String((Date.now() % 2_147_483_647) || 1)
   const jobName = resolvePrinterStorageJobName(
@@ -1636,7 +1673,22 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
   const blocked = printGuards.evaluate({ printerId: printer.id, source: 'reprint' })
   if (blocked) throw conflict(blocked.reason ?? 'Print blocked by a plugin')
   printDispatcher.assertNoActiveDispatchForPrinter(printer.id)
+  // Pre-generate the tracked job id so the post-start skip fallback can be armed
+  // BEFORE the start command publishes (a fast printer status cannot slip through the
+  // gap) with the same strong job-id match the dispatcher uses: `print-job.started`
+  // reports this exact id once the recorder confirms the job running.
+  const jobId = randomUUID()
+  const disarmPostStartSkip = skipIdentifyIds
+    ? armPostStartObjectSkip({
+      printerId: printer.id,
+      printerModel: printer.model,
+      dispatchJobId: jobId,
+      jobName,
+      objectIds: skipIdentifyIds
+    })
+    : null
   const trackedJobId = await startTrackedPrintJob({
+    jobId,
     printerId: printer.id,
     jobName,
     fileName: path.basename(filePath),
@@ -1668,11 +1720,18 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
         nozzleOffsetCalibration: normalizedOptions.nozzleOffsetCalibration,
         timelapse: normalizedOptions.timelapse,
         useAms: parsed.data.useAms,
-        amsMapping: parsed.data.amsMapping
+        amsMapping: parsed.data.amsMapping,
+        skipObjects: skipIdentifyIds
       })
     })
+  }).catch((error: unknown) => {
+    disarmPostStartSkip?.()
+    throw error
   })
-  if (!trackedJobId) throw badRequest('Printer is not connected — command was not delivered')
+  if (!trackedJobId) {
+    disarmPostStartSkip?.()
+    throw badRequest('Printer is not connected — command was not delivered')
+  }
   annotateRequestAuditLog(request, {
     action: 'start-printer-storage-print',
     resource: 'print job',
@@ -1683,11 +1742,43 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
       path: filePath,
       fileName: path.basename(filePath),
       plate: parsed.data.plate,
-      jobId: trackedJobId
+      jobId: trackedJobId,
+      ...(skipIdentifyIds ? { skippedObjectCount: skipIdentifyIds.length } : {})
     }
   })
   response.status(202).json({ path: filePath })
 })
+
+/**
+ * Map a storage-print request's deselected plate objects (`skipObjects`, the storage
+ * plates index's `objects[].id` values) to instance `identify_id`s via the same index the
+ * route already derived. NOT fail-safe-passthrough: an unresolvable selection (non-3MF
+ * source, unreadable index, unknown object id, no identify_ids, or a selection that would
+ * skip every object) rejects the print with a clear message instead of printing objects
+ * the user deselected. Returns null when nothing was deselected.
+ */
+function resolveStorageSkipIdentifyIds(
+  sourceKind: '3mf' | 'gcode',
+  index: Awaited<ReturnType<typeof readPrinterStorageThreeMfIndex>> | null,
+  plate: number,
+  skipObjects: number[] | undefined
+): number[] | null {
+  if (!skipObjects || skipObjects.length === 0) return null
+  if (sourceKind !== '3mf') {
+    throw badRequest('Object skipping is only available for sliced 3MF files')
+  }
+  if (!index) {
+    throw badRequest('Could not read the file to resolve the deselected objects. Try again, or print without deselecting objects.')
+  }
+  const mapped = plateSkipIdentifyIdsFromIndex(index, plate, new Set(skipObjects))
+  if (mapped.unmatchedObjectIds.length > 0 || mapped.identifyIds.length === 0) {
+    throw badRequest('Some deselected objects could not be matched on the selected plate. Re-open the print dialog and try again.')
+  }
+  if (mapped.identifyIds.length >= mapped.plateInstanceCount) {
+    throw badRequest('Cannot skip every object on the plate. Keep at least one object selected.')
+  }
+  return mapped.identifyIds
+}
 
 function resolveRequestedPrinterStoragePlateName(
   index: Awaited<ReturnType<typeof readPrinterStorageThreeMfIndex>> | null,

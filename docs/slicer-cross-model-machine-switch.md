@@ -3,112 +3,107 @@
 ## What this covers
 
 How the slicer service retargets a 3MF authored for one Bambu printer onto a
-*different* printer model at slice time, and why that path is split in two:
+*different* printer model at slice time (e.g. slicing a P1S project for an X2D
+without saving it first).
 
-- a **standard single-pass** slice for same-model jobs, and
-- a **two-pass estimate-mode** slice for cross-model jobs that land on an
-  H2-family multi-extruder machine.
+**PrintStream is its own source of truth for 3MF machine changes.** A
+cross-model slice does NOT round-trip the BambuStudio CLI to switch machines:
+the input 3MF's `project_settings.config` is rewritten natively with the shared
+`retargetProjectSettingsToMachine` (`packages/shared/src/machine-retarget.ts`)
+— the exact rewrite the editor's "save as a different printer" flow uses
+(`docs/project-printer-retarget.md`) — and the CLI then slices a project that
+already natively targets the requested machine, on the ordinary single-pass
+path. This works on every bundled slicer version; there is no dependency on
+CLI capability flags.
 
-If you are tempted to collapse these into one CLI invocation, read the
-"Why the split exists" section first — the split is a workaround for a hard
-BambuStudio CLI crash, not an accident.
+## The flow
 
-> This is the **slice-time** retarget (it produces gcode). To change the printer a saved
-> **project** targets without slicing — a pure settings rewrite that preserves the layout —
-> see `docs/project-printer-retarget.md`. The two share the topology-repair math in
-> `packages/shared/src/machine-retarget.ts`.
+Everything happens in `prepareInputThreeMf` in
+[apps/slicer/src/index.ts](../apps/slicer/src/index.ts), before the CLI runs:
 
-## The two paths
-
-Both paths run from `runCli` in [apps/slicer/src/index.ts](../apps/slicer/src/index.ts).
-
-### Standard path (same model, or no embedded source model)
-
-Used when the target printer model equals the model baked into the source 3MF,
-or the source carries no model. `prepareInputThreeMf` rewrites the embedded
-project settings, and `selectCliProfileFiles`
-([apps/slicer/src/cli-profile-selection.ts](../apps/slicer/src/cli-profile-selection.ts))
-deliberately drops the machine profile because the embedded 3MF already carries
-the correct machine identity. One `--slice --load-settings <process>` call
-produces the output.
-
-### Estimate-mode path (cross-model into an H2-family machine)
-
-Selected by `shouldUseEstimateModeMachineSwitch`
-([apps/slicer/src/machine-switch-guard.ts](../apps/slicer/src/machine-switch-guard.ts))
-when all of the following hold:
-
-- the source 3MF carries project settings,
-- the CLI advertises `--estimate-mode`, and
-- the resolved target model differs from the resolved source model.
-
-`assertSupportedEmbeddedMachineSwitch` additionally hard-fails a cross-model
-switch *into* `H2D` / `H2DPRO` / `H2C` when `--estimate-mode` is unavailable,
-because those targets cannot be reached any other way.
-
-The path runs three steps in `runEstimateModeMachineSwitch`:
-
-1. **Estimate export** — `--estimate-mode --export-3mf machine-switch-estimate.3mf`
-   (no `--slice`). BambuStudio performs the authoritative machine switch:
-   rewrites `printer_model`, `nozzle_diameter`, and the H2 extruder variants,
-   and (because we still pass `--load-filaments`) keeps the real filament colors
-   rather than the 8-slot estimate placeholders.
-2. **Repair** — `repairEstimateModeProjectSettings`
-   ([apps/slicer/src/machine-switch-repair.ts](../apps/slicer/src/machine-switch-repair.ts))
-   reconciles the multi-extruder topology that the estimate export leaves
-   inconsistent (e.g. `extruder_max_nozzle_count` vs `nozzle_volume_type` length,
-   empty `extruder_ams_count` slots), pulling the missing fields from the merged
-   machine profile (`mergeInheritedMachineProfile`). The result is written to
-   `machine-switch-repaired.3mf`.
-2b. **Re-center onto a larger bed** — `recenterRepairedProjectForLargerBed`
+1. **Detect the switch** — `shouldRetargetEmbeddedMachine`
+   ([apps/slicer/src/machine-switch-guard.ts](../apps/slicer/src/machine-switch-guard.ts))
+   compares the request's target model (the machine profile / `printerModel`)
+   with the project's embedded model (`printer_model` / `printer_settings_id`),
+   both canonicalised via the shared `canonicalBambuModelKey`
+   (`packages/shared/src/bambu-model-keys.ts`). No switch → the standard
+   prepare/rewrite path runs unchanged.
+2. **Retarget natively** — the project-settings transform applies
+   `retargetProjectSettingsToMachine` with the fully-merged target machine
+   profile (`readMergedMachineProfile` over the flattened `machine_full/`
+   presets): every machine-owned key is overwritten, the printer identity and
+   compatibility declarations are set to the target, the topology-dependent
+   runtime maps (`filament_nozzle_map`, extruder variants, AMS counts, …) are
+   re-derived, and the stale machine slot of `inherits_group` is blanked (the
+   CLI resolves the project's SYSTEM printer from that slot — see below). The
+   ordinary identity/filament rewrite (`rewriteProjectSettingsMetadata`) runs
+   on top, so the request's process/filament choices land as usual.
+3. **Re-center onto a larger bed** — `recenterRepairedProjectForLargerBed`
    ([apps/slicer/src/recenter-plates.ts](../apps/slicer/src/recenter-plates.ts)).
-   BambuStudio's CLI only auto-recenters objects (`translate_models`) on a switch it
-   treats as *forced* — i.e. an **incompatible** process — not the compatible-process
-   switch this flow performs. So on a switch to a **larger** bed the objects keep the
-   source bed's per-plate global offsets, and a multi-plate project's non-first plates
-   fall outside their plate region → `CLI_NO_SUITABLE_OBJECTS` (exit 206). We apply
-   BambuStudio's own per-plate shift ourselves (derived from `compute_origin_using_new_size`
-   + `translate_models`, `GAP = 1/5`), reading the source bed from the original upload and
-   the target bed from the merged machine profile. A no-op for a same/smaller target bed.
-3. **Final slice** — `--slice` the re-centered repaired 3MF with no profile args; its
-   machine identity is now embedded and self-consistent.
+   The retarget preserves the source layout, and BambuStudio's CLI only
+   auto-recenters objects on a switch it treats as *forced* — so on a switch to
+   a **larger** bed a multi-plate project's non-first plates would fall outside
+   their plate regions (`CLI_NO_SUITABLE_OBJECTS`, exit 206). We apply
+   BambuStudio's own per-plate shift ourselves (derived from
+   `compute_origin_using_new_size` + `translate_models`, `GAP = 1/5`). A no-op
+   for a same/smaller target bed.
+4. **Slice normally** — the standard single-pass CLI invocation. Because the
+   project settings were rewritten, `selectCliProfileFiles` drops the machine
+   profile from `--load-settings` (the embedded 3MF is the machine identity);
+   the process and filament presets load as usual and validate against the
+   *new* machine.
 
-## Why the split exists
+## Why the machine profile is dropped from `--load-settings`
 
-A cross-model slice from a single-extruder source (e.g. P1S) onto an H2-family
-multi-extruder machine was tested directly against BambuStudio CLI v02.07.00.55.
-Every single-pass alternative crashes:
+Loading a machine preset alongside a project was tested directly against
+BambuStudio CLI v02.07.00.55 and crashes on cross-model multi-extruder input
+(`get_extruder_variant_string, unsupported ExtruderType=<garbage>` segfault).
+The retargeted 3MF makes the load unnecessary: its embedded machine identity
+and topology are already self-consistent — the same reason a project saved via
+"save as a different printer" slices cleanly afterwards.
 
-| Approach | Result |
-| --- | --- |
-| `--slice --load-settings <H2D machine>;<H2D process> --load-filaments ...` (machine profile kept, no estimate-mode) | Segfault (`get_extruder_variant_string, unsupported ExtruderType=<garbage>`) |
-| `--slice --estimate-mode --load-settings ...` (one-shot estimate + slice) | Segfault |
-| `--estimate-mode --export-3mf ...` (no `--slice`) | Succeeds; produces a retargeted but topology-inconsistent 3MF |
-| `--slice <estimate export>` without the repair step | Segfault (`no filament colors found in projects`) |
+## Why the `inherits_group` blank matters
 
-So:
+BambuStudio resolves the project's *system* printer from the machine (last)
+slot of `inherits_group`, not from `printer_settings_id`. A project saved with
+an inherited/custom machine preset keeps its old parent there (e.g.
+`Bambu Lab P1P 0.4 nozzle`), and CLIs from 2.7.1 on validate every loaded
+filament preset against that name — so a stale slot fails the slice with the
+misleading `filament preset … is not compatible with printer <old machine>`.
+Both the slice-time rewrite (`rewriteProjectSettingsMetadata`) and the shared
+retarget blank the relevant slots when they rewrite the corresponding
+`*_settings_id`.
 
-- A naive single `--slice` cannot perform the cross-model switch into an H2
-  multi-extruder machine — it crashes inside extruder-variant resolution.
-- A one-shot `--slice --estimate-mode` also crashes, and estimate-mode is an
-  *estimation* mode anyway: on auto filament-map it fabricates eight white
-  placeholder AMS slots, which must not be baked into a printable gcode.3mf.
-- Only the estimate **export** survives the machine switch, and the export alone
-  is not sliceable — the TypeScript repair is load-bearing.
+## The remaining guard
 
-Both halves of the two-pass design are therefore required. There is no known
-single-CLI invocation that produces a correct cross-model H2 slice.
+`assertSupportedEmbeddedMachineSwitch` hard-fails exactly one case a retarget
+cannot help: a **nominally same-model H2-family project**
+(`H2D` / `H2DPRO` / `H2C`) that lacks the H2 dual-nozzle topology
+(`physical_extruder_map` et al.) — no switch is detected, so nothing rebuilds
+the topology, and the CLI segfaults resolving extruder variants. The error
+tells the user to re-save the project for that printer.
 
 ## Maintenance notes
 
-- Keep `shouldUseEstimateModeMachineSwitch` and the H2 guard in sync with the
-  set of multi-extruder models; today that is `H2D` / `H2DPRO` / `H2C`.
-- `machine-switch-guard.ts` has a local `normalizePrinterModel` that overlaps
-  with `canonicalBambuModelKey` in the web app
-  ([apps/web/src/lib/bambuPrinterModels.ts](../apps/web/src/lib/bambuPrinterModels.ts)).
-  Consider consolidating if the model-key logic is ever moved into
-  `packages/shared`.
-- Before changing either path, re-run a real cross-model job (single-extruder
-  source onto H2D) and confirm a non-zero, non-segfault exit and a valid
-  output 3MF. The crash modes above are silent (exit 139) and easy to
+- Model keys and the process-compatibility families live in
+  `packages/shared/src/bambu-model-keys.ts` (`canonicalBambuModelKey`,
+  `bambuModelKeysAreCompatible`), shared with the web slice dialog's profile
+  matching — change them there, not in a consumer.
+- The retarget math itself is `packages/shared/src/machine-retarget.ts`,
+  shared with the API's save-retarget; see `docs/project-printer-retarget.md`
+  for what carries over and how to verify after a BambuStudio version bump.
+- Before changing this path, re-run a real cross-model job (single-extruder
+  source onto H2D and onto X2D) and confirm a non-zero, non-segfault exit and
+  a valid output 3MF. The CLI's crash modes are silent (exit 139) and easy to
   reintroduce.
+
+## History
+
+Until 2026-07 this path used BambuStudio's `--estimate-mode` export as pass 1
+of a two-pass flow (CLI performs the switch, TypeScript repairs the topology,
+then a second CLI pass slices). That made cross-model slicing dependent on the
+selected slicer version exposing `--estimate-mode` — Bambu Studio 2.6.0.51
+ships X2D presets but not the flag, so a P1S→X2D slice silently fell down the
+standard path and failed with the filament-compatibility error above. The
+native retarget (already proven by the save flow) removed both the CLI
+round-trip and the capability dependency.

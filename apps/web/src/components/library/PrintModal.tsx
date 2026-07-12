@@ -55,6 +55,7 @@ import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { DialogFileTitle } from '../DialogFileTitle'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
+import { PrintObjectsSection } from './PrintObjectsSection'
 import { PrinterMapping } from './PrinterMapping'
 import { PrintStartOptionsFields } from './PrintStartOptionsFields'
 import { usePromptDialog } from '../PromptDialogProvider'
@@ -321,6 +322,28 @@ export function PrintModal({
    * {@link visibleMappingFilaments}).
    */
   const activePlateIsSliced = useMemo(() => plateHasSliceData(activePlate), [activePlate])
+  /**
+   * Per-object deselection (pre-sliced plates only). Deselected objects ride the
+   * dispatch as `skipObjects`; the server maps them to instance identify_ids,
+   * sends them in the start command, and keeps a mid-print skip fallback armed
+   * for firmware that ignores the start-command field. Unsliced files are
+   * excluded: they go through the slice flow, which already has per-object
+   * selection.
+   */
+  const plateObjects = useMemo(() => activePlate?.objects ?? [], [activePlate])
+  const showObjectSelection = activePlateIsSliced && plateObjects.length >= 2
+  const [deselectedObjectIds, setDeselectedObjectIds] = useState<number[]>([])
+  const deselectedObjectIdSet = useMemo(() => new Set(deselectedObjectIds), [deselectedObjectIds])
+  const activePlateIndex = activePlate?.index ?? null
+  useEffect(() => {
+    setDeselectedObjectIds([])
+  }, [file.id, versionId, activePlateIndex])
+  const toggleObjectSelected = (objectId: number, selected: boolean) => {
+    setDeselectedObjectIds((current) => {
+      if (selected) return current.filter((id) => id !== objectId)
+      return current.includes(objectId) ? current : [...current, objectId]
+    })
+  }
   /**
    * Per-filament gram usage for the active plate. Used by the printer
    * mapping rows to show "this print needs 12g of #1 PLA" so the user
@@ -613,7 +636,6 @@ export function PrintModal({
           mapping: mappings[printerId] ?? [],
           trayByMappingValue: buildPrinterTrayMap(statuses[printerId]),
           filaments: visibleFilaments,
-          timelapse,
           status: statuses[printerId]
         })
         if (!printer || warnings.length === 0) return null
@@ -624,7 +646,7 @@ export function PrintModal({
         }
       })
       .filter((entry): entry is { printerId: string; printerName: string; warnings: string[] } => entry != null)
-  }, [mappings, printersById, selectedIds, statuses, timelapse, visibleFilaments])
+  }, [mappings, printersById, selectedIds, statuses, visibleFilaments])
 
   const hardwareIssuesByPrinter = useMemo(() => {
     const next: Record<string, { plateType: PlateTypeMismatchIssue | null; nozzleDiameters: NozzleDiameterCompatibilityIssue[] }> = {}
@@ -774,6 +796,9 @@ export function PrintModal({
     setErrors({})
 
     try {
+      const skipObjects = showObjectSelection
+        ? deselectedObjectIds.filter((id) => plateObjects.some((object) => object.id === id))
+        : []
       const next: Record<string, string> = {}
       const submittedPrinterIds: string[] = []
       await Promise.all(
@@ -826,7 +851,10 @@ export function PrintModal({
                 printer?.currentNozzleDiameters ?? []
               ),
               plate: activePlate?.index ?? 1,
-              amsMapping: sanitizeTrayMapping(mappings[printerId])
+              amsMapping: sanitizeTrayMapping(mappings[printerId]),
+              // The same deselection applies to every selected printer. Filter to the
+              // active plate's objects so a stale id can never reach the dispatch.
+              ...(skipObjects.length > 0 ? { skipObjects } : {})
             } satisfies Omit<StartOrderPrintInput, 'printerId'>
 
             if (submitPrint) {
@@ -922,6 +950,14 @@ export function PrintModal({
                 />
               </Sheet>
             </>
+          )}
+
+          {showObjectSelection && (
+            <PrintObjectsSection
+              objects={plateObjects}
+              deselectedIds={deselectedObjectIdSet}
+              onToggle={toggleObjectSelected}
+            />
           )}
 
           <Typography level="title-sm">Printers</Typography>

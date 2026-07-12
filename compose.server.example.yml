@@ -79,6 +79,12 @@ services:
       MANAGED_BRIDGE: ${MANAGED_BRIDGE:-true}
       MANAGED_BRIDGE_TOKEN_FILE: /run/provision/managed-bridge-token
       NTFY_TOPIC_URL: ${NTFY_TOPIC_URL:-}
+      # Content-Security-Policy: report-only by default; set CSP_ENFORCE=true
+      # once your deployment shows no violations (watch for `[csp-report]`
+      # lines in the API log). If you embed a first-party analytics tracker,
+      # allow its origin via CSP_ANALYTICS_ORIGIN.
+      CSP_ENFORCE: ${CSP_ENFORCE:-}
+      CSP_ANALYTICS_ORIGIN: ${CSP_ANALYTICS_ORIGIN:-}
       # Single nginx hop in front; trust X-Forwarded-* from it so
       # `req.ip` and `req.protocol` reflect the real client.
       TRUST_PROXY: "1"

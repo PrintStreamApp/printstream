@@ -453,8 +453,37 @@ test('buildProjectFilePrintCommand maps options onto the project_file payload', 
     project_id: '12345',
     subtask_id: '12345',
     task_id: '12345',
-    ams_mapping: [0, 1]
+    ams_mapping: [0, 1],
+    ams_mapping_2: [
+      { ams_id: 0, slot_id: 0 },
+      { ams_id: 0, slot_id: 1 }
+    ]
   })
+})
+
+test('buildProjectFilePrintCommand derives ams_mapping_2 across the tray-index bands', () => {
+  // Regular units, an AMS HT (128+ band, tray index IS the unit id), an external
+  // virtual tray (id preserved, slot 0), a pruned -1 hole (0xff/0xff), and the
+  // ambiguous AMS Lite Mixed band (24-27, sent unset so a wrong pair never
+  // contradicts the correct legacy index) — matching BambuStudio's SD-card
+  // resend flow. H2C (Vortek) firmware needs the v2 form to build its AMS
+  // mapping table (0701-8012 without it).
+  const payload = buildProjectFilePrintCommand({
+    remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
+    bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
+    firstLayerInspection: false, filamentDynamicsCalibration: false,
+    nozzleOffsetCalibration: 'off', timelapse: false, useAms: true,
+    amsMapping: [6, 128, -1, 255, 254, 25]
+  })
+  assert.deepEqual(payload.ams_mapping, [6, 128, -1, 255, 254, 25])
+  assert.deepEqual(payload.ams_mapping_2, [
+    { ams_id: 1, slot_id: 2 },
+    { ams_id: 128, slot_id: 0 },
+    { ams_id: 0xff, slot_id: 0xff },
+    { ams_id: 255, slot_id: 0 },
+    { ams_id: 254, slot_id: 0 },
+    { ams_id: 0xff, slot_id: 0xff }
+  ])
 })
 
 test('buildProjectFilePrintCommand omits ams_mapping when empty', () => {
@@ -465,4 +494,30 @@ test('buildProjectFilePrintCommand omits ams_mapping when empty', () => {
     nozzleOffsetCalibration: 'off', timelapse: false, useAms: false, amsMapping: []
   })
   assert.equal('ams_mapping' in withEmpty, false)
+  assert.equal('ams_mapping_2' in withEmpty, false)
+})
+
+test('buildProjectFilePrintCommand includes skip_objects when identify_ids are supplied', () => {
+  // The start command carries the skip list directly (what Bambu Handy sends);
+  // firmware without partskip support ignores it and the mid-print fallback covers it.
+  const payload = buildProjectFilePrintCommand({
+    remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
+    bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
+    firstLayerInspection: false, filamentDynamicsCalibration: false,
+    nozzleOffsetCalibration: 'off', timelapse: false, useAms: false,
+    skipObjects: [153, 154]
+  })
+  assert.deepEqual(payload.skip_objects, [153, 154])
+})
+
+test('buildProjectFilePrintCommand omits skip_objects when empty, null, or absent', () => {
+  const base = {
+    remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
+    bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
+    firstLayerInspection: false, filamentDynamicsCalibration: false,
+    nozzleOffsetCalibration: 'off', timelapse: false, useAms: false
+  } as const
+  assert.equal('skip_objects' in buildProjectFilePrintCommand({ ...base, skipObjects: [] }), false)
+  assert.equal('skip_objects' in buildProjectFilePrintCommand({ ...base, skipObjects: null }), false)
+  assert.equal('skip_objects' in buildProjectFilePrintCommand({ ...base }), false)
 })

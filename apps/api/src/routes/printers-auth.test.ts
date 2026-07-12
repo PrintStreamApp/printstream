@@ -159,6 +159,8 @@ test('printer stats are resolved by the current printer serial and include live 
     assert.deepEqual(await response.json() satisfies PrinterStatsResponse, {
       stats: {
         printsInProgress: 1,
+        manualPrints: 0,
+        manualPrintHours: 0,
         totalPrints: 12,
         successfulPrints: 9,
         failedPrints: 2,
@@ -246,6 +248,8 @@ test('printer stats fall back to legacy filament totals when breakdown columns a
     assert.deepEqual(await response.json() satisfies PrinterStatsResponse, {
       stats: {
         printsInProgress: 0,
+        manualPrints: 0,
+        manualPrintHours: 0,
         totalPrints: 5,
         successfulPrints: 4,
         failedPrints: 1,

@@ -123,6 +123,40 @@ test('rewriteProjectSettingsMetadata replaces stale project printer and filament
   assert.deepEqual(rewritten.filament_nozzle_map, ['1'])
 })
 
+test('rewriteProjectSettingsMetadata blanks the inherited machine/process parents (stale P1P system-name regression)', () => {
+  // A project saved with an inherited machine preset keeps its parent's name in
+  // inherits_group's machine (last) slot; the CLI resolves the project's SYSTEM
+  // printer from that slot, so leaving it stale makes 2.7.1+ CLIs validate the
+  // new filament presets against the OLD machine and fail the slice.
+  const metadata = buildSlicedArtifactMetadata({
+    sourceFileId: 'source-file',
+    target: {
+      mode: 'manualProfile',
+      printerModel: 'X2D',
+      printerProfileId: 'machine-profile',
+      processProfileId: 'process-profile',
+      filamentMappings: []
+    },
+    outputFileName: 'example.gcode.3mf',
+    plate: 0
+  }, [
+    { id: 'machine-profile', kind: 'machine', name: 'Bambu Lab X2D 0.4 nozzle' },
+    { id: 'process-profile', kind: 'process', name: '0.20mm Standard @BBL X2D' }
+  ])
+
+  assert.ok(metadata)
+
+  const rewritten = rewriteProjectSettingsMetadata({
+    printer_settings_id: ['My P1S'],
+    print_settings_id: ['My 0.20mm Standard'],
+    inherits_group: ['0.20mm Standard @BBL P1S', 'Bambu PLA Basic @BBL P1S 0.4 nozzle', 'Bambu Lab P1P 0.4 nozzle']
+  }, metadata)
+
+  assert.deepEqual(rewritten.printer_settings_id, ['Bambu Lab X2D 0.4 nozzle'])
+  assert.deepEqual(rewritten.print_settings_id, ['0.20mm Standard @BBL X2D'])
+  assert.deepEqual(rewritten.inherits_group, ['', 'Bambu PLA Basic @BBL P1S 0.4 nozzle', ''])
+})
+
 test('rewriteProjectSettingsMetadata falls back to cleaned material names when no filament profile id is provided', () => {
   const metadata = buildSlicedArtifactMetadata({
     sourceFileId: 'source-file',

@@ -36,12 +36,12 @@ import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-
 import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
 import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
 import { selectCliProfileFiles } from './cli-profile-selection.js'
-import { assertSupportedEmbeddedMachineSwitch, shouldUseEstimateModeMachineSwitch } from './machine-switch-guard.js'
+import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } from './machine-switch-guard.js'
 import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
 import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
 import { formatSlicePresetIncompatibilityError } from './slice-error.js'
 import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
-import { mergeInheritedMachineProfile, repairEstimateModeProjectSettings } from './machine-switch-repair.js'
+import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from './machine-switch-repair.js'
 import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
 import { resolveCustomProfileConfig } from './custom-profile-resolve.js'
 import { sanitizeProfileFileName } from './profile-file-name.js'
@@ -219,13 +219,14 @@ app.post('/slice', async (request, response) => {
     await pipeline(request, createWriteStream(inputPath))
     appendStructuredOutput(outputLines, 'system', 'Preparing slicing project')
     const preparedInput = await prepareInputThreeMf({
+      slicerTarget,
       inputPath,
       outputPath: path.join(workDir, 'input.materials.3mf'),
       request: parsed.data.request,
       profileFiles: parsed.data.profileFiles ?? [],
       stripEmbeddedProfileRefs: shouldStripEmbeddedProfileRefs(parsed.data.request),
       processSettingOverrides: parsed.data.request.target.processSettingOverrides ?? {},
-      supportedFlags
+      outputLines
     })
     const slicedArtifactMetadata = buildSlicedArtifactMetadata(parsed.data.request, parsed.data.profileFiles ?? [])
     appendStructuredOutput(outputLines, 'system', 'Launching slicer CLI')
@@ -242,8 +243,6 @@ app.post('/slice', async (request, response) => {
       metadata: slicedArtifactMetadata,
       supportedFlags,
       rewroteProjectSettings: preparedInput.rewroteProjectSettings,
-      useEstimateModeMachineSwitch: preparedInput.useEstimateModeMachineSwitch,
-      machineSwitchProfileName: preparedInput.machineSwitchProfileName,
       bambuHomeDir,
       bambuConfigDir,
       bambuCacheDir,
@@ -335,8 +334,6 @@ async function runCli(input: {
   metadata: SlicedArtifactMetadata | null
   supportedFlags: ReadonlySet<string>
   rewroteProjectSettings: boolean
-  useEstimateModeMachineSwitch: boolean
-  machineSwitchProfileName: string | null
   bambuHomeDir: string
   bambuConfigDir: string
   bambuCacheDir: string
@@ -346,8 +343,7 @@ async function runCli(input: {
 }): Promise<void> {
   const supportedFlags = input.supportedFlags
   const cliProfileFiles = selectCliProfileFiles(input.profileFiles, {
-    rewroteProjectSettings: input.rewroteProjectSettings,
-    useEstimateModeMachineSwitch: input.useEstimateModeMachineSwitch
+    rewroteProjectSettings: input.rewroteProjectSettings
   })
   const profileArgs = await prepareProfileArgs(cliProfileFiles, path.dirname(input.outputPath), input.slicerTarget.profileDir, input.processSettingOverrides, input.filamentSettingOverrides)
   // A "from scratch" scaffold 3MF (calibration prints, new-project saves) carries the BBL marker
@@ -388,23 +384,6 @@ async function runCli(input: {
       return
     }
   }
-  if (input.useEstimateModeMachineSwitch) {
-    if (!input.machineSwitchProfileName) {
-      throw new Error('Machine-switch slicing requires a target machine profile name')
-    }
-    const machineSwitchProfileName = input.machineSwitchProfileName
-    await runEstimateModeMachineSwitch({
-      ...input,
-      inputPath: preparedInputPath,
-      machineSwitchProfileName,
-      profileArgs
-    })
-    return
-  }
-
-  const machineSwitchArgs = input.useEstimateModeMachineSwitch && supportedFlags.has('--estimate-mode')
-    ? ['--estimate-mode']
-    : []
   const templateArgs = ensurePositionalInputArgument(
     stripUnsupportedFlagArguments(
       splitArgsTemplate(input.slicerTarget.cliArgsTemplate ?? env.SLICER_CLI_ARGS_TEMPLATE ?? '').map((value) => {
@@ -431,8 +410,8 @@ async function runCli(input: {
   const skipObjectArgs = buildSkipObjectsArgs(await deriveSkipObjectIdentifyIds(preparedInputPath))
   const inputArgIndex = templateArgs.indexOf(preparedInputPath)
   const args = inputArgIndex >= 0
-    ? [...templateArgs.slice(0, inputArgIndex), ...machineSwitchArgs, ...profileArgs, ...skipObjectArgs, ...templateArgs.slice(inputArgIndex)]
-    : [...templateArgs, ...machineSwitchArgs, ...profileArgs, ...skipObjectArgs]
+    ? [...templateArgs.slice(0, inputArgIndex), ...profileArgs, ...skipObjectArgs, ...templateArgs.slice(inputArgIndex)]
+    : [...templateArgs, ...profileArgs, ...skipObjectArgs]
 
   await executeCli({
     slicerTarget: input.slicerTarget,
@@ -460,8 +439,6 @@ async function runMergedAllPlateFallback(input: {
   profileArgs: string[]
   metadata: SlicedArtifactMetadata | null
   supportedFlags: ReadonlySet<string>
-  useEstimateModeMachineSwitch: boolean
-  machineSwitchProfileName: string | null
   bambuHomeDir: string
   bambuConfigDir: string
   bambuCacheDir: string
@@ -485,7 +462,6 @@ async function runMergedAllPlateFallback(input: {
       plate: plateId,
       supportedFlags: input.supportedFlags,
       profileArgs: input.profileArgs,
-      machineSwitchArgs: [],
       removedFlags: ['--export-json'],
       removedStandaloneFlags: [],
       bambuHomeDir: input.bambuHomeDir,
@@ -527,141 +503,24 @@ function buildMergedPlateOutputFileName(outputFileName: string, plate: number): 
   return `${outputFileName.slice(0, dotIndex)}-plate-${plate}${outputFileName.slice(dotIndex)}`
 }
 
-/**
- * Two-pass cross-model retarget for jobs that land on an H2-family multi-extruder
- * machine: `--estimate-mode` export, then `repairEstimateModeProjectSettings`, then
- * a clean `--slice` of the repaired 3MF. The split is mandatory — a single-pass
- * `--slice` (with or without `--estimate-mode`) segfaults on a cross-model switch
- * into H2. See docs/slicer-cross-model-machine-switch.md for the rationale and the
- * empirical crash matrix.
- */
-interface MachineSwitchExportInput {
+/** Context for the post-retarget bed re-center: where the merged machine profile lives + the log sink. */
+interface MachineSwitchRecenterInput {
   slicerTarget: RuntimeSlicerTarget
-  inputPath: string
-  outputPath: string
-  outputFileName: string
-  outputLines: SlicingOutputLine[]
-  plate: number
-  profileFiles: SliceProfileFile[]
-  profileArgs: string[]
-  metadata: SlicedArtifactMetadata | null
-  supportedFlags: ReadonlySet<string>
   machineSwitchProfileName: string
-  bambuHomeDir: string
-  bambuConfigDir: string
-  bambuCacheDir: string
-  bambuDataDir: string
-  /** Client-cancel signal, forwarded to executeCli to kill the CLI child. */
-  signal?: AbortSignal
-}
-
-async function runEstimateModeMachineSwitch(input: MachineSwitchExportInput): Promise<void> {
-  // Two-pass cross-model switch: export+repair the project to the target machine, then slice it.
-  const repairedOutputPath = await exportRepairedMachineSwitchProject(input)
-
-  appendStructuredOutput(input.outputLines, 'system', 'Slicing normalized project')
-  const sliceArgs = buildCliArgs({
-    slicerTarget: input.slicerTarget,
-    inputPath: repairedOutputPath,
-    outputPath: input.outputPath,
-    outputFileName: input.outputFileName,
-    plate: input.plate,
-    supportedFlags: input.supportedFlags,
-    profileArgs: [],
-    machineSwitchArgs: [],
-    removedFlags: ['--export-json'],
-    removedStandaloneFlags: [],
-    bambuHomeDir: input.bambuHomeDir,
-    bambuConfigDir: input.bambuConfigDir,
-    bambuCacheDir: input.bambuCacheDir,
-    bambuDataDir: input.bambuDataDir
-  })
-  await executeCli({
-    slicerTarget: input.slicerTarget,
-    args: sliceArgs,
-    outputPath: input.outputPath,
-    outputLines: input.outputLines,
-    supportedFlags: input.supportedFlags,
-    bambuHomeDir: input.bambuHomeDir,
-    bambuConfigDir: input.bambuConfigDir,
-    bambuCacheDir: input.bambuCacheDir,
-    bambuDataDir: input.bambuDataDir,
-    signal: input.signal
-  })
+  outputLines: SlicingOutputLine[]
 }
 
 /**
- * First half of the cross-model machine switch: run BambuStudio's `--estimate-mode`
- * export, then reconcile the multi-extruder topology it leaves inconsistent
- * ({@link repairEstimateModeProjectSettings}). Returns the path to a retargeted,
- * self-consistent **project** 3MF. Both slicing (which then slices it) and the
- * editor's "save as a different printer" flow (which returns it) build on this.
- */
-async function exportRepairedMachineSwitchProject(input: MachineSwitchExportInput): Promise<string> {
-  const workDir = path.dirname(input.outputPath)
-  const estimateOutputPath = path.join(workDir, 'machine-switch-estimate.3mf')
-  const repairedOutputPath = path.join(workDir, 'machine-switch-repaired.3mf')
-
-  appendStructuredOutput(input.outputLines, 'system', 'Normalizing project with upstream machine-switch export')
-  const estimateArgs = buildCliArgs({
-    slicerTarget: input.slicerTarget,
-    inputPath: input.inputPath,
-    outputPath: estimateOutputPath,
-    outputFileName: path.basename(estimateOutputPath),
-    plate: input.plate,
-    supportedFlags: input.supportedFlags,
-    profileArgs: input.profileArgs,
-    machineSwitchArgs: ['--estimate-mode'],
-    removedFlags: ['--slice', '--export-json'],
-    removedStandaloneFlags: ['--min-save'],
-    bambuHomeDir: input.bambuHomeDir,
-    bambuConfigDir: input.bambuConfigDir,
-    bambuCacheDir: input.bambuCacheDir,
-    bambuDataDir: input.bambuDataDir
-  })
-  await executeCli({
-    slicerTarget: input.slicerTarget,
-    args: estimateArgs,
-    outputPath: estimateOutputPath,
-    outputLines: input.outputLines,
-    supportedFlags: input.supportedFlags,
-    bambuHomeDir: input.bambuHomeDir,
-    bambuConfigDir: input.bambuConfigDir,
-    bambuCacheDir: input.bambuCacheDir,
-    bambuDataDir: input.bambuDataDir,
-    signal: input.signal
-  })
-
-  await rewriteThreeMfProjectSettings(estimateOutputPath, repairedOutputPath, async (settings) => {
-    const mergedMachineProfile = await readMergedMachineProfile(input.slicerTarget.profileDir, input.machineSwitchProfileName)
-    const repairedSettings = repairEstimateModeProjectSettings(settings, mergedMachineProfile)
-    return input.metadata ? rewriteProjectSettingsMetadata(repairedSettings, input.metadata) : repairedSettings
-  })
-  const repairedInfo = await stat(repairedOutputPath)
-  if (!repairedInfo.isFile() || repairedInfo.size <= 0) {
-    throw new Error('Normalized machine-switch project is empty')
-  }
-  const repairedProjectSettings = await readThreeMfProjectSettings(repairedOutputPath)
-  if (!repairedProjectSettings) {
-    throw new Error('Normalized machine-switch project is missing project settings')
-  }
-  await readFile(repairedOutputPath)
-  appendStructuredOutput(input.outputLines, 'system', `Normalized project size: ${repairedInfo.size} bytes`)
-  await recenterRepairedProjectForLargerBed(repairedOutputPath, path.join(workDir, 'input.3mf'), input)
-  return repairedOutputPath
-}
-
-/**
- * After the machine-switch repair, shift each plate's objects onto the (larger) target bed so a
+ * After a machine retarget, shift each plate's objects onto the (larger) target bed so a
  * multi-plate project's non-first plates don't fall outside their plate region (CLI exit 206 /
- * CLI_NO_SUITABLE_OBJECTS). The repaired project already targets the new machine but keeps the source
+ * CLI_NO_SUITABLE_OBJECTS). The retargeted project already targets the new machine but keeps the source
  * layout, because BambuStudio's CLI only re-centers on a switch it treats as "forced" (an
  * incompatible process), not the normal compatible-process switch this flow performs. We apply
  * BambuStudio's own `translate_models` shift ourselves (see {@link recenterBuildItemsXml}), reading
  * the source bed from the original upload and the target bed from the merged machine profile. A no-op
  * for a same/smaller target bed.
  */
-async function recenterRepairedProjectForLargerBed(repairedPath: string, sourcePath: string, input: MachineSwitchExportInput): Promise<void> {
+async function recenterRepairedProjectForLargerBed(repairedPath: string, sourcePath: string, input: MachineSwitchRecenterInput): Promise<void> {
   const sourceSettings = await readThreeMfProjectSettings(sourcePath).catch(() => null)
   const sourceBed = sourceSettings ? bedSizeFromPrintableArea(sourceSettings.printable_area) : null
   const machineProfile = await readMergedMachineProfile(input.slicerTarget.profileDir, input.machineSwitchProfileName).catch(() => null)
@@ -974,7 +833,6 @@ function buildCliArgs(input: {
   plate: number
   supportedFlags: ReadonlySet<string>
   profileArgs: string[]
-  machineSwitchArgs: string[]
   removedFlags: string[]
   removedStandaloneFlags: string[]
   bambuHomeDir: string
@@ -1011,8 +869,8 @@ function buildCliArgs(input: {
 
   const inputArgIndex = templateArgs.indexOf(input.inputPath)
   return inputArgIndex >= 0
-    ? [...templateArgs.slice(0, inputArgIndex), ...input.machineSwitchArgs, ...input.profileArgs, ...templateArgs.slice(inputArgIndex)]
-    : [...templateArgs, ...input.machineSwitchArgs, ...input.profileArgs]
+    ? [...templateArgs.slice(0, inputArgIndex), ...input.profileArgs, ...templateArgs.slice(inputArgIndex)]
+    : [...templateArgs, ...input.profileArgs]
 }
 
 async function mkfifo(pipePath: string): Promise<void> {
@@ -1190,33 +1048,41 @@ function applyProcessSettingOverrides(profileJson: string, overrides: Record<str
 }
 
 async function prepareInputThreeMf(input: {
+  slicerTarget: RuntimeSlicerTarget
   inputPath: string
   outputPath: string
   request: z.infer<typeof createSlicingJobSchema>
   profileFiles: SliceProfileFile[]
   stripEmbeddedProfileRefs: boolean
   processSettingOverrides: Record<string, string | string[]>
-  supportedFlags: ReadonlySet<string>
+  outputLines: SlicingOutputLine[]
 }): Promise<{
   inputPath: string
   rewroteProjectSettings: boolean
-  useEstimateModeMachineSwitch: boolean
-  machineSwitchProfileName: string | null
 }> {
   const projectSettings = await readThreeMfProjectSettings(input.inputPath)
   const machineSwitchProfileName = input.profileFiles.find((profile) => profile.kind === 'machine')?.name ?? null
-  const useEstimateModeMachineSwitch = shouldUseEstimateModeMachineSwitch({
-    request: input.request,
-    profileFiles: input.profileFiles,
-    projectSettings,
-    supportedFlags: input.supportedFlags
-  })
   assertSupportedEmbeddedMachineSwitch({
     request: input.request,
     profileFiles: input.profileFiles,
-    projectSettings,
-    supportedFlags: input.supportedFlags
+    projectSettings
   })
+  // Cross-model slice: retarget the project's embedded machine OURSELVES — the same
+  // native `retargetProjectSettingsToMachine` rewrite the editor's "save as a different
+  // printer" uses — so PrintStream stays the source of truth for the 3MF's machine and
+  // the CLI receives a project that already natively targets the requested printer. No
+  // CLI `--estimate-mode` round-trip, no dependency on the slicer version's flags.
+  const needsMachineSwitch = shouldRetargetEmbeddedMachine({
+    request: input.request,
+    profileFiles: input.profileFiles,
+    projectSettings
+  })
+  if (needsMachineSwitch && !machineSwitchProfileName) {
+    throw new Error('Slicing for a different printer requires an installed machine profile — pick one and slice again.')
+  }
+  const machineSwitchProfile = needsMachineSwitch && machineSwitchProfileName
+    ? await readMergedMachineProfile(input.slicerTarget.profileDir, machineSwitchProfileName)
+    : null
 
   // A project-embedded ("project:") process profile has no separate process
   // profile file, so its overrides must be merged into the 3MF's own
@@ -1226,33 +1092,35 @@ async function prepareInputThreeMf(input: {
     Object.keys(input.processSettingOverrides).length > 0
 
   const metadata = buildSlicedArtifactMetadata(input.request, input.profileFiles)
-  if (useEstimateModeMachineSwitch) {
-    return {
-      inputPath: input.inputPath,
-      rewroteProjectSettings: false,
-      useEstimateModeMachineSwitch,
-      machineSwitchProfileName
-    }
-  }
 
-  if (!metadata && !input.stripEmbeddedProfileRefs && !applyEmbeddedProcessOverrides) {
+  if (!metadata && !machineSwitchProfile && !input.stripEmbeddedProfileRefs && !applyEmbeddedProcessOverrides) {
     return {
       inputPath: input.inputPath,
-      rewroteProjectSettings: false,
-      useEstimateModeMachineSwitch,
-      machineSwitchProfileName
+      rewroteProjectSettings: false
     }
   }
   // The slicer CLI reads `filament_map_mode` from model_settings.config (per plate),
   // not project_settings.config — so a manual nozzle choice must be forced there or the
   // CLI auto-assigns nozzles for flush and ignores the chosen Left/Right. Build the
-  // per-plate Manual map from the same assignment we write into project_settings.
-  const manualNozzle = metadata && projectSettings ? buildManualNozzleAssignment(projectSettings, metadata) : null
+  // per-plate Manual map from the same assignment we write into project_settings — against
+  // the TARGET machine's extruder map when the project is being retargeted (the source's
+  // single-nozzle map would otherwise suppress the assignment on a switch to dual-nozzle).
+  const nozzleAssignmentSettings = projectSettings && machineSwitchProfile
+    ? { ...projectSettings, physical_extruder_map: machineSwitchProfile.physical_extruder_map }
+    : projectSettings
+  const manualNozzle = metadata && nozzleAssignmentSettings ? buildManualNozzleAssignment(nozzleAssignmentSettings, metadata) : null
   const modelSettingsTransform = manualNozzle
     ? (xml: string) => applyManualFilamentMapToModelSettings(xml, manualNozzle.filament_map.join(' '))
     : undefined
   const hasEmbeddedProjectSettings = await rewriteThreeMfProjectSettings(input.inputPath, input.outputPath, (settings) => {
-    let rewrittenSettings = metadata ? rewriteProjectSettingsMetadata(settings, metadata) : settings
+    let rewrittenSettings = settings
+    if (machineSwitchProfile && machineSwitchProfileName) {
+      rewrittenSettings = retargetProjectSettingsToMachine(rewrittenSettings, machineSwitchProfile, {
+        printerSettingsId: machineSwitchProfileName,
+        printerModel: firstProfileString(machineSwitchProfile.printer_model) ?? deriveModelFromMachineName(machineSwitchProfileName)
+      })
+    }
+    if (metadata) rewrittenSettings = rewriteProjectSettingsMetadata(rewrittenSettings, metadata)
     if (input.stripEmbeddedProfileRefs) rewrittenSettings = stripEmbeddedProfileRefs(rewrittenSettings)
     if (applyEmbeddedProcessOverrides) rewrittenSettings = mergeProcessOverridesIntoProjectSettings(rewrittenSettings, input.processSettingOverrides)
     return rewrittenSettings
@@ -1260,17 +1128,38 @@ async function prepareInputThreeMf(input: {
   if (!hasEmbeddedProjectSettings) {
     return {
       inputPath: input.inputPath,
-      rewroteProjectSettings: false,
-      useEstimateModeMachineSwitch,
-      machineSwitchProfileName
+      rewroteProjectSettings: false
     }
+  }
+  if (machineSwitchProfile && machineSwitchProfileName) {
+    appendStructuredOutput(input.outputLines, 'system', `Retargeted project to ${machineSwitchProfileName}`)
+    // The retarget preserves the source layout; shift plates onto a larger target bed
+    // so multi-plate projects don't land outside their plate regions (CLI exit 206).
+    await recenterRepairedProjectForLargerBed(input.outputPath, input.inputPath, {
+      slicerTarget: input.slicerTarget,
+      machineSwitchProfileName,
+      outputLines: input.outputLines
+    })
   }
   return {
     inputPath: input.outputPath,
-    rewroteProjectSettings: true,
-    useEstimateModeMachineSwitch,
-    machineSwitchProfileName
+    rewroteProjectSettings: true
   }
+}
+
+/** First non-empty string from a BambuStudio profile value (string or string array). */
+function firstProfileString(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (Array.isArray(value)) {
+    const first = value.find((entry) => typeof entry === 'string' && entry.trim())
+    return typeof first === 'string' ? first.trim() : null
+  }
+  return null
+}
+
+/** Fallback printer_model from a machine preset name, dropping its nozzle-size suffix. */
+function deriveModelFromMachineName(name: string): string {
+  return name.replace(/\s+\d+(?:\.\d+)?\s*nozzle.*$/i, '').trim() || name
 }
 
 function shouldStripEmbeddedProfileRefs(request: z.infer<typeof createSlicingJobSchema>): boolean {

@@ -544,6 +544,8 @@ export function PrintersView() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['printers'] })
+      // Edits can change the manual lifetime-stats adjustments shown on the stats cards.
+      void queryClient.invalidateQueries({ queryKey: ['printer-stats'] })
       setEditing(null)
     }
   })
@@ -1434,6 +1436,7 @@ export function PrintersView() {
         <PrinterFormModal
           mode="edit"
           demoMode={demoMode}
+          printerId={editing.id}
           initialValues={{
             ...editing,
             bridgeId: editing.bridgeId ?? ''

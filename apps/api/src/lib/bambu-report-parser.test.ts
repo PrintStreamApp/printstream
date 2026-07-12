@@ -129,6 +129,27 @@ test('parseReport leaves nozzleRack null for a printer with no rack markers', ()
   assert.equal('nozzleRack' in (delta ?? {}), false)
 })
 
+test('makeOfflineStatus starts with skippedObjectIds unknown (null)', () => {
+  assert.equal(makeOfflineStatus(printer).skippedObjectIds, null)
+})
+
+test('parseReport parses s_obj into skippedObjectIds, tolerating string entries', () => {
+  const delta = parseReport({ print: { s_obj: [153, '154', 'not-a-number', null] } }, printer)
+  assert.deepEqual(delta?.skippedObjectIds, [153, 154])
+})
+
+test('parseReport applies an empty s_obj as "nothing skipped" but ignores a malformed one', () => {
+  // [] is a real state-bearing report (firmware supports partskip, nothing skipped)...
+  const empty = parseReport({ print: { s_obj: [] } }, printer)
+  assert.deepEqual(empty?.skippedObjectIds, [])
+  // ...whereas a non-array value or an absent field must not touch the merged status,
+  // mirroring the sdCardPresent init/merge semantics (null until first reported).
+  const malformed = parseReport({ print: { s_obj: 'nope', mc_percent: 10 } }, printer)
+  assert.equal('skippedObjectIds' in (malformed ?? {}), false)
+  const absent = parseReport({ print: { mc_percent: 10 } }, printer)
+  assert.equal('skippedObjectIds' in (absent ?? {}), false)
+})
+
 test('parseReport reports modules even when no ota entry is present', () => {
   const delta = parseReport(
     {

@@ -226,24 +226,6 @@ export function matchesPrinterModel(profile: SlicingProfileSummary, model: strin
   })
 }
 
-export const LEGACY_MACHINE_SWITCH_MODELS = new Set(['H2D', 'H2DPRO', 'H2C'])
-
-export function buildLegacyMachineSwitchWarning(input: {
-  sourcePrinterModel: string | null
-  targetPrinterModel: string | null
-  slicerTarget: SlicingCapabilities['targets'][number] | null
-}): string | null {
-  if (!input.slicerTarget || input.slicerTarget.supportsEstimateModeMachineSwitch) return null
-  if (!input.targetPrinterModel || !LEGACY_MACHINE_SWITCH_MODELS.has(input.targetPrinterModel)) return null
-  if (input.sourcePrinterModel && input.sourcePrinterModel === input.targetPrinterModel) return null
-
-  const targetLabel = formatSliceDialogPrinterModel(input.targetPrinterModel)
-  const sourceLabel = input.sourcePrinterModel
-    ? `${formatSliceDialogPrinterModel(input.sourcePrinterModel)} project`
-    : 'project'
-  return `${input.slicerTarget.label} cannot switch this ${sourceLabel} directly to ${targetLabel}. Choose a newer slicer version, or save the project as ${targetLabel} in Bambu Studio first.`
-}
-
 export function resolveSliceDialogSourcePrinterModel(bakedIndex: ThreeMfIndex | null, fallbackModels: readonly string[]): string | null {
   return normalizeSliceDialogPrinterModel(bakedIndex?.printerProfileName)
     ?? normalizeSliceDialogPrinterModel(bakedIndex?.compatiblePrinterModels[0])
@@ -264,7 +246,7 @@ export function formatSliceDialogPrinterModel(value: string): string {
     case 'H2DPRO': return 'H2D Pro'
     case 'H2D': return 'H2D'
     case 'H2C': return 'H2C'
-    case 'A1MINI': return 'A1 Mini'
+    case 'A1mini': return 'A1 Mini'
     default: return value
   }
 }

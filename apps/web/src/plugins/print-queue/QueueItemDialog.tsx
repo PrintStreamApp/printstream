@@ -42,7 +42,9 @@ import { apiFetch } from '../../lib/apiClient'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { DialogSection } from '../../components/DialogSection'
 import { LibraryPlateCardPicker } from '../../components/LibraryPlateSelect'
+import { PrintObjectsSection } from '../../components/library/PrintObjectsSection'
 import { PrintStartOptionsFields } from '../../components/library/PrintStartOptionsFields'
+import { plateHasSliceData } from '../../lib/sliceProfileMatching'
 import { buildLibraryResourceBasePath, visibleMappingFilaments } from '../../lib/libraryViewHelpers'
 import { mergePrintStartOptions } from '../../lib/printStartOptions'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
@@ -128,6 +130,13 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   // Overrides default to null = "follow the file/printer"; set once the user edits.
   const [mappingOverride, setMappingOverride] = useState<number[] | null>(item?.amsMapping ?? null)
   const [materialsOverride, setMaterialsOverride] = useState<QueueRequiredFilament[] | null>(item?.requiredFilaments ?? null)
+  /**
+   * Per-object deselection (sliced plates with a real object list only). Persisted on
+   * the queued item as `options.skipObjects` and passed through to dispatch, where the
+   * server maps it to instance identify_ids for the start command (plus the mid-print
+   * fallback). Plate-specific, so a plate change resets it.
+   */
+  const [deselectedObjectIds, setDeselectedObjectIds] = useState<number[]>(item?.options.skipObjects ?? [])
 
   const addItem = useAddQueueItem()
   const updateItem = useUpdateQueueItem()
@@ -196,6 +205,16 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
 
   const effectiveMaterials = materialsOverride ?? fileFilaments
 
+  const plateObjects = useMemo(() => activePlate?.objects ?? [], [activePlate])
+  const showObjectSelection = plateHasSliceData(activePlate) && plateObjects.length >= 2
+  const deselectedObjectIdSet = useMemo(() => new Set(deselectedObjectIds), [deselectedObjectIds])
+  const toggleObjectSelected = (objectId: number, selected: boolean) => {
+    setDeselectedObjectIds((current) => {
+      if (selected) return current.filter((id) => id !== objectId)
+      return current.includes(objectId) ? current : [...current, objectId]
+    })
+  }
+
   // Default AMS mapping for a specific-printer target (overridden once the user edits a slot).
   const computedMapping = useMemo(() => {
     if (target.kind !== 'printer' || !target.printerId) return []
@@ -208,9 +227,10 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
 
   const changePlate = (next: number) => {
     setPlateIndex(next)
-    // The new plate has its own filaments; drop overrides so they re-seed from it.
+    // The new plate has its own filaments and objects; drop overrides so they re-seed from it.
     setMappingOverride(null)
     setMaterialsOverride(null)
+    setDeselectedObjectIds([])
   }
   const changeTarget = (next: string) => {
     setTargetValue(next)
@@ -255,6 +275,14 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
     // Submit the actually-selected plate's index (the picker can resolve to a plate whose
     // number differs from the 1-based default, e.g. a single-plate sliced "Plate 2" output).
     const plate = activePlate?.index ?? plateIndex
+    // Filter to the active plate's objects so a stale id can never be persisted.
+    const skipObjects = showObjectSelection
+      ? deselectedObjectIds.filter((id) => plateObjects.some((object) => object.id === id))
+      : []
+    const submittedOptions: QueuePrintOptions = {
+      ...options,
+      skipObjects: skipObjects.length > 0 ? skipObjects : undefined
+    }
     try {
       if (isEdit && item) {
         await updateItem.mutateAsync({
@@ -263,7 +291,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
             plate,
             quantity,
             target,
-            options,
+            options: submittedOptions,
             amsMapping: isSpecific ? amsMapping ?? null : null,
             ...(materialsOverride ? { requiredFilaments: materialsOverride } : {})
           }
@@ -276,7 +304,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
           // An order-linked item is one order print → always a single copy.
           quantity: orderLink ? 1 : quantity,
           target,
-          options,
+          options: submittedOptions,
           ...(isSpecific && amsMapping ? { amsMapping } : {}),
           ...(materialsOverride ? { requiredFilaments: materialsOverride } : {}),
           ...(orderLink ? { orderLink } : {}),
@@ -316,6 +344,14 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
                   />
                 </DialogSection>
               ) : null}
+
+              {showObjectSelection && (
+                <PrintObjectsSection
+                  objects={plateObjects}
+                  deselectedIds={deselectedObjectIdSet}
+                  onToggle={toggleObjectSelected}
+                />
+              )}
 
               <Stack direction="row" spacing={2}>
                 {/* An order-linked item maps to one order print, so copies are fixed at 1. */}
