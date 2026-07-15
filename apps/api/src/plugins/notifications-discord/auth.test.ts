@@ -32,10 +32,10 @@ test('discord settings return 403 without settings.manage permission', async () 
     permissions: [],
     runtimePolicy: { demoMode: false }
   }, async ({ baseUrl }) => {
-    const response = await fetch(`${baseUrl}/api/plugins/notifications-discord/webhook`, {
-      method: 'PUT',
+    const response = await fetch(`${baseUrl}/api/plugins/notifications-discord/recipients`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ webhookUrl: 'https://discord.com/api/webhooks/123/abc' })
+      body: JSON.stringify({ url: 'https://discord.com/api/webhooks/123/abc', audience: 'everyone' })
     })
 
     assert.equal(response.status, 403)
@@ -43,32 +43,83 @@ test('discord settings return 403 without settings.manage permission', async () 
   })
 })
 
-test('discord settings can be read and updated by settings managers', async () => {
+test('discord recipients can be listed, added, and removed by settings managers', async () => {
   await withDiscordApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
     permissions: [SETTINGS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async ({ baseUrl }) => {
-    const updateResponse = await fetch(`${baseUrl}/api/plugins/notifications-discord/webhook`, {
-      method: 'PUT',
+    const addShared = await fetch(`${baseUrl}/api/plugins/notifications-discord/recipients`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ webhookUrl: 'https://discord.com/api/webhooks/123/abc' })
+      body: JSON.stringify({ url: 'https://discord.com/api/webhooks/123/abc', label: 'Team', audience: 'everyone' })
     })
+    assert.equal(addShared.status, 201)
 
-    assert.equal(updateResponse.status, 200)
-    assert.deepEqual(await updateResponse.json(), { webhookConfigured: true })
+    const addPersonal = await fetch(`${baseUrl}/api/plugins/notifications-discord/recipients`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://discord.com/api/webhooks/456/def', audience: 'mine' })
+    })
+    assert.equal(addPersonal.status, 201)
 
     const readResponse = await fetch(`${baseUrl}/api/plugins/notifications-discord`)
-
     assert.equal(readResponse.status, 200)
-    assert.deepEqual(await readResponse.json(), { webhookConfigured: true })
+    const read = await readResponse.json() as {
+      configured: boolean
+      recipients: Array<{ id: string; label: string; audience: string; userName?: string; url?: string }>
+    }
+    assert.equal(read.configured, true)
+    assert.deepEqual(read.recipients.map((entry) => entry.audience), ['everyone', 'personal'])
+    assert.equal(read.recipients[1]!.userName, 'User One')
+    assert.ok(read.recipients.every((entry) => entry.url === undefined), 'destination URLs never leave the server')
+
+    const removeResponse = await fetch(
+      `${baseUrl}/api/plugins/notifications-discord/recipients/${read.recipients[0]!.id}`,
+      { method: 'DELETE' }
+    )
+    assert.equal(removeResponse.status, 200)
+    const afterRemove = await removeResponse.json() as { recipients: Array<{ audience: string }> }
+    assert.deepEqual(afterRemove.recipients.map((entry) => entry.audience), ['personal'])
   })
+})
+
+test('discord recipients reject non-discord webhook URLs', async () => {
+  await withDiscordApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [SETTINGS_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/api/plugins/notifications-discord/recipients`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://example.com/webhook', audience: 'everyone' })
+    })
+    assert.equal(response.status, 400)
+  })
+})
+
+test('a legacy webhookUrl setting appears as a shared recipient', async () => {
+  await withDiscordApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [SETTINGS_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async ({ baseUrl }) => {
+    const readResponse = await fetch(`${baseUrl}/api/plugins/notifications-discord`)
+    const read = await readResponse.json() as { configured: boolean; recipients: Array<{ id: string; audience: string }> }
+    assert.equal(read.configured, true)
+    assert.deepEqual(read.recipients.map((entry) => entry.audience), ['everyone'])
+    assert.equal(read.recipients[0]!.id, 'legacy')
+  }, { initialSettings: { 'tenant:test-tenant:webhookUrl': 'https://discord.com/api/webhooks/1/legacy' } })
 })
 
 async function withDiscordApp(
   auth: RequestAuthContext,
-  run: (context: { baseUrl: string }) => Promise<void>
+  run: (context: { baseUrl: string }) => Promise<void>,
+  options: { initialSettings?: Record<string, string> } = {}
 ): Promise<void> {
   const app = express()
   app.use(express.json())
@@ -88,11 +139,18 @@ async function withDiscordApp(
     response.status(500).json({ error: 'Internal server error' })
   })
 
-  const settings = new Map<string, string>()
+  const settings = new Map<string, string>(Object.entries(options.initialSettings ?? {}))
   await notificationsDiscordPlugin.register({
     pluginName: 'notifications-discord',
     logger: { info() {}, warn() {}, error() {} },
-    prisma: {} as never,
+    prisma: {
+      authUser: {
+        async findUnique() { return { displayName: 'User One', email: 'user1@example.com' } }
+      },
+      setting: {
+        async findMany() { return [] }
+      }
+    } as never,
     printerEvents: new PrinterEventBus(),
     ws: { broadcast() {} } as never,
     router,

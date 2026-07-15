@@ -11,6 +11,9 @@
  * Routes:
  * - `GET /api/plugins/notifications-browser` — public key + subscription count.
  * - `POST /api/plugins/notifications-browser/subscriptions` — register a subscription.
+ * - `POST /api/plugins/notifications-browser/subscriptions/lookup` — whether an
+ *   endpoint is registered in the current scope (POST because the endpoint is a
+ *   capability URL that must stay out of query strings and logs).
  * - `DELETE /api/plugins/notifications-browser/subscriptions` — unregister by endpoint.
  * - `POST /api/plugins/notifications-browser/dismissals` — sync a notification
  *   dismissal to the actor's other devices (excluded from the audit trail).
@@ -27,6 +30,16 @@
  * its own list in the plugin's base store for platform-scope events (bridge
  * crashes, operator events). Notifications are only delivered to the
  * subscriptions belonging to the scope the event originated from.
+ *
+ * A browser has exactly ONE push subscription per origin, so the same
+ * endpoint is expected to appear in several scopes' lists — one entry per
+ * workspace the user enabled notifications in on that device. Enabling a
+ * workspace must therefore never invalidate the device's existing
+ * subscription, and disabling removes the endpoint from that scope only.
+ *
+ * Messages carrying `targetUserIds` are personal rather than scope-wide and
+ * route through `targeted-push.ts` (actor-key matching; cross-scope with
+ * endpoint dedupe when the message has no tenant).
  */
 import { z } from 'zod'
 import type { Request } from 'express'
@@ -37,7 +50,9 @@ import { annotateRequestAuditLog, skipRequestAuditLog } from '../../lib/audit-lo
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { badRequest } from '../../lib/http-error.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
+import { listTenantScopesWithPluginSetting } from '../../lib/notification-scope.js'
 import { WebPushDelivery, type StoredSubscription } from './push.js'
+import { deliverTargetedPush } from './targeted-push.js'
 
 const subscriptionSchema = z.object({
   endpoint: z.string().url(),
@@ -51,7 +66,7 @@ const subscribeBodySchema = z.object({
   subscription: subscriptionSchema
 })
 
-const unsubscribeBodySchema = z.object({
+const endpointBodySchema = z.object({
   endpoint: z.string().url()
 })
 
@@ -65,7 +80,7 @@ const dismissalBodySchema = z.object({
 
 export const notificationsBrowserPlugin: ApiPlugin = {
   name: 'notifications-browser',
-  version: '0.2.0',
+  version: '0.3.0',
   description: 'Background OS notifications via Web Push (works when the app is closed).',
   async register(context) {
     // VAPID keys are global (per-server), stored in the base plugin store.
@@ -132,6 +147,20 @@ export const notificationsBrowserPlugin: ApiPlugin = {
       response.status(201).json({ subscriptions: tenantDelivery.size() })
     })
 
+    context.router.post('/subscriptions/lookup', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
+      // Read-only status probe (fired on every settings-panel mount); a POST
+      // only because the endpoint is a capability URL that must stay out of
+      // query strings — no state changes, so no audit row.
+      skipRequestAuditLog(request)
+      const tenantId = request.tenant?.id ?? null
+      const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
+      const parsed = endpointBodySchema.safeParse(request.body)
+      if (!parsed.success) {
+        throw badRequest('Invalid lookup payload')
+      }
+      response.json({ registered: tenantDelivery.hasSubscription(parsed.data.endpoint) })
+    })
+
     context.router.delete('/subscriptions', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
       const tenantId = request.tenant?.id ?? null
       annotateRequestAuditLog(request, {
@@ -140,7 +169,7 @@ export const notificationsBrowserPlugin: ApiPlugin = {
         summary: 'Unregistered a browser push notification subscription.'
       })
       const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
-      const parsed = unsubscribeBodySchema.safeParse(request.body)
+      const parsed = endpointBodySchema.safeParse(request.body)
       if (!parsed.success) {
         throw badRequest('Invalid unsubscribe payload')
       }
@@ -178,6 +207,22 @@ export const notificationsBrowserPlugin: ApiPlugin = {
       context.printerEvents,
       async (message) => {
         const tenantId = message.tenantId ?? null
+        if (message.targetUserIds && message.targetUserIds.length > 0) {
+          const scopedDelivery = await getOrCreateScopedDelivery(tenantId)
+          const deliverable = message.tenantId
+            ? await resolveDeliverableEndpoints(context, tenantId, scopedDelivery.listSubscriptions())
+            : null
+          await deliverTargetedPush({
+            message,
+            targetUserIds: message.targetUserIds,
+            getScopedDelivery: getOrCreateScopedDelivery,
+            listSubscriptionTenantScopes: () =>
+              listTenantScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions'),
+            isEnabledForTenant: (scope) => context.isEnabledForTenant?.(scope) ?? true,
+            isDeliverableInScope: deliverable ? (entry) => deliverable.has(entry.endpoint) : undefined
+          })
+          return
+        }
         const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
         // Filter out subscriptions whose owning user no longer belongs to the
         // scope (membership for tenants, the platform flag at the platform

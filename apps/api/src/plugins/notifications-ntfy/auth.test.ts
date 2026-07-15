@@ -32,10 +32,10 @@ test('ntfy settings return 403 without settings.manage permission', async () => 
     permissions: [],
     runtimePolicy: { demoMode: false }
   }, async ({ baseUrl }) => {
-    const response = await fetch(`${baseUrl}/api/plugins/notifications-ntfy/topic`, {
-      method: 'PUT',
+    const response = await fetch(`${baseUrl}/api/plugins/notifications-ntfy/recipients`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topicUrl: 'https://ntfy.sh/test-topic' })
+      body: JSON.stringify({ url: 'https://ntfy.sh/test-topic', audience: 'everyone' })
     })
 
     assert.equal(response.status, 403)
@@ -43,30 +43,52 @@ test('ntfy settings return 403 without settings.manage permission', async () => 
   })
 })
 
-test('ntfy settings can be read and updated by settings managers', async () => {
+test('ntfy recipients can be listed, added, and removed by settings managers', async () => {
   await withNtfyApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
     permissions: [SETTINGS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async ({ baseUrl }) => {
-    const updateResponse = await fetch(`${baseUrl}/api/plugins/notifications-ntfy/topic`, {
-      method: 'PUT',
+    const addResponse = await fetch(`${baseUrl}/api/plugins/notifications-ntfy/recipients`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topicUrl: 'https://ntfy.sh/test-topic' })
+      body: JSON.stringify({ url: 'https://ntfy.sh/test-topic', label: 'Shop topic', audience: 'everyone' })
     })
-
-    assert.equal(updateResponse.status, 200)
-    assert.deepEqual(await updateResponse.json(), { topicConfigured: true })
+    assert.equal(addResponse.status, 201)
 
     const readResponse = await fetch(`${baseUrl}/api/plugins/notifications-ntfy`)
-
     assert.equal(readResponse.status, 200)
-    assert.deepEqual(await readResponse.json(), {
-      enabled: true,
-      topicConfigured: true
-    })
+    const read = await readResponse.json() as {
+      configured: boolean
+      recipients: Array<{ id: string; label: string; audience: string; url?: string }>
+    }
+    assert.equal(read.configured, true)
+    assert.deepEqual(read.recipients.map((entry) => [entry.label, entry.audience]), [['Shop topic', 'everyone']])
+    assert.ok(read.recipients.every((entry) => entry.url === undefined), 'topic URLs never leave the server')
+
+    const removeResponse = await fetch(
+      `${baseUrl}/api/plugins/notifications-ntfy/recipients/${read.recipients[0]!.id}`,
+      { method: 'DELETE' }
+    )
+    assert.equal(removeResponse.status, 200)
+    assert.deepEqual((await removeResponse.json() as { recipients: unknown[] }).recipients, [])
   })
+})
+
+test('a legacy topicUrl setting appears as a shared recipient', async () => {
+  await withNtfyApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [SETTINGS_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async ({ baseUrl }) => {
+    const readResponse = await fetch(`${baseUrl}/api/plugins/notifications-ntfy`)
+    const read = await readResponse.json() as { configured: boolean; recipients: Array<{ id: string; audience: string }> }
+    assert.equal(read.configured, true)
+    assert.deepEqual(read.recipients.map((entry) => entry.audience), ['everyone'])
+    assert.equal(read.recipients[0]!.id, 'legacy')
+  }, { initialSettings: { 'tenant:test-tenant:topicUrl': 'https://ntfy.sh/legacy-topic' } })
 })
 
 test('ntfy rejects an SSRF topic URL (cloud metadata / loopback)', async () => {
@@ -77,10 +99,10 @@ test('ntfy rejects an SSRF topic URL (cloud metadata / loopback)', async () => {
     runtimePolicy: { demoMode: false }
   }, async ({ baseUrl }) => {
     for (const topicUrl of ['http://169.254.169.254/latest/meta-data/', 'http://localhost:8080/x', 'ftp://ntfy.sh/x']) {
-      const response = await fetch(`${baseUrl}/api/plugins/notifications-ntfy/topic`, {
-        method: 'PUT',
+      const response = await fetch(`${baseUrl}/api/plugins/notifications-ntfy/recipients`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topicUrl })
+        body: JSON.stringify({ url: topicUrl, audience: 'everyone' })
       })
       assert.equal(response.status, 400, `expected ${topicUrl} to be rejected`)
     }
@@ -89,7 +111,8 @@ test('ntfy rejects an SSRF topic URL (cloud metadata / loopback)', async () => {
 
 async function withNtfyApp(
   auth: RequestAuthContext,
-  run: (context: { baseUrl: string }) => Promise<void>
+  run: (context: { baseUrl: string }) => Promise<void>,
+  options: { initialSettings?: Record<string, string> } = {}
 ): Promise<void> {
   const app = express()
   app.use(express.json())
@@ -109,11 +132,18 @@ async function withNtfyApp(
     response.status(500).json({ error: 'Internal server error' })
   })
 
-  const settings = new Map<string, string>()
+  const settings = new Map<string, string>(Object.entries(options.initialSettings ?? {}))
   await notificationsNtfyPlugin.register({
     pluginName: 'notifications-ntfy',
     logger: { info() {}, warn() {}, error() {} },
-    prisma: {} as never,
+    prisma: {
+      authUser: {
+        async findUnique() { return { displayName: 'User One', email: 'user1@example.com' } }
+      },
+      setting: {
+        async findMany() { return [] }
+      }
+    } as never,
     printerEvents: new PrinterEventBus(),
     ws: { broadcast() {} } as never,
     router,

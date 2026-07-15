@@ -1,26 +1,23 @@
 /**
  * Discord notifications plugin (built-in).
  *
- * Posts printer-domain notifications to a configured Discord webhook.
+ * Posts printer-domain notifications to configured Discord webhooks.
  * Formatting is delegated to the shared notification helper; this
  * plugin only owns Discord-specific delivery (embed colour, payload
  * shape).
  *
- * Configuration is scoped: each tenant stores its own webhook URL via
- * `context.settings.forTenant(tenantId)`, and the platform workspace stores
- * one in the plugin's base store for platform-scope events (bridge crashes,
- * operator events). Notifications only go to the webhook of the scope the
- * event belongs to.
+ * Destinations are a per-scope recipients list (shared team webhooks for
+ * broadcast notifications, self-bound personal webhooks for the requesting
+ * user's targeted messages — see `lib/notification-recipients.ts`). Each
+ * tenant stores its list via `context.settings.forTenant(tenantId)`, the
+ * platform workspace in the plugin's base store; a pre-list `webhookUrl`
+ * setting keeps working as an implicit shared entry until first write.
  */
 import type { ApiPlugin } from '../../plugin/types.js'
-import {
-  SETTINGS_MANAGE_PERMISSION,
-  type NotificationLevel
-} from '@printstream/shared'
-import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
-import { requireRequestPermission } from '../../lib/authorization.js'
+import type { NotificationLevel, NotificationMessage } from '@printstream/shared'
 import { badRequest } from '../../lib/http-error.js'
-import { messageNotificationScope, requestNotificationScope } from '../../lib/notification-scope.js'
+import { registerChannelRecipientRoutes } from '../../lib/notification-recipient-routes.js'
+import { resolveChannelDeliveryUrls } from '../../lib/notification-recipients.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
 import { env } from '../../lib/env.js'
 
@@ -36,88 +33,88 @@ const COLOUR_BY_LEVEL: Record<NotificationLevel, number> = {
 
 const WEBHOOK_PATTERN = /^https:\/\/(?:[a-z]+\.)?discord(?:app)?\.com\/api\/webhooks\//i
 
+const RECIPIENT_OPTIONS = {
+  channelLabel: 'Discord',
+  legacyUrlKey: 'webhookUrl',
+  legacyLabel: 'Discord webhook',
+  validateUrl: (url: string) => {
+    if (!WEBHOOK_PATTERN.test(url)) {
+      throw badRequest('Not a valid Discord webhook URL')
+    }
+  }
+}
+
 export const notificationsDiscordPlugin: ApiPlugin = {
   name: 'notifications-discord',
-  version: '0.1.0',
-  description: 'Forward printer notifications to a Discord webhook.',
+  version: '0.2.0',
+  description: 'Forward printer notifications to Discord webhooks (shared channels and personal ones).',
   async register(context) {
-    context.router.get('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const scope = requestNotificationScope(context, request)
-      const webhookUrl = await scope.settings.get('webhookUrl')
-      response.json({ webhookConfigured: Boolean(webhookUrl) })
-    })
-
-    context.router.put('/webhook', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const scope = requestNotificationScope(context, request)
-      const value = typeof request.body?.webhookUrl === 'string' ? request.body.webhookUrl.trim() : ''
-      if (!value) {
-        await scope.settings.delete('webhookUrl')
-        // The webhook URL is a secret; only record whether one is configured.
-        annotateRequestAuditLog(request, {
-          action: 'update-discord-webhook',
-          resource: 'Discord notification webhook',
-          summary: 'Cleared the Discord notification webhook.',
-          metadata: { configured: false }
-        })
-        response.json({ webhookConfigured: false })
-        return
-      }
-      if (!WEBHOOK_PATTERN.test(value)) {
-        throw badRequest('Not a valid Discord webhook URL')
-      }
-      await scope.settings.set('webhookUrl', value)
-      annotateRequestAuditLog(request, {
-        action: 'update-discord-webhook',
-        resource: 'Discord notification webhook',
-        summary: 'Configured the Discord notification webhook.',
-        metadata: { configured: true }
-      })
-      response.json({ webhookConfigured: true })
-    })
+    registerChannelRecipientRoutes(context, RECIPIENT_OPTIONS)
 
     const off = subscribePrinterNotifications(
       context.printerEvents,
       async (message) => {
-        const scope = messageNotificationScope(context, message.tenantId)
-        const webhookUrl = await scope.settings.get('webhookUrl')
-        if (!webhookUrl) return
-        // Discord embeds need an absolute URL for the image; relative
-        // paths get silently dropped. We attach via embed only when
-        // the API is configured with a public base URL.
-        const absoluteImage = message.imageUrl && /^https?:\/\//i.test(message.imageUrl)
-          ? message.imageUrl
-          : undefined
-        const absoluteUrl = resolvePublicNotificationUrl(message.url)
-        const payload = {
-          username: 'PrintStream',
-          embeds: [
-            {
-              title: message.title,
-              url: absoluteUrl,
-              description: message.body,
-              color: COLOUR_BY_LEVEL[message.level],
-              timestamp: message.timestamp,
-              footer: message.printerName ? { text: message.printerName } : undefined,
-              image: absoluteImage ? { url: absoluteImage } : undefined
-            }
-          ]
-        }
-        const res = await fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS)
+        const urls = await resolveChannelDeliveryUrls({
+          ...RECIPIENT_OPTIONS,
+          message,
+          pluginName: context.pluginName,
+          prisma: context.prisma,
+          settingsForScope: (tenantId) => tenantId ? context.settings.forTenant(tenantId) : context.settings,
+          isEnabledForTenant: (tenantId) => context.isEnabledForTenant?.(tenantId) ?? true
         })
-        if (!res.ok) {
-          throw new Error(`Discord webhook responded ${res.status}`)
+        if (urls.length === 0) return
+        const payload = buildDiscordPayload(message)
+        const results = await Promise.allSettled(urls.map(async (url) => {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS)
+          })
+          if (!res.ok) {
+            throw new Error(`Discord webhook responded ${res.status}`)
+          }
+        }))
+        for (const result of results) {
+          // One dead webhook must not hide the others; URLs are secrets, so
+          // only the failure itself is logged.
+          if (result.status === 'rejected') {
+            context.logger.warn('failed to publish Discord notification', result.reason)
+          }
         }
       },
       {
-        onError: (error) => context.logger.warn('failed to publish Discord notification', error),
-        shouldHandleTenantId: (tenantId) => context.isEnabledForTenant?.(tenantId) ?? true
+        onError: (error) => context.logger.warn('failed to publish Discord notification', error)
+        // No shouldHandleTenantId gate: targeted messages may fan out beyond
+        // the event's own scope, so the resolver enforces plugin enablement
+        // per DELIVERY scope instead of per event scope.
       }
     )
     context.onShutdown(off)
+  }
+}
+
+function buildDiscordPayload(message: NotificationMessage) {
+  // Discord embeds need an absolute URL for the image; relative
+  // paths get silently dropped. We attach via embed only when
+  // the API is configured with a public base URL.
+  const absoluteImage = message.imageUrl && /^https?:\/\//i.test(message.imageUrl)
+    ? message.imageUrl
+    : undefined
+  const absoluteUrl = resolvePublicNotificationUrl(message.url)
+  return {
+    username: 'PrintStream',
+    embeds: [
+      {
+        title: message.title,
+        url: absoluteUrl,
+        description: message.body,
+        color: COLOUR_BY_LEVEL[message.level],
+        timestamp: message.timestamp,
+        footer: message.printerName ? { text: message.printerName } : undefined,
+        image: absoluteImage ? { url: absoluteImage } : undefined
+      }
+    ]
   }
 }
 

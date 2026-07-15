@@ -29,11 +29,11 @@ const supportedState: BrowserNotificationEnrollmentPromptState = {
     pushManager: true
   },
   permission: 'default',
-  subscribed: false,
+  registeredInWorkspace: false,
   dismissed: false
 }
 
-test('shouldShowBrowserNotificationEnrollmentPrompt only nudges supported, enabled, unsubscribed devices', () => {
+test('shouldShowBrowserNotificationEnrollmentPrompt only nudges supported, enabled devices not registered in the workspace', () => {
   assert.equal(shouldShowBrowserNotificationEnrollmentPrompt(supportedState), true)
   assert.equal(
     shouldShowBrowserNotificationEnrollmentPrompt({ ...supportedState, permission: 'granted' }),
@@ -44,7 +44,7 @@ test('shouldShowBrowserNotificationEnrollmentPrompt only nudges supported, enabl
     false
   )
   assert.equal(
-    shouldShowBrowserNotificationEnrollmentPrompt({ ...supportedState, subscribed: true }),
+    shouldShowBrowserNotificationEnrollmentPrompt({ ...supportedState, registeredInWorkspace: true }),
     false
   )
   assert.equal(

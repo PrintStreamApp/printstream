@@ -7,6 +7,7 @@ import { printerEvents } from './printer-events.js'
 import { usePrismaStubs } from '../test-utils/prisma-stubs.js'
 import {
   emitPlatformNotification,
+  emitUserNotification,
   getPlatformNotificationTemplate,
   listPlatformNotificationTemplates,
   registerPlatformNotificationEvents,
@@ -88,6 +89,62 @@ test('emitPlatformNotification renders and fans out over the bus', async () => {
   assert.equal(received[0]?.title, 'Hello Nico')
   assert.equal(received[0]?.body, 'Body for Nico')
   assert.equal(received[0]?.tenantId, undefined, 'platform messages carry no tenant')
+})
+
+test('emitPlatformNotification forwards targeting and email-suppression options', async () => {
+  stubEmptyStorage()
+  const received: Array<{ targetUserIds?: string[]; emailHandledExternally?: boolean; url?: string; level: string }> = []
+  const listener = (event: { message: (typeof received)[number] }) => {
+    received.push(event.message)
+  }
+  printerEvents.on('platform.notification', listener)
+  try {
+    await emitPlatformNotification('test-event', { name: 'Nico' }, {
+      targetUserIds: ['user-1'],
+      emailHandledExternally: true,
+      url: '/platform/messages?conversation=c1',
+      level: 'warning'
+    })
+  } finally {
+    printerEvents.off('platform.notification', listener)
+  }
+
+  assert.equal(received.length, 1)
+  assert.deepEqual(received[0]?.targetUserIds, ['user-1'])
+  assert.equal(received[0]?.emailHandledExternally, true)
+  assert.equal(received[0]?.url, '/platform/messages?conversation=c1')
+  assert.equal(received[0]?.level, 'warning')
+})
+
+test('emitUserNotification stamps id/timestamp and requires targets', () => {
+  const received: Array<{ id: string; timestamp: string; targetUserIds?: string[]; title: string }> = []
+  const listener = (event: { message: (typeof received)[number] }) => {
+    received.push(event.message)
+  }
+  printerEvents.on('platform.notification', listener)
+  try {
+    emitUserNotification({
+      category: 'system',
+      level: 'info',
+      title: 'Reply',
+      body: 'Body',
+      targetUserIds: []
+    })
+    emitUserNotification({
+      category: 'system',
+      level: 'info',
+      title: 'Reply',
+      body: 'Body',
+      targetUserIds: ['user-1']
+    })
+  } finally {
+    printerEvents.off('platform.notification', listener)
+  }
+
+  assert.equal(received.length, 1, 'empty target lists are dropped')
+  assert.deepEqual(received[0]?.targetUserIds, ['user-1'])
+  assert.ok(received[0]?.id.length)
+  assert.ok(received[0]?.timestamp.length)
 })
 
 test('emitPlatformNotification drops disabled and unregistered events', async () => {

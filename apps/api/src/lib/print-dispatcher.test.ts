@@ -486,6 +486,27 @@ test('buildProjectFilePrintCommand derives ams_mapping_2 across the tray-index b
   ])
 })
 
+test('buildProjectFilePrintCommand carries ams_mapping_info and nozzles_info when resolved', () => {
+  const base = {
+    remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
+    bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
+    firstLayerInspection: false, filamentDynamicsCalibration: false,
+    nozzleOffsetCalibration: 'off', timelapse: false, useAms: true
+  } as const
+  const info = [{ ams: 128, targetColor: '0A2CA5FF', filamentId: 'GFA06', filamentType: 'PLA', nozzleId: 1, sourceColor: 'FF0000FF' }]
+  const nozzles = [{ id: 1, type: null, flowSize: 'high_flow', diameter: 0.4 }]
+  const payload = buildProjectFilePrintCommand({ ...base, amsMapping: [128], amsMappingInfo: info, nozzlesInfo: nozzles })
+  assert.deepEqual(payload.ams_mapping_info, info)
+  assert.deepEqual(payload.nozzles_info, nozzles)
+
+  // ams_mapping_info rides only alongside a mapping; nulls are omitted entirely.
+  const withoutMapping = buildProjectFilePrintCommand({ ...base, amsMappingInfo: info, nozzlesInfo: nozzles })
+  assert.equal('ams_mapping_info' in withoutMapping, false)
+  const withoutInfo = buildProjectFilePrintCommand({ ...base, amsMapping: [128], amsMappingInfo: null, nozzlesInfo: null })
+  assert.equal('ams_mapping_info' in withoutInfo, false)
+  assert.equal('nozzles_info' in withoutInfo, false)
+})
+
 test('buildProjectFilePrintCommand omits ams_mapping when empty', () => {
   const withEmpty = buildProjectFilePrintCommand({
     remoteName: 'a.gcode', param: 'a.gcode', subtaskName: 'a', submissionId: '1',

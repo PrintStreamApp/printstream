@@ -120,13 +120,32 @@ export function renderPlatformNotificationTemplate(template: string, variables: 
   return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, name: string) => variables[name] ?? '')
 }
 
+export interface PlatformNotificationEmitOptions {
+  /**
+   * Address the rendered message to specific platform users instead of
+   * broadcasting to every platform-scope channel destination (e.g. a claimed
+   * support conversation notifies only its assignee). Channel semantics
+   * follow the shared `targetUserIds` contract.
+   */
+  targetUserIds?: string[]
+  /** The emitter already sends its own transactional email for this event. */
+  emailHandledExternally?: boolean
+  level?: NotificationMessage['level']
+  /** App route to open when the notification is clicked. */
+  url?: string
+}
+
 /**
  * Render + fan out a platform event to every notification channel's
  * platform-scope delivery. Fire-and-forget: unknown/disabled events and
  * failures log instead of throwing so calling routes never depend on
  * notification delivery.
  */
-export async function emitPlatformNotification(event: string, variables: Record<string, string>): Promise<void> {
+export async function emitPlatformNotification(
+  event: string,
+  variables: Record<string, string>,
+  options: PlatformNotificationEmitOptions = {}
+): Promise<void> {
   try {
     if (!definitions.has(event)) {
       console.warn('[platform-notifications] unregistered event dropped', { event })
@@ -138,16 +157,42 @@ export async function emitPlatformNotification(event: string, variables: Record<
     const message: NotificationMessage = {
       id: randomUUID(),
       category: 'system',
-      level: 'info',
+      level: options.level ?? 'info',
       title: renderPlatformNotificationTemplate(template.title, variables),
       body: renderPlatformNotificationTemplate(template.body, variables),
       timestamp: new Date().toISOString(),
-      tag: `platform:${event}`
+      tag: `platform:${event}`,
+      url: options.url,
+      targetUserIds: options.targetUserIds,
+      emailHandledExternally: options.emailHandledExternally
     }
     printerEvents.emit('platform.notification', { message })
   } catch (error) {
     console.warn('[platform-notifications] failed to emit event', {
       event,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
+}
+
+/**
+ * Fan a fully-formed user-targeted message out over the same
+ * `platform.notification` bus event. For emitters outside the template
+ * registry whose copy is transactional rather than operator-editable
+ * (support replies to a user, suggestion-comment notifications). The
+ * message must carry `targetUserIds`; tenantless messages deliver
+ * cross-scope per the shared targeted contract. Fire-and-forget.
+ */
+export function emitUserNotification(
+  message: Omit<NotificationMessage, 'id' | 'timestamp'> & { targetUserIds: string[] }
+): void {
+  try {
+    if (message.targetUserIds.length === 0) return
+    printerEvents.emit('platform.notification', {
+      message: { ...message, id: randomUUID(), timestamp: new Date().toISOString() }
+    })
+  } catch (error) {
+    console.warn('[platform-notifications] failed to emit user notification', {
       error: error instanceof Error ? error.message : String(error)
     })
   }

@@ -1217,6 +1217,11 @@ model SupportConversation {
   tenantId           String?
   tenantName         String?
   resolvedAt         DateTime?
+  /// Platform operator handling this conversation (claim), with a display-name
+  /// snapshot for lists. Unclaimed conversations notify every operator;
+  /// claimed ones notify only the assignee.
+  assignedToUserId   String?
+  assignedToName     String?
   lastMessageAt      DateTime  @default(now())
   /// High-water marks for unread computation on each side.
   userLastReadAt     DateTime?
@@ -1279,11 +1284,14 @@ model SupportAttachment {
 /// Product suggestion board post (cloud-only). Not tenant-owned — the board is
 /// platform-wide and shared by every cloud workspace, accessed via `rootPrisma`.
 /// `authorName` is a display snapshot so posts survive account deletion.
+/// `status` is the platform team's triage state (a `suggestionStatusSchema`
+/// value; see `@printstream/shared/private`), settable only by platform admins.
 /// Harmless/unused in self-hosted or OSS deployments.
 model Suggestion {
   id           String   @id @default(cuid())
   title        String
   body         String
+  status       String   @default("open")
   authorUserId String?
   authorName   String
   createdAt    DateTime @default(now())

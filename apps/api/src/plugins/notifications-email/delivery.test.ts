@@ -22,6 +22,7 @@ function tenantStore(subscribers: string[]): PluginSettingStore {
 function buildContext(input: {
   subscribers: string[]
   members: Array<{ email: string }>
+  users?: Array<{ id: string; email: string }>
 }): ApiPluginContext {
   const settings: PluginSettingStore = {
     async get() { return null },
@@ -36,6 +37,13 @@ function buildContext(input: {
       authTenantMembership: {
         async findMany() {
           return input.members.map((member) => ({ user: { email: member.email } }))
+        }
+      },
+      authUser: {
+        async findMany({ where }: { where: { id: { in: string[] } } }) {
+          return (input.users ?? [])
+            .filter((user) => where.id.in.includes(user.id))
+            .map((user) => ({ email: user.email }))
         }
       }
     }
@@ -96,5 +104,38 @@ test('skips events without a tenant', async () => {
   captureTransport(sink)
   const handler = createEmailNotificationHandler(buildContext({ subscribers: ['u1'], members: [{ email: 'a@example.com' }] }))
   await handler(message({ tenantId: undefined }))
+  assert.equal(sink.length, 0)
+})
+
+test('user-targeted messages mail the target users directly, ignoring the digest opt-in', async () => {
+  const sink: EmailInput[] = []
+  captureTransport(sink)
+  const handler = createEmailNotificationHandler(buildContext({
+    subscribers: ['u1'],
+    members: [{ email: 'a@example.com' }],
+    users: [
+      { id: 'u7', email: 'target@example.com' },
+      { id: 'u8', email: 'other@example.com' }
+    ]
+  }))
+
+  // Tenantless personal event (e.g. a reply to the user's suggestion).
+  await handler(message({ tenantId: undefined, targetUserIds: ['u7'] }))
+
+  assert.deepEqual(sink.map((m) => m.to), ['target@example.com'])
+})
+
+test('messages flagged emailHandledExternally are not delivered by the email channel', async () => {
+  const sink: EmailInput[] = []
+  captureTransport(sink)
+  const handler = createEmailNotificationHandler(buildContext({
+    subscribers: ['u1'],
+    members: [{ email: 'a@example.com' }],
+    users: [{ id: 'u7', email: 'target@example.com' }]
+  }))
+
+  await handler(message({ emailHandledExternally: true }))
+  await handler(message({ tenantId: undefined, targetUserIds: ['u7'], emailHandledExternally: true }))
+
   assert.equal(sink.length, 0)
 })

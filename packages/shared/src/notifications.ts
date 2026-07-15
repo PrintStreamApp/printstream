@@ -136,7 +136,22 @@ export const notificationMessageSchema = z.object({
    * channels or absolute for external webhooks; the API populates
    * whichever form fits the configured `PUBLIC_BASE_URL`.
    */
-  imageUrl: z.string().optional()
+  imageUrl: z.string().optional(),
+  /**
+   * When present, the message is addressed to specific users rather than
+   * broadcast to a scope: channels that can address an individual (browser
+   * push actor matching, account email, user-bound webhook recipients)
+   * deliver only to these users, and shared broadcast destinations must NOT
+   * receive it. With no `tenantId`, targeted delivery may span every scope
+   * the user is registered in (platform-wide personal events).
+   */
+  targetUserIds: z.array(z.string()).optional(),
+  /**
+   * Set by emitters that already send their own transactional email for
+   * this event (e.g. support messaging); the email channel skips the
+   * message so recipients are not double-mailed.
+   */
+  emailHandledExternally: z.boolean().optional()
 })
 export type NotificationMessage = z.infer<typeof notificationMessageSchema>
 

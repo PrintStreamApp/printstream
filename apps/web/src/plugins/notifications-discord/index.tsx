@@ -1,31 +1,29 @@
 /**
  * Discord notifications plugin (web side).
  *
- * Pairs with the API plugin `notifications-discord`. Contributes a
- * settings panel where users paste their Discord webhook URL.
+ * Pairs with the API plugin `notifications-discord`. Contributes a settings
+ * panel managing the workspace's Discord destinations: shared webhooks that
+ * receive the workspace's notifications, and personal webhooks that receive
+ * only the current user's targeted messages.
  */
 /* eslint-disable react-refresh/only-export-components -- plugin entry exports a component intentionally */
 import type { WebPlugin } from '../../plugin/types'
-import { WebhookSettingsPanel } from '../../plugin/WebhookSettingsPanel'
+import { WebhookRecipientsPanel } from '../../plugin/WebhookRecipientsPanel'
 
 function DiscordPanel() {
   return (
-    <WebhookSettingsPanel
+    <WebhookRecipientsPanel
       pluginName="notifications-discord"
-      endpoint="webhook"
-      bodyField="webhookUrl"
-      configuredField="webhookConfigured"
-      label="Discord webhook URL"
+      urlLabel="Discord webhook URL"
       placeholder="https://discord.com/api/webhooks/…"
-      helpConfigured="A Discord webhook is configured."
-      helpEmpty="No webhook configured. Paste a Discord webhook URL to receive print alerts in a channel."
+      description="Post notifications to Discord. Add a shared webhook for a team channel, or a personal one that only receives notifications addressed to you."
     />
   )
 }
 
 export const notificationsDiscordPlugin: WebPlugin = {
   name: 'notifications-discord',
-  version: '0.1.0',
-  description: 'Forward printer notifications to a Discord webhook.',
+  version: '0.2.0',
+  description: 'Forward printer notifications to Discord webhooks (shared channels and personal ones).',
   settingsPanel: DiscordPanel
 }

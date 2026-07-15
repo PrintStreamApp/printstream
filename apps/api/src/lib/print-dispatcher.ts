@@ -49,6 +49,7 @@ import {
   uploadBridgeLibraryPlateToPrinterPath,
   uploadFileToPrinter
 } from './printer-ftp.js'
+import { resolveProjectFileMappingInfo, type ProjectFileMappingInfoFields } from './print-command-mapping-info.js'
 import { createSinglePlateThreeMf, readEntry } from './three-mf.js'
 import { plateSkipIdentifyIdsFromModelSettingsXml } from './three-mf-output.js'
 import { armPostStartObjectSkip } from './post-start-object-skip.js'
@@ -94,6 +95,12 @@ interface DispatchJobState {
    * `skip_objects` fallback for the same ids.
    */
   postStartSkipObjectIds: number[] | null
+  /**
+   * Slicer-parity `ams_mapping_info` / `nozzles_info` wire fields, resolved from the
+   * source 3MF's slice metadata at enqueue time (dual-nozzle plates only). Null fields
+   * are simply omitted from the start command. See `print-command-mapping-info.ts`.
+   */
+  mappingInfoFields: ProjectFileMappingInfoFields
   status: DispatchStatus
   progressMessage: string
   uploadAttempt: number
@@ -255,6 +262,13 @@ class PrintDispatcher {
     // nozzle the plate never uses (H2D error 0300-4010). Prune to the plate's actual
     // filaments; no-op for multi-filament plates and fail-safe if the plate can't be read.
     const amsMapping = await resolvePlateAmsMapping(sourceKind, localPath, input.plate, input.amsMapping)
+    const mappingInfoFields = await resolveProjectFileMappingInfo({
+      sourceKind,
+      localPath,
+      plate: input.plate,
+      amsMapping,
+      status: printerManager.getStatus(printer.id)
+    })
     const postStartSkipObjectIds = await resolvePostStartSkipObjectIds(sourceKind, localPath, input.plate, input.skipObjects)
 
     const now = new Date()
@@ -293,6 +307,7 @@ class PrintDispatcher {
         amsMapping
       },
       postStartSkipObjectIds,
+      mappingInfoFields,
       status: 'queued',
       progressMessage: 'Waiting to send',
       uploadAttempt: 0,
@@ -778,6 +793,15 @@ export interface ProjectFilePrintCommandInput {
   useAms: boolean
   amsMapping?: number[] | null
   /**
+   * Slicer-parity `ams_mapping_info` entries (per-filament metadata + target
+   * nozzle) and `nozzles_info` (per-extruder geometry), resolved from the
+   * sliced 3MF via `resolveProjectFileMappingInfo`. Dual-nozzle plates only;
+   * omitted from the payload when null/empty. The AMS HT needs these to be
+   * routable — see `print-command-mapping-info.ts`.
+   */
+  amsMappingInfo?: Array<Record<string, unknown>> | null
+  nozzlesInfo?: Array<Record<string, unknown>> | null
+  /**
    * Instance `identify_id`s to exclude from the print, sent as the payload's
    * `skip_objects` array (what Bambu Handy sends; there is an is_support_partskip
    * capability bit, and firmware without it ignores the field — callers keep the
@@ -857,6 +881,12 @@ export function buildProjectFilePrintCommand(input: ProjectFilePrintCommandInput
   if (input.amsMapping && input.amsMapping.length > 0) {
     printPayload.ams_mapping = input.amsMapping
     printPayload.ams_mapping_2 = input.amsMapping.map(amsMapping2Entry)
+    if (input.amsMappingInfo && input.amsMappingInfo.length > 0) {
+      printPayload.ams_mapping_info = input.amsMappingInfo
+    }
+  }
+  if (input.nozzlesInfo && input.nozzlesInfo.length > 0) {
+    printPayload.nozzles_info = input.nozzlesInfo
   }
   if (input.skipObjects && input.skipObjects.length > 0) {
     printPayload.skip_objects = input.skipObjects
@@ -880,6 +910,8 @@ function buildPrintStartPayload(job: DispatchJobState): Record<string, unknown> 
     timelapse: job.options.timelapse,
     useAms: job.options.useAms,
     amsMapping: job.options.amsMapping,
+    amsMappingInfo: job.mappingInfoFields.amsMappingInfo,
+    nozzlesInfo: job.mappingInfoFields.nozzlesInfo,
     skipObjects: job.postStartSkipObjectIds
   })
 }

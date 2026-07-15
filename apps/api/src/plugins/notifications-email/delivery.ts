@@ -5,6 +5,11 @@
  * addresses and sends one message per recipient through the core email-transport
  * registry. Recipients are filtered to *current, enabled* members so a removed or
  * login-disabled user stops receiving mail even if their opt-in row lingers.
+ *
+ * User-targeted messages (`targetUserIds`) instead mail the target users'
+ * account addresses directly — transactional semantics, independent of the
+ * digest opt-in — and messages flagged `emailHandledExternally` are skipped
+ * because their emitter already sent its own email.
  */
 import type { NotificationMessage } from '@printstream/shared'
 import { env } from '../../lib/env.js'
@@ -16,16 +21,15 @@ import { readEmailSubscribers } from '../../lib/notification-subscribers.js'
 /** Builds the notification handler that emails the scope's opted-in users. */
 export function createEmailNotificationHandler(context: ApiPluginContext) {
   return async function handle(message: NotificationMessage): Promise<void> {
+    // The emitter already sends its own transactional email for this event
+    // (e.g. support messaging) — delivering it here would double-mail.
+    if (message.emailHandledExternally) return
     // Skip cheaply when no transport can deliver (e.g. OSS before SMTP is set up).
     if (!(await isEmailDeliveryConfigured())) return
 
-    const scope = messageNotificationScope(context, message.tenantId)
-    const subscriberIds = await readEmailSubscribers(scope.settings)
-    if (subscriberIds.length === 0) return
-
-    const recipients = scope.tenantId
-      ? await resolveTenantRecipients(context, scope.tenantId, subscriberIds)
-      : await resolvePlatformRecipients(context, subscriberIds)
+    const recipients = message.targetUserIds && message.targetUserIds.length > 0
+      ? await resolveTargetedRecipients(context, message.targetUserIds)
+      : await resolveScopeSubscriberRecipients(context, message.tenantId)
     if (recipients.length === 0) return
 
     const html = buildEmailHtml(message)
@@ -38,6 +42,33 @@ export function createEmailNotificationHandler(context: ApiPluginContext) {
       }
     }
   }
+}
+
+/** The scope's opted-in subscribers, resolved to their account emails. */
+async function resolveScopeSubscriberRecipients(
+  context: ApiPluginContext,
+  tenantId: string | null | undefined
+): Promise<string[]> {
+  const scope = messageNotificationScope(context, tenantId)
+  const subscriberIds = await readEmailSubscribers(scope.settings)
+  if (subscriberIds.length === 0) return []
+  return scope.tenantId
+    ? await resolveTenantRecipients(context, scope.tenantId, subscriberIds)
+    : await resolvePlatformRecipients(context, subscriberIds)
+}
+
+/**
+ * Recipients for a user-targeted message: the target users' account emails.
+ * Deliberately NOT intersected with the per-scope digest opt-in — targeted
+ * messages are personally addressed (a reply to your suggestion, a support
+ * thread you handle), so they behave like transactional mail.
+ */
+async function resolveTargetedRecipients(context: ApiPluginContext, targetUserIds: readonly string[]): Promise<string[]> {
+  const users = await context.prisma.authUser.findMany({
+    where: { id: { in: [...targetUserIds] } },
+    select: { email: true }
+  })
+  return [...new Set(users.map((user) => user.email).filter((email): email is string => Boolean(email)))]
 }
 
 /** Opted-in members of the tenant, filtered to current enabled memberships. */

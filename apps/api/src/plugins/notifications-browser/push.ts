@@ -148,6 +148,11 @@ export class WebPushDelivery {
     return this.subscriptions.length
   }
 
+  /** Whether an endpoint is currently registered in this scope's list. */
+  hasSubscription(endpoint: string): boolean {
+    return this.subscriptions.some((entry) => entry.endpoint === endpoint)
+  }
+
   /**
    * Fan out a JSON payload to every stored subscription. Subscriptions
    * the push service rejects as gone (HTTP 404/410) are dropped from

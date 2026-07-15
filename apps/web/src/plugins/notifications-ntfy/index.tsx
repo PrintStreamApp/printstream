@@ -1,31 +1,29 @@
 /**
  * ntfy notifications plugin (web side).
  *
- * Server-side plugin owns delivery; this plugin only contributes a
- * settings panel that targets `/api/plugins/notifications-ntfy/topic`.
+ * Pairs with the API plugin `notifications-ntfy`. Contributes a settings
+ * panel managing the workspace's ntfy destinations: shared topics that
+ * receive the workspace's notifications, and personal topics that receive
+ * only the current user's targeted messages.
  */
 /* eslint-disable react-refresh/only-export-components -- plugin entry exports a component intentionally */
 import type { WebPlugin } from '../../plugin/types'
-import { WebhookSettingsPanel } from '../../plugin/WebhookSettingsPanel'
+import { WebhookRecipientsPanel } from '../../plugin/WebhookRecipientsPanel'
 
 function NtfyPanel() {
   return (
-    <WebhookSettingsPanel
+    <WebhookRecipientsPanel
       pluginName="notifications-ntfy"
-      endpoint="topic"
-      bodyField="topicUrl"
-      configuredField="topicConfigured"
-      label="ntfy topic URL"
+      urlLabel="ntfy topic URL"
       placeholder="https://ntfy.sh/your-topic"
-      helpConfigured="A notification topic is configured."
-      helpEmpty="No topic configured. Paste a ntfy topic URL to receive print alerts."
+      description="Push notifications to ntfy topics. Add a shared topic for the workspace, or a personal one that only receives notifications addressed to you."
     />
   )
 }
 
 export const notificationsNtfyPlugin: WebPlugin = {
   name: 'notifications-ntfy',
-  version: '0.2.0',
-  description: 'Forward printer notifications to a ntfy-style HTTP topic.',
+  version: '0.3.0',
+  description: 'Forward printer notifications to ntfy topics (shared and personal).',
   settingsPanel: NtfyPanel
 }

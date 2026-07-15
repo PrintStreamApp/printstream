@@ -13,7 +13,13 @@ export interface BrowserNotificationEnrollmentPromptState {
   pluginEnabled: boolean
   support: BrowserNotificationsSupportState
   permission: NotificationPermission
-  subscribed: boolean
+  /**
+   * Whether the CURRENT workspace already delivers to this device. A device
+   * subscribed only for other workspaces still gets the prompt, since
+   * enablement is per workspace; the dismissed flag is what keeps that from
+   * turning into a nag.
+   */
+  registeredInWorkspace: boolean
   dismissed: boolean
 }
 
@@ -26,7 +32,7 @@ export function shouldShowBrowserNotificationEnrollmentPrompt(
     && state.support.serviceWorker
     && state.support.pushManager
     && state.permission !== 'denied'
-    && !state.subscribed
+    && !state.registeredInWorkspace
     && !state.dismissed
 }
 
