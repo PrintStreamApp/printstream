@@ -274,6 +274,13 @@ export const amsUnitSchema = z.object({
   type: amsUnitTypeSchema,
   /** Physical extruder/nozzle this AMS unit feeds on dual-nozzle machines, when known. */
   nozzleId: z.number().int().min(0).nullable(),
+  /**
+   * Filament Track Switch input this unit is connected through (`'A'` / `'B'`),
+   * from `info` bits 24-27 when the extruder nibble reads `0xE`. A unit routed
+   * through the switch is reachable by both extruders, so `nozzleId` stays
+   * `null`. Absent/null on printers without an FTS.
+   */
+  switchInput: z.enum(['A', 'B']).nullable().optional(),
   /** AMS 2 Pro / AMS HT units expose remote drying controls. */
   supportDrying: z.boolean(),
   /** Remaining drying time, in minutes, when the unit reports it. */
@@ -466,6 +473,32 @@ export const nozzleRackSchema = z.object({
 })
 export type NozzleRack = z.infer<typeof nozzleRackSchema>
 
+/**
+ * Bambu Filament Track Switch (FTS) state, reported by FTS-capable firmware
+ * via `print.aux` bit 29 (installed) and `print.device.fila_switch`. The
+ * switch has two AMS-side inputs (A/B) and two extruder-side outputs; AMS
+ * units connected through it are reachable by BOTH extruders (their `info`
+ * extruder nibble reads `0xE` and `AmsUnit.switchInput` names the input).
+ * `null` on printers that never report the module. Mirrors BambuStudio's
+ * `DevFilaSwitch::ParseFilaSwitchInfo`.
+ */
+export const filamentTrackSwitchSchema = z.object({
+  installed: z.boolean(),
+  /** AMS slot connected to switch input A, when detected. */
+  inputA: z.object({ amsId: z.number().int(), slotId: z.number().int() }).nullable(),
+  /** AMS slot connected to switch input B, when detected. */
+  inputB: z.object({ amsId: z.number().int(), slotId: z.number().int() }).nullable(),
+  /** Extruder id switch output A feeds (0 = right/main, 1 = left/deputy). */
+  outputAExtruderId: z.number().int().nullable(),
+  /** Extruder id switch output B feeds (0 = right/main, 1 = left/deputy). */
+  outputBExtruderId: z.number().int().nullable(),
+  /** True while the switch's calibration routine is stepping. */
+  calibrating: z.boolean(),
+  /** Filament presence at the switch, when reported (`fila_switch.info` bit 0). */
+  filamentPresent: z.boolean().nullable()
+})
+export type FilamentTrackSwitch = z.infer<typeof filamentTrackSwitchSchema>
+
 export const printerConnectionWarningCodeSchema = z.enum([
   'localConnectionFailed',
   'developerModeDisabled'
@@ -535,6 +568,7 @@ export const printerStatusSchema = z.object({
    * {@link nozzleRackSchema}.
    */
   nozzleRack: nozzleRackSchema.nullable(),
+  filamentTrackSwitch: filamentTrackSwitchSchema.nullable().optional(),
   chamberTemp: z.number().nullable(),
   chamberTarget: z.number().nullable(),
   fanGearSpeed: z.number().nullable(),

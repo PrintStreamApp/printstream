@@ -1,3 +1,8 @@
+/**
+ * Pairs each dispatch-queue job (see `jobsDispatchQueue.ts`) with its resolved
+ * `PrintJob` history row when one exists, so the queue UI can show a dispatch
+ * item's underlying print (progress, result) alongside its upload state.
+ */
 import type { PrintDispatchJob, PrintJob } from '@printstream/shared'
 import { isActiveDispatchJob } from './dispatchToastVisibility'
 import { selectDispatchQueueJobs } from './jobsDispatchQueue'

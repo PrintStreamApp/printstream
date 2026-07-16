@@ -19,8 +19,10 @@ import { Router } from 'express'
 import multer from 'multer'
 import {
   LIBRARY_UPLOAD_PERMISSION,
+  repairLibraryMeshSchema,
   saveArrangedThreeMfSchema,
   stageImportFromLibrarySchema,
+  type MeshRepairResult,
   type StagedImport
 } from '@printstream/shared'
 import { z } from 'zod'
@@ -32,6 +34,7 @@ import { badRequest, HttpError, notFound } from '../lib/http-error.js'
 import { getStagedImport, resolveSceneEditImports, stageImport } from '../lib/import-store.js'
 import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
 import { detectImportFormat, meshToBinaryStl, parseImportedMesh } from '../lib/mesh-import.js'
+import { repairThreeMfMeshesToCopy } from '../lib/three-mf-mesh-repair.js'
 import { prisma } from '../lib/prisma.js'
 import { requireRequestTenantId, requireRouteParam, sendModelBuffer, singleUploadWithLimit } from '../lib/request-helpers.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from '../lib/three-mf.js'
@@ -140,7 +143,7 @@ editorRouter.post(
       console.warn('[editor] save validation failed:', JSON.stringify(parsed.error.issues))
       throw badRequest(`Invalid save request: ${issue?.message ?? 'validation failed'}${where}`)
     }
-    const { baseFileId, baseVersionId, mode, sceneEdit, retarget, slicerTargetId, objectProcessOverrides } = parsed.data
+    const { baseFileId, baseVersionId, mode, sceneEdit, retarget, slicerTargetId, objectProcessOverrides, processSettingOverrides } = parsed.data
 
     const baseFile = baseFileId
       ? await prisma.libraryFile.findFirst({
@@ -170,7 +173,9 @@ editorRouter.post(
     // Extra temp dirs to clean up (e.g. the retargeted artifact downloaded from the slicer).
     const extraCleanupDirs: string[] = []
     try {
-      const { replacedObjectIds } = await buildEditedThreeMf(basePath, outputPath, sceneEdit, imports)
+      const { replacedObjectIds } = await buildEditedThreeMf(basePath, outputPath, sceneEdit, imports, {
+        globalProcessOverrides: processSettingOverrides
+      })
       // Persist per-object PROCESS overrides into the saved 3MF (so they survive the save, not
       // just a slice). Overrides authored against a replaced/imported object are keyed by its
       // editor identity; re-key onto the baked object_id, then inject as model_settings metadata.
@@ -232,7 +237,7 @@ editorRouter.post(
         action: 'upload',
         resource: 'library file',
         summary: `Saved edited 3MF ${created.name}.`,
-        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, importCount: imports.length, retargetedTo: retarget?.printerModel ?? null }
+        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, importCount: imports.length, retargetedTo: retarget?.printerModel ?? null, globalProcessOverridesPersisted: processSettingOverrides != null && Object.keys(processSettingOverrides).length > 0 }
       })
       response.status(201).json({ file: { id: created.id, name: created.name } })
     } finally {
@@ -241,6 +246,88 @@ editorRouter.post(
     }
   }
 )
+
+/**
+ * Repair the mesh geometry of a stored 3MF (nearby-vertex weld + degenerate/duplicate facet pruning —
+ * the same admesh-style repair BambuStudio runs on STL imports but skips for 3MF). Writes a NEW
+ * library version only when something was actually repaired; a clean mesh returns `repaired: false`
+ * and leaves the file untouched. This is the manual counterpart to the best-effort repair the slice
+ * pipeline runs — here the user asks for it and sees exactly what changed. Web counterpart:
+ * `apps/web/src/plugins/model-studio` repair action.
+ */
+editorRouter.post('/repair-mesh', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
+  const tenantId = requireRequestTenantId(request)
+  const parsed = repairLibraryMeshSchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid repair request')
+
+  const file = await prisma.libraryFile.findFirst({
+    where: { id: parsed.data.fileId, tenantId },
+    select: { id: true, name: true, ownerBridgeId: true, storedPath: true, folderId: true }
+  })
+  if (!file) throw notFound('File not found')
+  if (!file.name.toLowerCase().endsWith('.3mf')) throw badRequest('Mesh repair only applies to 3MF projects')
+
+  // Repair an archived version's bytes when asked; otherwise the file's current content.
+  const version = parsed.data.versionId
+    ? await prisma.libraryFileVersion.findFirst({
+      where: { id: parsed.data.versionId, tenantId, libraryFileId: file.id },
+      select: { ownerBridgeId: true, storedPath: true }
+    })
+    : null
+  if (parsed.data.versionId && !version) throw notFound('Version not found')
+
+  const sourcePath = await resolveLibraryFileToLocalPath(version ?? file)
+  const workDir = await mkdtemp(path.join(tmpdir(), 'printstream-mesh-repair-'))
+  const repairedPath = path.join(workDir, path.basename(file.name) || 'repaired.3mf')
+  try {
+    const stats = await repairThreeMfMeshesToCopy(sourcePath, repairedPath)
+    if (!stats) {
+      annotateRequestAuditLog(request, {
+        action: 'other',
+        resource: 'library file',
+        summary: `Mesh repair: ${file.name} already clean.`,
+        metadata: { fileId: file.id, repaired: false }
+      })
+      const clean: MeshRepairResult = {
+        repaired: false,
+        weldedVertices: 0,
+        degenerateTrianglesRemoved: 0,
+        duplicateTrianglesRemoved: 0,
+        file: null
+      }
+      response.json(clean)
+      return
+    }
+
+    const sizeBytes = (await stat(repairedPath)).size
+    const { file: created } = await persistLibraryFileFromLocalPath({
+      tenantId,
+      sourcePath: repairedPath,
+      fileName: file.name,
+      sizeBytes,
+      folderId: file.folderId,
+      bridgeId: file.ownerBridgeId ?? null,
+      hidden: false,
+      request,
+      auditAction: 'upload',
+      missingBridgeMessage: 'Select a bridge before repairing this model'
+    })
+    annotateRequestAuditLog(request, {
+      action: 'upload',
+      resource: 'library file',
+      summary: `Repaired mesh of ${file.name} (welded ${stats.weldedVertices} vertices, dropped ${stats.degenerateTrianglesRemoved + stats.duplicateTrianglesRemoved} triangles).`,
+      metadata: { fileId: created.id, repaired: true, ...stats }
+    })
+    const result: MeshRepairResult = {
+      repaired: true,
+      ...stats,
+      file: { id: created.id, name: created.name, versionNumber: created.currentVersionNumber }
+    }
+    response.json(result)
+  } finally {
+    await rm(workDir, { recursive: true, force: true })
+  }
+})
 
 const newProjectSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),

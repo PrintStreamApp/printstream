@@ -1,10 +1,27 @@
 /**
- * Persists printer-observed job lifecycle events.
+ * Owns the `PrintJob` history table: creating, updating, and finalizing rows as
+ * prints move through their lifecycle. This is the ONLY module that writes
+ * `PrintJob`; the `/api/jobs` routes only read and prune.
  *
- * The printer manager is the source of truth for when a job actually starts
- * and finishes. The dispatcher can add optional PrintStream metadata (library
- * file, plate, AMS mapping) for jobs it initiated so history rows can support
- * rich display and reprint preselection.
+ * Two origins converge on the same rows:
+ * - PrintStream-initiated prints reserve a row up front via
+ *   `reserveTrackedPrintJobStart` / `startTrackedPrintJob` (called by the
+ *   dispatcher and the printers/library/calibration routes), carrying rich
+ *   metadata (library file, plate, AMS mapping) for display + reprint.
+ * - Externally started prints are discovered by the printer manager: the
+ *   `status`/`job.started` event handlers here create a `sourceType:'external'`
+ *   row with whatever the printer reports.
+ *
+ * Correlation is by task id. The printer's `taskId` is the durable key that
+ * ties a reserved row to the job the printer actually reports running; the
+ * `activeJobs`/`activeJobTaskIds` maps and `resolvePrintJobIdByTaskId` reconcile
+ * a live status update back to its row. A reserved row starts `result:'unknown'`
+ * until a finish event resolves it to success/failed/cancelled.
+ *
+ * All persistence uses `rootPrisma`: recording runs from event-bus handlers
+ * outside any tenant request context, and the tenant is resolved from the
+ * printer row. Metadata-column writes tolerate a DB still missing the newest
+ * columns (logged, then retried without them) so recording never blocks a print.
  */
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -138,6 +155,14 @@ export function stopPrintJobRecorder(): void {
   trackedStartGraceUntil.clear()
 }
 
+/**
+ * Reserve a history row for a PrintStream-initiated print BEFORE the start
+ * command is sent, so the print is tracked even if it never reaches the
+ * printer. Registers the pending source (for status correlation), upserts the
+ * row (`result:'unknown'`), emits `print.job.starting`, and returns the jobId
+ * (minted if not supplied). The caller must later resolve the row by publishing
+ * the start (see {@link startTrackedPrintJob}) or failing it.
+ */
 export async function reserveTrackedPrintJobStart(input: {
   jobId?: string
   printerId: string
@@ -167,6 +192,12 @@ export async function reserveTrackedPrintJobStart(input: {
   return jobId
 }
 
+/**
+ * Reserve a tracked row, then run `publish()` (the actual start-command send).
+ * On success returns the jobId; if `publish()` returns false the reserved row
+ * is immediately failed and `null` is returned — so a start that never left the
+ * building leaves a `failed` row rather than a phantom `unknown` one.
+ */
 export async function startTrackedPrintJob(input: {
   jobId?: string
   printerId: string
@@ -185,6 +216,7 @@ export async function startTrackedPrintJob(input: {
   return null
 }
 
+/** Mark a reserved row `failed` and drop its pending source (start never landed). */
 export async function failTrackedPrintJobStart(input: {
   printerId: string
   jobId: string
@@ -208,6 +240,12 @@ export async function resolveRelevantPrintJobId(printerId: string): Promise<stri
   return pendingJobId
 }
 
+/**
+ * Find the unfinished history row for a printer's current task id (the durable
+ * correlation key the printer reports), preferring the most relevant row when
+ * several are open. Returns null for a blank/unnormalizable task id or when no
+ * unfinished row matches.
+ */
 export async function resolvePrintJobIdByTaskId(printerId: string, taskId: string | null): Promise<string | null> {
   const normalizedTaskId = normalizeActivePrintTaskId(taskId)
   if (!normalizedTaskId) return null
@@ -335,6 +373,14 @@ async function bumpLibraryFilePrintStats(fileId: string | null | undefined, prin
   }
 }
 
+/**
+ * Create the tracked row, or reset an existing one for a fresh start. When the
+ * row already exists (e.g. a reprint reusing the same jobId, or a re-reserve)
+ * this REWINDS it to a running state: `startedAt` is set to now and
+ * `finishedAt`/`progressPercent`/`durationSeconds`/`result` are cleared back to
+ * `unknown`, so a re-run does not inherit the prior run's completion. Broadcasts
+ * a jobs-changed hint to the printer's tenant.
+ */
 export async function upsertTrackedPrintJobRecord(input: {
   jobId: string
   printerId: string

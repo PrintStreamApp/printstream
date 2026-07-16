@@ -40,6 +40,12 @@
  * Messages carrying `targetUserIds` are personal rather than scope-wide and
  * route through `targeted-push.ts` (actor-key matching; cross-scope with
  * endpoint dedupe when the message has no tenant).
+ *
+ * Besides the HTTP dismissal sync above, the plugin listens for
+ * `notification.dismiss` bus events (read-state dismissal: the notification's
+ * subject was seen in the app) and retracts tag-matched notifications from
+ * the targeted users' devices — or the whole originating scope when the
+ * event carries no targets.
  */
 import { z } from 'zod'
 import type { Request } from 'express'
@@ -213,7 +219,8 @@ export const notificationsBrowserPlugin: ApiPlugin = {
             ? await resolveDeliverableEndpoints(context, tenantId, scopedDelivery.listSubscriptions())
             : null
           await deliverTargetedPush({
-            message,
+            tenantId,
+            payload: message,
             targetUserIds: message.targetUserIds,
             getScopedDelivery: getOrCreateScopedDelivery,
             listSubscriptionTenantScopes: () =>
@@ -237,6 +244,36 @@ export const notificationsBrowserPlugin: ApiPlugin = {
       }
     )
     context.onShutdown(off)
+
+    // Read-state dismissal: when a notification's subject was seen in the app
+    // (e.g. a support thread was read), retract the delivered notification by
+    // its tag — targeted at specific users' devices, or across the whole
+    // originating scope when the event carries no targets.
+    const handleDismiss = async (event: { tag: string; tenantId: string | null; targetUserIds?: string[] }) => {
+      const dismissPayload = { type: 'dismiss', tag: event.tag }
+      if (event.targetUserIds && event.targetUserIds.length > 0) {
+        await deliverTargetedPush({
+          tenantId: event.tenantId,
+          payload: dismissPayload,
+          targetUserIds: event.targetUserIds,
+          getScopedDelivery: getOrCreateScopedDelivery,
+          listSubscriptionTenantScopes: () =>
+            listTenantScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions'),
+          isEnabledForTenant: (scope) => context.isEnabledForTenant?.(scope) ?? true
+        })
+        return
+      }
+      if (!(context.isEnabledForTenant?.(event.tenantId) ?? true)) return
+      const scopedDelivery = await getOrCreateScopedDelivery(event.tenantId)
+      await scopedDelivery.sendToAll(dismissPayload)
+    }
+    const onDismiss = (event: { tag: string; tenantId: string | null; targetUserIds?: string[] }) => {
+      handleDismiss(event).catch((error) => context.logger.warn('web-push dismissal fanout failed', error))
+    }
+    context.printerEvents.on('notification.dismiss', onDismiss)
+    context.onShutdown(() => {
+      context.printerEvents.off('notification.dismiss', onDismiss)
+    })
   }
 }
 

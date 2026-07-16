@@ -18,10 +18,14 @@
  * their install/enable defaults (`defaultEnabled`), runtime/manager surfaces,
  * and `tenantAccess`. A built-in plugin may own tenant-scoped Prisma models in
  * the core schema (see the `orders` plugin); plugins persisting only small
- * config should use the `settings` store. Third-party plugins should ship as
- * ordinary npm packages whose default export is an `ApiPlugin`; loading those
- * packages is out of scope for v1 but the interface is intentionally stable so
- * we can add a loader later without changing existing plugins.
+ * config should use the `settings` store.
+ *
+ * Third-party plugins ship as `.zip` archives (a `plugin.json` manifest plus
+ * an ESM entry whose default export is an `ApiPlugin`), uploaded through
+ * `/api/admin/plugins` and installed/loaded by `plugin/installer.ts`. Because
+ * they cannot migrate the core schema, they must persist through the
+ * `settings` store only. Web plugins are still built ahead of time, so an
+ * uploaded plugin's `web` field is accepted but ignored for now.
  */
 import type { Router } from 'express'
 import type { PluginCatalogEntry, PluginManagementEntry, PluginSurface, PluginTenantAccess, PluginSource, TenantPluginAvailability } from '@printstream/shared'

@@ -71,6 +71,7 @@ export function makeOfflineStatus(printer: Printer): PrinterStatus {
     nozzleTarget: null,
     nozzles: [],
     nozzleRack: null,
+    filamentTrackSwitch: null,
     chamberTemp: null,
     chamberTarget: null,
     fanGearSpeed: null,
@@ -421,6 +422,9 @@ export function parseReport(value: unknown, printer: Printer, currentStatus?: Pr
   }
   const nozzleRack = parseNozzleRack(print, currentStatus?.nozzleRack ?? null)
   if (nozzleRack !== undefined) delta.nozzleRack = nozzleRack
+
+  const filamentTrackSwitch = parseFilamentTrackSwitch(print, currentStatus?.filamentTrackSwitch ?? null)
+  if (filamentTrackSwitch !== undefined) delta.filamentTrackSwitch = filamentTrackSwitch
   assignChamberTemperature(delta, print, printer.model)
   assignFanSpeed(delta, 'fanGearSpeed', print.fan_gear)
   assignFanSpeed(delta, 'partFanPercent', print.cooling_fan_speed)
@@ -994,6 +998,9 @@ function parseAms(
         unitId,
         type: unitType,
         nozzleId: amsNozzleMap?.get(unitId) ?? previousUnit?.nozzleId ?? null,
+        switchInput: 'info' in entry
+          ? parseAmsUnitSwitchInputFromInfo(entry)
+          : previousUnit?.switchInput ?? null,
         supportDrying: amsType === 3 || amsType === 4 || previousUnit?.supportDrying === true,
         dryTimeRemainingMinutes: dryTime,
         dryingActive,
@@ -1200,6 +1207,21 @@ function parseAmsUnitNozzleIdFromInfo(unit: Record<string, unknown>): number | n
   const infoBits = stringOrNull(unit.info)
   const nozzleId = hexBitsValue(infoBits, 8, 4)
   return nozzleId === 0 || nozzleId === 1 ? nozzleId : null
+}
+
+/**
+ * Filament Track Switch input a unit is routed through: `info` bits 24-27,
+ * meaningful only when the extruder nibble (bits 8-11) reads `0xE` ("via
+ * switch"). BambuStudio maps 0 -> input B, 1 -> input A. Such a unit is
+ * reachable by both extruders, so its `nozzleId` stays null.
+ */
+function parseAmsUnitSwitchInputFromInfo(unit: Record<string, unknown>): 'A' | 'B' | null {
+  const infoBits = stringOrNull(unit.info)
+  if (hexBitsValue(infoBits, 8, 4) !== 0xe) return null
+  const switchInput = hexBitsValue(infoBits, 24, 4)
+  if (switchInput === 0) return 'B'
+  if (switchInput === 1) return 'A'
+  return null
 }
 
 function parseAmsTrayExists(
@@ -1904,6 +1926,72 @@ function parseNozzleRack(
       : previous?.replacingToNozzleId ?? null,
     nozzles
   }
+}
+
+/**
+ * Filament Track Switch (FTS) state: installed flag from `print.aux` bit 29,
+ * connections from `print.device.fila_switch`. Mirrors BambuStudio's
+ * `DevFilaSwitch::ParseFilaSwitchInfo`, including its array ordering quirk —
+ * `in[0]`/`out[0]` are the switch's B side, `in[1]`/`out[1]` the A side.
+ * Returns `undefined` (leave status untouched) for the fleet-wide case of no
+ * FTS signal, and clears previous state to `null` when the module disappears.
+ */
+function parseFilamentTrackSwitch(
+  print: Record<string, unknown>,
+  previous: PrinterStatus['filamentTrackSwitch'] | null
+): PrinterStatus['filamentTrackSwitch'] | undefined {
+  const device = isObject(print.device) ? print.device : null
+  const switchJson = device && isObject(device.fila_switch) ? device.fila_switch : null
+
+  let installed = previous?.installed ?? false
+  if ('aux' in print) {
+    const installedBit = hexBitsValue(stringOrNull(print.aux), 29, 1)
+    if (installedBit !== null) installed = installedBit === 1
+  }
+
+  if (!installed && !switchJson) {
+    // No FTS signal: stay silent for the fleet; clear state if one was removed.
+    return previous ? null : undefined
+  }
+
+  const next: NonNullable<PrinterStatus['filamentTrackSwitch']> = {
+    installed,
+    inputA: previous?.inputA ?? null,
+    inputB: previous?.inputB ?? null,
+    outputAExtruderId: previous?.outputAExtruderId ?? null,
+    outputBExtruderId: previous?.outputBExtruderId ?? null,
+    calibrating: previous?.calibrating ?? false,
+    filamentPresent: previous?.filamentPresent ?? null
+  }
+  if (!switchJson) return next
+
+  if (Array.isArray(switchJson.in) && switchJson.in.length === 2) {
+    next.inputB = parseSwitchInputSlot(switchJson.in[0])
+    next.inputA = parseSwitchInputSlot(switchJson.in[1])
+  }
+  if (Array.isArray(switchJson.out) && switchJson.out.length === 2) {
+    next.outputBExtruderId = parseSwitchOutputExtruder(switchJson.out[0])
+    next.outputAExtruderId = parseSwitchOutputExtruder(switchJson.out[1])
+  }
+  const stat = numberOrNull(switchJson.stat)
+  if (stat !== null) next.calibrating = stat === 1
+  const infoBits = numberOrNull(switchJson.info)
+  if (infoBits !== null) next.filamentPresent = (infoBits & 1) === 1
+  return next
+}
+
+/** `fila_switch.in[]` entry: `(ams_id << 8) | slot_id`, `-1` when nothing is docked. */
+function parseSwitchInputSlot(value: unknown): { amsId: number; slotId: number } | null {
+  const packed = numberOrNull(value)
+  if (packed === null || packed < 0) return null
+  return { amsId: (packed >> 8) & 0xff, slotId: packed & 0xff }
+}
+
+/** `fila_switch.out[]` entry: extruder id, `0xE` when the output is unmapped. */
+function parseSwitchOutputExtruder(value: unknown): number | null {
+  const id = numberOrNull(value)
+  if (id === null || id === 0xe) return null
+  return id
 }
 
 function parseInstalledNozzleSpecs(device: Record<string, unknown> | null): Map<number, InstalledNozzleSpec> {

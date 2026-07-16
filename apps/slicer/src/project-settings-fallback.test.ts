@@ -265,6 +265,66 @@ test('ensureEmbeddedProjectSettings falls back to Generic PLA when the named fil
   }
 })
 
+test('ensureEmbeddedProjectSettings covers a material-changed slot from its NAMED preset, not Generic PLA', async () => {
+  // The material-leak fix: the editor save DROPPED the old material's physics (incl. the
+  // nozzle_temperature sentinel) on a material change, so this config lands incomplete on purpose.
+  // The slice loads a machine profile (--load-settings) but no --load-filaments, so filament
+  // coverage must be derived from the NEW preset names the settings still carry — otherwise the
+  // re-synth would collapse to Generic PLA and the new material would slice with generic temps.
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    await writeFile(
+      fakeCli,
+      '#!/bin/sh\necho "$@" > "$(dirname "$0")/cli-args.txt"\nfor last; do :; done\nprintf %s \'{"printable_area":["0x0"],"layer_height":"0.2","nozzle_temperature":["255","220"]}\' > "$last"\n',
+      { mode: 0o755 }
+    )
+    const profileDir = path.join(dir, 'profiles')
+    const petg = 'Bambu PETG Basic @BBL P1S'
+    const pla = 'Bambu PLA Basic @BBL P1S'
+    await mkdir(path.join(profileDir, 'filament_full'), { recursive: true })
+    await writeFile(path.join(profileDir, 'filament_full', `${petg}.json`), '{"type":"filament"}')
+    await writeFile(path.join(profileDir, 'filament_full', `${pla}.json`), '{"type":"filament"}')
+    await writeFile(path.join(profileDir, 'filament_full', 'Generic PLA.json'), '{"type":"filament"}')
+
+    // Incomplete: NO nozzle_temperature (stripped by the editor on the material change), but the
+    // preset names survive so the slicer can re-derive per-slot physics.
+    const input = await writeThreeMf(dir, 'material-changed.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': JSON.stringify({
+        printable_area: ['0x0'],
+        layer_height: '0.2',
+        filament_settings_id: [petg, pla],
+        filament_type: ['PETG', 'PLA'],
+        filament_colour: ['#00AE42', '#FFFFFF']
+      })
+    })
+    const result = await ensureEmbeddedProjectSettings({
+      inputPath: input,
+      cliPath: fakeCli,
+      appDir: null,
+      profileArgs: ['--load-settings', 'machine.json'],
+      profileDir,
+      workDir: dir,
+      env: {},
+      log: () => {}
+    })
+    assert.notEqual(result, input)
+    const cliArgs = await readFile(path.join(dir, 'cli-args.txt'), 'utf8')
+    assert.match(cliArgs, /--load-filaments/)
+    // Both NEW materials are loaded (in order), so the export carries PETG + PLA physics…
+    assert.match(cliArgs, new RegExp(petg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    assert.match(cliArgs, new RegExp(pla.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    // …not a single Generic PLA baseline.
+    assert.doesNotMatch(cliArgs, /Generic PLA/)
+    // The project's own identity still wins in the overlay.
+    const merged = JSON.parse(await readZipEntryText(result, 'Metadata/project_settings.config') ?? '{}') as Record<string, unknown>
+    assert.deepEqual(merged.filament_type, ['PETG', 'PLA'])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('ensureEmbeddedProjectSettings slices as-is when a partial project-preset config names unknown presets', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
   try {

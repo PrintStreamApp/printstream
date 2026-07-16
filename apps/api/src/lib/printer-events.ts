@@ -75,6 +75,16 @@ export interface PrinterEvents {
    */
   'platform.notification': (event: { message: NotificationMessage }) => void
   /**
+   * Ask notification surfaces to retract an already-delivered notification,
+   * matched by its collapse `tag` (e.g. the user read the support thread, so
+   * the thread's notification is stale on every device). With
+   * `targetUserIds` the dismissal addresses only those users' devices
+   * (cross-scope when `tenantId` is null, mirroring the targeted-delivery
+   * contract); without it every subscription in the given scope is asked.
+   * Channels that cannot retract (email, webhooks) ignore it.
+   */
+  'notification.dismiss': (event: { tag: string; tenantId: string | null; targetUserIds?: string[] }) => void
+  /**
    * A filament spool became loaded in an AMS slot (the `filament-manager` plugin
    * emits on RFID auto-association and manual slot assignment). Carries the
    * spool's identity so a listener (the `calibration` plugin) can look up and

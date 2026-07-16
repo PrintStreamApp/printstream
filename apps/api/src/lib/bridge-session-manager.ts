@@ -1,9 +1,30 @@
 /**
- * In-memory bridge session registry.
+ * In-memory bridge session registry (process-local; a single API node owns a
+ * bridge's live socket at a time).
  *
- * Tracks the single active outbound connection for each bridge, handles
- * request/response correlation for RPC calls, and caches printer status
- * snapshots reported by the bridge runtime.
+ * Owns, per connected bridge: the single active outbound connection,
+ * request/response correlation for RPC calls, the cache of printer status
+ * snapshots the bridge reports, live camera-frame listeners, and per-printer
+ * FTP-activity flags.
+ *
+ * Failure-contract conventions callers must know (they are deliberately NOT
+ * uniform):
+ * - Fire-and-forget sends (`sendMessage`/`sendCommand`) never throw: they
+ *   return `false` when there is no live session or the socket send throws.
+ * - RPC calls (`startRpcRequest`/`requestRpc`) THROW synchronously when the
+ *   bridge has no session; once started, the returned promise REJECTS on
+ *   timeout ({@link BRIDGE_RPC_TIMEOUT_MS} default), cancel, a bridge-reported
+ *   error, or the session disconnecting.
+ * - Camera subscription (`subscribeCameraFrames`) throws when the bridge is
+ *   unavailable; a dropped session later calls each listener's `onClose`.
+ *
+ * Reconnect semantics: `registerConnection` force-closes any prior socket for
+ * the same bridge (code 4009) and replaces it. In-flight RPCs are keyed by
+ * bridge id, not by connection object, so a reconnect does NOT reject them —
+ * they stay pending and either resolve if the new session answers or hit their
+ * timeout. `unregisterConnection` only rejects pending RPCs when the closing
+ * socket is still the registered one, so a stale socket's teardown can't cancel
+ * the live session's requests.
  */
 import { randomUUID } from 'node:crypto'
 import type { Printer, PrinterStatus } from '@printstream/shared'
@@ -102,6 +123,11 @@ class BridgeSessionManager {
     return true
   }
 
+  /**
+   * Fire-and-forget send to the bridge's live socket. Returns `false` (never
+   * throws) when the bridge has no session or the underlying send throws, so
+   * callers must check the boolean rather than rely on an exception.
+   */
   sendMessage(bridgeId: string, message: BridgeRuntimeOutboundMessage): boolean {
     const activeConnection = this.connections.get(bridgeId)
     if (!activeConnection) return false
@@ -114,6 +140,7 @@ class BridgeSessionManager {
     }
   }
 
+  /** Fire-and-forget printer command; returns `false` like {@link sendMessage}. */
   sendCommand(bridgeId: string, printer: Printer, payload: Record<string, unknown>): boolean {
     return this.sendMessage(bridgeId, {
       type: 'bridge.command',
@@ -122,6 +149,15 @@ class BridgeSessionManager {
     })
   }
 
+  /**
+   * Begin an RPC and return its `requestId` (for {@link cancelRpcRequest}) plus
+   * the pending promise. THROWS `bridgeUnavailableMessage()` synchronously if
+   * the bridge has no live session. Once started, the promise rejects on
+   * timeout (default {@link BRIDGE_RPC_TIMEOUT_MS}, or `options.timeoutMs`),
+   * cancel, a bridge-reported error, or the session disconnecting. A progress
+   * report resets the timeout, so a long streaming transfer that keeps
+   * reporting will not time out mid-flight.
+   */
   startRpcRequest<T>(
     bridgeId: string,
     method: string,
@@ -163,6 +199,11 @@ class BridgeSessionManager {
     return { requestId, promise }
   }
 
+  /**
+   * Await-only wrapper over {@link startRpcRequest} for callers that do not
+   * need the `requestId` to cancel. Same contract: throws synchronously when
+   * the bridge is unavailable, otherwise resolves/rejects with the RPC result.
+   */
   async requestRpc<T>(
     bridgeId: string,
     method: string,
@@ -175,6 +216,10 @@ class BridgeSessionManager {
     return await this.startRpcRequest<T>(bridgeId, method, params, options).promise
   }
 
+  /**
+   * Cancel an in-flight RPC by id: rejects its pending promise and tells the
+   * bridge to abort the work. A no-op for an unknown/already-settled id.
+   */
   cancelRpcRequest(requestId: string): void {
     const pending = this.pendingRequests.get(requestId)
     if (!pending) return
@@ -187,6 +232,13 @@ class BridgeSessionManager {
     pending.reject(new Error(`Bridge RPC cancelled: ${pending.method}`))
   }
 
+  /**
+   * Register a camera-frame listener and return its unsubscribe function.
+   * THROWS `bridgeUnavailableMessage()` if the bridge has no session, or if
+   * this is the first watcher and the `bridge.camera.watch` send fails (the
+   * listener is rolled back first). While active, a dropped session invokes the
+   * listener's `onClose`; the last unsubscribe sends `bridge.camera.unwatch`.
+   */
   subscribeCameraFrames(bridgeId: string, printerId: string, listener: CameraFrameListener): () => void {
     if (!this.connections.has(bridgeId)) {
       throw new Error(bridgeUnavailableMessage())

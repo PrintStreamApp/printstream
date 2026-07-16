@@ -26,7 +26,7 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | --- | --- | --- |
 | **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves staged as imports) |
 | **Editor** | api | `routes/editor.ts` (save + staged imports), `lib/import-store.ts`, `lib/mesh-import.ts`; `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
-| **Slicing** | web | the slice UI in `pages/LibraryView.tsx` (`SliceSettingsController`, `SliceSettingsPanel`), `components/ProcessSettingsDialog.tsx`, `components/PerObjectSettingsDialog.tsx` |
+| **Slicing** | web | the slice UI in `pages/LibraryView.tsx` (`SliceSettingsController`, `SliceSettingsPanel`), `components/ProcessSettingsDialog.tsx`, `components/library/FilamentSettingsDialog.tsx` (material settings, shares `components/settings/SettingValueField.tsx`), `components/PerObjectSettingsDialog.tsx` |
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-profiles.ts` |
 | **Slicing** | slicer | `apps/slicer/**` — the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
 | **Shared 3MF model** | shared | `packages/shared/src/slicing.ts` (`SceneEdit`, slicing job contracts), the scene/index schemas in `printer.ts` |
@@ -132,6 +132,34 @@ not hand-edited — by `scripts/dev/generate-process-settings.mjs`, which
 transcribes the page/group layout and option metadata from a BambuStudio
 source checkout (`--src <bambustudio-src>`). Re-run it when bumping the
 BambuStudio pin.
+
+Each option carries BambuStudio's mode tier (`simple`/`advanced`/`develop`). The
+editor always shows the advanced superset (simple + advanced) and hides the
+`develop`-tier options unless **developer slicer settings** is on. That preference
+follows the general-settings shape: a workspace-wide shared default persisted in
+`GeneralSettings.slicerDeveloperMode` (via `/api/settings`) plus an optional
+per-device localStorage override, both edited from the Slicing settings page
+(`components/settings/SlicerDeveloperModeCard.tsx`). The editor reads the effective
+value through `useEffectiveSlicerDeveloperMode` (`apps/web/src/lib/slicerDeveloperMode.ts`);
+the tier gate is `isProcessOptionVisibleInMode` in
+`packages/shared/src/process-settings.ts`. Revealed options still obey the usual
+conditional visibility rules.
+
+### Global process settings persist through the editor's save
+
+Global (project-wide) process edits made in the editor persist into the saved 3MF,
+not just a one-off slice. The dialog is owned by the host `SliceFileModal` and writes
+the shared slice controller, so — like the material picker's `materialEditListenerRef` —
+the controller exposes a `processEditListenerRef` the editor points at
+`recordMaterialsHistory`; the modal fires it **before** a profile switch / overrides
+apply, so the edit lands in undo history and lights Save. On save, `useEditorSave` sends
+the controller's `processSettingOverrides` as `SaveArrangedThreeMf.processSettingOverrides`;
+`buildEditedThreeMf` merges them into `project_settings.config` via
+`applyGlobalProcessOverrides` (verbatim, mirroring the slicer's own
+`applyProcessSettingOverrides`). Deliberately routed through a `buildEditedThreeMf`
+option rather than the `SceneEdit` contract so the slice path — which applies these via
+the slice request instead — is untouched. On reopen the baked config becomes the
+baseline, so the override map resets to empty (no phantom "modified" marker).
 
 ## Printability ("Printable" toggle)
 

@@ -93,7 +93,7 @@ test('emitPlatformNotification renders and fans out over the bus', async () => {
 
 test('emitPlatformNotification forwards targeting and email-suppression options', async () => {
   stubEmptyStorage()
-  const received: Array<{ targetUserIds?: string[]; emailHandledExternally?: boolean; url?: string; level: string }> = []
+  const received: Array<{ targetUserIds?: string[]; emailHandledExternally?: boolean; url?: string; level: string; tag?: string }> = []
   const listener = (event: { message: (typeof received)[number] }) => {
     received.push(event.message)
   }
@@ -105,15 +105,18 @@ test('emitPlatformNotification forwards targeting and email-suppression options'
       url: '/platform/messages?conversation=c1',
       level: 'warning'
     })
+    await emitPlatformNotification('test-event', { name: 'Nico' }, { tag: 'support:c1' })
   } finally {
     printerEvents.off('platform.notification', listener)
   }
 
-  assert.equal(received.length, 1)
+  assert.equal(received.length, 2)
   assert.deepEqual(received[0]?.targetUserIds, ['user-1'])
   assert.equal(received[0]?.emailHandledExternally, true)
   assert.equal(received[0]?.url, '/platform/messages?conversation=c1')
   assert.equal(received[0]?.level, 'warning')
+  assert.equal(received[0]?.tag, 'platform:test-event', 'the event id is the default collapse tag')
+  assert.equal(received[1]?.tag, 'support:c1', 'a per-subject tag override wins')
 })
 
 test('emitUserNotification stamps id/timestamp and requires targets', () => {

@@ -1,3 +1,8 @@
+/**
+ * Shared contract for the plugin catalog and management surfaces: the runtime/
+ * manager surfaces a plugin runs on, its tenant-access mode, and the catalog +
+ * management entry shapes the API serves and the plugin-manager UI consumes.
+ */
 import { z } from 'zod'
 
 export const pluginSurfaceSchema = z.enum(['platform', 'tenant'])

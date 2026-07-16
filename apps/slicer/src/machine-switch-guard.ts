@@ -27,16 +27,29 @@ type EmbeddedMachineSwitchInput = {
 }
 
 /**
- * Whether the slice targets a different printer MODEL than the project's
- * embedded machine, i.e. the input 3MF must be retargeted before slicing.
- * False when either model is unresolvable (non-Bambu / no machine profile /
- * no embedded settings) — those slice on the standard path unchanged.
+ * Whether the input 3MF's embedded machine must be authored to the target
+ * before slicing — i.e. PrintStream rewrites `project_settings` to the target
+ * machine preset ({@link retargetProjectSettingsToMachine}) so the CLI receives
+ * a project that already natively targets the requested printer. True when a
+ * target machine preset is available AND the project's embedded machine is a
+ * DIFFERENT Bambu model OR absent entirely:
+ *  - different model  → the cross-model switch (e.g. P1S -> X2D);
+ *  - absent (null)    → a from-scratch project the editor never gave a machine
+ *    (a new-project scaffold embeds filaments + plate type but no machine), so
+ *    we author the chosen printer's machine in exactly as the save flow does.
+ * False when the embedded machine already IS the target model (nothing to do),
+ * when there is no machine preset to author from, or when the target model is
+ * unresolvable (non-Bambu) — those slice on the standard path unchanged.
  */
 export function shouldRetargetEmbeddedMachine(input: EmbeddedMachineSwitchInput): boolean {
   if (!input.projectSettings) return false
+  // No machine preset in the request means nothing to author the machine from
+  // (e.g. the legacy fallback-manual path) — leave the input untouched.
+  if (!input.profileFiles.some((profile) => profile.kind === 'machine')) return false
   const targetModel = resolveTargetPrinterModel(input.request, input.profileFiles)
+  if (!targetModel) return false
   const sourceModel = resolveSourcePrinterModel(input.projectSettings)
-  return Boolean(targetModel && sourceModel && targetModel !== sourceModel)
+  return sourceModel !== targetModel
 }
 
 export function assertSupportedEmbeddedMachineSwitch(input: EmbeddedMachineSwitchInput): void {

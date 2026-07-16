@@ -26,6 +26,48 @@ test('same-family switches and cross-model switches both retarget natively', () 
   assert.doesNotThrow(() => assertSupportedEmbeddedMachineSwitch(input))
 })
 
+test('a machine-less new-project scaffold retargets to the chosen H2D machine (not rejected)', () => {
+  // The editor's new-project scaffold bakes filaments + plate type but NO machine, so
+  // project_settings is non-null yet carries no printer_model. Slicing it to a real H2D
+  // must author the H2D machine in (as save does) rather than throw "missing dual-nozzle".
+  const input = {
+    request: {
+      sourceFileId: 'source',
+      target: {
+        mode: 'realPrinter',
+        printerId: 'home',
+        printerProfileId: 'machine-profile'
+      },
+      plate: 1
+    },
+    profileFiles: [{ kind: 'machine', name: 'Bambu Lab H2D 0.4 nozzle' }],
+    projectSettings: {
+      filament_settings_id: ['Bambu PETG HF @BBL H2D'],
+      filament_type: ['PETG'],
+      curr_bed_type: 'High Temp Plate'
+    }
+  } as const
+
+  assert.equal(shouldRetargetEmbeddedMachine(input), true)
+  assert.doesNotThrow(() => assertSupportedEmbeddedMachineSwitch(input))
+})
+
+test('does not retarget when there is no machine preset to author from', () => {
+  // The legacy fallback-manual path ships no machine profile file — leave the input
+  // untouched (the CLI resolves neutral defaults) rather than trying to retarget.
+  const input = {
+    request: {
+      sourceFileId: 'source',
+      target: { mode: 'manualProfile', printerModel: 'H2D', printerProfileId: '__printstream-fallback-manual-machine__' },
+      plate: 1
+    },
+    profileFiles: [{ kind: 'process', name: '0.20mm Standard @BBL H2D' }],
+    projectSettings: { filament_settings_id: ['Generic PETG'] }
+  } as const
+
+  assert.equal(shouldRetargetEmbeddedMachine(input), false)
+})
+
 test('cross-family X2D switch retargets natively even from a single-extruder-shaped project', () => {
   const input = {
     request: {

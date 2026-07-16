@@ -149,6 +149,31 @@ export class SlicerClient {
     targetId: string | null | undefined,
     profile: { source: 'builtin' | 'custom'; name: string; content?: string }
   ): Promise<Record<string, string | string[]> | null> {
+    return this.resolveProfileConfig('process', targetId, profile)
+  }
+
+  /**
+   * Resolves a FILAMENT profile to its fully-merged config map (same resolution as
+   * {@link resolveProcessConfig}, `kind: 'filament'`). Backs the material settings dialog's base
+   * values. Returns null when the slicer is unavailable or the profile cannot be resolved.
+   */
+  async resolveFilamentConfig(
+    targetId: string | null | undefined,
+    profile: { source: 'builtin' | 'custom'; name: string; content?: string }
+  ): Promise<Record<string, string | string[]> | null> {
+    return this.resolveProfileConfig('filament', targetId, profile)
+  }
+
+  /**
+   * Shared resolver behind {@link resolveProcessConfig} / {@link resolveFilamentConfig}: POSTs to the
+   * slicer's `/profiles/resolve` (which follows the `inherits` chain for a builtin preset or merges a
+   * custom diff onto its system base) and normalizes the returned config.
+   */
+  private async resolveProfileConfig(
+    kind: 'machine' | 'process' | 'filament',
+    targetId: string | null | undefined,
+    profile: { source: 'builtin' | 'custom'; name: string; content?: string }
+  ): Promise<Record<string, string | string[]> | null> {
     for (const baseUrl of this.baseUrls) {
       try {
         const params = new URLSearchParams()
@@ -156,18 +181,18 @@ export class SlicerClient {
         const response = await fetch(`${baseUrl}/profiles/resolve${params.size > 0 ? `?${params.toString()}` : ''}`, {
           method: 'POST',
           headers: { ...this.headers(), 'content-type': 'application/json' },
-          body: JSON.stringify({ source: profile.source, name: profile.name, content: profile.content }),
+          body: JSON.stringify({ source: profile.source, kind, name: profile.name, content: profile.content }),
           signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
         })
         if (!response.ok) {
-          console.warn('[slicer] resolveProcessConfig failed', `slicer service at ${baseUrl} returned ${response.status}`)
+          console.warn(`[slicer] resolve ${kind} config failed`, `slicer service at ${baseUrl} returned ${response.status}`)
           continue
         }
         const body = await response.json().catch(() => null) as { config?: unknown } | null
         if (!body || typeof body.config !== 'object' || body.config == null) return null
         return normalizeResolvedConfig(body.config as Record<string, unknown>)
       } catch (error) {
-        console.warn('[slicer] resolveProcessConfig failed', `${baseUrl}: ${(error as Error).message}`)
+        console.warn(`[slicer] resolve ${kind} config failed`, `${baseUrl}: ${(error as Error).message}`)
       }
     }
     return null

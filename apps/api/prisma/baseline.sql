@@ -833,6 +833,18 @@ CREATE TABLE "SupportMessage" (
 );
 
 -- CreateTable
+CREATE TABLE "SupportPendingEmail" (
+    "id" TEXT NOT NULL,
+    "conversationId" TEXT NOT NULL,
+    "messageId" TEXT NOT NULL,
+    "recipientSide" TEXT NOT NULL,
+    "sendAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SupportPendingEmail_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "SupportAttachment" (
     "id" TEXT NOT NULL,
     "messageId" TEXT,
@@ -1261,6 +1273,15 @@ CREATE INDEX "SupportConversation_status_lastMessageAt_idx" ON "SupportConversat
 CREATE INDEX "SupportMessage_conversationId_createdAt_idx" ON "SupportMessage"("conversationId", "createdAt");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "SupportPendingEmail_messageId_key" ON "SupportPendingEmail"("messageId");
+
+-- CreateIndex
+CREATE INDEX "SupportPendingEmail_sendAt_idx" ON "SupportPendingEmail"("sendAt");
+
+-- CreateIndex
+CREATE INDEX "SupportPendingEmail_conversationId_recipientSide_idx" ON "SupportPendingEmail"("conversationId", "recipientSide");
+
+-- CreateIndex
 CREATE INDEX "SupportAttachment_messageId_idx" ON "SupportAttachment"("messageId");
 
 -- CreateIndex
@@ -1511,6 +1532,12 @@ ALTER TABLE "QueueItem" ADD CONSTRAINT "QueueItem_lastPrintJobId_fkey" FOREIGN K
 
 -- AddForeignKey
 ALTER TABLE "SupportMessage" ADD CONSTRAINT "SupportMessage_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "SupportConversation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SupportPendingEmail" ADD CONSTRAINT "SupportPendingEmail_conversationId_fkey" FOREIGN KEY ("conversationId") REFERENCES "SupportConversation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SupportPendingEmail" ADD CONSTRAINT "SupportPendingEmail_messageId_fkey" FOREIGN KEY ("messageId") REFERENCES "SupportMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "SupportAttachment" ADD CONSTRAINT "SupportAttachment_messageId_fkey" FOREIGN KEY ("messageId") REFERENCES "SupportMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -1,3 +1,14 @@
+/**
+ * Derives the workspace the current page is in (from the URL) and turns it into
+ * the `X-PrintStream-Tenant` request header that `apiClient` attaches to every
+ * request, so the API scopes the response to the right workspace.
+ *
+ * The `'none'` sentinel is deliberate: in a browser with no workspace in the
+ * path, `readWorkspaceContextHeader` returns `'none'` (sent as the header) rather
+ * than null (header omitted), so the API is explicitly told "no workspace" and
+ * does NOT fall back to an ambient tenant. Header omitted only outside a browser
+ * (no window), where there is nothing to scope.
+ */
 import { isPlatformWorkspacePath, parseWorkspacePathname } from './workspaceRoute'
 
 const PLATFORM_CONTEXT_VALUE = 'platform'

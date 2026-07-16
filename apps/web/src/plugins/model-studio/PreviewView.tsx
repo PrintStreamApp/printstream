@@ -1,3 +1,16 @@
+/**
+ * Read-only 3D preview modal for a library file. Renders one of three content
+ * modes for the selected plate: a sliced-gcode toolpath (with the layer scrubber
+ * and BS-style stats panel), a plated 3MF scene, or a single mesh (STL/STEP).
+ * The editor is the editable counterpart; this view never mutates a `SceneEdit`.
+ *
+ * It owns a Three.js renderer "rig" created ONCE per open and reused across plate
+ * switches and query refetches — recreating it per switch churned WebGL contexts
+ * and could evict the editor's context underneath (see the model-studio WebGL
+ * lifecycle notes). Render is on-demand (idle = no GPU work). It can preview a
+ * live library file or an archived version, and shows a "Reload 3D view" overlay
+ * to rebuild after a lost WebGL context.
+ */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Box, Button, Chip, CircularProgress, DialogContent, Divider, IconButton, LinearProgress, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'

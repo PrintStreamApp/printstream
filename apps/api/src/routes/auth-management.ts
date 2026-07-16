@@ -1,8 +1,22 @@
 /**
- * Core auth management routes.
+ * Core auth management routes, provider-independent (they operate on identities,
+ * roles, and sessions, not on how a user authenticates). Route families:
+ * - `/me` — the current user's own profile (self-service, no manage permission).
+ * - `/groups`, `/status` — roles/permission groups (view/create/edit/delete gated
+ *   by the matching `AUTH_ROLES_*` permission).
+ * - `/users` — create/edit/delete users, assign roles, and view/revoke their
+ *   sessions (each gated by the matching `AUTH_USERS_*` permission).
+ * - `/service-accounts` — issue/edit/revoke non-human API identities.
+ * - `/session-policy` — deployment-wide session lifetime/idle policy.
  *
- * These routes own reusable identity, role, service-account, and session
- * policy operations that should not depend on a specific auth provider.
+ * Two security invariants cut across the mutating routes:
+ * - Privilege ceiling: an actor may not create, edit, or assign a user,
+ *   service account, or role whose permission set exceeds their own (the
+ *   `CANNOT_MANAGE_HIGHER_*` / `CANNOT_ASSIGN_HIGHER_ROLE` guards), so no one can
+ *   escalate privileges through management.
+ * - Self-protection: an actor cannot disable or delete the account they are
+ *   currently signed in as, which would lock them (and possibly the last admin)
+ *   out mid-request.
  */
 import crypto from 'node:crypto'
 import {

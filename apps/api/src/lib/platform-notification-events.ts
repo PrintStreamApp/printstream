@@ -133,6 +133,13 @@ export interface PlatformNotificationEmitOptions {
   level?: NotificationMessage['level']
   /** App route to open when the notification is clicked. */
   url?: string
+  /**
+   * Collapse-tag override (default `platform:<event>`). Pass a per-subject
+   * tag when later messages should replace the earlier notification for the
+   * same subject and read-state dismissal must be able to target it (e.g.
+   * `support:<conversationId>`).
+   */
+  tag?: string
 }
 
 /**
@@ -161,7 +168,7 @@ export async function emitPlatformNotification(
       title: renderPlatformNotificationTemplate(template.title, variables),
       body: renderPlatformNotificationTemplate(template.body, variables),
       timestamp: new Date().toISOString(),
-      tag: `platform:${event}`,
+      tag: options.tag ?? `platform:${event}`,
       url: options.url,
       targetUserIds: options.targetUserIds,
       emailHandledExternally: options.emailHandledExternally

@@ -1,3 +1,10 @@
+/**
+ * Pure decision helpers for auth/setup route chrome — the single owner of the
+ * "should this route show the loading splash, the auth wall, or the real page"
+ * logic, plus the platform-vs-tenant auth-theme and account-tab heuristics. Kept
+ * as pure functions (no hooks) so route components and tests share one source of
+ * truth instead of re-deriving the state machine. See the web development notes.
+ */
 import type { AuthActorSummary } from '@printstream/shared'
 
 export type AuthRouteState = 'loading' | 'auth' | 'redirect'
@@ -60,6 +67,12 @@ export function resolveProtectedRouteState(input: {
   return authRouteState === 'auth' ? 'auth' : 'render'
 }
 
+/**
+ * The public root (`/`) always renders marketing today. The inputs are kept in
+ * the signature (and ignored) so callers keep passing the auth/route state and a
+ * future rule — e.g. redirecting an authenticated user straight into the app —
+ * can be added here without changing every call site.
+ */
 export function resolvePublicRootRouteState(input: {
   isAuthenticated: boolean
   defaultRouteReady: boolean

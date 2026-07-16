@@ -9,7 +9,7 @@ import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
 import { plateSkipIdentifyIdsFromIndex, plateSkipIdentifyIdsFromModelSettingsXml } from './three-mf-output.js'
-import { applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
+import { applyFilamentList, applyGlobalProcessOverrides, applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
 import { rewriteThreeMfEntries } from './three-mf-internal.js'
 import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
 import type { SceneEdit, SceneEditFilament } from '@printstream/shared'
@@ -315,6 +315,106 @@ test('nozzle assignment is a no-op on single-nozzle projects', () => {
   })
   const filaments: SceneEditFilament[] = [{ color: '#FFC72C', sourceIndex: 0, nozzleId: 0 }]
   assert.equal(applyNozzleAssignmentToProjectSettings(projectSettings, filaments), projectSettings)
+})
+
+// The editor-save global-process-override path: applyGlobalProcessOverrides merges the editor's
+// global process edits into project_settings.config so they persist into the saved project.
+test('applyGlobalProcessOverrides merges scalar and vector overrides verbatim, preserving other keys', () => {
+  const projectSettings = JSON.stringify({
+    layer_height: '0.2',
+    sparse_infill_density: '15%',
+    line_width: ['0.42', '0.42'],
+    printer_model: ['Bambu Lab P1S']
+  })
+  const merged = JSON.parse(applyGlobalProcessOverrides(projectSettings, {
+    layer_height: '0.28',
+    line_width: ['0.5', '0.5'],
+    wall_loops: '3'
+  })) as Record<string, unknown>
+  assert.equal(merged.layer_height, '0.28') // overwritten scalar
+  assert.deepEqual(merged.line_width, ['0.5', '0.5']) // overwritten vector
+  assert.equal(merged.wall_loops, '3') // added key
+  assert.equal(merged.sparse_infill_density, '15%') // untouched
+  assert.deepEqual(merged.printer_model, ['Bambu Lab P1S']) // untouched
+})
+
+test('applyGlobalProcessOverrides is a no-op on unparseable project settings', () => {
+  assert.equal(applyGlobalProcessOverrides('not json', { layer_height: '0.3' }), 'not json')
+})
+
+// The material-leak fix: changing a slot's material (e.g. ABS -> PETG) must NOT carry the old
+// material's cloned per-filament physics into the new material's slot. applyFilamentList drops
+// every non-identity filament array (incl. the nozzle_temperature completeness sentinel) so the
+// slicer re-derives physics from the new preset name. See three-mf-scene-builder.ts.
+test('applyFilamentList drops the old material physics when a slot changes material, keeping identity', () => {
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'ABS'],
+    filament_settings_id: ['Bambu ABS @BBL P1S', 'Bambu ABS @BBL P1S'],
+    filament_nozzle_map: ['0', '0'],
+    chamber_temperatures: ['60', '60'],
+    nozzle_temperature: ['270', '270'],
+    hot_plate_temp: ['100', '100'],
+    textured_plate_temp: ['100', '100']
+  })
+  // Slot 0 ABS -> PETG, slot 1 ABS -> PLA (both keep their source index).
+  const filaments: SceneEditFilament[] = [
+    { color: '#00AE42', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL P1S' },
+    { color: '#FFFFFF', sourceIndex: 1, type: 'PLA', settingsId: 'Bambu PLA Basic @BBL P1S' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+
+  // Identity/structure is preserved and updated to the new materials…
+  assert.deepEqual(next.filament_type, ['PETG', 'PLA'])
+  assert.deepEqual(next.filament_settings_id, ['Bambu PETG Basic @BBL P1S', 'Bambu PLA Basic @BBL P1S'])
+  assert.deepEqual(next.filament_colour, ['#00AE42', '#FFFFFF'])
+  assert.deepEqual(next.filament_nozzle_map, ['0', '0'])
+  // …but the ABS physics is GONE (removing nozzle_temperature also makes the config incomplete,
+  // which triggers the slicer's re-derivation from the new preset names at slice time).
+  assert.equal('chamber_temperatures' in next, false)
+  assert.equal('nozzle_temperature' in next, false)
+  assert.equal('hot_plate_temp' in next, false)
+  assert.equal('textured_plate_temp' in next, false)
+})
+
+test('applyFilamentList blanks a changed slot\'s different_settings_to_system record, keeping process/machine and unchanged slots', () => {
+  // The material dialog treats a slot's different_settings_to_system entry as the authoritative
+  // "changed within this 3MF" signal — a record inherited from the OLD material would flag keys
+  // the new material never touched. Layout: [process, ...filament slots, machine].
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'ABS'],
+    filament_settings_id: ['Bambu ABS @BBL P1S', 'Bambu ABS @BBL P1S'],
+    different_settings_to_system: ['layer_height', 'nozzle_temperature;filament_flow_ratio', 'fan_min_speed', 'printable_area']
+  })
+  // Slot 0 ABS -> PETG (record blanked); slot 1 keeps ABS (record kept).
+  const filaments: SceneEditFilament[] = [
+    { color: '#00AE42', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL P1S' },
+    { color: '#000000', sourceIndex: 1, type: 'ABS', settingsId: 'Bambu ABS @BBL P1S' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+  assert.deepEqual(next.different_settings_to_system, ['layer_height', '', 'fan_min_speed', 'printable_area'])
+})
+
+test('applyFilamentList keeps physics (full clone) when only colour changes, no material change', () => {
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'ABS'],
+    filament_settings_id: ['Bambu ABS @BBL P1S', 'Bambu ABS @BBL P1S'],
+    chamber_temperatures: ['60', '60'],
+    nozzle_temperature: ['270', '270']
+  })
+  // Same type + settingsId as source, only the colours change -> not a material change.
+  const filaments: SceneEditFilament[] = [
+    { color: '#123456', sourceIndex: 0, type: 'ABS', settingsId: 'Bambu ABS @BBL P1S' },
+    { color: '#654321', sourceIndex: 1, type: 'ABS', settingsId: 'Bambu ABS @BBL P1S' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+
+  assert.deepEqual(next.filament_colour, ['#123456', '#654321'])
+  // Physics is retained (cloned) because the material did not change — the config stays complete.
+  assert.deepEqual(next.chamber_temperatures, ['60', '60'])
+  assert.deepEqual(next.nozzle_temperature, ['270', '270'])
 })
 
 test('buildPlateObjectsWithPreview derives first-layer previews from gcode comments', () => {

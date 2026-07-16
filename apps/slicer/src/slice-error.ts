@@ -1,3 +1,33 @@
+import { summarizeSliceProgress } from './slice-progress.js'
+
+/**
+ * Turns a BambuStudio CLI *engine crash* (a signal death — SIGABRT/SIGSEGV, which the xvfb-run
+ * wrapper surfaces as exit code 134-139) that happened **after the slice started** into a clear,
+ * user-facing message that names the stage it died in.
+ *
+ * Why the post-load gate: a signal death during project *load/teardown* is often a transient
+ * emulation flake that a re-run clears, so the caller keeps retrying those (returns null here). A
+ * crash once the per-plate slice is underway is deterministic — the engine cannot process this
+ * model's geometry at that stage, and it re-crashes identically on every retry (verified on a real
+ * torus model that segfaults at "Detect overhangs for auto-lift" across every bundled engine version
+ * and every print-setting/orientation permutation). Surfacing it as an actionable message — instead
+ * of the opaque "exited with code 139" — also makes the API skip the pointless retry, because the
+ * message no longer matches its transient-crash predicate.
+ *
+ * Returns null when the run had not reached the slicing stage (leave it classified as transient).
+ */
+export function formatSliceEngineCrashError(output: string, exitCode: number | null): string | null {
+  const { lastStage, maxPercent } = summarizeSliceProgress(output)
+  // Mirror slice-progress.ts's SLICING_STARTED_PERCENT; below it the crash is load/teardown → transient.
+  if (maxPercent < 6) return null
+  const stage = lastStage ? ` while processing "${lastStage}"` : ''
+  return (
+    `The slicing engine crashed${stage} on this model (engine exit ${exitCode ?? 'signal'}). ` +
+    `This is an engine limitation on the model's geometry, not a print-setting problem — it will fail the same way on a retry. ` +
+    `Try repairing or simplifying the model, re-exporting it from your CAD tool, or slicing a different plate.`
+  )
+}
+
 /**
  * Turns BambuStudio CLI slice-time *preset/printer incompatibility* output into a
  * clear, user-facing message.

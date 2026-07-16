@@ -625,6 +625,18 @@ export function isAdvancedModeOption(option: ProcessSettingOption): boolean {
 }
 
 /**
+ * True if an option should be shown given whether developer-mode options are revealed.
+ *
+ * The editor normally hides BambuStudio's `develop`-tier options (see
+ * {@link isAdvancedModeOption}); enabling developer mode reveals them too. This is the tier
+ * gate only — a revealed option is still subject to the usual conditional
+ * visibility/enable rules from {@link computeProcessFieldStates}.
+ */
+export function isProcessOptionVisibleInMode(option: ProcessSettingOption, showDeveloperOptions: boolean): boolean {
+  return showDeveloperOptions || isAdvancedModeOption(option)
+}
+
+/**
  * Computes the sparse override map of keys whose value changed from the base.
  * Vector values are compared element-wise.
  */

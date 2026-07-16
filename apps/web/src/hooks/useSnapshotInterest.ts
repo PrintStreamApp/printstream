@@ -1,3 +1,18 @@
+/**
+ * Reference-counted "someone is watching this printer's camera snapshot" signal.
+ *
+ * Many cards can want the same printer's snapshots at once, so watches are
+ * counted per printer: the first watcher sends `camera.snapshot.watch` over the
+ * WS and the last release sends `camera.snapshot.unwatch`, so the server streams
+ * a printer's snapshots only while at least one component is interested. The hook
+ * returns a version number (the latest capture timestamp) that bumps on each new
+ * snapshot so `useSyncExternalStore` re-renders consumers.
+ *
+ * The watch registry is module-level (shared across all mounts), and on every WS
+ * reconnect (`onOpen`) the still-active watches are re-sent — the server forgets
+ * subscriptions when the socket drops, so without this replay a reconnected page
+ * would silently stop receiving snapshots.
+ */
 import { useEffect, useSyncExternalStore } from 'react'
 import { wsClient } from '../lib/wsClient'
 

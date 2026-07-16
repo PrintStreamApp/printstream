@@ -48,6 +48,7 @@ test('settings read remains available without auth permissions', async () => {
     assert.deepEqual(await response.json(), {
       appTheme: 'default',
       unconstrainedWidth: false,
+      slicerDeveloperMode: false,
       landingPage: DEFAULT_APP_LANDING_PAGE,
       navTabOrder: [],
       quickStartDismissed: false,
@@ -113,6 +114,7 @@ test('settings write allows actors with settings.manage permission', async () =>
     assert.deepEqual(await response.json(), {
       appTheme: 'default',
       unconstrainedWidth: true,
+      slicerDeveloperMode: false,
       landingPage: DEFAULT_APP_LANDING_PAGE,
       navTabOrder: [],
       quickStartDismissed: false,
@@ -315,6 +317,7 @@ test('settings write for support access allows a recently verified admin', async
     assert.deepEqual(await response.json(), {
       appTheme: 'default',
       unconstrainedWidth: false,
+      slicerDeveloperMode: false,
       landingPage: DEFAULT_APP_LANDING_PAGE,
       navTabOrder: [],
       quickStartDismissed: false,

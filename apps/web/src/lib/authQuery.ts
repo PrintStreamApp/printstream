@@ -1,3 +1,13 @@
+/**
+ * Owns the auth-bootstrap query (who am I / what can I do) and the scoped
+ * `authQueryKeys` for every auth-management surface. The bootstrap result is
+ * shared through a React context so many components read one in-flight query
+ * rather than each refetching; keys are scoped by the auth scope key (workspace
+ * vs platform) so switching scope loads the right identity. Bootstrap is
+ * cached for `AUTH_BOOTSTRAP_STALE_TIME_MS`; auth surfaces invalidate these keys
+ * after a sign-in/out or provider change through this module's invalidation
+ * helper so identity/permissions refresh.
+ */
 import { createContext, createElement, useContext, type ReactNode } from 'react'
 import type { AuthBootstrap } from '@printstream/shared'
 import { useQuery, type QueryClient, type UseQueryResult } from '@tanstack/react-query'

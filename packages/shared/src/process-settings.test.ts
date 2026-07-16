@@ -6,6 +6,7 @@ import {
   defaultProcessVisibilityContext,
   diffProcessConfig,
   getProcessFieldState,
+  isProcessOptionVisibleInMode,
   processSettingsCatalog,
   processSettingOverridesSchema,
   validateProcessConfig,
@@ -137,4 +138,19 @@ test('diffProcessConfig returns only changed keys including vectors', () => {
 test('override schema accepts scalars and string vectors only', () => {
   assert.ok(processSettingOverridesSchema.safeParse({ layer_height: '0.2', line_width: ['0.4'] }).success)
   assert.equal(processSettingOverridesSchema.safeParse({ layer_height: 0.2 }).success, false)
+})
+
+test('developer-mode gate hides develop-tier options unless developer mode is on', () => {
+  const options = Object.values(processSettingsCatalog.options)
+  const developOption = options.find((option) => option.mode === 'develop')
+  const advancedOption = options.find((option) => option.mode !== 'develop')
+  assert.ok(developOption, 'catalog should carry at least one develop-tier option')
+  assert.ok(advancedOption, 'catalog should carry non-develop options')
+
+  // Develop-tier options are hidden by default, revealed only under developer mode.
+  assert.equal(isProcessOptionVisibleInMode(developOption!, false), false)
+  assert.equal(isProcessOptionVisibleInMode(developOption!, true), true)
+  // Non-develop options are always visible regardless of the flag.
+  assert.equal(isProcessOptionVisibleInMode(advancedOption!, false), true)
+  assert.equal(isProcessOptionVisibleInMode(advancedOption!, true), true)
 })

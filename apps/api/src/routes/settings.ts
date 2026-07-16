@@ -110,6 +110,7 @@ settingsRouter.put('/', async (request, response) => {
       changedKeys,
       ...(parsed.data.appTheme !== undefined ? { appTheme: parsed.data.appTheme } : {}),
       ...(parsed.data.unconstrainedWidth !== undefined ? { unconstrainedWidth: parsed.data.unconstrainedWidth } : {}),
+      ...(parsed.data.slicerDeveloperMode !== undefined ? { slicerDeveloperMode: parsed.data.slicerDeveloperMode } : {}),
       ...(parsed.data.landingPage !== undefined ? { landingPage: parsed.data.landingPage } : {}),
       ...(parsed.data.navTabOrder !== undefined ? { navTabOrderCount: parsed.data.navTabOrder.length } : {}),
       ...(parsed.data.quickStartDismissed !== undefined ? { quickStartDismissed: parsed.data.quickStartDismissed } : {}),

@@ -74,10 +74,11 @@ const MEASURE_SNAP_PX = 14
 const EDITOR_HOME_VIEW_DIRECTION = new THREE.Vector3(EDITOR_HOME_VIEW.x, EDITOR_HOME_VIEW.y, EDITOR_HOME_VIEW.z).normalize()
 
 /**
- * Every EditorView-local value the scene effect reads. Refs and callback-refs stay
- * declared in EditorView (other code reads them); they are threaded in here so the
- * moved effect body references them unchanged. Module-level helpers/types it uses are
- * imports above, not params.
+ * Every EditorView-local value the scene effect reads. The scene-object refs and
+ * callback-refs are declared in EditorView because other code there reads them too;
+ * passing them as refs (not values) is what lets the render loop and event handlers
+ * stay subscribed across EditorView re-renders while always seeing current state.
+ * Module-level helpers/types the effect uses are imports above, not params.
  */
 export interface EditorSceneParams {
   // Viewport DOM containers (also the effect's dependency array).
@@ -169,9 +170,11 @@ export interface EditorSceneParams {
 }
 
 /**
- * Initialize renderer/camera/controls once a container exists. The effect body below is
- * the verbatim scene-setup effect lifted from EditorView; the only change is that its
- * referenced EditorView locals now arrive through {@link EditorSceneParams}.
+ * Initialize renderer/camera/controls once a container exists, and own them for the
+ * viewport's lifetime. The effect deliberately depends only on the containers and the
+ * context-loss rebuild counter — never on the live editor values, which arrive as
+ * stable refs through {@link EditorSceneParams} — so the renderer and its listeners
+ * are built once and never torn down and rebuilt on an ordinary EditorView re-render.
  */
 export function useEditorScene(params: EditorSceneParams): void {
   // Bumped after a lost WebGL context to rebuild the whole scene rig (the content effects

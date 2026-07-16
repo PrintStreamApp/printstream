@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, SlicingProfileSummary, ThreeMfFilament, ThreeMfIndex, ThreeMfProjectFilament } from '@printstream/shared'
-import { buildSliceDialogProjectFilaments, isFilamentProfileCompatible, slicingProfilesResponseIsUsable } from './sliceProfileMatching'
+import { buildFilamentMappings, buildSliceDialogProjectFilaments, isFilamentProfileCompatible, slicingProfilesResponseIsUsable, type SliceMaterialOption } from './sliceProfileMatching'
+
+function materialOption(overrides: Partial<SliceMaterialOption> & { id: string }): SliceMaterialOption {
+  return {
+    label: 'PETG', group: 'Built-in profiles', materialType: 'PETG', brand: 'Bambu',
+    profileId: 'builtin:filament:PETG', material: 'Bambu PETG Basic', color: '#00AE42', colors: [],
+    source: 'manual', trayId: null, nozzleId: null, toolheadId: null, metadata: '',
+    slotLabel: null, presetLabel: 'Bambu PETG Basic', colorName: null, remainingGrams: null, remainPercent: null,
+    ...overrides
+  }
+}
 
 function machineProfile(name: string): SlicingProfileSummary {
   return { id: `builtin:machine:${name}`, source: 'builtin', kind: 'machine', name, compatiblePrinters: [name] }
@@ -299,3 +309,50 @@ test('a spool pinned to a slicing preset uses it (matched by display name) over 
   assert.equal(options[0]!.presetLabel, 'PLA Basic - Custom')
 })
 
+
+test('matchPlateTypeByLabel matches a code form against a profile label form (and vice versa)', async () => {
+  const { matchPlateTypeByLabel } = await import('./sliceProfileMatching')
+  // Options carry the label form; the desired value is the code form (or the reverse).
+  assert.equal(matchPlateTypeByLabel(['cool_plate', 'High Temp Plate', 'textured_pei_plate'], 'high_temp_plate'), 'High Temp Plate')
+  assert.equal(matchPlateTypeByLabel(['cool_plate', 'high_temp_plate'], 'High Temp Plate'), 'high_temp_plate')
+  assert.equal(matchPlateTypeByLabel(['cool_plate', 'textured_pei_plate'], 'high_temp_plate'), null)
+  assert.equal(matchPlateTypeByLabel(['cool_plate'], null), null)
+})
+
+test('resolvePreferredPlateType keeps the current plate by label and never falls back to Cool Plate', async () => {
+  const { resolvePreferredPlateType } = await import('./sliceProfileMatching')
+  const options = ['cool_plate', 'engineering_plate', 'High Temp Plate', 'textured_pei_plate', 'supertack_plate']
+  // The current selection survives even when its value-form differs from the option's form.
+  assert.equal(resolvePreferredPlateType(options, { current: 'high_temp_plate' }), 'High Temp Plate')
+  // No current match -> the selected printer's loaded plate wins.
+  assert.equal(resolvePreferredPlateType(options, { current: 'pei_smooth', printerPlateType: 'High Temp Plate' }), 'High Temp Plate')
+  // Neither matches -> a stable Textured PEI default, NOT rank-0 Cool Plate.
+  assert.equal(resolvePreferredPlateType(options, { current: 'nonexistent', printerPlateType: null }), 'textured_pei_plate')
+  // Textured PEI absent -> the first option (documented last resort).
+  assert.equal(resolvePreferredPlateType(['cool_plate', 'engineering_plate'], { current: 'nope' }), 'cool_plate')
+})
+
+test('buildFilamentMappings attaches per-material setting overrides to the matching slot only', () => {
+  const projectFilaments = [
+    { projectFilamentId: 1, label: 'PETG', color: '#00AE42', nozzleId: null },
+    { projectFilamentId: 2, label: 'PLA', color: '#FFFFFF', nozzleId: null }
+  ]
+  const options = [
+    materialOption({ id: 'opt-petg', profileId: 'builtin:filament:PETG' }),
+    materialOption({ id: 'opt-pla', profileId: 'builtin:filament:PLA', material: 'Bambu PLA Basic' })
+  ]
+  const mappings = buildFilamentMappings(
+    projectFilaments,
+    { 1: 'opt-petg', 2: 'opt-pla' },
+    {}, {}, options,
+    { 1: { nozzle_temperature: ['255'] } } // only slot 1 has an override
+  )
+  assert.deepEqual(mappings[0]?.settingOverrides, { nozzle_temperature: ['255'] })
+  assert.equal(mappings[1]?.settingOverrides, undefined)
+})
+
+test('buildFilamentMappings omits settingOverrides when the map is empty', () => {
+  const projectFilaments = [{ projectFilamentId: 1, label: 'PETG', color: '#00AE42', nozzleId: null }]
+  const mappings = buildFilamentMappings(projectFilaments, { 1: 'opt-petg' }, {}, {}, [materialOption({ id: 'opt-petg' })], { 1: {} })
+  assert.equal(mappings[0]?.settingOverrides, undefined)
+})

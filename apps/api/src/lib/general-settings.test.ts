@@ -18,6 +18,7 @@ test('getGeneralSettings defaults unconstrained width off when unset', async () 
   assert.deepEqual(settings, {
     appTheme: 'default',
     unconstrainedWidth: false,
+    slicerDeveloperMode: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
     navTabOrder: [],
     quickStartDismissed: false,
@@ -42,6 +43,7 @@ test('getGeneralSettings reads a persisted unconstrained width flag', async () =
   assert.deepEqual(settings, {
     appTheme: 'default',
     unconstrainedWidth: true,
+    slicerDeveloperMode: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
     navTabOrder: [],
     quickStartDismissed: false,
@@ -65,6 +67,7 @@ test('updateGeneralSettings upserts the shared unconstrained width flag', async 
   assert.deepEqual(settings, {
     appTheme: 'default',
     unconstrainedWidth: true,
+    slicerDeveloperMode: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
     navTabOrder: [],
     quickStartDismissed: false,
@@ -102,6 +105,7 @@ test('updateGeneralSettings writes support access policy in workspace scope with
   assert.deepEqual(settings, {
     appTheme: 'default',
     unconstrainedWidth: true,
+    slicerDeveloperMode: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
     navTabOrder: [],
     quickStartDismissed: false,
@@ -138,6 +142,41 @@ test('updateGeneralSettings persists the quick start dismissal', async () => {
   const upsert = upserts[0]
   assert.ok(upsert != null && upsert.key.endsWith('app:general:quickStartDismissed'))
   assert.equal(upsert?.value, 'true')
+})
+
+test('updateGeneralSettings upserts the shared slicer developer mode flag', async () => {
+  const upserts: Array<{ key: string; value: string }> = []
+  const settings = await updateGeneralSettings({ slicerDeveloperMode: true }, {
+    async findUnique() {
+      return null
+    },
+    async upsert(args) {
+      upserts.push({ key: args.where.key, value: args.update.value })
+      return {}
+    }
+  })
+
+  assert.equal(settings.slicerDeveloperMode, true)
+  assert.equal(upserts.length, 1)
+  const upsert = upserts[0]
+  assert.ok(upsert != null && upsert.key.endsWith('app:general:slicerDeveloperMode'))
+  assert.equal(upsert?.value, 'true')
+})
+
+test('getGeneralSettings reads a persisted slicer developer mode flag', async () => {
+  const settings = await getGeneralSettings({
+    async findUnique(args) {
+      if (args.where.key.endsWith('app:general:slicerDeveloperMode')) {
+        return { value: 'true' }
+      }
+      return null
+    },
+    async upsert() {
+      throw new Error('upsert should not be called')
+    }
+  })
+
+  assert.equal(settings.slicerDeveloperMode, true)
 })
 
 test('getGeneralSettings reads a persisted quick start dismissal', async () => {

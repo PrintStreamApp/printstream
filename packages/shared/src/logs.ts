@@ -1,3 +1,8 @@
+/**
+ * Shared contract for the two log surfaces the web app reads from the API: the
+ * operational `console.*` ring buffer (`/api/logs`) and the durable audit trail
+ * (`AuditLog`). Defines actor types, log levels, and the query/response shapes.
+ */
 import { z } from 'zod'
 
 export const auditActorTypeSchema = z.enum(['anonymous', 'user', 'service-account'])

@@ -1,3 +1,14 @@
+/**
+ * Reads the workspace's print-dispatch jobs (queued FTPS upload + start).
+ *
+ * Prefers a shared query supplied through `PrintDispatchJobsQueryProvider` when
+ * one is mounted, so many consumers ride one query instead of each fetching;
+ * otherwise it runs a local workspace-scoped query. While any job is actively
+ * dispatching/uploading it polls every 2s to track progress, and falls back to
+ * `idleRefetchInterval` (off by default) when everything is settled — the WS
+ * invalidation is the primary freshness signal, the poll only covers the active
+ * upload phase.
+ */
 import { createContext, createElement, useContext, type ReactNode } from 'react'
 import type { PrintDispatchJob } from '@printstream/shared'
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'

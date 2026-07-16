@@ -1,7 +1,11 @@
 /**
- * Built-in plugin loader. Lists the plugins shipped with the core app
- * and registers them at startup. Third-party plugin loading would hook
- * in here in a later iteration.
+ * Built-in plugin loader. Lists the plugins shipped with the core app and
+ * registers them at startup with their install/enable defaults and surfaces.
+ *
+ * This file only wires the FIRST-PARTY built-ins. Third-party plugins are a
+ * separate path: they are uploaded as `.zip` archives, extracted into
+ * `PLUGINS_DIR`, and re-loaded on each boot by `loadInstalledExternalPlugins`
+ * (`plugin/installer.ts`, invoked from `src/index.ts`) — not registered here.
  */
 import { pluginRegistry } from './registry.js'
 import { isSelfHostedDeployment } from '../lib/deployment-mode.js'

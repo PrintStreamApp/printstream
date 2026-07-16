@@ -10,6 +10,17 @@
  *   finishes successfully.
  * - Order print status is reconciled against persisted `PrintJob` rows so
  *   the plugin follows the actual printer lifecycle instead of guessing.
+ *
+ * Routes (mounted under `/api/plugins/orders`): `/templates` (CRUD) and
+ * `/orders` (CRUD) plus per-print lifecycle actions
+ * `/orders/:orderId/prints/:printId/{start,confirm,manual-complete,reopen}`.
+ * Owns its own Prisma models (`Order`, `OrderTemplate`, `OrderPrint`, ...).
+ *
+ * Cross-plugin seam: it does NOT import the print-queue plugin. Instead it
+ * subscribes to the `order-print.queued` / `order-print.unqueued` /
+ * `order-print.dispatched` events the print-queue emits (wired in
+ * `queue-link.ts`) so a linked queue item advances the order as it moves
+ * through the queue. See the plugin section of `ARCHITECTURE.md` for the seam contract.
  */
 import {
   JOBS_VIEW_PERMISSION,
@@ -919,6 +930,17 @@ async function readTemplateItemIndex(
   return await deps.readPlateIndex(resolvedPath)
 }
 
+/**
+ * Reconcile a started order print against the real `PrintJob` history and
+ * mirror the latest matching job's result onto it.
+ *
+ * Order prints are not linked to a job by id (the print is started before the
+ * printer reports a task id), so the match is by content: the newest `PrintJob`
+ * for the same printer, library file name, and plate whose `startedAt` is at or
+ * after the order print's own start. That job's finished/result state is copied
+ * onto `lastPrint*`; a no-op when nothing changed. Only meaningful while the
+ * order print is `started` — other states return unchanged.
+ */
 async function syncOrderPrintState(prismaClient: AnyPrismaClient, orderPrintId: string) {
   const existing = await prismaClient.orderPrint.findUnique({ where: { id: orderPrintId } })
   if (!existing) throw notFound('Order print not found')

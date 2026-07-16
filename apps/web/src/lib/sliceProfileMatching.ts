@@ -404,6 +404,41 @@ export function resolveInitialPlateType(file: LibraryFile, bakedIndex: ThreeMfIn
   return bakedIndex?.plates.find((plate) => plate.plateType)?.plateType ?? file.plateTypeChips[0] ?? 'textured_pei_plate'
 }
 
+/** The project's own plate type (baked plate metadata, then a file chip), or null when it carries none. */
+export function resolveProjectPlateType(file: LibraryFile, bakedIndex: ThreeMfIndex | null): string | null {
+  return bakedIndex?.plates.find((plate) => plate.plateType)?.plateType ?? file.plateTypeChips[0] ?? null
+}
+
+/**
+ * The plate-type option whose display LABEL matches `desired` (label-insensitive), or null.
+ * Label-based so the code form (`high_temp_plate`) and a profile's label form (`High Temp Plate`)
+ * resolve to the same option — otherwise the same logical plate falls out of its own option list
+ * (the value-form differs between sources) and the selection is silently dropped.
+ */
+export function matchPlateTypeByLabel(options: readonly string[], desired: string | null | undefined): string | null {
+  if (!desired) return null
+  const key = formatPlateTypeLabel(desired).toLowerCase()
+  return options.find((option) => formatPlateTypeLabel(option).toLowerCase() === key) ?? null
+}
+
+/**
+ * Resolve which plate type to select from `options`, in priority order: the current choice
+ * (matched by label so a value-form change never drops it), the selected printer's loaded plate,
+ * then a stable default (Textured PEI, then the first option). Deliberately never snaps to
+ * BambuStudio's rank-0 Cool Plate as a fallback — an unrelated profiles recompute must not
+ * silently change the user's plate to Cool Plate.
+ */
+export function resolvePreferredPlateType(
+  options: readonly string[],
+  preferences: { current?: string | null; printerPlateType?: string | null }
+): string {
+  return matchPlateTypeByLabel(options, preferences.current)
+    ?? matchPlateTypeByLabel(options, preferences.printerPlateType)
+    ?? matchPlateTypeByLabel(options, 'textured_pei_plate')
+    ?? options[0]
+    ?? ''
+}
+
 export function resolveInitialNozzleDiameter(file: LibraryFile, printer: Printer | null | undefined, selectedMachineProfile: SlicingProfileSummary | null, bakedIndex: ThreeMfIndex | null): string {
   return resolveSliceDialogNozzleDiameterOptions(file, printer ?? null, selectedMachineProfile ? [selectedMachineProfile] : [], bakedIndex)[0] ?? '0.4'
 }
@@ -669,13 +704,16 @@ export function buildFilamentMappings(
   optionIds: Record<number, string>,
   colors: Record<number, string>,
   toolheadIds: Record<number, string>,
-  materialOptions: SliceMaterialOption[]
+  materialOptions: SliceMaterialOption[],
+  /** Per-material filament setting overrides (from the material "tune" dialog), keyed by projectFilamentId. */
+  settingOverridesById: Record<number, Record<string, string | string[]>> = {}
 ) {
   return projectFilaments.flatMap((filament) => {
     const optionId = optionIds[filament.projectFilamentId]
     if (!optionId) return []
     const option = materialOptions.find((entry) => entry.id === optionId)
     if (!option) return []
+    const overrides = settingOverridesById[filament.projectFilamentId]
     return [{
       projectFilamentId: filament.projectFilamentId,
       profileId: option.profileId ?? undefined,
@@ -683,7 +721,8 @@ export function buildFilamentMappings(
       trayId: option.trayId,
       toolheadId: toolheadIds[filament.projectFilamentId] || option.toolheadId || (filament.nozzleId != null ? buildSliceToolheadId(filament.nozzleId) : undefined),
       material: option.material ?? option.label ?? filament.label,
-      color: normalizeSliceFilamentColor(colors[filament.projectFilamentId] ?? filament.color)
+      color: normalizeSliceFilamentColor(colors[filament.projectFilamentId] ?? filament.color),
+      settingOverrides: overrides && Object.keys(overrides).length > 0 ? overrides : undefined
     }]
   })
 }

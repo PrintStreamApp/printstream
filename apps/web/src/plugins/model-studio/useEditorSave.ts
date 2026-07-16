@@ -158,6 +158,14 @@ export function useEditorSave({
     return Object.keys(out).length > 0 ? out : undefined
   }, [sliceConfigRef, stateRef, seededProcessOverrideObjectIdsRef])
 
+  // Global (project-wide) process overrides authored in the editor. Sent with every save so they
+  // persist into the saved 3MF's project_settings.config (not just a one-off slice). Empty ⇒ omit,
+  // leaving the base project settings untouched.
+  const collectProcessSettingOverrides = useCallback((): Record<string, string | string[]> | undefined => {
+    const overrides = sliceConfigRef.current?.processSettingOverrides
+    return overrides && Object.keys(overrides).length > 0 ? overrides : undefined
+  }, [sliceConfigRef])
+
   const handleSaveVersion = useCallback(() => {
     const current = stateRef.current
     if (!current || baseFileId === null) return
@@ -168,13 +176,14 @@ export function useEditorSave({
         {
           baseFileId, baseVersionId, mode: 'newVersion', sceneEdit: buildSceneEditOut(current, { thumbnails }),
           objectProcessOverrides: collectObjectProcessOverrides(),
+          processSettingOverrides: collectProcessSettingOverrides(),
           retarget,
           slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
         },
         retarget ? `Saved a new version for ${retarget.printerModel}` : 'Saved a new version'
       )
     })()
-  }, [baseFileId, baseVersionId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, stateRef, sliceConfigRef])
+  }, [baseFileId, baseVersionId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
 
   const handleSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
@@ -188,13 +197,14 @@ export function useEditorSave({
           baseFileId, baseVersionId, mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
           sceneEdit: buildSceneEditOut(current, { thumbnails }),
           objectProcessOverrides: collectObjectProcessOverrides(),
+          processSettingOverrides: collectProcessSettingOverrides(),
           retarget,
           slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
         },
         `Saved “${name}”`
       )
     })()
-  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, stateRef, sliceConfigRef])
+  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
 
   return {
     saving,

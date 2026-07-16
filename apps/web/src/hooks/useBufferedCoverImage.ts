@@ -1,3 +1,18 @@
+/**
+ * Loads a printer's cover image and holds the LAST good frame on screen while
+ * the next one loads, so a card never flashes empty between covers.
+ *
+ * Two fetch modes: `blob` fetches the bytes and hands back an object URL (used
+ * where the request needs headers/abort); `direct` just preloads the URL in an
+ * `Image` and returns the URL itself. Each load retries up to 3 times with
+ * linearly-growing backoff before reporting `coverFailed`. `treatDisabledAsFailed`
+ * makes a disabled-but-requested cover report failed rather than blank.
+ *
+ * Object-URL lifetime is the subtle part: in `blob` mode the previous object URL
+ * is revoked only AFTER the new blob is created and swapped in (never before), so
+ * the visible image is never revoked out from under the DOM; the unmount effect
+ * revokes the last one so nothing leaks.
+ */
 import { useEffect, useRef, useState } from 'react'
 import { resolveBufferedCoverUrl } from '../lib/printerCardMedia'
 

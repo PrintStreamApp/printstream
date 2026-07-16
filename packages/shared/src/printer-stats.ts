@@ -1,3 +1,9 @@
+/**
+ * Shared contract for a single printer's stats card: the durable per-printer
+ * rollup (mirrors the `PrinterStats` model, including the manual pre-PrintStream
+ * usage kept separate from tracked counters) plus the in-progress live count.
+ * Consumed by the printer detail view.
+ */
 import { z } from 'zod'
 
 export const printerStatsSchema = z.object({

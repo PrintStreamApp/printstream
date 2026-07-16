@@ -18,6 +18,7 @@ import { NotificationChannelsPanel } from '../components/NotificationChannelsPan
 import { NotificationTemplatesPanel } from '../components/NotificationTemplatesPanel'
 import { BridgeSettingsSection } from '../components/settings/BridgeManagementSection'
 import { NavTabOrderEditor } from '../components/settings/NavTabOrderEditor'
+import { SlicerDeveloperModeCard } from '../components/settings/SlicerDeveloperModeCard'
 import { SlicingProfilesSettingsSection } from '../components/settings/SlicingProfilesSection'
 import { PluginManagerSection } from '../components/PluginManagerSection'
 import { apiFetch } from '../lib/apiClient'
@@ -521,6 +522,7 @@ export function SettingsView({
             ]}
             description="Upload BambuStudio profiles used by server-side slicing."
           />
+          <SlicerDeveloperModeCard />
           <SlicingProfilesSettingsSection />
         </Stack>
       ) : (

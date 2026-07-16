@@ -19,6 +19,7 @@ export async function publishPrinterCommand(printer: Printer, payload: Record<st
     keepalive: 30,
     rejectUnauthorized: false,
     clientId: `bambu-bridge-${printer.id}-${process.pid}-${Date.now().toString(36)}`,
+    // MQTT 3.1.1 — the protocol level Bambu printers' on-device broker speaks.
     protocolVersion: 4
   })
 

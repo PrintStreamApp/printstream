@@ -27,8 +27,15 @@
  * load; the export args for that case are derived from the preset names the settings themselves
  * carry, resolved against the slicer's builtin catalog.
  *
+ * MATERIAL CHANGE. The editor's save path (the API's `applyFilamentList`) deliberately DROPS the
+ * old material's per-filament physics — including the `nozzle_temperature` completeness sentinel —
+ * whenever a slot's material changes (e.g. ABS -> PETG), so the saved config lands here INCOMPLETE
+ * on purpose. This module then re-derives that slot's physics from the preset names the settings
+ * still carry (`ensureFilamentCoverage` -> `buildFilamentCoverageFromEmbedded`), so the new
+ * material slices with its own temperatures/flow rather than the old material's cloned values.
+ *
  * A no-op when the 3MF already embeds a complete `project_settings.config` (every real
- * BambuStudio project), so normal slicing is untouched.
+ * BambuStudio project, and any save with no material change), so normal slicing is untouched.
  */
 import { spawn } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
@@ -124,15 +131,49 @@ async function buildExportArgsFromEmbeddedPresetNames(
 }
 
 /**
+ * A `--load-filaments` value (`;`-joined paths) covering every slot the embedded settings name:
+ * each `filament_settings_id` entry resolves to its builtin preset, or Generic PLA when it does
+ * not, so the export keeps the project's slot COUNT and gives each slot its own material. Null
+ * when the settings name no filaments. This is what makes a material-changed project (whose editor
+ * save DROPPED the old material's physics — see the API's `applyFilamentList`) re-derive the NEW
+ * material's temperatures/flow instead of collapsing to a single Generic PLA baseline.
+ */
+async function buildFilamentCoverageFromEmbedded(
+  embedded: Record<string, unknown> | null,
+  profileDir: string
+): Promise<string | null> {
+  const rawNames = embedded && Array.isArray(embedded.filament_settings_id) ? embedded.filament_settings_id : []
+  const names = rawNames.filter((entry): entry is string => typeof entry === 'string')
+  if (names.length === 0) return null
+  const genericPla = await builtinProfilePathForName(profileDir, 'filament', 'Generic PLA')
+  const paths: string[] = []
+  for (const name of names) {
+    const resolved = name.trim() ? await builtinProfilePathForName(profileDir, 'filament', name) : null
+    const covered = resolved ?? genericPla
+    if (covered) paths.push(covered)
+  }
+  return paths.length > 0 ? paths.join(';') : null
+}
+
+/**
  * The export must cover the FILAMENT domain too: with no filament preset loaded, the exported
  * config omits the nullable per-filament override arrays (`filament_retraction_length`,
  * `filament_z_hop_types`, …) and the bare BBL-project loader still segfaults on the merge —
  * verified against the 2.7.1 CLI. When the args carry no `--load-filaments` (the project's
- * filament names didn't resolve, or the slice loads only a process), append Generic PLA: the
- * export is only a structural baseline, and the project's own values are overlaid on top.
+ * filament names didn't resolve, or the slice loads only a process), cover the filament domain
+ * from the presets the embedded settings NAME (so a material-changed project slices with the new
+ * material's real physics), padding unresolved slots with Generic PLA; fall back to a single
+ * Generic PLA when the settings name no filaments. The export is only a structural baseline — the
+ * project's own values are overlaid on top.
  */
-async function ensureFilamentCoverage(args: readonly string[], profileDir: string | null | undefined): Promise<readonly string[]> {
+async function ensureFilamentCoverage(
+  args: readonly string[],
+  profileDir: string | null | undefined,
+  embedded: Record<string, unknown> | null
+): Promise<readonly string[]> {
   if (args.includes('--load-filaments') || !profileDir) return args
+  const fromEmbedded = await buildFilamentCoverageFromEmbedded(embedded, profileDir)
+  if (fromEmbedded) return [...args, '--load-filaments', fromEmbedded]
   const fallback = await builtinProfilePathForName(profileDir, 'filament', 'Generic PLA')
   return fallback ? [...args, '--load-filaments', fallback] : args
 }
@@ -258,7 +299,7 @@ export async function ensureEmbeddedProjectSettings(input: {
     }
     exportArgs = derived
   }
-  exportArgs = await ensureFilamentCoverage(exportArgs, input.profileDir)
+  exportArgs = await ensureFilamentCoverage(exportArgs, input.profileDir, embedded)
 
   input.log(embedded === null
     ? 'Synthesizing project settings for scaffold 3MF (no embedded project_settings.config)'

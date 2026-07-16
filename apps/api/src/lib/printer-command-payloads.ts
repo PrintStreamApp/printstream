@@ -8,6 +8,14 @@
  * The `POST /api/printers/:id/command` route validates and gates the command,
  * then publishes whatever payloads this returns.
  *
+ * The new-vs-legacy branch is per-printer, not per-model: each control reads a
+ * `status.commandTransport.*` capability flag (derived from what the live
+ * status reports the firmware supports) and emits the structured native `print`
+ * command when available, else falls back to a raw `gcode_line`. So the same
+ * model can take either path depending on its firmware. Where the legacy
+ * fallback moves an axis, motion direction depends on the motion system (see
+ * `legacyMotionDistance`).
+ *
  * `resolvePressureAdvanceCommandContext` is also consumed by the
  * pressure-advance-profiles route, so it is exported alongside the translator.
  */
@@ -619,6 +627,9 @@ function legacyMotionDistance(
   distanceMm: number,
   model: ReturnType<typeof printerModelSchema.parse>
 ): number {
+  // On a bed-slinger (non-CoreXY, e.g. A1) the bed moves for Y and the nozzle
+  // for Z, so a "move +" jog in the UI is a negative G-code delta on those axes;
+  // CoreXY machines move the toolhead directly and need no inversion.
   if (usesCoreXyMotionSystem(model)) return distanceMm
   if (axis === 'Y' || axis === 'Z') return -distanceMm
   return distanceMm

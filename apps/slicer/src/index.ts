@@ -35,11 +35,11 @@ import { outputSignalsSliceComplete } from './slice-progress.js'
 import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
 import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
 import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
-import { selectCliProfileFiles } from './cli-profile-selection.js'
+import { buildPerMaterialFilamentOverrides, selectCliProfileFiles } from './cli-profile-selection.js'
 import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } from './machine-switch-guard.js'
 import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
 import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
-import { formatSlicePresetIncompatibilityError } from './slice-error.js'
+import { formatSliceEngineCrashError, formatSlicePresetIncompatibilityError } from './slice-error.js'
 import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
 import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from './machine-switch-repair.js'
 import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
@@ -240,6 +240,7 @@ app.post('/slice', async (request, response) => {
       profileFiles: parsed.data.profileFiles ?? [],
       processSettingOverrides: parsed.data.request.target.processSettingOverrides ?? {},
       filamentSettingOverrides: parsed.data.request.target.filamentSettingOverrides ?? {},
+      perMaterialFilamentOverrides: buildPerMaterialFilamentOverrides(parsed.data.request.target.filamentMappings ?? []),
       metadata: slicedArtifactMetadata,
       supportedFlags,
       rewroteProjectSettings: preparedInput.rewroteProjectSettings,
@@ -331,6 +332,8 @@ async function runCli(input: {
   profileFiles: SliceProfileFile[]
   processSettingOverrides: Record<string, string | string[]>
   filamentSettingOverrides: Record<string, string | string[]>
+  /** Per-material overrides keyed by the slot's filament profileId (from the material dialog). */
+  perMaterialFilamentOverrides: Record<string, Record<string, string | string[]>>
   metadata: SlicedArtifactMetadata | null
   supportedFlags: ReadonlySet<string>
   rewroteProjectSettings: boolean
@@ -345,7 +348,7 @@ async function runCli(input: {
   const cliProfileFiles = selectCliProfileFiles(input.profileFiles, {
     rewroteProjectSettings: input.rewroteProjectSettings
   })
-  const profileArgs = await prepareProfileArgs(cliProfileFiles, path.dirname(input.outputPath), input.slicerTarget.profileDir, input.processSettingOverrides, input.filamentSettingOverrides)
+  const profileArgs = await prepareProfileArgs(cliProfileFiles, path.dirname(input.outputPath), input.slicerTarget.profileDir, input.processSettingOverrides, input.filamentSettingOverrides, input.perMaterialFilamentOverrides)
   // A "from scratch" scaffold 3MF (calibration prints, new-project saves) carries the BBL marker
   // but no — or only a partial — embedded project_settings.config, which segfaults the CLI's
   // BBL-project loader. Synthesize/complete it from the slice's own profiles so it loads; a no-op
@@ -769,6 +772,17 @@ async function executeCli(input: {
             reject(new Error(presetError))
             return
           }
+          // A signal death (134-139, surfaced by the xvfb-run wrapper) AFTER the slice started is a
+          // deterministic engine crash on this model's geometry. Name the stage and mark it
+          // non-transient so the API surfaces guidance and skips its (futile) crash retry. A signal
+          // death during load/teardown returns null here and stays retryable (emulation flake).
+          if (code !== null && code >= 134 && code <= 139) {
+            const engineCrash = formatSliceEngineCrashError(`${stdoutCombined}\n${stderrCombined}`, code)
+            if (engineCrash) {
+              reject(new Error(engineCrash))
+              return
+            }
+          }
           reject(new Error(`Slicer CLI exited with code ${code ?? 'unknown'}`))
         }
       })
@@ -974,17 +988,20 @@ async function prepareProfileArgs(
   workDir: string,
   profileDir: string,
   processSettingOverrides: Record<string, string | string[]> = {},
-  filamentSettingOverrides: Record<string, string | string[]> = {}
+  filamentSettingOverrides: Record<string, string | string[]> = {},
+  perMaterialFilamentOverrides: Record<string, Record<string, string | string[]>> = {}
 ): Promise<string[]> {
   const settingsPaths: string[] = []
   const filamentPaths: string[] = []
   const customDir = path.join(workDir, 'profiles')
 
   for (const profile of profileFiles) {
+    // Filament overrides = the target-level map (applies to every filament, e.g. flow calibration)
+    // with THIS slot's per-material overrides layered on top (slot values win).
     const overrides = profile.kind === 'process'
       ? processSettingOverrides
       : profile.kind === 'filament'
-        ? filamentSettingOverrides
+        ? { ...filamentSettingOverrides, ...(perMaterialFilamentOverrides[profile.id] ?? {}) }
         : undefined
     const profilePath = await materializeProfileFile(profile, customDir, profileDir, overrides)
     if (profile.kind === 'filament') filamentPaths.push(profilePath)

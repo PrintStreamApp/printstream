@@ -1,9 +1,10 @@
 /**
  * User-targeted Web Push fan-out.
  *
- * Broadcast notifications go to every subscription in the event's scope;
- * a message with `targetUserIds` instead goes only to the target users'
- * devices (matched by the subscription's `user:<id>` actor key):
+ * Broadcast notifications go to every subscription in the event's scope; a
+ * targeted payload (a message with `targetUserIds`, or a dismissal retracting
+ * one) instead goes only to the target users' devices (matched by the
+ * subscription's `user:<id>` actor key):
  *
  * - With a `tenantId`, delivery stays inside that workspace's list and the
  *   caller-supplied deliverability filter (membership) still applies.
@@ -12,7 +13,6 @@
  *   that holds subscriptions — a user's device endpoint appears once per
  *   workspace they enabled, so fan-out dedupes by endpoint.
  */
-import type { NotificationMessage } from '@printstream/shared'
 import type { StoredSubscription } from './push.js'
 
 /** The slice of `WebPushDelivery` the targeted fan-out needs. */
@@ -21,7 +21,10 @@ export interface TargetedPushScopeDelivery {
 }
 
 export interface TargetedPushOptions {
-  message: NotificationMessage
+  /** Scope the event originated from (`null` = platform/tenantless). */
+  tenantId: string | null
+  /** JSON payload each matched subscription receives. */
+  payload: unknown
   targetUserIds: readonly string[]
   /** Scoped delivery accessor (`null` = platform scope). */
   getScopedDelivery: (tenantId: string | null) => Promise<TargetedPushScopeDelivery>
@@ -42,17 +45,17 @@ export async function deliverTargetedPush(options: TargetedPushOptions): Promise
   const targetActorKeys = new Set(options.targetUserIds.map((userId) => `user:${userId}`))
   if (targetActorKeys.size === 0) return
 
-  const scopes: Array<string | null> = options.message.tenantId
-    ? [options.message.tenantId]
+  const scopes: Array<string | null> = options.tenantId
+    ? [options.tenantId]
     : [null, ...await options.listSubscriptionTenantScopes()]
 
   const deliveredEndpoints = new Set<string>()
   for (const tenantId of scopes) {
     if (!options.isEnabledForTenant(tenantId)) continue
     const delivery = await options.getScopedDelivery(tenantId)
-    await delivery.sendMatching(options.message, (entry) => {
+    await delivery.sendMatching(options.payload, (entry) => {
       if (!entry.actorKey || !targetActorKeys.has(entry.actorKey)) return false
-      if (options.message.tenantId && options.isDeliverableInScope && !options.isDeliverableInScope(entry)) {
+      if (options.tenantId && options.isDeliverableInScope && !options.isDeliverableInScope(entry)) {
         return false
       }
       if (deliveredEndpoints.has(entry.endpoint)) return false

@@ -68,6 +68,13 @@ async function handlePushEvent(data) {
 
   const title = data.title || 'PrintStream'
   const tag = data.tag || undefined
+  if (tag && await isTagVisibleInFocusedClient(tag)) {
+    // The user is looking at this notification's subject right now (e.g. the
+    // support thread it announces is open and focused), so an OS notification
+    // would be noise. Skipping showNotification is allowed here: Chrome's
+    // userVisibleOnly rule exempts pushes handled while a client is focused.
+    return
+  }
   if (tag) {
     await suppressDismissSyncForTag(tag)
   }
@@ -91,6 +98,48 @@ async function handlePushEvent(data) {
     }
   }
   await self.registration.showNotification(title, options)
+}
+
+/**
+ * Whether any visible window client currently has this tag's subject surface
+ * on screen. Each candidate client is asked over a MessageChannel (answered
+ * by the notifications-browser plugin's visibility responder); no answer
+ * within the timeout counts as "not visible" so a wedged page never blocks
+ * the notification.
+ */
+async function isTagVisibleInFocusedClient(tag) {
+  try {
+    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    const candidates = clientList.filter((client) => client.visibilityState === 'visible')
+    if (candidates.length === 0) return false
+    const answers = await Promise.all(candidates.map((client) => askTagVisibility(client, tag)))
+    return answers.some(Boolean)
+  } catch {
+    return false
+  }
+}
+
+function askTagVisibility(client, tag) {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (value) => {
+      if (done) return
+      done = true
+      resolve(value)
+    }
+    const timer = setTimeout(() => finish(false), 400)
+    try {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timer)
+        finish(Boolean(event.data && event.data.visible))
+      }
+      client.postMessage({ type: 'notification-tag-visibility-check', tag }, [channel.port2])
+    } catch {
+      clearTimeout(timer)
+      finish(false)
+    }
+  })
 }
 
 async function suppressDismissSyncForTag(tag) {

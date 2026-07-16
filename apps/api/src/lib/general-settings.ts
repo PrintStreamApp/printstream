@@ -12,6 +12,7 @@ import { listAllWorkspaceSupportPermissions, serializeSupportAccessPermissions, 
 
 const APP_THEME_KEY = 'app:general:theme'
 const UNCONSTRAINED_WIDTH_KEY = 'app:general:unconstrainedWidth'
+const SLICER_DEVELOPER_MODE_KEY = 'app:general:slicerDeveloperMode'
 const LANDING_PAGE_KEY = 'app:general:landingPage'
 const NAV_TAB_ORDER_KEY = 'app:general:navTabOrder'
 const QUICK_START_DISMISSED_KEY = 'app:general:quickStartDismissed'
@@ -26,9 +27,10 @@ interface GeneralSettingsStore {
 }
 
 export async function getGeneralSettings(store: GeneralSettingsStore = prisma.setting): Promise<GeneralSettings> {
-  const [appThemeRow, unconstrainedWidthRow, landingPageRow, navTabOrderRow, quickStartDismissedRow, supportAccessEnabledRow, supportAccessPermissionsRow] = await Promise.all([
+  const [appThemeRow, unconstrainedWidthRow, slicerDeveloperModeRow, landingPageRow, navTabOrderRow, quickStartDismissedRow, supportAccessEnabledRow, supportAccessPermissionsRow] = await Promise.all([
     store.findUnique({ where: { key: scopeSettingKey(APP_THEME_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(UNCONSTRAINED_WIDTH_KEY) } }),
+    store.findUnique({ where: { key: scopeSettingKey(SLICER_DEVELOPER_MODE_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(LANDING_PAGE_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(NAV_TAB_ORDER_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(QUICK_START_DISMISSED_KEY) } }),
@@ -39,6 +41,7 @@ export async function getGeneralSettings(store: GeneralSettingsStore = prisma.se
   return generalSettingsSchema.parse({
     appTheme: parseAppThemeSetting(appThemeRow?.value),
     unconstrainedWidth: unconstrainedWidthRow?.value === 'true',
+    slicerDeveloperMode: slicerDeveloperModeRow?.value === 'true',
     landingPage: parseLandingPageSetting(landingPageRow?.value),
     navTabOrder: parseNavTabOrder(navTabOrderRow?.value),
     quickStartDismissed: quickStartDismissedRow?.value === 'true',
@@ -68,6 +71,15 @@ export async function updateGeneralSettings(
       where: { key },
       create: { key, value: String(input.unconstrainedWidth) },
       update: { value: String(input.unconstrainedWidth) }
+    })
+  }
+
+  if (input.slicerDeveloperMode !== undefined) {
+    const key = scopeSettingKey(SLICER_DEVELOPER_MODE_KEY)
+    await store.upsert({
+      where: { key },
+      create: { key, value: String(input.slicerDeveloperMode) },
+      update: { value: String(input.slicerDeveloperMode) }
     })
   }
 

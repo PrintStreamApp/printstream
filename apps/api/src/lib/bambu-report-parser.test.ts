@@ -168,3 +168,113 @@ test('parseReport reports modules even when no ota entry is present', () => {
     { name: 'ams/0', version: '00.00.06.49', hardwareVersion: 'AMS08' }
   ])
 })
+
+test('parseReport parses Filament Track Switch state (aux bit 29 + device.fila_switch)', () => {
+  const delta = parseReport(
+    {
+      print: {
+        aux: '20000000', // bit 29 set: FTS installed
+        device: {
+          fila_switch: {
+            // Index 0 is the switch's B side, index 1 the A side (BambuStudio
+            // DevFilaSwitch::ParseFilaSwitchInfo). Entries pack (ams_id<<8)|slot.
+            in: [(2 << 8) | 1, (128 << 8) | 0],
+            out: [1, 0],
+            stat: 1,
+            info: 1
+          }
+        }
+      }
+    },
+    printer
+  )
+
+  assert.deepEqual(delta?.filamentTrackSwitch, {
+    installed: true,
+    inputA: { amsId: 128, slotId: 0 },
+    inputB: { amsId: 2, slotId: 1 },
+    outputAExtruderId: 0,
+    outputBExtruderId: 1,
+    calibrating: true,
+    filamentPresent: true
+  })
+})
+
+test('parseReport treats -1 inputs and 0xE outputs as disconnected FTS ports', () => {
+  const delta = parseReport(
+    {
+      print: {
+        aux: '20000000',
+        device: { fila_switch: { in: [-1, (0 << 8) | 3], out: [0xe, 1], stat: 0, info: 0 } }
+      }
+    },
+    printer
+  )
+  assert.deepEqual(delta?.filamentTrackSwitch, {
+    installed: true,
+    inputA: { amsId: 0, slotId: 3 },
+    inputB: null,
+    outputAExtruderId: 1,
+    outputBExtruderId: null,
+    calibrating: false,
+    filamentPresent: false
+  })
+})
+
+test('parseReport leaves filamentTrackSwitch untouched without an FTS signal and clears it on removal', () => {
+  // Fleet case: plain aux with bit 29 unset, no fila_switch json -> no delta key.
+  const none = parseReport({ print: { aux: '0' } }, printer)
+  assert.equal('filamentTrackSwitch' in (none ?? {}), false)
+
+  // A previously tracked switch that disappears is cleared to null.
+  const current = {
+    ...makeOfflineStatus(printer),
+    filamentTrackSwitch: {
+      installed: true,
+      inputA: null,
+      inputB: null,
+      outputAExtruderId: null,
+      outputBExtruderId: null,
+      calibrating: false,
+      filamentPresent: null
+    }
+  }
+  const removed = parseReport({ print: { aux: '0' } }, printer, current)
+  assert.equal(removed?.filamentTrackSwitch, null)
+
+  // An aux-only delta with the bit still set keeps previous connection state.
+  const withConnections = {
+    ...current,
+    filamentTrackSwitch: { ...current.filamentTrackSwitch, inputA: { amsId: 128, slotId: 0 } }
+  }
+  const kept = parseReport({ print: { aux: '20000000' } }, printer, withConnections)
+  assert.deepEqual(kept?.filamentTrackSwitch?.inputA, { amsId: 128, slotId: 0 })
+})
+
+test('parseReport derives AmsUnit.switchInput from info bits 24-27 when routed via the FTS', () => {
+  const delta = parseReport(
+    {
+      print: {
+        ams: {
+          ams: [
+            // Extruder nibble (bits 8-11) = 0xE: bound through the switch;
+            // bits 24-27 name the input (0 = B, 1 = A).
+            { id: 0, info: '01000e01', tray: [{ id: 0 }] },
+            { id: 1, info: '00000e01', tray: [{ id: 0 }] },
+            { id: 2, info: '1', tray: [{ id: 0 }] }
+          ]
+        }
+      }
+    },
+    printer
+  )
+
+  const viaA = delta?.ams?.find((unit) => unit.unitId === 0)
+  const viaB = delta?.ams?.find((unit) => unit.unitId === 1)
+  const direct = delta?.ams?.find((unit) => unit.unitId === 2)
+  assert.equal(viaA?.switchInput, 'A')
+  assert.equal(viaA?.nozzleId, null)
+  assert.equal(viaB?.switchInput, 'B')
+  assert.equal(direct?.switchInput, null)
+  assert.equal(direct?.nozzleId, 0)
+})

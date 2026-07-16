@@ -1829,11 +1829,26 @@ function EditorView({
         : instance.parts.length
     ), 0)
     setBuildProgress(totalLoadUnits > 0 ? { done: 0, total: totalLoadUnits } : null)
-    if (incremental && !plateRoot.children.some((child) => child.userData?.isBedSurface)) {
-      // Show the destination plate's empty bed straight away; models append onto it as they build.
-      const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas })
-      liveBed.userData.isBedSurface = true
-      plateRoot.add(liveBed)
+    // Identifies the bed geometry currently on the plate. On an incremental (empty-plate) rebuild
+    // the plate is not cleared, so a bed added on a previous pass persists — but the bed DIMENSIONS
+    // can change underneath it (a scene refetch once the target printer resolves: e.g. the pre-model
+    // 256 fallback -> the printer's real 350x320). Replace the bed when its signature changed rather
+    // than skipping because "a bed already exists", which stranded the stale bed until an Arrange /
+    // add-model forced the atomic-swap path. The atomic (staging) path always rebuilds the bed.
+    const bedSignature = JSON.stringify([bedWidth, bedDepth, bedCenterX, bedCenterY, activePlate.bed.excludeAreas])
+    if (incremental) {
+      const existingBed = plateRoot.children.find((child) => child.userData?.isBedSurface)
+      if (!existingBed || existingBed.userData.bedSignature !== bedSignature) {
+        if (existingBed) {
+          disposeObject3D(existingBed)
+          plateRoot.remove(existingBed)
+        }
+        // Show the destination plate's empty bed straight away; models append onto it as they build.
+        const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas })
+        liveBed.userData.isBedSurface = true
+        liveBed.userData.bedSignature = bedSignature
+        plateRoot.add(liveBed)
+      }
     }
 
     void (async () => {
@@ -1843,8 +1858,10 @@ function EditorView({
       const target = staging ?? plateRoot
       if (staging) {
         const bedSurface = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas })
-        // Tagged so the thumbnail renderer hides it (Bambu-style model-only thumbnails).
+        // Tagged so the thumbnail renderer hides it (Bambu-style model-only thumbnails); the
+        // signature lets a later incremental rebuild detect a bed-dimension change.
         bedSurface.userData.isBedSurface = true
+        bedSurface.userData.bedSignature = bedSignature
         staging.add(bedSurface)
       }
       const builtGroups = new Map<string, THREE.Group>()

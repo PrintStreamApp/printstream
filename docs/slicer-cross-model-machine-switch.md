@@ -26,8 +26,16 @@ Everything happens in `prepareInputThreeMf` in
    compares the request's target model (the machine profile / `printerModel`)
    with the project's embedded model (`printer_model` / `printer_settings_id`),
    both canonicalised via the shared `canonicalBambuModelKey`
-   (`packages/shared/src/bambu-model-keys.ts`). No switch → the standard
-   prepare/rewrite path runs unchanged.
+   (`packages/shared/src/bambu-model-keys.ts`). It retargets whenever a target
+   machine preset is available and the embedded machine is a **different** Bambu
+   model **or absent entirely** — the latter is the new-project scaffold, which
+   the editor bakes with filaments + plate type but **no machine** (a
+   from-scratch project never round-trips the slicer to get one). Authoring the
+   chosen printer's machine in here is the same operation the Save flow's
+   `retargetSavedProjectMachine` performs, so a direct new-project slice and a
+   save+reopen produce the same self-consistent 3MF. When the embedded machine
+   already IS the target model, or there is no machine preset to author from,
+   the standard prepare/rewrite path runs unchanged.
 2. **Retarget natively** — the project-settings transform applies
    `retargetProjectSettingsToMachine` with the fully-merged target machine
    profile (`readMergedMachineProfile` over the flattened `machine_full/`
@@ -78,10 +86,14 @@ retarget blank the relevant slots when they rewrite the corresponding
 
 `assertSupportedEmbeddedMachineSwitch` hard-fails exactly one case a retarget
 cannot help: a **nominally same-model H2-family project**
-(`H2D` / `H2DPRO` / `H2C`) that lacks the H2 dual-nozzle topology
-(`physical_extruder_map` et al.) — no switch is detected, so nothing rebuilds
-the topology, and the CLI segfaults resolving extruder variants. The error
-tells the user to re-save the project for that printer.
+(`H2D` / `H2DPRO` / `H2C`) that already **declares** that H2 machine
+(`printer_model`/`printer_settings_id`) yet lacks its dual-nozzle topology
+(`physical_extruder_map` et al.) — the embedded model equals the target so no
+retarget is triggered, nothing rebuilds the topology, and the CLI segfaults
+resolving extruder variants. The error tells the user to re-save the project
+for that printer. Note this is distinct from a **machine-less** input (a
+new-project scaffold with no `printer_model`): that one *is* retargeted (step
+1 above authors the H2 machine in), so it never reaches this throw.
 
 ## Maintenance notes
 

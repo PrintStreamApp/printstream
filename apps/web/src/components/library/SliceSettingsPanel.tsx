@@ -18,6 +18,7 @@ import {
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import EditRoundedIcon from '@mui/icons-material/EditRounded'
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import RestoreRoundedIcon from '@mui/icons-material/RestoreRounded'
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded'
@@ -160,6 +161,10 @@ export interface SliceSettingsController {
   setFilamentToolheadIds: React.Dispatch<React.SetStateAction<Record<number, string>>>
   filamentColors: Record<number, string>
   setFilamentColors: React.Dispatch<React.SetStateAction<Record<number, string>>>
+  /** Per-material filament setting overrides keyed by projectFilamentId (material "tune" dialog). */
+  filamentSettingOverridesById: Record<number, Record<string, string | string[]>>
+  /** Open the material settings dialog for a given filament slot. */
+  openFilamentSettings: React.Dispatch<React.SetStateAction<number | null>>
   setPrinterMaterialPickerFilamentId: React.Dispatch<React.SetStateAction<number | null>>
   handleMaterialOptionChange: (projectFilamentId: number, option: SliceMaterialOption | null) => void
   /**
@@ -203,6 +208,14 @@ export interface SliceSettingsController {
    * bypass the markDirty-wrapped controller the editor hands to the settings panel.
    */
   materialEditListenerRef: React.MutableRefObject<(() => void) | null>
+  /**
+   * Sibling of {@link materialEditListenerRef} for GLOBAL process-setting edits (the process
+   * profile selection and the overrides applied by the process-settings dialog). The full editor
+   * sets it to a snapshot-then-dirty handler; call it BEFORE mutating `processProfileId` /
+   * `processSettingOverrides` so the pre-edit values are captured for undo. Null (no-op) outside
+   * the editor. Global process edits otherwise bypass the editor's dirty/undo like material picks do.
+   */
+  processEditListenerRef: React.MutableRefObject<(() => void) | null>
 }
 
 export interface SliceMaterialsSnapshot {
@@ -216,6 +229,10 @@ export interface SliceMaterialsSnapshot {
   filamentMaterialTypeFilters: Record<number, string>
   /** Per-object process overrides, so the editor's undo/redo can revert a gear edit. */
   objectProcessOverrides: Record<string, Record<string, string | string[]>>
+  /** Selected process profile id, so undo can revert a profile switch alongside its overrides. */
+  processProfileId: string
+  /** Global process-setting overrides, so the editor's undo/redo can revert a global process edit. */
+  processSettingOverrides: Record<string, string | string[]>
 }
 
 /**
@@ -247,11 +264,12 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
     plateType, setPlateType, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
-    processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen,
+    processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, processEditListenerRef,
     hasPlateObjects, objectOverrideCount, setPerObjectDialogOpen, selectedSliceObjectIds, plateObjects,
     projectFilaments, materialOptions, loadedMaterialOptions, materialToolheadOptions,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
+    filamentSettingOverridesById, openFilamentSettings,
     setPrinterMaterialPickerFilamentId, handleMaterialOptionChange,
     onAddFilament, onRemoveFilament, filamentInUse, filamentSupportOnly
   } = controller
@@ -491,6 +509,8 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                   ariaLabel="Preset"
                   modified={processProfileModified}
                   onChange={(profile) => {
+                    // Snapshot the pre-switch profile+overrides for undo/dirty (no-op outside the editor).
+                    processEditListenerRef.current?.()
                     processProfileSelectionTouchedRef.current = true
                     setProcessProfileId(profile?.id ?? '')
                     setProcessSettingOverrides({})
@@ -593,6 +613,35 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                       Choose from printer
                     </Button>
                   )}
+                  {(() => {
+                    // The tune dialog needs a resolvable filament profile id: the option's own
+                    // profileId (builtin/custom), or the underlying id for a project-embedded profile
+                    // (option id = `profile:<profileId>`). A loaded material with no matched preset has
+                    // neither, so editing is disabled until one is picked.
+                    const filamentProfileId = selectedOption?.profileId
+                      ?? (selectedOption?.id.startsWith('profile:') ? selectedOption.id.slice('profile:'.length) : null)
+                    const overrideCount = Object.keys(filamentSettingOverridesById[filament.projectFilamentId] ?? {}).length
+                    const disabled = !filamentProfileId || !selectedSlicerTargetIdForGuards
+                    return (
+                      <Tooltip title={filamentProfileId ? 'Edit filament settings' : 'Choose a material profile first'}>
+                        <span>
+                          <IconButton
+                            size="sm"
+                            variant="plain"
+                            color="neutral"
+                            disabled={disabled}
+                            onClick={() => openFilamentSettings(filament.projectFilamentId)}
+                            aria-label={`Edit filament settings for material ${filamentIndex + 1}`}
+                          >
+                            <TuneRoundedIcon fontSize="small" />
+                            {overrideCount > 0 && (
+                              <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.5 }}>{overrideCount}</Chip>
+                            )}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    )
+                  })()}
                   {showMaterialEditing && (() => {
                     const inUse = filamentInUse?.(filament.projectFilamentId) ?? false
                     const supportOnly = filamentSupportOnly?.(filament.projectFilamentId) ?? false

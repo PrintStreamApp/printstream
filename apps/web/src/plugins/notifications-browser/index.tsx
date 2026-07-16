@@ -28,6 +28,7 @@ import {
   readEnrollmentPromptDismissed,
   shouldShowBrowserNotificationEnrollmentPrompt
 } from './prompt'
+import { installNotificationVisibilityResponder } from './visibilityResponder'
 
 async function promptForBrowserNotificationEnrollmentOnAppLoad(): Promise<void> {
   const support = detectBrowserNotificationsSupport()
@@ -92,6 +93,8 @@ export const notificationsBrowserPlugin: WebPlugin = {
   description: 'Background OS notifications via Web Push (works when the app is closed).',
   settingsPanel: BrowserNotificationsPanel,
   init() {
+    // Lets the service worker suppress pushes whose subject is on screen.
+    installNotificationVisibilityResponder()
     void promptForBrowserNotificationEnrollmentOnAppLoad()
   }
 }

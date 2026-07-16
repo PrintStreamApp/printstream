@@ -47,7 +47,8 @@ test('tenant-scoped targeted push stays in scope and matches only target actors'
   ])
 
   await deliverTargetedPush({
-    message: message({ tenantId: 'tenant-a' }),
+    tenantId: 'tenant-a',
+    payload: message(),
     targetUserIds: ['user-1'],
     getScopedDelivery: async (tenantId) => {
       assert.equal(tenantId, 'tenant-a')
@@ -69,7 +70,8 @@ test('tenant-scoped targeted push applies the scope deliverability filter', asyn
   ])
 
   await deliverTargetedPush({
-    message: message({ tenantId: 'tenant-a' }),
+    tenantId: 'tenant-a',
+    payload: message(),
     targetUserIds: ['user-1'],
     getScopedDelivery: async () => scoped.delivery,
     listSubscriptionTenantScopes: async () => [],
@@ -96,7 +98,8 @@ test('platform-wide targeted push spans scopes and dedupes shared endpoints', as
   ])
 
   await deliverTargetedPush({
-    message: message(),
+    tenantId: null,
+    payload: message(),
     targetUserIds: ['user-1'],
     getScopedDelivery: async (tenantId) => scopes.get(tenantId)!,
     listSubscriptionTenantScopes: async () => ['tenant-a', 'tenant-b'],
@@ -117,7 +120,8 @@ test('platform-wide targeted push skips scopes where the plugin is disabled', as
   ])
 
   await deliverTargetedPush({
-    message: message(),
+    tenantId: null,
+    payload: message(),
     targetUserIds: ['user-1'],
     getScopedDelivery: async (tenantId) => scopes.get(tenantId)!,
     listSubscriptionTenantScopes: async () => ['tenant-a'],

@@ -73,11 +73,14 @@ import {
   normalizeSliceFilamentColor,
   parseSliceToolheadNozzleId,
   pickMachineProfileByName,
+  matchPlateTypeByLabel,
   pickMachineProfileForPrinter,
   resolveCompatiblePlateTypes,
   resolveInitialManualPrinterModel,
   resolveInitialNozzleDiameter,
   resolveInitialPlateType,
+  resolvePreferredPlateType,
+  resolveProjectPlateType,
   resolveSliceDialogNozzleDiameterOptions,
   resolveSliceDialogSourcePrinterModel,
   resolveSliceDialogTargetPrinterModel,
@@ -106,6 +109,7 @@ import {
 import { SliceSettingsPanel, type SliceSettingsController, type SliceMaterialsSnapshot } from './SliceSettingsPanel'
 
 const ProcessSettingsDialog = lazy(() => import('../ProcessSettingsDialog'))
+const FilamentSettingsDialog = lazy(() => import('./FilamentSettingsDialog'))
 const PerObjectSettingsDialog = lazy(() => import('../PerObjectSettingsDialog'))
 
 export function SliceFileModal({
@@ -195,6 +199,9 @@ export function SliceFileModal({
   const [bakedDefaultsApplied, setBakedDefaultsApplied] = useState(false)
   const manualPrinterModelTouchedRef = useRef(false)
   const processProfileSelectionTouchedRef = useRef(false)
+  // Tracks whether the user has explicitly chosen a plate type, so the printer-default and
+  // options-reset effects below never overwrite a deliberate choice.
+  const plateTypeTouchedRef = useRef(false)
   const [previewFileId, setPreviewFileId] = useState<string | null>(null)
   // Edited multi-plate arrangement from the interactive 3D editor. When set, it is
   // authoritative: the slice runs across every plate the edit defines (plate: 0).
@@ -274,11 +281,21 @@ export function SliceFileModal({
   const [processProfileId, setProcessProfileId] = useState(() => pickStandardProcessProfile(processProfiles)?.id ?? processProfiles[0]?.id ?? '')
   const [processSettingOverrides, setProcessSettingOverrides] = useState<Record<string, string | string[]>>({})
   const [processSettingsDialogOpen, setProcessSettingsDialogOpen] = useState(false)
+  // Per-material filament setting overrides from the material "tune" dialog, keyed by
+  // projectFilamentId; each rides its slot's mapping into the slice request. Slice-dialog-local.
+  const [filamentSettingOverridesById, setFilamentSettingOverridesById] = useState<Record<number, Record<string, string | string[]>>>({})
+  const [filamentSettingsFilamentId, setFilamentSettingsFilamentId] = useState<number | null>(null)
   const [objectProcessOverrides, setObjectProcessOverrides] = useState<Record<string, Record<string, string | string[]>>>({})
   const [perObjectDialogOpen, setPerObjectDialogOpen] = useState(false)
   const [plateMode, setPlateMode] = useState<'all' | 'single'>(() => requiresSinglePlate || defaultPlateNumber != null ? 'single' : 'all')
   const [plateNumber, setPlateNumber] = useState(() => String(defaultPlateNumber ?? 1))
   const [plateType, setPlateType] = useState(resolveInitialPlateType(file, null))
+  // The plate-type setter the UI is given: a user pick marks the choice as touched so the
+  // defaulting effects stop steering it. Programmatic defaults call the raw `setPlateType`.
+  const handlePlateTypeChange = useCallback((value: React.SetStateAction<string>) => {
+    plateTypeTouchedRef.current = true
+    setPlateType(value)
+  }, [])
   const [nozzleDiameter, setNozzleDiameter] = useState(() => resolveInitialNozzleDiameter(file, lockedPreferredPrinter ?? printers[0], null, null))
   const [nozzleFlow, setNozzleFlow] = useState<PrinterNozzleFlow>('standard')
   const [filamentMaterialOptionIds, setFilamentMaterialOptionIds] = useState<Record<number, string>>(() => buildInitialFilamentMaterialOptionSelection(file, null, filamentProfiles))
@@ -292,6 +309,10 @@ export function SliceFileModal({
   // settings panel. The editor registers `markDirty` here so picker-driven material edits still
   // light its Save button. Null in the simple slice path.
   const materialEditListenerRef = useRef<(() => void) | null>(null)
+  // Sibling of materialEditListenerRef for global process-setting edits (profile switch + the
+  // process-settings dialog's overrides). The editor registers a snapshot-then-dirty handler so
+  // those edits light Save and land in undo history. Null in the simple slice path.
+  const processEditListenerRef = useRef<(() => void) | null>(null)
   const [saveDestinationOpen, setSaveDestinationOpen] = useState(false)
   // Slice-time object selection (single-plate only). Tracks the kept objects; defaults to all.
   const [selectedSliceObjectIds, setSelectedSliceObjectIds] = useState<Set<number>>(new Set())
@@ -451,10 +472,27 @@ export function SliceFileModal({
     if (!firstProfile) return
     setProcessProfileId(firstProfile.id)
   }, [bakedIndex?.processProfileName, compatibleProcessProfiles, processProfileId, selectedAnyProcessProfile?.name, selectedMachineProfile?.defaultProcessProfile])
+  // Default the plate type from the SELECTED PRINTER's loaded plate (e.g. High Temp) when the
+  // project carries none of its own — a new project inherits the printer's current plate rather
+  // than always landing on Textured PEI. Only while the user hasn't picked a plate themselves and
+  // the project has no baked plate type (an existing project's own plate wins).
   useEffect(() => {
-    if (plateTypeOptions.includes(plateType)) return
-    setPlateType(plateTypeOptions[0] ?? '')
-  }, [plateType, plateTypeOptions])
+    if (targetMode !== 'realPrinter' || plateTypeTouchedRef.current) return
+    if (resolveProjectPlateType(file, bakedIndex)) return
+    const printerPlate = matchPlateTypeByLabel(plateTypeOptions, selectedPrinter?.currentPlateType)
+    if (printerPlate && printerPlate !== plateType) setPlateType(printerPlate)
+  }, [bakedIndex, file, plateType, plateTypeOptions, selectedPrinter?.currentPlateType, targetMode])
+  useEffect(() => {
+    if (plateTypeOptions.length === 0 || plateTypeOptions.includes(plateType)) return
+    // The selected plate fell out of the options — usually because a profiles recompute changed
+    // its value-form (code `high_temp_plate` vs a profile's `High Temp Plate`). Re-resolve by
+    // LABEL so the user's choice survives instead of snapping to BambuStudio's rank-0 Cool Plate.
+    const next = resolvePreferredPlateType(plateTypeOptions, {
+      current: plateType,
+      printerPlateType: targetMode === 'realPrinter' ? selectedPrinter?.currentPlateType : null
+    })
+    if (next !== plateType) setPlateType(next)
+  }, [plateType, plateTypeOptions, selectedPrinter?.currentPlateType, targetMode])
   useEffect(() => {
     if (nozzleDiameterOptions.includes(nozzleDiameter)) return
     setNozzleDiameter(nozzleDiameterOptions[0] ?? '')
@@ -499,7 +537,9 @@ export function SliceFileModal({
     const bakedProcessProfile = pickProjectFallbackSlicingProfileByName(processProfiles, bakedIndex.processProfileName)
       ?? pickSelectableSlicingProfileByName(processProfiles, bakedIndex.processProfileName)
     if (!preserveManualPrinterSelection && bakedProcessProfile) setProcessProfileId(bakedProcessProfile.id)
-    setPlateType(resolveInitialPlateType(file, bakedIndex))
+    // A deliberate plate choice wins over the project default; the printer-default effect above
+    // supplies the selected printer's plate when the project carries none.
+    if (!plateTypeTouchedRef.current) setPlateType(resolveInitialPlateType(file, bakedIndex))
     setNozzleDiameter(resolveInitialNozzleDiameter(file, selectedPrinter, bakedPrinterProfile, bakedIndex))
     setFilamentMaterialOptionIds(buildInitialFilamentMaterialOptionSelection(file, bakedIndex, filamentProfiles, selectedMachineProfile))
     setFilamentColors(buildInitialFilamentColorSelection(file, bakedIndex))
@@ -713,8 +753,10 @@ export function SliceFileModal({
     filamentMaterialOptionIds,
     filamentToolheadIds,
     filamentMaterialTypeFilters,
-    objectProcessOverrides
-  }), [removedFilamentIds, profileEditedFilamentIds, addedFilaments, addedFilamentSourceIndex, filamentColors, filamentMaterialOptionIds, filamentToolheadIds, filamentMaterialTypeFilters, objectProcessOverrides])
+    objectProcessOverrides,
+    processProfileId,
+    processSettingOverrides
+  }), [removedFilamentIds, profileEditedFilamentIds, addedFilaments, addedFilamentSourceIndex, filamentColors, filamentMaterialOptionIds, filamentToolheadIds, filamentMaterialTypeFilters, objectProcessOverrides, processProfileId, processSettingOverrides])
   const restoreMaterials = useCallback((snapshot: SliceMaterialsSnapshot) => {
     setRemovedFilamentIds(new Set(snapshot.removedFilamentIds))
     setProfileEditedFilamentIds(new Set(snapshot.profileEditedFilamentIds ?? []))
@@ -725,6 +767,9 @@ export function SliceFileModal({
     setFilamentToolheadIds(snapshot.filamentToolheadIds)
     setFilamentMaterialTypeFilters(snapshot.filamentMaterialTypeFilters)
     setObjectProcessOverrides(snapshot.objectProcessOverrides ?? {})
+    // Session-only snapshots always carry these; guard for forward-compat.
+    if (snapshot.processProfileId != null) setProcessProfileId(snapshot.processProfileId)
+    setProcessSettingOverrides(snapshot.processSettingOverrides ?? {})
   }, [])
   const suggestedOutputFileName = useMemo(() => {
     if (!requiresSinglePlate && plateMode !== 'single') return buildSlicedOutputFileName(file.name)
@@ -781,7 +826,7 @@ export function SliceFileModal({
           toolheads: sliceToolheads,
           processProfileId,
           processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
-          filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions)
+          filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById)
         }
       : {
           mode: 'manualProfile',
@@ -792,7 +837,7 @@ export function SliceFileModal({
           toolheads: sliceToolheads,
           processProfileId,
           processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
-          filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions)
+          filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById)
         }
   })
 
@@ -857,7 +902,7 @@ export function SliceFileModal({
         toolheads: sliceToolheads,
         processProfileId,
         processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
-        filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions)
+        filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById)
       }
     : null
 
@@ -882,7 +927,7 @@ export function SliceFileModal({
     printers, selectedPrinter, lockedPreferredPrinter, targetMode, setTargetMode, setPrinterId,
     selectedPrinterModel, manualPrinterModelTouchedRef, setManualPrinterModel, printerModelOptions,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
-    plateType, setPlateType, plateTypeOptions,
+    plateType, setPlateType: handlePlateTypeChange, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards: selectedSlicerTargetId, processSettingOverrides, setProcessSettingsDialogOpen,
@@ -902,9 +947,10 @@ export function SliceFileModal({
     projectFilaments: visibleProjectFilaments, materialOptions, loadedMaterialOptions, materialToolheadOptions,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
+    filamentSettingOverridesById, openFilamentSettings: setFilamentSettingsFilamentId,
     setPrinterMaterialPickerFilamentId, handleMaterialOptionChange,
     desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onRemoveFilament: handleRemoveFilament,
-    materialsSnapshot, restoreMaterials, materialEditListenerRef
+    materialsSnapshot, restoreMaterials, materialEditListenerRef, processEditListenerRef
   }
 
   // The editor owns geometry; the slice is otherwise valid when printer/process/
@@ -1097,14 +1143,52 @@ export function SliceFileModal({
             profileOptions={compatibleProcessProfiles.map((profile) => ({ id: profile.id, name: formatSlicingProfileDisplayName(profile) }))}
             applyScope={editorOnly ? 'project' : 'slice'}
             onProfileChange={(profileId, carryOverrides) => {
+              // Snapshot pre-edit state for the editor's undo/dirty (no-op in the simple slice path).
+              processEditListenerRef.current?.()
               processProfileSelectionTouchedRef.current = true
               setProcessProfileId(profileId)
               setProcessSettingOverrides(carryOverrides)
             }}
-            onApply={(overrides) => setProcessSettingOverrides(overrides)}
+            onApply={(overrides) => {
+              processEditListenerRef.current?.()
+              setProcessSettingOverrides(overrides)
+            }}
           />
         </Suspense>
       )}
+      {filamentSettingsFilamentId != null && (() => {
+        const option = materialOptions.find((entry) => entry.id === filamentMaterialOptionIds[filamentSettingsFilamentId])
+        // Resolve the material's slicing-profile id (see the tune button in SliceSettingsPanel).
+        const profileId = option?.profileId
+          ?? (option?.id.startsWith('profile:') ? option.id.slice('profile:'.length) : null)
+        if (!profileId) return null
+        // Bambu system presets are read-only; only a workspace custom preset can be updated in place.
+        const canEditOriginal = !profileId.startsWith('builtin:') && !profileId.startsWith('project:')
+        return (
+          <Suspense fallback={null}>
+            <FilamentSettingsDialog
+              open
+              onClose={() => setFilamentSettingsFilamentId(null)}
+              slicerTargetId={selectedSlicerTargetId}
+              filamentProfileId={profileId}
+              filamentProfileName={option?.presetLabel ?? option?.material ?? option?.label ?? `Material ${filamentSettingsFilamentId}`}
+              sourceFileId={file.id}
+              projectFilamentId={filamentSettingsFilamentId}
+              initialOverrides={filamentSettingOverridesById[filamentSettingsFilamentId] ?? {}}
+              canEditOriginal={canEditOriginal}
+              onApply={(overrides) => {
+                materialEditListenerRef.current?.()
+                setFilamentSettingOverridesById((prev) => {
+                  const next = { ...prev }
+                  if (Object.keys(overrides).length === 0) delete next[filamentSettingsFilamentId]
+                  else next[filamentSettingsFilamentId] = overrides
+                  return next
+                })
+              }}
+            />
+          </Suspense>
+        )
+      })()}
       {saveActionVisible && saveDestinationOpen && (
         <LibraryDestinationDialog
           title="Save sliced file"

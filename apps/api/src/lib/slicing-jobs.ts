@@ -23,6 +23,7 @@ import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from './three-mf.js'
 import { healUnweldedThreeMfMeshes } from './three-mf-mesh-weld.js'
+import { repairThreeMfMeshesToCopy, type MeshRepairStats } from './three-mf-mesh-repair.js'
 import { resolveSceneEditImports } from './import-store.js'
 import type { ResolvedSlicingProfileFile } from './slicing-profiles.js'
 import { withTenantRequestContext, type RequestTenantSummary } from './tenant-context.js'
@@ -507,6 +508,35 @@ export class SlicingJobs {
           sourcePath = weldedPath
         } else {
           await rm(weldedDir, { recursive: true, force: true }).catch(() => undefined)
+        }
+      }
+
+      // Repair mesh geometry the exact-weld heal above can't touch: near-duplicate ("cracked")
+      // vertices, and degenerate/duplicate facets. BambuStudio runs this same admesh repair on STL
+      // imports but trusts a 3MF's triangles verbatim, so a 3MF built from a cracked mesh reaches
+      // the slicer unrepaired. No-op (no copy) when the meshes are already clean, and best-effort —
+      // a repair failure must never fail a slice that would previously have run. Runs on the
+      // possibly-welded copy from the block above, so the two chain.
+      {
+        const repairedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-repair-'))
+        const repairedPath = path.join(repairedDir, path.basename(job.sourceFileName) || 'source.3mf')
+        let repairStats: MeshRepairStats | null = null
+        try {
+          repairStats = await repairThreeMfMeshesToCopy(sourcePath, repairedPath)
+        } catch (error) {
+          this.logJobEvent(job, 'warn', `Mesh repair pre-pass skipped: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        if (repairStats) {
+          this.logJobEvent(
+            job,
+            'info',
+            `Repaired mesh before slicing: welded ${repairStats.weldedVertices} vertices, ` +
+              `dropped ${repairStats.degenerateTrianglesRemoved} degenerate and ${repairStats.duplicateTrianglesRemoved} duplicate triangles`
+          )
+          rewrittenSourcePaths.push(repairedPath)
+          sourcePath = repairedPath
+        } else {
+          await rm(repairedDir, { recursive: true, force: true }).catch(() => undefined)
         }
       }
       let crashRetryUsed = false
@@ -1168,10 +1198,16 @@ function isLikelyBuiltinProfileCompatibilityExit(error: unknown): boolean {
 }
 
 /**
- * A slicer CLI death by signal — exit 128+N (134 SIGABRT … 139 SIGSEGV). BambuStudio under qemu
- * emulation (arm64 dev/self-host machines) segfaults intermittently on runs whose inputs slice
- * clean when retried, so one bounded retry absorbs the flake; a deterministic crash still fails
- * the job on the second attempt (including on native x86, where these exits are always real).
+ * A slicer CLI death by signal — exit 128+N (134 SIGABRT … 139 SIGSEGV) — that is worth ONE retry
+ * because it is likely transient. BambuStudio under qemu emulation (arm64 dev/self-host machines)
+ * segfaults intermittently during project load/teardown on runs that slice clean when retried, so
+ * one bounded retry absorbs the flake.
+ *
+ * A crash that happened *after the per-plate slice started* is NOT transient — it re-crashes
+ * identically every time — and the slicer already reclassifies those into a "The slicing engine
+ * crashed …" message (`formatSliceEngineCrashError`) that deliberately does NOT contain the
+ * "exited with code 13x" text this predicate matches, so a deterministic engine crash falls through
+ * to the failure path (with actionable guidance) instead of burning a futile second full slice.
  */
 export function isTransientSlicerCrashExit(error: unknown): boolean {
   if (!(error instanceof SlicerServiceError)) return false

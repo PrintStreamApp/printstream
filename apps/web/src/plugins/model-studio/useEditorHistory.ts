@@ -157,6 +157,17 @@ export function useEditorHistory({
     syncFlags()
   }, [syncFlags])
 
+  // Global process-setting edits (profile switch + the process-settings dialog, both rendered by
+  // the host slice modal) call this BEFORE mutating the controller. Snapshot the current material
+  // state — which now carries processProfileId/processSettingOverrides — so the edit is undoable
+  // and lights Save. Mirrors the material-picker listener (markSettingsDirty) above.
+  useEffect(() => {
+    const ref = sliceConfig?.processEditListenerRef
+    if (!ref) return
+    ref.current = recordMaterialsHistory
+    return () => { ref.current = null }
+  }, [sliceConfig, recordMaterialsHistory])
+
   const restoreHistoryState = useCallback((target: EditorState) => {
     const restored = cloneEditorState(target)
     setSelectedKey((current) => (current && restored.plates.some((plate) => plate.instances.some((instance) => instance.key === current)) ? current : null))

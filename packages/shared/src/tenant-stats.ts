@@ -1,3 +1,8 @@
+/**
+ * Shared contract for the workspace (tenant) stats page: the durable print/
+ * filament rollups (mirroring `TenantStats`), the get-started quick-start
+ * checklist, and the activity history. Consumed by the tenant stats view.
+ */
 import { z } from 'zod'
 import { statsActivityHistorySchema } from './stats-activity.js'
 

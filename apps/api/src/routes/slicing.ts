@@ -9,6 +9,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import {
   createSlicingJobSchema,
+  filamentSettingsCatalog,
   isDirectPrintableFileName,
   JOBS_DELETE_PERMISSION,
   JOBS_VIEW_PERMISSION,
@@ -17,11 +18,13 @@ import {
   PRINTS_DISPATCH_PERMISSION,
   printFromLibrarySchema,
   processSettingsCatalog,
+  resolveFilamentConfigRequestSchema,
   resolveProcessConfigRequestSchema,
   SETTINGS_MANAGE_PERMISSION,
   uploadSlicingProfileSchema,
   type CreateSlicingJob,
   type ProcessConfig,
+  type ResolveFilamentConfigResponse,
   type ResolveProcessConfigResponse,
   type SlicingCapabilities
 } from '@printstream/shared'
@@ -126,6 +129,40 @@ slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY
   if (!config) throw notFound('Process profile could not be resolved')
   // An installed/builtin preset has no baked overrides: both baselines are the resolved preset.
   const responseBody: ResolveProcessConfigResponse = { config, baseConfig: config, overriddenKeys: [] }
+  response.json(responseBody)
+})
+
+slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const parsed = resolveFilamentConfigRequestSchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid resolve request')
+  const tenantId = requireRequestTenantId(request)
+  if (parsed.data.filamentProfileId.startsWith(PROJECT_PROFILE_ID_PREFIX)) {
+    // A project-embedded filament: its config lives in the source 3MF's project_settings.config at
+    // the given slot column (projectFilamentId, 1-based). `overriddenKeys` is ALWAYS the slot's
+    // `different_settings_to_system` record — the 3MF's own in-project changes, which is what the
+    // dialog marks as modified. The named parent preset (when installed) rides along as `baseConfig`
+    // purely as the RESET target for those keys; the dialog must not value-diff the whole embedded
+    // config against it (that flags inherited drift the user never touched — see
+    // extractFilamentOverriddenKeys).
+    const project = await resolveProjectFilamentConfig(parsed.data.sourceFileId ?? null, parsed.data.projectFilamentId ?? null)
+    const baseline = await resolveBaselineFilamentConfig(tenantId, parsed.data.targetId ?? null, project.presetName)
+    const responseBody: ResolveFilamentConfigResponse = {
+      config: project.config,
+      baseConfig: baseline ?? project.config,
+      overriddenKeys: project.overriddenKeys
+    }
+    response.json(responseBody)
+    return
+  }
+  const [profileFile] = await resolveSlicingProfileFiles(tenantId, [{ id: parsed.data.filamentProfileId, kind: 'filament' }])
+  if (!profileFile) throw notFound('Filament profile not found')
+  const config = await slicerClient.resolveFilamentConfig(parsed.data.targetId ?? null, {
+    source: profileFile.source,
+    name: profileFile.name,
+    content: profileFile.content
+  })
+  if (!config) throw notFound('Filament profile could not be resolved')
+  const responseBody: ResolveFilamentConfigResponse = { config, baseConfig: config, overriddenKeys: [] }
   response.json(responseBody)
 })
 
@@ -336,6 +373,87 @@ async function resolveBaselineProcessConfig(tenantId: string, targetId: string |
   const [file] = await resolveSlicingProfileFiles(tenantId, [{ id: match.id, kind: 'process' }])
   if (!file) return null
   return await slicerClient.resolveProcessConfig(targetId, { source: file.source, name: file.name, content: file.content })
+}
+
+interface ProjectFilamentConfig {
+  config: ProcessConfig
+  presetName: string | null
+  overriddenKeys: string[]
+}
+
+/**
+ * Resolves the material-dialog base config for a project-embedded FILAMENT (a `project:filament:`
+ * profile) by reading the source 3MF's `project_settings.config` at the filament's SLOT column.
+ * BambuStudio stores each per-filament setting as a parallel array keyed by 0-based slot; we take
+ * `array[projectFilamentId - 1]` as that slot's scalar and keep only keys the filament catalog
+ * knows. `filament_settings_id[slot]` names the parent preset (for the resettable baseline).
+ */
+async function resolveProjectFilamentConfig(sourceFileId: string | null, projectFilamentId: number | null): Promise<ProjectFilamentConfig> {
+  if (!sourceFileId) throw badRequest('Source file is required to resolve a project filament profile')
+  if (!projectFilamentId || projectFilamentId < 1) throw badRequest('A filament slot is required to resolve a project filament profile')
+  const slot = projectFilamentId - 1
+  const sourceFile = await prisma.libraryFile.findUnique({
+    where: { id: sourceFileId },
+    select: { id: true, name: true, ownerBridgeId: true, storedPath: true }
+  })
+  if (!sourceFile) throw notFound('Source file not found')
+  const localPath = await resolveLibraryFileToLocalPath(sourceFile)
+  let raw: unknown
+  try {
+    raw = JSON.parse((await readEntry(localPath, PROJECT_SETTINGS_ENTRY_PATH)).toString('utf8'))
+  } catch {
+    throw notFound('Filament profile could not be resolved')
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw notFound('Filament profile could not be resolved')
+  const record = raw as Record<string, unknown>
+  const config: ProcessConfig = {}
+  for (const key of Object.keys(filamentSettingsCatalog.options)) {
+    const value = record[key]
+    // A filament setting is the slot column of a parallel array; a bare scalar (rare) applies to all.
+    if (Array.isArray(value)) {
+      const entry = value[slot]
+      if (typeof entry === 'string') config[key] = entry
+    } else if (typeof value === 'string') {
+      config[key] = value
+    }
+  }
+  const settingsIds = record.filament_settings_id
+  const presetName = Array.isArray(settingsIds) && typeof settingsIds[slot] === 'string' && settingsIds[slot].trim()
+    ? settingsIds[slot].trim()
+    : null
+  return { config, presetName, overriddenKeys: extractFilamentOverriddenKeys(record.different_settings_to_system, projectFilamentId) }
+}
+
+/**
+ * Parses one FILAMENT slot of Bambu's `different_settings_to_system` — the 3MF's own record of
+ * which keys the project changed from its system presets. Layout (PresetBundle.cpp):
+ * `[0]` = process, `[1..n]` = filament slot 1..n, `[n+1]` = machine; each entry is a `;`-separated
+ * key list. Keys are filtered to the filament catalog. This is the AUTHORITATIVE "modified in this
+ * 3MF" signal the material dialog highlights — deliberately NOT a value-diff against the parent
+ * preset, which would also flag inherited drift the user never touched (e.g. legacy files whose
+ * pre-fix save baked another material's physics under this preset's name).
+ */
+function extractFilamentOverriddenKeys(value: unknown, projectFilamentId: number): string[] {
+  const entry = Array.isArray(value) ? value[projectFilamentId] : undefined
+  if (typeof entry !== 'string') return []
+  return entry
+    .split(';')
+    .map((key) => key.trim())
+    .filter((key) => key.length > 0 && filamentSettingsCatalog.options[key] !== undefined)
+}
+
+/** Baseline a project filament resets/diffs against: the named parent filament preset when installed here. */
+async function resolveBaselineFilamentConfig(tenantId: string, targetId: string | null, presetName: string | null): Promise<ProcessConfig | null> {
+  if (!presetName) return null
+  const builtinProfiles = await slicerClient.profiles(targetId)
+  const customProfiles = await listCustomSlicingProfiles(tenantId, builtinProfiles)
+  const match = [...customProfiles, ...builtinProfiles].find(
+    (profile) => profile.kind === 'filament' && profile.name === presetName
+  )
+  if (!match) return null
+  const [file] = await resolveSlicingProfileFiles(tenantId, [{ id: match.id, kind: 'filament' }])
+  if (!file) return null
+  return await slicerClient.resolveFilamentConfig(targetId, { source: file.source, name: file.name, content: file.content })
 }
 
 slicingRouter.post('/jobs/:id/cancel', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), (request, response) => {

@@ -118,14 +118,14 @@ function listModelEntryNames(sourcePath: string): Promise<string[]> {
   })
 }
 
+/** Same cap the scene reader uses for the root model entry. */
+const MAX_MODEL_ENTRY_BYTES = 64 * 1024 * 1024
+
 /**
  * Produce a copy of `sourcePath` at `outputPath` with all soup meshes welded. Returns
  * true when a healed copy was written; false when every mesh was already welded (no
  * copy is produced — the caller keeps slicing the original).
  */
-/** Same cap the scene reader uses for the root model entry. */
-const MAX_MODEL_ENTRY_BYTES = 64 * 1024 * 1024
-
 export async function healUnweldedThreeMfMeshes(sourcePath: string, outputPath: string): Promise<boolean> {
   const entryNames = await listModelEntryNames(sourcePath)
   const transforms: Record<string, (xml: string) => string> = {}

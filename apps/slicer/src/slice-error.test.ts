@@ -1,6 +1,31 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatSlicePresetIncompatibilityError } from './slice-error.js'
+import { formatSliceEngineCrashError, formatSlicePresetIncompatibilityError } from './slice-error.js'
+
+const OVERHANG_CRASH_OUTPUT = [
+  '{"message":"Slicing begins","plate_count":1,"plate_index":1,"plate_percent":4,"total_percent":6}',
+  '{"message":"Detect overhangs for auto-lift","plate_count":1,"plate_index":1,"plate_percent":71,"total_percent":66}',
+  'Segmentation fault'
+].join('\n')
+
+test('formatSliceEngineCrashError names the crash stage for a post-load segfault', () => {
+  const message = formatSliceEngineCrashError(OVERHANG_CRASH_OUTPUT, 139)
+  assert.ok(message, 'should produce a message')
+  assert.match(message, /Detect overhangs for auto-lift/)
+  assert.match(message, /engine exit 139/)
+  // Must NOT contain the transient-crash text the API retry predicate keys on.
+  assert.doesNotMatch(message, /exited with code 13[4-9]/i)
+})
+
+test('formatSliceEngineCrashError returns null for a load/teardown crash (stays retryable)', () => {
+  const loadCrash = [
+    '[2026-07-15 22:51:31] [trace]   Initializing StaticPrintConfigs',
+    '{"message":"Prepare slicing","total_percent":3}',
+    'Segmentation fault (core dumped)'
+  ].join('\n')
+  assert.equal(formatSliceEngineCrashError(loadCrash, 139), null)
+  assert.equal(formatSliceEngineCrashError('', 139), null)
+})
 
 test('lifts a filament/printer incompatibility from BambuStudio stdout', () => {
   const output = [

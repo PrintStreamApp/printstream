@@ -114,6 +114,16 @@ model License {
   @@index([email])
 }
 
+/// A Bambu printer registered to a workspace. The central vendor-identity
+/// table; most other tables key off it. Serials are NOT globally unique — the
+/// same physical printer can be registered in two workspaces, so identity is
+/// `(tenantId, serial)` (see the `@@unique`), never `serial` alone. `bridgeId`
+/// is nullable and `SetNull`: it names the bridge that currently owns LAN
+/// access to this printer, and survives that bridge being removed. `model`
+/// defaults to "unknown" until discovery/status resolves the real model.
+/// `currentPlateType` / `currentNozzleDiameters` are the printer's last-reported
+/// hardware snapshot. `accessCode` is the LAN access code — a secret: never log
+/// it or surface it to the browser beyond where strictly required.
 model Printer {
   id         String   @id @default(cuid())
   tenantId   String
@@ -143,6 +153,13 @@ model Printer {
   @@index([tenantId, position])
 }
 
+/// A bridge runtime that owns LAN access to a set of printers and the library
+/// files on that LAN. `tenantId` is nullable and `SetNull`: a bridge can be
+/// dormant/unpaired (not yet attached to a workspace, or detached when its
+/// workspace is deleted). A returning physical bridge re-binds to its existing
+/// row by `installationId` (see that field) so a credential reset does not orphan
+/// its printers and library. The update/crash-health columns track self-update
+/// state and self-reported crash health for the bridge-standalone distribution.
 model Bridge {
   id         String   @id @default(cuid())
   tenantId   String?
@@ -187,6 +204,15 @@ model Bridge {
   @@index([runtimeTokenHash])
 }
 
+/// One print in the job history. Written only by `print-job-recorder.ts`, from
+/// two origins: reserved at dispatch when PrintStream starts a print, or created
+/// by the printer manager when it observes an externally started job. `result`
+/// is "unknown" until a finish event resolves it to "success" | "failed" |
+/// "cancelled"; `sourceType` is "library" | "calibration" | "external".
+/// `taskId` is the printer-reported correlation key that ties a reserved row to
+/// the running job. Durable stats (TenantStats/PrinterStats/PlatformStats) are
+/// rolled up at finish and are NOT reverted when a job row is later deleted —
+/// deleting history does not rewrite the aggregates.
 model PrintJob {
   id              String    @id @default(cuid())
   tenantId        String
@@ -258,6 +284,11 @@ model DispatchJob {
   @@index([printerId, status])
 }
 
+/// Durable per-workspace print-stats rollup (one row per tenant), incremented
+/// at job finish rather than scanned from `PrintJob` at read time. The
+/// successful/failed/cancelled split mirrors `PrintJob.result`; "wasted" is the
+/// sum over failed AND cancelled prints (time and filament spent on prints that
+/// did not succeed). Not reverted when a job row is deleted.
 model TenantStats {
   tenantId            String   @id
   totalPrints         Int      @default(0)
@@ -285,6 +316,10 @@ model TenantStats {
   tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
+/// Deployment-wide stats rollup — a single row (fixed `id`) aggregating every
+/// workspace, incremented alongside the per-tenant rollup. Same counter split as
+/// TenantStats ("wasted" = failed + cancelled). Read via `rootPrisma` for the
+/// platform overview.
 model PlatformStats {
   id                             String   @id
   tenantCount                    Int      @default(0)
@@ -310,6 +345,12 @@ model PlatformStats {
   updatedAt                      DateTime @updatedAt
 }
 
+/// Durable per-printer stats rollup. Keyed by `(tenantId, printerSerial)`, NOT
+/// by printer id, on purpose: keying on the serial means the stats survive a
+/// printer row being deleted and re-added (same physical machine keeps its
+/// history). Same successful/failed/cancelled/"wasted" split as TenantStats;
+/// `manual*` columns hold user-entered pre-PrintStream usage kept separate from
+/// tracked counters (see the field comment).
 model PrinterStats {
   tenantId              String
   printerSerial         String
@@ -346,6 +387,15 @@ model PrinterStats {
   @@index([tenantId, updatedAt])
 }
 
+/// A file in a workspace's model library (the current content; prior contents
+/// live in `LibraryFileVersion`). Bridge-owned by default: `ownerBridgeId` names
+/// the bridge that holds the bytes (null = the unsupported local/API-stored
+/// fallback). Two orthogonal kinds of "not in the normal listing": `hidden`
+/// transient/snapshot rows (see the field note) and `deletedAt` recycle-bin rows
+/// (soft-deleted, restorable until the retention sweep). Any query that selects
+/// by something other than an explicit id MUST filter through
+/// `visibleLibraryFilesWhere` (`lib/library-visibility.ts`) so hidden and
+/// recycled rows never leak into listings or name matching.
 model LibraryFile {
   id            String   @id @default(cuid())
   tenantId      String
@@ -419,15 +469,13 @@ model LibraryFile {
   @@index([tenantId, ownerBridgeId, folderId, hidden, lastPrintedAt], map: "LibraryFile_tenant_bridge_folder_lastPrintedAt_idx")
 }
 
-/**
- * Per-user "favorite" star on a library file. Personal (not shared across the
- * workspace), so the row is keyed by `(userId, libraryFileId)`. `userId` is the
- * authenticated user id, or a fixed sentinel for no-auth/self-host installs where
- * the actor is anonymous — a non-null value keeps the unique constraint sound
- * (Postgres would otherwise allow duplicate NULL-user rows). Intentionally no FK to
- * AuthUser so favorites work in both auth-enabled (cloud) and no-auth installs;
- * cleanup rides on the LibraryFile / Tenant cascades.
- */
+/// Per-user "favorite" star on a library file. Personal (not shared across the
+/// workspace), so the row is keyed by `(userId, libraryFileId)`. `userId` is the
+/// authenticated user id, or a fixed sentinel for no-auth/self-host installs where
+/// the actor is anonymous — a non-null value keeps the unique constraint sound
+/// (Postgres would otherwise allow duplicate NULL-user rows). Intentionally no FK to
+/// AuthUser so favorites work in both auth-enabled (cloud) and no-auth installs;
+/// cleanup rides on the LibraryFile / Tenant cascades.
 model LibraryFileFavorite {
   id            String   @id @default(cuid())
   tenantId      String
@@ -470,14 +518,12 @@ model LibraryFileVersion {
   @@index([tenantId, libraryFileId, versionNumber])
 }
 
-/**
- * Short-lived, unauthenticated download grant for a single library file.
- * Minted on demand (e.g. the "Open in Bambu Studio" desktop deep link) so an
- * external client with no browser session can fetch one file for a brief
- * window. Only the SHA-256 hash of the opaque token is stored; the raw token
- * lives only in the URL handed to the client. Rows are pruned opportunistically
- * once `expiresAt` passes.
- */
+/// Short-lived, unauthenticated download grant for a single library file.
+/// Minted on demand (e.g. the "Open in Bambu Studio" desktop deep link) so an
+/// external client with no browser session can fetch one file for a brief
+/// window. Only the SHA-256 hash of the opaque token is stored; the raw token
+/// lives only in the URL handed to the client. Rows are pruned opportunistically
+/// once `expiresAt` passes.
 model LibraryDownloadLink {
   id            String   @id @default(cuid())
   tenantId      String
@@ -494,12 +540,10 @@ model LibraryDownloadLink {
   @@index([libraryFileId])
 }
 
-/**
- * User-organized folder tree for the library. Folders only group
- * `LibraryFile` rows; files are still stored flat on disk under
- * `LIBRARY_DIR` (the folder is purely a metadata grouping). A null
- * `parentId` is a top-level folder.
- */
+/// User-organized folder tree for the library. Folders only group
+/// `LibraryFile` rows; files are still stored flat on disk under
+/// `LIBRARY_DIR` (the folder is purely a metadata grouping). A null
+/// `parentId` is a top-level folder.
 model LibraryFolder {
   id        String   @id @default(cuid())
   tenantId  String
@@ -520,6 +564,13 @@ model LibraryFolder {
   @@index([tenantId, parentId])
 }
 
+/// A copy of a library file's bytes materialized onto a specific bridge (one row
+/// per file+bridge). Lets a bridge that does not own a file still serve/print it.
+/// `replicaKind` defaults to "cache" — an evictable copy that may carry
+/// `expiresAt`/`lastAccessedAt`. `status` starts "pending" and reaches "ready"
+/// once the bytes are fetched and verified (`contentHash`/`lastVerifiedAt`);
+/// `errorMessage` records a failed materialization. Cascades away with the file,
+/// bridge, or tenant.
 model LibraryFileReplica {
   id             String   @id @default(cuid())
   tenantId       String
@@ -546,11 +597,24 @@ model LibraryFileReplica {
   @@index([tenantId, expiresAt])
 }
 
+/// Generic key/value store for all settings — there is no per-feature settings
+/// table. The `key` carries the scope as a prefix (`lib/tenant-settings.ts`):
+/// `tenant:<tenantId>:<name>` for a workspace setting, `platform:<name>` for a
+/// tenantless platform-scope setting, and `plugin:<pluginName>:...` for a
+/// plugin's scoped store (the plugin `settings` API, per-tenant via a further
+/// `tenant:`/`platform:` segment). `value` is a string (JSON-encoded when the
+/// setting is structured). Not a tenant relation — scoping lives in the key.
 model Setting {
   key   String @id
   value String
 }
 
+/// A saved printers-page view (workspace-scoped): a named filter/sort/grouping
+/// preset over the workspace's printers. The multi-value columns are JSON arrays
+/// serialized as strings, not relations — `printerIds`, `modelFilter`,
+/// `nozzleDiameterFilter`, and `plateTypeFilter` all hold a JSON string (the
+/// filters default to the empty array `"[]"`). `cardContentSettings` is a
+/// required JSON blob of per-card display toggles.
 model PrinterView {
   id                   String   @id @default(cuid())
   tenantId             String
@@ -574,27 +638,30 @@ model PrinterView {
   @@index([tenantId, name])
 }
 
-/**
- * Externally installed plugins (uploaded archives or, eventually, store
- * downloads). Built-in plugins are not tracked here — they live in code
- * and use the `Setting` table for their install/enabled flags. An entry
- * here means the registry should dynamic-import `entryPath` (relative
- * to `installPath`) at startup and register the resulting `ApiPlugin`.
- */
+/// Externally installed plugins (uploaded archives or, eventually, store
+/// downloads). Built-in plugins are not tracked here — they live in code
+/// and use the `Setting` table for their install/enabled flags. An entry
+/// here means the registry should dynamic-import `entryPath` (relative
+/// to `installPath`) at startup and register the resulting `ApiPlugin`.
 model Plugin {
   name        String   @id
   version     String?
   description String?
-  /** Where the package came from: 'upload' for now; 'store' is reserved. */
+  /// Where the package came from: 'upload' for now; 'store' is reserved.
   source      String
-  /** Absolute or env-rooted directory holding the extracted package. */
+  /// Absolute or env-rooted directory holding the extracted package.
   installPath String
-  /** ESM entry file relative to `installPath`. */
+  /// ESM entry file relative to `installPath`.
   entryPath   String
   installedAt DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
 
+/// A person's identity, GLOBAL to the deployment — an AuthUser is not owned by a
+/// workspace. Which workspaces they belong to lives in `AuthTenantMembership`,
+/// their roles in `AuthUserGroupMembership`, and their credentials in the
+/// per-provider credential tables. `isPlatformUser` marks an operator account
+/// (platform-scope access). Email is unique deployment-wide.
 model AuthUser {
   id            String                   @id @default(cuid())
   email         String
@@ -631,6 +698,12 @@ model AuthTenantMembership {
   @@index([tenantId, loginDisabled])
 }
 
+/// A role: a named permission bundle. `tenantId` is nullable ON PURPOSE — a null
+/// tenant is a platform-wide / system group (e.g. the built-in platform roles),
+/// which is why AuthGroup is a hand-scoped `TENANT_SCOPED_EXCEPTION_MODELS` entry
+/// rather than auto-scoped. `permissions` is the flat permission-string array;
+/// `isSystem`/`isEditable`/`isRemovable` protect the built-in presets from being
+/// renamed, re-permissioned, or deleted.
 model AuthGroup {
   id          String                            @id @default(cuid())
   tenantId    String?
@@ -738,6 +811,11 @@ model AuthPasswordCredential {
   user                AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+/// A one-time email sign-in / verification code (only its SHA-256 `tokenHash` is
+/// stored). `consumedAt` marks single use; `expiresAt` bounds its life. The
+/// `@@map("AuthMagicLinkToken")` keeps the original physical table name after the
+/// model was renamed from magic-link to email-code, so no table migration was
+/// needed — do not drop the map.
 model AuthEmailCodeToken {
   id         String    @id @default(cuid())
   userId      String?
@@ -755,6 +833,10 @@ model AuthEmailCodeToken {
   @@map("AuthMagicLinkToken")
 }
 
+/// A live session, polymorphic over its subject: exactly one of `userId` or
+/// `serviceAccountId` is set (a human session vs an API service-account session).
+/// Only the `secretHash` of the session secret is stored. `revokedAt`/`expiresAt`
+/// end it; `lastSeenAt` drives idle-timeout policy.
 model AuthSession {
   id               String               @id @default(cuid())
   secretHash       String               @unique
@@ -774,6 +856,13 @@ model AuthSession {
   @@index([revokedAt])
 }
 
+/// Durable audit trail: one row per mutating/privileged request (baseline row
+/// auto-created, enriched via `annotateRequestAuditLog`). `tenantId` is nullable
+/// for platform-scope events. The actor is polymorphic — `actorUserId` or
+/// `actorServiceAccountId` (both `SetNull` so the log outlives the actor), with
+/// `actorLabel` a display snapshot. `metadataJson` is free-form per-action detail
+/// and MUST NOT contain secrets (tokens, access/connect codes, webhook/push URLs,
+/// raw bodies) — only safe identifiers.
 model AuditLog {
   id                 String               @id @default(cuid())
   tenantId           String?
@@ -802,6 +891,10 @@ model AuditLog {
   @@index([action, createdAt])
 }
 
+/// A reusable order definition owned by the `orders` plugin: a template holds
+/// one or more `OrderTemplateVariant`s, each listing the required prints
+/// (`OrderTemplatePrint` = a library file + plate + quantity). Placing an order
+/// snapshots a template into a concrete `Order` (see that model). Tenant-scoped.
 model OrderTemplate {
   id            String   @id @default(cuid())
   tenantId      String
@@ -860,6 +953,12 @@ model OrderTemplatePrint {
   @@index([tenantId, libraryFileId])
 }
 
+/// A placed order: a template snapshotted into concrete work. `templateId` is a
+/// soft reference (`SetNull`) and `templateName`/`templateCode`/
+/// `templateDescription` are point-in-time SNAPSHOTS, so the order survives the
+/// template being edited or deleted. `status` defaults "active". The chosen
+/// variants+quantities are `OrderVariantSelection`s; the individual print units
+/// are `OrderPrint`s.
 model Order {
   id                  String   @id @default(cuid())
   tenantId            String
@@ -902,6 +1001,15 @@ model OrderVariantSelection {
   @@index([tenantId, templateVariantId])
 }
 
+/// One print unit within an order — the row the workflow acts on. `libraryFileName`
+/// is snapshotted (the file id is a soft reference) so the unit survives file
+/// changes. `groupPosition` + `sequenceNumber`/`sequenceCount` order and label it
+/// ("print 2 of 5") within its variant group. `status` is
+/// pending | queued | dispatching | started | completed; `completionSource`
+/// records how it finished ("confirmed" after a real successful job, vs "manual"
+/// override). The `lastPrint*` columns mirror the reconciled `PrintJob` result
+/// (see `syncOrderPrintState` in the orders plugin); `projectFilamentOverrides`
+/// is a JSON per-print filament remap.
 model OrderPrint {
   id                 String    @id @default(cuid())
   tenantId           String
@@ -1229,7 +1337,8 @@ model SupportConversation {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  messages SupportMessage[]
+  messages      SupportMessage[]
+  pendingEmails SupportPendingEmail[]
 
   @@index([lastMessageAt])
   @@index([userId, lastMessageAt])
@@ -1254,8 +1363,33 @@ model SupportMessage {
 
   conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   attachments  SupportAttachment[]
+  pendingEmail SupportPendingEmail?
 
   @@index([conversationId, createdAt])
+}
+
+/// A deferred support notification email (cloud-only). Support messages do not
+/// email the other side immediately: each message enqueues one row and a
+/// sweeper sends the email after an escalation delay UNLESS the recipient
+/// side's last-read mark has passed the message by then (they already saw it
+/// in the app, so the email would be a duplicate). Content is rebuilt from the
+/// conversation at fire time — never snapshotted here — and due rows for the
+/// same conversation+side coalesce into a single email.
+model SupportPendingEmail {
+  id             String   @id @default(cuid())
+  conversationId String
+  messageId      String   @unique
+  /// Which side receives the email: "user" | "platform" (the side opposite
+  /// the message's sender).
+  recipientSide  String
+  sendAt         DateTime
+  createdAt      DateTime @default(now())
+
+  conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message      SupportMessage      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([sendAt])
+  @@index([conversationId, recipientSide])
 }
 
 /// A file attached to a support message (cloud-only). Bytes live in the row —

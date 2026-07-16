@@ -28,6 +28,12 @@ export const BOOT_BACKGROUND_CACHE_KEY = 'printstream.appearance.bootBackground'
 export const DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX = 'printstream.general.landingPage.override'
 export const DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX = 'printstream.general.navTabOrder.override'
 export const DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY = 'bambu.general.unconstrainedWidth.override'
+/**
+ * Per-device override for the workspace-wide "developer slicer settings"
+ * default. Device-global (like the theme override), so the preference to see
+ * BambuStudio's develop-tier options follows the browser across workspaces.
+ */
+export const DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY = 'printstream.slicer.developerMode.override'
 
 export function tenantScopedRoutePath(path: string): string {
   return path === '/' ? '/workspaces/:tenantSlug' : `/workspaces/:tenantSlug${path}`

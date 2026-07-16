@@ -93,7 +93,14 @@ export const slicingFilamentMappingSchema = z.object({
   source: z.enum(['ams', 'externalSpool', 'manual']).default('manual'),
   trayId: z.number().int().nonnegative().nullable().optional(),
   toolheadId: z.string().trim().min(1).nullable().optional(),
-  profileId: z.string().trim().min(1).nullable().optional()
+  profileId: z.string().trim().min(1).nullable().optional(),
+  /**
+   * Per-MATERIAL filament setting overrides from the material settings dialog ("save in this 3MF"
+   * / apply-to-this-slice). Sparse map of changed keys applied on top of THIS slot's resolved
+   * filament profile at slice time — unlike the target-level `filamentSettingOverrides`, which
+   * applies to every filament. Merged over the target-level map, this slot's values winning.
+   */
+  settingOverrides: processSettingOverridesSchema.optional()
 })
 export type SlicingFilamentMapping = z.infer<typeof slicingFilamentMappingSchema>
 
@@ -654,6 +661,14 @@ export const saveArrangedThreeMfSchema = z.object({
    */
   objectProcessOverrides: z.record(z.string().min(1), processSettingOverridesSchema).optional(),
   /**
+   * Global (project-wide) process-setting overrides authored in the editor, keyed by
+   * BambuStudio process-config key. Merged into the saved 3MF's `project_settings.config` so
+   * editor process edits persist into the project (not just a one-off slice) — mirrors how the
+   * slicer merges a `project:`-profile's overrides into project_settings.config at slice time
+   * (`apps/slicer/src/index.ts`). Absent/empty ⇒ the base project settings are preserved as-is.
+   */
+  processSettingOverrides: processSettingOverridesSchema.optional(),
+  /**
    * Slicer target (version) used for a cross-model retarget on save. Required alongside
    * `retarget`; chooses which BambuStudio CLI performs the machine switch.
    */
@@ -671,6 +686,28 @@ export const saveArrangedThreeMfSchema = z.object({
   message: 'newVersion requires a base file'
 })
 export type SaveArrangedThreeMf = z.infer<typeof saveArrangedThreeMfSchema>
+
+/** Request the "Repair mesh" action (editor `POST /api/editor/repair-mesh`) on a stored 3MF. */
+export const repairLibraryMeshSchema = z.object({
+  fileId: z.string().trim().min(1),
+  /** Repair an archived version's content instead of the file's current content. Must belong to `fileId`. */
+  versionId: z.string().trim().min(1).optional()
+})
+export type RepairLibraryMesh = z.infer<typeof repairLibraryMeshSchema>
+
+/**
+ * Outcome of a mesh repair. `repaired: false` means the mesh was already clean and no new version was
+ * written (`file` is null) — the common case for BambuStudio-authored projects. The three counts are
+ * what the repair changed (see the API's `three-mf-mesh-repair` module).
+ */
+export const meshRepairResultSchema = z.object({
+  repaired: z.boolean(),
+  weldedVertices: z.number().int().nonnegative(),
+  degenerateTrianglesRemoved: z.number().int().nonnegative(),
+  duplicateTrianglesRemoved: z.number().int().nonnegative(),
+  file: z.object({ id: z.string(), name: z.string(), versionNumber: z.number().int() }).nullable()
+})
+export type MeshRepairResult = z.infer<typeof meshRepairResultSchema>
 
 export const createSlicingJobSchema = z.object({
   sourceFileId: z.string().trim().min(1),

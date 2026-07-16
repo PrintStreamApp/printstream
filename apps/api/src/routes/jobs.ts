@@ -1,6 +1,16 @@
 /**
- * Print-job archive. Rows are inserted by the printer manager when it
- * observes job lifecycle transitions.
+ * Print-job archive routes: list/read the history, delete rows (with their
+ * thumbnails/snapshots), reprint from a row, and fetch the audit logs related
+ * to a job.
+ *
+ * This module only reads and prunes `PrintJob` rows; it never creates them.
+ * Rows originate in `print-job-recorder.ts` two ways: reserved at dispatch
+ * time when PrintStream itself starts a print (`startTrackedPrintJob`, called
+ * from the dispatcher and the printers/library/calibration routes), and
+ * created by the printer manager when it observes a job it did not dispatch
+ * (an externally started print). Both paths converge on the same table, so a
+ * history row may carry rich PrintStream metadata (library file, plate, AMS
+ * mapping) or almost none for an external job.
  */
 import { Router } from 'express'
 import { Prisma } from '@prisma/client'

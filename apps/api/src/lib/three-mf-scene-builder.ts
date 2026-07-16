@@ -1075,6 +1075,22 @@ function filamentColourOut(value: string): string {
 }
 
 /**
+ * Per-filament arrays that carry IDENTITY / STRUCTURE (a user choice or the key that drives
+ * slice-time re-resolution), not material physics. On a material change these are kept (remapped
+ * from the source slot) while every other filament-indexed array is dropped — see
+ * {@link applyFilamentList}. `filament_settings_id` must stay: it names the new preset the slicer
+ * re-derives physics from; `filament_nozzle_map` is a project-level assignment no filament preset
+ * would restore.
+ */
+const FILAMENT_IDENTITY_KEYS = new Set([
+  'filament_colour',
+  'filament_type',
+  'filament_settings_id',
+  'filament_ids',
+  'filament_nozzle_map'
+])
+
+/**
  * Replace `project_settings.config`'s filament set with the desired ordered list
  * (Bambu-style add/remove of materials). Position `i` becomes filament `i + 1`.
  *
@@ -1086,8 +1102,21 @@ function filamentColourOut(value: string): string {
  * The square `flush_volumes_matrix` (count x count) is rebuilt row/column-wise. When the
  * source has no filament arrays (a from-scratch project) only colour/type are written and
  * the slicer fills the rest from the filament profiles supplied at slice time.
+ *
+ * MATERIAL CHANGE (e.g. ABS -> PETG). Cloning `sourceIndex`'s arrays copies the OLD material's
+ * per-filament physics (chamber/plate/nozzle temps, flow, cooling, retraction, ...), so a naive
+ * remap leaves the project "PETG by name, ABS by temperature". When any slot's material identity
+ * (type or `settingsId`) differs from its source slot, we therefore DROP every non-identity
+ * filament array — which also removes the `nozzle_temperature` completeness sentinel. The slicer's
+ * {@link ensureEmbeddedProjectSettings} / `ensureFilamentCoverage` (apps/slicer) then re-derives
+ * the physics from the kept `filament_settings_id` preset names at slice time, so the new material
+ * slices with its own temperatures. This heals only NEW saves (the embedded config the slicer
+ * reads); already-saved projects keep their stale physics until re-saved. Identity/structure keys
+ * ({@link FILAMENT_IDENTITY_KEYS}) are still remapped so the user's colours and nozzle assignment
+ * survive; imported projects with no material change are left byte-for-byte (full clone, no drop),
+ * preserving any in-desktop-BambuStudio filament tweaks.
  */
-function applyFilamentList(projectSettingsJson: string, filaments: SceneEditFilament[]): string {
+export function applyFilamentList(projectSettingsJson: string, filaments: SceneEditFilament[]): string {
   if (filaments.length === 0) return projectSettingsJson
   let parsed: unknown
   try {
@@ -1112,6 +1141,16 @@ function applyFilamentList(projectSettingsJson: string, filaments: SceneEditFila
       const idx = requested == null ? i : requested
       return idx >= 0 && idx < oldCount ? idx : 0
     }
+    // A slot changed material iff its desired type/settingsId differs from the slot it clones from.
+    const sourceTypes = Array.isArray(record.filament_type) ? record.filament_type : []
+    const sourceSettingsIds = Array.isArray(record.filament_settings_id) ? record.filament_settings_id : []
+    const slotMaterialChanged = (i: number): boolean => {
+      const src = sourceFor(i)
+      const filament = filaments[i]
+      return (filament?.settingsId != null && filament.settingsId !== sourceSettingsIds[src])
+        || (filament?.type != null && filament.type !== sourceTypes[src])
+    }
+    const materialChanged = filaments.some((_filament, i) => slotMaterialChanged(i))
     for (const [key, value] of Object.entries(record)) {
       if (!Array.isArray(value)) continue
       if (key === 'flush_volumes_matrix') {
@@ -1126,9 +1165,27 @@ function applyFilamentList(projectSettingsJson: string, filaments: SceneEditFila
         }
         continue
       }
-      if (value.length === oldCount) {
-        record[key] = Array.from({ length: newCount }, (_unused, i) => value[sourceFor(i)])
+      if (value.length !== oldCount) continue
+      if (materialChanged && !FILAMENT_IDENTITY_KEYS.has(key)) {
+        // Drop the OLD material's cloned physics; the slicer re-derives it from the new preset.
+        delete record[key]
+        continue
       }
+      record[key] = Array.from({ length: newCount }, (_unused, i) => value[sourceFor(i)])
+    }
+    // `different_settings_to_system` is `[process, ...filament slots, machine]` (length oldCount+2),
+    // so the generic remap above skips it. Rebuild it by hand: each new slot follows its source
+    // slot's record, but a slot whose MATERIAL changed gets a BLANK record — its in-project changes
+    // belonged to the old material, and the material dialog treats this record as the authoritative
+    // "changed within this 3MF" signal, so a stale entry would flag keys the new material never
+    // touched.
+    const differentSettings = record.different_settings_to_system
+    if (Array.isArray(differentSettings) && differentSettings.length === oldCount + 2) {
+      record.different_settings_to_system = [
+        differentSettings[0],
+        ...Array.from({ length: newCount }, (_unused, i) => (slotMaterialChanged(i) ? '' : differentSettings[sourceFor(i) + 1])),
+        differentSettings[oldCount + 1]
+      ]
     }
   }
 
@@ -1458,6 +1515,14 @@ export async function buildEditedThreeMf(
      * pressure-advance tower. On a base-file build these replace a same-named source entry.
      */
     extraEntries?: Array<{ name: string; content: string }>
+    /**
+     * Global (project-wide) process-setting overrides to merge into `project_settings.config`,
+     * keyed by BambuStudio process-config key with the value written verbatim (scalar string or
+     * string array). Persists the editor's global process edits into the project. Kept off the
+     * `SceneEdit` contract deliberately so the slice path (which applies these via the slice
+     * request instead) is unaffected — only the save route passes them.
+     */
+    globalProcessOverrides?: Record<string, string | string[]>
   } = {}
 ): Promise<BuildEditedThreeMfResult> {
   let baseModelXml = NEW_PROJECT_MODEL_XML
@@ -1551,6 +1616,12 @@ export async function buildEditedThreeMf(
   // synthesized from an empty settings object instead — otherwise the material / plate-type /
   // prime-tower choices would silently vanish on save (transforms only fire on existing entries).
   const projectSettingsTransforms = buildProjectSettingsTransforms(edit)
+  // Global process overrides ride in via options (not the SceneEdit) so only the save route
+  // bakes them; append last so they win over any preset-derived process values.
+  if (options.globalProcessOverrides && Object.keys(options.globalProcessOverrides).length > 0) {
+    const overrides = options.globalProcessOverrides
+    projectSettingsTransforms.push((json) => applyGlobalProcessOverrides(json, overrides))
+  }
   const applyProjectSettings = (json: string) => projectSettingsTransforms.reduce((acc, transform) => transform(acc), json)
 
   if (baseSourcePath) {
@@ -1674,6 +1745,25 @@ function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: string) =
  * BambuStudio's serialized enum value). Without this, a plate-type change in the editor only
  * lives in the UI: the source's `curr_bed_type` is copied verbatim and wins on reopen.
  */
+/**
+ * Merges global process-setting overrides into `project_settings.config`, writing each value
+ * verbatim (BambuStudio serialized string / string array). Inverse of the resolve-process read
+ * and identical to the slicer's `applyProcessSettingOverrides`, so a saved override reopens as
+ * the project's baseline (the editor then shows no pending override). No-op on unparseable JSON.
+ */
+export function applyGlobalProcessOverrides(projectSettingsJson: string, overrides: Record<string, string | string[]>): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(projectSettingsJson)
+  } catch {
+    return projectSettingsJson
+  }
+  if (!parsed || typeof parsed !== 'object') return projectSettingsJson
+  const record = parsed as Record<string, unknown>
+  for (const [key, value] of Object.entries(overrides)) record[key] = value
+  return JSON.stringify(record)
+}
+
 function applyProjectPlateType(projectSettingsJson: string, plateType: string): string {
   const canonical = canonicalCurrBedType(plateType)
   if (!canonical) return projectSettingsJson

@@ -7,11 +7,16 @@
  * Process tab uses. The user edits values against a resolved base config; the
  * dialog emits the sparse override map (changed keys) back to the slice dialog
  * and can optionally persist the result as a reusable custom process preset.
+ *
+ * The catalog's `develop`-tier options are hidden unless developer mode is on
+ * (`useEffectiveSlicerDeveloperMode` — the workspace default from the Slicing
+ * settings page, optionally overridden per device); see
+ * `isProcessOptionVisibleInMode`.
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Box, Button, CircularProgress, DialogActions, Divider, FormControl, FormLabel,
-  IconButton, Input, Option, Select, Stack, Switch, Tab, TabList, TabPanel, Tabs, Textarea, Tooltip, Typography
+  Alert, Box, Button, Checkbox, CircularProgress, DialogActions, Divider, FormControl, FormLabel,
+  IconButton, Input, Option, Select, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography
 } from '@mui/joy'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -24,10 +29,9 @@ import {
   defaultProcessVisibilityContext,
   diffProcessConfig,
   getProcessFieldState,
-  isAdvancedModeOption,
+  isProcessOptionVisibleInMode,
   processConfigValuesEqual,
   processSettingsCatalog,
-  serializeProcessBool,
   validateProcessConfig,
   type ProcessConfig,
   type ProcessSettingOption,
@@ -35,10 +39,12 @@ import {
   type ProcessVisibilityContext
 } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
+import { useEffectiveSlicerDeveloperMode } from '../lib/slicerDeveloperMode'
 import { BackAwareModal } from './BackAwareModal'
 import { DialogSection } from './DialogSection'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { usePromptDialog } from './PromptDialogProvider'
+import { SettingValueField } from './settings/SettingValueField'
 
 export interface ProcessSettingsDialogProps {
   open: boolean
@@ -84,6 +90,11 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, applyScope = 'slice', onApply } = props
   const allowedKeySet = useMemo(() => (allowedKeys ? new Set(allowedKeys) : null), [allowedKeys])
   const isKeyAllowed = (key: string): boolean => allowedKeySet === null || allowedKeySet.has(key)
+  // Reveal BambuStudio's develop-tier options only when developer mode is on (workspace
+  // default, optionally overridden per device — see useEffectiveSlicerDeveloperMode).
+  const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
+  const isOptionVisibleInMode = (option: ProcessSettingOption): boolean =>
+    isProcessOptionVisibleInMode(option, showDeveloperOptions)
   // `baseConfig` is the preset baseline (reset target); `sliceBase` is the effective config the
   // slicer merges overrides onto (equal to baseConfig for installed presets, but the 3MF's
   // already-overridden config for a project profile). `bakedKeys` marks 3MF overrides whose
@@ -98,6 +109,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const [activePage, setActivePage] = useState(0)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState('')
+  const [showChangedOnly, setShowChangedOnly] = useState(false)
   const normalizedQuery = query.trim().toLowerCase()
   const { promptText } = usePromptDialog()
 
@@ -165,6 +177,18 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const fieldStates = useMemo(() => computeProcessFieldStates(config, context), [config, context])
   const accessor = useMemo(() => createProcessConfigAccessor(config), [config])
 
+  /**
+   * True when a key differs from its preset baseline — either a resettable value diff, or a
+   * 3MF-baked override whose baseline value couldn't be resolved (`bakedKeys`, still untouched
+   * relative to the effective config). Surfaces both in-session edits and sealed-in overrides.
+   * Declared here (before `pageHasContent`) so the tab-visibility and "changed only" filter can use it.
+   */
+  const isModified = (key: string): boolean => {
+    if (baseConfig === null) return false
+    if (!processConfigValuesEqual(baseConfig[key], config[key])) return true
+    return bakedKeys.has(key) && processConfigValuesEqual(config[key], sliceBase[key])
+  }
+
   /** Number of visible settings matching the search query on each page (0 when not searching). */
   const pageMatchCounts = useMemo(() => processSettingsCatalog.pages.map((page) => {
     if (!normalizedQuery) return 0
@@ -173,7 +197,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
       for (const line of group.lines) {
         for (const key of line.keys) {
           const option = processSettingsCatalog.options[key]
-          if (!option || !isAdvancedModeOption(option) || !isKeyAllowed(key)) continue
+          if (!option || !isOptionVisibleInMode(option) || !isKeyAllowed(key)) continue
           if (!getProcessFieldState(fieldStates.states, key).visible) continue
           if (processKeyMatchesQuery(key, normalizedQuery)) count += 1
         }
@@ -188,10 +212,11 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const pageHasContent = useMemo(() => processSettingsCatalog.pages.map((page) =>
     page.groups.some((group) => group.lines.some((line) => line.keys.some((key) => {
       const option = processSettingsCatalog.options[key]
-      return Boolean(option) && isAdvancedModeOption(option!) && isKeyAllowed(key) && getProcessFieldState(fieldStates.states, key).visible
+      if (!option || !isOptionVisibleInMode(option) || !isKeyAllowed(key) || !getProcessFieldState(fieldStates.states, key).visible) return false
+      return !showChangedOnly || isModified(key)
     })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [fieldStates, allowedKeySet])
+  ), [fieldStates, allowedKeySet, showChangedOnly, config, baseConfig, bakedKeys, sliceBase])
 
   // Keep the active tab on a page that still has content.
   useEffect(() => {
@@ -244,17 +269,6 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const canReset = (key: string): boolean =>
     baseConfig !== null && !processConfigValuesEqual(baseConfig[key], config[key])
 
-  /**
-   * True when a key differs from its preset baseline — either a resettable value diff, or a
-   * 3MF-baked override whose baseline value couldn't be resolved (`bakedKeys`, still untouched
-   * relative to the effective config). Surfaces both in-session edits and sealed-in overrides.
-   */
-  const isModified = (key: string): boolean => {
-    if (baseConfig === null) return false
-    if (!processConfigValuesEqual(baseConfig[key], config[key])) return true
-    return bakedKeys.has(key) && processConfigValuesEqual(config[key], sliceBase[key])
-  }
-
   const modifiedKeyCount = useMemo(() => {
     if (!baseConfig) return 0
     return Object.keys(processSettingsCatalog.options).filter((key) => isKeyAllowed(key) && isModified(key)).length
@@ -269,7 +283,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
         group.lines.some((line) =>
           line.keys.some((key) => {
             const option = processSettingsCatalog.options[key]
-            if (!option || !isAdvancedModeOption(option) || !isKeyAllowed(key)) return false
+            if (!option || !isOptionVisibleInMode(option) || !isKeyAllowed(key)) return false
             return isModified(key)
           })
         )
@@ -370,19 +384,28 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
             orientation="horizontal"
             sx={{ mt: 1, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: 'transparent' }}
           >
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search settings…"
-              size="sm"
-              startDecorator={<Box component="span" sx={{ display: 'inline-flex', fontSize: 18, opacity: 0.6 }}><SearchRoundedIcon fontSize="inherit" /></Box>}
-              endDecorator={query ? (
-                <IconButton size="sm" variant="plain" color="neutral" onClick={() => setQuery('')} aria-label="Clear search">
-                  <Box component="span" sx={{ display: 'inline-flex', fontSize: 16 }}><CloseRoundedIcon fontSize="inherit" /></Box>
-                </IconButton>
-              ) : undefined}
-              sx={{ flexShrink: 0, mb: 1 }}
-            />
+            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexShrink: 0, mb: 1, flexWrap: 'wrap' }}>
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search settings…"
+                size="sm"
+                startDecorator={<Box component="span" sx={{ display: 'inline-flex', fontSize: 18, opacity: 0.6 }}><SearchRoundedIcon fontSize="inherit" /></Box>}
+                endDecorator={query ? (
+                  <IconButton size="sm" variant="plain" color="neutral" onClick={() => setQuery('')} aria-label="Clear search">
+                    <Box component="span" sx={{ display: 'inline-flex', fontSize: 16 }}><CloseRoundedIcon fontSize="inherit" /></Box>
+                  </IconButton>
+                ) : undefined}
+                sx={{ flex: 1, minWidth: 160 }}
+              />
+              <Checkbox
+                size="sm"
+                label="Changed only"
+                checked={showChangedOnly}
+                onChange={(event) => setShowChangedOnly(event.target.checked)}
+                disabled={modifiedKeyCount === 0 && !showChangedOnly}
+              />
+            </Stack>
             <TabList
               sx={{
                 overflowX: 'auto',
@@ -401,6 +424,9 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
               ) : null)}
             </TabList>
             <ScrollableDialogBody sx={{ mt: 0, px: 0 }}>
+              {showChangedOnly && modifiedKeyCount === 0 && (
+                <Typography level="body-sm" textColor="text.tertiary" sx={{ p: 2 }}>No changed settings.</Typography>
+              )}
               {corrections.length > 0 && (
                 <Alert color="warning" size="sm" sx={{ m: 1 }}>
                   <Stack spacing={0.25}>
@@ -415,9 +441,10 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
                       const visibleLines = group.lines.filter((line) =>
                         line.keys.some((key) => {
                           const option = processSettingsCatalog.options[key]
-                          if (!option || !isAdvancedModeOption(option) || !isKeyAllowed(key)) return false
+                          if (!option || !isOptionVisibleInMode(option) || !isKeyAllowed(key)) return false
                           if (!getProcessFieldState(fieldStates.states, key).visible) return false
-                          return !normalizedQuery || processKeyMatchesQuery(key, normalizedQuery)
+                          if (normalizedQuery && !processKeyMatchesQuery(key, normalizedQuery)) return false
+                          return !showChangedOnly || isModified(key)
                         })
                       )
                       if (visibleLines.length === 0) return null
@@ -429,6 +456,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
                                 key={`${group.title}-${lineIndex}`}
                                 lineLabel={line.label}
                                 keys={line.keys.filter(isKeyAllowed)}
+                                showDeveloperOptions={showDeveloperOptions}
                                 code={line.code}
                                 fieldStates={fieldStates}
                                 accessor={accessor}
@@ -488,6 +516,8 @@ function processKeyMatchesQuery(key: string, normalizedQuery: string): boolean {
 interface ProcessSettingLineRowProps {
   lineLabel?: string
   keys: string[]
+  /** Whether BambuStudio develop-tier options are revealed (developer-mode preference). */
+  showDeveloperOptions: boolean
   code?: boolean
   fieldStates: ReturnType<typeof computeProcessFieldStates>
   accessor: ReturnType<typeof createProcessConfigAccessor>
@@ -500,10 +530,10 @@ interface ProcessSettingLineRowProps {
 }
 
 function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element | null {
-  const { keys, lineLabel, code, fieldStates, accessor, isModified, canReset, onReset, onScalarChange } = props
+  const { keys, lineLabel, showDeveloperOptions, code, fieldStates, accessor, isModified, canReset, onReset, onScalarChange } = props
   const visibleKeys = keys.filter((key) => {
     const option = processSettingsCatalog.options[key]
-    return option && isAdvancedModeOption(option) && getProcessFieldState(fieldStates.states, key).visible
+    return option && isProcessOptionVisibleInMode(option, showDeveloperOptions) && getProcessFieldState(fieldStates.states, key).visible
   })
   if (visibleKeys.length === 0) return null
 
@@ -538,14 +568,14 @@ function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element |
             const modified = isModified(key)
             return (
               <Stack key={key} direction="row" spacing={0.25} alignItems="center">
-                <ProcessSettingField
+                <SettingValueField
                   settingKey={key}
                   option={option}
+                  value={accessor.str(key)}
                   enabled={enabled}
                   enumRestriction={enumRestriction}
                   showOwnLabel={visibleKeys.length > 1}
                   modified={modified}
-                  accessor={accessor}
                   onScalarChange={onScalarChange}
                   isCode={code}
                 />
@@ -574,122 +604,3 @@ function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element |
   )
 }
 
-interface ProcessSettingFieldProps {
-  settingKey: string
-  option: ProcessSettingOption
-  enabled: boolean
-  enumRestriction?: string[]
-  showOwnLabel: boolean
-  isCode?: boolean
-  modified?: boolean
-  accessor: ReturnType<typeof createProcessConfigAccessor>
-  onScalarChange: (key: string, value: string) => void
-}
-
-/**
- * One fixed width for every scalar value control (numeric inputs, percent fields, and enum
- * selects) so the value column lines up — content-sized controls otherwise vary (a bare number
- * shrinks; a `%`/`°` decorator or a long enum label grows).
- */
-const SCALAR_CONTROL_WIDTH = 200
-
-function ProcessSettingField(props: ProcessSettingFieldProps): JSX.Element {
-  const { settingKey, option, enabled, enumRestriction, showOwnLabel, isCode, modified, accessor, onScalarChange } = props
-  const scalar = accessor.str(settingKey)
-
-  if (option.type === 'bool') {
-    return (
-      <Stack direction="row" spacing={0.75} alignItems="center">
-        <Switch
-          checked={accessor.bool(settingKey)}
-          disabled={!enabled}
-          onChange={(event) => onScalarChange(settingKey, serializeProcessBool(event.target.checked))}
-        />
-        {showOwnLabel && (
-          <Typography level="body-sm" sx={modified ? { color: 'warning.plainColor', fontWeight: 'lg' } : undefined}>
-            {option.label}
-          </Typography>
-        )}
-      </Stack>
-    )
-  }
-
-  if (option.type === 'enum') {
-    const values = enumRestriction ?? option.enumValues ?? []
-    const labels = option.enumValues ?? []
-    return (
-      <Select
-        value={scalar}
-        disabled={!enabled}
-        onChange={(_event, value) => { if (typeof value === 'string') onScalarChange(settingKey, value) }}
-        sx={{ width: SCALAR_CONTROL_WIDTH }}
-      >
-        {values.map((value) => {
-          const labelIndex = labels.indexOf(value)
-          const display = labelIndex >= 0 && option.enumLabels ? option.enumLabels[labelIndex] ?? value : value
-          return <Option key={value} value={value}>{display}</Option>
-        })}
-      </Select>
-    )
-  }
-
-  if (option.type === 'string' && (isCode || option.isCode)) {
-    return (
-      <Textarea
-        minRows={3}
-        value={scalar}
-        disabled={!enabled}
-        onChange={(event) => onScalarChange(settingKey, event.target.value)}
-        sx={{ flex: 1, fontFamily: 'code', minWidth: 280 }}
-      />
-    )
-  }
-
-  const isInteger = option.type === 'int'
-  const isFloat = option.type === 'float'
-  // A pure percent value is serialized with a `%` suffix ("15%"), but since it is ALWAYS a
-  // percentage the suffix is redundant with the `%` sidetext decorator — show just the number
-  // in a native number input and re-append the suffix on change. floatOrPercent stays text:
-  // there the typed `%` is meaningful (it distinguishes "40%" from "0.4" mm).
-  const isPurePercent = option.type === 'percent' && !option.vector
-  const isPercentish = option.type === 'percent' || option.type === 'floatOrPercent'
-  const isNumeric = isInteger || isFloat || isPercentish
-  // A vector setting packs several values into one string (e.g. "0.4,0.4"); keep it free-text.
-  // A native number input gives the right keyboard + spinners and rejects letters outright.
-  const useNumberInput = (isInteger || isFloat || isPurePercent) && !option.vector
-  // Single numeric fields get a FIXED width so every one lines up (otherwise each sizes itself
-  // between min/max from its content + the native spinners, so e.g. "Wall loops" and "Top shell
-  // layers" came out different widths). Vector/string/point keep the wider flexible range.
-  const fixedNumericWidth = isNumeric && !option.vector
-
-  return (
-    <Input
-      type={useNumberInput ? 'number' : 'text'}
-      value={isPurePercent ? scalar.replace(/%/g, '').trim() : scalar}
-      disabled={!enabled}
-      onChange={(event) => {
-        // The native number input already blocks non-numeric text; the floatOrPercent fields are
-        // text, so strip anything that can't belong to a number/percent as it is typed.
-        const raw = event.target.value
-        if (isPurePercent) {
-          // Keep BambuStudio's serialized form ("15%") in the config.
-          onScalarChange(settingKey, raw === '' ? '' : `${raw}%`)
-        } else {
-          onScalarChange(settingKey, isPercentish && !option.vector ? raw.replace(/[^\d.%-]/g, '') : raw)
-        }
-      }}
-      endDecorator={option.sidetext ? <Typography level="body-xs">{option.sidetext}</Typography> : undefined}
-      slotProps={isNumeric ? {
-        input: {
-          inputMode: isInteger ? 'numeric' : 'decimal',
-          ...(useNumberInput ? { step: isInteger ? 1 : 'any' } : {}),
-          ...(option.min != null ? { min: option.min } : {}),
-          ...(option.max != null ? { max: option.max } : {})
-        }
-      } : undefined}
-      sx={fixedNumericWidth
-        ? { width: SCALAR_CONTROL_WIDTH }
-        : { minWidth: 140, maxWidth: option.type === 'string' || option.type === 'point' ? 280 : 180 }}
-    />
-  )
-}

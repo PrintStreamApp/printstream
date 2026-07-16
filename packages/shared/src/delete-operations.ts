@@ -1,3 +1,8 @@
+/**
+ * Shared contract for tracked bulk-delete operations (library files, printer SD
+ * storage). Defines the operation kinds and progress/result shapes the API
+ * reports and the web app polls while a long-running delete runs.
+ */
 import { z } from 'zod'
 
 export const deleteOperationKindSchema = z.enum([
