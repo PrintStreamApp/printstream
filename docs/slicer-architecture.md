@@ -113,6 +113,20 @@ Bambu object_id). The editor-arranged path now applies them via `createObjectCus
 after the bake (previously skipped whenever a `sceneEdit` was present); the original object's
 name also travels onto the replacement via `objectNames` (importId-keyed).
 
+`repairedObjectIds` carries BambuStudio's per-object "fix model": each entry is an in-project
+object the user right-clicked → **Repair mesh** in the editor. Unlike `meshReplacements`, this is
+NOT a geometry swap — `buildEditedThreeMf` resolves each marked root object to the entries that
+actually carry its meshes (a Bambu project keeps each object's mesh in its own
+`3D/Objects/*.model`) and runs `three-mf-mesh-repair` **in place** on just those meshes: a
+nearby-vertex weld (closing sub-tolerance cracks) plus degenerate/duplicate facet pruning — the
+admesh pass BambuStudio applies to STL imports but skips for a 3MF's triangles. In place is the
+whole point: it preserves the object's per-triangle paint and its part volumes, which rebuilding
+the geometry would destroy. For the same reason the bake applies **paint before repair** (repair
+carries each triangle's attributes through while welding/dropping, so painting first rides through
+it; painting after would index triangles repair removed). Marking is the entire client-side edit —
+repair is visually a no-op — and nothing repairs automatically: slicing never silently alters
+geometry.
+
 **Imported-object 3MF structure (Production Extension).** When the base project uses the 3MF
 Production Extension (`requiredextensions="p"` — what BambuStudio writes), the bake emits every
 injected `<object>`/`<component>`/build `<item>` with a `p:UUID`, and a multi-solid import's solids

@@ -21,7 +21,6 @@ import FolderOpenRoundedIcon from '@mui/icons-material/FolderOpenRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import EditRoundedIcon from '@mui/icons-material/EditRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
-import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded'
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
@@ -38,7 +37,6 @@ import type {
   LibraryFile,
   LibraryFileVersion,
   LibraryFolder,
-  MeshRepairResult,
   SlicingCapabilities,
   SlicingJobResponse,
   Permission,
@@ -561,26 +559,6 @@ export function LibraryView() {
     [toggleFavorite]
   )
 
-  // Manual mesh repair: the same admesh-style repair (nearby-weld + degenerate/duplicate pruning)
-  // the slice pipeline runs best-effort, but user-invoked and reporting exactly what changed. Writes
-  // a new version only when the mesh actually had defects; a clean mesh is a no-op with a clear note.
-  const repairMesh = useMutation({
-    mutationFn: (file: LibraryFile) =>
-      apiFetch<MeshRepairResult>('/api/editor/repair-mesh', { method: 'POST', body: { fileId: file.id } }),
-    onSuccess: (result) => {
-      if (!result.repaired) {
-        toast.success({ message: 'Mesh is already clean — nothing to repair.' })
-        return
-      }
-      const droppedTriangles = result.degenerateTrianglesRemoved + result.duplicateTrianglesRemoved
-      toast.success({
-        message: `Repaired mesh: welded ${result.weldedVertices} vertices and dropped ${droppedTriangles} triangles. Saved as version ${result.file?.versionNumber ?? ''}.`
-      })
-    },
-    onError: (error: Error) => toast.error(error.message || 'Failed to repair mesh'),
-    onSettled: invalidateAll
-  })
-
   const moveFile = useMutation({
     mutationFn: ({ id, folderId }: { id: string; folderId: string | null }) =>
       apiFetch(`/api/library/${id}`, { method: 'PATCH', body: { folderId, bridgeId: activeBridgeId } }),
@@ -929,16 +907,6 @@ export function LibraryView() {
           }}>
             {file.favorite ? <StarRoundedIcon /> : <StarBorderRoundedIcon />} {file.favorite ? 'Unfavorite' : 'Favorite'}
           </MenuItem>
-        )}
-        {canManageLibrary && isUnslicedThreeMfFile(file) && (
-          <MenuItem
-            onClick={() => {
-              if (bridgeResourceUnavailable) return
-              onAction?.()
-              repairMesh.mutate(file)
-            }}
-            disabled={bridgeResourceUnavailable || repairMesh.isPending}
-          ><AutoFixHighRoundedIcon /> Repair mesh</MenuItem>
         )}
         {canManageLibrary && <MenuItem onClick={() => {
           onAction?.()
@@ -1513,6 +1481,9 @@ export function LibraryView() {
           submitAction={startSlicingJob.variables?.action ?? null}
           submitError={startSlicingJob.error instanceof Error ? startSlicingJob.error.message : null}
           onClose={closeSliceDialog}
+          // "Save as" in the editor makes a NEW file — re-target the dialog to it (the key includes
+          // the file id, so this cleanly re-mounts the editor on the just-saved project).
+          onSavedAs={(saved) => { void openSliceForSavedFile(saved) }}
           onSubmit={(input, action, options) => startSlicingJob.mutate({ file: sliceTarget, versionId: sliceVersionId, action, keepDialogOpen: options?.keepDialogOpen, ...input })}
         />
       )}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { repairModelEntryMeshes, repairSingleMeshXml } from './three-mf-mesh-repair.js'
+import { repairModelEntryMeshes, repairObjectMeshesInModelEntry, repairSingleMeshXml } from './three-mf-mesh-repair.js'
 
 /**
  * A small tetra-ish mesh with three defects the repair targets:
@@ -75,4 +75,58 @@ test('repairModelEntryMeshes aggregates across meshes and reports combined stats
   assert.equal(result.stats.weldedVertices, 1)
   assert.equal(result.stats.degenerateTrianglesRemoved, 1)
   assert.equal(result.stats.duplicateTrianglesRemoved, 1)
+})
+
+/** Two objects in one entry: object 5 is cracked, object 6 is clean and must not be touched. */
+function twoObjectEntryXml(): string {
+  return [
+    '<model>',
+    ' <resources>',
+    '  <object id="5" type="model">',
+    '   <mesh>',
+    '    <vertices>',
+    '     <vertex x="0" y="0" z="0"/>',
+    '     <vertex x="10" y="0" z="0"/>',
+    '     <vertex x="0" y="10" z="0"/>',
+    '     <vertex x="10.00001" y="0" z="0"/>',
+    '    </vertices>',
+    '    <triangles>',
+    '     <triangle v1="0" v2="1" v3="2" paint_color="9"/>',
+    '     <triangle v1="0" v2="3" v3="2"/>',
+    '    </triangles>',
+    '   </mesh>',
+    '  </object>',
+    '  <object id="6" type="model">',
+    '   <mesh>',
+    '    <vertices>',
+    '     <vertex x="0" y="0" z="0"/>',
+    '     <vertex x="1" y="0" z="0"/>',
+    '     <vertex x="0" y="1" z="0"/>',
+    '    </vertices>',
+    '    <triangles>',
+    '     <triangle v1="0" v2="1" v3="2"/>',
+    '    </triangles>',
+    '   </mesh>',
+    '  </object>',
+    ' </resources>',
+    '</model>'
+  ].join('\n')
+}
+
+test('repairObjectMeshesInModelEntry repairs only the named objects and preserves paint', () => {
+  const result = repairObjectMeshesInModelEntry(twoObjectEntryXml(), new Set([5]))
+  assert.ok(result, 'object 5 is cracked so the entry should be rewritten')
+  // Vertex 3 welded onto vertex 1; the second triangle became a duplicate of the first and dropped.
+  assert.equal(result.stats.weldedVertices, 1)
+  assert.equal(result.stats.duplicateTrianglesRemoved, 1)
+  // Paint on the surviving triangle rides through the repair — the property that lets repair run
+  // in place on a painted object instead of replacing its geometry.
+  assert.match(result.xml, /paint_color="9"/)
+  // Object 6 was not named and must be byte-identical.
+  assert.match(result.xml, /<object id="6" type="model">\n {3}<mesh>\n {4}<vertices>\n {5}<vertex x="0" y="0" z="0"\/>/)
+})
+
+test('repairObjectMeshesInModelEntry is a no-op (null) when the named object is already clean', () => {
+  assert.equal(repairObjectMeshesInModelEntry(twoObjectEntryXml(), new Set([6])), null)
+  assert.equal(repairObjectMeshesInModelEntry(twoObjectEntryXml(), new Set([999])), null)
 })

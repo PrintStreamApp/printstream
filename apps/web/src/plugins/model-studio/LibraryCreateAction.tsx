@@ -50,7 +50,8 @@ export function LibraryCreateAction(props: Record<string, unknown>) {
     <Button
       type="button"
       size="sm"
-      variant="soft"
+      variant="solid"
+      color="primary"
       loading={creating}
       startDecorator={<ViewInArRoundedIcon />}
       onClick={() => void handleCreate()}

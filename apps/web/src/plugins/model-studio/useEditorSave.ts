@@ -37,6 +37,8 @@ export interface EditorSaveParams {
   /** Slice-time apply (only present when launched from the slice dialog). */
   onApply: ((edit: SceneEdit) => void) | undefined
   onSaved: ((file: { id: string; name: string }) => void) | undefined
+  /** Called after a SAVE AS (a new file) so the host can re-open the editor on it. */
+  onSavedAs: ((file: { id: string; name: string }) => void) | undefined
   onClose: () => void
   confirm: (options: ConfirmDialogOptions) => Promise<boolean>
 }
@@ -69,6 +71,7 @@ export function useEditorSave({
   saveAsBridgeId,
   onApply,
   onSaved,
+  onSavedAs,
   onClose,
   confirm
 }: EditorSaveParams): EditorSave {
@@ -192,7 +195,7 @@ export function useEditorSave({
     void (async () => {
       const thumbnails = await captureAllPlateThumbnails(current)
       const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
-      await runSave(
+      const saved = await runSave(
         {
           baseFileId, baseVersionId, mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
           sceneEdit: buildSceneEditOut(current, { thumbnails }),
@@ -203,8 +206,11 @@ export function useEditorSave({
         },
         `Saved “${name}”`
       )
+      // "Save as" makes a NEW file; leaving the editor on the old project is confusing (the user's
+      // edits, and any further edits, target the old file). Re-open the editor on the new file.
+      if (saved) onSavedAs?.(saved)
     })()
-  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
 
   return {
     saving,

@@ -1050,7 +1050,10 @@ export function printerCardAmsGridColumns(cardsPerRow: number): number {
 }
 
 export function amsUnitSlotSpan(unit: AmsUnit): number {
-  return Math.max(1, Math.min(4, unit.slots.length))
+  // Single-slot units (AMS HT) still get a two-column cell: one column is too
+  // narrow for the unit header (letter, temp, humidity, drying/refresh), which
+  // otherwise wraps mid-label and overlaps.
+  return Math.max(2, Math.min(4, unit.slots.length))
 }
 
 export function parseStoredBoolean(raw: string): boolean | null {

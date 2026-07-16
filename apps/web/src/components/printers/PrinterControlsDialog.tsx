@@ -1,8 +1,9 @@
 /**
  * Printer controls dialog extracted from `pages/PrintersView.tsx`: a tabbed
- * modal (lights, speed, temperatures, fans, motion, extruder) that only
- * enables controls supported and safe for the printer's current state, and
- * emits `PrinterControlCommand`s to its caller.
+ * modal (lights, speed, temperatures, nozzles, fans, motion, extruder) that
+ * only enables controls supported and safe for the printer's current state,
+ * and emits `PrinterControlCommand`s to its caller. The Nozzles tab (read-only
+ * nozzle-changer rack) appears only on printers that report one (H2C).
  */
 import { useState } from 'react'
 import {
@@ -129,6 +130,7 @@ export function PrinterControlsDialog({
             <Tab value="printer">Lights</Tab>
             <Tab value="speed">Speed</Tab>
             <Tab value="temperature">Temperatures</Tab>
+            {status.nozzleRack != null && <Tab value="nozzles">Nozzles</Tab>}
             {hasFanControls && <Tab value="fans">Fans</Tab>}
             <Tab value="motion">Motion</Tab>
             {hasExtruderControls && <Tab value="extruder">Extruder</Tab>}
@@ -212,8 +214,6 @@ export function PrinterControlsDialog({
               )}
 
               {activeTab === 'temperature' && (
-                <>
-                {status.nozzleRack ? <NozzleRackSection rack={status.nozzleRack} /> : null}
                 <DialogSection title="Temperatures" wrapInSheet={false}>
                   <Sheet variant="soft" sx={{ p: 1.25, borderRadius: 'md' }}>
                     <Stack spacing={1}>
@@ -387,7 +387,10 @@ export function PrinterControlsDialog({
                     </Stack>
                   </Sheet>
                 </DialogSection>
-                </>
+              )}
+
+              {activeTab === 'nozzles' && status.nozzleRack != null && (
+                <NozzleRackSection rack={status.nozzleRack} />
               )}
 
               {activeTab === 'fans' && hasFanControls && (

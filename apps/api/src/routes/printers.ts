@@ -131,6 +131,7 @@ import { deleteOperationDispatcher } from '../lib/delete-operation-dispatcher.js
 import { printGuards } from '../lib/print-guards.js'
 import {
   buildProjectFilePrintCommand,
+  printerModelHasDualNozzles,
   getRemotePrintTarget,
   getPrintSourceKind,
   normalizePrintStartOptionsForPrinter,
@@ -1721,6 +1722,7 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
         timelapse: normalizedOptions.timelapse,
         useAms: parsed.data.useAms,
         amsMapping: parsed.data.amsMapping,
+        dualNozzles: printerModelHasDualNozzles(printer.model),
         skipObjects: skipIdentifyIds
       })
     })

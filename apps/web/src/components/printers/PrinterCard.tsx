@@ -963,6 +963,7 @@ function PrinterCardComponent({
             canOpenControls={canOpenControls}
             onOpenTemperatureControls={() => openControlsDialog('temperature')}
             onOpenSpeedControls={() => openControlsDialog('speed')}
+            onOpenNozzleControls={() => openControlsDialog('nozzles')}
             showChamberTemperature={showChamberTemperature}
             chamberTemperature={chamberTemperature}
             chamberTarget={chamberTarget}

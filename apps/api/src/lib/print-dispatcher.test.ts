@@ -427,7 +427,8 @@ test('buildProjectFilePrintCommand maps options onto the project_file payload', 
     nozzleOffsetCalibration: 'off',
     timelapse: true,
     useAms: true,
-    amsMapping: [0, 1]
+    amsMapping: [0, 1],
+    dualNozzles: false
   })
   assert.deepEqual(payload, {
     command: 'project_file',
@@ -454,29 +455,31 @@ test('buildProjectFilePrintCommand maps options onto the project_file payload', 
     subtask_id: '12345',
     task_id: '12345',
     ams_mapping: [0, 1],
-    ams_mapping_2: [
+    ams_mapping2: [
       { ams_id: 0, slot_id: 0 },
       { ams_id: 0, slot_id: 1 }
     ]
   })
 })
 
-test('buildProjectFilePrintCommand derives ams_mapping_2 across the tray-index bands', () => {
-  // Regular units, an AMS HT (128+ band, tray index IS the unit id), an external
-  // virtual tray (id preserved, slot 0), a pruned -1 hole (0xff/0xff), and the
-  // ambiguous AMS Lite Mixed band (24-27, sent unset so a wrong pair never
-  // contradicts the correct legacy index) — matching BambuStudio's SD-card
-  // resend flow. H2C (Vortek) firmware needs the v2 form to build its AMS
-  // mapping table (0701-8012 without it).
-  const payload = buildProjectFilePrintCommand({
+test('buildProjectFilePrintCommand encodes the mapping wire forms across the tray-index bands', () => {
+  // Regular units, an AMS HT (128+ band, tray index IS the unit id — needs the
+  // ams_mapping2 form or H2 firmware fails 0701-8012 at the first HT fetch), a
+  // pruned -1 hole (0xff/0xff), external virtual trays (flat array carries -1;
+  // H2 firmware rejects raw 254/255 there), and the ambiguous AMS Lite Mixed
+  // band (24-27, unset in v2 so a wrong pair never contradicts the flat index).
+  // Shape verified against real BambuStudio request-topic captures; note the
+  // wire key is ams_mapping2, NOT ams_mapping_2.
+  const base = {
     remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
     bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
     firstLayerInspection: false, filamentDynamicsCalibration: false,
-    nozzleOffsetCalibration: 'off', timelapse: false, useAms: true,
-    amsMapping: [6, 128, -1, 255, 254, 25]
-  })
-  assert.deepEqual(payload.ams_mapping, [6, 128, -1, 255, 254, 25])
-  assert.deepEqual(payload.ams_mapping_2, [
+    nozzleOffsetCalibration: 'off', timelapse: false, useAms: true
+  } as const
+
+  const dual = buildProjectFilePrintCommand({ ...base, amsMapping: [6, 128, -1, 255, 254, 25], dualNozzles: true })
+  assert.deepEqual(dual.ams_mapping, [6, 128, -1, -1, -1, 25])
+  assert.deepEqual(dual.ams_mapping2, [
     { ams_id: 1, slot_id: 2 },
     { ams_id: 128, slot_id: 0 },
     { ams_id: 0xff, slot_id: 0xff },
@@ -484,27 +487,16 @@ test('buildProjectFilePrintCommand derives ams_mapping_2 across the tray-index b
     { ams_id: 254, slot_id: 0 },
     { ams_id: 0xff, slot_id: 0xff }
   ])
-})
+  assert.equal('ams_mapping_2' in dual, false)
 
-test('buildProjectFilePrintCommand carries ams_mapping_info and nozzles_info when resolved', () => {
-  const base = {
-    remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
-    bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
-    firstLayerInspection: false, filamentDynamicsCalibration: false,
-    nozzleOffsetCalibration: 'off', timelapse: false, useAms: true
-  } as const
-  const info = [{ ams: 128, targetColor: '0A2CA5FF', filamentId: 'GFA06', filamentType: 'PLA', nozzleId: 1, sourceColor: 'FF0000FF' }]
-  const nozzles = [{ id: 1, type: null, flowSize: 'high_flow', diameter: 0.4 }]
-  const payload = buildProjectFilePrintCommand({ ...base, amsMapping: [128], amsMappingInfo: info, nozzlesInfo: nozzles })
-  assert.deepEqual(payload.ams_mapping_info, info)
-  assert.deepEqual(payload.nozzles_info, nozzles)
-
-  // ams_mapping_info rides only alongside a mapping; nulls are omitted entirely.
-  const withoutMapping = buildProjectFilePrintCommand({ ...base, amsMappingInfo: info, nozzlesInfo: nozzles })
-  assert.equal('ams_mapping_info' in withoutMapping, false)
-  const withoutInfo = buildProjectFilePrintCommand({ ...base, amsMapping: [128], amsMappingInfo: null, nozzlesInfo: null })
-  assert.equal('ams_mapping_info' in withoutInfo, false)
-  assert.equal('nozzles_info' in withoutInfo, false)
+  // Single-nozzle machines report the external tray as 254, but firmware only
+  // routes ams_id 255 to the external spool there — 254 targets AMS tray 0.
+  const single = buildProjectFilePrintCommand({ ...base, amsMapping: [254, 3], dualNozzles: false })
+  assert.deepEqual(single.ams_mapping, [-1, 3])
+  assert.deepEqual(single.ams_mapping2, [
+    { ams_id: 255, slot_id: 0 },
+    { ams_id: 0, slot_id: 3 }
+  ])
 })
 
 test('buildProjectFilePrintCommand omits ams_mapping when empty', () => {
@@ -512,10 +504,10 @@ test('buildProjectFilePrintCommand omits ams_mapping when empty', () => {
     remoteName: 'a.gcode', param: 'a.gcode', subtaskName: 'a', submissionId: '1',
     bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
     firstLayerInspection: false, filamentDynamicsCalibration: false,
-    nozzleOffsetCalibration: 'off', timelapse: false, useAms: false, amsMapping: []
+    nozzleOffsetCalibration: 'off', timelapse: false, useAms: false, amsMapping: [], dualNozzles: false
   })
   assert.equal('ams_mapping' in withEmpty, false)
-  assert.equal('ams_mapping_2' in withEmpty, false)
+  assert.equal('ams_mapping2' in withEmpty, false)
 })
 
 test('buildProjectFilePrintCommand includes skip_objects when identify_ids are supplied', () => {
@@ -525,7 +517,7 @@ test('buildProjectFilePrintCommand includes skip_objects when identify_ids are s
     remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
     bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
     firstLayerInspection: false, filamentDynamicsCalibration: false,
-    nozzleOffsetCalibration: 'off', timelapse: false, useAms: false,
+    nozzleOffsetCalibration: 'off', timelapse: false, useAms: false, dualNozzles: false,
     skipObjects: [153, 154]
   })
   assert.deepEqual(payload.skip_objects, [153, 154])
@@ -536,7 +528,7 @@ test('buildProjectFilePrintCommand omits skip_objects when empty, null, or absen
     remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
     bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
     firstLayerInspection: false, filamentDynamicsCalibration: false,
-    nozzleOffsetCalibration: 'off', timelapse: false, useAms: false
+    nozzleOffsetCalibration: 'off', timelapse: false, useAms: false, dualNozzles: false
   } as const
   assert.equal('skip_objects' in buildProjectFilePrintCommand({ ...base, skipObjects: [] }), false)
   assert.equal('skip_objects' in buildProjectFilePrintCommand({ ...base, skipObjects: null }), false)

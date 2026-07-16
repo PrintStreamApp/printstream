@@ -1,12 +1,19 @@
 /**
- * Mesh geometry repair for the meshes inside a 3MF — a numeric, admesh-equivalent pass that goes
- * beyond the exact-duplicate weld in `three-mf-mesh-weld.ts`.
+ * Mesh geometry repair for a single object's mesh inside a 3MF — a numeric, admesh-equivalent pass
+ * that goes beyond the exact-duplicate weld in `three-mf-mesh-weld.ts`.
  *
  * What it owns: turning a structurally-imperfect mesh into one the slicer can chew on, mirroring the
  * load-bearing, *non-destructive* steps BambuStudio's own `TriangleMesh::repair()` runs on STL import
  * (`admesh/util.cpp` → `stl_check_facets_exact` + `stl_check_facets_nearby` + degenerate/duplicate
  * pruning). BambuStudio applies that repair to STL/STEP imports but trusts a 3MF's triangles verbatim,
  * so a 3MF authored from a cracked or soup mesh reaches the slicer unrepaired.
+ *
+ * Who calls it: `three-mf-scene-builder.ts` while baking an editor save, for each object the user
+ * marked via the model studio's right-click "Repair mesh" (`SceneEdit.repairedObjectIds`). It is
+ * deliberately applied IN PLACE on the object's mesh XML rather than by staging a replacement import:
+ * rewriting in place is what keeps every per-triangle paint attribute and the object's part volumes,
+ * which rebuilding the geometry would destroy. Nothing repairs automatically — slicing never silently
+ * alters geometry; repair only happens when the user asks for it and saves.
  *
  * Contract: this is a **safe** repair — it only *merges coincident geometry and drops junk*, never
  * invents or deletes surface:
@@ -26,16 +33,10 @@
  * manifold mesh that crashes the engine on its 2D geometry has nothing here to repair (see the
  * engine-crash path in the slicer's `slice-error.ts`).
  *
- * Every non-index triangle attribute (paint codes) rides along unchanged, exactly as the weld heal
- * preserves them. Best-effort: an unreadable/oversized or non-conforming entry is left untouched
- * rather than failing the operation.
- *
- * Two callers: the slice pre-pass ({@link repairThreeMfMeshesToCopy}, best-effort, never fails a
- * slice) and the editor's explicit "Repair mesh" action (which persists the repaired copy as a new
- * library version and shows the user what was fixed).
+ * Every non-index triangle attribute (paint codes) rides along unchanged — the load-bearing property
+ * that lets repair run in place on a painted object. A mesh that doesn't match the serialization we
+ * understand is left untouched (null) rather than risking corrupting geometry.
  */
-import yauzl from 'yauzl'
-import { readEntry, rewriteThreeMfEntries } from './three-mf-internal.js'
 
 const VERTEX_TAG_PATTERN = /<vertex\s+x="([^"]*)"\s+y="([^"]*)"\s+z="([^"]*)"\s*\/>/g
 const TRIANGLE_TAG_PATTERN = /[ \t]*<triangle\b([^>]*)\/>\s*?\n?/g
@@ -226,6 +227,31 @@ export function repairSingleMeshXml(meshXml: string): { xml: string; stats: Mesh
   return { xml, stats }
 }
 
+/**
+ * Repair the meshes of SPECIFIC objects inside one 3MF model entry, leaving every other object in
+ * that entry untouched. `objectIds` are the mesh-carrying object ids within THIS entry — a root
+ * object's resolved components, which the caller maps via the root model's `<components>` (a Bambu
+ * project keeps each object's mesh in its own `3D/Objects/*.model`, so the id the user selected in
+ * the editor is rarely the id that carries the mesh). Returns the rewritten XML + combined stats, or
+ * null when none of the named objects needed repair.
+ */
+export function repairObjectMeshesInModelEntry(
+  xml: string,
+  objectIds: ReadonlySet<number>
+): { xml: string; stats: MeshRepairStats } | null {
+  let total = EMPTY_STATS
+  const rewritten = xml.replace(/<object\b[^>]*\bid="(\d+)"[^>]*>[\s\S]*?<\/object>/g, (objectXml, id: string) => {
+    if (!objectIds.has(Number.parseInt(id, 10))) return objectXml
+    return objectXml.replace(/<mesh>[\s\S]*?<\/mesh>/, (meshXml) => {
+      const repaired = repairSingleMeshXml(meshXml)
+      if (!repaired) return meshXml
+      total = addStats(total, repaired.stats)
+      return repaired.xml
+    })
+  })
+  return isEmpty(total) ? null : { xml: rewritten, stats: total }
+}
+
 /** Repair every `<mesh>` in a 3MF model entry's XML. Returns the rewritten XML + stats, or null if nothing changed. */
 export function repairModelEntryMeshes(xml: string): { xml: string; stats: MeshRepairStats } | null {
   let total = EMPTY_STATS
@@ -236,60 +262,4 @@ export function repairModelEntryMeshes(xml: string): { xml: string; stats: MeshR
     return repaired.xml
   })
   return isEmpty(total) ? null : { xml: rewritten, stats: total }
-}
-
-/** Entry names that can carry mesh geometry: the root model and any object part files. */
-function isModelEntryName(name: string): boolean {
-  return name === '3D/3dmodel.model' || /^3D\/Objects\/[^/]+\.model$/.test(name)
-}
-
-function listModelEntryNames(sourcePath: string): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    yauzl.open(sourcePath, { lazyEntries: true }, (error, zipFile) => {
-      if (error || !zipFile) {
-        reject(error ?? new Error('Failed to open 3MF'))
-        return
-      }
-      const names: string[] = []
-      zipFile.on('error', reject)
-      zipFile.on('end', () => resolve(names))
-      zipFile.on('entry', (entry: { fileName: string }) => {
-        if (isModelEntryName(entry.fileName)) names.push(entry.fileName)
-        zipFile.readEntry()
-      })
-      zipFile.readEntry()
-    })
-  })
-}
-
-/** Same cap the scene reader uses for the root model entry. */
-const MAX_MODEL_ENTRY_BYTES = 64 * 1024 * 1024
-
-/**
- * Produce a copy of `sourcePath` at `outputPath` with every mesh repaired (see the module header).
- * Returns the aggregate {@link MeshRepairStats} when a repaired copy was written, or null when nothing
- * needed repair (no copy is produced — the caller keeps using the original). Best-effort: an
- * unreadable/oversized entry is skipped with a warning rather than throwing.
- */
-export async function repairThreeMfMeshesToCopy(sourcePath: string, outputPath: string): Promise<MeshRepairStats | null> {
-  const entryNames = await listModelEntryNames(sourcePath)
-  const transforms: Record<string, (xml: string) => string> = {}
-  let total = EMPTY_STATS
-  for (const name of entryNames) {
-    let xml: string
-    try {
-      xml = (await readEntry(sourcePath, name, undefined, MAX_MODEL_ENTRY_BYTES)).toString('utf8')
-    } catch (error) {
-      console.warn(`[mesh-repair] skipped ${name}:`, error instanceof Error ? error.message : error)
-      continue
-    }
-    const repaired = repairModelEntryMeshes(xml)
-    if (repaired) {
-      transforms[name] = () => repaired.xml
-      total = addStats(total, repaired.stats)
-    }
-  }
-  if (Object.keys(transforms).length === 0) return null
-  await rewriteThreeMfEntries(sourcePath, outputPath, transforms)
-  return total
 }

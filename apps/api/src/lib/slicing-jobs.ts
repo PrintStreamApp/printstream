@@ -23,7 +23,6 @@ import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from './three-mf.js'
 import { healUnweldedThreeMfMeshes } from './three-mf-mesh-weld.js'
-import { repairThreeMfMeshesToCopy, type MeshRepairStats } from './three-mf-mesh-repair.js'
 import { resolveSceneEditImports } from './import-store.js'
 import type { ResolvedSlicingProfileFile } from './slicing-profiles.js'
 import { withTenantRequestContext, type RequestTenantSummary } from './tenant-context.js'
@@ -511,34 +510,6 @@ export class SlicingJobs {
         }
       }
 
-      // Repair mesh geometry the exact-weld heal above can't touch: near-duplicate ("cracked")
-      // vertices, and degenerate/duplicate facets. BambuStudio runs this same admesh repair on STL
-      // imports but trusts a 3MF's triangles verbatim, so a 3MF built from a cracked mesh reaches
-      // the slicer unrepaired. No-op (no copy) when the meshes are already clean, and best-effort —
-      // a repair failure must never fail a slice that would previously have run. Runs on the
-      // possibly-welded copy from the block above, so the two chain.
-      {
-        const repairedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-repair-'))
-        const repairedPath = path.join(repairedDir, path.basename(job.sourceFileName) || 'source.3mf')
-        let repairStats: MeshRepairStats | null = null
-        try {
-          repairStats = await repairThreeMfMeshesToCopy(sourcePath, repairedPath)
-        } catch (error) {
-          this.logJobEvent(job, 'warn', `Mesh repair pre-pass skipped: ${error instanceof Error ? error.message : String(error)}`)
-        }
-        if (repairStats) {
-          this.logJobEvent(
-            job,
-            'info',
-            `Repaired mesh before slicing: welded ${repairStats.weldedVertices} vertices, ` +
-              `dropped ${repairStats.degenerateTrianglesRemoved} degenerate and ${repairStats.duplicateTrianglesRemoved} duplicate triangles`
-          )
-          rewrittenSourcePaths.push(repairedPath)
-          sourcePath = repairedPath
-        } else {
-          await rm(repairedDir, { recursive: true, force: true }).catch(() => undefined)
-        }
-      }
       let crashRetryUsed = false
       while (true) {
         const slicerJobId = buildSlicerAttemptJobId(job.id, retryAttempt)

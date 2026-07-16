@@ -406,7 +406,8 @@ function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: num
   const group = new THREE.Group()
   // mm of text height on the bed. Sized to stay legible when the whole bed is in
   // view (a 256mm plate): at 5mm the numbers were an invisible speck until heavily
-  // zoomed in, which was the real complaint behind the (ineffective) billboard hack.
+  // zoomed in. The labels are camera-facing sprites (see createAxisTickLabel), so at
+  // this size they stay readable at any viewing angle instead of foreshortening away.
   const labelHeight = 9
   const margin = labelHeight * 0.9
   const firstX = Math.ceil(minX / BED_GRID_MAJOR_STEP_MM) * BED_GRID_MAJOR_STEP_MM
@@ -427,7 +428,7 @@ function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: num
 }
 
 /**
- * A flat numeric tick label lying on the bed plane, like a ruler mark.
+ * A camera-facing numeric tick label (a Sprite) placed at a bed edge, sized in bed millimetres.
  *
  * It scales with the bed/grid (`heightMm` is real bed millimetres), so the
  * numbers line up with the grid lines they annotate at every zoom level. The
@@ -451,13 +452,26 @@ function createAxisTickLabel(text: string, heightMm: number): THREE.Object3D | n
   context.fillText(text, canvas.width / 2, canvas.height / 2)
 
   const texture = new THREE.CanvasTexture(canvas)
-  texture.anisotropy = 4
+  // NO mipmaps — this is what keeps the numbers visible at every zoom. The canvas is a thin glyph
+  // on a fully transparent background, so mip levels average the glyph away with transparent black:
+  // once the label minifies past the base level (any zoomed-out view), sampled alpha collapses to
+  // ~0 and the number disappears entirely (verified by pixel probe: brightest pixel 35 -> 197 after
+  // disabling). Plain linear sampling aliases slightly when small but can never null the glyph.
+  texture.generateMipmaps = false
+  texture.minFilter = THREE.LinearFilter
   const aspect = canvas.width / canvas.height
-  const mesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(aspect * heightMm, heightMm),
-    new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.7, depthWrite: false, side: THREE.DoubleSide })
+  // A camera-facing Sprite, NOT a flat plane on the bed: a plane lying in the bed plane is viewed
+  // edge-on at grazing camera angles, foreshortening the number to a thin sliver that reads as
+  // "fading away" (the reported bug). A sprite always faces the camera, so it stays fully legible at
+  // any angle. sizeAttenuation keeps it world-sized (heightMm tall), so head-on it looks exactly as
+  // before — same legibility when the whole bed is in view — it just never foreshortens.
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0.9, depthWrite: false, sizeAttenuation: true })
   )
-  return mesh
+  sprite.scale.set(aspect * heightMm, heightMm, 1)
+  // Draw over the bed/grid rather than z-fighting with them.
+  sprite.renderOrder = 4
+  return sprite
 }
 
 /**

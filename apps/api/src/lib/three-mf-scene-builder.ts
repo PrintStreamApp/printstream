@@ -22,6 +22,7 @@ import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import type { ImportedMesh } from './mesh-import.js'
 import { escapeXmlAttribute, readEntry, readZipEntryBuffer } from './three-mf-internal.js'
+import { repairObjectMeshesInModelEntry } from './three-mf-mesh-repair.js'
 import { BRIM_EAR_POINTS_ENTRY, CUSTOM_GCODE_PER_LAYER_ENTRY, extractPlateType, extractSceneBed, LOGICAL_PART_PLATE_GAP, normalizeColor, parseAttrs, parseModelSettingsScene, parseRootModelComponents, parseRootModelObjectIdOrder } from './three-mf-reader.js'
 
 /**
@@ -1351,6 +1352,32 @@ export function applyTrianglePaintToModelEntry(
  * that cannot be resolved against the base model (stale ids, import-backed parts) are
  * skipped so the source geometry stays untouched rather than mis-painted.
  */
+/**
+ * Map each `SceneEdit.repairedObjectIds` root object to the entry + mesh-carrying object ids that
+ * actually hold its geometry: `entryPath -> {mesh objectId}`. Mirrors {@link resolvePartPaintByEntry}
+ * — a Bambu project keeps each object's mesh in its own `3D/Objects/*.model`, so the id the editor
+ * marked is a root that references the real mesh objects through `<components>`. An object with an
+ * inline mesh (no components — e.g. a from-scratch scaffold) carries its own id in the root entry.
+ */
+function resolveRepairMeshesByEntry(baseModelXml: string, repairedObjectIds: readonly number[]): Map<string, Set<number>> {
+  const byEntry = new Map<string, Set<number>>()
+  const componentsByObjectId = parseRootModelComponents(baseModelXml)
+  const add = (entryPath: string, objectId: number) => {
+    const ids = byEntry.get(entryPath) ?? new Set<number>()
+    ids.add(objectId)
+    byEntry.set(entryPath, ids)
+  }
+  for (const objectId of repairedObjectIds) {
+    const components = componentsByObjectId.get(objectId) ?? []
+    if (components.length === 0) {
+      add('3D/3dmodel.model', objectId)
+      continue
+    }
+    for (const component of components) add(component.entryPath, component.objectId)
+  }
+  return byEntry
+}
+
 function resolvePartPaintByEntry(
   baseModelXml: string,
   partPaint: SceneEditPartPaint[]
@@ -1654,15 +1681,36 @@ export async function buildEditedThreeMf(
       transforms.set(entry.name, () => entry.content)
       extraEntries.push(entry)
     }
-    // Painted parts whose meshes live in per-object sub-entries (Bambu's 3D/Objects/*.model).
-    // One transform per entry composes every channel that touches it.
-    const paintedEntryPaths = new Set(paintChannels.flatMap((channel) => [...channel.byEntry.keys()]))
-    paintedEntryPaths.delete('3D/3dmodel.model')
-    for (const entryPath of paintedEntryPaths) {
-      transforms.set(entryPath, (xml) => paintChannels.reduce((acc, channel) => {
-        const paints = channel.byEntry.get(entryPath)
-        return paints ? applyTrianglePaintToModelEntry(acc, channel.attribute, paints) : acc
-      }, xml))
+    // Objects the user marked for mesh repair (editor right-click → "Repair mesh"), resolved to the
+    // entries that actually carry their meshes. Repair rewrites in place, so paint and part volumes
+    // survive it — which is why repair is a marked edit rather than a geometry replacement.
+    const repairMeshesByEntry = resolveRepairMeshesByEntry(baseModelXml, edit.repairedObjectIds ?? [])
+    // An inline-mesh object lives in the root entry, whose transform closes over `modelXml`; repair
+    // it directly (the closure reads the variable when the copy pass runs).
+    const rootRepairIds = repairMeshesByEntry.get('3D/3dmodel.model')
+    if (rootRepairIds) {
+      const repairedRoot = repairObjectMeshesInModelEntry(modelXml, rootRepairIds)
+      if (repairedRoot) modelXml = repairedRoot.xml
+    }
+    // Parts whose meshes live in per-object sub-entries (Bambu's 3D/Objects/*.model): painted,
+    // repaired, or both. One transform per entry composes everything that touches it. Paint MUST be
+    // applied before repair — repair preserves each triangle's attributes while welding/dropping, so
+    // painting first rides through it, whereas painting after would index triangles repair removed.
+    const touchedEntryPaths = new Set([
+      ...paintChannels.flatMap((channel) => [...channel.byEntry.keys()]),
+      ...repairMeshesByEntry.keys()
+    ])
+    touchedEntryPaths.delete('3D/3dmodel.model')
+    for (const entryPath of touchedEntryPaths) {
+      transforms.set(entryPath, (xml) => {
+        const painted = paintChannels.reduce((acc, channel) => {
+          const paints = channel.byEntry.get(entryPath)
+          return paints ? applyTrianglePaintToModelEntry(acc, channel.attribute, paints) : acc
+        }, xml)
+        const repairIds = repairMeshesByEntry.get(entryPath)
+        if (!repairIds) return painted
+        return repairObjectMeshesInModelEntry(painted, repairIds)?.xml ?? painted
+      })
     }
     // The project's slicer->runtime nozzle map, needed to move slice_info group ids onto the
     // chosen nozzles. Empty for single-nozzle projects or a from-scratch project with no settings.

@@ -556,6 +556,17 @@ export const sceneEditSchema = z.object({
   addedParts: z.array(sceneEditAddedPartSchema).max(200).optional(),
   /** Optional object→import geometry replacements (Replace-with); see {@link sceneEditMeshReplacementSchema}. */
   meshReplacements: z.array(sceneEditMeshReplacementSchema).max(200).optional(),
+  /**
+   * In-project objects the user asked to mesh-repair (editor right-click → "Repair mesh"), by Bambu
+   * `object_id`. The repair is applied SERVER-SIDE while baking the save (`buildEditedThreeMf` →
+   * `repairSingleMeshXml`): near-duplicate ("cracked") vertices are welded and degenerate/duplicate
+   * facets dropped, in place in the object's mesh XML. It is deliberately not a geometry replacement
+   * — repairing in place keeps every per-triangle paint attribute and the object's part volumes,
+   * which staging a replacement import would destroy. Repair is visually a no-op (it only merges
+   * coincident geometry and drops junk), so the editor marks the object and the change materialises
+   * on Save like any other edit. No-op for an object whose mesh is already clean.
+   */
+  repairedObjectIds: z.array(z.number().int()).max(200).optional(),
   /** Optional per-object-part filament overrides (material reassignment) for in-project objects. */
   partFilaments: z.array(sceneEditPartFilamentSchema).optional(),
   /** Optional per-part process overrides (process settings on individual parts of an object). */
@@ -686,28 +697,6 @@ export const saveArrangedThreeMfSchema = z.object({
   message: 'newVersion requires a base file'
 })
 export type SaveArrangedThreeMf = z.infer<typeof saveArrangedThreeMfSchema>
-
-/** Request the "Repair mesh" action (editor `POST /api/editor/repair-mesh`) on a stored 3MF. */
-export const repairLibraryMeshSchema = z.object({
-  fileId: z.string().trim().min(1),
-  /** Repair an archived version's content instead of the file's current content. Must belong to `fileId`. */
-  versionId: z.string().trim().min(1).optional()
-})
-export type RepairLibraryMesh = z.infer<typeof repairLibraryMeshSchema>
-
-/**
- * Outcome of a mesh repair. `repaired: false` means the mesh was already clean and no new version was
- * written (`file` is null) — the common case for BambuStudio-authored projects. The three counts are
- * what the repair changed (see the API's `three-mf-mesh-repair` module).
- */
-export const meshRepairResultSchema = z.object({
-  repaired: z.boolean(),
-  weldedVertices: z.number().int().nonnegative(),
-  degenerateTrianglesRemoved: z.number().int().nonnegative(),
-  duplicateTrianglesRemoved: z.number().int().nonnegative(),
-  file: z.object({ id: z.string(), name: z.string(), versionNumber: z.number().int() }).nullable()
-})
-export type MeshRepairResult = z.infer<typeof meshRepairResultSchema>
 
 export const createSlicingJobSchema = z.object({
   sourceFileId: z.string().trim().min(1),

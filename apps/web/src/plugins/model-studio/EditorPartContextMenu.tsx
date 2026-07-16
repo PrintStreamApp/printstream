@@ -45,8 +45,16 @@ export function EditorPartContextMenu({
       onClose={onClose}
       anchorEl={{ getBoundingClientRect: () => new DOMRect(contextMenu.x, contextMenu.y, 0, 0) }}
       placement="bottom-start"
+      // Keep the menu on-screen near an edge (flip + shift back into the viewport), and scroll if
+      // it is taller than the viewport, instead of clipping items off where they can't be clicked.
+      modifiers={[
+        { name: 'flip', options: { padding: 8 } },
+        { name: 'preventOverflow', options: { padding: 8 } }
+      ]}
       sx={{
         zIndex: (theme) => theme.zIndex.tooltip,
+        maxHeight: 'calc(100dvh - 16px)',
+        overflowY: 'auto',
         [`& .${listItemDecoratorClasses.root}`]: { minInlineSize: '1.75rem' },
         '& svg': { fontSize: '1.25rem' }
       }}

@@ -1,7 +1,8 @@
 /**
  * The printer-card metrics row: temperature readouts (nozzle — single or dual, bed, chamber) plus
  * print-speed, door, and duct chips. Each readout/chip is gated by the card's content settings and
- * live status; temperature and speed readouts deep-link into the controls dialog when permitted.
+ * live status; temperature, speed, and nozzle-changer readouts deep-link into the matching
+ * controls-dialog tab when permitted.
  * Extracted from PrinterCard to keep the card body render-focused.
  */
 import { Stack } from '@mui/joy'
@@ -22,6 +23,8 @@ export interface PrinterCardMetricsProps {
   canOpenControls: boolean
   onOpenTemperatureControls: () => void
   onOpenSpeedControls: () => void
+  /** Opens the controls dialog on the Nozzles (nozzle changer) tab. */
+  onOpenNozzleControls: () => void
   showChamberTemperature: boolean
   chamberTemperature: number | null
   chamberTarget: number | null
@@ -37,6 +40,7 @@ export function PrinterCardMetrics({
   canOpenControls,
   onOpenTemperatureControls,
   onOpenSpeedControls,
+  onOpenNozzleControls,
   showChamberTemperature,
   chamberTemperature,
   chamberTarget,
@@ -123,7 +127,7 @@ export function PrinterCardMetrics({
             ariaLabel={`Nozzle changer: ${summary.chipLabel}`}
             value={summary.chipLabel}
             tooltipTitle={tooltip}
-            onClick={canOpenControls ? onOpenTemperatureControls : undefined}
+            onClick={canOpenControls ? onOpenNozzleControls : undefined}
           />
         )
       })() : null}

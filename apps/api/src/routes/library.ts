@@ -72,6 +72,7 @@ import { printerManager } from '../lib/printer-manager.js'
 import { requireTenantOwnedConnectedPrinter } from '../lib/printer-access.js'
 import {
   buildProjectFilePrintCommand,
+  printerModelHasDualNozzles,
   getPrintSourceKind,
   getRemotePrintTarget,
   normalizePrintStartOptionsForPrinter,
@@ -1799,7 +1800,8 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
     nozzleOffsetCalibration: normalizedOptions.nozzleOffsetCalibration,
     timelapse: normalizedOptions.timelapse,
     useAms: parsed.data.useAms,
-    amsMapping: parsed.data.amsMapping
+    amsMapping: parsed.data.amsMapping,
+    dualNozzles: printerModelHasDualNozzles(printer.model)
   })
   const trackedJobId = await startTrackedPrintJob({
     printerId: printer.id,

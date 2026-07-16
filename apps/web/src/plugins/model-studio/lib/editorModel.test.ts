@@ -10,6 +10,7 @@ import {
   duplicateInstance,
   fillPlateFromScene,
   instanceFromStagedImport,
+  isObjectMarkedForRepair,
   replaceInstanceGeometry,
   seedEditorState,
   seedEmptyEditorState,
@@ -490,4 +491,41 @@ test('buildSceneEdit emits added parts only for placed objects; clone keeps them
 
   // No added parts -> the field is omitted entirely.
   assert.equal(buildSceneEdit(seedEmptyEditorState()).addedParts, undefined)
+})
+
+test('buildSceneEdit emits repairedObjectIds for a marked, placed object', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const object = instanceFromStagedImport(STAGED)
+  object.source = { kind: 'object' }
+  object.objectId = 12
+  state.plates[0]!.instances.push(object)
+  state.repairedObjectIds = [12]
+
+  assert.equal(isObjectMarkedForRepair(state, 12), true)
+  assert.equal(isObjectMarkedForRepair(state, 99), false)
+  assert.deepEqual(buildSceneEdit(state).repairedObjectIds, [12])
+})
+
+test('buildSceneEdit drops a repair mark whose object is gone or was replaced', () => {
+  // Marked but never placed (e.g. the object was deleted after marking): no dangling repair.
+  const orphaned: EditorState = seedEmptyEditorState()
+  orphaned.repairedObjectIds = [12]
+  assert.equal(buildSceneEdit(orphaned).repairedObjectIds, undefined)
+
+  // Marked, then replaced: the baked geometry is now the import, not the mesh the mark meant.
+  const replacedState: EditorState = seedEmptyEditorState()
+  const original = instanceFromStagedImport(STAGED)
+  original.source = { kind: 'object' }
+  original.objectId = 12
+  replacedState.plates[0]!.instances.push(replaceInstanceGeometry(original, { ...STAGED, importId: 'imp-2' }, 12))
+  replacedState.repairedObjectIds = [12]
+  assert.equal(buildSceneEdit(replacedState).repairedObjectIds, undefined)
+})
+
+test('cloneEditorState snapshots repair marks so undo restores them', () => {
+  const state: EditorState = seedEmptyEditorState()
+  state.repairedObjectIds = [12]
+  const snapshot = cloneEditorState(state)
+  state.repairedObjectIds.push(13)
+  assert.deepEqual(snapshot.repairedObjectIds, [12], 'the snapshot must not alias the live array')
 })

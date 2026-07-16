@@ -1,7 +1,7 @@
 /**
  * Right-click context menu for editor objects. Single object: duplicate / split /
- * assemble, replace from library or file, add part volumes (negative/modifier/blocker),
- * change material, object settings, centre / drop / reset / mirror transforms, move to
+ * assemble, rename, replace from library or file, repair mesh, add part volumes (negative/modifier/
+ * blocker), change material, object settings, centre / drop / reset / mirror transforms, move to
  * another plate, and delete. Multi-selection (the clicked object is a member): a reduced
  * bulk menu (BambuStudio-style) — duplicate, assemble, change material, set printable /
  * skip, object settings, move to plate, delete — each applied to the whole selection.
@@ -20,12 +20,14 @@ import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import CenterFocusStrongRoundedIcon from '@mui/icons-material/CenterFocusStrongRounded'
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
+import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRenameOutlineRounded'
 import DriveFileMoveRoundedIcon from '@mui/icons-material/DriveFileMoveRounded'
 import FlipRoundedIcon from '@mui/icons-material/FlipRounded'
 import MergeTypeRoundedIcon from '@mui/icons-material/MergeTypeRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import PrintDisabledRoundedIcon from '@mui/icons-material/PrintDisabledRounded'
+import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded'
 import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded'
 import ThreeSixtyRoundedIcon from '@mui/icons-material/ThreeSixtyRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
@@ -48,6 +50,8 @@ export interface EditorContextMenuProps {
    */
   selectionCount: number
   onDuplicate: (key: string) => void
+  /** Rename the object (single selection only) — the object list rows have no rename shortcut. */
+  onRename: (key: string) => void
   onSplitToObjects: (key: string) => void
   /** Whether the "Assemble N objects" item shows (a multi-selection includes this object). */
   canAssemble: boolean
@@ -55,8 +59,12 @@ export interface EditorContextMenuProps {
   onAssemble: () => void
   onReplaceFromLibrary: (key: string) => void
   onReplaceFromFile: (key: string) => void
-  /** In-project object (not an imported mesh) — gates the add-part-volume items. */
+  /** In-project object (not an imported mesh) — gates the add-part-volume + repair items. */
   isObject: boolean
+  /** Mark this object's mesh for repair on save (welds cracked vertices, drops junk facets). */
+  onRepairMesh: (key: string) => void
+  /** Already marked for repair this session — the item reports that instead of re-marking. */
+  isRepairMarked: boolean
   onAddPartVolume: (key: string, subtype: SceneEditAddedPartSubtype) => void
   /** Project materials for the "Change material" submenu; hidden when empty. */
   filamentOptions: ReadonlyArray<FilamentOption>
@@ -79,8 +87,9 @@ export interface EditorContextMenuProps {
 }
 
 export function EditorContextMenu({
-  contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onSplitToObjects, canAssemble,
-  assembleCount, onAssemble, onReplaceFromLibrary, onReplaceFromFile, isObject, onAddPartVolume,
+  contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onRename, onSplitToObjects, canAssemble,
+  assembleCount, onAssemble, onReplaceFromLibrary, onReplaceFromFile, isObject, onRepairMesh,
+  isRepairMarked, onAddPartVolume,
   filamentOptions, onChangeMaterial, onSetPrintable, onEditObjectSettings, onCenterOnPlate,
   onDropToBed, onResetRotation, onResetScale, onMirror, otherPlates, onMoveToPlate, onDelete
 }: EditorContextMenuProps) {
@@ -124,8 +133,18 @@ export function EditorContextMenu({
       onClose={onClose}
       anchorEl={{ getBoundingClientRect: () => new DOMRect(contextMenu.x, contextMenu.y, 0, 0) }}
       placement="bottom-start"
+      // Keep the menu on-screen when opened near an edge: flip to the other side and shift back
+      // inside the viewport instead of letting items spill off where they can't be clicked.
+      modifiers={[
+        { name: 'flip', options: { padding: 8 } },
+        { name: 'preventOverflow', options: { padding: 8 } }
+      ]}
       sx={{
         zIndex: (theme) => theme.zIndex.tooltip,
+        // A menu taller than the viewport (the full single-object menu with move-to-plate rows)
+        // scrolls rather than running its last items off the bottom edge.
+        maxHeight: 'calc(100dvh - 16px)',
+        overflowY: 'auto',
         // In a vertical menu Joy's ListItemDecorator only reserves height, not width, so
         // icons of differing glyph widths leave the labels ragged. Pin a fixed icon column
         // and a uniform icon size so every label starts at the same x.
@@ -174,6 +193,10 @@ export function EditorContextMenu({
             <ListItemDecorator><ContentCopyRoundedIcon /></ListItemDecorator>
             Duplicate
           </MenuItem>
+          <MenuItem onClick={() => { onClose(); onRename(key) }}>
+            <ListItemDecorator><DriveFileRenameOutlineRoundedIcon /></ListItemDecorator>
+            Rename…
+          </MenuItem>
           <MenuItem onClick={() => { onSplitToObjects(key); onClose() }}>
             <ListItemDecorator><CallSplitRoundedIcon /></ListItemDecorator>
             Split to objects
@@ -193,6 +216,12 @@ export function EditorContextMenu({
             <ListItemDecorator><SwapHorizRoundedIcon /></ListItemDecorator>
             Replace from file…
           </MenuItem>
+          {isObject && !multi && (
+            <MenuItem disabled={isRepairMarked} onClick={() => { onClose(); onRepairMesh(key) }}>
+              <ListItemDecorator><AutoFixHighRoundedIcon /></ListItemDecorator>
+              {isRepairMarked ? 'Mesh repair runs on save' : 'Repair mesh'}
+            </MenuItem>
+          )}
           {isObject && (
             <>
               <ListDivider />

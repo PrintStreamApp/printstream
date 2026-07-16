@@ -27,9 +27,12 @@ import {
   AMS_LITE_MIXED_TRAY_INDEX_OFFSET,
   bridgeUpdateBlocksPrinting,
   bridgeUpdateStatusSchema,
+  getPrinterControlCapabilities,
   getPrinterPrintStartOptions,
   formatBytes,
   trayIndexToAmsSlot,
+  VIRTUAL_TRAY_DEPUTY_ID,
+  VIRTUAL_TRAY_MAIN_ID,
   type PrintDispatchJob,
   type PrintFromLibrary,
   type PrintNozzleOffsetCalibrationMode,
@@ -49,7 +52,6 @@ import {
   uploadBridgeLibraryPlateToPrinterPath,
   uploadFileToPrinter
 } from './printer-ftp.js'
-import { resolveProjectFileMappingInfo, type ProjectFileMappingInfoFields } from './print-command-mapping-info.js'
 import { createSinglePlateThreeMf, readEntry } from './three-mf.js'
 import { plateSkipIdentifyIdsFromModelSettingsXml } from './three-mf-output.js'
 import { armPostStartObjectSkip } from './post-start-object-skip.js'
@@ -95,12 +97,8 @@ interface DispatchJobState {
    * `skip_objects` fallback for the same ids.
    */
   postStartSkipObjectIds: number[] | null
-  /**
-   * Slicer-parity `ams_mapping_info` / `nozzles_info` wire fields, resolved from the
-   * source 3MF's slice metadata at enqueue time (dual-nozzle plates only). Null fields
-   * are simply omitted from the start command. See `print-command-mapping-info.ts`.
-   */
-  mappingInfoFields: ProjectFileMappingInfoFields
+  /** Whether the target printer is dual-nozzle (drives external-tray encoding in `ams_mapping2`). */
+  dualNozzles: boolean
   status: DispatchStatus
   progressMessage: string
   uploadAttempt: number
@@ -262,13 +260,6 @@ class PrintDispatcher {
     // nozzle the plate never uses (H2D error 0300-4010). Prune to the plate's actual
     // filaments; no-op for multi-filament plates and fail-safe if the plate can't be read.
     const amsMapping = await resolvePlateAmsMapping(sourceKind, localPath, input.plate, input.amsMapping)
-    const mappingInfoFields = await resolveProjectFileMappingInfo({
-      sourceKind,
-      localPath,
-      plate: input.plate,
-      amsMapping,
-      status: printerManager.getStatus(printer.id)
-    })
     const postStartSkipObjectIds = await resolvePostStartSkipObjectIds(sourceKind, localPath, input.plate, input.skipObjects)
 
     const now = new Date()
@@ -307,7 +298,7 @@ class PrintDispatcher {
         amsMapping
       },
       postStartSkipObjectIds,
-      mappingInfoFields,
+      dualNozzles: printerModelHasDualNozzles(printer.model),
       status: 'queued',
       progressMessage: 'Waiting to send',
       uploadAttempt: 0,
@@ -793,14 +784,10 @@ export interface ProjectFilePrintCommandInput {
   useAms: boolean
   amsMapping?: number[] | null
   /**
-   * Slicer-parity `ams_mapping_info` entries (per-filament metadata + target
-   * nozzle) and `nozzles_info` (per-extruder geometry), resolved from the
-   * sliced 3MF via `resolveProjectFileMappingInfo`. Dual-nozzle plates only;
-   * omitted from the payload when null/empty. The AMS HT needs these to be
-   * routable — see `print-command-mapping-info.ts`.
+   * Whether the target printer is a dual-nozzle machine. Drives the external
+   * virtual-tray encoding in `ams_mapping2` (see {@link amsMapping2Entry}).
    */
-  amsMappingInfo?: Array<Record<string, unknown>> | null
-  nozzlesInfo?: Array<Record<string, unknown>> | null
+  dualNozzles: boolean
   /**
    * Instance `identify_id`s to exclude from the print, sent as the payload's
    * `skip_objects` array (what Bambu Handy sends; there is an is_support_partskip
@@ -811,29 +798,59 @@ export interface ProjectFilePrintCommandInput {
 }
 
 /**
- * Marks an `ams_mapping_2` entry as unmapped (BambuStudio uses `0xff` for both
- * fields). Distinguished from an external virtual tray (`ams_id` 254/255) by the
+ * Marks an `ams_mapping2` entry as unmapped (0xff in both fields).
+ * Distinguished from an external virtual tray (`ams_id` 254/255) by the
  * `slot_id`: virtual trays carry slot 0, unmapped entries carry 0xff.
  */
 const AMS_MAPPING_2_UNSET = 0xff
 
 /**
- * The v2 `ams_mapping_2` entry for a legacy global tray index. BambuStudio sends
- * this `{ams_id, slot_id}` form alongside the legacy index array on every print
- * (see `SelectMachineDialog::get_ams_mapping_result`), and H2C (Vortek rack)
- * firmware requires it to build its runtime AMS mapping table: a legacy-only
- * command starts printing but fails with 0701-8012 ("Failed to get AMS mapping
- * table") at the first filament change that actually fetches from the AMS.
- * Unused entries (-1 from plate pruning) become 0xff/0xff; external virtual
- * trays (254/255) keep their id with slot 0, matching BambuStudio.
- *
- * The AMS Lite Mixed band (24-27) is deliberately sent as unset: those indices
- * are ambiguous in reverse (`trayIndexToAmsSlot` reads them as regular unit 6),
- * and a v2 pair that contradicts the correct legacy index would be worse than
- * none — BambuStudio itself pairs real `ams_mapping` values with 0xff/0xff v2
- * entries in its SD-resend invalid case, so firmware tolerates the combination.
+ * The flat `ams_mapping` wire entry for a stored tray index. External virtual
+ * trays (254/255) become -1 on the wire: the flat array only carries physical
+ * tray indices, and the external selection rides in `ams_mapping2`. H2-family
+ * firmware rejects raw 254/255 in the flat array with 0700-8012 "Failed to get
+ * AMS mapping table" (verified by BambuStudio request-topic captures — see the
+ * bambuddy project's start_print notes — and matching BambuStudio's own
+ * `get_ams_mapping_result`, which -1s virtual trays before pushing v0).
  */
-function amsMapping2Entry(trayIndex: number): { ams_id: number; slot_id: number } {
+function flatAmsMappingEntry(trayIndex: number): number {
+  return trayIndex === VIRTUAL_TRAY_MAIN_ID || trayIndex === VIRTUAL_TRAY_DEPUTY_ID ? -1 : trayIndex
+}
+
+/**
+ * Whether a stored printer model string names a dual-nozzle machine, for the
+ * command builder's `dualNozzles` input. Unknown/unparseable models resolve to
+ * single-nozzle, which yields the conservative external-tray encoding.
+ */
+export function printerModelHasDualNozzles(model: string): boolean {
+  const parsed = printerModelSchema.safeParse(model)
+  return getPrinterControlCapabilities(parsed.success ? parsed.data : 'unknown').dualNozzles
+}
+
+/**
+ * The `ams_mapping2` entry for a stored tray index. The wire key has NO
+ * underscore before the 2 — verified from real BambuStudio request-topic
+ * captures (bambuddy); the `ams_mapping_2` spelling that appears in a
+ * BambuStudio *log statement* is silently ignored by firmware. H2-family
+ * firmware needs this v2 form to resolve AMS HT trays (the 128+ band): with a
+ * flat-only command the print starts, then fails 0701-8012 ("Failed to get AMS
+ * mapping table") at the first filament change that fetches from the HT.
+ *
+ * Encodings, matching capture-verified behavior:
+ * - regular slots `{unit, slot}`; AMS HT `{128+, 0}` (tray index IS the unit id)
+ * - unmapped (-1 from plate pruning) -> 0xff/0xff
+ * - external virtual trays: dual-nozzle machines keep the chosen 254/255
+ *   (deputy/main); single-nozzle machines always send 255 — their status
+ *   reports the external tray as 254, but firmware routes `ams_id: 254` to
+ *   AMS tray 0, so only VIRTUAL_TRAY_MAIN_ID is valid there
+ * - the AMS Lite Mixed band (24-27) is sent unset: ambiguous in reverse
+ *   (`trayIndexToAmsSlot` reads it as regular unit 6), and a contradicting
+ *   pair is worse than none; the flat entry still carries the correct index
+ */
+function amsMapping2Entry(trayIndex: number, dualNozzles: boolean): { ams_id: number; slot_id: number } {
+  if (trayIndex === VIRTUAL_TRAY_MAIN_ID || trayIndex === VIRTUAL_TRAY_DEPUTY_ID) {
+    return { ams_id: dualNozzles ? trayIndex : VIRTUAL_TRAY_MAIN_ID, slot_id: 0 }
+  }
   const liteMixedBand = trayIndex >= AMS_LITE_MIXED_TRAY_INDEX_OFFSET && trayIndex < AMS_LITE_MIXED_TRAY_INDEX_OFFSET + 4
   const slot = liteMixedBand ? null : trayIndexToAmsSlot(trayIndex)
   if (!slot) return { ams_id: AMS_MAPPING_2_UNSET, slot_id: AMS_MAPPING_2_UNSET }
@@ -847,10 +864,13 @@ function amsMapping2Entry(trayIndex: number): { ams_id: number; slot_id: number 
  * Object skipping rides in the payload's `skip_objects` array (see
  * {@link ProjectFilePrintCommandInput.skipObjects}).
  *
- * The AMS mapping is sent in both wire forms, mirroring what BambuStudio's
- * SD-card resend flow (the closest analog to our upload-then-start dispatch)
- * sends to every model: the legacy `ams_mapping` global-tray-index array plus
- * the v2 `ams_mapping_2` unit/slot pairs (see {@link amsMapping2Entry}).
+ * The AMS mapping is sent in both wire forms: the flat `ams_mapping` array
+ * (physical tray indices, virtual trays -1 — see {@link flatAmsMappingEntry})
+ * plus the `ams_mapping2` unit/slot pairs ({@link amsMapping2Entry}). This is
+ * the exact shape verified working on H2D/H2C hardware including AMS HT
+ * fetches; do not add speculative fields without a wire capture — the
+ * `ams_mapping_info`/`nozzles_info` names we once inferred from BambuStudio
+ * internals are not on the wire and firmware ignored them.
  */
 export function buildProjectFilePrintCommand(input: ProjectFilePrintCommandInput): Record<string, unknown> {
   const printPayload: Record<string, unknown> = {
@@ -879,14 +899,8 @@ export function buildProjectFilePrintCommand(input: ProjectFilePrintCommandInput
     task_id: input.submissionId
   }
   if (input.amsMapping && input.amsMapping.length > 0) {
-    printPayload.ams_mapping = input.amsMapping
-    printPayload.ams_mapping_2 = input.amsMapping.map(amsMapping2Entry)
-    if (input.amsMappingInfo && input.amsMappingInfo.length > 0) {
-      printPayload.ams_mapping_info = input.amsMappingInfo
-    }
-  }
-  if (input.nozzlesInfo && input.nozzlesInfo.length > 0) {
-    printPayload.nozzles_info = input.nozzlesInfo
+    printPayload.ams_mapping = input.amsMapping.map(flatAmsMappingEntry)
+    printPayload.ams_mapping2 = input.amsMapping.map((trayIndex) => amsMapping2Entry(trayIndex, input.dualNozzles))
   }
   if (input.skipObjects && input.skipObjects.length > 0) {
     printPayload.skip_objects = input.skipObjects
@@ -910,8 +924,7 @@ function buildPrintStartPayload(job: DispatchJobState): Record<string, unknown> 
     timelapse: job.options.timelapse,
     useAms: job.options.useAms,
     amsMapping: job.options.amsMapping,
-    amsMappingInfo: job.mappingInfoFields.amsMappingInfo,
-    nozzlesInfo: job.mappingInfoFields.nozzlesInfo,
+    dualNozzles: job.dualNozzles,
     skipObjects: job.postStartSkipObjectIds
   })
 }

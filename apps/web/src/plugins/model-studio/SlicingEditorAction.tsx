@@ -27,6 +27,9 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
   const isNewProject = props.isNewProject === true
   const bridgeId = typeof props.bridgeId === 'string' ? props.bridgeId : null
   const folderId = typeof props.folderId === 'string' ? props.folderId : null
+  const onSavedAs = typeof props.onSavedAs === 'function'
+    ? (props.onSavedAs as (file: { id: string; name: string }) => void)
+    : undefined
   const onApply = typeof props.onApply === 'function'
     ? (props.onApply as (edit: SceneEdit) => void)
     : null
@@ -92,6 +95,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             initialPlateIndex={initialPlateIndex}
             targetPrinterModel={targetPrinterModel}
             onApply={(edit) => { onApply(edit); closeEditor() }}
+            onSavedAs={onSavedAs}
             onClose={closeEditor}
             sliceConfig={sliceConfig}
             canSlice={canSlice}

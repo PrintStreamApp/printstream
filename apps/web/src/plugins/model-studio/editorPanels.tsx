@@ -41,7 +41,6 @@ import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
-import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'
 import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRenameOutlineRounded'
@@ -996,9 +995,6 @@ export function ModelList({
   onSelectPart,
   onObjectContextMenu,
   onPartContextMenu,
-  onRename,
-  onDuplicate,
-  onDelete,
   filamentColors,
   filamentOptions,
   onReassignFilament,
@@ -1031,9 +1027,6 @@ export function ModelList({
   onObjectContextMenu?: (key: string, position: { x: number; y: number }) => void
   /** Right-click on a part row: open the part context menu at the pointer. */
   onPartContextMenu?: (objectId: number, componentObjectId: number, position: { x: number; y: number }) => void
-  onRename: (key: string) => void
-  onDuplicate: (key: string) => void
-  onDelete: (key: string) => void
   filamentColors?: Record<number, string>
   filamentOptions?: FilamentOption[]
   onReassignFilament?: (targets: Array<{ objectId: number; componentObjectId: number }>, filamentId: number) => void
@@ -1135,21 +1128,6 @@ export function ModelList({
                     </IconButton>
                   </Tooltip>
                 )}
-                <Tooltip title="Rename">
-                  <IconButton size="sm" variant="plain" color="neutral" onClick={() => onRename(instance.key)} aria-label="Rename object">
-                    <DriveFileRenameOutlineRoundedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title="Duplicate">
-                  <IconButton size="sm" variant="plain" color="neutral" onClick={() => onDuplicate(instance.key)} aria-label="Duplicate model">
-                    <ContentCopyRoundedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title="Delete">
-                  <IconButton size="sm" variant="plain" color="danger" onClick={() => onDelete(instance.key)} aria-label="Delete model">
-                    <DeleteRoundedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
               </Stack>
             </ListItem>
             {showParts && instance.parts.map((part, index) => {

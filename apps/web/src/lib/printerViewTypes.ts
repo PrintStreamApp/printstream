@@ -9,7 +9,7 @@
  */
 import { type PrinterCommand } from '@printstream/shared'
 
-export type PrinterControlsDialogTab = 'printer' | 'speed' | 'temperature' | 'fans' | 'motion' | 'extruder'
+export type PrinterControlsDialogTab = 'printer' | 'speed' | 'temperature' | 'nozzles' | 'fans' | 'motion' | 'extruder'
 
 export type PrinterRecoveryLoadCommand =
   | Extract<PrinterCommand, { type: 'loadAmsFilament' }>

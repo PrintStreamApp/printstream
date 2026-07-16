@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { filamentPresetLabel } from './printersViewHelpers.js'
+import type { AmsUnit } from '@printstream/shared'
+import { amsUnitSlotSpan, filamentPresetLabel } from './printersViewHelpers.js'
 
 const BAMBU_RFID = '0F674662BC86478AA008E7CCAD3B3A2A'
 
@@ -27,4 +28,16 @@ test('filamentPresetLabel never prepends "Bambu" to the material fallback for no
 
 test('filamentPresetLabel still prepends "Bambu" to the material fallback for a scanned spool without a mapped preset', () => {
   assert.equal(filamentPresetLabel('GFUNKNOWN', 'PLA', null, { trayUuid: BAMBU_RFID }), 'Bambu PLA')
+})
+
+// amsUnitSlotSpan only reads slots.length, so a minimal fixture suffices.
+const unitWithSlots = (count: number): AmsUnit => ({ slots: new Array(count).fill({}) } as unknown as AmsUnit)
+
+test('amsUnitSlotSpan gives single-slot units (AMS HT) a two-column span so the header fits', () => {
+  assert.equal(amsUnitSlotSpan(unitWithSlots(1)), 2)
+})
+
+test('amsUnitSlotSpan spans multi-slot units by slot count, capped at four', () => {
+  assert.equal(amsUnitSlotSpan(unitWithSlots(4)), 4)
+  assert.equal(amsUnitSlotSpan(unitWithSlots(6)), 4)
 })

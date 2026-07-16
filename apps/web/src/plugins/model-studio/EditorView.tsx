@@ -118,7 +118,8 @@ import {
   type EditorPause,
   type EditorInstance,
   type EditorPlate,
-  type EditorState
+  type EditorState,
+  isObjectMarkedForRepair
 } from './lib/editorModel'
 import { useSidebarResize } from './lib/useSidebarResize'
 import {
@@ -179,6 +180,7 @@ import {
   type PlacementWarning,
   type SelectedTransform
 } from './editorGeometry'
+import { useEditorKeyboardShortcuts } from './useEditorKeyboardShortcuts'
 import {
   AddModelMenu,
   GizmoToolbar,
@@ -270,6 +272,8 @@ interface EditorViewProps {
   bridgeId?: string | null
   /** Called after a successful save with the resulting library file. */
   onSaved?: (file: { id: string; name: string }) => void
+  /** Called after a Save As (new file) so the host re-opens the editor on it. */
+  onSavedAs?: (file: { id: string; name: string }) => void
   onClose: () => void
   /**
    * Per-object override access (only present when launched from the slice dialog).
@@ -321,6 +325,7 @@ function EditorView({
   folderId = null,
   bridgeId = null,
   onSaved,
+  onSavedAs,
   onClose,
   sliceConfig,
   canSlice = false,
@@ -2694,6 +2699,28 @@ function EditorView({
    * import so the save bakes it in as a `<component>` with the Bambu subtype. The
    * part is selected immediately so the gizmo can position it.
    */
+  /**
+   * Mark the right-clicked object's mesh for repair on save. The repair itself runs server-side
+   * while baking (`SceneEdit.repairedObjectIds`), where it can rewrite the mesh in place and keep
+   * the object's paint and part volumes — so there is nothing to apply to the local scene, and
+   * nothing to see: welding cracked vertices and dropping junk facets is visually a no-op. Marking
+   * is the whole edit, which is why it just records history and reports what will happen.
+   */
+  const handleRepairMesh = useCallback((key: string) => {
+    const state = stateRef.current
+    const plate = state?.plates.find((entry) => entry.index === activePlateIndex)
+    const instance = plate?.instances.find((entry) => entry.key === key)
+    if (!state || !instance) return
+    if (instance.source.kind !== 'object') {
+      toast.error('Save the project first, then repair this imported model.')
+      return
+    }
+    if (isObjectMarkedForRepair(state, instance.objectId)) return
+    recordHistoryRef.current?.()
+    state.repairedObjectIds = [...(state.repairedObjectIds ?? []), instance.objectId]
+    toast.success('Mesh repair will run for this object when you save.')
+  }, [activePlateIndex, recordHistoryRef])
+
   const handleAddPartVolume = useCallback(async (key: string, subtype: SceneEditAddedPartSubtype) => {
     const state = stateRef.current
     const plate = state?.plates.find((entry) => entry.index === activePlateIndex)
@@ -2996,6 +3023,59 @@ function EditorView({
     setSelectedKey((current) => (current && keySet.has(current) ? null : current))
     setExtraSelectedKeys((current) => current.filter((entry) => !keySet.has(entry)))
   }, [activePlateIndex, updatePlates, selectionFor])
+
+  /** Select every object on the active plate (Ctrl/Cmd+A) — object mode, so part selection clears. */
+  const handleSelectAllObjects = useCallback(() => {
+    const keys = activePlateRef.current?.instances.map((instance) => instance.key) ?? []
+    if (keys.length === 0) return
+    setSelectedKey(keys[0]!)
+    setExtraSelectedKeys(keys.slice(1))
+    setPartSelection((current) => (current ? null : current))
+    setSelectedBakedPart((current) => (current ? null : current))
+    objectAnchorKeyRef.current = keys[0]!
+  }, [])
+
+  /** Paste cloned instances onto the active plate at free spots, selecting them — one undoable step. */
+  const handlePasteInstances = useCallback((instances: EditorInstance[]) => {
+    if (instances.length === 0) return
+    let lastKey: string | null = null
+    updatePlates((plates) =>
+      plates.map((plate) => {
+        if (plate.index !== activePlateIndex) return plate
+        let next = plate
+        for (const instance of instances) {
+          const spot = findFreePlatePosition(next)
+          instance.position.set(spot.x, spot.y, instance.position.z)
+          lastKey = instance.key
+          next = { ...next, instances: [...next.instances, instance] }
+        }
+        return next
+      })
+    )
+    if (lastKey) selectExclusive(lastKey)
+  }, [activePlateIndex, updatePlates, selectExclusive])
+
+  // The whole selection (primary + multi-select extras), kept in a ref for the keyboard hook.
+  const selectionKeysRef = useRef<string[]>([])
+  selectionKeysRef.current = selectedKey ? [selectedKey, ...extraSelectedKeys] : []
+  // Shortcuts are live once the editable scene has mounted (the typing guard in the hook keeps them
+  // out of form fields; the gcode preview is a separate component, so there is no preview mode here).
+  const shortcutsEnabledRef = useRef(false)
+  shortcutsEnabledRef.current = sceneReady
+  useEditorKeyboardShortcuts({
+    enabledRef: shortcutsEnabledRef,
+    selectedKeyRef,
+    activePlateRef,
+    selectionKeysRef,
+    onDuplicate: handleDuplicate,
+    onDelete: handleDelete,
+    onSelectAll: handleSelectAllObjects,
+    onClearSelection: () => selectExclusive(null),
+    onPasteInstances: handlePasteInstances,
+    undoRef,
+    redoRef,
+    setGizmoModeRef
+  })
 
   /**
    * Move an instance — or, when it belongs to the multi-selection, the whole selection —
@@ -3513,6 +3593,7 @@ function EditorView({
     saveAsBridgeId,
     onApply,
     onSaved,
+    onSavedAs,
     onClose,
     confirm
   })
@@ -3997,9 +4078,6 @@ function EditorView({
                       onSelectPart={handleSelectPart}
                       onObjectContextMenu={handleObjectRowContextMenu}
                       onPartContextMenu={handlePartRowContextMenu}
-                      onRename={handleRenameObject}
-                      onDuplicate={handleDuplicate}
-                      onDelete={handleDelete}
                       filamentColors={filamentColors}
                       filamentOptions={filamentOptions}
                       onReassignFilament={filamentOptions.length > 0 ? reassignFilament : undefined}
@@ -4238,6 +4316,7 @@ function EditorView({
             onClose={() => setContextMenu(null)}
             selectionCount={selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key) ? extraSelectedKeys.length + 1 : 1}
             onDuplicate={handleDuplicate}
+            onRename={(key) => { void handleRenameObject(key) }}
             onSplitToObjects={(key) => { void handleSplitToObjects(key) }}
             canAssemble={extraSelectedKeys.length > 0 && (selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key))}
             assembleCount={extraSelectedKeys.length + 1}
@@ -4245,6 +4324,12 @@ function EditorView({
             onReplaceFromLibrary={(key) => { setReplaceTargetKey(key); setLibraryPickerOpen(true) }}
             onReplaceFromFile={(key) => { setReplaceTargetKey(key); fileInputRef.current?.click() }}
             isObject={activePlate?.instances.find((entry) => entry.key === contextMenu.key)?.source.kind === 'object'}
+            onRepairMesh={handleRepairMesh}
+            isRepairMarked={(() => {
+              const instance = activePlate?.instances.find((entry) => entry.key === contextMenu.key)
+              const state = stateRef.current
+              return Boolean(state && instance && isObjectMarkedForRepair(state, instance.objectId))
+            })()}
             onAddPartVolume={(key, subtype) => { void handleAddPartVolume(key, subtype) }}
             filamentOptions={filamentOptions}
             onChangeMaterial={(filamentId) => reassignSelectionFilament(contextMenu.key, filamentId)}

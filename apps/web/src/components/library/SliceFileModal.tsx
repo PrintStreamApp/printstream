@@ -135,6 +135,7 @@ export function SliceFileModal({
   flowCopy,
   onBack,
   onClose,
+  onSavedAs,
   onSubmit
 }: {
   file: LibraryFile
@@ -168,6 +169,8 @@ export function SliceFileModal({
    */
   onBack?: () => void
   onClose: () => void
+  /** After a "Save as" in the editor: re-open the editor on the newly-created file (`file.id` changes). */
+  onSavedAs?: (file: { id: string; name: string }) => void
   onSubmit: (input: SliceFileSubmitInput, action: SliceFileSubmitAction, options?: { keepDialogOpen?: boolean }) => void
 }) {
   const navigate = useNavigate()
@@ -1035,6 +1038,7 @@ export function SliceFileModal({
     hasPlateObjects,
     canEditSettings: Boolean(selectedProcessProfile && selectedSlicerTargetId),
     onEditObjectSettings: () => setPerObjectDialogOpen(true),
+    onSavedAs,
     onClose
   }
   // Simple mode is gone for the library flow: slicing opens the full 3D editor

@@ -155,16 +155,18 @@ export function AmsUnitRow({
     >
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
-          <Typography level="body-xs" textColor="text.tertiary">AMS {amsUnitLetter(unit.unitId)}</Typography>
+          {/* Truncate the unit label rather than letting it wrap under the
+              readouts — narrow (single-slot) unit cards have no vertical room. */}
+          <Typography level="body-xs" textColor="text.tertiary" noWrap>AMS {amsUnitLetter(unit.unitId)}</Typography>
         </Stack>
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minHeight: '1rem' }}>
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minHeight: '1rem', flexShrink: 0 }}>
           {unit.temperature != null && (
-            <Typography level="body-xs" textColor="text.tertiary">
+            <Typography level="body-xs" textColor="text.tertiary" noWrap>
               {`${unit.temperature.toFixed(0)}°`}
             </Typography>
           )}
           {unit.humidityPercent != null ? (
-            <Typography level="body-xs" textColor="text.tertiary">
+            <Typography level="body-xs" textColor="text.tertiary" noWrap>
               {`${Math.round(unit.humidityPercent)}% RH`}
             </Typography>
           ) : unit.humidityLevel != null ? (
@@ -173,7 +175,7 @@ export function AmsUnitRow({
               size="sm"
               title={`Humidity level ${unit.humidityLevel}/5 — ${humidityLevelLabel(unit.humidityLevel)} (older AMS units do not report a percentage).`}
             >
-              <Typography level="body-xs" textColor="text.tertiary">
+              <Typography level="body-xs" textColor="text.tertiary" noWrap>
                 {`Lv ${unit.humidityLevel}/5`}
               </Typography>
             </Tooltip>

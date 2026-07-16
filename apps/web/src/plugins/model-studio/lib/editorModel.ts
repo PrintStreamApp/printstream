@@ -201,6 +201,16 @@ export interface EditorState {
    */
   addedParts?: Record<number, EditorAddedPart[]>
   /**
+   * In-project objects the user marked for mesh repair this session (right-click →
+   * "Repair mesh"), by objectId. The repair itself runs SERVER-SIDE while baking the save
+   * (`SceneEdit.repairedObjectIds` → `three-mf-mesh-repair`), so there is nothing to apply
+   * to the local scene: repair only merges coincident vertices and drops degenerate/duplicate
+   * facets, which is visually a no-op. Marking is therefore the whole client-side edit — it
+   * participates in undo/redo via {@link cloneEditorState} and is emitted by
+   * {@link buildSceneEdit}. Object-level (shared by every instance), like {@link EditorState.addedParts}.
+   */
+  repairedObjectIds?: number[]
+  /**
    * Per-PART process overrides made this session (process settings on one part of an object,
    * separate from the object's overall overrides), keyed by {@link supportPaintKey}
    * (`objectId:componentObjectId`). Each value is the desired override map for that part; an empty
@@ -726,8 +736,34 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     pauses: collectPauses(state),
     objectNames: collectObjectNames(state),
     addedParts: collectAddedParts(state),
-    meshReplacements: collectMeshReplacements(state)
+    meshReplacements: collectMeshReplacements(state),
+    repairedObjectIds: collectRepairedObjectIds(state)
   }
+}
+
+/**
+ * Emit the objects marked for mesh repair, dropped to those that still have a placed instance —
+ * marking an object and then deleting it must not ship a dangling repair. An object replaced this
+ * session is skipped too: its geometry is now import-backed, so the original mesh the mark referred
+ * to is not what gets baked.
+ */
+function collectRepairedObjectIds(state: EditorState): SceneEdit['repairedObjectIds'] {
+  if (!state.repairedObjectIds || state.repairedObjectIds.length === 0) return undefined
+  const placedObjectIds = new Set<number>()
+  const replacedObjectIds = new Set<number>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
+      else if (instance.source.replacedObjectId != null) replacedObjectIds.add(instance.source.replacedObjectId)
+    }
+  }
+  const ids = state.repairedObjectIds.filter((id) => placedObjectIds.has(id) && !replacedObjectIds.has(id))
+  return ids.length > 0 ? ids : undefined
+}
+
+/** Whether an object is already marked for mesh repair on save. */
+export function isObjectMarkedForRepair(state: EditorState, objectId: number): boolean {
+  return (state.repairedObjectIds ?? []).includes(objectId)
 }
 
 /**
@@ -1157,6 +1193,7 @@ export function cloneEditorState(state: EditorState): EditorState {
         )
       }
       : {}),
+    ...(state.repairedObjectIds ? { repairedObjectIds: [...state.repairedObjectIds] } : {}),
     ...(state.addedParts
       ? {
         addedParts: Object.fromEntries(
