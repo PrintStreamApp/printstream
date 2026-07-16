@@ -232,7 +232,7 @@ export function formatNozzleDiameterIssue(issue: NozzleDiameterCompatibilityIssu
   const nozzleLabel = formatNozzleLabel(issue.extruderId, 'long', nozzleCount) ?? 'Required nozzle'
   const required = formatNozzleDiameterLabel(issue.requiredDiameter) ?? issue.requiredDiameter
   if (!issue.selectedDiameter) {
-    return `${nozzleLabel}: select the installed nozzle size (${required} required)`
+    return `${nozzleLabel}: installed size unknown (sliced for ${required})`
   }
   const selected = formatNozzleDiameterLabel(issue.selectedDiameter) ?? issue.selectedDiameter
   return `${nozzleLabel}: sliced for ${required}, printer is set to ${selected}`

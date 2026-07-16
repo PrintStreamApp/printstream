@@ -12,7 +12,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Autocomplete, Box, Button, DialogActions, DialogTitle, FormControl, FormLabel, Input, Stack, Textarea, Typography
+  Alert, Box, Button, DialogActions, DialogTitle, FormControl, FormLabel, Input, Stack, Textarea, Typography
 } from '@mui/joy'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import { useQuery } from '@tanstack/react-query'
@@ -20,6 +20,7 @@ import { extractErrorMessage, normalizeFilamentFamily, type FilamentSpool, type 
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { ColorSwatchPicker } from '../../components/ColorSwatchPicker'
+import { DeferredKeyboardAutocomplete } from '../../components/DeferredKeyboardAutocomplete'
 import { apiFetch } from '../../lib/apiClient'
 import { COMMON_FILAMENT_COLOR_SWATCHES, commonFilamentColorName, resolveFilamentColorSwatches } from '../../lib/filamentColor'
 import { slicingProfilesQueryOptions } from '../../lib/slicingProfilesQuery'
@@ -95,7 +96,7 @@ function FieldAutocomplete({
   placeholder?: string
 }) {
   return (
-    <Autocomplete
+    <DeferredKeyboardAutocomplete
       freeSolo
       forcePopupIcon
       popupIcon={<ArrowDropDownIcon />}

@@ -1,9 +1,13 @@
 /**
  * Composer control for support-message attachments: an "Attach files" button
- * plus a chip per picked file (spinner while uploading, delete to remove,
- * danger + tooltip when an upload failed). Purely presentational over
+ * plus a chip per picked file (upload progress while uploading, delete to
+ * remove, danger + tooltip when an upload failed). Purely presentational over
  * `useSupportAttachmentDrafts`, so the help dialog and both conversation
  * composers stay consistent.
+ *
+ * Progress is determinate because attachments can be large enough to take
+ * minutes; an indeterminate spinner would leave the user unable to tell a slow
+ * upload from a stuck one.
  */
 import { useRef } from 'react'
 import { Button, Chip, ChipDelete, CircularProgress, Stack, Tooltip } from '@mui/joy'
@@ -31,12 +35,23 @@ export function SupportAttachmentsField({
             variant="soft"
             color={draft.status === 'error' ? 'danger' : 'neutral'}
             startDecorator={draft.status === 'uploading'
-              ? <CircularProgress size="sm" sx={{ '--CircularProgress-size': '14px' }} />
+              ? (
+                <CircularProgress
+                  size="sm"
+                  // Indeterminate until the first chunk lands, so opening the
+                  // session does not read as a stalled 0%.
+                  determinate={draft.progress > 0}
+                  value={Math.round(draft.progress * 100)}
+                  sx={{ '--CircularProgress-size': '14px' }}
+                />
+              )
               : <InsertDriveFileOutlinedIcon fontSize="small" />}
             endDecorator={<ChipDelete disabled={disabled} onDelete={() => drafts.remove(draft.key)} />}
             sx={{ maxWidth: 240, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }}
           >
-            {draft.file.name} ({formatBytes(draft.file.size)})
+            {draft.file.name} ({draft.status === 'uploading' && draft.progress > 0
+              ? `${Math.round(draft.progress * 100)}%`
+              : formatBytes(draft.file.size)})
           </Chip>
         )
         return draft.status === 'error'

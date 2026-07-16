@@ -160,7 +160,7 @@ export function buildBridgeUpdateSummary(bridge: BridgeVersionMetadata, options:
     runnerAbiVersion: bridge.runnerAbiVersion ?? null,
     lastCheckedAt: bridge.lastUpdateCheckAt?.toISOString() ?? null,
     lastError: bridge.lastUpdateError ?? null,
-    manualUpdateCommand: resolveManualUpdateCommand(status, bridge.runnerAbiVersion ?? null)
+    manualUpdateCommand: resolveManualUpdateCommand(status, bridge.runnerAbiVersion ?? null, current)
   }
 }
 
@@ -212,14 +212,35 @@ function isStandaloneRunnerAbi(runnerAbiVersion: string | null | undefined): boo
   return runnerAbiVersion?.startsWith('sea-') === true
 }
 
-function resolveManualUpdateCommand(status: BridgeUpdateStatus, runnerAbiVersion: string | null): string | null {
+function resolveManualUpdateCommand(status: BridgeUpdateStatus, runnerAbiVersion: string | null, currentBuild: BridgeBuild | null): string | null {
   if (isStandaloneRunnerAbi(runnerAbiVersion)) {
     if (status === 'runnerUpdateRequired' || status === 'updateHeldBack') return 'printstream-bridge update apply'
     return null
   }
   if (status === 'runnerUpdateRequired') return 'docker compose pull bridge && docker compose up -d bridge'
   if (status === 'imageUpdateRequired') return 'docker compose build bridge && docker compose up -d bridge'
+  // `updateAvailable` on a Docker bridge is only self-serviceable when the
+  // promoted build publishes an app bundle this bridge can activate; otherwise
+  // (no bundle published, or an image-pull-only bridge) the in-app "Update
+  // bridge" action can only answer "pull manually" — surface the command up
+  // front so the operator is not sent through a doomed click to learn it.
+  if (status === 'updateAvailable' && !dockerBridgeCanSelfApply(currentBuild, runnerAbiVersion)) {
+    return 'docker compose pull bridge && docker compose up -d bridge'
+  }
   return null
+}
+
+/**
+ * Whether a Docker bridge can self-apply the promoted build in place. Mirrors
+ * the exact runner-ABI gate in the bridge's bundle driver
+ * (`apps/bridge/src/update-driver-docker-bundle.ts`): a bundle only installs
+ * onto a runner whose ABI matches the bundle's exactly, and bare-ABI bridges
+ * (combined-image role, source runs) never run the bundle driver at all.
+ */
+function dockerBridgeCanSelfApply(build: BridgeBuild | null, runnerAbiVersion: string | null): boolean {
+  if (!build?.bundle || !runnerAbiVersion) return false
+  const requiredAbi = build.bundle.minimumRunnerAbiVersion ?? build.minimumRunnerAbiVersion
+  return requiredAbi != null && requiredAbi === runnerAbiVersion
 }
 
 function readCurrentBridgeBuildPointer(releasesDir: string): CurrentBridgeBuildPointer | null {

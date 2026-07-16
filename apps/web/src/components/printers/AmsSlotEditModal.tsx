@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Autocomplete, AutocompleteOption, Button, ButtonGroup, Divider, FormControl, FormLabel, IconButton, Input, ListItemContent, Menu, MenuItem, ModalDialog, Option, Select, Sheet, Stack, Typography
+  AutocompleteOption, Button, ButtonGroup, Divider, FormControl, FormLabel, IconButton, Input, ListItemContent, Menu, MenuItem, ModalDialog, Option, Select, Sheet, Stack, Typography
 } from '@mui/joy'
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -28,6 +28,7 @@ import {
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
 import { DialogSection } from '../DialogSection'
+import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ColorSwatchPicker } from '../ColorSwatchPicker'
 import { FilamentChangeProgressPanel } from './FilamentChangeProgressPanel'
@@ -545,7 +546,7 @@ export function AmsSlotEditModal({
                 />
                 <FormControl>
                   <FormLabel>Bambu preset</FormLabel>
-                  <Autocomplete
+                  <DeferredKeyboardAutocomplete
                     options={presetOptions}
                     value={selectedPresetOption}
                     onChange={(_event, value) => {

@@ -372,9 +372,13 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
   const lastUpdateLabel = lastUpdateResult?.message ?? null
   const updateActionPending = checkBridgeUpdate.isPending || startBridgeUpdate.isPending
   const bridgeActionPending = renameBridge.isPending || removeBridge.isPending || testBridge.isPending || updateActionPending
+  // A manual command on `updateAvailable` means this bridge updates by image
+  // pull (see the API's bridge-update-policy) — the in-app update action could
+  // only re-answer "pull manually", so keep the button on "Check for updates".
   const canStartBridgeUpdate = bridge.update.status !== 'current' &&
     bridge.update.status !== 'imageUpdateRequired' &&
-    bridge.update.status !== 'runnerUpdateRequired'
+    bridge.update.status !== 'runnerUpdateRequired' &&
+    !(bridge.update.status === 'updateAvailable' && bridge.update.manualUpdateCommand)
   const printerLabel = bridge.printerCount === 1 ? '1 printer' : `${bridge.printerCount} printers`
   const attachedPrinterLabel = bridge.printerCount === 1 ? '1 attached printer will be unassigned.' : `${bridge.printerCount} attached printers will be unassigned.`
 
@@ -559,7 +563,14 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
               {testError && <Alert color="danger">{testError}</Alert>}
               {updateError && <Alert color="danger">{updateError}</Alert>}
               {bridge.update.lastError && <Alert color="warning">{bridge.update.lastError}</Alert>}
-              {bridge.update.manualUpdateCommand && <Alert color="warning">Manual bridge update required: {bridge.update.manualUpdateCommand}</Alert>}
+              {bridge.update.manualUpdateCommand && (
+                <Alert color="warning">
+                  {bridge.update.status === 'updateAvailable'
+                    ? 'This bridge updates by pulling a new image on the bridge host: '
+                    : 'Manual bridge update required: '}
+                  {bridge.update.manualUpdateCommand}
+                </Alert>
+              )}
               {lastTestLabel && <Alert color="success">{lastTestLabel}</Alert>}
               {lastUpdateLabel && <Alert color="neutral">{lastUpdateLabel}</Alert>}
             </Stack>

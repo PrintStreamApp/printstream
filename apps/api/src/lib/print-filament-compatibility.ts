@@ -61,10 +61,10 @@ export function assertLibraryPrintCompatibilityForIndex(
   assertCompatiblePrinterModel(index.compatiblePrinterModels, input.printerModel)
   assertPrinterHardwareCompatibility(index, input)
   const issues = getLibraryPrintCompatibilityIssues(index, input)
-  const hardIssues = issues.filter((issue) => issue.nozzleMismatch)
-  if (hardIssues.length > 0) {
-    throw conflict(formatCompatibilityMessage(hardIssues))
-  }
+  // Nozzle-mismatch issues are overridable too: the tray→nozzle binding comes
+  // from status parsing that can be wrong (H2D AMS/nozzle parsing is unverified
+  // against live hardware), so a confirmed `allowIncompatibleFilament` must be
+  // able to dispatch a physically-correct setup the parser misreads.
   if (input.allowIncompatibleFilament || issues.length === 0) return
   throw conflict(formatCompatibilityMessage(issues))
 }
@@ -128,19 +128,19 @@ function assertPrinterHardwareCompatibility(
   const requiredNozzleDiameters = buildRequiredNozzleDiametersByExtruder(plate.filaments, plate.nozzleSizes)
   if (requiredNozzleDiameters.size === 0) return
   const effectiveNozzleDiameters = resolvePrinterNozzleDiameters(input.printerStatus, input.currentNozzleDiameters)
-  if (effectiveNozzleDiameters.length === 0) {
-    throw conflict('Select the printer\'s installed nozzle size in the print dialog before dispatching this file.')
-  }
 
+  // An undetected/unset diameter is "unknown", not "incompatible": the status
+  // parser can fail to populate an extruder's diameter (seen on H2D), and
+  // refusing a valid print because *we* could not detect the nozzle is the
+  // wrong default. Only a positively conflicting diameter blocks dispatch;
+  // the web dialog still warns on unknowns so the user can fix the setting.
   const issues = findNozzleDiameterCompatibilityIssues(requiredNozzleDiameters, effectiveNozzleDiameters)
+    .filter((issue) => issue.selectedDiameter !== null)
   if (issues.length === 0) return
 
   const details = issues.map((issue) => {
     const nozzleLabel = formatNozzleLabel(issue.extruderId, 'long') ?? 'required nozzle'
     const requiredDiameter = formatNozzleDiameterLabel(issue.requiredDiameter) ?? issue.requiredDiameter
-    if (!issue.selectedDiameter) {
-      return `${nozzleLabel}: select the installed nozzle size (${requiredDiameter} required)`
-    }
     const selectedDiameter = formatNozzleDiameterLabel(issue.selectedDiameter) ?? issue.selectedDiameter
     return `${nozzleLabel}: sliced for ${requiredDiameter}, printer is set to ${selectedDiameter}`
   })

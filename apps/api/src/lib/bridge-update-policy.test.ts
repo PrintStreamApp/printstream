@@ -185,6 +185,48 @@ test('buildBridgeUpdateSummary flags fingerprint mismatches as update available'
     assert.equal(summary.status, 'updateAvailable')
     assert.equal(summary.currentReleaseFingerprint, OTHER_FP)
     assert.equal(summary.latestBuildRevision, 'abc123def456')
+    // No app bundle is published for the promoted build, so this Docker bridge
+    // cannot self-apply: the pull command must be surfaced up front (issue #50).
+    assert.equal(summary.manualUpdateCommand, 'docker compose pull bridge && docker compose up -d bridge')
+  } finally {
+    await rm(releasesDir, { recursive: true, force: true })
+  }
+})
+
+test('buildBridgeUpdateSummary omits the manual command when a matching app bundle is published', async () => {
+  const releasesDir = await mkdtemp(path.join(tmpdir(), 'bridge-builds-'))
+  try {
+    await writePointer(releasesDir)
+    await writeFile(path.join(releasesDir, `bridge-${FP.slice(0, 12)}.release.json`), JSON.stringify(bundleFragment()), 'utf8')
+
+    // The promoted build ships an app bundle for this bridge's exact runner
+    // ABI, so the in-app "Update bridge" action self-applies — no manual step.
+    const selfApplying = buildBridgeUpdateSummary({
+      releaseFingerprint: OTHER_FP,
+      protocolVersion: 1,
+      runnerAbiVersion: 'node22-ffmpeg7-v1'
+    }, { releasesDir })
+    assert.equal(selfApplying.status, 'updateAvailable')
+    assert.equal(selfApplying.manualUpdateCommand, null)
+
+    // A bridge on a different exact ABI cannot activate that bundle (the
+    // bridge's bundle driver requires an exact match), so it gets the command.
+    const abiMismatch = buildBridgeUpdateSummary({
+      releaseFingerprint: OTHER_FP,
+      protocolVersion: 1,
+      runnerAbiVersion: 'node22.22.3-ffmpeg7-v1'
+    }, { releasesDir })
+    assert.equal(abiMismatch.status, 'updateAvailable')
+    assert.equal(abiMismatch.manualUpdateCommand, 'docker compose pull bridge && docker compose up -d bridge')
+
+    // Standalone bridges self-update their binary; never show a Docker command.
+    const standalone = buildBridgeUpdateSummary({
+      releaseFingerprint: OTHER_FP,
+      protocolVersion: 1,
+      runnerAbiVersion: 'sea-node22-v1'
+    }, { releasesDir })
+    assert.equal(standalone.status, 'updateAvailable')
+    assert.equal(standalone.manualUpdateCommand, null)
   } finally {
     await rm(releasesDir, { recursive: true, force: true })
   }

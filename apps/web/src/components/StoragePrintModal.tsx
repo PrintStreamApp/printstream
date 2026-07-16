@@ -441,12 +441,20 @@ export function StoragePrintModal({
                 {mappingCapable && hardCompatibilityIssues.length > 0 && (
                   <Alert color="danger" variant="soft">
                     <Stack spacing={1}>
-                      <Typography level="title-sm">Tray assignment must be fixed</Typography>
+                      <Typography level="title-sm">Tray nozzle mismatch detected</Typography>
+                      <Typography level="body-sm">
+                        One or more selected trays appear bound to the wrong nozzle for this sliced file. Pick a tray on the matching nozzle, or confirm below to print anyway if the nozzle assignment shown is wrong.
+                      </Typography>
                       {hardCompatibilityIssues.map((issue) => (
                         <Typography key={issue.filamentId} level="body-xs">
                           {formatStorageMappedCompatibilityIssue(issue, status?.nozzles.length ?? null)}
                         </Typography>
                       ))}
+                      <Checkbox
+                        label="Print anyway with the current tray assignments"
+                        checked={allowIncompatibleFilament}
+                        onChange={(event) => setAllowIncompatibleFilament(event.target.checked)}
+                      />
                     </Stack>
                   </Alert>
                 )}
@@ -459,11 +467,15 @@ export function StoragePrintModal({
                           {formatStorageMappedCompatibilityIssue(issue, status?.nozzles.length ?? null)}
                         </Typography>
                       ))}
-                      <Checkbox
-                        label="Print anyway with the current tray assignments"
-                        checked={allowIncompatibleFilament}
-                        onChange={(event) => setAllowIncompatibleFilament(event.target.checked)}
-                      />
+                      {/* The nozzle-mismatch alert above renders the same confirm
+                          checkbox; never show two bound to one state. */}
+                      {hardCompatibilityIssues.length === 0 && (
+                        <Checkbox
+                          label="Print anyway with the current tray assignments"
+                          checked={allowIncompatibleFilament}
+                          onChange={(event) => setAllowIncompatibleFilament(event.target.checked)}
+                        />
+                      )}
                     </Stack>
                   </Alert>
                 )}
@@ -518,7 +530,7 @@ export function StoragePrintModal({
             loading={submitting}
             disabled={
               (mappingCapable && !allMappingsComplete)
-              || hardCompatibilityIssues.length > 0
+              || (hardCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
               || (softCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
               || (!mappingCapable && automaticCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
             }

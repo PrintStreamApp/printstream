@@ -54,6 +54,8 @@ services:
       API_PORT: 4000
       DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/printstream?schema=public}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:8080}
+      # Other durable stores default to siblings of this path, so it must stay
+      # on the mounted volume rather than the container filesystem.
       LIBRARY_DIR: /data/library
       # Bridge release artifacts (published by CI, promoted by deploys) live in
       # the repo checkout and are bind-mounted so the API can serve them.

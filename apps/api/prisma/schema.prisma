@@ -1392,12 +1392,17 @@ model SupportPendingEmail {
   @@index([conversationId, recipientSide])
 }
 
-/// A file attached to a support message (cloud-only). Bytes live in the row —
-/// attachments are small (capped per file/message at the route boundary) and
-/// platform-wide durable user data, so they cascade-delete with the
-/// conversation and need no filesystem coordination. Uploaded ahead of the
-/// message (`messageId` is null until the send claims it, verified against
-/// `uploaderUserId`); unclaimed rows are swept after a TTL.
+/// A file attached to a support message (cloud-only). Platform-wide durable
+/// user data; the row cascade-deletes with its conversation.
+///
+/// Bytes live on disk (`storedPath`), not in the row: attachments are capped at
+/// a size where inlining them would put the whole payload through WAL, backups,
+/// and API memory on every read. The row is metadata only, so deleting it
+/// leaves the file behind — `attachment-storage.ts` owns the sweep that
+/// reclaims files with no surviving row.
+///
+/// Uploaded ahead of the message (`messageId` is null until the send claims it,
+/// verified against `uploaderUserId`); unclaimed rows are swept after a TTL.
 model SupportAttachment {
   id             String   @id @default(cuid())
   /// Null until a message send claims the upload.
@@ -1406,7 +1411,11 @@ model SupportAttachment {
   filename       String
   contentType    String
   sizeBytes      Int
-  data           Bytes
+  /// Inline bytes for rows written before disk storage (all <= 25 MB). Null for
+  /// every new row; read support is retained so old attachments keep serving.
+  data           Bytes?
+  /// Path relative to the attachment storage root. Null only for legacy `data` rows.
+  storedPath     String?
   createdAt      DateTime @default(now())
 
   message SupportMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)

@@ -53,7 +53,13 @@ function BridgeUpdateBannerItem({ bridge }: { bridge: BridgeSummary }) {
   const { managedBridge } = useRuntimePolicy()
   const status = bridge.update.status
   const blocks = bridgeUpdateBlocksPrinting(status)
+  // When the server hands out a manual command for `updateAvailable`, this
+  // bridge updates by image pull (see `resolveManualUpdateCommand` in the API's
+  // bridge-update-policy): the in-app update action could only re-answer "pull
+  // manually", so show the command instead of a doomed button.
+  const manualUpdateCommand = bridge.update.manualUpdateCommand
   const canSelfUpdate = bridgeUpdateSupportsInAppUpdate(status)
+    && !(status === 'updateAvailable' && manualUpdateCommand)
 
   const startUpdate = useMutation({
     mutationFn: () => apiFetch<BridgeUpdateActionResponse>(`/api/bridges/${encodeURIComponent(bridge.id)}/update/start`, { method: 'POST' }),
@@ -109,18 +115,20 @@ function BridgeUpdateBannerItem({ bridge }: { bridge: BridgeSummary }) {
                   : 'An update is available for this bridge.')}
         </Typography>
 
-        {(status === 'imageUpdateRequired' || status === 'runnerUpdateRequired') && (
+        {(status === 'imageUpdateRequired' || status === 'runnerUpdateRequired' || manualUpdateCommand) && (
           <Typography level="body-sm">
             {managedBridge
-              ? (bridge.update.manualUpdateCommand
+              ? (manualUpdateCommand
                   ? 'Rebuild your PrintStream containers when convenient to update the printer connection service:'
                   : 'Rebuild your PrintStream containers when convenient to update the printer connection service (for example, docker compose up -d --build).')
-              : (bridge.update.manualUpdateCommand
-                  ? 'Refresh the image on the bridge host when convenient (it cannot self-update):'
-                  : 'Refresh the image on the bridge host when convenient (it cannot self-update).')}
-            {bridge.update.manualUpdateCommand && (
+              : status === 'updateAvailable'
+                ? 'This bridge updates by pulling a new image. Run this on the bridge host when convenient:'
+                : (manualUpdateCommand
+                    ? 'Refresh the image on the bridge host when convenient (it cannot self-update):'
+                    : 'Refresh the image on the bridge host when convenient (it cannot self-update).')}
+            {manualUpdateCommand && (
               <Box component="code" sx={{ display: 'block', mt: 0.5, fontFamily: 'code', fontSize: 'sm', whiteSpace: 'pre-wrap' }}>
-                {bridge.update.manualUpdateCommand}
+                {manualUpdateCommand}
               </Box>
             )}
           </Typography>

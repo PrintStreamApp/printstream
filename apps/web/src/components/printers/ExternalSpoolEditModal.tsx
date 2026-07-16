@@ -6,7 +6,7 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import {
-  Autocomplete, AutocompleteOption, Button, ButtonGroup, FormControl, FormLabel, Input, ListItemContent, ModalDialog, Option, Select, Stack, Typography
+  AutocompleteOption, Button, ButtonGroup, FormControl, FormLabel, Input, ListItemContent, ModalDialog, Option, Select, Stack, Typography
 } from '@mui/joy'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
@@ -20,6 +20,7 @@ import {
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
 import { DialogSection } from '../DialogSection'
+import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ColorSwatchPicker } from '../ColorSwatchPicker'
@@ -208,7 +209,7 @@ export function ExternalSpoolEditModal({
               />
               <FormControl>
                 <FormLabel>Bambu preset</FormLabel>
-                <Autocomplete
+                <DeferredKeyboardAutocomplete
                   options={presetOptions}
                   value={selectedPresetOption}
                   onChange={(_event, value) => {

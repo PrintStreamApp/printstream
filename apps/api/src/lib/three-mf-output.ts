@@ -392,7 +392,7 @@ export function plateObjectIdsFromModelSettingsXml(xml: string, plate: number): 
   return ids
 }
 
-/** Result of mapping a plate's deselected `object_id`s to instance `identify_id`s. */
+/** Result of mapping a plate's deselected plates-index object ids to instance `identify_id`s. */
 export interface PlateSkipIdentifyIds {
   /** `identify_id`s of every instance (on the plate) of the requested objects. */
   identifyIds: number[]
@@ -403,51 +403,19 @@ export interface PlateSkipIdentifyIds {
 }
 
 /**
- * Map deselected plate objects (Bambu `object_id`s, the id space of the plates index's
- * `objects[].id`) to the `identify_id`s of every one of their instances on `plate`, read from a
- * `model_settings.config` XML string. `identify_id` is the per-instance handle Bambu keys
- * mid-print `skip_objects` on (the G-code's "unique label id") — a DIFFERENT id space from
- * `object_id` — so the post-start skip must send these, never the object ids themselves. Mirrors
- * the object→identify translation the slicer service does for `--skip-objects`
- * (`apps/slicer/src/skip-objects.ts`).
- */
-export function plateSkipIdentifyIdsFromModelSettingsXml(
-  xml: string,
-  plate: number,
-  objectIds: ReadonlySet<number>
-): PlateSkipIdentifyIds {
-  const identifyIds: number[] = []
-  const matchedObjectIds = new Set<number>()
-  let plateInstanceCount = 0
-  for (const plateMatch of xml.matchAll(/<plate\b[^>]*>[\s\S]*?<\/plate>/g)) {
-    const block = plateMatch[0]
-    const plateId = Number(/<metadata\s+key="plater_id"\s+value="(\d+)"\s*\/>/.exec(block)?.[1])
-    if (plateId !== plate) continue
-    for (const instanceMatch of block.matchAll(/<model_instance\b[^>]*>[\s\S]*?<\/model_instance>/g)) {
-      const instance = instanceMatch[0]
-      const objectId = Number(/<metadata\s+key="object_id"\s+value="(\d+)"\s*\/>/.exec(instance)?.[1])
-      if (!Number.isInteger(objectId)) continue
-      plateInstanceCount += 1
-      if (!objectIds.has(objectId)) continue
-      const identifyId = Number(/<metadata\s+key="identify_id"\s+value="(\d+)"\s*\/>/.exec(instance)?.[1])
-      if (!Number.isInteger(identifyId)) continue
-      matchedObjectIds.add(objectId)
-      identifyIds.push(identifyId)
-    }
-  }
-  const unmatchedObjectIds = [...objectIds].filter((id) => !matchedObjectIds.has(id))
-  return { identifyIds, unmatchedObjectIds, plateInstanceCount }
-}
-
-/**
- * Map deselected plate objects to instance `identify_id`s using an already-parsed 3MF
- * index instead of re-reading `model_settings.config` — the storage-print flow's variant
- * of {@link plateSkipIdentifyIdsFromModelSettingsXml}. `objectIds` are the plates index's
- * own `objects[].id` values (whatever id space that index carries; the printer-storage
- * index derives objects from slice_info, where the id is itself the identify_id), and each
- * object's `identifyIds` supplies its firmware skip handles. An object without identify_ids
- * counts as unmatched, and `plateInstanceCount` sums every object's instances so callers
- * can refuse a skip-everything selection.
+ * Map deselected plate objects to instance `identify_id`s using a parsed 3MF index — the single
+ * resolver behind both the library dispatch (`print-dispatcher.ts`) and printer-storage print
+ * flows. `identify_id` is the per-instance handle Bambu keys `skip_objects` on (the G-code's
+ * "unique label id") — a DIFFERENT id space from the model `object_id` — so the post-start skip
+ * must send these, never the object ids themselves. `objectIds` are the plates index's own
+ * `objects[].id` values, whatever id space that index carries: model_settings-derived objects use
+ * `object_id`, while slice_info-derived objects (gcode-only exports with no `model_instance`
+ * blocks; also the printer-storage index) use the identify_id itself. Resolving through the same
+ * index the UI displayed is what keeps those two id spaces from ever crossing. Each object's
+ * `identifyIds` supplies its firmware skip handles; an object without identify_ids counts as
+ * unmatched, and `plateInstanceCount` sums every object's instances so callers can refuse a
+ * skip-everything selection. Mirrors the object→identify translation the slicer service does for
+ * `--skip-objects` (`apps/slicer/src/skip-objects.ts`).
  */
 export function plateSkipIdentifyIdsFromIndex(
   // Structural subset of ThreeMfIndex so callers can pass any parsed index shape.

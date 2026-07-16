@@ -12,7 +12,7 @@
 import type React from 'react'
 import { useEffect, useState } from 'react'
 import {
-  Alert, Autocomplete, AutocompleteOption, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormHelperText, FormLabel, IconButton, Input, Link,
+  Alert, AutocompleteOption, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormHelperText, FormLabel, IconButton, Input, Link,
   ListItemContent, Option, Select, Sheet, Stack, Tooltip, Typography
 } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
@@ -35,6 +35,7 @@ import type {
 } from '@printstream/shared'
 import { formatNozzleDiameterLabel } from '@printstream/shared'
 import { useNavigate } from 'react-router-dom'
+import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import { formatSlicingProfileDisplayName } from '../../lib/slicingProfileSelection'
 import {
@@ -353,7 +354,7 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
         >
             <FormControl sx={{ gridArea: 'printer', minWidth: 0 }}>
               <FormLabel>Printer</FormLabel>
-              <Autocomplete
+              <DeferredKeyboardAutocomplete
                 options={printers}
                 value={selectedPrinter}
                 placeholder={lockedPreferredPrinter ? undefined : 'Optional'}
@@ -793,7 +794,7 @@ function SlicingProfileAutocomplete({
   }, [valueDisplayName])
 
   return (
-    <Autocomplete
+    <DeferredKeyboardAutocomplete
       options={profiles}
       value={value}
       inputValue={inputValue}
@@ -848,7 +849,7 @@ function SliceMaterialAutocomplete({
   }, [value?.id, displayValue])
 
   return (
-    <Autocomplete
+    <DeferredKeyboardAutocomplete
       options={options}
       value={value}
       inputValue={inputValue}

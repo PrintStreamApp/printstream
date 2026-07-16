@@ -12,7 +12,8 @@
  * is allowed.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Autocomplete, Box, FormControl, FormLabel, Option, Select, Stack, Typography } from '@mui/joy'
+import { Box, FormControl, FormLabel, Option, Select, Stack, Typography } from '@mui/joy'
+import { DeferredKeyboardAutocomplete } from '../../components/DeferredKeyboardAutocomplete'
 import { normalizeHexColor, type QueueRequiredFilament } from '@printstream/shared'
 import { FilamentOptionLabel } from '../../components/library/FilamentOptionLabel'
 import { FilamentColorPicker } from '../../components/library/FilamentColorPicker'
@@ -159,7 +160,7 @@ export function QueueMaterialRow({
         <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ pl: 0.5 }}>
           <FormControl sx={{ flex: 1, minWidth: 0 }}>
             <FormLabel>Brand</FormLabel>
-            <Autocomplete<string, false, false, true>
+            <DeferredKeyboardAutocomplete<string, false, false, true>
               size="sm"
               freeSolo
               openOnFocus

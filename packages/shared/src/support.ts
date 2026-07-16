@@ -22,10 +22,65 @@ export const supportConversationKindSchema = z.enum(['feedback', 'bug', 'questio
 export type SupportConversationKind = z.infer<typeof supportConversationKindSchema>
 
 /** Hard cap on one support attachment upload. */
-export const SUPPORT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
+export const SUPPORT_ATTACHMENT_MAX_BYTES = 150 * 1024 * 1024
+
+/**
+ * Cap on the combined size of one message's attachments.
+ *
+ * The per-file cap alone would let one message carry
+ * `MAX_PER_MESSAGE * MAX_BYTES` (750 MB) of durable platform storage, so the
+ * total is bounded separately and enforced at claim time — the only point where
+ * the whole set is known.
+ */
+export const SUPPORT_ATTACHMENTS_MAX_TOTAL_BYTES = 300 * 1024 * 1024
 
 /** Most attachments a single support message may carry. */
 export const SUPPORT_ATTACHMENTS_MAX_PER_MESSAGE = 5
+
+/**
+ * Per-request ceiling for one upload chunk, advertised by the begin response.
+ *
+ * Attachments are uploaded in chunks rather than as one request because the
+ * cap above exceeds what a single request can carry end-to-end: the cloud
+ * deployment sits behind a proxy that rejects bodies over 100 MB, and a
+ * multi-minute single-shot upload has no way to resume after a dropped
+ * connection. Keep this well under any proxy body limit.
+ */
+export const SUPPORT_ATTACHMENT_CHUNK_BYTES = 8 * 1024 * 1024
+
+/** Body of `POST .../attachments/uploads`, which opens an upload session. */
+export const beginSupportAttachmentUploadRequestSchema = z.object({
+  filename: z.string().trim().min(1, 'A filename is required.').max(200),
+  contentType: z.string().trim().max(100).optional(),
+  sizeBytes: z.number().int().min(1).max(SUPPORT_ATTACHMENT_MAX_BYTES)
+})
+export type BeginSupportAttachmentUploadRequest = z.infer<typeof beginSupportAttachmentUploadRequestSchema>
+
+/** Response of `POST .../attachments/uploads`. `uploadedBytes` is the resume offset. */
+export const beginSupportAttachmentUploadResponseSchema = z.object({
+  uploadId: z.string(),
+  chunkSizeBytes: z.number().int().positive(),
+  uploadedBytes: z.number().int().nonnegative()
+})
+export type BeginSupportAttachmentUploadResponse = z.infer<typeof beginSupportAttachmentUploadResponseSchema>
+
+/** Response of `POST .../attachments/uploads/:id/chunks`. */
+export const supportAttachmentChunkResponseSchema = z.object({
+  uploadedBytes: z.number().int().nonnegative(),
+  complete: z.boolean()
+})
+export type SupportAttachmentChunkResponse = z.infer<typeof supportAttachmentChunkResponseSchema>
+
+/**
+ * Response of `GET .../attachments/uploads/:id` — the server's authoritative
+ * received-byte count, which a client re-reads to resume after a failed chunk.
+ */
+export const supportAttachmentUploadStatusResponseSchema = z.object({
+  uploadId: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  receivedBytes: z.number().int().nonnegative()
+})
+export type SupportAttachmentUploadStatusResponse = z.infer<typeof supportAttachmentUploadStatusResponseSchema>
 
 /**
  * One file attached to a support message, as served back to clients (the

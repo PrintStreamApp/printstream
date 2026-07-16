@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
-import { plateSkipIdentifyIdsFromIndex, plateSkipIdentifyIdsFromModelSettingsXml } from './three-mf-output.js'
+import { plateSkipIdentifyIdsFromIndex } from './three-mf-output.js'
 import { applyFilamentList, applyGlobalProcessOverrides, applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
 import { rewriteThreeMfEntries } from './three-mf-internal.js'
 import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
@@ -674,47 +674,80 @@ const MULTI_INSTANCE_MODEL_SETTINGS_XML = [
   '</config>'
 ].join('\n')
 
-test('plateSkipIdentifyIdsFromModelSettingsXml maps deselected object_ids to every plate instance identify_id', () => {
-  // identify_id is a different id space from object_id (the G-code "unique label id" the
-  // firmware's skip_objects keys on); deselecting object 3 must skip both of its instances.
-  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(MULTI_INSTANCE_MODEL_SETTINGS_XML, 1, new Set([3]))
-  assert.deepEqual(mapped.identifyIds, [153, 154])
-  assert.deepEqual(mapped.unmatchedObjectIds, [])
-  assert.equal(mapped.plateInstanceCount, 3)
+test('readPlateIndex + plateSkipIdentifyIdsFromIndex map object_ids to every plate instance identify_id', async () => {
+  // The dispatch skip-resolution path end to end: identify_id is a different id space from
+  // object_id (the G-code "unique label id" the firmware's skip_objects keys on); deselecting
+  // object 3 must skip both of its instances, and plate scoping must not leak object 11's
+  // plate-2 instance into a plate-1 skip.
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-skip-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['Metadata/model_settings.config', Buffer.from(MULTI_INSTANCE_MODEL_SETTINGS_XML, 'utf8')]
+    ])
+
+    const index = await readPlateIndex(sourcePath)
+    const mapped = plateSkipIdentifyIdsFromIndex(index, 1, new Set([3]))
+    assert.deepEqual(mapped.identifyIds, [153, 154])
+    assert.deepEqual(mapped.unmatchedObjectIds, [])
+    assert.equal(mapped.plateInstanceCount, 3)
+
+    // Object 11 exists on both plates; a plate-2 skip must return plate 2's identify_id only,
+    // and an object with no instance on the requested plate reports as unmatched.
+    const plateTwo = plateSkipIdentifyIdsFromIndex(index, 2, new Set([3, 11]))
+    assert.deepEqual(plateTwo.identifyIds, [205])
+    assert.deepEqual(plateTwo.unmatchedObjectIds, [3])
+    assert.equal(plateTwo.plateInstanceCount, 1)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 })
 
-test('plateSkipIdentifyIdsFromModelSettingsXml scopes to the requested plate', () => {
-  // Object 11 exists on both plates; a plate-2 skip must return plate 2's identify_id only.
-  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(MULTI_INSTANCE_MODEL_SETTINGS_XML, 2, new Set([11]))
-  assert.deepEqual(mapped.identifyIds, [205])
-  assert.equal(mapped.plateInstanceCount, 1)
-})
+test('skip resolution handles gcode-only 3MFs whose objects exist only in slice_info', async () => {
+  // Regression: Bambu Studio "sliced plate" exports (and MakerWorld print profiles) ship a
+  // model_settings.config with plate metadata but NO model_instance blocks, so the index falls
+  // back to slice_info objects whose ids ARE identify_ids. Resolving those ids against
+  // model_settings (the dispatcher's old path) matched nothing and rejected every deselection;
+  // resolving through the same parsed index the print dialog displayed must map them 1:1.
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-skip-gcode-only-'))
+  const sourcePath = path.join(tempDir, 'source.gcode.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['Metadata/model_settings.config', Buffer.from([
+        '<config>',
+        '  <plate>',
+        '    <metadata key="plater_id" value="2"/>',
+        '    <metadata key="plater_name" value="2 - Mast, Feeders"/>',
+        '  </plate>',
+        '</config>'
+      ].join('\n'), 'utf8')],
+      ['Metadata/slice_info.config', Buffer.from([
+        '<config>',
+        '  <plate>',
+        '    <metadata key="index" value="2"/>',
+        '    <metadata key="prediction" value="9684"/>',
+        '    <object identify_id="11018" name="Yarn guide" skipped="false" />',
+        '    <object identify_id="11051" name="Clamp foot" skipped="false" />',
+        '    <object identify_id="11792" name="Clamp foot" skipped="false" />',
+        '  </plate>',
+        '</config>'
+      ].join('\n'), 'utf8')]
+    ])
 
-test('plateSkipIdentifyIdsFromModelSettingsXml reports object ids with no instance on the plate', () => {
-  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(MULTI_INSTANCE_MODEL_SETTINGS_XML, 2, new Set([3, 11]))
-  assert.deepEqual(mapped.identifyIds, [205])
-  assert.deepEqual(mapped.unmatchedObjectIds, [3])
-})
-
-test('plateSkipIdentifyIdsFromModelSettingsXml treats an instance without identify_id as unmatched', () => {
-  const xml = [
-    '<config>',
-    '  <plate>',
-    '    <metadata key="plater_id" value="1"/>',
-    '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/></model_instance>',
-    '  </plate>',
-    '</config>'
-  ].join('\n')
-  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(xml, 1, new Set([3]))
-  assert.deepEqual(mapped.identifyIds, [])
-  assert.deepEqual(mapped.unmatchedObjectIds, [3])
-  assert.equal(mapped.plateInstanceCount, 1)
+    const index = await readPlateIndex(sourcePath)
+    const mapped = plateSkipIdentifyIdsFromIndex(index, 2, new Set([11018, 11051]))
+    assert.deepEqual(mapped.identifyIds, [11018, 11051])
+    assert.deepEqual(mapped.unmatchedObjectIds, [])
+    assert.equal(mapped.plateInstanceCount, 3)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 })
 
 test('plateSkipIdentifyIdsFromIndex maps deselected plate objects through the parsed index', () => {
-  // Mirrors plateSkipIdentifyIdsFromModelSettingsXml but reads the already-parsed index —
-  // the storage-print flow's path. Object 3 has two instances on plate 1; object 11
-  // reappears on plate 2 under a different identify_id and must stay plate-scoped.
+  // The shared resolver behind both the library-dispatch and storage-print flows. Object 3
+  // has two instances on plate 1; object 11 reappears on plate 2 under a different
+  // identify_id and must stay plate-scoped.
   const index = {
     plates: [
       {

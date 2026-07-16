@@ -53,7 +53,8 @@ import {
   uploadFileToPrinter
 } from './printer-ftp.js'
 import { createSinglePlateThreeMf, readEntry } from './three-mf.js'
-import { plateSkipIdentifyIdsFromModelSettingsXml } from './three-mf-output.js'
+import { readPlateIndex } from './three-mf-reader.js'
+import { plateSkipIdentifyIdsFromIndex } from './three-mf-output.js'
 import { armPostStartObjectSkip } from './post-start-object-skip.js'
 import { printGuards } from './print-guards.js'
 import { type SnapshotLibraryFile } from './print-file-snapshots.js'
@@ -946,10 +947,16 @@ async function resolvePlateAmsMapping(
 }
 
 /**
- * Resolve the request's deselected plate objects (`skipObjects`, Bambu `object_id`s from the
- * plates index) into the instance `identify_id`s the firmware keys object skipping on (both
- * the start command's `skip_objects` field and the mid-print command), read from the source
- * 3MF's `Metadata/model_settings.config`.
+ * Resolve the request's deselected plate objects (`skipObjects`, ids from the plates index the
+ * print dialog displayed) into the instance `identify_id`s the firmware keys object skipping on
+ * (both the start command's `skip_objects` field and the mid-print command).
+ *
+ * Resolution MUST go through the same shared index parse that produced the dialog's object list
+ * ({@link readPlateIndex}), never a direct `model_settings.config` lookup: gcode-only exports
+ * (Bambu Studio "sliced plate" files, MakerWorld print profiles) carry no `model_instance`
+ * blocks at all, so the index falls back to slice_info objects whose ids are ALREADY
+ * identify_ids — an id space a model_settings lookup can never match. Re-deriving through the
+ * same parser keeps the id space aligned with whatever the user actually deselected.
  *
  * Unlike the AMS-mapping prune above, this is NOT fail-safe-passthrough: the user explicitly
  * deselected objects, so printing them anyway would violate intent and waste material. Any
@@ -967,15 +974,18 @@ async function resolvePostStartSkipObjectIds(
   if (sourceKind !== '3mf') {
     throw new Error('Object skipping is only available for sliced 3MF files')
   }
-  const modelSettingsXml = localPath
-    ? await readEntry(localPath, 'Metadata/model_settings.config')
-      .then((buffer) => buffer.toString('utf8'))
-      .catch(() => null)
+  const index = localPath
+    ? await readPlateIndex(localPath).catch((error: unknown) => {
+      // Surface the real read failure (corrupt archive, IO error) before the
+      // user-facing rejection below replaces it with generic guidance.
+      console.warn(`[dispatch] could not read 3MF index for skip resolution (${localPath})`, (error as Error).message)
+      return null
+    })
     : null
-  if (!modelSettingsXml) {
+  if (!index) {
     throw new Error('Could not read the file to resolve the deselected objects. Try again, or print without deselecting objects.')
   }
-  const mapped = plateSkipIdentifyIdsFromModelSettingsXml(modelSettingsXml, plate, new Set(skipObjects))
+  const mapped = plateSkipIdentifyIdsFromIndex(index, plate, new Set(skipObjects))
   if (mapped.unmatchedObjectIds.length > 0 || mapped.identifyIds.length === 0) {
     throw new Error('Some deselected objects could not be matched on the selected plate. Re-open the print dialog and try again.')
   }

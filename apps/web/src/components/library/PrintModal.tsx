@@ -684,7 +684,13 @@ export function PrintModal({
     [hardwareIssuesByPrinter, selectedIds]
   )
   const hasPlateTypeIssues = plateTypeIssueEntries.length > 0
-  const hasHardNozzleDiameterIssues = nozzleDiameterIssueEntries.length > 0
+  // Only a positively conflicting diameter blocks dispatch. An issue with no
+  // selected diameter means detection failed and nothing is saved — "unknown",
+  // not "incompatible" — so it warns without blocking, matching the API guard
+  // (`assertPrinterHardwareCompatibility` ignores unknowns the same way).
+  const hasHardNozzleDiameterIssues = nozzleDiameterIssueEntries
+    .some(([, issues]) => issues.some((issue) => issue.selectedDiameter !== null))
+  const hasUnknownNozzleDiameterIssues = !hasHardNozzleDiameterIssues && nozzleDiameterIssueEntries.length > 0
   const hardwareSignature = useMemo(
     () => JSON.stringify({ plateTypeIssueEntries, nozzleDiameterIssueEntries }),
     [nozzleDiameterIssueEntries, plateTypeIssueEntries]
@@ -1178,7 +1184,7 @@ export function PrintModal({
             )}
           </Sheet>
 
-          {(hasHardNozzleDiameterIssues || hasPlateTypeIssues) && (
+          {(hasHardNozzleDiameterIssues || hasUnknownNozzleDiameterIssues || hasPlateTypeIssues) && (
             <Alert
               color={hasHardNozzleDiameterIssues ? 'danger' : 'warning'}
               variant="soft"
@@ -1186,12 +1192,18 @@ export function PrintModal({
             >
               <Stack spacing={1} sx={{ width: '100%' }}>
                 <Typography level="title-sm">
-                  {hasHardNozzleDiameterIssues ? 'Printer hardware must be fixed' : 'Plate type mismatch detected'}
+                  {hasHardNozzleDiameterIssues
+                    ? 'Printer hardware must be fixed'
+                    : hasPlateTypeIssues
+                      ? 'Plate type mismatch detected'
+                      : 'Installed nozzle size not verified'}
                 </Typography>
                 <Typography level="body-sm">
                   {hasHardNozzleDiameterIssues
                     ? 'The sliced nozzle diameter does not match the nozzle size saved in printer settings. Update the printer on the Printers page before dispatching.'
-                    : 'The saved printer plate type does not match the sliced plate type. Review and confirm before dispatching.'}
+                    : hasPlateTypeIssues
+                      ? 'The saved printer plate type does not match the sliced plate type. Review and confirm before dispatching.'
+                      : 'The installed nozzle size was not detected, so it cannot be checked against the sliced file. Printing is allowed; set the nozzle size on the Printers page to enable the check.'}
                 </Typography>
                 {nozzleDiameterIssueEntries.map(([printerId, issues]) => {
                   const printer = printers.find((entry) => entry.id === printerId)
@@ -1236,11 +1248,11 @@ export function PrintModal({
             >
               <Stack spacing={1} sx={{ width: '100%' }}>
                 <Typography level="title-sm">
-                  {hasHardCompatibilityIssues ? 'Tray assignment must be fixed' : 'Filament mismatch detected'}
+                  {hasHardCompatibilityIssues ? 'Tray nozzle mismatch detected' : 'Filament mismatch detected'}
                 </Typography>
                 <Typography level="body-sm">
                   {hasHardCompatibilityIssues
-                    ? 'One or more selected trays are bound to the wrong nozzle for this sliced file. Pick a tray on the matching nozzle before dispatching.'
+                    ? 'One or more selected trays appear bound to the wrong nozzle for this sliced file. Pick a tray on the matching nozzle, or confirm below to print anyway if the nozzle assignment shown is wrong.'
                     : 'One or more selected trays do not match the sliced material. Review the warnings below before dispatching.'}
                 </Typography>
                 {hardCompatibilityIssueEntries.map(([printerId, issues]) => {
@@ -1273,13 +1285,11 @@ export function PrintModal({
                     </Stack>
                   )
                 })}
-                {hasSoftCompatibilityIssues && (
-                  <Checkbox
-                    label="Print anyway with the current tray assignments"
-                    checked={allowIncompatibleFilament}
-                    onChange={(event) => setAllowIncompatibleFilament(event.target.checked)}
-                  />
-                )}
+                <Checkbox
+                  label="Print anyway with the current tray assignments"
+                  checked={allowIncompatibleFilament}
+                  onChange={(event) => setAllowIncompatibleFilament(event.target.checked)}
+                />
               </Stack>
             </Alert>
           )}
@@ -1306,10 +1316,9 @@ export function PrintModal({
               disabled={
                 selectedIds.length === 0
                 || !allMappingsComplete
-                || hasHardCompatibilityIssues
                 || hasHardNozzleDiameterIssues
                 || (hasPlateTypeIssues && !allowPlateTypeMismatch)
-                || (hasSoftCompatibilityIssues && !allowIncompatibleFilament)
+                || ((hasHardCompatibilityIssues || hasSoftCompatibilityIssues) && !allowIncompatibleFilament)
               }
               onClick={submit}
             >

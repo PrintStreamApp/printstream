@@ -1,34 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useMediaQueryMatch } from './useMediaQueryMatch'
 
+/**
+ * True at phone widths (<= 599px), for layout decisions. For behavior driven by
+ * the on-screen keyboard or touch input, use `useTouchPointer` instead — a
+ * narrow desktop window matches this but has no virtual keyboard.
+ */
 export function useMobileViewport(): boolean {
-  const [matches, setMatches] = useState(() => {
-    if (typeof window === 'undefined') {
-      return false
-    }
-
-    return window.matchMedia('(max-width: 599px)').matches
-  })
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return undefined
-    }
-
-    const mediaQuery = window.matchMedia('(max-width: 599px)')
-    const handleChange = (event?: MediaQueryListEvent) => {
-      setMatches(event?.matches ?? mediaQuery.matches)
-    }
-
-    handleChange()
-
-    if (typeof mediaQuery.addEventListener === 'function') {
-      mediaQuery.addEventListener('change', handleChange)
-      return () => mediaQuery.removeEventListener('change', handleChange)
-    }
-
-    mediaQuery.addListener(handleChange)
-    return () => mediaQuery.removeListener(handleChange)
-  }, [])
-
-  return matches
+  return useMediaQueryMatch('(max-width: 599px)')
 }
