@@ -118,16 +118,14 @@ export const resolveFilamentConfigRequestSchema = z.object({
 export type ResolveFilamentConfigRequest = z.infer<typeof resolveFilamentConfigRequestSchema>
 
 /**
- * Response for `/profiles/resolve-filament`.
+ * Response for `/profiles/resolve-filament` — same contract as `/profiles/resolve-process`.
  * - `config`: the profile's effective values (for a `project:` filament, the 3MF's embedded slot
- *   column).
- * - `overriddenKeys`: for a `project:` filament, the slot's `different_settings_to_system` record —
- *   the 3MF's OWN in-project changes. This is the only "modified" signal the material dialog
- *   highlights; it must not value-diff `config` against `baseConfig`, which would also flag
- *   inherited drift the user never touched (legacy files can differ from their parent preset on
- *   dozens of untouched keys). Empty for installed presets.
- * - `baseConfig`: the named parent preset when installed (else `config`) — the RESET target for the
- *   overridden keys only.
+ *   column) — the base the slicer merges further overrides onto.
+ * - `baseConfig`: the preset baseline to reset toward and value-diff against ("modified" = the
+ *   value differs from the preset OUTSIDE the project). Equal to `config` for installed presets;
+ *   the resolved parent preset for a project filament when resolvable.
+ * - `overriddenKeys`: fallback changed-keys signal (the slot's `different_settings_to_system`
+ *   record), populated only when the parent preset could not be resolved.
  */
 export interface ResolveFilamentConfigResponse {
   config: ProcessConfig

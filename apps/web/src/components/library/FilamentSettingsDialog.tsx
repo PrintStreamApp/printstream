@@ -68,7 +68,12 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     isProcessOptionVisibleInMode(option, showDeveloperOptions)
   const { promptText } = usePromptDialog()
 
+  // `baseConfig` is the preset baseline (reset target + "modified" diff source); `sliceBase` is the
+  // effective config the slicer merges overrides onto (the 3MF's embedded values for a project
+  // filament — equal to baseConfig for installed presets). `bakedKeys` marks 3MF changes whose
+  // baseline could not be resolved, so they still read as modified. Mirrors ProcessSettingsDialog.
   const [baseConfig, setBaseConfig] = useState<FilamentConfig | null>(null)
+  const [sliceBase, setSliceBase] = useState<FilamentConfig>({})
   const [bakedKeys, setBakedKeys] = useState<Set<string>>(new Set())
   const [config, setConfig] = useState<FilamentConfig>({})
   const [loading, setLoading] = useState(false)
@@ -112,19 +117,14 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
         // The values shown/sliced: the profile's own config, with parent/catalog values filling
         // only the keys it doesn't define.
         const effective = { ...parent, ...projectValues }
-        const overridden = new Set(response.overriddenKeys ?? [])
-        // "Modified" means CHANGED WITHIN THIS 3MF (the slot's different_settings_to_system record)
-        // or edited in this session — never a value-diff of the whole embedded config against the
-        // parent preset. A legacy or drifted file can differ from its parent on dozens of keys the
-        // user never touched (e.g. another material's physics baked under this preset's name by a
-        // pre-fix save); flagging those would drown the real edits. So the baseline IS the effective
-        // config, except the 3MF-recorded overridden keys, which reset toward the parent value.
-        const base = { ...effective }
-        for (const key of overridden) {
-          if (parent[key] !== undefined) base[key] = parent[key]
-        }
-        setBaseConfig(base)
-        setBakedKeys(overridden)
+        // "Modified" = the value differs from the preset OUTSIDE the project (value-diff vs the
+        // resolved parent), same as the process dialog — this is what surfaces real embedded
+        // deviations a project-preset slice would print with (e.g. legacy files carrying another
+        // material's physics under this preset's name). Keys the parent doesn't define fall back to
+        // the project's own value as baseline so a blank never reads as changed-against-nothing.
+        setSliceBase(effective)
+        setBaseConfig({ ...effective, ...parent })
+        setBakedKeys(new Set(response.overriddenKeys ?? []))
         setConfig({ ...effective, ...scalarizeFilamentConfig(initialOverrides) })
       })
       .catch((err: unknown) => {
@@ -162,10 +162,15 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
   const canReset = (key: string): boolean =>
     baseConfig !== null && !filamentConfigValuesEqual(baseConfig[key], config[key])
 
+  /**
+   * True when a key differs from its preset baseline — either a resettable value diff, or a
+   * 3MF-baked change whose baseline value couldn't be resolved (`bakedKeys`, still untouched
+   * relative to the effective config). Mirrors ProcessSettingsDialog.
+   */
   const isModified = (key: string): boolean => {
     if (baseConfig === null) return false
     if (!filamentConfigValuesEqual(baseConfig[key], config[key])) return true
-    return bakedKeys.has(key)
+    return bakedKeys.has(key) && filamentConfigValuesEqual(config[key], sliceBase[key])
   }
 
   const modifiedKeyCount = useMemo(() => {
@@ -243,7 +248,10 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
 
   const handleApply = () => {
     if (!baseConfig) return
-    onApply(expandOverrides(diffFilamentConfig(baseConfig, config)))
+    // Emit overrides relative to the effective slice base so baked-but-untouched values aren't
+    // re-sent, while a RESET of a baked deviation becomes an explicit override back to the preset
+    // value — which is what actually heals a drifted project filament at slice time.
+    onApply(expandOverrides(diffFilamentConfig(sliceBase, config)))
     onClose()
   }
 
@@ -262,7 +270,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
         method: 'POST',
         body: { kind: 'filament', fileName: `${name}.json`, encoding: 'utf8', overwrite, content: JSON.stringify(presetConfig, null, 2) }
       })
-      onApply(expandOverrides(diffFilamentConfig(baseConfig ?? {}, config)))
+      onApply(expandOverrides(diffFilamentConfig(sliceBase, config)))
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save preset')

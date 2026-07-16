@@ -138,19 +138,16 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
   const tenantId = requireRequestTenantId(request)
   if (parsed.data.filamentProfileId.startsWith(PROJECT_PROFILE_ID_PREFIX)) {
     // A project-embedded filament: its config lives in the source 3MF's project_settings.config at
-    // the given slot column (projectFilamentId, 1-based). `overriddenKeys` is ALWAYS the slot's
-    // `different_settings_to_system` record — the 3MF's own in-project changes, which is what the
-    // dialog marks as modified. The named parent preset (when installed) rides along as `baseConfig`
-    // purely as the RESET target for those keys; the dialog must not value-diff the whole embedded
-    // config against it (that flags inherited drift the user never touched — see
-    // extractFilamentOverriddenKeys).
+    // the given slot column (projectFilamentId, 1-based). Same contract as resolve-process:
+    // "modified" means the embedded config differs from the preset outside the project, so the
+    // baseline is the resolved parent preset (value-diff source + reset target). Only when that
+    // parent is not installed here does the slot's `different_settings_to_system` record stand in
+    // as the changed-keys signal.
     const project = await resolveProjectFilamentConfig(parsed.data.sourceFileId ?? null, parsed.data.projectFilamentId ?? null)
     const baseline = await resolveBaselineFilamentConfig(tenantId, parsed.data.targetId ?? null, project.presetName)
-    const responseBody: ResolveFilamentConfigResponse = {
-      config: project.config,
-      baseConfig: baseline ?? project.config,
-      overriddenKeys: project.overriddenKeys
-    }
+    const responseBody: ResolveFilamentConfigResponse = baseline
+      ? { config: project.config, baseConfig: baseline, overriddenKeys: [] }
+      : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys }
     response.json(responseBody)
     return
   }
@@ -428,10 +425,11 @@ async function resolveProjectFilamentConfig(sourceFileId: string | null, project
  * Parses one FILAMENT slot of Bambu's `different_settings_to_system` — the 3MF's own record of
  * which keys the project changed from its system presets. Layout (PresetBundle.cpp):
  * `[0]` = process, `[1..n]` = filament slot 1..n, `[n+1]` = machine; each entry is a `;`-separated
- * key list. Keys are filtered to the filament catalog. This is the AUTHORITATIVE "modified in this
- * 3MF" signal the material dialog highlights — deliberately NOT a value-diff against the parent
- * preset, which would also flag inherited drift the user never touched (e.g. legacy files whose
- * pre-fix save baked another material's physics under this preset's name).
+ * key list. Keys are filtered to the filament catalog. Used as the changed-keys FALLBACK when the
+ * named parent preset is not installed here (mirroring `extractProcessOverriddenKeys`); when the
+ * parent resolves, "modified" is the value-diff against it — the record alone would HIDE genuine
+ * embedded deviations (e.g. legacy files whose pre-fix save baked another material's physics under
+ * this preset's name), which do shape a project-preset slice.
  */
 function extractFilamentOverriddenKeys(value: unknown, projectFilamentId: number): string[] {
   const entry = Array.isArray(value) ? value[projectFilamentId] : undefined
