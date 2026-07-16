@@ -1505,9 +1505,18 @@ test('print-from-storage includes explicit AMS mappings in the printer command p
     assert.equal(response.status, 202)
   })
 
-  const publishPayload = publishCommand.mock.calls[0]?.arguments[1] as { print: { ams_mapping?: number[] } } | undefined
+  const publishPayload = publishCommand.mock.calls[0]?.arguments[1] as {
+    print: { ams_mapping?: number[]; ams_mapping2?: Array<{ ams_id: number; slot_id: number }> }
+  } | undefined
   assert.ok(publishPayload)
-  assert.deepEqual(publishPayload.print.ams_mapping, [0, 255])
+  // The external virtual tray (255) rides as -1 in the flat array — H2-family
+  // firmware rejects raw 254/255 there — with the real reference in
+  // ams_mapping2 (H2D is dual-nozzle, so the chosen main/deputy id is kept).
+  assert.deepEqual(publishPayload.print.ams_mapping, [0, -1])
+  assert.deepEqual(publishPayload.print.ams_mapping2, [
+    { ams_id: 0, slot_id: 0 },
+    { ams_id: 255, slot_id: 0 }
+  ])
 })
 
 test('print-from-storage uses the printer-reported first-layer inspection default when omitted', async () => {
