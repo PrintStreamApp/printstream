@@ -20,15 +20,16 @@ import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import {
-  applyFilamentConfigDefaults,
   diffFilamentConfig,
   filamentConfigValuesEqual,
   filamentSettingsCatalog,
   isProcessOptionVisibleInMode,
+  prepareResolvedFilamentState,
   scalarizeFilamentConfig,
   type FilamentConfig,
   type FilamentSettingOption,
-  type FilamentSettingOverrides
+  type FilamentSettingOverrides,
+  type ResolveFilamentConfigResponse
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
@@ -55,11 +56,6 @@ export interface FilamentSettingsDialogProps {
   onApply: (overrides: FilamentSettingOverrides) => void
 }
 
-type ResolveResponse = {
-  config: Record<string, string | string[]>
-  baseConfig?: Record<string, string | string[]>
-  overriddenKeys?: string[]
-}
 
 export default function FilamentSettingsDialog(props: FilamentSettingsDialogProps): JSX.Element {
   const { open, onClose, slicerTargetId, filamentProfileId, filamentProfileName, sourceFileId, projectFilamentId, initialOverrides, canEditOriginal, onApply } = props
@@ -98,34 +94,22 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     setLoading(true)
     setError(null)
     setBaseConfig(null)
-    apiFetch<ResolveResponse>('/api/slicing/profiles/resolve-filament', {
+    apiFetch<ResolveFilamentConfigResponse>('/api/slicing/profiles/resolve-filament', {
       method: 'POST',
       body: { filamentProfileId, targetId: slicerTargetId || null, sourceFileId: sourceFileId || null, projectFilamentId: projectFilamentId ?? null }
     })
       .then((response) => {
         if (cancelled) return
-        const rawBase = applyFilamentConfigDefaults((response.baseConfig ?? response.config) as FilamentConfig)
-        // Broadcast shape per key: prefer the baseline's per-variant vector length, falling back to
-        // the project value's for keys the baseline omits.
-        const shapeEntries: Array<[string, number]> = [
-          ...Object.entries(response.config as FilamentConfig).map(([key, value]) => [key, Array.isArray(value) ? value.length : 1] as [string, number]),
-          ...Object.entries(rawBase).map(([key, value]) => [key, Array.isArray(value) ? value.length : 1] as [string, number])
-        ]
-        baseShapesRef.current = Object.fromEntries(shapeEntries)
-        const parent = scalarizeFilamentConfig(rawBase)
-        const projectValues = scalarizeFilamentConfig(response.config as FilamentConfig)
-        // The values shown/sliced: the profile's own config, with parent/catalog values filling
-        // only the keys it doesn't define.
-        const effective = { ...parent, ...projectValues }
         // "Modified" = the value differs from the preset OUTSIDE the project (value-diff vs the
         // resolved parent), same as the process dialog — this is what surfaces real embedded
-        // deviations a project-preset slice would print with (e.g. legacy files carrying another
-        // material's physics under this preset's name). Keys the parent doesn't define fall back to
-        // the project's own value as baseline so a blank never reads as changed-against-nothing.
-        setSliceBase(effective)
-        setBaseConfig({ ...effective, ...parent })
-        setBakedKeys(new Set(response.overriddenKeys ?? []))
-        setConfig({ ...effective, ...scalarizeFilamentConfig(initialOverrides) })
+        // deviations a project-preset slice would print with. The shared prepare helper is also
+        // what drives the slice dialog's pre-open "changed values" badge, so the two agree.
+        const state = prepareResolvedFilamentState(response)
+        baseShapesRef.current = state.shapes
+        setSliceBase(state.effective)
+        setBaseConfig(state.baseline)
+        setBakedKeys(new Set(state.bakedKeys))
+        setConfig({ ...state.effective, ...scalarizeFilamentConfig(initialOverrides) })
       })
       .catch((err: unknown) => {
         if (cancelled) return

@@ -120,6 +120,7 @@ import {
   type EditorPlate,
   type EditorState
 } from './lib/editorModel'
+import { useSidebarResize } from './lib/useSidebarResize'
 import {
   fetchImportMesh,
   stageImportFromFile,
@@ -584,6 +585,7 @@ function EditorView({
   // Only meaningful when launched with slice settings (sliceConfig present); Settings
   // is the default since configuring the slice is the primary task.
   const [sidebarTab, setSidebarTab] = useState<'objects' | 'settings'>('settings')
+  const { sidebarWidth, resizeHandleProps } = useSidebarResize()
   const isMobile = useMobileViewport()
   // On phones the 3D view and settings can't sit side by side, so the user toggles
   // between them; the model/per-object list lives in a slide-up bottom sheet.
@@ -4116,7 +4118,7 @@ function EditorView({
                   minHeight: 0,
                   display: 'grid',
                   gap: 1,
-                  gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) 388px' },
+                  gridTemplateColumns: { xs: '1fr', sm: `minmax(0, 1fr) ${sidebarWidth}px` },
                   gridTemplateRows: { xs: 'auto minmax(0, 1fr) auto', sm: 'auto minmax(0, 1fr)' },
                   gridTemplateAreas: {
                     xs: '"plates" "viewport" "panel"',
@@ -4126,7 +4128,27 @@ function EditorView({
               >
                 <Box sx={{ gridArea: 'plates', minWidth: 0 }}>{plateStrip}</Box>
                 {viewport}
-                <Box sx={{ gridArea: 'panel', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <Box sx={{ gridArea: 'panel', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                  {/* Desktop-only grab strip straddling the grid gap on the panel's left edge;
+                      drag to resize the sidebar, double-click to reset (useSidebarResize). */}
+                  <Box
+                    aria-hidden
+                    onPointerDown={resizeHandleProps.onPointerDown}
+                    onDoubleClick={resizeHandleProps.onDoubleClick}
+                    sx={{
+                      display: { xs: 'none', sm: 'block' },
+                      position: 'absolute',
+                      left: -9,
+                      top: 0,
+                      bottom: 0,
+                      width: 10,
+                      cursor: 'col-resize',
+                      touchAction: 'none',
+                      zIndex: 2,
+                      '&::after': { content: '""', position: 'absolute', left: 4, top: 0, bottom: 0, width: '2px', borderRadius: '1px', bgcolor: 'transparent', transition: 'background-color 120ms' },
+                      '&:hover::after, &:active::after': { bgcolor: 'primary.solidBg' }
+                    }}
+                  />
                   {sliceConfig ? (
                     <Sheet
                       variant="outlined"

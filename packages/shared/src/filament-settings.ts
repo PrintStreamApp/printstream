@@ -19,7 +19,7 @@
  * loaded filament profile at slice time (apps/slicer materializeProfileFile).
  */
 import { z } from 'zod'
-import type { ProcessConfig, ProcessSettingsCatalog } from './process-settings.js'
+import { processConfigValuesEqual, type ProcessConfig, type ProcessSettingsCatalog } from './process-settings.js'
 import { filamentSettingsCatalog } from './generated/filament-settings.generated.js'
 
 export { filamentSettingsCatalog }
@@ -97,6 +97,60 @@ export function applyFilamentConfigDefaults(config: ProcessConfig): ProcessConfi
     if (option.default !== undefined) result[key] = option.default
   }
   return result
+}
+
+/**
+ * Normalized view of a `resolve-filament` response: the scalarized effective/baseline configs the
+ * material dialog edits against, the fallback changed-keys record, and each key's original
+ * per-variant vector shape (for broadcasting an edited scalar back at apply time). Owned here so
+ * the dialog and the pre-open "changed values" badge derive from ONE implementation and can never
+ * disagree about what counts as modified.
+ */
+export interface ResolvedFilamentState {
+  /** Values shown/sliced: the profile's own config over parent/catalog fill (element-0 scalars). */
+  effective: ProcessConfig
+  /** Reset/diff baseline: the parent preset where it defines a key, the own value elsewhere. */
+  baseline: ProcessConfig
+  /** Fallback changed-keys record (`different_settings_to_system`) when the parent didn't resolve. */
+  bakedKeys: string[]
+  /** Per-key original vector length (baseline's shape preferred, own config's as fallback). */
+  shapes: Record<string, number>
+}
+
+export function prepareResolvedFilamentState(response: ResolveFilamentConfigResponse): ResolvedFilamentState {
+  const rawBase = applyFilamentConfigDefaults(response.baseConfig ?? response.config)
+  const shapes: Record<string, number> = {}
+  for (const [key, value] of Object.entries(response.config)) shapes[key] = Array.isArray(value) ? value.length : 1
+  for (const [key, value] of Object.entries(rawBase)) shapes[key] = Array.isArray(value) ? value.length : 1
+  const parent = scalarizeFilamentConfig(rawBase)
+  const own = scalarizeFilamentConfig(response.config)
+  const effective = { ...parent, ...own }
+  // Keys the parent doesn't define fall back to the own value as baseline, so a value the project
+  // carries but the preset omits (often a blank) never reads as changed-against-nothing.
+  const baseline = { ...effective, ...parent }
+  return { effective, baseline, bakedKeys: response.overriddenKeys ?? [], shapes }
+}
+
+/**
+ * Catalog keys whose FINAL sliced value (effective config + the given session overrides) differs
+ * from the external preset — the count a fresh dialog would flag, and the number the slice
+ * dialog's pre-open badge shows. Note the healing property: overrides that push a drifted value
+ * BACK to the preset value reduce this count (a fully reset material reads 0 even though heal
+ * overrides ride the slice request).
+ */
+export function resolvedFilamentModifiedKeys(state: ResolvedFilamentState, overrides: ProcessConfig = {}): string[] {
+  const finalConfig = { ...state.effective, ...scalarizeFilamentConfig(overrides) }
+  const keys = new Set<string>()
+  for (const key of Object.keys(finalConfig)) {
+    if (!FILAMENT_SETTING_KEYS.has(key)) continue
+    if (!processConfigValuesEqual(state.baseline[key], finalConfig[key])) keys.add(key)
+  }
+  // Record-marked keys stay flagged while untouched relative to the embedded config (parent
+  // baseline unresolved), mirroring the dialog's bakedKeys condition.
+  for (const key of state.bakedKeys) {
+    if (FILAMENT_SETTING_KEYS.has(key) && processConfigValuesEqual(finalConfig[key], state.effective[key])) keys.add(key)
+  }
+  return [...keys]
 }
 
 /** Request body for resolving a filament profile's base config for the material dialog. */

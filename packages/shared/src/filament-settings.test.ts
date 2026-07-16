@@ -92,6 +92,38 @@ test('scalarizeFilamentConfig collapses per-variant vectors to element 0 so a mu
   assert.deepEqual(diffFilamentConfig(baseline, scalarizeFilamentConfig(project)), { retraction_distances_when_ec: '10' })
 })
 
+test('prepareResolvedFilamentState + resolvedFilamentModifiedKeys: drift shows, blanks do not, heal overrides zero it', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
+  const state = prepareResolvedFilamentState({
+    // Embedded project slot: ABS residue (270) under a PETG parent (255), plus a key the parent
+    // doesn't define (blank default_filament_colour).
+    config: { nozzle_temperature: '270', default_filament_colour: '', filament_flow_ratio: '0.95' },
+    baseConfig: { nozzle_temperature: ['255', '255'], filament_flow_ratio: ['0.95', '0.95'] },
+    overriddenKeys: []
+  })
+  // Drift flags; the parentless blank and the matching flow ratio do not.
+  assert.deepEqual(resolvedFilamentModifiedKeys(state).sort(), ['nozzle_temperature'])
+  // Session override moving the value further stays flagged…
+  assert.deepEqual(resolvedFilamentModifiedKeys(state, { nozzle_temperature: '280' }), ['nozzle_temperature'])
+  // …but a heal override back to the preset value reads clean (Reset all -> 0 badge).
+  assert.deepEqual(resolvedFilamentModifiedKeys(state, { nozzle_temperature: ['255', '255'] }), [])
+  // Shapes prefer the baseline's per-variant vector length.
+  assert.equal(state.shapes.nozzle_temperature, 2)
+})
+
+test('resolvedFilamentModifiedKeys falls back to the 3MF record when the parent is unresolved', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
+  // Parent not installed: baseConfig === config, so value-diff finds nothing; the record flags.
+  const state = prepareResolvedFilamentState({
+    config: { nozzle_temperature: '270' },
+    baseConfig: { nozzle_temperature: '270' },
+    overriddenKeys: ['nozzle_temperature']
+  })
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), ['nozzle_temperature'])
+  // A session edit replaces the record flag with a value flag (still exactly one key).
+  assert.deepEqual(resolvedFilamentModifiedKeys(state, { nozzle_temperature: '280' }), ['nozzle_temperature'])
+})
+
 test('override + resolve schemas validate their shapes', () => {
   assert.deepEqual(filamentSettingOverridesSchema.parse({ nozzle_temperature: ['240'] }), { nozzle_temperature: ['240'] })
   const req = resolveFilamentConfigRequestSchema.parse({ filamentProfileId: 'builtin:filament:x', projectFilamentId: 2 })

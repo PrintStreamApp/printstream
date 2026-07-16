@@ -671,3 +671,31 @@ export function processConfigValuesEqual(a: ProcessConfigValue | undefined, b: P
 export function serializeProcessBool(value: boolean): string {
   return value ? '1' : '0'
 }
+
+/**
+ * Catalog keys whose FINAL sliced value (the resolved profile's effective config + the given
+ * session overrides) differs from the external preset baseline — what a fresh
+ * ProcessSettingsDialog would flag as modified, surfaced as the slice dialog's pre-open "changed
+ * values" badge. Overrides that push a drifted value BACK to the baseline reduce the count (a
+ * fully reset profile reads 0 even though heal overrides ride the slice request). Counterpart of
+ * `resolvedFilamentModifiedKeys` in `filament-settings.ts`.
+ */
+export function resolvedProcessModifiedKeys(
+  response: { config: ProcessConfig; baseConfig?: ProcessConfig; overriddenKeys?: string[] },
+  overrides: ProcessConfig = {}
+): string[] {
+  const effective = applyProcessConfigDefaults(response.config)
+  const baseline = applyProcessConfigDefaults(response.baseConfig ?? response.config)
+  const finalConfig = { ...effective, ...overrides }
+  const keys = new Set<string>()
+  for (const key of Object.keys(finalConfig)) {
+    if (!isProcessSettingKey(key)) continue
+    if (!processConfigValuesEqual(baseline[key], finalConfig[key])) keys.add(key)
+  }
+  // 3MF-recorded changes whose baseline couldn't resolve stay flagged while untouched relative to
+  // the effective config, mirroring the dialog's bakedKeys condition.
+  for (const key of response.overriddenKeys ?? []) {
+    if (isProcessSettingKey(key) && processConfigValuesEqual(finalConfig[key], effective[key])) keys.add(key)
+  }
+  return [...keys]
+}

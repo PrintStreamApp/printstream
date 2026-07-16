@@ -154,3 +154,20 @@ test('developer-mode gate hides develop-tier options unless developer mode is on
   assert.equal(isProcessOptionVisibleInMode(advancedOption!, false), true)
   assert.equal(isProcessOptionVisibleInMode(advancedOption!, true), true)
 })
+
+test('resolvedProcessModifiedKeys counts final-vs-baseline diffs, healed by overrides', async () => {
+  const { resolvedProcessModifiedKeys } = await import('./process-settings.js')
+  const response = {
+    config: { layer_height: '0.28', wall_loops: '2' },
+    baseConfig: { layer_height: '0.2', wall_loops: '2' },
+    overriddenKeys: []
+  }
+  assert.deepEqual(resolvedProcessModifiedKeys(response), ['layer_height'])
+  // A session override back to the baseline value heals the badge to zero.
+  assert.deepEqual(resolvedProcessModifiedKeys(response, { layer_height: '0.2' }), [])
+  // The 3MF record stands in when the baseline could not resolve (baseConfig === config).
+  assert.deepEqual(
+    resolvedProcessModifiedKeys({ config: { layer_height: '0.28' }, baseConfig: { layer_height: '0.28' }, overriddenKeys: ['layer_height'] }),
+    ['layer_height']
+  )
+})

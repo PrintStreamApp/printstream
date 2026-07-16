@@ -17,7 +17,6 @@ import {
 } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
-import EditRoundedIcon from '@mui/icons-material/EditRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import RestoreRoundedIcon from '@mui/icons-material/RestoreRounded'
@@ -50,6 +49,7 @@ import {
   type SliceMaterialOption
 } from '../../lib/sliceProfileMatching'
 import { FilamentColorPicker } from './FilamentColorPicker'
+import { useFilamentChangedCount, useProcessChangedCount } from './useBakedPresetChanges'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { buildTenantWorkspacePath } from '../../lib/workspaceRoute'
 
@@ -277,6 +277,14 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
   const showPerObjectRow = mode === 'simple'
   // Add/remove materials is an editing affordance (Bambu-style) — only in the editor.
   const showMaterialEditing = mode === 'editor'
+  // Pre-open "changed values" badge for the process row: how far the FINAL sliced values
+  // (embedded project config + session overrides) differ from the external preset.
+  const processChangedCount = useProcessChangedCount({
+    slicerTargetId: selectedSlicerTargetIdForGuards,
+    processProfileId: selectedProcessProfile?.id ?? null,
+    sourceFileId: file.id,
+    overrides: processSettingOverrides
+  })
   return (
     <>
       {slicerStatus.capabilitiesLoading && !slicerStatus.hasCapabilities && (
@@ -507,7 +515,7 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                   value={selectedProcessProfile}
                   placeholder="Choose a quality profile"
                   ariaLabel="Preset"
-                  modified={processProfileModified}
+                  modified={processProfileModified || processChangedCount > 0}
                   onChange={(profile) => {
                     // Snapshot the pre-switch profile+overrides for undo/dirty (no-op outside the editor).
                     processEditListenerRef.current?.()
@@ -517,22 +525,24 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                   }}
                 />
               </Box>
-              <Tooltip title={selectedProcessProfile ? 'Edit process settings' : 'Choose a quality profile first'}>
+              <Tooltip title={selectedProcessProfile
+                ? (processChangedCount > 0 ? `Edit process settings — ${processChangedCount} changed vs preset` : 'Edit process settings')
+                : 'Choose a quality profile first'}
+              >
                 <span>
-                  <Button
-                    variant="outlined"
+                  <IconButton
+                    size="sm"
+                    variant="plain"
                     color="neutral"
-                    startDecorator={<EditRoundedIcon />}
                     disabled={!selectedProcessProfile || !selectedSlicerTargetIdForGuards}
                     onClick={() => setProcessSettingsDialogOpen(true)}
+                    aria-label="Edit process settings"
                   >
-                    Edit
-                    {Object.keys(processSettingOverrides).length > 0 && (
-                      <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.75 }}>
-                        {Object.keys(processSettingOverrides).length}
-                      </Chip>
+                    <TuneRoundedIcon fontSize="small" />
+                    {processChangedCount > 0 && (
+                      <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.5 }}>{processChangedCount}</Chip>
                     )}
-                  </Button>
+                  </IconButton>
                 </span>
               </Tooltip>
             </Stack>
@@ -613,35 +623,15 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                       Choose from printer
                     </Button>
                   )}
-                  {(() => {
-                    // The tune dialog needs a resolvable filament profile id: the option's own
-                    // profileId (builtin/custom), or the underlying id for a project-embedded profile
-                    // (option id = `profile:<profileId>`). A loaded material with no matched preset has
-                    // neither, so editing is disabled until one is picked.
-                    const filamentProfileId = selectedOption?.profileId
-                      ?? (selectedOption?.id.startsWith('profile:') ? selectedOption.id.slice('profile:'.length) : null)
-                    const overrideCount = Object.keys(filamentSettingOverridesById[filament.projectFilamentId] ?? {}).length
-                    const disabled = !filamentProfileId || !selectedSlicerTargetIdForGuards
-                    return (
-                      <Tooltip title={filamentProfileId ? 'Edit filament settings' : 'Choose a material profile first'}>
-                        <span>
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="neutral"
-                            disabled={disabled}
-                            onClick={() => openFilamentSettings(filament.projectFilamentId)}
-                            aria-label={`Edit filament settings for material ${filamentIndex + 1}`}
-                          >
-                            <TuneRoundedIcon fontSize="small" />
-                            {overrideCount > 0 && (
-                              <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.5 }}>{overrideCount}</Chip>
-                            )}
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    )
-                  })()}
+                  <FilamentTuneButton
+                    filamentIndex={filamentIndex}
+                    projectFilamentId={filament.projectFilamentId}
+                    selectedOption={selectedOption}
+                    slicerTargetId={selectedSlicerTargetIdForGuards}
+                    sourceFileId={file.id}
+                    overrides={filamentSettingOverridesById[filament.projectFilamentId] ?? {}}
+                    onOpen={() => openFilamentSettings(filament.projectFilamentId)}
+                  />
                   {showMaterialEditing && (() => {
                     const inUse = filamentInUse?.(filament.projectFilamentId) ?? false
                     const supportOnly = filamentSupportOnly?.(filament.projectFilamentId) ?? false
@@ -894,3 +884,50 @@ function SliceMaterialAutocomplete({
   )
 }
 
+
+/**
+ * Material "tune" button + pre-open changed-values badge. Its own component (rather than inline in
+ * the material row map) so the per-material resolve hook is legal; the badge counts how far the
+ * material's FINAL sliced values (embedded config + session overrides) differ from the external
+ * preset — same math as the FilamentSettingsDialog, so badge and dialog always agree.
+ */
+function FilamentTuneButton(props: {
+  filamentIndex: number
+  projectFilamentId: number
+  selectedOption: SliceMaterialOption | null
+  slicerTargetId: string
+  sourceFileId: string
+  overrides: Record<string, string | string[]>
+  onOpen: () => void
+}): JSX.Element {
+  const { filamentIndex, projectFilamentId, selectedOption, slicerTargetId, sourceFileId, overrides, onOpen } = props
+  // The tune dialog needs a resolvable filament profile id: the option's own profileId
+  // (builtin/custom), or the underlying id for a project-embedded profile (option id =
+  // `profile:<profileId>`). A loaded material with no matched preset has neither, so editing is
+  // disabled until one is picked.
+  const filamentProfileId = selectedOption?.profileId
+    ?? (selectedOption?.id.startsWith('profile:') ? selectedOption.id.slice('profile:'.length) : null)
+  const changedCount = useFilamentChangedCount({ slicerTargetId, filamentProfileId, sourceFileId, projectFilamentId, overrides })
+  return (
+    <Tooltip title={filamentProfileId
+      ? (changedCount > 0 ? `Edit filament settings — ${changedCount} changed vs preset` : 'Edit filament settings')
+      : 'Choose a material profile first'}
+    >
+      <span>
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          disabled={!filamentProfileId || !slicerTargetId}
+          onClick={onOpen}
+          aria-label={`Edit filament settings for material ${filamentIndex + 1}`}
+        >
+          <TuneRoundedIcon fontSize="small" />
+          {changedCount > 0 && (
+            <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.5 }}>{changedCount}</Chip>
+          )}
+        </IconButton>
+      </span>
+    </Tooltip>
+  )
+}
