@@ -731,7 +731,20 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
   /** Project filaments designated as support material (`support_filament`/`support_interface_filament`/`filament_is_support`). */
   supportFilamentIds: z.array(z.number().int().positive()).default([]),
   printerProfileName: z.string().nullable().default(null),
-  processProfileName: z.string().nullable().default(null)
+  processProfileName: z.string().nullable().default(null),
+  /**
+   * No Bambu project metadata (a vanilla/CAD-exported mesh container — see the shared
+   * index parser): consumers treat the file like STL/STEP, never as an openable project.
+   * Defaulted so an index from a not-yet-updated bridge parses as a project (the
+   * pre-existing behavior).
+   */
+  geometryOnly: z.boolean().default(false),
+  /**
+   * The editor's single-object 3MF export (the `printstream_model_kind` marker in
+   * project_settings.config): a full project by construction, but treated as a reusable
+   * MODEL by default (preview on click) with slice/edit still reachable from menus.
+   */
+  objectExport: z.boolean().default(false)
 })
 
 export type BridgeLibraryThreeMfIndex = z.infer<typeof bridgeLibraryThreeMfIndexSchema>

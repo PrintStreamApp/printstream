@@ -41,7 +41,8 @@ export interface ImportedMeshPart {
   mesh: ImportedMesh
 }
 
-const MAX_IMPORT_TRIANGLES = 5_000_000
+/** Ceiling for any staged import's merged triangle count (STL/STEP parse and 3MF extraction). */
+export const MAX_IMPORT_TRIANGLES = 5_000_000
 
 /**
  * Weld exact-duplicate vertex positions into shared indexed vertices (dropping triangles

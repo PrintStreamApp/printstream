@@ -44,7 +44,9 @@ function buildIndex(overrides: {
     compatiblePrinterModels: [],
     supportFilamentIds: [],
     printerProfileName: null,
-    processProfileName: null
+    processProfileName: null,
+    geometryOnly: false,
+    objectExport: false
   }
 }
 

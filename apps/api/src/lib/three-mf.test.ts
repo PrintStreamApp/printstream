@@ -9,7 +9,7 @@ import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
 import { plateSkipIdentifyIdsFromIndex } from './three-mf-output.js'
-import { applyFilamentList, applyGlobalProcessOverrides, applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
+import { applyFilamentList, applyGlobalProcessOverrides, applyModelKindMarker, applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
 import { rewriteThreeMfEntries } from './three-mf-internal.js'
 import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
 import type { SceneEdit, SceneEditFilament } from '@printstream/shared'
@@ -37,6 +37,31 @@ const projectSettingsJson = JSON.stringify({
   printer_model: ['Bambu Lab P2S'],
   physical_extruder_map: ['0', '1'],
   extruder_nozzle_stats: ['tool#1', 'tool#0']
+})
+
+test('buildThreeMfIndex flags geometry-only 3MFs (no Bambu metadata) and only those', () => {
+  // Vanilla mesh container: neither slice_info nor model_settings — the plate is fabricated.
+  const vanilla = buildThreeMfIndex(null, null, new Map())
+  assert.equal(vanilla.geometryOnly, true)
+  assert.equal(vanilla.plates.length, 1)
+  // Any model_settings plate (even the empty new-project scaffold's) marks a real project.
+  const scaffold = buildThreeMfIndex(null, null, new Map([[1, 'Plate 1']]))
+  assert.equal(scaffold.geometryOnly, false)
+  // slice_info alone (a sliced gcode.3mf) is a project too.
+  const sliced = buildThreeMfIndex('<config><plate><metadata key="index" value="1"/></plate></config>', null, new Map())
+  assert.equal(sliced.geometryOnly, false)
+})
+
+test('single-object model exports round-trip the model-kind marker', () => {
+  // The bake stamps project_settings; the index parser reads it back as `objectExport`.
+  const stamped = applyModelKindMarker(JSON.stringify({ printer_settings_id: 'X' }))
+  const index = buildThreeMfIndex(null, stamped, new Map([[1, 'Plate 1']]))
+  assert.equal(index.objectExport, true)
+  assert.equal(index.geometryOnly, false)
+  // Ordinary projects (no marker) stay unflagged.
+  assert.equal(buildThreeMfIndex(null, JSON.stringify({ printer_settings_id: 'X' }), new Map([[1, 'Plate 1']])).objectExport, false)
+  // The marker never destroys existing settings keys.
+  assert.equal((JSON.parse(stamped) as Record<string, unknown>).printer_settings_id, 'X')
 })
 
 test('buildThreeMfIndex distinguishes A1 mini from A1 (mini must not classify as A1)', () => {

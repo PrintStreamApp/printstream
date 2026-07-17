@@ -967,6 +967,19 @@ export const libraryFileSchema = z.object({
   projectFilamentChips: z.array(projectFilamentChipSchema),
   /** Plates in the 3MF project index; absent or 0 when unknown or not a 3MF. */
   plateCount: z.number().int().nonnegative().optional(),
+  /**
+   * A 3MF with no Bambu project metadata (a vanilla/CAD mesh container). Such a file is
+   * not an openable project — the web treats it like STL/STEP (preview-only card, mesh
+   * thumbnail, importable into projects). Absent for other kinds and for real projects.
+   */
+  geometryOnly: z.boolean().optional(),
+  /**
+   * A single-object 3MF produced by the editor's "Export object as 3MF" (marker-stamped).
+   * A full project internally (parts/materials/paint preserved), but its default library
+   * treatment is model-like: clicking opens the 3D preview; slicing/editing stays
+   * available from explicit menu actions.
+   */
+  objectExport: z.boolean().optional(),
   /** Display name of whoever added/replaced/restored the current content. */
   createdByName: z.string().nullable().optional(),
   /** Set when the content was produced by restoring this older version number. */

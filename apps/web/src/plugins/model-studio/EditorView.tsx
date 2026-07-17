@@ -62,10 +62,13 @@ import type {
   StagedImport,
   ThreeMfIndex
 } from '@printstream/shared'
-import { PER_OBJECT_PROCESS_KEYS } from '@printstream/shared'
+import { LIBRARY_DOWNLOAD_PERMISSION, LIBRARY_UPLOAD_PERMISSION, PER_OBJECT_PROCESS_KEYS } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { resolveProjectFilamentColorName } from '../../lib/filamentColor'
 import { buildApiUrl } from '../../lib/apiUrl'
+import { useAuthBootstrapQuery } from '../../lib/authQuery'
+import { downloadBlob } from '../../lib/downloadBlob'
+import { enqueueLibraryUploads } from '../../lib/libraryUploadQueue'
 import { toast } from '../../lib/toast'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
@@ -137,6 +140,15 @@ import {
   triangleSoupToBinaryStl,
   type CutAxis
 } from './lib/meshCut'
+import {
+  buildObjectStl,
+  buildObjectsStl,
+  buildPartsStl,
+  groupHasExcludedVolumes,
+  partsExportName,
+  stlExportBaseName,
+  stlExportFileName
+} from './lib/objectExport'
 import {
   ADDED_PART_MESH_NAME,
   ADDED_PART_SPECS,
@@ -564,6 +576,17 @@ function EditorView({
   // When set, the next picked library file / uploaded local file replaces this instance's
   // geometry in place (Replace flow) instead of adding a new model to the plate.
   const [replaceTargetKey, setReplaceTargetKey] = useState<string | null>(null)
+  // Pending export-to-library request (destination dialog open). 'object'/'merged'/'parts'
+  // save one named STL; 'separate' saves one STL per selected object (no name field —
+  // each file is named after its object). Downloads never set this; they run immediately.
+  const [exportRequest, setExportRequest] = useState<
+    | { kind: 'object'; key: string }
+    | { kind: 'project'; key: string }
+    | { kind: 'merged'; keys: ReadonlyArray<string> }
+    | { kind: 'separate'; keys: ReadonlyArray<string> }
+    | { kind: 'parts'; ownerId: number; componentObjectIds: ReadonlyArray<number> }
+    | null
+  >(null)
   // Per-object process overrides now live inline in the sidebar object list (no
   // separate dialog/button); the active object's override editor is a sub-dialog.
   const perObject = sliceConfig?.perObjectSettings ?? null
@@ -680,6 +703,15 @@ function EditorView({
     queryFn: ({ signal }) => apiFetch<{ folders: LibraryFolder[] }>(`/api/library/folders?bridgeId=${encodeURIComponent(saveAsBridgeId!)}`, { signal }),
     staleTime: 60_000
   })
+  // Library permissions gate the object export-as-STL targets, mirroring LibraryView:
+  // downloading to the PC needs library.download, exporting into the library needs
+  // library.upload (both open when auth is disabled). The server enforces the upload
+  // permission regardless; this only decides which menu items appear.
+  const authBootstrapQuery = useAuthBootstrapQuery()
+  const editorAuthEnabled = authBootstrapQuery.data?.authEnabled ?? false
+  const editorPermissions = authBootstrapQuery.data?.permissions
+  const canExportDownload = !editorAuthEnabled || (editorPermissions ?? []).includes(LIBRARY_DOWNLOAD_PERMISSION)
+  const canExportToLibrary = !editorAuthEnabled || (editorPermissions ?? []).includes(LIBRARY_UPLOAD_PERMISSION)
 
   const plateIndices = useMemo(
     () => (platesQuery.data?.plates ?? []).map((plate) => plate.index),
@@ -1239,6 +1271,10 @@ function EditorView({
             // subtype: an import solid retyped via "Change type" (e.g. to a modifier volume)
             // renders translucent like a baked part of that type.
             const partGroup = createThreeMfPartObject(geometry, { color: partColor, clearanceTransform: placement, subtype: part.subtype })
+            // Part identity for per-part export. Deliberately NOT `partRef`: that key drives the
+            // baked-part gizmo/selection write-back, whose transforms bake by REAL 3MF object id —
+            // an import's synthetic identity must stay out of that path.
+            partGroup.userData.importPartRef = { componentObjectId: part.componentObjectId }
             if (!isModifierVolumeSubtype(part.subtype)) {
               const partMesh = partGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
               if (partMesh) {
@@ -2264,10 +2300,13 @@ function EditorView({
    * keyed on the instance set (`platesSignature`), so it does not refire when objects are
    * merely moved/rotated/scaled — capturing here at save/slice time guarantees the persisted
    * output's thumbnail matches the real layout instead of a stale one. Also refreshes the
-   * live plate-strip previews as a side effect.
+   * live plate-strip previews as a side effect — unless `updateLive: false`, for renders of
+   * a synthetic state (the single-object 3MF export) that must not repaint the strip.
+   * `force: true` renders plates the user never opened (the export's plate is synthetic,
+   * so it has no live thumbnail to key the default skip on).
    */
   const captureAllPlateThumbnails = useCallback(
-    async (current: EditorState): Promise<Array<{ plateIndex: number; png: string }>> => {
+    async (current: EditorState, options?: { force?: boolean; updateLive?: boolean }): Promise<Array<{ plateIndex: number; png: string }>> => {
       const renderer = getThumbnailRenderer()
       const out: Array<{ plateIndex: number; png: string }> = []
       for (const plate of current.plates) {
@@ -2276,7 +2315,7 @@ function EditorView({
         // their geometry is already cached, so this is cheap. Unopened plates are skipped: the
         // bake (embedPlateThumbnails) preserves their original embedded PNG, so a large
         // multi-plate project never loads every plate's geometry just to save.
-        if (!plateThumbnailsRef.current[plate.index]) continue
+        if (!options?.force && !plateThumbnailsRef.current[plate.index]) continue
         const group = new THREE.Group()
         try {
           for (const instance of plate.instances) {
@@ -2284,7 +2323,7 @@ function EditorView({
             if (built) group.add(built)
           }
           const url = renderer.render(group, plate.bed)
-          setPlateThumbnails((existing) => ({ ...existing, [plate.index]: url }))
+          if (options?.updateLive !== false) setPlateThumbnails((existing) => ({ ...existing, [plate.index]: url }))
           const png = url.replace(/^data:image\/png;base64,/, '')
           if (png.length > 0) out.push({ plateIndex: plate.index, png })
         } catch {
@@ -2692,6 +2731,149 @@ function EditorView({
       setImporting(false)
     }
   }, [activePlateIndex, updatePlates])
+
+  /** Active-plate instances + live render groups for the given keys (missing entries dropped). */
+  const exportMembersFor = useCallback((keys: ReadonlyArray<string>) => {
+    const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
+    return keys
+      .map((key) => ({ instance: plate?.instances.find((entry) => entry.key === key), group: groupByKeyRef.current.get(key) }))
+      .filter((member): member is { instance: EditorInstance; group: THREE.Group } => Boolean(member.instance && member.group))
+  }, [activePlateIndex])
+
+  /**
+   * Build ONE STL for the given objects (BambuStudio's "Export as one STL"): model
+   * parts merged with world placement baked (a multi-object selection keeps its
+   * relative layout), re-centred on the origin. Helper volumes (negative parts,
+   * modifiers, support blockers/enforcers) are dropped — there is no client-side mesh
+   * boolean — so `droppedVolumes` lets the caller tell the user. Returns null (with an
+   * error toast) when nothing solid remains, e.g. every part is a modifier.
+   */
+  const buildSelectionStl = useCallback((keys: ReadonlyArray<string>): { stl: ArrayBuffer; name: string; droppedVolumes: boolean } | null => {
+    const members = exportMembersFor(keys)
+    if (members.length === 0) return null
+    const stl = buildObjectsStl(members.map((member) => member.group))
+    if (!stl) {
+      toast.error(members.length === 1
+        ? `${members[0]!.instance.name} has no solid geometry to export.`
+        : 'The selected objects have no solid geometry to export.')
+      return null
+    }
+    return { stl, name: members[0]!.instance.name, droppedVolumes: members.some((member) => groupHasExcludedVolumes(member.group)) }
+  }, [exportMembersFor])
+
+  /**
+   * Build one STL PER object (BambuStudio's "Export as STLs…"), each named after its
+   * object with a " (2)"-style suffix deduping repeats. Objects with no solid geometry
+   * are skipped; null (with an error toast) when nothing at all can be exported.
+   */
+  const buildSelectionStlFiles = useCallback((keys: ReadonlyArray<string>): Array<{ fileName: string; stl: ArrayBuffer; droppedVolumes: boolean }> | null => {
+    const members = exportMembersFor(keys)
+    if (members.length === 0) return null
+    const nameCounts = new Map<string, number>()
+    const files: Array<{ fileName: string; stl: ArrayBuffer; droppedVolumes: boolean }> = []
+    for (const member of members) {
+      const stl = buildObjectStl(member.group)
+      if (!stl) continue
+      const base = stlExportBaseName(member.instance.name)
+      const count = (nameCounts.get(base) ?? 0) + 1
+      nameCounts.set(base, count)
+      files.push({
+        fileName: `${count === 1 ? base : `${base} (${count})`}.stl`,
+        stl,
+        droppedVolumes: groupHasExcludedVolumes(member.group)
+      })
+    }
+    if (files.length === 0) {
+      toast.error('The selected objects have no solid geometry to export.')
+      return null
+    }
+    return files
+  }, [exportMembersFor])
+
+  /**
+   * Build one STL for specific PARTS of one object (the part menu's export) — including
+   * a selected helper volume, since picking it is the deliberate ask. `ownerId` is the
+   * part selection's object key: the Bambu object id, or an import's synthetic
+   * `replacedObjectId` (the same ownership rule as part type/material changes).
+   */
+  const buildPartsExport = useCallback((ownerId: number, componentObjectIds: ReadonlyArray<number>): { stl: ArrayBuffer; name: string; droppedVolumes: boolean } | null => {
+    const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
+    const instance = plate?.instances.find((entry) =>
+      (entry.source.kind === 'object' ? entry.objectId : entry.source.replacedObjectId) === ownerId)
+    const group = instance ? groupByKeyRef.current.get(instance.key) : undefined
+    if (!instance || !group) return null
+    const stl = buildPartsStl(group, componentObjectIds)
+    if (!stl) {
+      toast.error('The selected parts have no geometry to export.')
+      return null
+    }
+    return { stl, name: partsExportName(instance, componentObjectIds), droppedVolumes: false }
+  }, [activePlateIndex])
+
+  const downloadExportedStl = useCallback((built: { stl: ArrayBuffer; name: string; droppedVolumes: boolean }) => {
+    const fileName = stlExportFileName(built.name)
+    downloadBlob(new Blob([built.stl], { type: 'application/octet-stream' }), fileName)
+    if (built.droppedVolumes) {
+      toast.warn(`Exported ${fileName} — negative, modifier, and support volumes are not included.`)
+    } else {
+      toast.success(`Exported ${fileName}.`)
+    }
+  }, [])
+
+  const handleExportMergedDownload = useCallback((keys: ReadonlyArray<string>) => {
+    const built = buildSelectionStl(keys)
+    if (built) downloadExportedStl(built)
+  }, [buildSelectionStl, downloadExportedStl])
+
+  const handleExportSeparateDownload = useCallback((keys: ReadonlyArray<string>) => {
+    const files = buildSelectionStlFiles(keys)
+    if (!files) return
+    for (const file of files) {
+      downloadBlob(new Blob([file.stl], { type: 'application/octet-stream' }), file.fileName)
+    }
+    if (files.some((file) => file.droppedVolumes)) {
+      toast.warn(`Exported ${files.length} STLs — negative, modifier, and support volumes are not included.`)
+    } else {
+      toast.success(`Exported ${files.length} STLs.`)
+    }
+  }, [buildSelectionStlFiles])
+
+  const handleExportPartsDownload = useCallback((ownerId: number, componentObjectIds: ReadonlyArray<number>) => {
+    const built = buildPartsExport(ownerId, componentObjectIds)
+    if (built) downloadExportedStl(built)
+  }, [buildPartsExport, downloadExportedStl])
+
+  /** Destination-dialog submit for export-to-library: upload through the shared queue (its toast reports progress). */
+  const handleExportToLibrarySubmit = useCallback((outputFileName: string | null, outputFolderId: string | null) => {
+    const request = exportRequest
+    setExportRequest(null)
+    if (!request) return
+    const destination = { folderId: outputFolderId, bridgeId: saveAsBridgeId }
+    if (request.kind === 'separate') {
+      const files = buildSelectionStlFiles(request.keys)
+      if (!files) return
+      enqueueLibraryUploads(
+        files.map((file) => ({ file: new File([file.stl], file.fileName, { type: 'application/octet-stream' }), folderSegments: [] })),
+        destination
+      )
+      if (files.some((file) => file.droppedVolumes)) {
+        toast.warn('Negative, modifier, and support volumes are not included in the exported STLs.')
+      }
+      return
+    }
+    if (!outputFileName) return
+    // 'project' never lands here (the dialog dispatches it straight to the save hook),
+    // but the narrowing treats both single-key kinds the same.
+    const built = request.kind === 'parts'
+      ? buildPartsExport(request.ownerId, request.componentObjectIds)
+      : buildSelectionStl(request.kind === 'object' || request.kind === 'project' ? [request.key] : request.keys)
+    if (!built) return
+    const file = new File([built.stl], `${outputFileName}.stl`, { type: 'application/octet-stream' })
+    enqueueLibraryUploads([{ file, folderSegments: [] }], destination)
+    if (built.droppedVolumes) {
+      toast.warn(`Exporting ${file.name} — negative, modifier, and support volumes are not included.`)
+    }
+  }, [exportRequest, buildSelectionStlFiles, buildPartsExport, buildSelectionStl, saveAsBridgeId])
 
   /**
    * Add a new part volume (negative part / modifier / support blocker / enforcer)
@@ -3579,7 +3761,9 @@ function EditorView({
     handleApply,
     handleCloseRequest,
     handleSaveVersion,
-    handleSaveAs
+    handleSaveAs,
+    handleExportObjectAs3mf,
+    handleExportObjectAs3mfDownload
   } = useEditorSave({
     stateRef,
     sliceConfigRef,
@@ -4293,11 +4477,11 @@ function EditorView({
           />
         </DialogActions>
 
-        {/* Hidden picker for "Import file…" — STL required; STEP server-tessellated. */}
+        {/* Hidden picker for "Import file…" — STL parsed, STEP server-tessellated, 3MF geometry-extracted. */}
         <input
           ref={fileInputRef}
           type="file"
-          accept=".stl,.step,.stp"
+          accept=".stl,.step,.stp,.3mf"
           hidden
           onChange={(event) => {
             const file = event.target.files?.[0]
@@ -4323,6 +4507,18 @@ function EditorView({
             onAssemble={() => { void handleAssembleSelection() }}
             onReplaceFromLibrary={(key) => { setReplaceTargetKey(key); setLibraryPickerOpen(true) }}
             onReplaceFromFile={(key) => { setReplaceTargetKey(key); fileInputRef.current?.click() }}
+            onExportDownload={canExportDownload ? (key) => handleExportMergedDownload([key]) : undefined}
+            onExportToLibrary={canExportToLibrary ? (key) => setExportRequest({ kind: 'object', key }) : undefined}
+            onExportProjectDownload={canExportDownload ? (key) => {
+              // Immediate download named after the object (matching the STL download items).
+              const name = activePlate?.instances.find((entry) => entry.key === key)?.name ?? ''
+              handleExportObjectAs3mfDownload(key, `${stlExportBaseName(name)}.3mf`)
+            } : undefined}
+            onExportProjectToLibrary={canExportToLibrary ? (key) => setExportRequest({ kind: 'project', key }) : undefined}
+            onExportMergedDownload={canExportDownload ? () => handleExportMergedDownload(selectionFor(contextMenu.key)) : undefined}
+            onExportMergedToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'merged', keys: selectionFor(contextMenu.key) }) : undefined}
+            onExportSeparateDownload={canExportDownload ? () => handleExportSeparateDownload(selectionFor(contextMenu.key)) : undefined}
+            onExportSeparateToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'separate', keys: selectionFor(contextMenu.key) }) : undefined}
             isObject={activePlate?.instances.find((entry) => entry.key === contextMenu.key)?.source.kind === 'object'}
             onRepairMesh={handleRepairMesh}
             isRepairMarked={(() => {
@@ -4367,6 +4563,8 @@ function EditorView({
               contextMenu.componentObjectIds.map((componentObjectId) => ({ objectId: contextMenu.objectId, componentObjectId })),
               filamentId
             )}
+            onExportDownload={canExportDownload ? () => handleExportPartsDownload(contextMenu.objectId, contextMenu.componentObjectIds) : undefined}
+            onExportToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'parts', ownerId: contextMenu.objectId, componentObjectIds: contextMenu.componentObjectIds }) : undefined}
             onEditSettings={perObject ? openPartSettingsForSelection : undefined}
           />
         )}
@@ -4400,7 +4598,7 @@ function EditorView({
     {saveAsOpen && (
       <LibraryDestinationDialog
         title="Save as new file"
-        description="Choose where to save the new file, then confirm the file name. Picking an existing file saves over it."
+        description="Choose where to save the new file, then confirm the file name. Saving with an existing file's name replaces it."
         showFiles
         fileNameField={{ label: 'File name', initialValue: saveAsSuggestedName, extension: '.3mf' }}
         initialFolderId={saveAsInitialFolderId}
@@ -4416,6 +4614,62 @@ function EditorView({
         onSubmit={({ outputFileName, outputFolderId }) => { if (outputFileName) handleSaveAs(outputFileName, outputFolderId) }}
       />
     )}
+
+    {exportRequest && (() => {
+      // Suggested file name per request shape; null = no name field ('separate' names
+      // each file after its object).
+      const suggestedName = (() => {
+        if (exportRequest.kind === 'separate') return null
+        if (exportRequest.kind === 'parts') {
+          const instance = activePlate?.instances.find((entry) =>
+            (entry.source.kind === 'object' ? entry.objectId : entry.source.replacedObjectId) === exportRequest.ownerId)
+          return instance ? partsExportName(instance, exportRequest.componentObjectIds) : ''
+        }
+        const key = exportRequest.kind === 'object' || exportRequest.kind === 'project' ? exportRequest.key : exportRequest.keys[0]
+        return activePlate?.instances.find((entry) => entry.key === key)?.name ?? ''
+      })()
+      return (
+        <LibraryDestinationDialog
+          title={exportRequest.kind === 'project' ? 'Export object as 3MF'
+            : exportRequest.kind === 'parts' ? 'Export parts as STL'
+            : exportRequest.kind === 'separate' ? 'Export objects as STLs'
+            : exportRequest.kind === 'merged' ? 'Export objects as one STL'
+            : 'Export object as STL'}
+          description={exportRequest.kind === 'project'
+            ? "Choose where to save the new project, then confirm the file name. The object keeps its parts, materials, and paint. Saving with an existing file's name replaces it."
+            : exportRequest.kind === 'separate'
+              ? 'Choose where to save the exported STLs — each selected object becomes its own file, named after the object. Existing files with the same names are replaced.'
+              : "Choose where to save the exported STL, then confirm the file name. Saving with an existing file's name replaces it."}
+          showFiles
+          fileNameField={suggestedName === null ? undefined : {
+            label: 'File name',
+            initialValue: stlExportBaseName(suggestedName),
+            extension: exportRequest.kind === 'project' ? '.3mf' : '.stl'
+          }}
+          initialFolderId={saveAsInitialFolderId}
+          folders={editorFoldersQuery.data?.folders ?? []}
+          bridgeId={saveAsBridgeId}
+          bridgeName={null}
+          showRoot
+          dialogWidth={720}
+          submitting={false}
+          error={null}
+          confirmActionLabel={({ outputFolderId, rootDestinationLabel }) => outputFolderId ? 'Export here' : `Export to ${rootDestinationLabel}`}
+          onClose={() => setExportRequest(null)}
+          onSubmit={({ outputFileName, outputFolderId }) => {
+            if (exportRequest.kind === 'project') {
+              // Server-side bake through the save pipeline (defined after this callback's
+              // sibling handlers by the save hook, so it is dispatched here, not in
+              // handleExportToLibrarySubmit).
+              setExportRequest(null)
+              if (outputFileName) handleExportObjectAs3mf(exportRequest.key, outputFileName, outputFolderId)
+              return
+            }
+            handleExportToLibrarySubmit(outputFileName ?? null, outputFolderId)
+          }}
+        />
+      )
+    })()}
 
     {editingPartKey && perObject && (() => {
       // Per-volume overrides for a modifier part: same restricted catalog as the

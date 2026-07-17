@@ -1,7 +1,8 @@
 /**
  * Right-click context menu for the selected PART(S) of one object (BambuStudio's
- * multi-volume menu): change type, change material, and per-part process settings,
- * each applied to every selected part.
+ * multi-volume menu): change type, change material, export the selection as one STL
+ * (download or save to the library; items appear per granted library permission),
+ * and per-part process settings, each applied to every selected part.
  *
  * Presentational: the parent owns the part selection, the menu's open state (shared
  * click-away/Escape wiring with the object context menu), and the bulk mutations.
@@ -9,12 +10,14 @@
  */
 import { useState, type MutableRefObject } from 'react'
 import { ListDivider, ListItemDecorator, Menu, MenuItem } from '@mui/joy'
-import { listItemDecoratorClasses } from '@mui/joy/ListItemDecorator'
 import type { SceneEditPartSubtype } from '@printstream/shared'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
+import FileDownloadRoundedIcon from '@mui/icons-material/FileDownloadRounded'
+import IosShareRoundedIcon from '@mui/icons-material/IosShareRounded'
+import LibraryAddRoundedIcon from '@mui/icons-material/LibraryAddRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
-import { ContextMenuBackItem, FilamentMenuItems, PartTypeMenuItems } from './contextMenuItems'
+import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX, ContextMenuBackItem, FilamentMenuItems, PartTypeMenuItems } from './contextMenuItems'
 import type { FilamentOption } from './EditorView'
 
 export interface EditorPartContextMenuProps {
@@ -29,14 +32,22 @@ export interface EditorPartContextMenuProps {
   /** Hidden when the project has no materials. */
   filamentOptions: ReadonlyArray<FilamentOption>
   onChangeMaterial: (filamentId: number) => void
+  /**
+   * Export-the-selected-parts-as-one-STL targets. Each is present only when the user
+   * holds the matching library permission (download / upload); when both are absent
+   * the Export item is hidden.
+   */
+  onExportDownload?: () => void
+  onExportToLibrary?: () => void
   /** Opens the per-part process settings dialog for the selection; absent without slice settings. */
   onEditSettings?: () => void
 }
 
 export function EditorPartContextMenu({
-  contextMenu, count, listboxRef, onClose, onChangeType, filamentOptions, onChangeMaterial, onEditSettings
+  contextMenu, count, listboxRef, onClose, onChangeType, filamentOptions, onChangeMaterial,
+  onExportDownload, onExportToLibrary, onEditSettings
 }: EditorPartContextMenuProps) {
-  const [view, setView] = useState<'root' | 'type' | 'material'>('root')
+  const [view, setView] = useState<'root' | 'type' | 'material' | 'export'>('root')
   const suffix = count > 1 ? ` (${count} parts)` : ''
   return (
     <Menu
@@ -45,19 +56,8 @@ export function EditorPartContextMenu({
       onClose={onClose}
       anchorEl={{ getBoundingClientRect: () => new DOMRect(contextMenu.x, contextMenu.y, 0, 0) }}
       placement="bottom-start"
-      // Keep the menu on-screen near an edge (flip + shift back into the viewport), and scroll if
-      // it is taller than the viewport, instead of clipping items off where they can't be clicked.
-      modifiers={[
-        { name: 'flip', options: { padding: 8 } },
-        { name: 'preventOverflow', options: { padding: 8 } }
-      ]}
-      sx={{
-        zIndex: (theme) => theme.zIndex.tooltip,
-        maxHeight: 'calc(100dvh - 16px)',
-        overflowY: 'auto',
-        [`& .${listItemDecoratorClasses.root}`]: { minInlineSize: '1.75rem' },
-        '& svg': { fontSize: '1.25rem' }
-      }}
+      modifiers={CONTEXT_MENU_POPPER_MODIFIERS}
+      sx={CONTEXT_MENU_SX}
     >
       {view === 'type' ? (
         <>
@@ -71,6 +71,23 @@ export function EditorPartContextMenu({
           <ListDivider />
           <FilamentMenuItems options={filamentOptions} onPick={(filamentId) => { onChangeMaterial(filamentId); onClose() }} />
         </>
+      ) : view === 'export' ? (
+        <>
+          <ContextMenuBackItem label={`Export as STL${suffix}`} onBack={() => setView('root')} />
+          <ListDivider />
+          {onExportDownload && (
+            <MenuItem onClick={() => { onClose(); onExportDownload() }}>
+              <ListItemDecorator><FileDownloadRoundedIcon /></ListItemDecorator>
+              Download
+            </MenuItem>
+          )}
+          {onExportToLibrary && (
+            <MenuItem onClick={() => { onClose(); onExportToLibrary() }}>
+              <ListItemDecorator><LibraryAddRoundedIcon /></ListItemDecorator>
+              Save to library…
+            </MenuItem>
+          )}
+        </>
       ) : (
         <>
           <MenuItem onClick={(event) => { event.stopPropagation(); setView('type') }}>
@@ -81,6 +98,12 @@ export function EditorPartContextMenu({
             <MenuItem onClick={(event) => { event.stopPropagation(); setView('material') }}>
               <ListItemDecorator><PaletteRoundedIcon /></ListItemDecorator>
               Change material{suffix}…
+            </MenuItem>
+          )}
+          {(onExportDownload || onExportToLibrary) && (
+            <MenuItem onClick={(event) => { event.stopPropagation(); setView('export') }}>
+              <ListItemDecorator><IosShareRoundedIcon /></ListItemDecorator>
+              Export as STL{suffix}…
             </MenuItem>
           )}
           {onEditSettings && (

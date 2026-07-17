@@ -55,7 +55,7 @@ test('orders routes create templates, expand order prints, and complete the orde
       finishedAt: null,
       cancelRequested: false
     }),
-    inspectBridgeLibraryThreeMf: async () => ({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null }),
+    inspectBridgeLibraryThreeMf: async () => ({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, geometryOnly: false, objectExport: false }),
     resolveLibraryFileToLocalPath: async (file) => path.join(testRoot, file.storedPath),
     readPlateIndex: async () => ({ plates: [] }) as never
   })
@@ -187,7 +187,7 @@ test('orders create only the selected template variants and multiplies their req
     enqueueLibraryPrint: async () => {
       throw new Error('not used in variant selection test')
     },
-    inspectBridgeLibraryThreeMf: async () => ({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null }),
+    inspectBridgeLibraryThreeMf: async () => ({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, geometryOnly: false, objectExport: false }),
     resolveLibraryFileToLocalPath: async (file) => path.join(testRoot, file.storedPath),
     readPlateIndex: async () => ({ plates: [] }) as never
   })

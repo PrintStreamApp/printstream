@@ -17,7 +17,7 @@
 import { createWriteStream } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { canonicalCurrBedType, isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTransform, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
-import { sliceExtruderForNozzleId, stringArray } from '@printstream/shared/three-mf'
+import { PRINTSTREAM_MODEL_KIND_KEY, PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT, sliceExtruderForNozzleId, stringArray } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import type { ImportedMesh } from './mesh-import.js'
@@ -1550,6 +1550,12 @@ export async function buildEditedThreeMf(
      * request instead) is unaffected — only the save route passes them.
      */
     globalProcessOverrides?: Record<string, string | string[]>
+    /**
+     * Stamp the output as a single-object model export (`printstream_model_kind` in
+     * project_settings.config — see the shared index parser's marker doc). Passed only
+     * by the editor's "Export object as 3MF" flows, never by ordinary saves.
+     */
+    objectExportMarker?: boolean
   } = {}
 ): Promise<BuildEditedThreeMfResult> {
   let baseModelXml = NEW_PROJECT_MODEL_XML
@@ -1648,6 +1654,9 @@ export async function buildEditedThreeMf(
   if (options.globalProcessOverrides && Object.keys(options.globalProcessOverrides).length > 0) {
     const overrides = options.globalProcessOverrides
     projectSettingsTransforms.push((json) => applyGlobalProcessOverrides(json, overrides))
+  }
+  if (options.objectExportMarker) {
+    projectSettingsTransforms.push(applyModelKindMarker)
   }
   const applyProjectSettings = (json: string) => projectSettingsTransforms.reduce((acc, transform) => transform(acc), json)
 
@@ -1799,6 +1808,24 @@ function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: string) =
  * and identical to the slicer's `applyProcessSettingOverrides`, so a saved override reopens as
  * the project's baseline (the editor then shows no pending override). No-op on unparseable JSON.
  */
+/**
+ * Stamp `project_settings.config` as a single-object model export. Reader counterpart:
+ * the shared index parser's `PRINTSTREAM_MODEL_KIND_KEY` extraction (see its doc for the
+ * BambuStudio unknown-key tolerance rationale).
+ */
+export function applyModelKindMarker(projectSettingsJson: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(projectSettingsJson)
+  } catch {
+    return projectSettingsJson
+  }
+  if (!parsed || typeof parsed !== 'object') return projectSettingsJson
+  const record = parsed as Record<string, unknown>
+  record[PRINTSTREAM_MODEL_KIND_KEY] = PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT
+  return JSON.stringify(record)
+}
+
 export function applyGlobalProcessOverrides(projectSettingsJson: string, overrides: Record<string, string | string[]>): string {
   let parsed: unknown
   try {

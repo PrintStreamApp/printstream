@@ -1538,16 +1538,18 @@ test('library mesh streams raw STL bytes to view-permitted actors', async () => 
   })
 })
 
-test('library mesh is unavailable for non-stl files', async () => {
+test('library mesh is unavailable for non-mesh kinds', async () => {
+  // gcode: rejected by the kind gate outright. (3MF is no longer rejected up front —
+  // geometry-only 3MFs serve their extracted mesh; project 3MFs 404 after inspection.)
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
     tenantId: 'tenant-1',
     ownerBridgeId: null,
     folderId: null,
-    name: 'Model Project.3mf',
-    storedPath: 'Model_Project.3mf',
+    name: 'Sliced.gcode.3mf',
+    storedPath: 'Sliced.gcode.3mf',
     sizeBytes: 1024,
-    kind: '3mf',
+    kind: 'gcode',
     hidden: false,
     compatiblePrinterModels: null,
     snapshotKey: null,

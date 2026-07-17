@@ -1102,6 +1102,49 @@ function collectImportPartFilaments(state: EditorState): SceneEdit['importPartFi
 }
 
 /**
+ * Single-object project state for "Export object as 3MF": the chosen instance alone on
+ * one plate (re-indexed to 1, centred on its bed), deep-copied together with every
+ * session map so the bake keeps the object's parts, per-part filaments/types/transforms,
+ * paint, added part volumes, name override, and repair mark — `buildSceneEdit`'s
+ * collectors already prune each map to placed instances, so entries for the objects left
+ * behind simply drop out. Plate-scoped choreography (plate name, layer filament changes,
+ * pauses, prime tower) is deliberately NOT carried over: it belongs to the source plate's
+ * composition, not the object. Returns null when `key` is not placed.
+ */
+export function buildSingleObjectExportState(state: EditorState, key: string): EditorState | null {
+  const sourcePlate = state.plates.find((plate) => plate.instances.some((instance) => instance.key === key))
+  if (!sourcePlate) return null
+  const cloned = cloneEditorState(state)
+  const plate = cloned.plates.find((entry) => entry.index === sourcePlate.index)
+  const instance = plate?.instances.find((entry) => entry.key === key)
+  if (!plate || !instance) return null
+  const centerX = (plate.bed.minX + plate.bed.maxX) / 2
+  const centerY = (plate.bed.minY + plate.bed.maxY) / 2
+  instance.position.set(centerX, centerY, instance.position.z)
+  // A shearing instance saves its exact matrix VERBATIM (position is just the decomposed
+  // mirror), so re-centre by rewriting the matrix translation in place — dropping the
+  // matrix like a gizmo edit would deform the shear.
+  if (instance.exactMatrix) {
+    instance.exactMatrix[9] = centerX
+    instance.exactMatrix[10] = centerY
+  }
+  return {
+    ...cloned,
+    plates: [{
+      ...plate,
+      index: 1,
+      name: null,
+      instances: [instance],
+      primeTower: null,
+      filamentChanges: undefined,
+      filamentChangesOverride: undefined,
+      pauses: undefined,
+      pausesOverride: undefined
+    }]
+  }
+}
+
+/**
  * Deep-clone the editable state for the undo/redo history. Transform edits mutate
  * instance position/rotation/scale in place, so snapshots must clone those Three.js
  * objects (and the plate/instance/part structure) to stay independent of later edits.
@@ -1126,6 +1169,9 @@ export function cloneEditorState(state: EditorState): EditorState {
         objectId: instance.objectId,
         instanceId: instance.instanceId,
         name: instance.name,
+        // Rename flag must survive the snapshot, or undo/redo (and the single-object
+        // export clone) silently drops a rename from the next save.
+        ...(instance.nameOverridden ? { nameOverridden: true } : {}),
         position: instance.position.clone(),
         rotation: instance.rotation.clone(),
         scale: instance.scale.clone(),

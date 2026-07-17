@@ -80,6 +80,7 @@ import {
 } from '../lib/print-dispatcher.js'
 import { readEntry, readPlateIndex, readPreviewAssets, readSceneManifest, type ThreeMfIndex as ParsedThreeMfIndex } from '../lib/three-mf.js'
 import { meshToBinaryStl, tessellateStepMesh } from '../lib/mesh-import.js'
+import { extractThreeMfImportMesh } from '../lib/three-mf-mesh-extract.js'
 import { libraryDir } from '../lib/library-paths.js'
 import { deleteLibraryFolderTree, ensureLibraryFolderPath, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
 import { resolveRequestActorAttribution } from '../lib/actor-attribution.js'
@@ -1442,7 +1443,10 @@ libraryRouter.put(
     const fileId = requireRouteParam(request.params.id, 'File id')
     const row = await prisma.libraryFile.findUnique({ where: { id: fileId } }) as LibraryFileRow | null
     if (!row) throw notFound('File not found')
-    if (row.kind !== 'stl' && row.kind !== 'step') throw badRequest('Thumbnails are only uploadable for mesh files')
+    // 3MF is accepted for geometry-only files (the client only renders mesh thumbnails
+    // for those); a render uploaded against a project 3MF just fills a cache that its
+    // embedded plate PNGs shadow, so the looser gate cannot change what projects show.
+    if (row.kind !== 'stl' && row.kind !== 'step' && row.kind !== '3mf') throw badRequest('Thumbnails are only uploadable for mesh files')
 
     const body = request.body
     if (!Buffer.isBuffer(body) || body.length === 0) throw badRequest('Expected a PNG body')
@@ -1473,7 +1477,7 @@ libraryRouter.get('/:id/mesh', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
   const fileId = requireRouteParam(request.params.id, 'File id')
   const row = await prisma.libraryFile.findUnique({ where: { id: fileId } }) as LibraryFileRow | null
   if (!row) throw notFound('File not found')
-  if (row.kind !== 'stl' && row.kind !== 'step') throw notFound('No mesh available')
+  if (row.kind !== 'stl' && row.kind !== 'step' && row.kind !== '3mf') throw notFound('No mesh available')
   if (sendNotModifiedIfLibraryFileFresh(request, response, row, 'mesh')) return
   const signal = requestAbortSignal(request, response)
   let onDisk: string
@@ -1483,11 +1487,20 @@ libraryRouter.get('/:id/mesh', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
     throw notFound('File missing on disk')
   }
   try {
-    const buffer = await readFile(onDisk)
-    if (signal.aborted) return
-    // STEP carries no triangle mesh — tessellate it to STL once per cache window (the ETag
-    // 304 above short-circuits warm clients before this point). STL ships verbatim.
-    const stl = row.kind === 'step' ? meshToBinaryStl(await tessellateStepMesh(buffer)) : buffer
+    let stl: Buffer
+    if (row.kind === '3mf') {
+      // Only geometry-only 3MFs (vanilla mesh containers) serve a single mesh here —
+      // real projects have per-plate previews and never render through this route.
+      const index = await readPlateIndex(onDisk, signal)
+      if (!index.geometryOnly) throw notFound('No mesh available')
+      stl = Buffer.from(meshToBinaryStl(await extractThreeMfImportMesh(onDisk)))
+    } else {
+      const buffer = await readFile(onDisk)
+      if (signal.aborted) return
+      // STEP carries no triangle mesh — tessellate it to STL once per cache window (the ETag
+      // 304 above short-circuits warm clients before this point). STL ships verbatim.
+      stl = row.kind === 'step' ? Buffer.from(meshToBinaryStl(await tessellateStepMesh(buffer))) : buffer
+    }
     if (signal.aborted) return
     response.setHeader('Cache-Control', 'private, max-age=300')
     await sendModelBuffer(request, response, stl, 'model/stl')
@@ -1945,6 +1958,8 @@ async function toDto(row: {
     nozzleSizeChips,
     projectFilamentChips,
     plateCount,
+    ...(chips.geometryOnly ? { geometryOnly: true } : {}),
+    ...(chips.objectExport ? { objectExport: true } : {}),
     createdByName: row.createdByName ?? null,
     restoredFromVersionNumber: row.restoredFromVersionNumber ?? null,
     favorite: options.favorite ?? false,
@@ -2154,6 +2169,19 @@ async function sendLibraryFileThumbnail(
   const signal = requestAbortSignal(request, response)
   const plateIndex = parsePlateIndexQuery(request.query.plate)
   if (sendNotModifiedIfLibraryFileFresh(request, response, row, `thumbnail:${plateIndex}`)) return
+  // Geometry-only 3MFs have no embedded plate PNGs; like STL/STEP they get a
+  // client-rendered mesh thumbnail persisted via PUT /:id/thumbnail. Serve that cache
+  // when present (content-addressed on the per-version storedPath, so a version swap
+  // can never show a stale render) and fall through to the embedded lookups — which
+  // 404 for such files, telling the client to render (and upload) one.
+  if (row.kind === '3mf') {
+    const meshRender = await readMeshThumbnailCache(row)
+    if (meshRender) {
+      response.setHeader('Content-Type', 'image/png')
+      response.send(meshRender)
+      return
+    }
+  }
   if (row.ownerBridgeId) {
     const buffer = await readBridgeLibraryThumbnail(row, plateIndex, signal)
     if (!buffer) throw notFound('Thumbnail missing')
@@ -2290,12 +2318,19 @@ async function resolveLibraryFilePreviewAsset(
 
 /** Derive the cached library chip bundle from a parsed 3MF index. */
 function deriveChips(index: ParsedThreeMfIndex): DerivedChips {
+  // A geometry-only 3MF's plates are fabricated placeholders (see the shared index
+  // parser), so a plate count would be a lie — report none and carry the flag so the
+  // web renders the file like STL/STEP instead of a project.
+  if (index.geometryOnly) {
+    return { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [], geometryOnly: true }
+  }
   return {
     plateCount: index.plates.length,
     compatiblePrinterModels: index.compatiblePrinterModels,
     plateTypeChips: collectPlateTypeChips(index),
     nozzleSizeChips: collectNozzleSizeChips(index),
-    projectFilamentChips: collectProjectFilamentChips(index)
+    projectFilamentChips: collectProjectFilamentChips(index),
+    ...(index.objectExport ? { objectExport: true } : {})
   }
 }
 

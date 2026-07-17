@@ -82,7 +82,7 @@ import {
 import { PluginSlot } from '../plugin/PluginSlot'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { parseLibraryDragItem } from '../lib/libraryDragItem'
-import { isPreviewOnlyLibraryFile, isUnslicedThreeMfFile } from '../lib/libraryFileTags'
+import { isPreviewFirstLibraryFile, isUnslicedThreeMfFile } from '../lib/libraryFileTags'
 import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../lib/libraryDirectory'
 import { getMeshThumbnailProvider } from '../lib/modelThumbnailRegistry'
 import { buildLibraryBreadcrumb, buildLibraryFavoritesRoute, buildLibraryFolderRoute, fromBridgeFolderId, isBridgeFolderId, isLibraryFavoritesPath, toBridgeFolderId } from '../lib/libraryNavigation'
@@ -391,10 +391,13 @@ export function LibraryView() {
   const isDefaultOpenableFile = (file: LibraryFile) => {
     if (bridgeResourceUnavailable) return false
     if (canDispatchPrints && isDirectPrintableFileName(file.name)) return true
-    if (canUploadLibrary && isUnslicedThreeMfFile(file)) return true
-    // STL/STEP have no print or edit action; clicking one opens the read-only 3D preview —
-    // but only when the previewer (model-studio) is installed, so the card isn't a dead click.
-    return isPreviewOnlyLibraryFile(file) && getMeshThumbnailProvider() !== null
+    // Preview-first files (STL/STEP, geometry-only 3MFs, single-object model exports)
+    // open the read-only 3D preview — but only when the previewer (model-studio) is
+    // installed, so the card isn't a dead click. Checked before the editor branch:
+    // a model EXPORT is an unsliced project too, but its default action is the preview
+    // (slice/edit stay in the explicit menu actions).
+    if (isPreviewFirstLibraryFile(file)) return getMeshThumbnailProvider() !== null
+    return canUploadLibrary && isUnslicedThreeMfFile(file)
   }
 
   const openFileDefaultAction = (file: LibraryFile) => {
@@ -403,17 +406,18 @@ export function LibraryView() {
       setPrintTarget({ file, versionId: null })
       return
     }
+    // Preview-first before the editor: model exports are projects internally but open
+    // as models by default (the model-studio plugin renders the preview via the
+    // `library.overlays` slot).
+    if (isPreviewFirstLibraryFile(file)) {
+      setPreviewVersion(null)
+      setPreviewFileId(file.id)
+      return
+    }
     if (canUploadLibrary && isUnslicedThreeMfFile(file)) {
       setSliceVersionId(null)
       setSliceFlow('library')
       setSliceTarget(file)
-      return
-    }
-    // STL/STEP: no print or edit action, so the default click opens the 3D preview
-    // (the model-studio plugin renders it via the `library.overlays` slot).
-    if (isPreviewOnlyLibraryFile(file)) {
-      setPreviewVersion(null)
-      setPreviewFileId(file.id)
     }
   }
 

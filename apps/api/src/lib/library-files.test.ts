@@ -258,3 +258,37 @@ test('unhideSlicedOutput simply unhides when no same-name file exists', async ()
   assert.equal(applied?.data.folderId, 'folder-2')
   assert.equal(applied?.data.name, 'widget.gcode.3mf')
 })
+
+test('unhideSlicedOutput appends .gcode.3mf unless the full compound extension is already present', async () => {
+  // The save dialog previews `<name>.gcode.3mf`; the final name must match that
+  // preview even when the typed name ends in a bare `.3mf`.
+  stub(prisma.libraryFile, 'findUnique', async () => ({
+    id: 'output-1',
+    tenantId: 'tenant-1',
+    ownerBridgeId: 'bridge-1',
+    name: 'widget.gcode.3mf',
+    storedPath: 'output-1.gcode.3mf',
+    sizeBytes: 512,
+    kind: 'gcode',
+    thumbnailPath: null,
+    folderId: null,
+    hidden: true,
+    createdById: null,
+    createdByName: null
+  }))
+  stub(prisma.libraryFile, 'findFirst', async () => null)
+  stub(prisma.libraryFile, 'update', async (args: { where: { id: string }; data: { name: string } }) => (
+    { id: args.where.id, name: args.data.name }
+  ))
+
+  const cases: Array<[input: string, saved: string]> = [
+    ['widget', 'widget.gcode.3mf'],
+    ['widget.3mf', 'widget.3mf.gcode.3mf'],
+    ['widget.gcode.3mf', 'widget.gcode.3mf'],
+    ['Widget.GCODE.3MF', 'Widget.GCODE.3MF']
+  ]
+  for (const [input, saved] of cases) {
+    const result = await unhideSlicedOutput('output-1', { name: input })
+    assert.equal(result.name, saved)
+  }
+})

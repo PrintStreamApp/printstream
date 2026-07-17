@@ -406,8 +406,8 @@ function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: num
   const group = new THREE.Group()
   // mm of text height on the bed. Sized to stay legible when the whole bed is in
   // view (a 256mm plate): at 5mm the numbers were an invisible speck until heavily
-  // zoomed in. The labels are camera-facing sprites (see createAxisTickLabel), so at
-  // this size they stay readable at any viewing angle instead of foreshortening away.
+  // zoomed in. The labels lie flat on the bed (see createAxisTickLabel), like
+  // markings printed on the plate itself.
   const labelHeight = 9
   const margin = labelHeight * 0.9
   const firstX = Math.ceil(minX / BED_GRID_MAJOR_STEP_MM) * BED_GRID_MAJOR_STEP_MM
@@ -428,12 +428,18 @@ function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: num
 }
 
 /**
- * A camera-facing numeric tick label (a Sprite) placed at a bed edge, sized in bed millimetres.
+ * A numeric tick label lying FLAT on the bed at a bed edge, sized in bed millimetres.
  *
  * It scales with the bed/grid (`heightMm` is real bed millimetres), so the
  * numbers line up with the grid lines they annotate at every zoom level. The
  * size is chosen so they remain readable when the whole plate is in view rather
  * than only once the camera is zoomed in close.
+ *
+ * Flat-on-the-bed is a deliberate user preference over the earlier camera-facing
+ * Sprite (billboarding read as odd): the numbers behave like markings printed on
+ * the plate, which means they DO foreshorten at grazing camera angles. That is
+ * accepted; the historical "numbers fade away when zoomed out" bug was the mipmap
+ * alpha-collapse below, not the flat orientation — keep mipmaps off either way.
  */
 function createAxisTickLabel(text: string, heightMm: number): THREE.Object3D | null {
   const fontSize = 44
@@ -460,18 +466,16 @@ function createAxisTickLabel(text: string, heightMm: number): THREE.Object3D | n
   texture.generateMipmaps = false
   texture.minFilter = THREE.LinearFilter
   const aspect = canvas.width / canvas.height
-  // A camera-facing Sprite, NOT a flat plane on the bed: a plane lying in the bed plane is viewed
-  // edge-on at grazing camera angles, foreshortening the number to a thin sliver that reads as
-  // "fading away" (the reported bug). A sprite always faces the camera, so it stays fully legible at
-  // any angle. sizeAttenuation keeps it world-sized (heightMm tall), so head-on it looks exactly as
-  // before — same legibility when the whole bed is in view — it just never foreshortens.
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0.9, depthWrite: false, sizeAttenuation: true })
+  // PlaneGeometry lies in the XY (bed) plane with +Y as the text's up direction, so the
+  // numbers read upright from the default front view with their tops pointing into the bed.
+  // double-sided so they also read (mirrored) from below the bed plane.
+  const label = new THREE.Mesh(
+    new THREE.PlaneGeometry(aspect * heightMm, heightMm),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide })
   )
-  sprite.scale.set(aspect * heightMm, heightMm, 1)
-  // Draw over the bed/grid rather than z-fighting with them.
-  sprite.renderOrder = 4
-  return sprite
+  // Draw over the bed/grid rather than z-fighting with them (the caller lifts it to z=0.02).
+  label.renderOrder = 4
+  return label
 }
 
 /**
@@ -496,7 +500,13 @@ function createZoneLabel(text: string, centerX: number, centerY: number, boxWidt
   context.fillText(text, canvas.width / 2, canvas.height / 2)
 
   const texture = new THREE.CanvasTexture(canvas)
-  texture.anisotropy = 4
+  // NO mipmaps, same as createAxisTickLabel above and for the same reason: a thin glyph on a
+  // fully transparent canvas mip-averages toward transparent black, so a flat-on-bed label
+  // viewed at distance (grazing angle = deep mip levels) faded toward invisible. Linear
+  // sampling aliases slightly when minified but can never null the glyph. (Anisotropy only
+  // affects mip sampling, so there is none to configure without mipmaps.)
+  texture.generateMipmaps = false
+  texture.minFilter = THREE.LinearFilter
   const aspect = canvas.width / canvas.height
   // Run the label along the box's long axis; rotate 90 deg for tall, thin zones.
   const vertical = boxHeight > boxWidth

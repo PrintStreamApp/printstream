@@ -804,7 +804,12 @@ export function parseBrimEarPoints(
   return out
 }
 
-function parseRootBuildItemTransforms(xml: string): Map<number, number[][]> {
+/**
+ * Per-object build-item transforms (one entry per placed instance, in build order), so
+ * `map.get(objectId)![instanceId]` is that instance's placement. Also used by the 3MF
+ * geometry-import extractor to place a vanilla (no Bambu metadata) file's objects.
+ */
+export function parseRootBuildItemTransforms(xml: string): Map<number, number[][]> {
   const out = new Map<number, number[][]>()
   const buildBlock = xml.match(/<build\b[^>]*>[\s\S]*?<\/build>/)?.[0] ?? ''
   for (const match of buildBlock.matchAll(/<item\b([^>]*)\/?>(?:<\/item>)?/g)) {
@@ -1232,7 +1237,8 @@ function parseThreeMfTransform(value: string | undefined): number[] | null {
     : null
 }
 
-function composeThreeMfTransforms(parent: readonly number[], child: readonly number[]): number[] {
+/** Compose two 12-element 3MF transforms (column-major 3x3 basis + translation): parent ∘ child. */
+export function composeThreeMfTransforms(parent: readonly number[], child: readonly number[]): number[] {
   const a00 = parent[0] ?? 1
   const a10 = parent[1] ?? 0
   const a20 = parent[2] ?? 0
@@ -1279,7 +1285,12 @@ function readThreeMfPartSubtype(partBlock: string, partAttrs: Record<string, str
   return partAttrs.subtype?.trim() || readModelSettingsMetadataString(partBlock, 'volume_type') || null
 }
 
-function isNonRenderableThreeMfPartSubtype(subtype: string | null): boolean {
+/**
+ * Whether a part subtype is a helper volume (negative/modifier/support blocker/enforcer)
+ * rather than printed geometry. Exported for the 3MF geometry-import extractor, which
+ * mirrors the STL exporter's rule: helper volumes are never part of imported geometry.
+ */
+export function isNonRenderableThreeMfPartSubtype(subtype: string | null): boolean {
   if (!subtype) return false
   return NON_RENDERABLE_THREE_MF_PART_SUBTYPES.has(normalizeThreeMfPartSubtype(subtype))
 }

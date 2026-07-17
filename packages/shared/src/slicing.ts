@@ -648,11 +648,12 @@ export const stageImportFromLibrarySchema = z.object({
 export type StageImportFromLibrary = z.infer<typeof stageImportFromLibrarySchema>
 
 /**
- * Persist an edited arrangement as a 3MF. `baseFileId` is the source project the edit started from,
- * or null for a brand-new project built from an empty skeleton. `mode` chooses between overwriting
- * the base as a new library version and creating a new library file (`name` required for the latter).
+ * The bake inputs shared by every "arranged 3MF" operation: persist as a library file
+ * (`saveArrangedThreeMfSchema`) or stream back as a download (`exportArrangedThreeMfSchema`).
+ * `baseFileId` is the source project the edit started from, or null for a brand-new project
+ * built from an empty skeleton.
  */
-export const saveArrangedThreeMfSchema = z.object({
+const arrangedThreeMfBakeSchema = z.object({
   baseFileId: z.string().trim().min(1).nullable(),
   /**
    * Build from an archived version's content instead of the file's current content
@@ -660,11 +661,14 @@ export const saveArrangedThreeMfSchema = z.object({
    * still land as a NEW version of the file — the old version is never mutated.
    */
   baseVersionId: z.string().trim().min(1).nullable().optional(),
-  mode: z.enum(['newVersion', 'saveAs']),
-  name: z.string().trim().min(1).max(255).optional(),
-  folderId: z.string().trim().min(1).nullable().optional(),
-  bridgeId: z.string().trim().min(1).nullable().optional(),
   sceneEdit: sceneEditSchema,
+  /**
+   * Stamp the baked 3MF as a single-object model export (`printstream_model_kind` in
+   * project_settings.config), so the library treats it as a reusable model (preview on
+   * click) rather than an openable project. Sent only by the editor's "Export object as
+   * 3MF" flows (save-to-library and download), never by ordinary saves.
+   */
+  objectExport: z.boolean().optional(),
   /**
    * Per-object process-setting overrides, keyed by Bambu `object_id` (or a fresh import's
    * synthetic id, which is re-keyed onto the baked object). Persisted into the saved 3MF's
@@ -691,12 +695,34 @@ export const saveArrangedThreeMfSchema = z.object({
    * of silently keeping the source machine. Omitted ⇒ save the arrangement as-authored.
    */
   retarget: slicingManualProfileTargetSchema.optional()
+})
+
+/**
+ * Persist an edited arrangement as a 3MF library file. `mode` chooses between overwriting
+ * the base as a new library version and creating a new library file (`name` required for
+ * the latter).
+ */
+export const saveArrangedThreeMfSchema = arrangedThreeMfBakeSchema.extend({
+  mode: z.enum(['newVersion', 'saveAs']),
+  name: z.string().trim().min(1).max(255).optional(),
+  folderId: z.string().trim().min(1).nullable().optional(),
+  bridgeId: z.string().trim().min(1).nullable().optional()
 }).refine((value) => value.mode !== 'saveAs' || Boolean(value.name), {
   message: 'A name is required when saving as a new file'
 }).refine((value) => value.mode !== 'newVersion' || Boolean(value.baseFileId), {
   message: 'newVersion requires a base file'
 })
 export type SaveArrangedThreeMf = z.infer<typeof saveArrangedThreeMfSchema>
+
+/**
+ * Bake an edited arrangement and stream the 3MF back as a download — nothing is persisted
+ * server-side (the download counterpart of a `saveAs`, for "Download 3MF project"). `name`
+ * only labels the audit entry; the client names the downloaded file itself.
+ */
+export const exportArrangedThreeMfSchema = arrangedThreeMfBakeSchema.extend({
+  name: z.string().trim().min(1).max(255).optional()
+})
+export type ExportArrangedThreeMf = z.infer<typeof exportArrangedThreeMfSchema>
 
 export const createSlicingJobSchema = z.object({
   sourceFileId: z.string().trim().min(1),

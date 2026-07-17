@@ -1302,11 +1302,14 @@ export function FileThumbnail({
 
   // Client-side fallback, rendered only after the server thumbnail 404s/errors so most
   // files never pay the cost (Three.js lives in the model-studio plugin, not in core):
-  //  - STL/STEP: the first-ever view has nothing cached server-side; the mesh provider
-  //    renders the mesh AND uploads the PNG, so the next view is served from the server.
-  //  - 3MF/gcode: a sliced gcode.3mf may carry no embedded plate PNG; render from the scene.
-  const meshProvider = file.kind === 'stl' || file.kind === 'step' ? getMeshThumbnailProvider() : null
-  const sceneProvider = file.kind === '3mf' || file.kind === 'gcode' ? getSceneThumbnailProvider() : null
+  //  - STL/STEP and geometry-only 3MFs: the first-ever view has nothing cached
+  //    server-side; the mesh provider renders the mesh AND uploads the PNG, so the
+  //    next view is served from the server.
+  //  - project 3MF/gcode: a sliced gcode.3mf may carry no embedded plate PNG; render from
+  //    the scene. (A geometry-only 3MF has no plated scene — its fallback is the mesh.)
+  const isMeshFile = file.kind === 'stl' || file.kind === 'step' || (file.kind === '3mf' && file.geometryOnly === true)
+  const meshProvider = isMeshFile ? getMeshThumbnailProvider() : null
+  const sceneProvider = !isMeshFile && (file.kind === '3mf' || file.kind === 'gcode') ? getSceneThumbnailProvider() : null
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null)
   useEffect(() => { setFallbackUrl(null) }, [file.id, file.uploadedAt])
   useEffect(() => {

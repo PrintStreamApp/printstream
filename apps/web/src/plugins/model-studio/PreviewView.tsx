@@ -1155,7 +1155,9 @@ function resolvePreviewMode(file: LibraryFile | null): PreviewMode {
   if (!file) return null
   if (file.kind === 'stl') return 'stl'
   if (file.kind === 'step') return 'step'
-  if (file.kind === '3mf') return '3mf'
+  // A geometry-only 3MF has no plated scene to render — it previews as a single mesh,
+  // exactly like STL (`/mesh` serves its extracted geometry as STL bytes).
+  if (file.kind === '3mf') return file.geometryOnly === true ? 'stl' : '3mf'
   if (file.kind === 'gcode') return 'plate-gcode'
   return null
 }

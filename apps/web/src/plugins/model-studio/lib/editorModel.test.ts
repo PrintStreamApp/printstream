@@ -4,6 +4,7 @@ import { libraryThreeMfSceneSchema, threeMfIndexSchema, type StagedImport } from
 import * as THREE from 'three'
 import {
   buildSceneEdit,
+  buildSingleObjectExportState,
   cloneEditorState,
   decomposeInstanceTransform,
   exactTransformIfShearing,
@@ -528,4 +529,88 @@ test('cloneEditorState snapshots repair marks so undo restores them', () => {
   const snapshot = cloneEditorState(state)
   state.repairedObjectIds.push(13)
   assert.deepEqual(snapshot.repairedObjectIds, [12], 'the snapshot must not alias the live array')
+})
+
+test('cloneEditorState keeps the rename flag so undo (and exports) preserve renames', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const renamed = instanceFromStagedImport(STAGED)
+  renamed.source = { kind: 'object' }
+  renamed.objectId = 4
+  renamed.name = 'Better name'
+  renamed.nameOverridden = true
+  state.plates[0]!.instances.push(renamed)
+  const snapshot = cloneEditorState(state)
+  assert.equal(snapshot.plates[0]?.instances[0]?.nameOverridden, true)
+  assert.deepEqual(buildSceneEdit(snapshot).objectNames, [{ objectId: 4, name: 'Better name' }])
+})
+
+test('buildSingleObjectExportState isolates one object on a fresh single plate', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const kept = instanceFromStagedImport(STAGED)
+  kept.source = { kind: 'object' }
+  kept.objectId = 7
+  state.plates[0]!.instances.push(kept)
+  const exportedSource = instanceFromStagedImport({ ...STAGED, importId: 'imp-9' })
+  exportedSource.source = { kind: 'object' }
+  exportedSource.objectId = 8
+  exportedSource.position.set(30, 40, 0)
+  state.plates.push({
+    index: 2,
+    name: 'Plate two',
+    plateType: null,
+    bed: { minX: 0, maxX: 200, minY: 0, maxY: 180, excludeAreas: [] },
+    instances: [exportedSource],
+    primeTower: null,
+    filamentChanges: [{ z: 5, filamentId: 2 }],
+    pauses: [{ z: 3 }]
+  })
+  state.repairedObjectIds = [7, 8]
+
+  const out = buildSingleObjectExportState(state, exportedSource.key)
+  assert.ok(out)
+  assert.equal(out.plates.length, 1)
+  const plate = out.plates[0]!
+  assert.equal(plate.index, 1)
+  assert.equal(plate.name, null)
+  assert.equal(plate.filamentChanges, undefined)
+  assert.equal(plate.pauses, undefined)
+  assert.equal(plate.instances.length, 1)
+  const exported = plate.instances[0]!
+  assert.equal(exported.objectId, 8)
+  // Centred on the plate's bed (bed centre, not origin).
+  assert.deepEqual([exported.position.x, exported.position.y], [100, 90])
+  // Session maps carry over wholesale; buildSceneEdit's collectors prune to the export.
+  const edit = buildSceneEdit(out)
+  assert.equal(edit.instances.length, 1)
+  assert.equal(edit.instances[0]?.plateIndex, 1)
+  assert.deepEqual(edit.repairedObjectIds, [8])
+  // The live state is untouched (deep copy).
+  assert.deepEqual([exportedSource.position.x, exportedSource.position.y], [30, 40])
+  assert.equal(state.plates.length, 2)
+})
+
+test('buildSingleObjectExportState recentres a shearing instance through its exact matrix', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const sheared = instanceFromStagedImport(STAGED)
+  sheared.source = { kind: 'object' }
+  sheared.objectId = 5
+  sheared.position.set(7, 8, 0)
+  sheared.exactMatrix = [1, 0, 0, 0.5, 1, 0, 0, 0, 1, 7, 8, 0]
+  state.plates[0]!.bed = { minX: -100, maxX: 100, minY: -90, maxY: 90, excludeAreas: [] }
+  state.plates[0]!.instances.push(sheared)
+
+  const out = buildSingleObjectExportState(state, sheared.key)
+  assert.ok(out)
+  const exported = out.plates[0]!.instances[0]!
+  // Translation rewritten in place; the shear column survives.
+  assert.deepEqual(exported.exactMatrix?.slice(9), [0, 0, 0])
+  const edit = buildSceneEdit(out)
+  assert.deepEqual(edit.instances[0]?.matrix?.slice(9), [0, 0, 0])
+  assert.equal(edit.instances[0]?.matrix?.[3], 0.5)
+  // The live instance's matrix is untouched.
+  assert.deepEqual(sheared.exactMatrix.slice(9), [7, 8, 0])
+})
+
+test('buildSingleObjectExportState returns null for an unplaced key', () => {
+  assert.equal(buildSingleObjectExportState(seedEmptyEditorState(), 'missing'), null)
 })

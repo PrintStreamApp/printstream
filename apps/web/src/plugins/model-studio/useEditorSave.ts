@@ -2,9 +2,11 @@
  * Save / apply / close flows for the 3MF project editor.
  *
  * Owns the "is a save in flight" and Save-As dialog state and the handlers that turn the live
- * scene into a persisted 3MF (new version or Save-As), hand a built SceneEdit back to the host
- * at slice time ("Use this layout"), and guard closing while there are unsaved edits. Pulled out
- * of EditorView so the component body keeps to scene wiring and rendering.
+ * scene into a persisted 3MF (new version, Save-As, or the single-object "Export as 3MF" —
+ * which saves a filtered copy WITHOUT adopting it as the editor's saved state), hand a built
+ * SceneEdit back to the host at slice time ("Use this layout"), and guard closing while there
+ * are unsaved edits. Pulled out of EditorView so the component body keeps to scene wiring and
+ * rendering.
  *
  * The scene-output producers (`buildSceneEditOut`, `captureAllPlateThumbnails`) stay in the
  * component because the slice flow shares them; they are passed in here. Marking the project
@@ -12,13 +14,17 @@
  */
 import { useCallback, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { type SaveArrangedThreeMf, type SceneEdit } from '@printstream/shared'
+import { type ExportArrangedThreeMf, type SaveArrangedThreeMf, type SceneEdit } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
+import { buildApiUrl } from '../../lib/apiUrl'
+import { downloadBlob } from '../../lib/downloadBlob'
 import { toast } from '../../lib/toast'
 import { invalidateLibraryQueries } from '../../lib/libraryQueryInvalidation'
+import { readWorkspaceContextHeader } from '../../lib/workspaceContext'
 import { type ConfirmDialogOptions } from '../../components/PromptDialogProvider'
 import { type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
-import { type EditorState } from './lib/editorModel'
+import { buildSingleObjectExportState, type EditorState } from './lib/editorModel'
+import { fetchModelBytes } from './lib/modelFetch'
 
 type PlateThumbnail = { plateIndex: number; png: string }
 
@@ -29,7 +35,7 @@ export interface EditorSaveParams {
   /** Adopt the current state as the saved baseline (from useEditorHistory). */
   markSaved: () => void
   buildSceneEditOut: (current: EditorState, options?: { thumbnails?: PlateThumbnail[] }) => SceneEdit
-  captureAllPlateThumbnails: (current: EditorState) => Promise<PlateThumbnail[]>
+  captureAllPlateThumbnails: (current: EditorState, options?: { force?: boolean; updateLive?: boolean }) => Promise<PlateThumbnail[]>
   seededProcessOverrideObjectIdsRef: MutableRefObject<Set<number>>
   baseFileId: string | null
   baseVersionId: string | null | undefined
@@ -56,6 +62,10 @@ export interface EditorSave {
   handleSaveVersion: () => void
   /** Save the arrangement as a new file at the given name/folder. */
   handleSaveAs: (name: string, destinationFolderId: string | null) => void
+  /** Export ONE object as its own new 3MF project file (keeps the editor on the source project). */
+  handleExportObjectAs3mf: (key: string, name: string, destinationFolderId: string | null) => void
+  /** Same single-object 3MF bake, streamed back as a browser download — nothing lands in the library. */
+  handleExportObjectAs3mfDownload: (key: string, fileName: string) => void
 }
 
 export function useEditorSave({
@@ -90,13 +100,22 @@ export function useEditorSave({
 
   // Persist the arrangement as a 3MF. Staged imports are already on the server,
   // so the SceneEdit's importId references are all the backend needs to bake them.
+  // `asProject: false` (the single-object export) still saves through the same
+  // endpoint but must NOT adopt the result as the editor's saved state: the source
+  // project's unsaved edits were not persisted to ITS file, so the dirty flag stays,
+  // and the host is not told its file was saved.
   const runSave = useCallback(
-    async (payload: SaveArrangedThreeMf, successMessage: string): Promise<{ id: string; name: string } | null> => {
+    async (
+      payload: SaveArrangedThreeMf,
+      successMessage: string,
+      options?: { asProject?: boolean }
+    ): Promise<{ id: string; name: string } | null> => {
       // BambuStudio parity: a project must have a material before it can be saved.
       if ((sliceConfigRef.current?.projectFilaments?.length ?? 0) === 0) {
         toast.error('Add a material to the project before saving.')
         return null
       }
+      const asProject = options?.asProject !== false
       setSaving(true)
       try {
         const { file } = await apiFetch<{ file: { id: string; name: string } }>('/api/editor/save', {
@@ -104,9 +123,9 @@ export function useEditorSave({
           body: payload
         })
         await invalidateLibraryQueries(queryClient)
-        markSaved()
+        if (asProject) markSaved()
         toast.success(successMessage)
-        onSaved?.(file)
+        if (asProject) onSaved?.(file)
         // Keep the editor open after saving so the user can keep arranging/printing.
         return file
       } catch (error) {
@@ -139,12 +158,14 @@ export function useEditorSave({
   // only applying to a one-off slice. Prunes overrides for objects that no longer exist, and emits
   // an empty `{}` for a re-hydrated object whose overrides were CLEARED so the save strips the now
   // stale baked overrides (rather than leaving them to resurrect on the next reopen).
-  const collectObjectProcessOverrides = useCallback((): Record<string, Record<string, string | string[]>> | undefined => {
+  const collectObjectProcessOverrides = useCallback((scope?: EditorState): Record<string, Record<string, string | string[]>> | undefined => {
     const value = sliceConfigRef.current?.perObjectSettings?.value
     if (!value) return undefined
     // Object identities currently placed: a real objectId, or an import's synthetic id.
+    // `scope` narrows "placed" to a synthetic state (the single-object export), so only
+    // that object's overrides ride along.
     const placed = new Set<number>()
-    for (const plate of stateRef.current?.plates ?? []) {
+    for (const plate of (scope ?? stateRef.current)?.plates ?? []) {
       for (const instance of plate.instances) {
         if (instance.source.kind === 'object') placed.add(instance.objectId)
         else if (instance.source.replacedObjectId != null) placed.add(instance.source.replacedObjectId)
@@ -212,6 +233,94 @@ export function useEditorSave({
     })()
   }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
 
+  /**
+   * "Export object as 3MF": bake ONLY the given object into a new single-plate 3MF library
+   * file through the normal save pipeline, so its parts, per-part materials/types, paint,
+   * added volumes, and per-object process overrides all survive (everything an STL export
+   * flattens away). Unlike Save-As, the editor stays on the source project and its dirty
+   * state is untouched — the export is a copy, not a save of the project.
+   */
+  const handleExportObjectAs3mf = useCallback((key: string, name: string, destinationFolderId: string | null) => {
+    const current = stateRef.current
+    if (!current) return
+    const exportState = buildSingleObjectExportState(current, key)
+    if (!exportState) return
+    void (async () => {
+      // Fresh thumbnail of the exported object alone; force (the synthetic plate has no
+      // live strip entry) and don't repaint the live plate strip with it.
+      const thumbnails = await captureAllPlateThumbnails(exportState, { force: true, updateLive: false })
+      const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+      await runSave(
+        {
+          baseFileId, baseVersionId, mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
+          sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
+          objectProcessOverrides: collectObjectProcessOverrides(exportState),
+          processSettingOverrides: collectProcessSettingOverrides(),
+          retarget,
+          slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
+          // Marker: the library treats the export as a reusable model (preview on click),
+          // not an openable project — see the shared index parser's model-kind doc.
+          objectExport: true
+        },
+        `Exported “${name}”`,
+        { asProject: false }
+      )
+    })()
+  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+
+  /**
+   * "Download 3MF project": the same single-object bake as {@link handleExportObjectAs3mf}
+   * but streamed straight back as a download (`POST /api/editor/export-3mf` — see the route's
+   * doc for the no-persist contract). Uses the stall-guarded model fetch because the baked
+   * 3MF is a large body on the same web→API path as model downloads.
+   */
+  const handleExportObjectAs3mfDownload = useCallback((key: string, fileName: string) => {
+    const current = stateRef.current
+    if (!current) return
+    const exportState = buildSingleObjectExportState(current, key)
+    if (!exportState) return
+    // Same BambuStudio parity rule as saving: a project needs a material.
+    if ((sliceConfigRef.current?.projectFilaments?.length ?? 0) === 0) {
+      toast.error('Add a material to the project before exporting.')
+      return
+    }
+    void (async () => {
+      setSaving(true)
+      try {
+        const thumbnails = await captureAllPlateThumbnails(exportState, { force: true, updateLive: false })
+        const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+        const payload: ExportArrangedThreeMf = {
+          baseFileId,
+          baseVersionId,
+          name: fileName,
+          sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
+          objectProcessOverrides: collectObjectProcessOverrides(exportState),
+          processSettingOverrides: collectProcessSettingOverrides(),
+          retarget,
+          slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
+          // Marker: re-uploaded downloads classify as reusable models, not projects.
+          objectExport: true
+        }
+        const workspaceContext = readWorkspaceContextHeader()
+        const bytes = await fetchModelBytes(buildApiUrl('/api/editor/export-3mf'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(workspaceContext ? { 'X-PrintStream-Tenant': workspaceContext } : {})
+          },
+          body: JSON.stringify(payload)
+        })
+        downloadBlob(new Blob([bytes as BlobPart], { type: 'model/3mf' }), fileName)
+        toast.success(`Exported ${fileName}.`)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Unable to export the object.')
+      } finally {
+        setSaving(false)
+      }
+    })()
+  }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+
   return {
     saving,
     saveAsOpen,
@@ -219,6 +328,8 @@ export function useEditorSave({
     handleApply,
     handleCloseRequest,
     handleSaveVersion,
-    handleSaveAs
+    handleSaveAs,
+    handleExportObjectAs3mf,
+    handleExportObjectAs3mfDownload
   }
 }

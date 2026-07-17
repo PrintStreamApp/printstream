@@ -1,10 +1,14 @@
 /**
  * Right-click context menu for editor objects. Single object: duplicate / split /
- * assemble, rename, replace from library or file, repair mesh, add part volumes (negative/modifier/
- * blocker), change material, object settings, centre / drop / reset / mirror transforms, move to
- * another plate, and delete. Multi-selection (the clicked object is a member): a reduced
- * bulk menu (BambuStudio-style) — duplicate, assemble, change material, set printable /
- * skip, object settings, move to plate, delete — each applied to the whole selection.
+ * assemble, rename, replace from library or file, export (STL download / STL to library /
+ * single-object 3MF project download or to library; items appear per granted library
+ * permission), repair mesh, add part volumes
+ * (negative/modifier/blocker), change material, object settings, centre / drop / reset /
+ * mirror transforms, move to another plate, and delete. Multi-selection (the clicked
+ * object is a member): a reduced bulk menu (BambuStudio-style) — duplicate, assemble,
+ * export as STL (merged into one, or one file per object), change material, set
+ * printable / skip, object settings, move to plate, delete — each applied to the
+ * whole selection.
  *
  * Presentational: every action is a callback and the parent owns the menu's open state
  * and the mutations. The menu closes itself after each action. The "Change material"
@@ -12,7 +16,6 @@
  */
 import { useState, type MutableRefObject } from 'react'
 import { ListDivider, ListItemDecorator, Menu, MenuItem } from '@mui/joy'
-import { listItemDecoratorClasses } from '@mui/joy/ListItemDecorator'
 import type { SceneEditAddedPartSubtype } from '@printstream/shared'
 import AspectRatioRoundedIcon from '@mui/icons-material/AspectRatioRounded'
 import CallSplitRoundedIcon from '@mui/icons-material/CallSplitRounded'
@@ -22,7 +25,10 @@ import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRenameOutlineRounded'
 import DriveFileMoveRoundedIcon from '@mui/icons-material/DriveFileMoveRounded'
+import FileDownloadRoundedIcon from '@mui/icons-material/FileDownloadRounded'
 import FlipRoundedIcon from '@mui/icons-material/FlipRounded'
+import IosShareRoundedIcon from '@mui/icons-material/IosShareRounded'
+import LibraryAddRoundedIcon from '@mui/icons-material/LibraryAddRounded'
 import MergeTypeRoundedIcon from '@mui/icons-material/MergeTypeRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -33,7 +39,7 @@ import ThreeSixtyRoundedIcon from '@mui/icons-material/ThreeSixtyRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import VerticalAlignBottomRoundedIcon from '@mui/icons-material/VerticalAlignBottomRounded'
 import { ADDED_PART_SPECS, ADDED_PART_SUBTYPES } from './editorGeometry'
-import { ContextMenuBackItem, FilamentMenuItems } from './contextMenuItems'
+import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX, ContextMenuBackItem, FilamentMenuItems } from './contextMenuItems'
 import type { FilamentOption } from './EditorView'
 
 type Axis = 'x' | 'y' | 'z'
@@ -59,6 +65,23 @@ export interface EditorContextMenuProps {
   onAssemble: () => void
   onReplaceFromLibrary: (key: string) => void
   onReplaceFromFile: (key: string) => void
+  /**
+   * Export targets (BambuStudio's "Export as one STL" / "Export as STLs…", plus the
+   * beyond-parity single-object 3MF project export — download or save to library —
+   * which keeps parts/materials/paint). Single selection uses the per-key handlers;
+   * a multi-selection uses the merged pair (whole selection → one STL) plus the
+   * separate pair (one STL per object). Each is present only when the user holds the
+   * matching library permission (download / upload); when none is present the Export
+   * item is hidden.
+   */
+  onExportDownload?: (key: string) => void
+  onExportToLibrary?: (key: string) => void
+  onExportProjectDownload?: (key: string) => void
+  onExportProjectToLibrary?: (key: string) => void
+  onExportMergedDownload?: () => void
+  onExportMergedToLibrary?: () => void
+  onExportSeparateDownload?: () => void
+  onExportSeparateToLibrary?: () => void
   /** In-project object (not an imported mesh) — gates the add-part-volume + repair items. */
   isObject: boolean
   /** Mark this object's mesh for repair on save (welds cracked vertices, drops junk facets). */
@@ -88,13 +111,15 @@ export interface EditorContextMenuProps {
 
 export function EditorContextMenu({
   contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onRename, onSplitToObjects, canAssemble,
-  assembleCount, onAssemble, onReplaceFromLibrary, onReplaceFromFile, isObject, onRepairMesh,
+  assembleCount, onAssemble, onReplaceFromLibrary, onReplaceFromFile, onExportDownload, onExportToLibrary,
+  onExportProjectDownload, onExportProjectToLibrary, onExportMergedDownload, onExportMergedToLibrary, onExportSeparateDownload,
+  onExportSeparateToLibrary, isObject, onRepairMesh,
   isRepairMarked, onAddPartVolume,
   filamentOptions, onChangeMaterial, onSetPrintable, onEditObjectSettings, onCenterOnPlate,
   onDropToBed, onResetRotation, onResetScale, onMirror, otherPlates, onMoveToPlate, onDelete
 }: EditorContextMenuProps) {
   const { key } = contextMenu
-  const [view, setView] = useState<'root' | 'material'>('root')
+  const [view, setView] = useState<'root' | 'material' | 'export'>('root')
   const multi = selectionCount > 1
   const suffix = multi ? ` (${selectionCount} objects)` : ''
   const changeMaterialItem = filamentOptions.length > 0 && (
@@ -133,24 +158,8 @@ export function EditorContextMenu({
       onClose={onClose}
       anchorEl={{ getBoundingClientRect: () => new DOMRect(contextMenu.x, contextMenu.y, 0, 0) }}
       placement="bottom-start"
-      // Keep the menu on-screen when opened near an edge: flip to the other side and shift back
-      // inside the viewport instead of letting items spill off where they can't be clicked.
-      modifiers={[
-        { name: 'flip', options: { padding: 8 } },
-        { name: 'preventOverflow', options: { padding: 8 } }
-      ]}
-      sx={{
-        zIndex: (theme) => theme.zIndex.tooltip,
-        // A menu taller than the viewport (the full single-object menu with move-to-plate rows)
-        // scrolls rather than running its last items off the bottom edge.
-        maxHeight: 'calc(100dvh - 16px)',
-        overflowY: 'auto',
-        // In a vertical menu Joy's ListItemDecorator only reserves height, not width, so
-        // icons of differing glyph widths leave the labels ragged. Pin a fixed icon column
-        // and a uniform icon size so every label starts at the same x.
-        [`& .${listItemDecoratorClasses.root}`]: { minInlineSize: '1.75rem' },
-        '& svg': { fontSize: '1.25rem' }
-      }}
+      modifiers={CONTEXT_MENU_POPPER_MODIFIERS}
+      sx={CONTEXT_MENU_SX}
     >
       {view === 'material' ? (
         <>
@@ -158,6 +167,66 @@ export function EditorContextMenu({
           <ListDivider />
           <FilamentMenuItems options={filamentOptions} onPick={(filamentId) => { onChangeMaterial(filamentId); onClose() }} />
         </>
+      ) : view === 'export' ? (
+        multi ? (
+          <>
+            <ContextMenuBackItem label={`Export as STL${suffix}`} onBack={() => setView('root')} />
+            <ListDivider />
+            {onExportMergedDownload && (
+              <MenuItem onClick={() => { onClose(); onExportMergedDownload() }}>
+                <ListItemDecorator><FileDownloadRoundedIcon /></ListItemDecorator>
+                Download as one STL
+              </MenuItem>
+            )}
+            {onExportSeparateDownload && (
+              <MenuItem onClick={() => { onClose(); onExportSeparateDownload() }}>
+                <ListItemDecorator><FileDownloadRoundedIcon /></ListItemDecorator>
+                Download as separate STLs
+              </MenuItem>
+            )}
+            {onExportMergedToLibrary && (
+              <MenuItem onClick={() => { onClose(); onExportMergedToLibrary() }}>
+                <ListItemDecorator><LibraryAddRoundedIcon /></ListItemDecorator>
+                Save one STL to library…
+              </MenuItem>
+            )}
+            {onExportSeparateToLibrary && (
+              <MenuItem onClick={() => { onClose(); onExportSeparateToLibrary() }}>
+                <ListItemDecorator><LibraryAddRoundedIcon /></ListItemDecorator>
+                Save separate STLs to library…
+              </MenuItem>
+            )}
+          </>
+        ) : (
+          <>
+            <ContextMenuBackItem label="Export" onBack={() => setView('root')} />
+            <ListDivider />
+            {onExportDownload && (
+              <MenuItem onClick={() => { onClose(); onExportDownload(key) }}>
+                <ListItemDecorator><FileDownloadRoundedIcon /></ListItemDecorator>
+                Download STL
+              </MenuItem>
+            )}
+            {onExportToLibrary && (
+              <MenuItem onClick={() => { onClose(); onExportToLibrary(key) }}>
+                <ListItemDecorator><LibraryAddRoundedIcon /></ListItemDecorator>
+                Save STL to library…
+              </MenuItem>
+            )}
+            {onExportProjectDownload && (
+              <MenuItem onClick={() => { onClose(); onExportProjectDownload(key) }}>
+                <ListItemDecorator><FileDownloadRoundedIcon /></ListItemDecorator>
+                Download 3MF project
+              </MenuItem>
+            )}
+            {onExportProjectToLibrary && (
+              <MenuItem onClick={() => { onClose(); onExportProjectToLibrary(key) }}>
+                <ListItemDecorator><LibraryAddRoundedIcon /></ListItemDecorator>
+                Save 3MF project to library…
+              </MenuItem>
+            )}
+          </>
+        )
       ) : multi ? (
         // Bulk menu for a multi-selection (BambuStudio's multiple-object menu): only
         // actions with real N-object semantics; per-object items live in the single menu.
@@ -170,6 +239,12 @@ export function EditorContextMenu({
             <MenuItem onClick={() => { onAssemble(); onClose() }}>
               <ListItemDecorator><MergeTypeRoundedIcon /></ListItemDecorator>
               Assemble {assembleCount} objects
+            </MenuItem>
+          )}
+          {(onExportMergedDownload || onExportMergedToLibrary || onExportSeparateDownload || onExportSeparateToLibrary) && (
+            <MenuItem onClick={(event) => { event.stopPropagation(); setView('export') }}>
+              <ListItemDecorator><IosShareRoundedIcon /></ListItemDecorator>
+              Export as STL{suffix}…
             </MenuItem>
           )}
           <ListDivider />
@@ -216,6 +291,12 @@ export function EditorContextMenu({
             <ListItemDecorator><SwapHorizRoundedIcon /></ListItemDecorator>
             Replace from file…
           </MenuItem>
+          {(onExportDownload || onExportToLibrary || onExportProjectToLibrary) && (
+            <MenuItem onClick={(event) => { event.stopPropagation(); setView('export') }}>
+              <ListItemDecorator><IosShareRoundedIcon /></ListItemDecorator>
+              Export…
+            </MenuItem>
+          )}
           {isObject && !multi && (
             <MenuItem disabled={isRepairMarked} onClick={() => { onClose(); onRepairMesh(key) }}>
               <ListItemDecorator><AutoFixHighRoundedIcon /></ListItemDecorator>

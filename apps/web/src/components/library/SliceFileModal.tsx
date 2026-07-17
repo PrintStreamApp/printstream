@@ -1196,7 +1196,7 @@ export function SliceFileModal({
       {saveActionVisible && saveDestinationOpen && (
         <LibraryDestinationDialog
           title="Save sliced file"
-          description="Choose where to save the sliced file, then confirm the file name. Picking an existing file saves over it."
+          description="Choose where to save the sliced file, then confirm the file name. Saving with an existing file's name replaces it."
           showFiles
           fileNameField={{
             label: 'File name',

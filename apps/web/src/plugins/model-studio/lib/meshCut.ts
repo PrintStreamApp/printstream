@@ -26,16 +26,25 @@ const CHAIN_QUANTUM = 1e-4
 
 /**
  * Collect the world-space triangle soup of every model mesh under `root`, skipping editor
- * decorations (face-hull overlays, modifier meshes, prime towers) and non-mesh helpers.
+ * decorations (face-hull overlays, paint-tint overlays, modifier meshes, prime towers) and
+ * non-mesh helpers. Paint overlays are real meshes parented under the part mesh, so without
+ * the skip a painted object's painted triangles would be collected twice.
+ * `includeModifierVolumes` keeps helper volumes (negative/modifier/blocker/enforcer meshes)
+ * in the soup — used when a specific part is exported deliberately, never for the solid
+ * geometry walks (cut/split/assemble/whole-object export).
  */
-export function collectWorldTriangles(root: THREE.Object3D): Float32Array {
+export function collectWorldTriangles(
+  root: THREE.Object3D,
+  options?: { includeModifierVolumes?: boolean }
+): Float32Array {
   root.updateWorldMatrix(true, true)
   const chunks: Float32Array[] = []
   let total = 0
   const vertex = new THREE.Vector3()
   root.traverse((node) => {
     const mesh = node as THREE.Mesh
-    if (!mesh.isMesh || mesh.userData.isFaceHull || mesh.userData.isModifier || mesh.userData.isPrimeTower) return
+    if (!mesh.isMesh || mesh.userData.isFaceHull || mesh.userData.isPaintOverlay || mesh.userData.isPrimeTower) return
+    if (mesh.userData.isModifier && !options?.includeModifierVolumes) return
     const geometry = mesh.geometry
     const position = geometry.getAttribute('position')
     if (!position) return

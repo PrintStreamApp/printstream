@@ -33,17 +33,32 @@ export function shouldShowLibraryPlateTypeTags(file: LibraryFile): boolean {
 
 /** A plain project 3MF (no embedded gcode) — printable only after slicing. */
 export function isUnslicedThreeMfFile(file: LibraryFile): boolean {
-  return file.name.toLowerCase().endsWith('.3mf') && !isDirectPrintableFileName(file.name)
+  // A geometry-only 3MF (no Bambu project metadata) is a mesh container, not an
+  // openable/sliceable project — it belongs to the preview-only class below, exactly
+  // like STL/STEP, and every "pick a file to slice" surface must skip it.
+  return file.name.toLowerCase().endsWith('.3mf') && !isDirectPrintableFileName(file.name) && file.geometryOnly !== true
 }
 
 /**
- * Files whose only library action is the read-only 3D preview: STL and STEP have no
- * direct-print path (unlike gcode) and aren't editable projects (unlike 3MF), so a click
- * on one should open the previewer rather than do nothing. STEP is tessellated to STL by
- * the server before the previewer renders it.
+ * Files whose only library action is the read-only 3D preview: STL, STEP, and
+ * geometry-only 3MFs have no direct-print path (unlike gcode) and aren't editable
+ * projects (unlike project 3MFs), so a click on one should open the previewer rather
+ * than do nothing. The server converts each to a mesh for the previewer (STEP is
+ * tessellated; a geometry-only 3MF is extracted).
  */
 export function isPreviewOnlyLibraryFile(file: LibraryFile): boolean {
-  return file.kind === 'stl' || file.kind === 'step'
+  return file.kind === 'stl' || file.kind === 'step' || (file.kind === '3mf' && file.geometryOnly === true)
+}
+
+/**
+ * Files whose DEFAULT click opens the 3D preview rather than their primary action.
+ * Beyond the preview-only class, this includes single-object model exports
+ * (`objectExport`): full projects internally, but saved to be reused as models — so a
+ * click previews them (plated mode), while slicing/editing stays available through the
+ * explicit menu actions (they still count as `isUnslicedThreeMfFile`).
+ */
+export function isPreviewFirstLibraryFile(file: LibraryFile): boolean {
+  return isPreviewOnlyLibraryFile(file) || (file.kind === '3mf' && file.objectExport === true)
 }
 
 /**

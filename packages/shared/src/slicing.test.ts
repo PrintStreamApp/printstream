@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { saveArrangedThreeMfSchema, MAX_PAINT_CODE_LENGTH } from './slicing.js'
+import { exportArrangedThreeMfSchema, saveArrangedThreeMfSchema, MAX_PAINT_CODE_LENGTH } from './slicing.js'
 
 const sceneEdit = { plates: [{ index: 1 }], instances: [] }
 const retarget = {
@@ -22,6 +22,19 @@ test('saveArrangedThreeMf carries an optional retarget machine + slicer target',
   // Retarget is optional — a plain arrangement save still validates.
   const plain = saveArrangedThreeMfSchema.parse({ baseFileId: 'f1', mode: 'newVersion', sceneEdit })
   assert.equal(plain.retarget, undefined)
+})
+
+test('exportArrangedThreeMf is the bake payload without persistence targeting', () => {
+  // No mode/folder/bridge — and name stays optional (it only labels the audit entry).
+  const parsed = exportArrangedThreeMfSchema.parse({ baseFileId: 'f1', sceneEdit, retarget, slicerTargetId: 't1' })
+  assert.equal(parsed.retarget?.printerModel, 'H2D')
+  assert.equal(parsed.name, undefined)
+  const named = exportArrangedThreeMfSchema.parse({ baseFileId: null, sceneEdit, name: 'Widget.3mf' })
+  assert.equal(named.name, 'Widget.3mf')
+
+  // The save schema still enforces its persistence rules after the shared-base refactor.
+  assert.equal(saveArrangedThreeMfSchema.safeParse({ baseFileId: 'f1', mode: 'saveAs', sceneEdit }).success, false)
+  assert.equal(saveArrangedThreeMfSchema.safeParse({ baseFileId: null, mode: 'newVersion', sceneEdit }).success, false)
 })
 
 test('seam/support/colour paint accepts long sub-triangle split codes', () => {

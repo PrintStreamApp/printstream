@@ -24,6 +24,10 @@ export interface DerivedChips {
   plateTypeChips: LibraryFile['plateTypeChips']
   nozzleSizeChips: LibraryFile['nozzleSizeChips']
   projectFilamentChips: LibraryFile['projectFilamentChips']
+  /** Geometry-only 3MF (no Bambu project metadata) — the web treats it like STL/STEP. */
+  geometryOnly?: boolean
+  /** Editor single-object export (marker-stamped) — model-like default treatment. */
+  objectExport?: boolean
 }
 
 export function serializeDerivedChips(chips: DerivedChips): string {

@@ -117,7 +117,7 @@ async function withOrdersApp(
     enqueueLibraryPrint: async () => {
       throw new Error('not used in auth test')
     },
-    inspectBridgeLibraryThreeMf: async () => ({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null }),
+    inspectBridgeLibraryThreeMf: async () => ({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null, geometryOnly: false, objectExport: false }),
     resolveLibraryFileToLocalPath: async () => '/tmp/file.gcode',
     readPlateIndex: async () => ({ plates: [] }) as never
   }).register({

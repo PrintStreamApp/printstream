@@ -5,14 +5,16 @@
  * controls) plus the `SliceSettingsController` and `SliceMaterialsSnapshot`
  * contracts that bridge `SliceFileModal`'s state into it, so the SAME panel
  * renders both in the slim slice dialog (`mode='simple'`) and inside the model
- * studio's 3D editor (`mode='editor'`). The autocompletes/color picker it relies
- * on stay file-local. State stays owned by the caller; only values/setters flow
- * through the controller.
+ * studio's 3D editor (`mode='editor'`). Each material renders as one compact
+ * swatch row (number + preset/colour name, plus the nozzle picker); the expanded
+ * type/preset/color inputs live in `MaterialEditDialog`, opened by clicking the
+ * swatch. State stays owned by the caller; only values/setters flow through the
+ * controller.
  */
 import type React from 'react'
 import { useEffect, useState } from 'react'
 import {
-  Alert, AutocompleteOption, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormHelperText, FormLabel, IconButton, Input, Link,
+  Alert, AutocompleteOption, Badge, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormHelperText, FormLabel, IconButton, Input, Link,
   ListItemContent, Option, Select, Sheet, Stack, Tooltip, Typography
 } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
@@ -37,6 +39,7 @@ import { formatNozzleDiameterLabel } from '@printstream/shared'
 import { useNavigate } from 'react-router-dom'
 import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
+import { filamentTextColor, resolveProjectFilamentColorName } from '../../lib/filamentColor'
 import { formatSlicingProfileDisplayName } from '../../lib/slicingProfileSelection'
 import {
   buildSliceDialogProjectFilaments,
@@ -49,7 +52,7 @@ import {
   resolveMaterialTypeOptions,
   type SliceMaterialOption
 } from '../../lib/sliceProfileMatching'
-import { FilamentColorPicker } from './FilamentColorPicker'
+import { MaterialEditDialog } from './MaterialEditDialog'
 import { useFilamentChangedCount, useProcessChangedCount } from './useBakedPresetChanges'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { buildTenantWorkspacePath } from '../../lib/workspaceRoute'
@@ -278,6 +281,9 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
   const showPerObjectRow = mode === 'simple'
   // Add/remove materials is an editing affordance (Bambu-style) — only in the editor.
   const showMaterialEditing = mode === 'editor'
+  // Which material's expanded type/preset/color dialog is open (opened by clicking the
+  // compact swatch row). Panel-local: both surfaces render their own panel instance.
+  const [materialDialogFilamentId, setMaterialDialogFilamentId] = useState<number | null>(null)
   // Pre-open "changed values" badge for the process row: how far the FINAL sliced values
   // (embedded project config + session overrides) differ from the external preset.
   const processChangedCount = useProcessChangedCount({
@@ -600,131 +606,84 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
               </Button>
             )}
           </Stack>
-          {projectFilaments.length === 0 && showMaterialEditing && (
-            <Typography level="body-sm" textColor="text.tertiary">No materials yet. Add one to choose a material.</Typography>
-          )}
-          {projectFilaments.map((filament, filamentIndex) => {
-            const selectedOption = materialOptions.find((option) => option.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
-            const typeFilter = filamentMaterialTypeFilters[filament.projectFilamentId] ?? selectedOption?.materialType ?? ''
-            const typeOptions = resolveMaterialTypeOptions(materialOptions)
-            const narrowedMaterialOptions = narrowMaterialOptions(materialOptions, typeFilter, selectedOption?.id)
-            const loadedOptionsForFilament = prioritizeLoadedMaterialOptionsForFilament(loadedMaterialOptions, filament.nozzleId ?? null)
-            const selectedToolheadId = filamentToolheadIds[filament.projectFilamentId] ?? ''
-            const useToolheadButtonSet = materialToolheadOptions.length === 2
-            return (
-            <Sheet key={filament.projectFilamentId} variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
-              <Stack spacing={0.75}>
-              <Stack direction="row" alignItems="center" sx={{ flexWrap: 'wrap', columnGap: 1, rowGap: 0.5 }}>
-                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0, flexWrap: 'wrap', rowGap: 0.25 }}>
-                  <Typography level="title-sm">Material {filamentIndex + 1}</Typography>
-                </Stack>
-                <Stack direction="row" spacing={0.5} alignItems="center" sx={{ ml: 'auto' }}>
-                  {targetMode === 'realPrinter' && (
-                    <Button type="button" size="sm" variant="plain" disabled={loadedOptionsForFilament.length === 0} onClick={() => setPrinterMaterialPickerFilamentId(filament.projectFilamentId)}>
-                      Choose from printer
-                    </Button>
-                  )}
-                  <FilamentTuneButton
-                    filamentIndex={filamentIndex}
-                    projectFilamentId={filament.projectFilamentId}
-                    selectedOption={selectedOption}
-                    slicerTargetId={selectedSlicerTargetIdForGuards}
-                    sourceFileId={file.id}
-                    overrides={filamentSettingOverridesById[filament.projectFilamentId] ?? {}}
-                    onOpen={() => openFilamentSettings(filament.projectFilamentId)}
-                  />
-                  {showMaterialEditing && (() => {
-                    const inUse = filamentInUse?.(filament.projectFilamentId) ?? false
-                    const supportOnly = filamentSupportOnly?.(filament.projectFilamentId) ?? false
-                    const removeDisabled = projectFilaments.length <= 1 || inUse
-                    const removeTitle = projectFilaments.length <= 1
-                      ? 'A project needs at least one material'
-                      : inUse
-                        ? (supportOnly
-                            ? 'This material is used for supports — change the support filament before removing'
-                            : 'This material is used by an object — reassign it before removing')
-                        : 'Remove material'
-                    return (
-                      <Tooltip title={removeTitle}>
-                        <span>
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="danger"
-                            disabled={removeDisabled}
-                            onClick={() => onRemoveFilament(filament.projectFilamentId)}
-                            aria-label={`Remove material ${filamentIndex + 1}`}
-                          >
-                            <DeleteRoundedIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    )
-                  })()}
-                </Stack>
-              </Stack>
-              <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ flexWrap: 'wrap' }}>
-                <FormControl sx={{ flex: '1 1 150px', minWidth: 0 }}>
-                  <FormLabel>Type</FormLabel>
-                  <Select<string>
-                    value={typeFilter}
-                    slotProps={{
-                      listbox: {
-                        sx: {
-                          maxHeight: { xs: 'min(50vh, 18rem)', sm: 360 },
-                          overflowY: 'auto',
-                          overscrollBehavior: 'contain'
+          <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
+            <Stack spacing={0.75}>
+              {projectFilaments.length === 0 && showMaterialEditing && (
+                <Typography level="body-sm" textColor="text.tertiary">No materials yet. Add one to choose a material.</Typography>
+              )}
+              {projectFilaments.map((filament, filamentIndex) => {
+                const selectedOption = materialOptions.find((option) => option.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
+                const typeFilter = filamentMaterialTypeFilters[filament.projectFilamentId] ?? selectedOption?.materialType ?? ''
+                const selectedToolheadId = filamentToolheadIds[filament.projectFilamentId] ?? ''
+                const useToolheadButtonSet = materialToolheadOptions.length === 2
+                const normalizedColor = normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color)
+                // Same family derivation as the color picker, so the swatch's colour NAME
+                // matches what the expanded dialog will show.
+                const colorName = resolveProjectFilamentColorName({
+                  color: normalizedColor,
+                  filamentName: [selectedOption?.brand, (selectedOption?.material ?? selectedOption?.materialType ?? typeFilter) || filament.label].filter(Boolean).join(' ') || null,
+                  filamentType: (selectedOption?.materialType ?? typeFilter) || filament.label
+                }) ?? normalizedColor.toUpperCase()
+                const presetName = selectedOption ? (selectedOption.presetLabel ?? selectedOption.label) : filament.label
+                const presetUnmatched = Boolean(selectedOption && selectedOption.source !== 'manual' && !selectedOption.profileId)
+                return (
+                  <Stack key={filament.projectFilamentId} direction="row" alignItems="center" sx={{ flexWrap: 'wrap', columnGap: 0.75, rowGap: 0.5 }}>
+                    <Box
+                      component="button"
+                      type="button"
+                      onClick={() => setMaterialDialogFilamentId(filament.projectFilamentId)}
+                      title={presetUnmatched
+                        ? 'No preset matches this filament — click to pick one'
+                        : `${presetName} · ${colorName} — edit material`}
+                      aria-label={`Edit material ${filamentIndex + 1}: ${presetName}, ${colorName}`}
+                      sx={{
+                        appearance: 'none',
+                        flex: '1 1 140px',
+                        minWidth: 0,
+                        height: 'var(--Input-minHeight, 2.25rem)',
+                        px: 1,
+                        py: 0,
+                        borderRadius: 'sm',
+                        border: (theme) => `1px solid ${theme.vars.palette.divider}`,
+                        background: normalizedColor,
+                        color: filamentTextColor(null, normalizedColor),
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 0.75,
+                        overflow: 'hidden',
+                        transition: 'transform 80ms ease, border-color 80ms ease',
+                        '&:hover': { transform: 'scale(1.02)', borderColor: 'primary.outlinedBorder' },
+                        '&:focus-visible': {
+                          outline: (theme) => `2px solid ${theme.vars.palette.focusVisible}`,
+                          outlineOffset: 2
                         }
-                      }
-                    }}
-                    onChange={(_event, value) => setFilamentMaterialTypeFilters((current) => ({ ...current, [filament.projectFilamentId]: value ?? '' }))}
-                  >
-                    <Option value="">All material types</Option>
-                    {typeOptions.map((option) => <Option key={option} value={option}>{option}</Option>)}
-                  </Select>
-                </FormControl>
-                <FormControl sx={{ flex: '1 1 150px', minWidth: 0 }}>
-                  <FormLabel>Preset</FormLabel>
-                  <SliceMaterialAutocomplete
-                    options={narrowedMaterialOptions}
-                    value={selectedOption}
-                    placeholder="Choose a material profile"
-                    onChange={(option) => handleMaterialOptionChange(filament.projectFilamentId, option)}
-                  />
-                  {/* The field itself shows the preset in effect; only flag the case
-                      where a loaded filament resolved to NO preset at all. */}
-                  {selectedOption && selectedOption.source !== 'manual' && !selectedOption.profileId && (
-                    <FormHelperText sx={{ color: 'warning.400' }}>
-                      No preset matches this filament — pick one from the list.
-                    </FormHelperText>
-                  )}
-                </FormControl>
-                <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ flex: '1 1 100%', minWidth: 0, width: '100%' }}>
-                  <FormControl sx={{ flex: '1 1 0', minWidth: 0 }}>
-                    <FormLabel>Color</FormLabel>
-                    <Box sx={{ display: 'flex', alignItems: 'center', height: 'var(--Input-minHeight, 2.25rem)', width: '100%' }}>
-                      <FilamentColorPicker
-                        color={normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color)}
-                        material={(selectedOption?.material ?? selectedOption?.materialType ?? typeFilter) || filament.label}
-                        materialType={(selectedOption?.materialType ?? typeFilter) || filament.label}
-                        brand={selectedOption?.brand ?? ''}
-                        fullWidth
-                        onChange={(color) => setFilamentColors((current) => ({ ...current, [filament.projectFilamentId]: normalizeSliceFilamentColor(color) }))}
-                      />
+                      }}
+                    >
+                      <Typography level="body-xs" sx={{ fontWeight: 700, lineHeight: 1, color: 'inherit', flexShrink: 0 }}>
+                        {filamentIndex + 1}
+                      </Typography>
+                      <Typography level="body-xs" fontWeight="md" noWrap sx={{ color: 'inherit' }}>
+                        {presetName} · {colorName}
+                      </Typography>
+                      {presetUnmatched && <WarningAmberRoundedIcon fontSize="small" sx={{ ml: 'auto', flexShrink: 0 }} />}
                     </Box>
-                  </FormControl>
-                  {materialToolheadOptions.length > 0 && (useToolheadButtonSet ? (
-                    <FormControl sx={{ flex: '1 1 0', minWidth: 0 }} required>
-                      <FormLabel>Nozzle</FormLabel>
-                      <ButtonGroup size="md" variant="outlined" sx={{ '--ButtonGroup-radius': 'var(--joy-radius-sm)', width: '100%', '& > *': { minWidth: 0, px: 1.25, flex: 1 } }}>
+                    {materialToolheadOptions.length > 0 && (useToolheadButtonSet ? (
+                      <ButtonGroup
+                        size="sm"
+                        variant="outlined"
+                        aria-label={`Nozzle for material ${filamentIndex + 1}`}
+                        sx={{ '--ButtonGroup-radius': 'var(--joy-radius-sm)', flexShrink: 0, '& > *': { minWidth: 0, px: 1 } }}
+                      >
                         {[...materialToolheadOptions].sort((left, right) => {
                           const rank = (position: 'left' | 'right' | 'single' | null | undefined) => position === 'left' ? 0 : position === 'right' ? 1 : 2
                           return rank(left.position) - rank(right.position)
                         }).map((toolhead) => {
+                          // Single-letter labels keep the row compact; the full label rides the tooltip.
                           const buttonLabel = toolhead.position === 'left'
-                            ? 'Left'
+                            ? 'L'
                             : toolhead.position === 'right'
-                              ? 'Right'
+                              ? 'R'
                               : toolhead.label
                           const selected = selectedToolheadId === toolhead.id
                           return (
@@ -734,6 +693,7 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                               variant={selected ? 'solid' : 'outlined'}
                               color={selected ? 'primary' : 'neutral'}
                               aria-pressed={selected}
+                              aria-label={toolhead.label}
                               onClick={() => setFilamentToolheadIds((current) => ({ ...current, [filament.projectFilamentId]: toolhead.id }))}
                               title={toolhead.label}
                             >
@@ -742,28 +702,95 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                           )
                         })}
                       </ButtonGroup>
-                    </FormControl>
-                  ) : (
-                    <FormControl sx={{ flex: '1 1 0', minWidth: 0 }} required>
-                      <FormLabel>Nozzle</FormLabel>
+                    ) : (
                       <Select<string>
-                        value={selectedToolheadId}
-                        placeholder="Choose"
+                        size="sm"
+                        value={selectedToolheadId || null}
+                        placeholder="Nozzle"
+                        slotProps={{ button: { 'aria-label': `Nozzle for material ${filamentIndex + 1}` } }}
+                        sx={{ flexShrink: 0, minWidth: 96 }}
                         onChange={(_event, value) => setFilamentToolheadIds((current) => ({ ...current, [filament.projectFilamentId]: value ?? '' }))}
                       >
                         {materialToolheadOptions.map((toolhead) => (
                           <Option key={toolhead.id} value={toolhead.id}>{toolhead.label}</Option>
                         ))}
                       </Select>
-                    </FormControl>
-                  ))}
-                </Stack>
-              </Stack>
-              </Stack>
-            </Sheet>
-          )})}
+                    ))}
+                    <FilamentTuneButton
+                      filamentIndex={filamentIndex}
+                      projectFilamentId={filament.projectFilamentId}
+                      selectedOption={selectedOption}
+                      slicerTargetId={selectedSlicerTargetIdForGuards}
+                      sourceFileId={file.id}
+                      overrides={filamentSettingOverridesById[filament.projectFilamentId] ?? {}}
+                      onOpen={() => openFilamentSettings(filament.projectFilamentId)}
+                    />
+                    {showMaterialEditing && (() => {
+                      const inUse = filamentInUse?.(filament.projectFilamentId) ?? false
+                      const supportOnly = filamentSupportOnly?.(filament.projectFilamentId) ?? false
+                      const removeDisabled = projectFilaments.length <= 1 || inUse
+                      const removeTitle = projectFilaments.length <= 1
+                        ? 'A project needs at least one material'
+                        : inUse
+                          ? (supportOnly
+                              ? 'This material is used for supports — change the support filament before removing'
+                              : 'This material is used by an object — reassign it before removing')
+                          : 'Remove material'
+                      return (
+                        <Tooltip title={removeTitle}>
+                          <span>
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="danger"
+                              disabled={removeDisabled}
+                              onClick={() => onRemoveFilament(filament.projectFilamentId)}
+                              aria-label={`Remove material ${filamentIndex + 1}`}
+                            >
+                              <DeleteRoundedIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )
+                    })()}
+                  </Stack>
+                )
+              })}
+            </Stack>
+          </Sheet>
         </Stack>
       )}
+      {materialDialogFilamentId != null && (() => {
+        // Deriving here (not stored) keeps the dialog live: a "Choose from printer" pick
+        // that lands while it is open updates type/preset/color in place. A filament
+        // removed out from under it (editor undo) simply renders nothing.
+        const filamentIndex = projectFilaments.findIndex((entry) => entry.projectFilamentId === materialDialogFilamentId)
+        const filament = filamentIndex >= 0 ? projectFilaments[filamentIndex] : null
+        if (!filament) return null
+        const selectedOption = materialOptions.find((option) => option.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
+        const typeFilter = filamentMaterialTypeFilters[filament.projectFilamentId] ?? selectedOption?.materialType ?? ''
+        return (
+          <MaterialEditDialog
+            filamentIndex={filamentIndex}
+            filamentLabel={filament.label}
+            typeFilter={typeFilter}
+            typeOptions={resolveMaterialTypeOptions(materialOptions)}
+            onTypeFilterChange={(value) => setFilamentMaterialTypeFilters((current) => ({ ...current, [filament.projectFilamentId]: value }))}
+            materialOptions={narrowMaterialOptions(materialOptions, typeFilter, selectedOption?.id)}
+            selectedOption={selectedOption}
+            onMaterialOptionChange={(option) => handleMaterialOptionChange(filament.projectFilamentId, option)}
+            color={normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color)}
+            onColorChange={(color) => setFilamentColors((current) => ({ ...current, [filament.projectFilamentId]: normalizeSliceFilamentColor(color) }))}
+            chooseFromPrinter={targetMode === 'realPrinter'
+              ? {
+                  disabled: prioritizeLoadedMaterialOptionsForFilament(loadedMaterialOptions, filament.nozzleId ?? null).length === 0,
+                  onOpen: () => setPrinterMaterialPickerFilamentId(filament.projectFilamentId)
+                }
+              : null}
+            onClose={() => setMaterialDialogFilamentId(null)}
+          />
+        )
+      })()}
       {afterMaterials}
       </>)}
     </>
@@ -825,67 +852,6 @@ function SlicingProfileAutocomplete({
   )
 }
 
-function SliceMaterialAutocomplete({
-  options,
-  value,
-  placeholder,
-  onChange
-}: {
-  options: SliceMaterialOption[]
-  value: SliceMaterialOption | null
-  placeholder: string
-  onChange: (option: SliceMaterialOption | null) => void
-}) {
-  // The FIELD shows the slicing preset actually in effect — choosing a loaded
-  // filament ("Michael's PLA") sets type/preset/colour and the field reads the
-  // matched preset ("PLA Basic - Custom"), BambuStudio-style. The filament name
-  // still labels the option rows below, where the choice is made.
-  const displayValue = value ? value.presetLabel ?? value.label : ''
-  const [inputValue, setInputValue] = useState(displayValue)
-
-  useEffect(() => {
-    setInputValue(displayValue)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seed only when the selection changes
-  }, [value?.id, displayValue])
-
-  return (
-    <DeferredKeyboardAutocomplete
-      options={options}
-      value={value}
-      inputValue={inputValue}
-      onChange={(_event, option) => onChange(option)}
-      onInputChange={(_event, nextValue, reason) => {
-        if (reason === 'reset') return
-        setInputValue(nextValue)
-      }}
-      getOptionLabel={(option) => option.label}
-      isOptionEqualToValue={(option, selected) => option.id === selected.id}
-      groupBy={(option) => option.group}
-      placeholder={placeholder}
-      selectOnFocus
-      handleHomeEndKeys
-      openOnFocus
-      slotProps={{ listbox: { sx: { maxHeight: 360 } } }}
-      renderOption={(props, option) => (
-        <AutocompleteOption {...props} key={option.id}>
-          <ListItemContent>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-              <Box sx={{ width: 16, height: 16, borderRadius: '50%', bgcolor: option.color ?? 'neutral.500', border: '1px solid', borderColor: 'divider', flexShrink: 0 }} />
-              <Stack spacing={0.35} sx={{ minWidth: 0 }}>
-                <Typography level="body-sm" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{option.label}</Typography>
-                <Typography level="body-xs" textColor="text.tertiary">
-                  {[option.brand, option.metadata].filter(Boolean).join(' · ')}
-                </Typography>
-              </Stack>
-            </Stack>
-          </ListItemContent>
-        </AutocompleteOption>
-      )}
-    />
-  )
-}
-
-
 /**
  * Material "tune" button + pre-open changed-values badge. Its own component (rather than inline in
  * the material row map) so the per-material resolve hook is legal; the badge counts how far the
@@ -915,19 +881,20 @@ function FilamentTuneButton(props: {
       : 'Choose a material profile first'}
     >
       <span>
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          disabled={!filamentProfileId || !slicerTargetId}
-          onClick={onOpen}
-          aria-label={`Edit filament settings for material ${filamentIndex + 1}`}
-        >
-          <TuneRoundedIcon fontSize="small" />
-          {changedCount > 0 && (
-            <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.5 }}>{changedCount}</Chip>
-          )}
-        </IconButton>
+        {/* Corner badge (not an inline chip) so the button width — and the whole material
+            row's column alignment — stays constant whether or not there are changes. */}
+        <Badge badgeContent={changedCount} size="sm" color="primary" badgeInset="15%">
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            disabled={!filamentProfileId || !slicerTargetId}
+            onClick={onOpen}
+            aria-label={`Edit filament settings for material ${filamentIndex + 1}`}
+          >
+            <TuneRoundedIcon fontSize="small" />
+          </IconButton>
+        </Badge>
       </span>
     </Tooltip>
   )

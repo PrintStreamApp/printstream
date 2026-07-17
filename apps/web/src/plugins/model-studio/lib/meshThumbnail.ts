@@ -188,7 +188,13 @@ function rememberThumbnail(key: string, url: string): void {
 function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
   void (async () => {
     try {
-      const png = await (await fetch(dataUrl)).blob()
+      // Decode the data URL by hand: `fetch(dataUrl)` counts as a connect-src request,
+      // which the app's CSP blocks — that silently disabled thumbnail persistence
+      // everywhere CSP is enforced (the render succeeded, the PUT never happened, and
+      // every later view re-rendered from scratch).
+      const comma = dataUrl.indexOf(',')
+      const bytes = Uint8Array.from(atob(dataUrl.slice(comma + 1)), (char) => char.charCodeAt(0))
+      const png = new Blob([bytes], { type: 'image/png' })
       await fetch(
         buildApiUrl(`/api/library/${encodeURIComponent(file.id)}/thumbnail?v=${encodeURIComponent(file.uploadedAt)}`),
         {
@@ -205,12 +211,13 @@ function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
 }
 
 /**
- * Render (or return a cached) PNG data URL preview for a raw-mesh (STL/STEP) library
- * file. Resolves to `null` when the preview can't be produced (aborted, fetch/parse
- * failure) so callers fall back to the kind label.
+ * Render (or return a cached) PNG data URL preview for a raw-mesh library file — STL,
+ * STEP, or a geometry-only 3MF (all served as STL by `/mesh`). Resolves to `null` when
+ * the preview can't be produced (aborted, fetch/parse failure) so callers fall back to
+ * the kind label.
  */
 export async function renderMeshThumbnail(file: LibraryFile, signal?: AbortSignal): Promise<string | null> {
-  if (file.kind !== 'stl' && file.kind !== 'step') return null
+  if (file.kind !== 'stl' && file.kind !== 'step' && !(file.kind === '3mf' && file.geometryOnly === true)) return null
   const key = cacheKey(file)
   const cached = cache.get(key)
   if (cached) return cached

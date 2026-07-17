@@ -1,9 +1,9 @@
 /**
  * Folder-picker dialog for "save / move into the library" flows. Save flows
  * (`showFiles`) also list the files in the destination folder: clicking one
- * fills the name field, and submitting a name that collides with an existing
- * file asks for confirmation before replacing it (the server archives the
- * replaced content as a version).
+ * fills the name field, and submitting a name whose final form (base name +
+ * declared extension) exactly matches an existing file asks for confirmation
+ * before replacing it (the server archives the replaced content as a version).
  */
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { Box, Button, FormControl, FormHelperText, FormLabel, IconButton, Input, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
@@ -14,6 +14,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { LibraryBrowseResponse, LibraryFolder } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../lib/libraryDisplay'
+import { findLibrarySaveConflict } from '../lib/librarySaveConflict'
 import { EmptyState } from './EmptyState'
 import { LibraryBreadcrumb } from './LibraryBreadcrumb'
 import { BackAwareModal as Modal } from './BackAwareModal'
@@ -64,7 +65,7 @@ export function LibraryDestinationDialog({
   showRoot: boolean
   /**
    * List the destination folder's files (save flows): picking one fills the
-   * name field, and a name collision asks to replace the existing file.
+   * name field, and an exact final-name match asks to replace that file.
    */
   showFiles?: boolean
   dialogWidth?: number
@@ -119,17 +120,13 @@ export function LibraryDestinationDialog({
     : rawOutputFileName
   const canSubmit = (fileNameField ? trimmedOutputFileName.length > 0 : true) && !submitting
 
-  // A save name collides when it matches an existing file's full or base name
-  // (save flows edit the basename and the server re-appends the extension, so
-  // compare both ways, including the declared extension when known).
+  // A save name collides only when the FINAL name (base + declared extension)
+  // matches an existing file exactly — the server's replace predicate. A looser
+  // base-name match would warn about files the save won't touch (e.g. saving
+  // `benchy` + `.gcode.3mf` next to `benchy.gcode`).
   const conflictingFile = useMemo(() => {
-    if (!showFiles || !fileNameField || !trimmedOutputFileName) return null
-    const fullName = fileNameField.extension ? `${trimmedOutputFileName}${fileNameField.extension}` : null
-    return destinationFiles.find((file) =>
-      file.name === trimmedOutputFileName
-      || file.name === fullName
-      || splitLibraryFileNameForRename(file.name).baseName === trimmedOutputFileName
-    ) ?? null
+    if (!showFiles || !fileNameField) return null
+    return findLibrarySaveConflict(destinationFiles, trimmedOutputFileName, fileNameField.extension)
   }, [destinationFiles, fileNameField, showFiles, trimmedOutputFileName])
 
   const submit = async () => {

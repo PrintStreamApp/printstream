@@ -31,7 +31,7 @@ import type {
  * Version of the parsed-index logic. Both apps key their caches on this (the bridge's in-memory LRU
  * and the API's derived-index cache), so bumping it once invalidates stale indexes everywhere.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 11
+export const THREE_MF_INDEX_PARSER_VERSION = 12
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -174,7 +174,41 @@ export function buildThreeMfIndex(
     }
   }
 
-  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, ...bakedProfiles }
+  // Geometry-only 3MF: no Bambu project metadata at all — neither slice_info nor
+  // model_settings produced a plate (the plates above are fabricated placeholders).
+  // Such a file is a mesh container (a vanilla CAD export), not an openable project:
+  // the editor's scene parse requires model_settings, so consumers route these files
+  // down the STL/STEP mesh paths (preview, mesh thumbnail, import-into-project)
+  // instead of the project editor. An editor "New 3MF" scaffold always writes
+  // model_settings, so self-authored projects can never classify as geometry-only.
+  const geometryOnly = parsedPlates.length === 0 && modelSettingsPlates.length === 0
+  const objectExport = extractModelKindMarker(projectSettingsJson) === PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT
+
+  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, ...bakedProfiles }
+}
+
+/**
+ * `project_settings.config` key the editor's single-object export stamps on its output
+ * (value {@link PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT}). Such a file is a full Bambu
+ * project by construction — that is what preserves the object's parts/materials/paint —
+ * but it exists to be a reusable MODEL, so the library's default treatment is model-like
+ * (preview on click) while project capabilities (slice/edit) stay reachable from menus.
+ * BambuStudio tolerates the foreign key: its JSON config loader records unrecognized
+ * keys and skips them (the same forward-compatibility path newer-Studio files rely on).
+ * Writer counterpart: `applyModelKindMarker` in the API's `three-mf-scene-builder.ts`.
+ */
+export const PRINTSTREAM_MODEL_KIND_KEY = 'printstream_model_kind'
+export const PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT = 'object-export'
+
+function extractModelKindMarker(projectSettingsJson: string | null): string | null {
+  if (!projectSettingsJson) return null
+  try {
+    const parsed = JSON.parse(projectSettingsJson) as Record<string, unknown>
+    const value = parsed?.[PRINTSTREAM_MODEL_KIND_KEY]
+    return typeof value === 'string' ? value : null
+  } catch {
+    return null
+  }
 }
 
 export function defaultPlate(): BridgeLibraryThreeMfPlate {

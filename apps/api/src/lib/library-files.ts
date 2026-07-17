@@ -372,9 +372,15 @@ export async function unhideSlicedOutput(
   const folderId = options && Object.prototype.hasOwnProperty.call(options, 'folderId')
     ? options.folderId ?? null
     : output.folderId
+  // Append the sliced-output extension unless the caller supplied it in FULL.
+  // Matching the whole compound `.gcode.3mf` (not a bare `.3mf`) keeps the final
+  // name WYSIWYG with the save dialog's preview (apps/web
+  // LibraryDestinationDialog, which shows `<name>.gcode.3mf` and predicts the
+  // replace target from it): a typed `benchy.3mf` becomes `benchy.3mf.gcode.3mf`
+  // exactly as previewed, instead of a name the dialog never showed.
   const trimmedName = options?.name?.trim()
   const name = trimmedName
-    ? (trimmedName.toLowerCase().endsWith('.3mf') ? trimmedName : `${trimmedName}.gcode.3mf`)
+    ? (trimmedName.toLowerCase().endsWith('.gcode.3mf') ? trimmedName : `${trimmedName}.gcode.3mf`)
     : output.name
 
   const existing = output.ownerBridgeId
