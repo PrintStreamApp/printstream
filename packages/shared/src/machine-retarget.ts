@@ -142,6 +142,22 @@ export function applyProcessProfileToProjectSettings(
   return next
 }
 
+/** Bambu models whose machine block must carry the dual-nozzle (two-extruder) topology. */
+export const H2_DUAL_NOZZLE_MODEL_KEYS: ReadonlySet<string> = new Set(['H2D', 'H2DPRO', 'H2C'])
+
+/**
+ * Whether a project's embedded settings carry the H2-family dual-nozzle machine shape the
+ * BambuStudio CLI needs (its extruder-variant resolution crashes without it). Consumed by the
+ * slicer's machine-switch guard (heal-or-reject before slicing) and the API's save-side heal —
+ * one definition so the two ends never disagree on what "intact" means.
+ */
+export function hasDualNozzleMachineShape(projectSettings: ProfileRecord): boolean {
+  return stringArray(projectSettings.physical_extruder_map).length >= 2
+    && stringArray(projectSettings.extruder_nozzle_stats).length >= 2
+    && stringArray(projectSettings.extruder_max_nozzle_count).length >= 2
+    && stringArray(projectSettings.default_nozzle_volume_type).length >= 2
+}
+
 export function mergeInheritedMachineProfile(profileName: string, profileRecords: ReadonlyMap<string, ProfileRecord>): ProfileRecord {
   const profile = profileRecords.get(profileName)
   if (!profile) {

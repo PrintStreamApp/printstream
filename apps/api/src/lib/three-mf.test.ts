@@ -402,6 +402,70 @@ test('applyFilamentList drops the old material physics when a slot changes mater
   assert.equal('textured_plate_temp' in next, false)
 })
 
+// Regression for the H2D "missing its dual-nozzle machine data" incident: on a dual-nozzle
+// machine with exactly TWO filaments, every extruder-indexed machine array is length 2 as well,
+// so the length-based filament-array detection matched them and a material-change save DELETED
+// nozzle_diameter / physical_extruder_map / extruder_type / extruder_variant_list — leaving a
+// project the slicer's machine-switch guard rejects. Machine-domain arrays must survive verbatim.
+test('applyFilamentList never drops or remaps extruder-indexed machine arrays that length-collide with the filament count', () => {
+  const machineBlock = {
+    nozzle_diameter: ['0.4', '0.4'],
+    physical_extruder_map: ['1', '0'],
+    extruder_type: ['Direct Drive', 'Direct Drive'],
+    extruder_variant_list: ['Direct Drive Standard,Direct Drive High Flow', 'Direct Drive Standard,Direct Drive High Flow'],
+    extruder_colour: ['', ''],
+    extruder_offset: ['0x2', '0x2'],
+    min_layer_height: ['0.08', '0.08'],
+    max_layer_height: ['0.28', '0.28'],
+    machine_min_extruding_rate: ['0', '0'],
+    extruder_nozzle_stats: ['Standard#1', 'Standard#1'],
+    start_end_points: ['30x-3', '30x-3'],
+    grab_length: ['15', '15']
+  }
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#001489', '#808080'],
+    filament_type: ['PETG', 'PLA-S'],
+    filament_settings_id: ['Bambu PETG Basic @BBL H2D 0.4 nozzle', 'Bambu Support For PLA/PETG @BBL H2D'],
+    nozzle_temperature: ['255', '220'],
+    ...machineBlock
+  })
+  // Slot 1's material changes (PLA-S support -> ABS-S support) — the exact incident shape.
+  const filaments: SceneEditFilament[] = [
+    { color: '#001489', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' },
+    { color: '#FFFFFF', sourceIndex: 1, type: 'ABS-S', settingsId: 'Bambu Support for ABS @BBL H2D' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+
+  // The filament physics drop still happens…
+  assert.equal('nozzle_temperature' in next, false)
+  assert.deepEqual(next.filament_type, ['PETG', 'ABS-S'])
+  // …but every machine/extruder array survives byte-for-byte.
+  for (const [key, value] of Object.entries(machineBlock)) {
+    assert.deepEqual(next[key], value, `machine key ${key} must survive a material-change save`)
+  }
+})
+
+test('applyFilamentList does not length-remap machine arrays when a filament slot is added', () => {
+  // Adding a third filament on a dual-nozzle machine must not grow the extruder-indexed arrays
+  // to three entries (the machine still has two extruders).
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#001489', '#808080'],
+    filament_type: ['PETG', 'PETG'],
+    filament_settings_id: ['Bambu PETG Basic @BBL H2D 0.4 nozzle', 'Bambu PETG Basic @BBL H2D 0.4 nozzle'],
+    nozzle_diameter: ['0.4', '0.4'],
+    physical_extruder_map: ['1', '0']
+  })
+  const filaments: SceneEditFilament[] = [
+    { color: '#001489', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' },
+    { color: '#808080', sourceIndex: 1, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' },
+    { color: '#FFFFFF', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+  assert.deepEqual(next.filament_colour, ['#001489', '#808080', '#FFFFFF'])
+  assert.deepEqual(next.nozzle_diameter, ['0.4', '0.4'])
+  assert.deepEqual(next.physical_extruder_map, ['1', '0'])
+})
+
 test('applyFilamentList blanks a changed slot\'s different_settings_to_system record, keeping process/machine and unchanged slots', () => {
   // The material dialog treats a slot's different_settings_to_system entry as the authoritative
   // "changed within this 3MF" signal — a record inherited from the OLD material would flag keys

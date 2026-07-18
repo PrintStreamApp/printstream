@@ -16,13 +16,47 @@ import { slicingProfilesResponseIsUsable } from './sliceProfileMatching'
 /** The catalogue is effectively static per slicer image; keep it fresh for a few minutes. */
 export const SLICING_PROFILES_STALE_TIME_MS = 5 * 60_000
 
+/**
+ * Abort a catalogue fetch that produces nothing for this long. The response is the largest JSON
+ * body the app loads (multi-MB), and a transport that wedges mid-body (the Vite dev proxy's
+ * intermittent large-body stall; a dropped LB connection in prod) otherwise hangs the fetch
+ * FOREVER — no error, so no retry, and the slice dialog sits on "Loading slicer data…" until
+ * closed (unmount aborts the fetch) and reopened (a fresh fetch succeeds). Timing out turns the
+ * stall into an error React Query retries (×5 with backoff), so the dialog self-heals. Generous:
+ * a healthy load takes a couple of seconds even on slow dev.
+ */
+const SLICING_PROFILES_STALL_TIMEOUT_MS = 25_000
+
 export function slicingProfilesQueryOptions(targetId: string) {
   return {
     queryKey: ['slicing-profiles', targetId] as const,
     queryFn: async ({ signal }: { signal?: AbortSignal }) => {
       const params = new URLSearchParams()
       params.set('targetId', targetId)
-      const result = await apiFetch<SlicingProfilesResponse>(`/api/slicing/profiles?${params.toString()}`, { signal })
+      // Compose the query's cancel signal with the stall timeout (manual composition —
+      // AbortSignal.any is still too new to rely on across the supported browsers).
+      const controller = new AbortController()
+      const onOuterAbort = () => controller.abort()
+      signal?.addEventListener('abort', onOuterAbort, { once: true })
+      let stalled = false
+      const stallTimer = setTimeout(() => {
+        stalled = true
+        controller.abort()
+      }, SLICING_PROFILES_STALL_TIMEOUT_MS)
+      let result: SlicingProfilesResponse
+      try {
+        result = await apiFetch<SlicingProfilesResponse>(`/api/slicing/profiles?${params.toString()}`, { signal: controller.signal })
+      } catch (error) {
+        // A stall-triggered abort must surface as a plain Error: React Query treats caller
+        // aborts as cancellation (no retry), but a stalled transport should retry.
+        if (stalled && !signal?.aborted) {
+          throw new Error('Loading slicer profiles stalled — retrying.')
+        }
+        throw error
+      } finally {
+        clearTimeout(stallTimer)
+        signal?.removeEventListener('abort', onOuterAbort)
+      }
       // A response with no builtin presets means the slicer answered before its bundled
       // `*_full/` preset dirs were indexed (restart / still initializing) and only the
       // workspace's custom profiles came back. Caching that strands the editor on a

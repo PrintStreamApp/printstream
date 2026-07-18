@@ -12,6 +12,11 @@
  * virtual keyboards), so this is safe as a drop-in for every autocomplete —
  * use it instead of the bare Joy `Autocomplete` in app UI.
  *
+ * Also owns the app-wide GROUPED listbox styling: when `groupBy` is set, the
+ * group subheaders get a banded/bordered sticky treatment (see
+ * `GROUPED_LISTBOX_SX`) so groups read as separators instead of blending into
+ * the options — one place, consistent across every grouped picker.
+ *
  * Implementation constraint: the repeat-tap listener is attached natively via a
  * ref because Joy's input slot only composes `onBlur`/`onFocus`/`onMouseDown`
  * from `slotProps.input` — any other handler passed there is silently dropped
@@ -20,7 +25,29 @@
 import { useEffect, useRef, useState } from 'react'
 import { Autocomplete } from '@mui/joy'
 import type { AutocompleteProps } from '@mui/joy'
+import type { SxProps } from '@mui/joy/styles/types'
 import { useTouchPointer } from './useTouchPointer'
+
+/**
+ * Listbox styling applied to every GROUPED autocomplete (`groupBy` set): Joy's default group
+ * subheaders render as plain muted text that blends into the options, so give them a banded,
+ * bordered, sticky header row instead. Lives here (merged automatically) so all grouped pickers
+ * — process/machine profiles, materials, Bambu preset pickers — separate their groups the same
+ * way without per-site styling.
+ */
+const GROUPED_LISTBOX_SX: SxProps = {
+  '& .MuiListSubheader-root': {
+    backgroundColor: 'background.level1',
+    borderBlockEnd: '1px solid',
+    borderColor: 'divider',
+    fontWeight: 'lg',
+    letterSpacing: '0.08em',
+    color: 'text.secondary',
+    minBlockSize: 28
+  },
+  // Breathing room between one group's last option and the next group's header band.
+  '& > li + li .MuiListSubheader-root': { marginBlockStart: 4 }
+}
 
 function assignRef<T>(ref: React.Ref<T> | null | undefined, value: T | null): void {
   if (typeof ref === 'function') {
@@ -69,6 +96,18 @@ export function DeferredKeyboardAutocomplete<
       {...rest}
       slotProps={{
         ...slotProps,
+        ...(rest.groupBy ? {
+          listbox: (ownerState) => {
+            const listboxSlotProps = slotProps?.listbox
+            const external = typeof listboxSlotProps === 'function' ? listboxSlotProps(ownerState) : listboxSlotProps
+            const externalSx = (external as { sx?: SxProps } | undefined)?.sx
+            // sx arrays compose left-to-right, so a site's own listbox sx still wins on conflicts.
+            return {
+              ...external,
+              sx: [GROUPED_LISTBOX_SX, ...(Array.isArray(externalSx) ? externalSx : externalSx ? [externalSx] : [])]
+            }
+          }
+        } : null),
         input: (ownerState) => {
           const inputSlotProps = slotProps?.input
           const external = typeof inputSlotProps === 'function' ? inputSlotProps(ownerState) : inputSlotProps

@@ -116,8 +116,13 @@ test('cross-model H2D switch retargets natively (the retarget rebuilds the dual-
   assert.doesNotThrow(() => assertSupportedEmbeddedMachineSwitch(input))
 })
 
-test('rejects a nominally-H2D project that lacks the H2 dual-nozzle metadata (no retarget to repair it)', () => {
-  assert.throws(() => assertSupportedEmbeddedMachineSwitch({
+test('HEALS a nominally-H2D project that lacks the H2 dual-nozzle metadata by retargeting to its own machine', () => {
+  // Regression for the field incident: a filament rewrite once deleted the extruder-indexed
+  // machine arrays from a saved H2D project (nozzle_diameter, physical_extruder_map, …).
+  // With a machine preset available, the same-model "switch" re-authors the machine block
+  // from the bundled preset — the file slices instead of hard-failing with "open it in
+  // Bambu Studio and re-save".
+  const input = {
     request: {
       sourceFileId: 'source',
       target: {
@@ -128,6 +133,32 @@ test('rejects a nominally-H2D project that lacks the H2 dual-nozzle metadata (no
       plate: 0
     },
     profileFiles: [{ kind: 'machine', name: 'Bambu Lab H2D 0.4 nozzle' }],
+    projectSettings: {
+      printer_model: 'Bambu Lab H2D',
+      physical_extruder_map: ['0'],
+      extruder_nozzle_stats: [],
+      extruder_max_nozzle_count: ['1'],
+      default_nozzle_volume_type: ['Standard']
+    }
+  } as const
+
+  assert.equal(shouldRetargetEmbeddedMachine(input), true)
+  assert.doesNotThrow(() => assertSupportedEmbeddedMachineSwitch(input))
+})
+
+test('still rejects a topology-less H2D project when no machine preset is available to heal from', () => {
+  assert.throws(() => assertSupportedEmbeddedMachineSwitch({
+    request: {
+      sourceFileId: 'source',
+      target: {
+        mode: 'manualProfile',
+        printerModel: 'H2D',
+        printerProfileId: 'machine-profile'
+      },
+      plate: 0
+    },
+    // No machine profile file in the request — nothing to author the machine block from.
+    profileFiles: [{ kind: 'process', name: '0.20mm Standard @BBL H2D' }],
     projectSettings: {
       printer_model: 'Bambu Lab H2D',
       physical_extruder_map: ['0'],

@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Alert, Box, Button, Checkbox, CircularProgress, DialogActions, Divider, FormControl, FormLabel,
-  IconButton, Input, Option, Select, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography
+  IconButton, Input, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography
 } from '@mui/joy'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -36,13 +36,15 @@ import {
   type ProcessConfig,
   type ProcessSettingOption,
   type ProcessSettingOverrides,
-  type ProcessVisibilityContext
+  type ProcessVisibilityContext,
+  type SlicingProfileSummary
 } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { useEffectiveSlicerDeveloperMode } from '../lib/slicerDeveloperMode'
 import { BackAwareModal } from './BackAwareModal'
 import { DialogSection } from './DialogSection'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
+import { SlicingProfileAutocomplete } from './library/SlicingProfileAutocomplete'
 import { usePromptDialog } from './PromptDialogProvider'
 import { SettingValueField, type SettingFilamentChoice } from './settings/SettingValueField'
 
@@ -57,8 +59,12 @@ export interface ProcessSettingsDialogProps {
   initialOverrides: ProcessSettingOverrides
   /** Machine context affecting conditional visibility (printer model, flavor). */
   visibilityContext?: Partial<ProcessVisibilityContext>
-  /** Selectable process profiles for switching within the dialog (Bambu carry-over). */
-  profileOptions?: Array<{ id: string; name: string }>
+  /**
+   * Selectable process profiles for switching within the dialog (Bambu carry-over). Full
+   * summaries so the switcher renders the SAME grouped picker (project/workspace/built-in)
+   * as the slice panel's process dropdown.
+   */
+  profileOptions?: SlicingProfileSummary[]
   /** Switch the active profile, carrying the current modifications (relative to the preset). */
   onProfileChange?: (profileId: string, carryOverrides: ProcessSettingOverrides) => void
   /** Restrict the editable catalog to these keys (per-object overrides expose a subset). */
@@ -355,19 +361,20 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
         {profileOptions && profileOptions.length > 1 && onProfileChange && (
           <FormControl size="sm" sx={{ mt: 1 }}>
             <FormLabel>Profile</FormLabel>
-            <Select
-              value={processProfileId}
-              onChange={(_event, value) => {
-                if (typeof value === 'string' && value !== processProfileId && baseConfig) {
+            {/* Same grouped/sorted picker as the slice panel's process dropdown, so the two
+                surfaces present the catalog identically (groups, ordering, tooltips). */}
+            <SlicingProfileAutocomplete
+              profiles={profileOptions}
+              value={profileOptions.find((profile) => profile.id === processProfileId) ?? null}
+              placeholder="Choose a process profile"
+              ariaLabel="Process profile"
+              onChange={(profile) => {
+                if (profile && profile.id !== processProfileId && baseConfig) {
                   // Carry modifications (vs the current preset baseline) onto the new profile.
-                  onProfileChange(value, diffProcessConfig(baseConfig, config))
+                  onProfileChange(profile.id, diffProcessConfig(baseConfig, config))
                 }
               }}
-            >
-              {profileOptions.map((option) => (
-                <Option key={option.id} value={option.id}>{option.name}</Option>
-              ))}
-            </Select>
+            />
           </FormControl>
         )}
         {loading && (

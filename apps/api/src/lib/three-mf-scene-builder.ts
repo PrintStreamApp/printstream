@@ -1092,12 +1092,73 @@ const FILAMENT_IDENTITY_KEYS = new Set([
 ])
 
 /**
+ * Machine-domain arrays that live in `project_settings.config` but are indexed by EXTRUDER (or
+ * are machine-level lists), NOT by filament. {@link applyFilamentList} identifies filament-indexed
+ * arrays by length, and on a dual-nozzle machine with exactly two filaments every one of these
+ * length-2 arrays is indistinguishable from a filament array by length alone — the remap would
+ * corrupt them on an add/remove and the material-change drop DELETED them (a real save on an H2D
+ * stripped `nozzle_diameter`/`physical_extruder_map`/`extruder_type`/`extruder_variant_list`,
+ * leaving a project the slicer's machine-switch guard rejects as missing its dual-nozzle
+ * topology). These keys must never be remapped or dropped by the filament rewrite.
+ *
+ * Sourced from BambuStudio's own preset-domain split (vendored source,
+ * `libslic3r/Preset.cpp` `s_Preset_printer_options` + `s_Preset_machine_limits_options`, and
+ * `PrintConfig.cpp` `init_extruder_option_keys`) plus the runtime-derived machine maps observed
+ * in real projects (`extruder_nozzle_stats`, `extruder_ams_count`, `start_end_points`) and the
+ * project-level printer-compatibility declarations. The bare extruder-indexed names are listed;
+ * their per-filament override twins use `filament_*` prefixes and stay strippable. An unknown NEW
+ * machine key from a future BambuStudio would still be misclassified — the slicer-side same-model
+ * topology heal (machine-switch-guard) backstops that by re-authoring the machine block.
+ */
+const MACHINE_DOMAIN_ARRAY_KEYS = new Set([
+  // Preset.cpp s_Preset_printer_options (Bambu-relevant subset; scalars included harmlessly).
+  'printable_area', 'extruder_printable_area', 'bed_exclude_area', 'gcode_flavor',
+  'machine_start_gcode', 'machine_end_gcode', 'printing_by_object_gcode', 'before_layer_change_gcode',
+  'layer_change_gcode', 'time_lapse_gcode', 'wrapping_detection_gcode', 'change_filament_gcode',
+  'printer_model', 'printer_variant', 'printer_extruder_id', 'printer_extruder_variant',
+  'extruder_variant_list', 'default_nozzle_volume_type', 'printable_height', 'extruder_printable_height',
+  'extruder_clearance_dist_to_rod', 'extruder_clearance_max_radius', 'extruder_clearance_height_to_lid',
+  'extruder_clearance_height_to_rod', 'nozzle_height', 'master_extruder_id', 'default_print_profile',
+  'silent_mode', 'scan_first_layer', 'wrapping_detection_layers', 'wrapping_exclude_area',
+  'machine_load_filament_time', 'machine_unload_filament_time', 'machine_pause_gcode',
+  'template_custom_gcode', 'machine_hotend_change_time', 'nozzle_type', 'auxiliary_fan', 'fan_direction',
+  'nozzle_volume', 'upward_compatible_machine', 'z_hop_types', 'support_chamber_temp_control',
+  'support_air_filtration', 'support_cooling_filter', 'cooling_filter_enabled', 'printer_structure',
+  'thumbnail_size', 'best_object_pos', 'head_wrap_detect_zone', 'printer_notes', 'print_in_clockwise',
+  'enable_long_retraction_when_cut', 'long_retractions_when_cut', 'retraction_distances_when_cut',
+  'use_relative_e_distances', 'extruder_type', 'use_firmware_retraction', 'grab_length',
+  'machine_switch_extruder_time', 'hotend_cooling_rate', 'hotend_heating_rate', 'enable_pre_heating',
+  'support_object_skip_flush', 'physical_extruder_map', 'bed_temperature_formula',
+  'machine_prepare_compensation_time', 'nozzle_flush_dataset', 'group_algo_with_time',
+  'extruder_max_nozzle_count', 'support_fast_purge_mode',
+  // Preset.cpp s_Preset_machine_limits_options.
+  'machine_max_acceleration_extruding', 'machine_max_acceleration_retracting', 'machine_max_acceleration_travel',
+  'machine_max_acceleration_x', 'machine_max_acceleration_y', 'machine_max_acceleration_z', 'machine_max_acceleration_e',
+  'machine_max_speed_x', 'machine_max_speed_y', 'machine_max_speed_z', 'machine_max_speed_e',
+  'machine_min_extruding_rate', 'machine_min_travel_rate',
+  'machine_max_jerk_x', 'machine_max_jerk_y', 'machine_max_jerk_z', 'machine_max_jerk_e',
+  'machine_max_force_Y', 'machine_bed_mass_Y', 'machine_max_printed_mass',
+  // PrintConfig.cpp init_extruder_option_keys — the bare extruder-indexed names as they appear in
+  // project_settings (the filament-override twins are `filament_*`-prefixed and stay strippable).
+  'nozzle_diameter', 'min_layer_height', 'max_layer_height', 'extruder_offset',
+  'retraction_length', 'z_hop', 'retraction_speed', 'retract_lift_above', 'retract_lift_below',
+  'deretraction_speed', 'retract_before_wipe', 'retract_restart_extra', 'retraction_minimum_travel',
+  'wipe', 'wipe_distance', 'retract_when_changing_layer', 'retract_length_toolchange',
+  'retract_restart_extra_toolchange', 'extruder_colour', 'default_filament_profile',
+  // Runtime-derived machine maps + project-level printer compatibility (not in the BBS preset
+  // lists, but extruder-indexed / machine-identity in real project files).
+  'extruder_nozzle_stats', 'extruder_ams_count', 'start_end_points', 'print_compatible_printers'
+])
+
+/**
  * Replace `project_settings.config`'s filament set with the desired ordered list
  * (Bambu-style add/remove of materials). Position `i` becomes filament `i + 1`.
  *
  * To stay resilient to BambuStudio version differences (project_settings carries many
  * parallel filament-indexed arrays we don't enumerate), EVERY top-level array whose
- * length equals the current filament count is remapped by an index map: a desired slot
+ * length equals the current filament count — except the machine/extruder-domain keys in
+ * {@link MACHINE_DOMAIN_ARRAY_KEYS}, which are extruder-indexed and merely length-collide
+ * with the filament count on dual-nozzle machines — is remapped by an index map: a desired slot
  * copies its `sourceIndex` (an existing filament's settings) so new/cloned slots inherit
  * a valid profile, then `filament_colour`/`filament_type` are set from the desired list.
  * The square `flush_volumes_matrix` (count x count) is rebuilt row/column-wise. When the
@@ -1154,6 +1215,11 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     const materialChanged = filaments.some((_filament, i) => slotMaterialChanged(i))
     for (const [key, value] of Object.entries(record)) {
       if (!Array.isArray(value)) continue
+      // Machine/extruder-domain arrays are indexed by extruder, not filament — on a machine
+      // whose extruder count happens to equal the filament count (2 and 2 on a dual-nozzle
+      // H2D) the length test below cannot tell them apart, and remapping or dropping them
+      // destroys the project's machine topology. Never touch them here.
+      if (MACHINE_DOMAIN_ARRAY_KEYS.has(key)) continue
       if (key === 'flush_volumes_matrix') {
         if (value.length === oldCount * oldCount) {
           const next: unknown[] = []

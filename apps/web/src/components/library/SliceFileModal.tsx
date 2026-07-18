@@ -41,7 +41,6 @@ import { FilamentOptionLabel } from './FilamentOptionLabel'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import {
   extractLayerHeightToken,
-  formatSlicingProfileDisplayName,
   isProjectProfileAllowedForTarget,
   isSelectableOrProjectFallbackSlicingProfile,
   isSelectableSlicingProfile,
@@ -750,7 +749,12 @@ export function SliceFileModal({
         type: selectedOption?.materialType ?? (isAdded ? 'PLA' : null),
         // The selected preset name (e.g. "Bambu PETG HF @BBL H2D 0.4 nozzle") so the material
         // choice persists as `filament_settings_id`. Null keeps the slot's existing preset.
-        settingsId: selectedOption?.material ?? null,
+        // Only a RESOLVED preset's name may persist: a loaded AMS option with no matched
+        // profile carries the tray's display identity ("Bambu PETG Basic") in `material`,
+        // and writing that into filament_settings_id poisons the saved project — the name
+        // matches no catalog preset, so slice-time physics re-derivation silently falls
+        // back to Generic PLA.
+        settingsId: selectedOption?.profileId ? selectedOption.material : null,
         sourceIndex: sourceIndex >= 0 ? sourceIndex : 0,
         // The chosen toolhead's runtime nozzle id (0 = right, 1 = left), falling back to the slot's
         // baked nozzle so unchanged slots keep their assignment. Null on single-nozzle projects.
@@ -1284,7 +1288,7 @@ export function SliceFileModal({
             sourceFileId={file.id}
             initialOverrides={processSettingOverrides}
             visibilityContext={{ printerModel: targetMode === 'manualProfile' ? manualPrinterModel : (selectedPrinter?.model ?? '') }}
-            profileOptions={compatibleProcessProfiles.map((profile) => ({ id: profile.id, name: formatSlicingProfileDisplayName(profile) }))}
+            profileOptions={compatibleProcessProfiles}
             filamentChoices={processFilamentChoices}
             applyScope={editorOnly ? 'project' : 'slice'}
             onProfileChange={(profileId, carryOverrides) => {

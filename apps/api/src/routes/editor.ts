@@ -32,7 +32,7 @@ import { z } from 'zod'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
-import { retargetSavedProjectMachine } from '../lib/save-retarget.js'
+import { healSavedProjectMachineTopology, retargetSavedProjectMachine } from '../lib/save-retarget.js'
 import { badRequest, HttpError, notFound } from '../lib/http-error.js'
 import { getStagedImport, resolveSceneEditImports, stageImport } from '../lib/import-store.js'
 import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
@@ -172,7 +172,7 @@ async function bakeArrangedThreeMf(
   input: ExportArrangedThreeMf,
   workDir: string,
   fileName: string
-): Promise<{ bakedPath: string; importCount: number; extraCleanupDirs: string[]; baseFile: { id: string; name: string; ownerBridgeId: string | null; folderId: string | null } | null }> {
+): Promise<{ bakedPath: string; importCount: number; extraCleanupDirs: string[]; baseFile: { id: string; name: string; ownerBridgeId: string | null; folderId: string | null } | null; machineTopologyHealed: boolean }> {
   const { baseFileId, baseVersionId, sceneEdit, retarget, slicerTargetId, objectProcessOverrides, processSettingOverrides, objectExport } = input
 
   const baseFile = baseFileId
@@ -228,6 +228,7 @@ async function bakeArrangedThreeMf(
   // slicer's machine switch, so the saved 3MF opens/slices for the new printer instead of
   // silently keeping the source machine. buildEditedThreeMf alone never switches the machine.
   let bakedPath = workingPath
+  let machineTopologyHealed = false
   if (retarget) {
     bakedPath = await retargetSavedProjectMachine({
       tenantId,
@@ -237,8 +238,25 @@ async function bakeArrangedThreeMf(
       retarget
     })
     extraCleanupDirs.push(path.dirname(bakedPath))
+  } else {
+    // Same-model save: if the base project LOST its dual-nozzle machine block (a filament
+    // rewrite once stripped the extruder-indexed machine arrays), re-author it from the
+    // project's own machine preset so the file heals at rest instead of staying unsliceable.
+    // Best-effort — null means "not needed or not possible" and the save proceeds unchanged.
+    const healedPath = await healSavedProjectMachineTopology({
+      tenantId,
+      arrangedPath: workingPath,
+      fileName,
+      slicerTargetId,
+      filaments: sceneEdit.filaments
+    })
+    if (healedPath) {
+      bakedPath = healedPath
+      extraCleanupDirs.push(path.dirname(healedPath))
+      machineTopologyHealed = true
+    }
   }
-  return { bakedPath, importCount: imports.length, extraCleanupDirs, baseFile }
+  return { bakedPath, importCount: imports.length, extraCleanupDirs, baseFile, machineTopologyHealed }
 }
 
 editorRouter.post(
@@ -286,7 +304,7 @@ editorRouter.post(
         action: 'upload',
         resource: 'library file',
         summary: `Saved edited 3MF ${created.name}.`,
-        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, importCount: baked.importCount, retargetedTo: parsed.retarget?.printerModel ?? null, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
+        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, importCount: baked.importCount, retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
       })
       response.status(201).json({ file: { id: created.id, name: created.name } })
     } finally {
@@ -323,7 +341,7 @@ editorRouter.post(
         action: 'export-3mf',
         resource: 'library file',
         summary: `Exported edited 3MF ${fileName} for download.`,
-        metadata: { baseFileId: parsed.baseFileId ?? null, fileName, importCount: baked.importCount, retargetedTo: parsed.retarget?.printerModel ?? null, sizeBytes: bytes.length }
+        metadata: { baseFileId: parsed.baseFileId ?? null, fileName, importCount: baked.importCount, retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, sizeBytes: bytes.length }
       })
       await sendModelBuffer(request, response, bytes, 'model/3mf')
     } finally {

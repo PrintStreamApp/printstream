@@ -82,18 +82,26 @@ Both the slice-time rewrite (`rewriteProjectSettingsMetadata`) and the shared
 retarget blank the relevant slots when they rewrite the corresponding
 `*_settings_id`.
 
-## The remaining guard
+## The same-model heal and the remaining guard
 
-`assertSupportedEmbeddedMachineSwitch` hard-fails exactly one case a retarget
-cannot help: a **nominally same-model H2-family project**
-(`H2D` / `H2DPRO` / `H2C`) that already **declares** that H2 machine
-(`printer_model`/`printer_settings_id`) yet lacks its dual-nozzle topology
-(`physical_extruder_map` et al.) — the embedded model equals the target so no
-retarget is triggered, nothing rebuilds the topology, and the CLI segfaults
-resolving extruder variants. The error tells the user to re-save the project
-for that printer. Note this is distinct from a **machine-less** input (a
-new-project scaffold with no `printer_model`): that one *is* retargeted (step
-1 above authors the H2 machine in), so it never reaches this throw.
+A **nominally same-model H2-family project** (`H2D` / `H2DPRO` / `H2C`) that
+already **declares** that H2 machine (`printer_model`/`printer_settings_id`)
+yet lacks its dual-nozzle topology (`physical_extruder_map` et al. — the
+shared `hasDualNozzleMachineShape`) is **healed**, not rejected:
+`shouldRetargetEmbeddedMachine` treats it as retarget-needed, so step 1 above
+re-authors the machine block from the bundled preset exactly like a
+cross-model switch. Without the heal the CLI segfaults resolving extruder
+variants. (Field origin: a filament rewrite in the API's save path once
+deleted the extruder-indexed machine arrays — see `MACHINE_DOMAIN_ARRAY_KEYS`
+in `three-mf-scene-builder.ts`; the API also heals such files at rest on
+their next save via `healSavedProjectMachineTopology`.)
+
+`assertSupportedEmbeddedMachineSwitch` hard-fails only when that heal is
+impossible: the same damaged shape with **no machine preset in the request**
+to author from. The error tells the user to re-save the project for that
+printer. A **machine-less** input (a new-project scaffold with no
+`printer_model`) never reaches the throw either — it *is* retargeted (step 1
+authors the H2 machine in).
 
 ## Maintenance notes
 

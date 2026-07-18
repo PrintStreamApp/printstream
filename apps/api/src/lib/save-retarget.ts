@@ -14,11 +14,20 @@
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { applyProcessProfileToProjectSettings, retargetProjectSettingsToMachine, type SlicingManualProfileTarget } from '@printstream/shared'
+import {
+  applyProcessProfileToProjectSettings,
+  canonicalBambuModelKey,
+  H2_DUAL_NOZZLE_MODEL_KEYS,
+  hasDualNozzleMachineShape,
+  retargetProjectSettingsToMachine,
+  type SceneEditFilament,
+  type SlicingManualProfileTarget
+} from '@printstream/shared'
 import { conflict } from './http-error.js'
 import { slicerClient } from './slicer-client.js'
 import { resolveSlicingProfileFiles } from './slicing-profiles.js'
 import { readEntry, rewriteModelSettingsThreeMf, rewriteThreeMfEntries } from './three-mf-internal.js'
+import { applyNozzleAssignmentToProjectSettings } from './three-mf-scene-builder.js'
 
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
 const SLICE_INFO_ENTRY = 'Metadata/slice_info.config'
@@ -109,6 +118,77 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   )
   await rewriteModelSettingsThreeMf(stagePath, outPath, stripSliceInfoPrinterModelId, SLICE_INFO_ENTRY)
   return outPath
+}
+
+/**
+ * Best-effort save-side heal for an H2-family project whose embedded settings LOST their
+ * dual-nozzle machine block (a filament rewrite once deleted the extruder-indexed machine
+ * arrays — see MACHINE_DOMAIN_ARRAY_KEYS in three-mf-scene-builder). Re-authors the machine
+ * from the project's own `printer_settings_id` (resolved as a builtin machine preset via the
+ * slicer), then re-applies the edit's nozzle assignment — the retarget resets
+ * `filament_nozzle_map` to the machine default, and with the topology restored the assignment
+ * write works again (it no-ops without `physical_extruder_map`, which is exactly how the damage
+ * also made the L/R choice silently stop saving).
+ *
+ * Returns the path to the healed 3MF, or null when the project doesn't need (or can't get) the
+ * heal: settings absent/unreadable, not an H2-family machine, topology intact, or the machine
+ * preset unresolvable (e.g. a custom preset name — the slicer's slice-time heal still covers
+ * those). Never throws: a heal failure must not fail the save that triggered it — it logs and
+ * the save proceeds with the un-healed bake (which still slices via the slicer-side heal).
+ */
+export async function healSavedProjectMachineTopology(input: {
+  tenantId: string
+  arrangedPath: string
+  fileName: string
+  slicerTargetId: string | null | undefined
+  /** The edit's filament list, used to re-apply the per-slot nozzle assignment after the heal. */
+  filaments: SceneEditFilament[] | null | undefined
+}): Promise<string | null> {
+  try {
+    const projectSettingsRaw = await readEntry(input.arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
+    if (!projectSettingsRaw || projectSettingsRaw.length === 0) return null
+    let projectSettings: Record<string, unknown>
+    try {
+      projectSettings = JSON.parse(projectSettingsRaw.toString('utf8')) as Record<string, unknown>
+    } catch {
+      return null
+    }
+    const model = canonicalBambuModelKey(firstString(projectSettings.printer_model) ?? firstString(projectSettings.printer_settings_id))
+    if (!model || !H2_DUAL_NOZZLE_MODEL_KEYS.has(model)) return null
+    if (hasDualNozzleMachineShape(projectSettings)) return null
+
+    const machineName = firstString(projectSettings.printer_settings_id)
+    if (!machineName) return null
+    const machineConfig = await slicerClient.resolveMachineConfig(input.slicerTargetId ?? null, {
+      source: 'builtin',
+      name: machineName
+    })
+    if (!machineConfig) return null
+
+    let healed = retargetProjectSettingsToMachine(projectSettings, machineConfig, {
+      printerSettingsId: machineName,
+      printerModel: firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(machineName)
+    })
+    let healedJson = JSON.stringify(healed)
+    if (input.filaments && input.filaments.length > 0) {
+      healedJson = applyNozzleAssignmentToProjectSettings(healedJson, input.filaments)
+      healed = JSON.parse(healedJson) as Record<string, unknown>
+    }
+
+    const outDir = await mkdtemp(path.join(tmpdir(), 'printstream-heal-'))
+    const outPath = path.join(outDir, path.basename(input.fileName) || 'healed.3mf')
+    await rewriteThreeMfEntries(
+      input.arrangedPath,
+      outPath,
+      { [PROJECT_SETTINGS_ENTRY]: () => healedJson },
+      [{ name: PROJECT_SETTINGS_ENTRY, content: healedJson }]
+    )
+    console.warn(`[editor-save] healed missing ${model} dual-nozzle machine data in ${input.fileName} (re-authored from ${machineName})`)
+    return outPath
+  } catch (error) {
+    console.warn(`[editor-save] dual-nozzle machine heal failed for ${input.fileName}; saving un-healed:`, error instanceof Error ? error.message : error)
+    return null
+  }
 }
 
 /** Resolve the target process profile's full config, or null when there's none / it can't be resolved. */

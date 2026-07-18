@@ -6,19 +6,19 @@
  * input is retargeted natively via the shared `retargetProjectSettingsToMachine`
  * (the same rewrite the editor's "save as a different printer" uses) before the
  * CLI ever sees it — see docs/slicer-cross-model-machine-switch.md.
- * `shouldRetargetEmbeddedMachine` decides when that applies;
- * `assertSupportedEmbeddedMachineSwitch` hard-fails the one case a retarget
- * can't help: a nominally same-model H2-family project that lacks the H2
- * dual-nozzle topology (which crashes the CLI's extruder-variant resolution).
+ * `shouldRetargetEmbeddedMachine` decides when that applies — including the
+ * HEAL case: a nominally same-model H2-family project that lacks the H2
+ * dual-nozzle topology (a damaged save) is re-authored from the bundled
+ * machine preset rather than fed to the CLI, whose extruder-variant resolution
+ * crashes on it. `assertSupportedEmbeddedMachineSwitch` hard-fails only when
+ * that heal is impossible (no machine preset in the request to author from).
  */
-import { canonicalBambuModelKey, type CreateSlicingJob, type SlicingProfileKind } from '@printstream/shared'
+import { canonicalBambuModelKey, H2_DUAL_NOZZLE_MODEL_KEYS, hasDualNozzleMachineShape, type CreateSlicingJob, type SlicingProfileKind } from '@printstream/shared'
 
 type SliceProfileFile = {
   kind: SlicingProfileKind
   name: string
 }
-
-const EMBEDDED_H2_MACHINE_MODELS = new Set(['H2D', 'H2DPRO', 'H2C'])
 
 type EmbeddedMachineSwitchInput = {
   request: CreateSlicingJob
@@ -32,14 +32,20 @@ type EmbeddedMachineSwitchInput = {
  * machine preset ({@link retargetProjectSettingsToMachine}) so the CLI receives
  * a project that already natively targets the requested printer. True when a
  * target machine preset is available AND the project's embedded machine is a
- * DIFFERENT Bambu model OR absent entirely:
+ * DIFFERENT Bambu model, absent entirely, or a same-model H2 missing its topology:
  *  - different model  → the cross-model switch (e.g. P1S -> X2D);
  *  - absent (null)    → a from-scratch project the editor never gave a machine
  *    (a new-project scaffold embeds filaments + plate type but no machine), so
- *    we author the chosen printer's machine in exactly as the save flow does.
- * False when the embedded machine already IS the target model (nothing to do),
- * when there is no machine preset to author from, or when the target model is
- * unresolvable (non-Bambu) — those slice on the standard path unchanged.
+ *    we author the chosen printer's machine in exactly as the save flow does;
+ *  - same-model H2 WITHOUT the dual-nozzle shape → a damaged save (a filament
+ *    rewrite once deleted the extruder-indexed machine arrays — see
+ *    MACHINE_DOMAIN_ARRAY_KEYS in the API's three-mf-scene-builder); re-authoring
+ *    from the bundled preset HEALS the file for this slice, where the guard
+ *    below could otherwise only hard-fail it.
+ * False when the embedded machine already IS the target model with intact
+ * machine data (nothing to do), when there is no machine preset to author from,
+ * or when the target model is unresolvable (non-Bambu) — those slice on the
+ * standard path unchanged.
  */
 export function shouldRetargetEmbeddedMachine(input: EmbeddedMachineSwitchInput): boolean {
   if (!input.projectSettings) return false
@@ -49,7 +55,8 @@ export function shouldRetargetEmbeddedMachine(input: EmbeddedMachineSwitchInput)
   const targetModel = resolveTargetPrinterModel(input.request, input.profileFiles)
   if (!targetModel) return false
   const sourceModel = resolveSourcePrinterModel(input.projectSettings)
-  return sourceModel !== targetModel
+  if (sourceModel !== targetModel) return true
+  return H2_DUAL_NOZZLE_MODEL_KEYS.has(targetModel) && !hasDualNozzleMachineShape(input.projectSettings)
 }
 
 export function assertSupportedEmbeddedMachineSwitch(input: EmbeddedMachineSwitchInput): void {
@@ -57,14 +64,14 @@ export function assertSupportedEmbeddedMachineSwitch(input: EmbeddedMachineSwitc
   if (!projectSettings) return
 
   const targetModel = resolveTargetPrinterModel(input.request, input.profileFiles)
-  if (!targetModel || !EMBEDDED_H2_MACHINE_MODELS.has(targetModel)) return
+  if (!targetModel || !H2_DUAL_NOZZLE_MODEL_KEYS.has(targetModel)) return
 
   // A cross-model job is retargeted natively, which rebuilds the dual-nozzle
   // topology from the target machine profile — nothing to guard.
   if (shouldRetargetEmbeddedMachine(input)) return
   // Same-model H2 project: it must already carry the H2 dual-nozzle shape, or
   // the CLI segfaults resolving extruder variants.
-  if (hasEmbeddedH2MachineShape(projectSettings)) return
+  if (hasDualNozzleMachineShape(projectSettings)) return
 
   throw new Error(
     `This 3MF targets ${formatPrinterModel(targetModel)} but is missing its dual-nozzle machine data, so it cannot be sliced as-is. `
@@ -86,12 +93,6 @@ function resolveSourcePrinterModel(projectSettings: Record<string, unknown>): st
   return canonicalBambuModelKey(firstString(projectSettings.printer_model) ?? firstString(projectSettings.printer_settings_id))
 }
 
-function hasEmbeddedH2MachineShape(projectSettings: Record<string, unknown>): boolean {
-  return stringArray(projectSettings.physical_extruder_map).length >= 2
-    && stringArray(projectSettings.extruder_nozzle_stats).length >= 2
-    && stringArray(projectSettings.extruder_max_nozzle_count).length >= 2
-    && stringArray(projectSettings.default_nozzle_volume_type).length >= 2
-}
 
 function formatPrinterModel(value: string): string {
   switch (value) {
@@ -108,10 +109,4 @@ function firstString(value: unknown): string | null {
     return typeof first === 'string' ? first.trim() : null
   }
   return null
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-    : []
 }

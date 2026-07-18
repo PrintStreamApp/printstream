@@ -34,7 +34,7 @@ import { readPrintJobThumbnail } from '../lib/print-job-thumbnails.js'
 import { badRequest, notFound } from '../lib/http-error.js'
 import { prisma } from '../lib/prisma.js'
 import { requireRequestPermission } from '../lib/authorization.js'
-import { requireRequestTenantId, requireRouteParam } from '../lib/request-helpers.js'
+import { requireRequestTenantId, requireRouteParam, sendModelBuffer } from '../lib/request-helpers.js'
 import { env } from '../lib/env.js'
 import { slicerClient } from '../lib/slicer-client.js'
 import { slicingJobs } from '../lib/slicing-jobs.js'
@@ -100,7 +100,12 @@ slicingRouter.get('/profiles', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
   const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
   const builtinProfiles = await slicerClient.profiles(targetId)
   const customProfiles = await listCustomSlicingProfiles(tenantId, builtinProfiles)
-  response.json({ profiles: [...customProfiles, ...builtinProfiles] })
+  // The full catalogue is thousands of profile summaries (multi-MB JSON) — the largest JSON
+  // body the web app loads. Send it through the gzip/piped-chunk sender rather than a single
+  // `response.json()` buffer: the one-shot write is what the Vite dev proxy intermittently
+  // stalls on for large bodies (dropped tail → the dialog's fetch hangs forever), the same
+  // failure sendModelBuffer already works around for model/mesh payloads.
+  await sendModelBuffer(request, response, Buffer.from(JSON.stringify({ profiles: [...customProfiles, ...builtinProfiles] }), 'utf8'), 'application/json')
 })
 
 slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {

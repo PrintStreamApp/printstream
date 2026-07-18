@@ -12,7 +12,7 @@
  * controller.
  */
 import type React from 'react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Alert, AutocompleteOption, Badge, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormLabel, IconButton, Input, Link,
   List, ListItem, ListItemContent, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
@@ -40,19 +40,18 @@ import { useNavigate } from 'react-router-dom'
 import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import { filamentTextColor, resolveProjectFilamentColorName } from '../../lib/filamentColor'
-import { formatSlicingProfileDisplayName } from '../../lib/slicingProfileSelection'
 import {
   buildSliceDialogProjectFilaments,
   buildSliceDialogToolheads,
   formatPlateTypeLabel,
   formatPrinterModelLabel,
-  isProjectSlicingProfile,
   narrowMaterialOptions,
   normalizeSliceFilamentColor,
   resolveMaterialTypeOptions,
   type SliceMaterialOption
 } from '../../lib/sliceProfileMatching'
 import { MaterialEditDialog } from './MaterialEditDialog'
+import { SlicingProfileAutocomplete } from './SlicingProfileAutocomplete'
 import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from './PlateGcodeSections'
 import { useFilamentChangedCount, useProcessChangedCount } from './useBakedPresetChanges'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
@@ -859,61 +858,6 @@ export function SliceSettingsPanel({ controller, mode }: {
       })()}
       </>)}
     </>
-  )
-}
-
-function SlicingProfileAutocomplete({
-  profiles,
-  value,
-  placeholder,
-  ariaLabel,
-  modified,
-  onChange
-}: {
-  profiles: SlicingProfileSummary[]
-  value: SlicingProfileSummary | null
-  placeholder: string
-  ariaLabel?: string
-  /** When true, prefixes the selected name with `*` (Bambu's "modified" marker). */
-  modified?: boolean
-  onChange: (profile: SlicingProfileSummary | null) => void
-}) {
-  const valueDisplayName = value ? `${modified ? '* ' : ''}${formatSlicingProfileDisplayName(value)}` : ''
-  const [inputValue, setInputValue] = useState(valueDisplayName)
-
-  useEffect(() => {
-    setInputValue(valueDisplayName)
-  }, [valueDisplayName])
-
-  return (
-    <DeferredKeyboardAutocomplete
-      options={profiles}
-      value={value}
-      inputValue={inputValue}
-      onChange={(_event, profile) => onChange(profile)}
-      onInputChange={(_event, nextValue, reason) => {
-        if (reason === 'reset') return
-        setInputValue(nextValue)
-      }}
-      getOptionLabel={formatSlicingProfileDisplayName}
-      isOptionEqualToValue={(option, selected) => option.id === selected.id}
-      groupBy={(profile) => isProjectSlicingProfile(profile) ? '3MF project profiles' : profile.source === 'custom' ? 'Workspace profiles' : 'Built-in profiles'}
-      placeholder={placeholder}
-      selectOnFocus
-      handleHomeEndKeys
-      openOnFocus
-      slotProps={{
-        input: ariaLabel ? { 'aria-label': ariaLabel } : undefined,
-        listbox: { sx: { maxHeight: 360 } }
-      }}
-      renderOption={(props, profile) => (
-        <AutocompleteOption {...props} key={profile.id}>
-          <ListItemContent>
-            <Typography level="body-sm" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatSlicingProfileDisplayName(profile)}</Typography>
-          </ListItemContent>
-        </AutocompleteOption>
-      )}
-    />
   )
 }
 
