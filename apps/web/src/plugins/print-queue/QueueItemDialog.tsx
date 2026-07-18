@@ -345,14 +345,6 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
                 </DialogSection>
               ) : null}
 
-              {showObjectSelection && (
-                <PrintObjectsSection
-                  objects={plateObjects}
-                  deselectedIds={deselectedObjectIdSet}
-                  onToggle={toggleObjectSelected}
-                />
-              )}
-
               <Stack direction="row" spacing={2}>
                 {/* An order-linked item maps to one order print, so copies are fixed at 1. */}
                 {!orderLink && (
@@ -395,6 +387,14 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
                   )}
                 </DialogSection>
               ) : null}
+
+              {showObjectSelection && (
+                <PrintObjectsSection
+                  objects={plateObjects}
+                  deselectedIds={deselectedObjectIdSet}
+                  onToggle={toggleObjectSelected}
+                />
+              )}
 
               <DialogSection title="Print settings">
                 <PrintStartOptionsFields

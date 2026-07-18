@@ -29,6 +29,8 @@ import type {
   Printer,
   PrinterStatus,
   SceneEdit,
+  SceneEditPlateFilamentChanges,
+  SceneEditPlatePauses,
   SlicingCapabilities,
   SlicingProfileSummary,
   ThreeMfProjectFilament
@@ -458,6 +460,10 @@ export type SliceFileSubmitInput = {
   selectedObjectIds?: number[]
   /** Per-object process overrides keyed by `object_id`; only used for single-plate slices. */
   objectProcessOverrides?: Record<string, Record<string, string | string[]>>
+  /** Slice-time per-plate layer filament changes (replace semantics); ignored with a sceneEdit. */
+  filamentChanges?: SceneEditPlateFilamentChanges[]
+  /** Slice-time per-plate layer pauses (replace semantics); ignored with a sceneEdit. */
+  pauses?: SceneEditPlatePauses[]
   /** Edited multi-plate arrangement from the interactive 3D editor; authoritative when present. */
   sceneEdit?: SceneEdit
 }
@@ -522,6 +528,8 @@ export function buildCreateSlicingJobBody(
     plate: input.plate,
     selectedObjectIds: input.selectedObjectIds,
     objectProcessOverrides: input.objectProcessOverrides,
+    filamentChanges: input.filamentChanges,
+    pauses: input.pauses,
     sceneEdit: input.sceneEdit
   }
 }

@@ -30,8 +30,9 @@ import type {
 /**
  * Version of the parsed-index logic. Both apps key their caches on this (the bridge's in-memory LRU
  * and the API's derived-index cache), so bumping it once invalidates stale indexes everywhere.
+ * v13: per-plate `filamentChanges`/`pauses` from `custom_gcode_per_layer.xml`.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 12
+export const THREE_MF_INDEX_PARSER_VERSION = 13
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -60,13 +61,15 @@ interface ModelSettingsSupportConfig {
 
 /**
  * Assemble the typed 3MF index from the already-extracted archive entries: the slice-info XML, the
- * project settings JSON, the model-settings plate metadata, and the embedded plate thumbnails.
+ * project settings JSON, the model-settings plate metadata, the embedded plate thumbnails, and the
+ * layer-based custom G-code sidecar (filament changes + pauses; null when the archive has none).
  */
 export function buildThreeMfIndex(
   sliceInfoXml: string | null,
   projectSettingsJson: string | null,
   modelSettings: Map<number, string> | ModelSettingsPlateMetadata[] = new Map(),
-  thumbnailPlateFiles: Map<number, string> = new Map()
+  thumbnailPlateFiles: Map<number, string> = new Map(),
+  customGcodeXml: string | null = null
 ): BridgeLibraryThreeMfIndex {
   const modelSettingsPlates = Array.isArray(modelSettings)
     ? modelSettings
@@ -164,6 +167,15 @@ export function buildThreeMfIndex(
     // nozzle diameters instead so 3MFs get the same nozzle chips as sliced files.
     if (plate.nozzleSizes.length === 0 && projectNozzleSizes.length > 0) {
       plate.nozzleSizes = [...projectNozzleSizes]
+    }
+    // Baked layer G-code (filament changes / pauses), so pre-slice surfaces can show and
+    // edit them without opening the archive again. Omitted (not []) when the sidecar has
+    // no entries for the plate — absent and empty mean the same downstream.
+    if (customGcodeXml) {
+      const changes = parseCustomGcodeToolChanges(customGcodeXml, plate.index)
+      if (changes.length > 0) plate.filamentChanges = changes.map(({ z, filamentId }) => ({ z, filamentId }))
+      const pauses = parseCustomGcodePauses(customGcodeXml, plate.index)
+      if (pauses.length > 0) plate.pauses = pauses
     }
     for (const filament of plate.filaments) {
       if (!filament.filamentName) {
@@ -1020,6 +1032,60 @@ function numberAt(values: string[], index: number): number | null {
 }
 
 /** Parse an XML attribute string into a record. Exported for the scene reader. */
+/** Archive entry BambuStudio uses for layer-based custom gcode (filament changes etc.). */
+export const CUSTOM_GCODE_PER_LAYER_ENTRY = 'Metadata/custom_gcode_per_layer.xml'
+
+/**
+ * Iterate one plate's `<layer .../>` attribute sets from `custom_gcode_per_layer.xml`,
+ * in stored order. Shared by the ToolChange and PausePrint parsers below.
+ */
+function* iterateCustomGcodePlateLayers(text: string | null, plateIndex: number): Generator<Record<string, string>> {
+  if (!text) return
+  for (const plateMatch of text.matchAll(/<plate>([\s\S]*?)<\/plate>/g)) {
+    const block = plateMatch[1] ?? ''
+    const id = Number.parseInt(parseAttrs(/<plate_info\b([^>]*)\/>/.exec(block)?.[1] ?? '').id ?? '', 10)
+    if (id !== plateIndex) continue
+    for (const layerMatch of block.matchAll(/<layer\b([^>]*)\/>/g)) {
+      yield parseAttrs(layerMatch[1] ?? '')
+    }
+  }
+}
+
+/**
+ * Parse one plate's ToolChange entries (type="2") from `custom_gcode_per_layer.xml`:
+ * `{ z, filamentId, color }` per change, ordered as stored. Other entry types are
+ * intentionally skipped — pauses have their own parser below.
+ */
+export function parseCustomGcodeToolChanges(
+  text: string | null,
+  plateIndex: number
+): Array<{ z: number; filamentId: number; color: string | null }> {
+  const out: Array<{ z: number; filamentId: number; color: string | null }> = []
+  for (const attrs of iterateCustomGcodePlateLayers(text, plateIndex)) {
+    if (attrs.type !== '2') continue
+    const z = Number.parseFloat(attrs.top_z ?? '')
+    const filamentId = Number.parseInt(attrs.extruder ?? '', 10)
+    if (!Number.isFinite(z) || !Number.isInteger(filamentId) || filamentId <= 0) continue
+    out.push({ z, filamentId, color: attrs.color?.trim() || null })
+  }
+  return out
+}
+
+/**
+ * Parse one plate's PausePrint entries (type="1") from `custom_gcode_per_layer.xml`:
+ * `{ z }` per pause (the paused layer's top_z), ordered as stored.
+ */
+export function parseCustomGcodePauses(text: string | null, plateIndex: number): Array<{ z: number }> {
+  const out: Array<{ z: number }> = []
+  for (const attrs of iterateCustomGcodePlateLayers(text, plateIndex)) {
+    if (attrs.type !== '1') continue
+    const z = Number.parseFloat(attrs.top_z ?? '')
+    if (!Number.isFinite(z) || z <= 0) continue
+    out.push({ z })
+  }
+  return out
+}
+
 export function parseAttrs(input: string): Record<string, string> {
   const out: Record<string, string> = {}
   // The lookbehind pins each attempt to the start of a name run, keeping the

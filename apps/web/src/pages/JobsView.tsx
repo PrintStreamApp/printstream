@@ -3,7 +3,7 @@ import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
-import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CAMERA_VIEW_PERMISSION,
@@ -77,6 +77,7 @@ import { buildTenantWorkspacePath } from '../lib/workspaceRoute'
 import { useBufferedCoverImage } from '../hooks/useBufferedCoverImage'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { useSlicingJobs } from '../hooks/useSlicingJobs'
+import { PluginSlot } from '../plugin/PluginSlot'
 import { PrintModal } from '../components/library/PrintModal'
 
 interface LiveJob {
@@ -471,8 +472,27 @@ export function JobsView() {
     setHistoryResults([])
   }
 
+  // Sections contributed by `jobs.sections` slot plugins (e.g. the print queue).
+  // A slot component registers its SectionNav entry (and re-registers on count
+  // changes) via this callback; the returned cleanup drops the entry when the
+  // section unmounts, so the nav stays correct with the plugin disabled.
+  const [pluginSections, setPluginSections] = useState<SectionNavEntry[]>([])
+  const registerSection = useCallback((entry: SectionNavEntry) => {
+    setPluginSections((current) => {
+      const index = current.findIndex((existing) => existing.id === entry.id)
+      if (index === -1) return [...current, entry]
+      const next = [...current]
+      next[index] = entry
+      return next
+    })
+    return () => {
+      setPluginSections((current) => current.filter((existing) => existing.id !== entry.id))
+    }
+  }, [])
+
   const inProgressCount = activeSlicingJobs.length + dispatchQueue.length + liveJobs.length
   const sections: SectionNavEntry[] = [
+    ...pluginSections,
     { id: 'active', label: 'Active', desktopLabel: 'In progress', count: inProgressCount },
     { id: 'history', label: 'History', desktopLabel: 'Job history', count: historyEntries.length }
   ]
@@ -502,6 +522,10 @@ export function JobsView() {
           />
         ) : (
           <>
+      {/* Plugin-contributed sections above the core ones — e.g. the print-queue
+          plugin's backlog (apps/web/src/plugins/print-queue/QueueSection.tsx).
+          Renders nothing when no plugin contributes. */}
+      <PluginSlot name="jobs.sections" context={{ registerSection }} />
       <Box id="active" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
         <Stack spacing={1}>
           <Typography level="title-md">In progress</Typography>

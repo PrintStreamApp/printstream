@@ -126,11 +126,11 @@ const baseCoreTabs: ReadonlyArray<ShellTab> = [
   }
 ]
 
-// Default left-to-right order for the leading plugin tabs (Queue, Orders, Filament,
+// Default left-to-right order for the leading plugin tabs (Orders, Filament,
 // then Calibration — Calibration sits after Filament); any other plugin tab falls
 // back to alphabetical after these. The final interleaving with core tabs is
 // governed by DEFAULT_NAV_TAB_ORDER.
-const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/queue', '/orders', '/filament', '/calibration']
+const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/orders', '/filament', '/calibration']
 
 // Register built-in plugins when this (lazy-loaded) app-shell chunk first loads — moved out of
 // main.tsx so a cold load of a marketing page never pulls in the plugin graph. Runs once at module
@@ -433,7 +433,7 @@ export function App() {
     },
     [allPluginRoutes, apiPluginsByName, appPathname, currentPluginSurface, pluginStateQuery.data?.plugins]
   )
-  // Plugin routes (e.g. /queue) are only mounted once the plugin catalog query resolves, which itself
+  // Plugin routes (e.g. /orders) are only mounted once the plugin catalog query resolves, which itself
   // can't start until auth bootstrap finishes. On a hard refresh of a plugin route that determination is
   // still in flight at first paint, so the route isn't in the tree yet. Track whether the current path is
   // a known plugin route and whether the catalog is still resolving, so the catch-all below can wait
@@ -1257,7 +1257,7 @@ export function App() {
                   const Element = route.element
                   return <Route key={`${route.pluginName}:scoped:${route.path}`} path={tenantScopedRoutePath(route.path)} element={renderTenantContextElement(<Element />)} />
                 })}
-                {/* A known plugin route (e.g. /queue) on a cold load isn't mounted yet while the plugin
+                {/* A known plugin route (e.g. /orders) on a cold load isn't mounted yet while the plugin
                     catalog resolves — wait rather than redirect home. See catchAllRouteDecision. */}
                 <Route
                   path="*"

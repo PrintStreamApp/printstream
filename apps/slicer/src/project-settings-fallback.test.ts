@@ -325,6 +325,77 @@ test('ensureEmbeddedProjectSettings covers a material-changed slot from its NAME
   }
 })
 
+test('ensureEmbeddedProjectSettings THROWS the CLI reason when the settings export fails, instead of slicing the partial config', async () => {
+  // Regression for the Kawasaki funnel incident: a stale slice-dialog selection paired an X1C
+  // process with the H2D machine, the export exited 239 (CLI_PROCESS_NOT_COMPATIBLE), and the old
+  // "slice the scaffold 3MF as-is" fallback fed the partial config to the BBL-project loader —
+  // a deterministic segfault surfaced as an opaque exit 139. The failure must instead carry the
+  // CLI's own reason, in the `Slicer CLI exited with code N` shape the API's compatibility
+  // classifier keys on (so it can drop the incompatible built-ins and retry).
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    // Mimics BambuStudio: the [error] reason goes to STDOUT, exit code 239 (= -17 & 0xff).
+    await writeFile(
+      fakeCli,
+      '#!/bin/sh\necho "[2026-07-18 05:24:53.1] [0x1] [error]   run 2993: process not compatible with printer."\necho "run found error, return -17, exit..."\nexit 239\n',
+      { mode: 0o755 }
+    )
+    const input = await writeThreeMf(dir, 'partial.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': '{"curr_bed_type":"High Temp Plate","filament_colour":["#001489"]}'
+    })
+    const logged: string[] = []
+    await assert.rejects(
+      ensureEmbeddedProjectSettings({
+        inputPath: input,
+        cliPath: fakeCli,
+        appDir: null,
+        profileArgs: ['--load-settings', 'machine.json;process.json'],
+        workDir: dir,
+        env: {},
+        log: (message) => logged.push(message)
+      }),
+      (error: Error) => {
+        assert.match(error.message, /^Slicer CLI exited with code 239 while merging project settings/)
+        assert.match(error.message, /process not compatible with printer/)
+        return true
+      }
+    )
+    // The reason must also reach the job's output log for diagnosis.
+    assert.equal(logged.some((line) => line.includes('process not compatible with printer')), true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ensureEmbeddedProjectSettings THROWS when the export runs but produces no settings output', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    // Exits 0 but never writes the --export-settings file.
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    await writeFile(fakeCli, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const input = await writeThreeMf(dir, 'partial.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': '{"filament_colour":["#FFFFFF"]}'
+    })
+    await assert.rejects(
+      ensureEmbeddedProjectSettings({
+        inputPath: input,
+        cliPath: fakeCli,
+        appDir: null,
+        profileArgs: ['--load-settings', 'machine.json'],
+        workDir: dir,
+        env: {},
+        log: () => {}
+      }),
+      /while merging project settings/
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('ensureEmbeddedProjectSettings slices as-is when a partial project-preset config names unknown presets', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
   try {

@@ -22,6 +22,12 @@ export interface PrinterCardAmsGridProps {
   onRefresh?: () => void
   onOpenDrying?: (unitId: number) => void
   onEditSlot?: (unit: AmsUnit, slot: AmsSlot) => void
+  onLoadSlot?: (unit: AmsUnit, slot: AmsSlot) => void
+  /** Resolves why a slot's filament load is currently unavailable (tooltip + disabled), or null when allowed. */
+  loadSlotDisabledReason?: (unit: AmsUnit, slot: AmsSlot) => string | null
+  onUnloadSlot?: (unit: AmsUnit, slot: AmsSlot) => void
+  /** Resolves why unloading is currently unavailable (tooltip + disabled), or null when allowed. */
+  unloadSlotDisabledReason?: (unit: AmsUnit, slot: AmsSlot) => string | null
   onRescanSlot?: (unit: AmsUnit, slot: AmsSlot) => void
   /** Resolves why a slot's rescan is currently unavailable (tooltip + disabled), or null when allowed. */
   rescanSlotDisabledReason?: (unit: AmsUnit, slot: AmsSlot) => string | null
@@ -41,6 +47,10 @@ export function PrinterCardAmsGrid({
   onRefresh,
   onOpenDrying,
   onEditSlot,
+  onLoadSlot,
+  loadSlotDisabledReason,
+  onUnloadSlot,
+  unloadSlotDisabledReason,
   onRescanSlot,
   rescanSlotDisabledReason,
   onResetSlot,
@@ -76,6 +86,10 @@ export function PrinterCardAmsGrid({
             onRefresh={onRefresh}
             onOpenDrying={onOpenDrying ? () => onOpenDrying(unit.unitId) : undefined}
             onEditSlot={onEditSlot ? (slot) => onEditSlot(unit, slot) : undefined}
+            onLoadSlot={onLoadSlot ? (slot) => onLoadSlot(unit, slot) : undefined}
+            loadSlotDisabledReason={loadSlotDisabledReason ? (slot) => loadSlotDisabledReason(unit, slot) : undefined}
+            onUnloadSlot={onUnloadSlot ? (slot) => onUnloadSlot(unit, slot) : undefined}
+            unloadSlotDisabledReason={unloadSlotDisabledReason ? (slot) => unloadSlotDisabledReason(unit, slot) : undefined}
             onRescanSlot={onRescanSlot ? (slot) => onRescanSlot(unit, slot) : undefined}
             rescanSlotDisabledReason={rescanSlotDisabledReason ? (slot) => rescanSlotDisabledReason(unit, slot) : undefined}
             onResetSlot={onResetSlot ? (slot) => onResetSlot(unit, slot) : undefined}

@@ -46,13 +46,6 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
   const onSlice = typeof props.onSlice === 'function'
     ? (props.onSlice as (opts: { plate: number; sceneEdit: SceneEdit }) => void)
     : undefined
-  // Per-object overrides still open the host's dialog (stacked above the editor).
-  const objectOverrideCount = typeof props.objectOverrideCount === 'number' ? props.objectOverrideCount : 0
-  const hasPlateObjects = props.hasPlateObjects === true
-  const canEditSettings = props.canEditSettings === true
-  const onEditObjectSettings = typeof props.onEditObjectSettings === 'function'
-    ? (props.onEditObjectSettings as () => void)
-    : undefined
   // When the editor IS the slice UI (simple mode removed), the host opens it
   // directly: no button, and closing the editor closes the host dialog.
   const autoOpen = props.autoOpen === true
@@ -102,10 +95,6 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             sliceDisabledReason={sliceDisabledReason}
             slicing={slicing}
             onSlice={onSlice}
-            objectOverrideCount={objectOverrideCount}
-            hasPlateObjects={hasPlateObjects}
-            canEditSettings={canEditSettings}
-            onEditObjectSettings={onEditObjectSettings}
           />
         </Suspense>
       )}

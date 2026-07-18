@@ -44,7 +44,7 @@ import { BackAwareModal } from './BackAwareModal'
 import { DialogSection } from './DialogSection'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { usePromptDialog } from './PromptDialogProvider'
-import { SettingValueField } from './settings/SettingValueField'
+import { SettingValueField, type SettingFilamentChoice } from './settings/SettingValueField'
 
 export interface ProcessSettingsDialogProps {
   open: boolean
@@ -72,6 +72,12 @@ export interface ProcessSettingsDialogProps {
   /** Title prefix; defaults to "Process settings" (per-object uses "Object settings"). */
   titlePrefix?: string
   /**
+   * The project's materials for filament-index settings (support/raft base+interface,
+   * walls/infill filament) — see {@link SettingValueField}. Omitted, those fall back to
+   * bare number inputs.
+   */
+  filamentChoices?: SettingFilamentChoice[]
+  /**
    * What the Apply button commits to: a `project` (the 3D editor, where the override is saved
    * with the project) or a one-off `slice` (the print/slice dialog, where it applies to just that
    * slice). Only changes the button wording. Defaults to `slice`.
@@ -87,7 +93,7 @@ type ResolveResponse = {
 }
 
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, applyScope = 'slice', onApply } = props
+  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', onApply } = props
   const allowedKeySet = useMemo(() => (allowedKeys ? new Set(allowedKeys) : null), [allowedKeys])
   const isKeyAllowed = (key: string): boolean => allowedKeySet === null || allowedKeySet.has(key)
   // Reveal BambuStudio's develop-tier options only when developer mode is on (workspace
@@ -466,6 +472,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
                                 onReset={resetKey}
                                 onScalarChange={setScalar}
                                 onValueChange={setValue}
+                                filamentChoices={filamentChoices}
                               />
                             ))}
                           </Stack>
@@ -527,10 +534,11 @@ interface ProcessSettingLineRowProps {
   onReset: (key: string) => void
   onScalarChange: (key: string, value: string) => void
   onValueChange: (key: string, value: string | string[]) => void
+  filamentChoices?: SettingFilamentChoice[]
 }
 
 function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element | null {
-  const { keys, lineLabel, showDeveloperOptions, code, fieldStates, accessor, isModified, canReset, onReset, onScalarChange } = props
+  const { keys, lineLabel, showDeveloperOptions, code, fieldStates, accessor, isModified, canReset, onReset, onScalarChange, filamentChoices } = props
   const visibleKeys = keys.filter((key) => {
     const option = processSettingsCatalog.options[key]
     return option && isProcessOptionVisibleInMode(option, showDeveloperOptions) && getProcessFieldState(fieldStates.states, key).visible
@@ -576,6 +584,7 @@ function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element |
                   enumRestriction={enumRestriction}
                   showOwnLabel={visibleKeys.length > 1}
                   modified={modified}
+                  filamentChoices={filamentChoices}
                   onScalarChange={onScalarChange}
                   isCode={code}
                 />

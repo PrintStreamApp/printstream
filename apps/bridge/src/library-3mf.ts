@@ -17,6 +17,7 @@ import { rm, stat } from 'node:fs/promises'
 import type { BridgeLibraryThreeMfIndex } from '@printstream/shared'
 import { MemoryLruCache } from '@printstream/shared'
 import {
+  CUSTOM_GCODE_PER_LAYER_ENTRY,
   THREE_MF_INDEX_PARSER_VERSION,
   buildThreeMfIndex,
   parseModelSettingsPlates,
@@ -80,7 +81,14 @@ export async function readBridgeLibraryThreeMfIndex(filePath: string): Promise<B
   }
 
   const thumbnailPlateFiles = await readPlateThumbnailFiles(filePath).catch(() => new Map<number, string>())
-  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles)
+  // Layer G-code sidecar (filament changes / pauses) — optional; most projects have none.
+  let customGcodeXml: string | null = null
+  try {
+    customGcodeXml = (await readEntry(filePath, CUSTOM_GCODE_PER_LAYER_ENTRY)).toString('utf8')
+  } catch {
+    customGcodeXml = null
+  }
+  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles, customGcodeXml)
   cache.set(filePath, { mtimeMs: info.mtimeMs, size: info.size, parserVersion: THREE_MF_PARSER_CACHE_VERSION, index })
   return index
 }

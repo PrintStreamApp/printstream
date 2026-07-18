@@ -470,6 +470,51 @@ test('slicing jobs retry when compatibility fallback matches generated builtin:m
   })
 })
 
+test('slicing jobs retry without builtin machine/process after a settings-merge compatibility failure', async () => {
+  // Regression: the slicer now fails fast (instead of segfaulting) when its project-settings
+  // repair export hits CLI_PROCESS_NOT_COMPATIBLE (exit 239) — e.g. a stale slice dialog pairing
+  // an X1C process with an H2D machine. That message must keep flowing into the existing
+  // exit-239 compatibility fallback so the slice recovers onto the project's own presets.
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const runProfileKinds: string[][] = []
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.run = (async (input) => {
+    runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
+    if (runProfileKinds.length === 1) {
+      throw new SlicerServiceError('Slicer CLI exited with code 239 while merging project settings for slicing (process not compatible with printer)', [])
+    }
+    throw new SlicerServiceError('Still failed after retry', [])
+  }) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    profileFiles: [
+      { id: 'builtin-machine', source: 'builtin', kind: 'machine', name: 'Bambu Lab H2D 0.4 nozzle' },
+      { id: 'builtin-process', source: 'builtin', kind: 'process', name: '0.20mm Standard @BBL X1C' },
+      { id: 'builtin-filament', source: 'builtin', kind: 'filament', name: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' }
+    ],
+    request: makeRequest()
+  })
+
+  await waitFor(async () => {
+    const current = jobs.get('tenant-1', job.id)
+    assert.equal(current.status, 'failed')
+    // The retry dropped the builtin machine + process (the incompatible pair) but kept the filament.
+    assert.deepEqual(runProfileKinds, [
+      ['builtin:machine', 'builtin:process', 'builtin:filament'],
+      ['builtin:filament']
+    ])
+    assert.equal(current.output.some((entry) => entry.text.includes('Retrying slicer without incompatible built-in')), true)
+  })
+})
+
 test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, then fail', async () => {
   // Exit 139 (SIGSEGV) et al. happen intermittently under qemu emulation on inputs that slice
   // clean when re-run; one bounded retry absorbs the flake without masking a deterministic crash.

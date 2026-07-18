@@ -14,8 +14,8 @@
 import type React from 'react'
 import { useEffect, useState } from 'react'
 import {
-  Alert, AutocompleteOption, Badge, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormHelperText, FormLabel, IconButton, Input, Link,
-  ListItemContent, Option, Select, Sheet, Stack, Tooltip, Typography
+  Alert, AutocompleteOption, Badge, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormLabel, IconButton, Input, Link,
+  List, ListItem, ListItemContent, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
 } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
@@ -53,6 +53,7 @@ import {
   type SliceMaterialOption
 } from '../../lib/sliceProfileMatching'
 import { MaterialEditDialog } from './MaterialEditDialog'
+import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from './PlateGcodeSections'
 import { useFilamentChangedCount, useProcessChangedCount } from './useBakedPresetChanges'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { buildTenantWorkspacePath } from '../../lib/workspaceRoute'
@@ -131,10 +132,24 @@ export interface SliceSettingsController {
   processSettingOverrides: Record<string, string | string[]>
   setProcessSettingsDialogOpen: React.Dispatch<React.SetStateAction<boolean>>
   hasPlateObjects: boolean
-  objectOverrideCount: number
-  setPerObjectDialogOpen: React.Dispatch<React.SetStateAction<boolean>>
   selectedSliceObjectIds: Set<number>
   plateObjects: Array<{ id: number; name: string }>
+  /** Toggle whether a plate object is included in the slice/print (independent of a process profile). */
+  onToggleSliceObject: (objectId: number) => void
+  /** Open the restricted per-object process-settings dialog for one plate object (simple mode). */
+  openSliceObjectSettings: (objectId: number, name: string) => void
+  /**
+   * Per-plate layer G-code editing for the targeted plate (simple mode): effective filament
+   * changes + pauses (session edit over the file's baked entries) and their setters. Null when
+   * no single plate is targeted (all-plates mode has no one plate to edit) or the file has none.
+   */
+  plateGcode: {
+    filamentChanges: Array<{ z: number; filamentId: number }>
+    pauses: Array<{ z: number }>
+    onFilamentChangesChange: (changes: Array<{ z: number; filamentId: number }>) => void
+    onPausesChange: (pauses: Array<{ z: number }>) => void
+    filamentOptions: FilamentOption[]
+  } | null
   /**
    * Everything the editor sidebar needs to render per-object print toggles and
    * process overrides inline (no separate dialog). Null when no process profile is
@@ -213,6 +228,14 @@ export interface SliceSettingsController {
    */
   materialEditListenerRef: React.MutableRefObject<(() => void) | null>
   /**
+   * Notification from the editor's save flow that the project was just persisted with the
+   * CURRENT material list (add/remove overlays baked into the file as slots 1..N). The
+   * controller uses it to rebase its session overlay onto the refreshed file — without it,
+   * an added material appears twice after Save (once from the refetched base, once from the
+   * still-pending overlay) until the editor is reopened.
+   */
+  onProjectSaved: () => void
+  /**
    * Sibling of {@link materialEditListenerRef} for GLOBAL process-setting edits (the process
    * profile selection and the overrides applied by the process-settings dialog). The full editor
    * sets it to a snapshot-then-dirty handler; call it BEFORE mutating `processProfileId` /
@@ -240,23 +263,18 @@ export interface SliceMaterialsSnapshot {
 }
 
 /**
- * Shared slice-settings surface. `mode='simple'` renders the full set (incl. the
- * all/single-plate selector and the per-object overrides row) for the slim
- * slicing dialog; `mode='editor'` omits the plate-scope selector (the 3D editor
- * has its own plate strip) and the per-object row (the editor surfaces that in
- * its Objects tab). Both modes share one `controller` instance, so edits in
- * either surface update the same state.
+ * Shared slice-settings surface. `mode='simple'` renders the full set for the slim
+ * prepare-print dialog — incl. the all/single-plate selector plus, below Materials
+ * (mirroring the editor sidebar's order), the inline Objects list (print toggles +
+ * per-object settings) and the per-plate filament-change/pause sections.
+ * `mode='editor'` omits those: the 3D editor has its own plate strip and renders
+ * its own object list and G-code sections after this panel. Both modes share one
+ * `controller` instance, so edits in either surface update the same state.
  */
-export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
+export function SliceSettingsPanel({ controller, mode }: {
   controller: SliceSettingsController
   mode: 'simple' | 'editor'
   activePlateIndex?: number
-  /**
-   * Caller-owned sections rendered after the Materials block (once slicer data is
-   * ready) — the editor mounts its per-plate filament-change/pause sections here so
-   * they sit with the other print configuration instead of under the object list.
-   */
-  afterMaterials?: React.ReactNode
 }) {
   const {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview,
@@ -269,7 +287,7 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, processEditListenerRef,
-    hasPlateObjects, objectOverrideCount, setPerObjectDialogOpen, selectedSliceObjectIds, plateObjects,
+    hasPlateObjects, selectedSliceObjectIds, plateObjects, onToggleSliceObject, openSliceObjectSettings, plateGcode, perObjectSettings,
     projectFilaments, materialOptions, loadedMaterialOptions, materialToolheadOptions,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
@@ -278,7 +296,9 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
     onAddFilament, onRemoveFilament, filamentInUse, filamentSupportOnly
   } = controller
   const showPlateSection = mode === 'simple'
-  const showPerObjectRow = mode === 'simple'
+  // The inline Objects + per-plate G-code sections are simple-mode only: the 3D editor
+  // renders its own object list and G-code sections after this panel.
+  const showInlineObjects = mode === 'simple'
   // Add/remove materials is an editing affordance (Bambu-style) — only in the editor.
   const showMaterialEditing = mode === 'editor'
   // Which material's expanded type/preset/color dialog is open (opened by clicking the
@@ -554,32 +574,6 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
               </Tooltip>
             </Stack>
           </FormControl>
-          {showPerObjectRow && hasPlateObjects && (
-            <Stack spacing={0.5}>
-              <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center">
-                <FormLabel sx={{ m: 0 }}>Per-object overrides</FormLabel>
-                <Button
-                  variant="outlined"
-                  color="neutral"
-                  size="sm"
-                  disabled={!selectedProcessProfile || !selectedSlicerTargetIdForGuards}
-                  onClick={() => setPerObjectDialogOpen(true)}
-                >
-                  Edit per-object
-                  {objectOverrideCount > 0 && (
-                    <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.75 }}>{objectOverrideCount}</Chip>
-                  )}
-                </Button>
-              </Stack>
-              {selectedSliceObjectIds.size < plateObjects.length && (
-                <FormHelperText sx={selectedSliceObjectIds.size === 0 ? { color: 'danger.500' } : undefined}>
-                  {selectedSliceObjectIds.size === 0
-                    ? `Select at least one object to ${flow === 'print' ? 'print' : 'slice'}.`
-                    : `${selectedSliceObjectIds.size} of ${plateObjects.length} objects will ${flow === 'print' ? 'print' : 'be sliced'}.`}
-                </FormHelperText>
-              )}
-            </Stack>
-          )}
           {tenantSlug && (
             <Link
               level="body-xs"
@@ -671,7 +665,11 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                     {materialToolheadOptions.length > 0 && (useToolheadButtonSet ? (
                       <ButtonGroup
                         size="sm"
-                        variant="outlined"
+                        // Soft group with a solid selected button (the GizmoToolbar pattern):
+                        // soft and solid are both borderless, so toggling the selection never
+                        // changes the buttons' dimensions — outlined buttons carry a 1px border
+                        // that solid drops, which made unselected groups 2px wider.
+                        variant="soft"
                         aria-label={`Nozzle for material ${filamentIndex + 1}`}
                         sx={{ '--ButtonGroup-radius': 'var(--joy-radius-sm)', flexShrink: 0, '& > *': { minWidth: 0, px: 1 } }}
                       >
@@ -690,7 +688,7 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
                             <Button
                               key={toolhead.id}
                               type="button"
-                              variant={selected ? 'solid' : 'outlined'}
+                              variant={selected ? 'solid' : 'soft'}
                               color={selected ? 'primary' : 'neutral'}
                               aria-pressed={selected}
                               aria-label={toolhead.label}
@@ -760,6 +758,74 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
           </Sheet>
         </Stack>
       )}
+      {showInlineObjects && hasPlateObjects && (
+        <Stack spacing={1}>
+          <Typography level="title-sm">Objects</Typography>
+          <Sheet variant="outlined" sx={{ p: 0.5, borderRadius: 'sm' }}>
+            <List size="sm" sx={{ '--ListItem-minHeight': '2.25rem' }}>
+              {plateObjects.map((object) => {
+                const printing = selectedSliceObjectIds.has(object.id)
+                const overrideCount = Object.keys(perObjectSettings?.value[String(object.id)] ?? {}).length
+                return (
+                  <ListItem key={object.id}>
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
+                      <Tooltip title={printing ? `Will ${flow === 'print' ? 'print' : 'slice'} — toggle to skip` : 'Skipped — toggle to include'} variant="soft">
+                        <Switch
+                          size="sm"
+                          checked={printing}
+                          onChange={() => onToggleSliceObject(object.id)}
+                          slotProps={{ input: { 'aria-label': `Include ${object.name}` } }}
+                          sx={{ flexShrink: 0 }}
+                        />
+                      </Tooltip>
+                      <Typography level="body-sm" noWrap sx={{ flex: 1, minWidth: 0, opacity: printing ? 1 : 0.5 }}>
+                        {object.name}
+                      </Typography>
+                      <Tooltip title={selectedProcessProfile ? 'Per-object settings' : 'Choose a quality profile first'}>
+                        <span>
+                          <IconButton
+                            size="sm"
+                            variant={overrideCount > 0 ? 'soft' : 'plain'}
+                            color={overrideCount > 0 ? 'primary' : 'neutral'}
+                            disabled={!selectedProcessProfile || !selectedSlicerTargetIdForGuards}
+                            onClick={() => openSliceObjectSettings(object.id, object.name)}
+                            aria-label={`Per-object settings for ${object.name}`}
+                          >
+                            <TuneRoundedIcon fontSize="small" />
+                            {overrideCount > 0 && (
+                              <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.5 }}>{overrideCount}</Chip>
+                            )}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </Stack>
+                  </ListItem>
+                )
+              })}
+            </List>
+          </Sheet>
+          {selectedSliceObjectIds.size < plateObjects.length && (
+            <Typography level="body-xs" sx={{ color: selectedSliceObjectIds.size === 0 ? 'danger.500' : 'text.tertiary' }}>
+              {selectedSliceObjectIds.size === 0
+                ? `Select at least one object to ${flow === 'print' ? 'print' : 'slice'}.`
+                : `${selectedSliceObjectIds.size} of ${plateObjects.length} objects will ${flow === 'print' ? 'print' : 'be sliced'}.`}
+            </Typography>
+          )}
+        </Stack>
+      )}
+      {showInlineObjects && plateGcode && (
+        <>
+          {/* A single material has nothing to change to; pauses apply regardless. */}
+          {plateGcode.filamentOptions.length > 1 && (
+            <PlateFilamentChangesSection
+              changes={plateGcode.filamentChanges}
+              filamentOptions={plateGcode.filamentOptions}
+              onChange={plateGcode.onFilamentChangesChange}
+            />
+          )}
+          <PlatePausesSection pauses={plateGcode.pauses} onChange={plateGcode.onPausesChange} />
+        </>
+      )}
       {materialDialogFilamentId != null && (() => {
         // Deriving here (not stored) keeps the dialog live: a "Choose from printer" pick
         // that lands while it is open updates type/preset/color in place. A filament
@@ -791,7 +857,6 @@ export function SliceSettingsPanel({ controller, mode, afterMaterials }: {
           />
         )
       })()}
-      {afterMaterials}
       </>)}
     </>
   )

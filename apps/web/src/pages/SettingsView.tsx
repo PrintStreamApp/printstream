@@ -1,8 +1,7 @@
 import React from 'react'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
-import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
-import { Alert, Box, Button, Card, CardContent, FormControl, FormLabel, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Card, FormLabel, Option, Select, Stack, Typography } from '@mui/joy'
 import {
   type AppLandingPageSetting,
   type AppThemeSetting,

@@ -1,11 +1,15 @@
 /**
- * Print-queue view: the shared, reorderable backlog. Shows each queued item with a
- * live eligibility badge (recomputed from the WS-fed printer-status cache via the
- * shared matcher), and drives the manual dispatch actions — single "Start now",
- * "Start all idle", hold/resume, re-queue, reorder, and remove.
+ * Print-queue section, rendered at the top of the core Jobs page via the
+ * `jobs.sections` slot (host: `apps/web/src/pages/JobsView.tsx`). Shows the shared,
+ * reorderable backlog: each queued item carries a live eligibility badge (recomputed
+ * from the WS-fed printer-status cache via the shared matcher) and the manual
+ * dispatch actions — single "Start now", "Start all idle", hold/resume, re-queue,
+ * reorder, and remove. Registers a "Queue" entry in the page's SectionNav through
+ * the slot's `registerSection` callback, and renders nothing when the viewer lacks
+ * the queue's permissions (the host page has its own jobs-permission gate).
  */
-import { useMemo, useState } from 'react'
-import { Alert, Button, Sheet, Stack, Typography } from '@mui/joy'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Sheet, Stack, Typography } from '@mui/joy'
 import AddRounded from '@mui/icons-material/AddRounded'
 import PlaylistPlayRounded from '@mui/icons-material/PlaylistPlayRounded'
 import PlayArrowRounded from '@mui/icons-material/PlayArrowRounded'
@@ -40,6 +44,8 @@ import {
 } from './api'
 import { LibraryFilePickerDialog } from '../../components/LibraryFilePickerDialog'
 import { PaginatedSection } from '../../components/PaginationFooter'
+import { type SectionNavEntry } from '../../components/dashboard/SectionNav'
+import { sectionScrollMarginTop } from '../../components/dashboard/SectionNav.constants'
 import { QueueItemDialog } from './QueueItemDialog'
 import { QueueStartDialog } from './QueueStartDialog'
 import { SliceToQueueFlow } from './SliceToQueueFlow'
@@ -51,7 +57,10 @@ import { QueueItemCard, type QueueItemFleetMatch } from './QueueItemCard'
 
 const UNKNOWN_FLEET_MATCH: QueueItemFleetMatch = { model: 'unknown', nozzle: 'unknown', plate: 'unknown' }
 
-export function QueueView() {
+export function QueueSection(props: Record<string, unknown>) {
+  const registerSection = typeof props.registerSection === 'function'
+    ? (props.registerSection as (entry: SectionNavEntry) => () => void)
+    : null
   const authBootstrapQuery = useAuthBootstrapQuery()
   const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
   const permissions = authBootstrapQuery.data?.permissions ?? []
@@ -144,13 +153,15 @@ export function QueueView() {
     return count
   }, [items, summaries])
 
-  if (!canView) {
-    return (
-      <Alert color="warning" variant="soft">
-        You do not have permission to view the print queue.
-      </Alert>
-    )
-  }
+  const itemCount = items.length
+  useEffect(() => {
+    if (!registerSection || !canView) return undefined
+    return registerSection({ id: 'queue', label: 'Queue', desktopLabel: 'Print queue', count: itemCount })
+  }, [registerSection, canView, itemCount])
+
+  // The host Jobs page already gates on the jobs permission; when the viewer
+  // additionally lacks queue visibility (library view), hide the section entirely.
+  if (!canView) return null
 
   const runMutation = async (itemId: string, action: () => Promise<unknown>, errorMessage: string) => {
     setPendingItemId(itemId)
@@ -245,9 +256,9 @@ export function QueueView() {
   }
 
   return (
-    <Stack spacing={2}>
-      <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between" sx={{ flexWrap: 'wrap' }}>
-        <Typography level="h3" startDecorator={<PlaylistPlayRounded />}>Print queue</Typography>
+    <Stack id="queue" spacing={1} sx={{ scrollMarginTop: sectionScrollMarginTop }}>
+      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+        <Typography level="title-md">Print queue</Typography>
         {canManage ? (
           <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
             <Button
@@ -269,14 +280,12 @@ export function QueueView() {
       </Stack>
 
       {items.length === 0 ? (
-        <Sheet variant="soft" sx={{ borderRadius: 'md', p: 2 }}>
-          <EmptyState
-            icon={<PlaylistPlayRounded />}
-            title="The queue is empty"
-            description={canManage ? 'Add a printable library file to line up prints across your printers.' : 'No prints are queued right now.'}
-            action={canManage ? <Button size="sm" startDecorator={<AddRounded />} onClick={() => setPickerOpen(true)}>Add to queue</Button> : undefined}
-          />
-        </Sheet>
+        <EmptyState
+          compact
+          icon={<PlaylistPlayRounded />}
+          title="The queue is empty"
+          description={canManage ? 'Add a printable library file to line up prints across your printers.' : 'No prints are queued right now.'}
+        />
       ) : (
         <>
           <QueueDirectoryToolbar directory={directory} />

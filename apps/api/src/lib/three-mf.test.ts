@@ -1916,6 +1916,55 @@ test('parseCustomGcodePauses reads only the requested plate\'s pause entries', (
   assert.deepEqual(parseCustomGcodePauses(null, 1), [])
 })
 
+test('buildThreeMfIndex surfaces per-plate filament changes and pauses from the custom G-code sidecar', () => {
+  const index = buildThreeMfIndex(null, null, new Map([[1, 'Plate A'], [2, 'Plate B']]), new Map(), CUSTOM_GCODE_SOURCE_XML)
+  const plateOne = index.plates.find((plate) => plate.index === 1)
+  const plateTwo = index.plates.find((plate) => plate.index === 2)
+  assert.deepEqual(plateOne?.filamentChanges, [{ z: 4, filamentId: 2 }])
+  assert.deepEqual(plateOne?.pauses, [{ z: 9 }])
+  assert.deepEqual(plateTwo?.filamentChanges, [{ z: 2.4, filamentId: 3 }])
+  // No pause entries on plate 2 → the field is omitted, not an empty array.
+  assert.equal(plateTwo?.pauses, undefined)
+  // No sidecar at all → nothing attaches.
+  const bare = buildThreeMfIndex(null, null, new Map([[1, 'Plate A']]), new Map(), null)
+  assert.equal(bare.plates[0]?.filamentChanges, undefined)
+})
+
+test('createObjectCustomizedThreeMf applies slice-time layer G-code edits, upserting a missing sidecar', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-gcode-edit-'))
+  try {
+    // Source WITH a sidecar: the edit replaces plate 1's tool change, keeps its pause.
+    const withSidecar = path.join(tempDir, 'with.3mf')
+    const withOut = path.join(tempDir, 'with-out.3mf')
+    await writeZipFixture(withSidecar, [
+      ['Metadata/model_settings.config', Buffer.from(OBJECT_MODEL_SETTINGS_XML, 'utf8')],
+      ['Metadata/custom_gcode_per_layer.xml', Buffer.from(CUSTOM_GCODE_SOURCE_XML, 'utf8')]
+    ])
+    await createObjectCustomizedThreeMf(withSidecar, withOut, 1, {
+      customGcode: { filamentChanges: [{ plateIndex: 1, changes: [{ z: 6.2, filamentId: 4, color: '#00FF00' }] }] }
+    })
+    const merged = (await readEntry(withOut, 'Metadata/custom_gcode_per_layer.xml')).toString('utf8')
+    assert.deepEqual(parseCustomGcodeToolChanges(merged, 1), [{ z: 6.2, filamentId: 4, color: '#00FF00' }])
+    assert.deepEqual(parseCustomGcodePauses(merged, 1), [{ z: 9 }])
+    // Unlisted plate 2 is preserved verbatim.
+    assert.deepEqual(parseCustomGcodeToolChanges(merged, 2), [{ z: 2.4, filamentId: 3, color: '#0000FF' }])
+
+    // Source WITHOUT a sidecar: the entry is created (append path).
+    const bare = path.join(tempDir, 'bare.3mf')
+    const bareOut = path.join(tempDir, 'bare-out.3mf')
+    await writeZipFixture(bare, [
+      ['Metadata/model_settings.config', Buffer.from(OBJECT_MODEL_SETTINGS_XML, 'utf8')]
+    ])
+    await createObjectCustomizedThreeMf(bare, bareOut, 1, {
+      customGcode: { pauses: [{ plateIndex: 1, pauses: [{ z: 5.6 }] }] }
+    })
+    const created = (await readEntry(bareOut, 'Metadata/custom_gcode_per_layer.xml')).toString('utf8')
+    assert.deepEqual(parseCustomGcodePauses(created, 1), [{ z: 5.6 }])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 const FILAMENT_MODEL_SETTINGS_XML = [
   '<config>',
   '  <object id="3"><metadata key="name" value="Box"/><part id="1" subtype="normal_part"><metadata key="name" value="Box part"/><metadata key="extruder" value="2"/></part></object>',

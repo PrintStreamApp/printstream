@@ -26,10 +26,13 @@ import type {
   PrinterStatus,
   SceneEdit,
   SceneEditFilament,
+  SceneEditPlateFilamentChanges,
+  SceneEditPlatePauses,
   SlicingCapabilities,
   SlicingManualProfileTarget,
   ThreeMfIndex
 } from '@printstream/shared'
+import { PER_OBJECT_PROCESS_KEYS } from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { bambuModelKeysAreCompatible } from '../../lib/bambuPrinterModels'
@@ -107,10 +110,13 @@ import {
   type SliceFileSubmitInput
 } from '../../lib/libraryViewHelpers'
 import { SliceSettingsPanel, type SliceSettingsController, type SliceMaterialsSnapshot } from './SliceSettingsPanel'
+import type { FilamentOption } from './PlateGcodeSections'
 
 const ProcessSettingsDialog = lazy(() => import('../ProcessSettingsDialog'))
 const FilamentSettingsDialog = lazy(() => import('./FilamentSettingsDialog'))
-const PerObjectSettingsDialog = lazy(() => import('../PerObjectSettingsDialog'))
+
+/** Stable empty-overrides reference so the per-object dialog's resolve effect doesn't re-fire. */
+const EMPTY_OBJECT_OVERRIDES: Record<string, string | string[]> = {}
 
 export function SliceFileModal({
   file,
@@ -289,7 +295,9 @@ export function SliceFileModal({
   const [filamentSettingOverridesById, setFilamentSettingOverridesById] = useState<Record<number, Record<string, string | string[]>>>({})
   const [filamentSettingsFilamentId, setFilamentSettingsFilamentId] = useState<number | null>(null)
   const [objectProcessOverrides, setObjectProcessOverrides] = useState<Record<string, Record<string, string | string[]>>>({})
-  const [perObjectDialogOpen, setPerObjectDialogOpen] = useState(false)
+  // The plate object whose restricted per-object settings dialog is open (the inline
+  // Objects section's gear), stacked above the slim dialog / editor.
+  const [editingSliceObject, setEditingSliceObject] = useState<{ id: number; name: string } | null>(null)
   const [plateMode, setPlateMode] = useState<'all' | 'single'>(() => requiresSinglePlate || defaultPlateNumber != null ? 'single' : 'all')
   const [plateNumber, setPlateNumber] = useState(() => String(defaultPlateNumber ?? 1))
   const [plateType, setPlateType] = useState(resolveInitialPlateType(file, null))
@@ -603,10 +611,6 @@ export function SliceFileModal({
   const submitSelectedObjectIds = hasPlateObjects && selectedSliceObjectIds.size < plateObjects.length
     ? plateObjects.filter((object) => selectedSliceObjectIds.has(object.id)).map((object) => object.id)
     : undefined
-  const objectOverrideCount = useMemo(
-    () => Object.values(objectProcessOverrides).filter((overrides) => Object.keys(overrides).length > 0).length,
-    [objectProcessOverrides]
-  )
   const submitObjectProcessOverrides = useMemo(() => {
     const entries = Object.entries(objectProcessOverrides).filter(([, overrides]) => Object.keys(overrides).length > 0)
     return entries.length > 0 ? Object.fromEntries(entries) : undefined
@@ -653,6 +657,53 @@ export function SliceFileModal({
     () => isFullProjectEditor ? projectFilaments : projectFilaments.filter((filament) => filament.usedOnSelectedPlate),
     [projectFilaments, isFullProjectEditor]
   )
+  // Material choices for filament-index process settings ("Support/raft base" etc.).
+  // Ids are the 1-based POSITION in the full ordered list — the index the slicer reads —
+  // not projectFilamentId, which can diverge from position after a removal.
+  const processFilamentChoices = useMemo(
+    () => projectFilaments.map((filament, index) => {
+      const option = materialOptions.find((entry) => entry.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
+      return {
+        id: index + 1,
+        label: option?.label ?? filament.label,
+        color: normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF')
+      }
+    }),
+    [projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors]
+  )
+  // Slice-time layer G-code (filament changes + pauses): session edits keyed by plate
+  // index, displayed over the file's baked entries (now part of the plates index). Edits
+  // ride the slice request only — nothing persists to the library file. `undefined` per
+  // plate means untouched; a present-but-empty list deliberately clears the baked entries.
+  const [plateFilamentChangeEdits, setPlateFilamentChangeEdits] = useState<Record<number, Array<{ z: number; filamentId: number }>>>({})
+  const [platePauseEdits, setPlatePauseEdits] = useState<Record<number, Array<{ z: number }>>>({})
+  const gcodeFilamentOptions = useMemo<FilamentOption[]>(
+    () => visibleProjectFilaments.map((filament) => {
+      const option = materialOptions.find((entry) => entry.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
+      return {
+        id: filament.projectFilamentId,
+        color: normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF'),
+        label: option?.label ?? filament.label,
+        colorName: null
+      }
+    }),
+    [visibleProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors]
+  )
+  const submitFilamentChanges = useMemo<SceneEditPlateFilamentChanges[] | undefined>(() => {
+    const entries = Object.entries(plateFilamentChangeEdits).map(([plateIndex, changes]) => ({
+      plateIndex: Number(plateIndex),
+      changes: changes.map((change) => ({
+        ...change,
+        // Sidecar display colour (slicer metadata only) — the live palette colour for the material.
+        color: normalizeSliceFilamentColor(filamentColors[change.filamentId] ?? '#FFFFFF')
+      }))
+    }))
+    return entries.length > 0 ? entries : undefined
+  }, [plateFilamentChangeEdits, filamentColors])
+  const submitPauses = useMemo<SceneEditPlatePauses[] | undefined>(() => {
+    const entries = Object.entries(platePauseEdits).map(([plateIndex, pauses]) => ({ plateIndex: Number(plateIndex), pauses }))
+    return entries.length > 0 ? entries : undefined
+  }, [platePauseEdits])
   const filamentCountChanged = removedFilamentIds.size > 0 || addedFilaments.length > 0
   // A material PROFILE change (e.g. PLA -> PETG) must persist its new `filament_settings_id`,
   // otherwise the saved 3MF keeps the old preset and reopens as the previous material.
@@ -745,6 +796,53 @@ export function SliceFileModal({
       return next
     })
   }, [baseProjectFilaments])
+  // Identity of the BASE material list (ids/labels/colors/nozzles — not the plate-usage flag,
+  // which changes on plate switches). Used to detect the post-save refetch below.
+  const baseFilamentSignature = useMemo(
+    () => JSON.stringify(baseProjectFilaments.map((filament) => [filament.projectFilamentId, filament.label, filament.color, filament.nozzleId])),
+    [baseProjectFilaments]
+  )
+  // Pending rebase armed by a successful editor save: the saved file bakes the CURRENT
+  // projectFilaments as slots 1..N, so once the refetched base reflects that, the session
+  // add/remove overlay must be folded into it — otherwise an added material shows up twice
+  // (base + overlay) and a removed one comes back. `savedIds` records each slot's session id
+  // in save order so the per-slot keyed state can follow the renumbering.
+  const pendingMaterialRebaseRef = useRef<{ savedIds: number[]; baseSignature: string } | null>(null)
+  const handleProjectSaved = useCallback(() => {
+    // Without add/remove the base ids stay stable, so the keyed state needs no rebase.
+    if (removedFilamentIds.size === 0 && addedFilaments.length === 0) return
+    pendingMaterialRebaseRef.current = {
+      savedIds: projectFilaments.map((filament) => filament.projectFilamentId),
+      baseSignature: baseFilamentSignature
+    }
+  }, [removedFilamentIds, addedFilaments, projectFilaments, baseFilamentSignature])
+  useEffect(() => {
+    const pending = pendingMaterialRebaseRef.current
+    if (!pending || pending.baseSignature === baseFilamentSignature) return
+    pendingMaterialRebaseRef.current = null
+    // Saved slot i (0-based) is now base filament i+1; move keyed state across and drop
+    // entries for slots that no longer exist. Runs after the seeding effects above (declared
+    // later), so freshly seeded defaults for the new base are remapped consistently too.
+    const idByOldId = new Map(pending.savedIds.map((oldId, index) => [oldId, index + 1] as const))
+    const remap = <T,>(record: Record<number, T>): Record<number, T> => {
+      const next: Record<number, T> = {}
+      for (const [key, value] of Object.entries(record)) {
+        const newId = idByOldId.get(Number(key))
+        if (newId != null) next[newId] = value
+      }
+      return next
+    }
+    setFilamentMaterialOptionIds(remap)
+    setFilamentColors(remap)
+    setFilamentToolheadIds(remap)
+    setFilamentMaterialTypeFilters(remap)
+    setFilamentSettingOverridesById(remap)
+    setAddedFilaments([])
+    setAddedFilamentSourceIndex({})
+    setRemovedFilamentIds(new Set())
+    // Profile picks are baked into the saved file's slots, so the explicit-edit flags reset too.
+    setProfileEditedFilamentIds(new Set())
+  }, [baseFilamentSignature])
   // Material state is immutably updated, so capturing references gives a valid snapshot
   // the editor's undo/redo can restore (removedFilamentIds copied to an array + rebuilt).
   const materialsSnapshot = useMemo<SliceMaterialsSnapshot>(() => ({
@@ -790,11 +888,27 @@ export function SliceFileModal({
     && !platesQuery.isLoading
     && (!platesQuery.data || bakedDefaultsApplied)
 
+  // A SET-but-incompatible profile id must block submission: the reconciliation effects re-pick
+  // selections when the target changes, but a submit racing them (or any state they miss) would
+  // send a cross-model pairing the slicer hard-rejects — the CLI's "process not compatible with
+  // printer" exit, historically surfaced as an opaque mid-slice segfault. Gate on membership in
+  // the compatible lists, not just non-emptiness. Only enforced once the slicer data is ready:
+  // while profiles/plates are still loading the compatible lists are empty, and flagging the
+  // seeded ids against them would misreport "incompatible" for ordinary loading states.
+  const printerProfileIncompatible = slicerDataReady
+    && printerProfileId.length > 0
+    && !compatibleMachineProfiles.some((profile) => profile.id === printerProfileId)
+  const processProfileIncompatible = slicerDataReady
+    && processProfileId.length > 0
+    && selectedProcessProfile == null
+
   const canSubmit = Boolean(configured)
     && selectedSlicerTargetId.length > 0
     && suggestedOutputFileName.trim().length > 0
     && printerProfileId.length > 0
     && processProfileId.length > 0
+    && !printerProfileIncompatible
+    && !processProfileIncompatible
     && selectedNozzleDiameters.length > 0
     && !missingFilamentProfile
     && !missingFilamentToolhead
@@ -819,6 +933,10 @@ export function SliceFileModal({
     sceneEdit: sceneEdit ?? undefined,
     selectedObjectIds: sceneEdit ? undefined : submitSelectedObjectIds,
     objectProcessOverrides: submitObjectProcessOverrides,
+    // Slice-time layer G-code edits (per-plate replace semantics; only touched plates are
+    // sent). With a sceneEdit the edit carries its own entries, so these are omitted.
+    filamentChanges: sceneEdit ? undefined : submitFilamentChanges,
+    pauses: sceneEdit ? undefined : submitPauses,
     target: targetMode === 'realPrinter'
       ? {
           mode: 'realPrinter',
@@ -934,7 +1052,18 @@ export function SliceFileModal({
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards: selectedSlicerTargetId, processSettingOverrides, setProcessSettingsDialogOpen,
-    hasPlateObjects, objectOverrideCount, setPerObjectDialogOpen, selectedSliceObjectIds, plateObjects,
+    hasPlateObjects, selectedSliceObjectIds, plateObjects,
+    onToggleSliceObject: toggleSliceObject,
+    openSliceObjectSettings: (objectId, name) => setEditingSliceObject({ id: objectId, name }),
+    plateGcode: file.kind === '3mf' && selectedPlate > 0 && selectedPlateOption
+      ? {
+          filamentChanges: plateFilamentChangeEdits[selectedPlate] ?? selectedPlateOption.filamentChanges ?? [],
+          pauses: platePauseEdits[selectedPlate] ?? selectedPlateOption.pauses ?? [],
+          onFilamentChangesChange: (changes) => setPlateFilamentChangeEdits((current) => ({ ...current, [selectedPlate]: changes })),
+          onPausesChange: (pauses) => setPlatePauseEdits((current) => ({ ...current, [selectedPlate]: pauses })),
+          filamentOptions: gcodeFilamentOptions
+        }
+      : null,
     perObjectSettings: selectedProcessProfile ? {
       slicerTargetId: selectedSlicerTargetId,
       processProfileId: selectedProcessProfile.id,
@@ -953,7 +1082,7 @@ export function SliceFileModal({
     filamentSettingOverridesById, openFilamentSettings: setFilamentSettingsFilamentId,
     setPrinterMaterialPickerFilamentId, handleMaterialOptionChange,
     desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onRemoveFilament: handleRemoveFilament,
-    materialsSnapshot, restoreMaterials, materialEditListenerRef, processEditListenerRef
+    materialsSnapshot, restoreMaterials, materialEditListenerRef, onProjectSaved: handleProjectSaved, processEditListenerRef
   }
 
   // The editor owns geometry; the slice is otherwise valid when printer/process/
@@ -963,6 +1092,8 @@ export function SliceFileModal({
     && selectedSlicerTargetId.length > 0
     && printerProfileId.length > 0
     && processProfileId.length > 0
+    && !printerProfileIncompatible
+    && !processProfileIncompatible
     && selectedNozzleDiameters.length > 0
     && !missingFilamentProfile
     && !missingFilamentToolhead
@@ -981,6 +1112,8 @@ export function SliceFileModal({
     slicerDataReady,
     printerProfileId,
     processProfileId,
+    printerProfileIncompatible,
+    processProfileIncompatible,
     nozzleDiameterCount: selectedNozzleDiameters.length,
     missingFilamentProfile,
     missingFilamentToolhead,
@@ -1034,10 +1167,6 @@ export function SliceFileModal({
     sliceConfig: sliceController,
     initialPlateIndex: Number.parseInt(plateNumber, 10),
     targetPrinterModel: editorTargetPrinterModel,
-    objectOverrideCount,
-    hasPlateObjects,
-    canEditSettings: Boolean(selectedProcessProfile && selectedSlicerTargetId),
-    onEditObjectSettings: () => setPerObjectDialogOpen(true),
     onSavedAs,
     onClose
   }
@@ -1113,23 +1242,34 @@ export function SliceFileModal({
       )}
       {/* Per-object + process settings dialogs live at the top level so they stack
           above the editor in editor-only mode (and above the slim dialog otherwise). */}
-      {perObjectDialogOpen && selectedProcessProfile && (
+      {editingSliceObject && selectedProcessProfile && (
+        // Restricted per-object settings for one object of the inline Objects list (the
+        // panel's gear). Baselined on the global effective config (profile + global
+        // overrides) so per-object edits read and reset relative to what the object would
+        // otherwise inherit — matching Bambu Studio.
         <Suspense fallback={null}>
-          <PerObjectSettingsDialog
-            open={perObjectDialogOpen}
-            onClose={() => setPerObjectDialogOpen(false)}
-            objects={plateObjects}
+          <ProcessSettingsDialog
+            open
+            onClose={() => setEditingSliceObject(null)}
             slicerTargetId={selectedSlicerTargetId}
             processProfileId={selectedProcessProfile.id}
-            processProfileName={selectedProcessProfile.name}
+            processProfileName={editingSliceObject.name}
             sourceFileId={file.id}
-            globalOverrides={processSettingOverrides}
-            visibilityContext={{ printerModel: targetMode === 'manualProfile' ? manualPrinterModel : (selectedPrinter?.model ?? '') }}
-            value={objectProcessOverrides}
-            onChange={setObjectProcessOverrides}
-            printSelection={selectedSliceObjectIds}
-            onTogglePrint={toggleSliceObject}
+            initialOverrides={objectProcessOverrides[String(editingSliceObject.id)] ?? EMPTY_OBJECT_OVERRIDES}
+            visibilityContext={{ printerModel: targetMode === 'manualProfile' ? manualPrinterModel : (selectedPrinter?.model ?? ''), isGlobalConfig: false }}
+            allowedKeys={PER_OBJECT_PROCESS_KEYS}
+            baseOverlay={processSettingOverrides}
+            titlePrefix="Object settings"
             applyScope={editorOnly ? 'project' : 'slice'}
+            onApply={(overrides) => {
+              setObjectProcessOverrides((current) => {
+                const next = { ...current }
+                if (Object.keys(overrides).length === 0) delete next[String(editingSliceObject.id)]
+                else next[String(editingSliceObject.id)] = overrides
+                return next
+              })
+              setEditingSliceObject(null)
+            }}
           />
         </Suspense>
       )}
@@ -1145,6 +1285,7 @@ export function SliceFileModal({
             initialOverrides={processSettingOverrides}
             visibilityContext={{ printerModel: targetMode === 'manualProfile' ? manualPrinterModel : (selectedPrinter?.model ?? '') }}
             profileOptions={compatibleProcessProfiles.map((profile) => ({ id: profile.id, name: formatSlicingProfileDisplayName(profile) }))}
+            filamentChoices={processFilamentChoices}
             applyScope={editorOnly ? 'project' : 'slice'}
             onProfileChange={(profileId, carryOverrides) => {
               // Snapshot pre-edit state for the editor's undo/dirty (no-op in the simple slice path).

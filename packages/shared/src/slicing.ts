@@ -754,6 +754,15 @@ export const createSlicingJobSchema = z.object({
    */
   objectProcessOverrides: z.record(z.string().min(1), processSettingOverridesSchema).optional(),
   /**
+   * Per-plate layer-based filament changes to apply to THIS slice only (nothing is persisted to
+   * the library file). Same replace-per-listed-plate semantics as `sceneEdit.filamentChanges` —
+   * an empty `changes` array clears the plate's baked entries. Only honored when `sceneEdit` is
+   * absent: an edited layout is authoritative and carries its own entries.
+   */
+  filamentChanges: z.array(sceneEditPlateFilamentChangesSchema).optional(),
+  /** Per-plate layer pauses for THIS slice; same contract as `filamentChanges`. */
+  pauses: z.array(sceneEditPlatePausesSchema).optional(),
+  /**
    * Edited plate arrangement from the interactive 3D editor. When present, the source 3MF's
    * build items and `model_settings.config` plates/instances are rewritten to match before
    * slicing, so moved/rotated/scaled/added/removed models and multi-plate layout changes are

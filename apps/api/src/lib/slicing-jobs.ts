@@ -477,13 +477,19 @@ export class SlicingJobs {
       const objectProcessOverrides = job.request.objectProcessOverrides
       const hasObjectCustomization = (selectedObjectIds && selectedObjectIds.length > 0)
         || (objectProcessOverrides && Object.keys(objectProcessOverrides).length > 0)
-      if (!sceneEdit && job.request.plate > 0 && hasObjectCustomization) {
+      // Slice-time layer G-code edits (filament changes / pauses) from the prepare-print dialog.
+      // `undefined` means untouched; a present-but-empty list is a deliberate clear, so the guard
+      // checks presence, not length. sceneEdit slices carry these inside the edit instead.
+      const hasGcodeEdits = job.request.filamentChanges !== undefined || job.request.pauses !== undefined
+      if (!sceneEdit && ((job.request.plate > 0 && hasObjectCustomization) || hasGcodeEdits)) {
         const filteredDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-objcustom-'))
         const filteredPath = path.join(filteredDir, path.basename(job.sourceFileName) || 'source.3mf')
         rewrittenSourcePaths.push(filteredPath)
+        const applyObjectCustomization = job.request.plate > 0 && hasObjectCustomization
         await createObjectCustomizedThreeMf(sourcePath, filteredPath, job.request.plate, {
-          selectedObjectIds: selectedObjectIds && selectedObjectIds.length > 0 ? selectedObjectIds : undefined,
-          objectProcessOverrides: objectProcessOverrides && Object.keys(objectProcessOverrides).length > 0 ? objectProcessOverrides : undefined
+          selectedObjectIds: applyObjectCustomization && selectedObjectIds && selectedObjectIds.length > 0 ? selectedObjectIds : undefined,
+          objectProcessOverrides: applyObjectCustomization && objectProcessOverrides && Object.keys(objectProcessOverrides).length > 0 ? objectProcessOverrides : undefined,
+          customGcode: hasGcodeEdits ? { filamentChanges: job.request.filamentChanges, pauses: job.request.pauses } : undefined
         })
         sourcePath = filteredPath
       }

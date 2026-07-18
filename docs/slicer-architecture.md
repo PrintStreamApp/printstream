@@ -70,7 +70,12 @@ filament changes and layer pauses (ToolChange / PausePrint entries in
 — the slicer re-snaps to the nearest layer at slice time, BambuStudio semantics); the
 writer replaces only the listed plates' entries of the edited type while preserving
 the other entry types and untouched plates, and the scene response seeds the editor's
-per-plate lists.
+per-plate lists. The prepare-print dialog edits the same entries WITHOUT a
+`SceneEdit`: the shared 3MF index surfaces each plate's baked changes/pauses, the
+dialog's edits ride `createSlicingJob`'s top-level `filamentChanges`/`pauses`
+(same replace-per-plate schemas; ignored when a `sceneEdit` is present, which carries
+its own), and the API merges them into the slice input via the object-customization
+rewrite — a slice-only edit that never touches the library file.
 `addedParts` carries new volumes added INSIDE objects (Bambu's negative parts,
 modifiers, support blockers/enforcers): each references a staged import's mesh plus
 an object-local 12-number matrix; the writer injects the mesh as a new object
@@ -283,6 +288,15 @@ model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outpu
   against the slicer's builtin catalog — and the export must always cover the FILAMENT domain
   (falling back to Generic PLA), because a filament-less export omits the per-filament override
   arrays (`filament_retraction_length`, …) and the bare loader segfaults on those alone.
+  When the export itself FAILS (e.g. the CLI's exit 239 "process not compatible with printer"
+  from a cross-model machine/process pairing), the guard throws with that reason instead of
+  slicing the incomplete config — proceeding is always the deterministic segfault — keeping the
+  `Slicer CLI exited with code N` message shape the API's slicing queue classifies for its
+  drop-incompatible-builtin-profiles retry (`isLikelyBuiltinProfileCompatibilityExit`). The web
+  dialog guards the same class at the source: a set-but-incompatible machine/process selection
+  (state predating a printer switch) blocks submission with a named reason instead of reaching
+  the slicer at all (`printerProfileIncompatible`/`processProfileIncompatible` in
+  `SliceFileModal`).
 - **Calibration PA-tower brim must be `outer_only`, never `brim_ears`.** In our
   BambuStudio fork `brim_ears` is the *painted* brim type: it emits nothing unless manual
   ear points are painted into `Metadata/brim_ear_points.txt`, which the tower has none of,

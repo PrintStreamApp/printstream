@@ -335,13 +335,6 @@ export function StoragePrintModal({
               </FormControl>
             </DialogSection>
           )}
-          {showObjectSelection && (
-            <PrintObjectsSection
-              objects={plateObjects}
-              deselectedIds={deselectedObjectIdSet}
-              onToggle={toggleObjectSelected}
-            />
-          )}
           {mappingCapable && (
             <DialogSection title="Filament mapping">
               <StoragePrinterMapping
@@ -363,6 +356,13 @@ export function StoragePrintModal({
                 }}
               />
             </DialogSection>
+          )}
+          {showObjectSelection && (
+            <PrintObjectsSection
+              objects={plateObjects}
+              deselectedIds={deselectedObjectIdSet}
+              onToggle={toggleObjectSelected}
+            />
           )}
           {hasPrintSettings && (
             <DialogSection title="Print settings">

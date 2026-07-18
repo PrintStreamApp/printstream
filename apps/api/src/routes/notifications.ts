@@ -24,7 +24,6 @@ import {
   updateNotificationTemplate
 } from '../lib/notification-templates.js'
 import {
-  getPlatformNotificationTemplate,
   isKnownPlatformNotificationEvent,
   listPlatformNotificationTemplates,
   resetPlatformNotificationTemplate,

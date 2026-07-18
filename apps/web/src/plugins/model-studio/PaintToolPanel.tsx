@@ -10,8 +10,8 @@
  */
 import { Button, ButtonGroup, Checkbox, Chip, Option, Select, Sheet, Slider, Stack, Typography } from '@mui/joy'
 import { PAINT_TOOL_LABELS, PAINT_TOOLS_BY_CHANNEL } from './editorGeometry'
-import { FilamentOptionContent, TOOL_PANEL_TOP } from './editorPanels'
-import type { FilamentOption } from './EditorView'
+import { TOOL_PANEL_TOP } from './editorPanels'
+import { FilamentOptionContent, type FilamentOption } from '../../components/library/PlateGcodeSections'
 import type { EditorPaint } from './useEditorPaint'
 
 export interface PaintToolPanelProps {

@@ -1,14 +1,17 @@
 /**
  * Print-queue plugin (web side).
  *
- * Adds a top-level "Queue" tab: a shared, reorderable print backlog whose items show
+ * Contributes the print-queue section at the top of the core Jobs page (the
+ * `jobs.sections` slot): a shared, reorderable print backlog whose items show
  * a live eligibility badge (matched against each printer's loaded AMS material) and
- * are dispatched on demand. The view is eager-loaded with the app shell — this is core
- * app functionality, not a heavy/optional surface, so it should be ready on first paint.
+ * are dispatched on demand. The section is eager-loaded with the app shell — this is
+ * core app functionality, not a heavy/optional surface, so it should be ready on
+ * first paint. The legacy top-level "/queue" route stays registered (unlisted) as a
+ * redirect to /jobs so old bookmarks and landing-page preferences keep working.
  */
-import PlaylistPlayRounded from '@mui/icons-material/PlaylistPlayRounded'
 import type { WebPlugin } from '../../plugin/types'
-import { QueueView } from './QueueView'
+import { QueueRedirect } from './QueueRedirect'
+import { QueueSection } from './QueueSection'
 import { SettingsPanel } from './SettingsPanel'
 import { LibraryAddToQueueAction } from './LibraryAddToQueueAction'
 import { LibraryAddToQueueHost } from './LibraryAddToQueueHost'
@@ -17,16 +20,16 @@ import { OrdersAddToQueueAction } from './OrdersAddToQueueAction'
 export const printQueuePlugin: WebPlugin = {
   name: 'print-queue',
   version: '0.1.0',
-  description: 'A shared, reorderable print backlog that matches queued jobs to printers by loaded AMS material.',
+  description: 'A shared, reorderable print backlog on the Jobs page that matches queued jobs to printers by loaded AMS material.',
   routes: [
     {
       path: '/queue/*',
-      navLabel: 'Queue',
-      navMobileIcon: <PlaylistPlayRounded />,
-      element: QueueView
+      element: QueueRedirect
     }
   ],
   slots: [
+    // The queue itself renders as the top section of the core Jobs page.
+    { name: 'jobs.sections', component: QueueSection },
     // Negative order keeps "Add to queue" first among library.fileActions plugins so it
     // sits immediately after the core "Print" item (which renders before the slot) in
     // every library kebab/context menu, ahead of model-studio's Preview / Open actions.

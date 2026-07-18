@@ -18,7 +18,6 @@ import type {
   Printer,
   PrinterNozzleFlow,
   PrinterStatus,
-  SlicingCapabilities,
   SlicingProfileSummary,
   ThreeMfIndex,
   ThreeMfPlate

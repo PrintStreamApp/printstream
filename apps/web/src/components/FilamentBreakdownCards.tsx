@@ -8,7 +8,8 @@
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded'
 import type { FilamentUsageSlice, FilamentUsageStats } from '@printstream/shared'
-import { BreakdownStatCard, CATEGORICAL_STAT_COLORS } from './StatsCards'
+import { BreakdownStatCard } from './StatsCards'
+import { CATEGORICAL_STAT_COLORS } from '../lib/statColors'
 
 /** Named legend rows per card; remaining slices still render in the donut. */
 const LEGEND_LIMIT = 3

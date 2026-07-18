@@ -268,6 +268,8 @@ function buildSliceDisabledReasonInput(overrides: Partial<SliceDisabledReasonInp
     slicerDataReady: true,
     printerProfileId: 'builtin:machine:h2d-04',
     processProfileId: 'builtin:process:0.20',
+    printerProfileIncompatible: false,
+    processProfileIncompatible: false,
     nozzleDiameterCount: 1,
     missingFilamentProfile: false,
     missingFilamentToolhead: false,
@@ -305,6 +307,23 @@ test('resolveSliceDisabledReason reports loading before incomplete-settings reas
   assert.equal(
     resolveSliceDisabledReason(buildSliceDisabledReasonInput({ slicerDataReady: false, printerProfileId: '' })),
     'Loading slicer data…'
+  )
+})
+
+test('resolveSliceDisabledReason flags a set-but-incompatible process selection', () => {
+  // Regression: a slice dialog whose state predated a printer switch submitted an X1C process
+  // against an H2D target — the id was non-empty, so the old gates let it through and the slicer
+  // hard-rejected it ("process not compatible with printer"). The reason must name the mismatch.
+  assert.equal(
+    resolveSliceDisabledReason(buildSliceDisabledReasonInput({ processProfileIncompatible: true })),
+    'The selected print settings aren’t compatible with the target printer — choose a compatible profile.'
+  )
+})
+
+test('resolveSliceDisabledReason flags a set-but-incompatible machine selection', () => {
+  assert.equal(
+    resolveSliceDisabledReason(buildSliceDisabledReasonInput({ printerProfileIncompatible: true })),
+    'The selected printer profile doesn’t match the target printer.'
   )
 })
 

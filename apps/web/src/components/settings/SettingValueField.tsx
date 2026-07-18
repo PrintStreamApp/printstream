@@ -5,7 +5,7 @@
  * serialized-string value, emitting the new scalar. It knows nothing about which catalog the option
  * came from, so both dialogs render identical controls.
  */
-import { Input, Option, Select, Stack, Switch, Textarea, Typography } from '@mui/joy'
+import { Box, Input, Option, Select, Stack, Switch, Textarea, Typography } from '@mui/joy'
 import { serializeProcessBool, type ProcessSettingOption } from '@printstream/shared'
 
 /**
@@ -14,6 +14,14 @@ import { serializeProcessBool, type ProcessSettingOption } from '@printstream/sh
  * shrinks; a `%`/`°` decorator or a long enum label grows).
  */
 export const SCALAR_CONTROL_WIDTH = 200
+
+/** A project material offered by filament-index settings ("Support/raft base" etc.). */
+export interface SettingFilamentChoice {
+  /** 1-based filament index as the config stores it (position in the project's material list). */
+  id: number
+  label: string
+  color: string | null
+}
 
 export interface SettingValueFieldProps {
   settingKey: string
@@ -27,11 +35,64 @@ export interface SettingValueFieldProps {
   showOwnLabel: boolean
   isCode?: boolean
   modified?: boolean
+  /**
+   * The project's materials, for filament-index settings (BambuStudio's `i_enum_open` int
+   * options: support/raft base+interface, walls/infill filament). When provided those render
+   * as a material picker — 0 is "Default" — instead of a bare number input.
+   */
+  filamentChoices?: SettingFilamentChoice[]
   onScalarChange: (key: string, value: string) => void
 }
 
+/** Small colour swatch for material options in filament-index selects. */
+function FilamentSwatch({ color }: { color: string | null }) {
+  return (
+    <Box
+      component="span"
+      sx={{
+        width: 14,
+        height: 14,
+        borderRadius: '3px',
+        flexShrink: 0,
+        bgcolor: color || 'neutral.softBg',
+        border: '1px solid rgba(255,255,255,0.18)'
+      }}
+    />
+  )
+}
+
 export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
-  const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, isCode, modified, onScalarChange } = props
+  const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, isCode, modified, filamentChoices, onScalarChange } = props
+
+  // Filament-index settings (the catalog marks them `i_enum_open` ints) pick a project
+  // material by its 1-based index; render them as a material select when the host supplied
+  // the material list. "0" is BambuStudio's "Default" (use the object's own filament).
+  if (option.type === 'int' && option.guiType === 'i_enum_open' && filamentChoices && filamentChoices.length > 0) {
+    const current = Number.parseInt(scalar, 10)
+    const normalized = Number.isFinite(current) && current > 0 ? String(current) : '0'
+    // A value pointing past the current material list (stale baked config) still needs a
+    // visible row, or the select would render blank.
+    const outOfRange = normalized !== '0' && !filamentChoices.some((choice) => String(choice.id) === normalized)
+    return (
+      <Select
+        value={normalized}
+        disabled={!enabled}
+        onChange={(_event, value) => { if (typeof value === 'string') onScalarChange(settingKey, value) }}
+        sx={{ width: SCALAR_CONTROL_WIDTH }}
+      >
+        <Option value="0">Default</Option>
+        {filamentChoices.map((choice) => (
+          <Option key={choice.id} value={String(choice.id)}>
+            <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+              <FilamentSwatch color={choice.color} />
+              <Typography level="body-sm" noWrap>{choice.id} — {choice.label}</Typography>
+            </Stack>
+          </Option>
+        ))}
+        {outOfRange && <Option value={normalized}>Material {normalized} (missing)</Option>}
+      </Select>
+    )
+  }
 
   if (option.type === 'bool') {
     return (

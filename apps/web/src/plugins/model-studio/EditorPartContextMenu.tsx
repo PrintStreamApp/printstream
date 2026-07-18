@@ -17,7 +17,8 @@ import IosShareRoundedIcon from '@mui/icons-material/IosShareRounded'
 import LibraryAddRoundedIcon from '@mui/icons-material/LibraryAddRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
-import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX, ContextMenuBackItem, FilamentMenuItems, PartTypeMenuItems } from './contextMenuItems'
+import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX } from './contextMenuChrome'
+import { ContextMenuBackItem, FilamentMenuItems, PartTypeMenuItems } from './contextMenuItems'
 import type { FilamentOption } from './EditorView'
 
 export interface EditorPartContextMenuProps {

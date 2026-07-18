@@ -205,6 +205,10 @@ export interface SliceDisabledReasonInput {
   slicerDataReady: boolean
   printerProfileId: string
   processProfileId: string
+  /** Set-but-incompatible machine selection (id not in the target's compatible machine list). */
+  printerProfileIncompatible: boolean
+  /** Set-but-incompatible process selection (id not in the target's compatible process list). */
+  processProfileIncompatible: boolean
   nozzleDiameterCount: number
   missingFilamentProfile: boolean
   missingFilamentToolhead: boolean
@@ -228,7 +232,9 @@ export function resolveSliceDisabledReason(input: SliceDisabledReasonInput): str
   if (input.profilesError) return input.profilesError
   if (!input.slicerDataReady) return 'Loading slicer data…'
   if (input.printerProfileId.length === 0) return 'No matching printer profile is installed for this printer and nozzle.'
+  if (input.printerProfileIncompatible) return 'The selected printer profile doesn’t match the target printer.'
   if (input.processProfileId.length === 0) return 'Choose a print-settings profile.'
+  if (input.processProfileIncompatible) return 'The selected print settings aren’t compatible with the target printer — choose a compatible profile.'
   if (input.nozzleDiameterCount === 0) return 'Choose a nozzle size.'
   if (input.missingFilamentProfile) return 'Assign a filament to every material slot.'
   if (input.missingFilamentToolhead) return 'Assign a nozzle to every material slot.'

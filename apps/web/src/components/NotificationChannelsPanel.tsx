@@ -2,43 +2,8 @@ import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { Alert, Card, CardContent, Chip, Stack, Typography } from '@mui/joy'
-import { usePluginCatalogQuery } from '../lib/pluginCatalogQuery'
-import {
-  compareNotificationPluginEntries,
-  getPluginDisplayName,
-  isNotificationPlugin,
-  mergePlugins,
-  shouldRenderPluginSettingsPanel,
-  type MergedPluginEntry
-} from '../lib/pluginSettings'
-import { webPluginRegistry } from '../plugin/registry'
-
-/**
- * The notification channel entries renderable in the current workspace
- * context (tenant or platform): installed + enabled `notifications-*`
- * plugins with a settings panel. Shared with hosts that need the count
- * before deciding to show a Notifications section at all.
- */
-export function useNotificationChannelEntries() {
-  const pluginCatalogQuery = usePluginCatalogQuery({ suppressGlobalErrorToast: true })
-  // A channel's web panel talks to its API plugin, so the plugin must exist
-  // in the CURRENT surface's catalog. Web-only merged entries default to
-  // installed/enabled/available, which would mount the other surface's
-  // panels here (tenant channels on the platform view and vice versa) and
-  // toast "Plugin unavailable in this workspace" from their status queries.
-  const present = mergePlugins(pluginCatalogQuery.data?.plugins ?? [], webPluginRegistry.list())
-    .filter((entry): entry is MergedPluginEntry => isNotificationPlugin(entry.name))
-    .filter((entry) => entry.api != null)
-  // Channels that exist in this context, enabled or not — hosts use this to
-  // decide whether a Notifications section exists at all (the panel's own
-  // "enable a plugin" empty state covers the none-enabled case).
-  const availableChannels = present.filter((entry) =>
-    Boolean(entry.api?.installed && entry.api.availableInCurrentContext))
-  const channels = present
-    .filter((entry) => shouldRenderPluginSettingsPanel(entry, 'notifications'))
-    .sort(compareNotificationPluginEntries)
-  return { pluginCatalogQuery, channels, availableChannels }
-}
+import { getPluginDisplayName } from '../lib/pluginSettings'
+import { useNotificationChannelEntries } from '../hooks/useNotificationChannelEntries'
 
 export function NotificationChannelsPanel({
   description = 'Configure how each device or destination receives print alerts. Browser push is per device, while Discord and ntfy deliver through their configured destinations.'

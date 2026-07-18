@@ -13,12 +13,13 @@
  */
 import { createWriteStream } from 'node:fs'
 import { rename } from 'node:fs/promises'
-import { isProcessSettingKey, type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBounds } from '@printstream/shared'
+import { isProcessSettingKey, type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBounds, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
 import { PNG } from 'pngjs'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import { escapeXmlAttribute, readEntry, readZipEntryBuffer, rewriteThreeMfEntries } from './three-mf-internal.js'
-import { buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex, type ThreeMfPlateObject } from './three-mf-reader.js'
+import { CUSTOM_GCODE_PER_LAYER_ENTRY, buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex, type ThreeMfPlateObject } from './three-mf-reader.js'
+import { mergeCustomGcodePerLayer } from './three-mf-scene-builder.js'
 
 const ACTIVE_PRINT_PREVIEW_MAX_GCODE_BYTES = 128 * 1024 * 1024
 const MINIMAL_THREE_MF_MODEL_XML = [
@@ -281,12 +282,20 @@ export type ObjectProcessOverrides = Record<string, Record<string, string | stri
  * deleting objects corrupts the `<assemble>` cross-references. Scoped to `plate`'s object set so
  * objects on other plates are never touched. Per-object process overrides are applied to
  * `model_settings.config`.
+ *
+ * `customGcode` merges slice-time layer filament changes / pauses into
+ * `Metadata/custom_gcode_per_layer.xml` (replace-per-listed-plate semantics — see
+ * {@link mergeCustomGcodePerLayer}); the entry is upserted when the source archive has none.
  */
 export async function createObjectCustomizedThreeMf(
   sourcePath: string,
   outputPath: string,
   plate: number,
-  options: { selectedObjectIds?: number[]; objectProcessOverrides?: ObjectProcessOverrides }
+  options: {
+    selectedObjectIds?: number[]
+    objectProcessOverrides?: ObjectProcessOverrides
+    customGcode?: { filamentChanges?: SceneEditPlateFilamentChanges[]; pauses?: SceneEditPlatePauses[] }
+  }
 ): Promise<void> {
   const selected = options.selectedObjectIds ? new Set(options.selectedObjectIds) : null
   const overrides = options.objectProcessOverrides
@@ -310,6 +319,7 @@ export async function createObjectCustomizedThreeMf(
   }
 
   const transforms: Record<string, (xml: string) => string> = {}
+  const appendEntries: Array<{ name: string; content: string }> = []
   if (hasOverrides) {
     transforms['Metadata/model_settings.config'] = (xml) => applyObjectProcessOverridesXml(xml, overrides!)
   }
@@ -317,7 +327,15 @@ export async function createObjectCustomizedThreeMf(
     const ids = unprintableObjectIds
     transforms['3D/3dmodel.model'] = (xml) => setBuildItemsUnprintableXml(xml, ids)
   }
-  await rewriteThreeMfEntries(sourcePath, outputPath, transforms)
+  const customGcode = options.customGcode
+  if (customGcode && (customGcode.filamentChanges !== undefined || customGcode.pauses !== undefined)) {
+    // Transform covers a source that already has the sidecar; the append upserts it when
+    // absent (rewriteThreeMfEntries only appends names the copy pass did not write). An
+    // empty merge result still writes '' — the scene builder's established "cleared" form.
+    transforms[CUSTOM_GCODE_PER_LAYER_ENTRY] = (xml) => mergeCustomGcodePerLayer(xml, customGcode.filamentChanges, customGcode.pauses)
+    appendEntries.push({ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: mergeCustomGcodePerLayer(null, customGcode.filamentChanges, customGcode.pauses) })
+  }
+  await rewriteThreeMfEntries(sourcePath, outputPath, transforms, appendEntries)
 }
 
 /**

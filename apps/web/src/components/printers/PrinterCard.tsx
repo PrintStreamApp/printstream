@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Printer3dRoundedIcon } from '../../components/Printer3dRoundedIcon'
-import { getAmsRescanAvailability, getPrinterCalibrationCapabilities, getPrinterDisplayCapabilities, getPrinterControlCapabilities, isPrinterActiveJobStage, isPrinterIdleCompatibleStage, type AmsSlot, type AmsUnit, type ExternalSpool, type PrintJob, type PrinterActivePrintObjects, type PrinterCardContentSettings, type Printer, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
+import { getAmsLoadFilamentAvailability, getAmsRescanAvailability, getAmsUnloadFilamentAvailability, getPrinterCalibrationCapabilities, getPrinterDisplayCapabilities, getPrinterControlCapabilities, isPrinterActiveJobStage, isPrinterIdleCompatibleStage, type AmsSlot, type AmsUnit, type ExternalSpool, type PrintJob, type PrinterActivePrintObjects, type PrinterCardContentSettings, type Printer, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { usePluginCatalogQuery } from '../../lib/pluginCatalogQuery'
@@ -204,6 +204,10 @@ function PrinterCardComponent({
         toast.success('Rescan requested')
       } else if (command.type === 'resetAmsSlot') {
         toast.success('Slot reset')
+      } else if (command.type === 'loadAmsFilament') {
+        toast.success('Filament load requested')
+      } else if (command.type === 'unloadAmsFilament') {
+        toast.success('Filament unload requested')
       } else if (command.type === 'setPrintOption') {
         toast.success(`${PRINTER_SETTINGS_LABELS[command.option]} updated`)
       } else if (command.type === 'setAmsUserSettings') {
@@ -228,6 +232,8 @@ function PrinterCardComponent({
         command.type === 'calibrate' ||
         command.type === 'rescanAmsSlot' ||
         command.type === 'resetAmsSlot' ||
+        command.type === 'loadAmsFilament' ||
+        command.type === 'unloadAmsFilament' ||
         command.type === 'setPrintOption' ||
         command.type === 'setAmsUserSettings' ||
         command.type === 'setAmsFilamentBackup' ||
@@ -502,6 +508,26 @@ function PrinterCardComponent({
       type: 'resetAmsSlot',
       amsId: unit.unitId,
       slotId: slot.slot
+    })
+    : undefined
+  // Slot context-menu load/unload mirror the slot edit modal's filament actions: same
+  // commands, same default heater target from the slot's configured filament profile.
+  const loadAmsSlotFilament = canManagePrinter
+    ? (unit: AmsUnit, slot: AmsSlot) => sendCommand.mutate({
+      type: 'loadAmsFilament',
+      amsId: unit.unitId,
+      slotId: slot.slot,
+      extruderId: unit.nozzleId ?? undefined,
+      nozzleTemp: resolveFilamentChangeTargetTemp(slot) ?? 220
+    })
+    : undefined
+  const unloadAmsSlotFilament = canManagePrinter
+    ? (unit: AmsUnit, slot: AmsSlot) => sendCommand.mutate({
+      type: 'unloadAmsFilament',
+      amsId: unit.unitId,
+      slotId: slot.slot,
+      extruderId: unit.nozzleId ?? undefined,
+      nozzleTemp: resolveFilamentChangeTargetTemp(slot) ?? 220
     })
     : undefined
   const nozzleReadouts = printerNozzles(status)
@@ -985,6 +1011,10 @@ function PrinterCardComponent({
             onRefresh={canControlPrinter ? () => sendCommand.mutate({ type: 'refresh' }) : undefined}
             onOpenDrying={canManagePrinter ? (unitId) => setAmsDryingUnitId(unitId) : undefined}
             onEditSlot={editAmsSlot}
+            onLoadSlot={loadAmsSlotFilament}
+            loadSlotDisabledReason={loadAmsSlotFilament ? (unit, slot) => getAmsLoadFilamentAvailability(status, unit.unitId, slot.slot).reason : undefined}
+            onUnloadSlot={unloadAmsSlotFilament}
+            unloadSlotDisabledReason={unloadAmsSlotFilament ? (unit, slot) => getAmsUnloadFilamentAvailability(status, unit.unitId, slot.slot).reason : undefined}
             onRescanSlot={rescanAmsSlot}
             rescanSlotDisabledReason={rescanAmsSlot ? (unit, slot) => getAmsRescanAvailability(status, unit.unitId, slot.slot).reason : undefined}
             onResetSlot={resetAmsSlot}

@@ -958,14 +958,6 @@ export function PrintModal({
             </>
           )}
 
-          {showObjectSelection && (
-            <PrintObjectsSection
-              objects={plateObjects}
-              deselectedIds={deselectedObjectIdSet}
-              onToggle={toggleObjectSelected}
-            />
-          )}
-
           <Typography level="title-sm">Printers</Typography>
           <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
             <Stack spacing={1}>
@@ -1160,6 +1152,14 @@ export function PrintModal({
               )}
             </Stack>
           </Sheet>
+
+          {showObjectSelection && (
+            <PrintObjectsSection
+              objects={plateObjects}
+              deselectedIds={deselectedObjectIdSet}
+              onToggle={toggleObjectSelected}
+            />
+          )}
 
           <Typography level="title-sm">Print settings</Typography>
           <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>

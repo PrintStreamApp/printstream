@@ -44,7 +44,7 @@ export type CatchAllRouteDecision = 'wait' | 'defer-to-plugin-handling' | 'redir
 /**
  * Decide what the router's catch-all (unmatched path) should do.
  *
- * Plugin routes (e.g. `/queue`) are only mounted once the plugin catalog resolves, which can't even start
+ * Plugin routes (e.g. `/orders`) are only mounted once the plugin catalog resolves, which can't even start
  * until auth bootstrap finishes. On a hard refresh of a plugin route, that determination is still in flight
  * at first paint, so the route isn't in the tree yet and the path falls through to the catch-all. Redirecting
  * home then would bounce the user off the very page they refreshed. So:

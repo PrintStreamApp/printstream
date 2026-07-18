@@ -1,15 +1,17 @@
 /**
  * Filament source rows for the printer card extracted from
  * `pages/PrintersView.tsx`: `AmsUnitRow` renders one AMS unit's slots (with
- * tooltips and a per-slot edit/rescan/reset context menu) and `ExternalSpoolRow`
- * renders an external spool. Both are presentational, driven by status data
- * and optional action callbacks.
+ * tooltips and a per-slot edit/load/unload/rescan/reset context menu) and
+ * `ExternalSpoolRow` renders an external spool. Both are presentational, driven
+ * by status data and optional action callbacks.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Box, CircularProgress, IconButton, Menu, MenuItem, Stack, Tooltip, Typography } from '@mui/joy'
 import EditRoundedIcon from '@mui/icons-material/EditRounded'
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
+import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
+import EjectRoundedIcon from '@mui/icons-material/EjectRounded'
 import LocalFireDepartmentRoundedIcon from '@mui/icons-material/LocalFireDepartmentRounded'
 import { type AmsSlot, type AmsUnit, type ExternalSpool } from '@printstream/shared'
 import { AmsSlotTooltipBody, ExternalSpoolTooltipBody } from './FilamentTooltipBodies'
@@ -39,6 +41,10 @@ export function AmsUnitRow({
   onRefresh,
   onOpenDrying,
   onEditSlot,
+  onLoadSlot,
+  loadSlotDisabledReason,
+  onUnloadSlot,
+  unloadSlotDisabledReason,
   onRescanSlot,
   rescanSlotDisabledReason,
   onResetSlot,
@@ -51,6 +57,10 @@ export function AmsUnitRow({
   onRefresh?: () => void
   onOpenDrying?: () => void
   onEditSlot?: (slot: AmsSlot) => void
+  onLoadSlot?: (slot: AmsSlot) => void
+  loadSlotDisabledReason?: (slot: AmsSlot) => string | null
+  onUnloadSlot?: (slot: AmsSlot) => void
+  unloadSlotDisabledReason?: (slot: AmsSlot) => string | null
   onRescanSlot?: (slot: AmsSlot) => void
   rescanSlotDisabledReason?: (slot: AmsSlot) => string | null
   onResetSlot?: (slot: AmsSlot) => void
@@ -130,7 +140,7 @@ export function AmsUnitRow({
   useControlledMenuClickAway(Boolean(contextMenu), `ams-slot-context-menu-${unit.unitId}`, closeContextMenu, [contextMenuAnchorRef])
 
   const openSlotContextMenu = (slot: AmsSlot, anchorEl: HTMLDivElement) => {
-    if (!onEditSlot && !onRescanSlot && !onResetSlot) return
+    if (!onEditSlot && !onLoadSlot && !onUnloadSlot && !onRescanSlot && !onResetSlot) return
     clearPendingTooltipOpen()
     suppressSlotTooltip(slot.slot, anchorEl)
     contextMenuAnchorRef.current = anchorEl
@@ -299,7 +309,7 @@ export function AmsUnitRow({
                   clearTooltipSuppression(slot.slot)
                 }}
                 onContextMenu={(event) => {
-                  if (!onEditSlot && !onRescanSlot && !onResetSlot) return
+                  if (!onEditSlot && !onLoadSlot && !onUnloadSlot && !onRescanSlot && !onResetSlot) return
                   event.preventDefault()
                   openSlotContextMenu(slot, event.currentTarget)
                 }}
@@ -472,6 +482,32 @@ export function AmsUnitRow({
             >
               <EditRoundedIcon /> Edit
             </MenuItem>
+          )}
+          {onLoadSlot && withDisabledActionReason(
+            <MenuItem
+              disabled={slotActionsDisabled || Boolean(loadSlotDisabledReason?.(contextMenu.slot))}
+              onClick={() => {
+                const slot = contextMenu.slot
+                closeContextMenu()
+                onLoadSlot(slot)
+              }}
+            >
+              <DownloadRoundedIcon /> Load filament
+            </MenuItem>,
+            slotActionsDisabled ? null : loadSlotDisabledReason?.(contextMenu.slot) ?? null
+          )}
+          {onUnloadSlot && withDisabledActionReason(
+            <MenuItem
+              disabled={slotActionsDisabled || Boolean(unloadSlotDisabledReason?.(contextMenu.slot))}
+              onClick={() => {
+                const slot = contextMenu.slot
+                closeContextMenu()
+                onUnloadSlot(slot)
+              }}
+            >
+              <EjectRoundedIcon /> Unload filament
+            </MenuItem>,
+            slotActionsDisabled ? null : unloadSlotDisabledReason?.(contextMenu.slot) ?? null
           )}
           {onRescanSlot && withDisabledActionReason(
             <MenuItem

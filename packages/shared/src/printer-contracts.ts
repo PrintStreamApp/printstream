@@ -1425,7 +1425,15 @@ export const threeMfPlateSchema = z.object({
   /** Slicer-estimated print time (seconds) from slice_info's `prediction`, when sliced. */
   prediction: z.number().nullable().optional(),
   /** Slicer-estimated total filament weight (grams) from slice_info's `weight`. */
-  weight: z.number().nullable().optional()
+  weight: z.number().nullable().optional(),
+  /**
+   * Layer-based filament changes baked in `custom_gcode_per_layer.xml` (by print height in
+   * mm) — the prepare-print dialog seeds its editable list from these. Absent on payloads
+   * from older servers.
+   */
+  filamentChanges: z.array(z.object({ z: z.number(), filamentId: z.number().int().positive() })).optional(),
+  /** Layer pauses baked in `custom_gcode_per_layer.xml`, by print height (mm). */
+  pauses: z.array(z.object({ z: z.number() })).optional()
 })
 export type ThreeMfPlate = z.infer<typeof threeMfPlateSchema>
 

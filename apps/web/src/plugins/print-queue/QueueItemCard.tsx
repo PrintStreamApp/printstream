@@ -1,7 +1,7 @@
 /**
  * One row in the print-queue backlog. Presentational: it renders the file/plate,
  * copies count-down, required-filament swatches, target, a live eligibility badge,
- * and the per-item actions. All state + handlers come from {@link QueueView}.
+ * and the per-item actions. All state + handlers come from {@link QueueSection}.
  */
 import { Box, Card, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy'
 import PlayArrowRounded from '@mui/icons-material/PlayArrowRounded'

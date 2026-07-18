@@ -33,6 +33,7 @@ import {
   type PrinterModel
 } from '@printstream/shared'
 import {
+  CUSTOM_GCODE_PER_LAYER_ENTRY,
   THREE_MF_INDEX_PARSER_VERSION,
   buildThreeMfIndex,
   collectNormalizedModels,
@@ -42,6 +43,8 @@ import {
   normalizePrinterModelName,
   nullableNumberArray,
   parseAttrs,
+  parseCustomGcodePauses,
+  parseCustomGcodeToolChanges,
   parseModelSettingsPlates,
   parseProjectFilaments,
   readModelSettingsMetadataInt,
@@ -54,7 +57,7 @@ import { env } from './env.js'
 import { readEntry } from './three-mf-internal.js'
 
 // Re-export the shared index parser surface that other api modules import from this reader.
-export { buildThreeMfIndex, buildDefaultPickFilePath, extractPlateType, normalizeColor, parseAttrs } from '@printstream/shared/three-mf'
+export { CUSTOM_GCODE_PER_LAYER_ENTRY, buildThreeMfIndex, buildDefaultPickFilePath, extractPlateType, normalizeColor, parseAttrs, parseCustomGcodePauses, parseCustomGcodeToolChanges } from '@printstream/shared/three-mf'
 
 // The parsed index types are the shared RPC-contract shapes; alias them under their historical names
 // so existing importers (and the scene code below) keep working unchanged.
@@ -339,7 +342,11 @@ export async function readPlateIndex(filePath: string, signal?: AbortSignal): Pr
   }
 
   const thumbnailPlateFiles = await readPlateThumbnailFiles(filePath, signal).catch(() => new Map<number, string>())
-  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles)
+  // Layer G-code sidecar (filament changes / pauses) — optional; most projects have none.
+  const customGcodeXml = await readEntry(filePath, CUSTOM_GCODE_PER_LAYER_ENTRY, signal)
+    .then((buffer) => buffer.toString('utf8'))
+    .catch(() => null)
+  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles, customGcodeXml)
   cache.set(filePath, { mtimeMs: info.mtimeMs, parserVersion: THREE_MF_PARSER_CACHE_VERSION, index })
   return index
 }
@@ -690,60 +697,6 @@ export function parseRootModelComponents(xml: string): Map<number, ThreeMfRootCo
     }
 
     if (components.length > 0) out.set(rootObjectId, components)
-  }
-  return out
-}
-
-/** Archive entry BambuStudio uses for layer-based custom gcode (filament changes etc.). */
-export const CUSTOM_GCODE_PER_LAYER_ENTRY = 'Metadata/custom_gcode_per_layer.xml'
-
-/**
- * Iterate one plate's `<layer .../>` attribute sets from `custom_gcode_per_layer.xml`,
- * in stored order. Shared by the ToolChange and PausePrint parsers below.
- */
-function* iterateCustomGcodePlateLayers(text: string | null, plateIndex: number): Generator<Record<string, string>> {
-  if (!text) return
-  for (const plateMatch of text.matchAll(/<plate>([\s\S]*?)<\/plate>/g)) {
-    const block = plateMatch[1] ?? ''
-    const id = Number.parseInt(parseAttrs(/<plate_info\b([^>]*)\/>/.exec(block)?.[1] ?? '').id ?? '', 10)
-    if (id !== plateIndex) continue
-    for (const layerMatch of block.matchAll(/<layer\b([^>]*)\/>/g)) {
-      yield parseAttrs(layerMatch[1] ?? '')
-    }
-  }
-}
-
-/**
- * Parse one plate's ToolChange entries (type="2") from `custom_gcode_per_layer.xml`:
- * `{ z, filamentId, color }` per change, ordered as stored. Other entry types are
- * intentionally skipped — pauses have their own parser below.
- */
-export function parseCustomGcodeToolChanges(
-  text: string | null,
-  plateIndex: number
-): Array<{ z: number; filamentId: number; color: string | null }> {
-  const out: Array<{ z: number; filamentId: number; color: string | null }> = []
-  for (const attrs of iterateCustomGcodePlateLayers(text, plateIndex)) {
-    if (attrs.type !== '2') continue
-    const z = Number.parseFloat(attrs.top_z ?? '')
-    const filamentId = Number.parseInt(attrs.extruder ?? '', 10)
-    if (!Number.isFinite(z) || !Number.isInteger(filamentId) || filamentId <= 0) continue
-    out.push({ z, filamentId, color: attrs.color?.trim() || null })
-  }
-  return out
-}
-
-/**
- * Parse one plate's PausePrint entries (type="1") from `custom_gcode_per_layer.xml`:
- * `{ z }` per pause (the paused layer's top_z), ordered as stored.
- */
-export function parseCustomGcodePauses(text: string | null, plateIndex: number): Array<{ z: number }> {
-  const out: Array<{ z: number }> = []
-  for (const attrs of iterateCustomGcodePlateLayers(text, plateIndex)) {
-    if (attrs.type !== '1') continue
-    const z = Number.parseFloat(attrs.top_z ?? '')
-    if (!Number.isFinite(z) || z <= 0) continue
-    out.push({ z })
   }
   return out
 }

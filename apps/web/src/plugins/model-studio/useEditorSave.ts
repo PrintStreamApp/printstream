@@ -123,7 +123,13 @@ export function useEditorSave({
           body: payload
         })
         await invalidateLibraryQueries(queryClient)
-        if (asProject) markSaved()
+        if (asProject) {
+          markSaved()
+          // The saved 3MF bakes the session's material add/removes as its filament list;
+          // tell the controller so it rebases its overlay once the refetched index lands
+          // (otherwise an added material renders twice until the editor is reopened).
+          sliceConfigRef.current?.onProjectSaved()
+        }
         toast.success(successMessage)
         if (asProject) onSaved?.(file)
         // Keep the editor open after saving so the user can keep arranging/printing.

@@ -178,7 +178,30 @@ async function ensureFilamentCoverage(
   return fallback ? [...args, '--load-filaments', fallback] : args
 }
 
-/** Run the CLI with the given profile args + `--export-settings` and return the exported JSON, or null. */
+interface ExportMergedProjectSettingsResult {
+  settings: string | null
+  /** Non-zero (or null on spawn/signal death) CLI exit when the export failed; 0 on success. */
+  exitCode: number | null
+  /**
+   * Most specific reason the CLI gave for a failed export — the last `[error]` log line's text
+   * (BambuStudio reports these on STDOUT, e.g. "process not compatible with printer"), falling
+   * back to the last non-empty output line. Null on success or when nothing was captured.
+   */
+  failureDetail: string | null
+}
+
+/** Extract the most actionable line from a failed export's combined CLI output. */
+function extractCliFailureDetail(output: string): string | null {
+  const lines = output.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] as string
+    const errorMatch = /\[error\]\s+(?:\S+\s+\d+:\s*)?(.+)$/.exec(line)
+    if (errorMatch?.[1]) return errorMatch[1].trim()
+  }
+  return lines.at(-1) ?? null
+}
+
+/** Run the CLI with the given profile args + `--export-settings` and return the exported JSON, or a failure. */
 async function exportMergedProjectSettings(input: {
   cliPath: string
   appDir: string | null
@@ -186,19 +209,24 @@ async function exportMergedProjectSettings(input: {
   workDir: string
   env: NodeJS.ProcessEnv
   signal?: AbortSignal
-}): Promise<string | null> {
+}): Promise<ExportMergedProjectSettingsResult> {
   // `--export-settings` writes the fully merged `--load-settings`/`--load-filaments` config; it
   // needs no input model and does not slice, so it is fast. Absolute output path (no `--outputdir`).
   const settingsPath = path.join(input.workDir, `project-settings-${randomUUID()}.config`)
   const args = [...input.profileArgs, '--export-settings', settingsPath]
+  let combinedOutput = ''
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     const child = spawn(input.cliPath, args, {
-      stdio: ['ignore', 'ignore', 'pipe'],
+      // BambuStudio logs its errors (boost log `[error]` lines) to STDOUT, so both streams must
+      // be captured — with stdout ignored, a compatibility failure here is undiagnosable.
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...input.env, SLICER_APPDIR: input.appDir ?? input.env.SLICER_APPDIR }
     })
-    let stderr = ''
+    const capture = (chunk: string) => { combinedOutput = (combinedOutput + chunk).slice(-4000) }
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', capture)
     child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-2000) })
+    child.stderr.on('data', capture)
     const onAbort = () => { try { child.kill('SIGKILL') } catch { /* already gone */ } }
     input.signal?.addEventListener('abort', onAbort, { once: true })
     child.on('error', (error) => { input.signal?.removeEventListener('abort', onAbort); reject(error) })
@@ -206,11 +234,13 @@ async function exportMergedProjectSettings(input: {
   })
   if (exitCode !== 0) {
     await rm(settingsPath, { force: true }).catch(() => undefined)
-    return null
+    return { settings: null, exitCode, failureDetail: extractCliFailureDetail(combinedOutput) }
   }
   const content = await readFile(settingsPath, 'utf8').catch(() => null)
   await rm(settingsPath, { force: true }).catch(() => undefined)
-  return content && content.trim().length > 0 ? content : null
+  return content && content.trim().length > 0
+    ? { settings: content, exitCode: 0, failureDetail: null }
+    : { settings: null, exitCode: 0, failureDetail: 'export produced no settings output' }
 }
 
 /** Copy every entry of `inputPath` into `outputPath`, adding (or replacing) `project_settings.config`. */
@@ -258,8 +288,15 @@ export async function copyThreeMfWithProjectSettings(inputPath: string, outputPa
  * settings the 3MF DID embed (so the project's `curr_bed_type`, filament colours, and retargeted
  * machine identity win over the export's values), and return the path to a rewritten 3MF that
  * embeds the merge. Returns `inputPath` unchanged when it already embeds a complete config, or
- * when synthesis fails (best-effort — the slice then proceeds and surfaces its own error rather
- * than this masking it).
+ * when there is nothing to synthesize from (no load args and no resolvable preset names).
+ *
+ * Failure semantics: when the settings export RUNS and fails, this THROWS with the CLI's exit
+ * code and reason instead of letting the slice proceed — a partial/absent config reaching the
+ * BBL-project loader is a deterministic segfault, so "slicing as-is" could only ever trade a
+ * clear error (e.g. "process not compatible with printer") for an opaque exit 139. The thrown
+ * message keeps the `Slicer CLI exited with code N` shape the API's compatibility/crash retry
+ * classifiers key on (`isLikelyBuiltinProfileCompatibilityExit` / `isTransientSlicerCrashExit`
+ * in the API's slicing-jobs), so recoverable failures still auto-retry.
  */
 export async function ensureEmbeddedProjectSettings(input: {
   inputPath: string
@@ -304,7 +341,7 @@ export async function ensureEmbeddedProjectSettings(input: {
   input.log(embedded === null
     ? 'Synthesizing project settings for scaffold 3MF (no embedded project_settings.config)'
     : 'Completing partial embedded project settings for scaffold 3MF')
-  const projectSettings = await exportMergedProjectSettings({
+  const exported = await exportMergedProjectSettings({
     cliPath: input.cliPath,
     appDir: input.appDir,
     profileArgs: exportArgs,
@@ -312,9 +349,20 @@ export async function ensureEmbeddedProjectSettings(input: {
     env: input.env,
     signal: input.signal
   })
+  const projectSettings = exported.settings
   if (!projectSettings) {
-    input.log('Could not export merged project settings; slicing the scaffold 3MF as-is')
-    return input.inputPath
+    // Slicing on anyway is never viable from here: this path only runs when the embedded config
+    // is absent or partial, and the BBL-project loader deterministically segfaults on both (an
+    // opaque exit 139 that used to burn a crash-retry too). Fail with the CLI's own reason
+    // instead. The message deliberately keeps the `Slicer CLI exited with code N` shape: the
+    // API's slicing queue recognizes exit 239 (CLI_PROCESS_NOT_COMPATIBLE — e.g. a stale dialog
+    // pairing an X1C process with an H2D machine) and retries without the incompatible built-in
+    // profiles, so the slice recovers onto the project's own presets instead of failing.
+    const detail = exported.failureDetail ? ` (${exported.failureDetail})` : ''
+    input.log(`Could not export merged project settings${detail}`)
+    throw new Error(exported.exitCode === 0
+      ? `Slicer settings export produced no output while merging project settings for slicing${detail}`
+      : `Slicer CLI exited with code ${exported.exitCode ?? 'unknown'} while merging project settings for slicing${detail}`)
   }
   let embeddableSettings = projectSettings
   if (embedded !== null) {

@@ -36,7 +36,6 @@ import {
   Stack,
   Tab,
   TabList,
-  TabPanel,
   Tabs,
   Tooltip,
   Typography
@@ -199,14 +198,13 @@ import {
   isImportableLibraryFile,
   KeyboardHelpButton,
   ModelList,
-  PlateFilamentChangesSection,
-  PlatePausesSection,
   PlateThumbnailStrip,
   SaveSplitButton,
   SliceSplitButton,
   TOOL_PANEL_TOP,
   TransformPanel
 } from './editorPanels'
+import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from '../../components/library/PlateGcodeSections'
 import { BrimEarsPanel } from './BrimEarsPanel'
 import { CutToolPanel } from './CutToolPanel'
 import { EditorContextMenu } from './EditorContextMenu'
@@ -288,19 +286,9 @@ interface EditorViewProps {
   onSavedAs?: (file: { id: string; name: string }) => void
   onClose: () => void
   /**
-   * Per-object override access (only present when launched from the slice dialog).
-   * The editor's Objects tab shows a "Per-object settings" button that opens the
-   * host's dialog, which stacks above the editor. The global process/preset and
-   * all other slice settings live in the shared `sliceConfig` panel.
-   */
-  objectOverrideCount?: number
-  hasPlateObjects?: boolean
-  canEditSettings?: boolean
-  onEditObjectSettings?: () => void
-  /**
    * Full slice-settings controller (printer/process/filament/plate-type/nozzle)
    * shared with the slim slicing dialog. When present, the editor renders the
-   * shared `SliceSettingsPanel` in its "Settings" tab and can slice/print directly.
+   * shared `SliceSettingsPanel` in its sidebar and can slice/print directly.
    */
   sliceConfig?: SliceSettingsController
   /** Whether the slice's printer/process/filament settings are complete. */
@@ -609,10 +597,6 @@ function EditorView({
     () => (editingObject && perObject ? perObject.value[String(editingObject.ids[0])] ?? EMPTY_OBJECT_OVERRIDES : EMPTY_OBJECT_OVERRIDES),
     [editingObject, perObject]
   )
-  // Sidebar view: the shared slice settings vs. the model/per-object list (Bambu-style).
-  // Only meaningful when launched with slice settings (sliceConfig present); Settings
-  // is the default since configuring the slice is the primary task.
-  const [sidebarTab, setSidebarTab] = useState<'objects' | 'settings'>('settings')
   const { sidebarWidth, resizeHandleProps } = useSidebarResize()
   const isMobile = useMobileViewport()
   // On phones the 3D view and settings can't sit side by side, so the user toggles
@@ -4216,7 +4200,11 @@ function EditorView({
                 )}
               </Sheet>
             )
-            const objectsContent = (
+            // `fill` stretches the object list to the container's height with its own scrollbar
+            // (the mobile bottom-sheet and the no-slice-config sidebar, both fixed-height); the
+            // merged settings sidebar passes false so the list takes its natural height and the
+            // whole panel scrolls as one column.
+            const renderObjectsContent = (options: { fill: boolean }) => (
               <>
                 {/* On mobile this header sits in the bottom-sheet next to the drawer's
                     close (X); reserve room on the right so the Add button clears it. */}
@@ -4244,7 +4232,7 @@ function EditorView({
                     onScale={applyManualScale}
                   />
                 )}
-                <Sheet variant="outlined" sx={{ flex: 1, minHeight: 120, borderRadius: 'sm', overflow: 'auto' }}>
+                <Sheet variant="outlined" sx={{ ...(options.fill ? { flex: 1 } : {}), minHeight: 120, borderRadius: 'sm', overflow: 'auto' }}>
                   {activePlate.instances.length === 0 ? (
                     <Box sx={{ p: 1.5 }}>
                       <Typography level="body-sm" textColor="text.tertiary">
@@ -4296,12 +4284,11 @@ function EditorView({
                 </Sheet>
               </>
             )
-            // Per-plate layer G-code sections (filament changes + pauses), compact and
-            // side by side (wrapping when narrow). They live on the SETTINGS tab right
-            // after Materials — they configure the print like the rest of that tab, and
-            // under the object list they squeezed it out of its vertical space.
+            // Per-plate layer G-code sections (filament changes + pauses), each on its
+            // own full-width row. They render after the object list, closing out the
+            // sidebar's materials → objects → per-plate G-code column.
             const plateGcodeSections = activePlate ? (
-              <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <Stack spacing={1.5} sx={{ alignItems: 'stretch' }}>
                 {filamentOptions.length > 1 && (
                   <PlateFilamentChangesSection
                     changes={effectiveFilamentChanges(activePlate)}
@@ -4316,7 +4303,7 @@ function EditorView({
               </Stack>
             ) : null
             const settingsPanel = sliceConfigForPanel
-              ? <SliceSettingsPanel controller={sliceConfigForPanel} mode="editor" activePlateIndex={activePlateIndex} afterMaterials={plateGcodeSections} />
+              ? <SliceSettingsPanel controller={sliceConfigForPanel} mode="editor" activePlateIndex={activePlateIndex} />
               : null
 
             if (isMobile) {
@@ -4363,9 +4350,8 @@ function EditorView({
                   >
                     <ModalClose />
                     <Box sx={{ p: 1.5, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      {objectsContent}
-                      {/* Without slice settings there is no Settings tab to host these. */}
-                      {!sliceConfig && plateGcodeSections}
+                      {renderObjectsContent({ fill: true })}
+                      {plateGcodeSections}
                     </Box>
                   </Drawer>
                 </>
@@ -4412,34 +4398,23 @@ function EditorView({
                     }}
                   />
                   {sliceConfig ? (
+                    // One scrolling column (no Settings/Objects tab split): slicer/printer/
+                    // process/materials, then the object list directly below the materials,
+                    // then the per-plate filament-change/pause rows. The object list takes
+                    // its natural height here — the column scrolls as a whole.
                     <Sheet
                       variant="outlined"
-                      sx={{ flex: 1, minHeight: 0, borderRadius: 'sm', overflow: 'hidden', display: 'flex', flexDirection: 'column', bgcolor: 'background.level1' }}
+                      sx={{ flex: 1, minHeight: 0, borderRadius: 'sm', overflow: 'auto', bgcolor: 'background.level1' }}
                     >
-                      <Tabs
-                        value={sidebarTab}
-                        onChange={(_event, value) => setSidebarTab(value === 'settings' ? 'settings' : 'objects')}
-                        sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: 'transparent' }}
-                      >
-                        <TabList
-                          disableUnderline
-                          sx={{ flexShrink: 0, borderBottom: '1px solid', borderColor: 'divider', borderRadius: 0, bgcolor: 'background.surface' }}
-                        >
-                          <Tab value="settings" sx={{ flex: 1 }}>Settings</Tab>
-                          <Tab value="objects" sx={{ flex: 1 }}>Objects</Tab>
-                        </TabList>
-                        <TabPanel value="settings" keepMounted sx={{ p: 1.25, flex: 1, minHeight: 0, overflow: 'auto' }}>
-                          <Stack spacing={1.25}>{settingsPanel}</Stack>
-                        </TabPanel>
-                        <TabPanel value="objects" keepMounted sx={{ p: 1.25, flex: 1, minHeight: 0, gap: 1, flexDirection: 'column', '&:not([hidden])': { display: 'flex' } }}>
-                          {objectsContent}
-                        </TabPanel>
-                      </Tabs>
+                      <Stack spacing={1.25} sx={{ p: 1.25 }}>
+                        {settingsPanel}
+                        {renderObjectsContent({ fill: false })}
+                        {plateGcodeSections}
+                      </Stack>
                     </Sheet>
                   ) : (
                     <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1, overflow: 'auto' }}>
-                      {objectsContent}
-                      {/* Without slice settings there is no Settings tab to host these. */}
+                      {renderObjectsContent({ fill: true })}
                       {plateGcodeSections}
                     </Box>
                   )}
@@ -4792,8 +4767,9 @@ function EditorView({
   )
 }
 
-/** Small swatch showing a part/object's filament number, tinted with its colour. */
-export type FilamentOption = { id: number; color: string | null; label: string | null; colorName: string | null }
+// The filament-option shape moved to the core PlateGcodeSections module (the prepare-print
+// dialog shares it); re-exported here so the plugin's many type-importers keep one path.
+export type { FilamentOption } from '../../components/library/PlateGcodeSections'
 
 /**
  * Re-render the editor ONLY when its own data changes — never on a parent re-render driven by live
@@ -4804,15 +4780,14 @@ export type FilamentOption = { id: number; color: string | null; label: string |
  * printer status; the only host-driven thing that legitimately changes is the loaded-materials list,
  * which lives in `sliceConfig` and is caught by the content compare below.
  *
- * Callback identity (onApply/onClose/onSlice/onEditObjectSettings/onSaved) is intentionally ignored:
+ * Callback identity (onApply/onClose/onSlice/onSaved) is intentionally ignored:
  * they're rebuilt every parent render, but the editor invokes them only on real user interactions,
  * which always follow a data change (so a fresh closure has already been delivered). Internal editor
  * state changes still re-render normally — React.memo only gates parent-prop-driven re-renders.
  */
 const EDITOR_DATA_PROP_KEYS = [
   'baseFileId', 'isNewProject', 'baseVersionId', 'currentEdit', 'initialPlateIndex', 'targetPrinterModel',
-  'folderId', 'bridgeId', 'canSlice', 'sliceDisabledReason', 'slicing', 'objectOverrideCount',
-  'hasPlateObjects', 'canEditSettings'
+  'folderId', 'bridgeId', 'canSlice', 'sliceDisabledReason', 'slicing'
 ] as const
 function editorViewPropsEqual(prev: EditorViewProps, next: EditorViewProps): boolean {
   for (const key of EDITOR_DATA_PROP_KEYS) {

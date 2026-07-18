@@ -2135,7 +2135,9 @@ async function sendLibraryFilePlates(
         filaments: plate.filaments,
         objects: plate.objects,
         prediction: plate.prediction ?? null,
-        weight: plate.weight ?? null
+        weight: plate.weight ?? null,
+        filamentChanges: plate.filamentChanges,
+        pauses: plate.pauses
       })),
       projectFilaments: index.projectFilaments,
       compatiblePrinterModels: index.compatiblePrinterModels,
