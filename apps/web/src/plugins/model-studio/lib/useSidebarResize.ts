@@ -1,16 +1,20 @@
 /**
- * Desktop drag-resize for the editor's right sidebar (the Settings/Objects panel column).
+ * Desktop drag-resize for the editor's sidebar (the Settings/Objects panel column).
  *
  * Owns the persisted width (a per-device localStorage display pref, repo convention) and the
- * pointer wiring for the grab strip on the panel's left edge: pointer capture keeps move events on
- * the handle for the whole drag, the new width is the panel's fixed right edge minus the pointer x,
- * clamped so neither the panel nor the 3D viewport can collapse. Double-click resets to the
- * default. The mobile (xs) layout uses a drawer and never renders the handle, so this is
- * desktop-only by construction.
+ * pointer wiring for the grab strip on the panel's inner edge: pointer capture keeps move events on
+ * the handle for the whole drag, and the new width is measured from whichever panel edge the grid
+ * holds still — the OUTER one, since the flexible viewport column takes the rest. That edge flips
+ * with the sidebar's side, so the caller passes it in; getting it wrong makes the drag run
+ * backwards. Widths are clamped so neither the panel nor the 3D viewport can collapse.
+ * Double-click resets to the default. The mobile (xs) layout stacks and never renders the handle,
+ * so this is desktop-only by construction.
  */
 import { useCallback } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useLocalStorageState } from '../../../hooks/useLocalStorageState'
+// Type-only: the settings dialog owns the viewport-preference contract (core), this consumes it.
+import type { EditorSidebarSide } from '../../../components/library/EditorSettingsDialog'
 
 export const EDITOR_SIDEBAR_DEFAULT_WIDTH = 388
 export const EDITOR_SIDEBAR_MIN_WIDTH = 300
@@ -30,7 +34,7 @@ export interface SidebarResizeHandleProps {
   onDoubleClick: () => void
 }
 
-export function useSidebarResize(): { sidebarWidth: number; resizeHandleProps: SidebarResizeHandleProps } {
+export function useSidebarResize(side: EditorSidebarSide = 'right'): { sidebarWidth: number; resizeHandleProps: SidebarResizeHandleProps } {
   const [sidebarWidth, setSidebarWidth] = useLocalStorageState<number>(
     'editor.sidebarWidth',
     EDITOR_SIDEBAR_DEFAULT_WIDTH,
@@ -42,12 +46,16 @@ export function useSidebarResize(): { sidebarWidth: number; resizeHandleProps: S
     if (event.button !== 0) return
     event.preventDefault()
     const handle = event.currentTarget
-    // The handle lives inside the panel column, whose RIGHT edge stays fixed while dragging (the
-    // grid's flexible column is on the left), so width = right edge - pointer x.
-    const rightEdge = handle.parentElement?.getBoundingClientRect().right
-    if (rightEdge === undefined) return
+    // The handle lives inside the panel column. The panel's OUTER edge is the one the grid holds
+    // still while dragging (the flexible viewport column absorbs the change), so the width is
+    // always measured from it — which edge that is depends on the side.
+    const panelBounds = handle.parentElement?.getBoundingClientRect()
+    if (!panelBounds) return
+    const fixedEdge = side === 'left' ? panelBounds.left : panelBounds.right
     handle.setPointerCapture(event.pointerId)
-    const onMove = (moveEvent: PointerEvent) => setSidebarWidth(clampSidebarWidth(rightEdge - moveEvent.clientX))
+    const onMove = (moveEvent: PointerEvent) => setSidebarWidth(clampSidebarWidth(
+      side === 'left' ? moveEvent.clientX - fixedEdge : fixedEdge - moveEvent.clientX
+    ))
     const stop = () => {
       handle.removeEventListener('pointermove', onMove)
       handle.removeEventListener('pointerup', stop)
@@ -56,7 +64,7 @@ export function useSidebarResize(): { sidebarWidth: number; resizeHandleProps: S
     handle.addEventListener('pointermove', onMove)
     handle.addEventListener('pointerup', stop)
     handle.addEventListener('pointercancel', stop)
-  }, [setSidebarWidth])
+  }, [side, setSidebarWidth])
 
   const onDoubleClick = useCallback(() => setSidebarWidth(EDITOR_SIDEBAR_DEFAULT_WIDTH), [setSidebarWidth])
 

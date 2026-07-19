@@ -68,13 +68,56 @@ import TouchAppRoundedIcon from '@mui/icons-material/TouchAppRounded'
 import type { LibraryFile, SceneEditAddedPartSubtype, SceneEditPartSubtype } from '@printstream/shared'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
+import { SettingsTuneButton } from '../../components/SettingsTuneButton'
 import { ADDED_PART_SPECS, PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform } from './editorGeometry'
+import { summarizeInstanceMaterial } from './lib/editorModel'
 import type { EditorAddedPart, EditorInstance, EditorPlate } from './lib/editorModel'
 import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
 import type { FilamentOption } from './EditorView'
 
-/** Top offset for the floating tool panels (cut / measure / paint / brim ears) — clears the toolbar. */
-export const TOOL_PANEL_TOP = { xs: 52, sm: 56 } as const
+/**
+ * Hover rule for the tool rail: opens every button's collapsed label together, so the rail
+ * behaves like an editor activity bar (hover anywhere → it widens) instead of one button
+ * twitching wider at a time. Applied to the rail's container, which owns the hover state.
+ */
+export const RAIL_HOVER_LABEL_SX = {
+  // `:has(:focus-visible)` rather than `:focus-within`: clicking a tool leaves that button
+  // focused, and `:focus-within` then pinned the rail open long after the pointer had left.
+  // This keeps the keyboard path (tabbing along the rail still opens the labels) without the
+  // stuck-open mouse behaviour.
+  '&:hover [data-tool-label], &:has(:focus-visible) [data-tool-label]': {
+    maxWidth: '10rem',
+    opacity: 1,
+    marginInlineStart: '0.5rem'
+  }
+} as const
+
+/** Shared height for the axis-group headers so Scale's lock button cannot misalign the row. */
+const AXIS_HEADER_HEIGHT = 24
+
+/** Floor for one axis field: fits a signed two-decimal value plus its axis letter. */
+const AXIS_FIELD_MIN_WIDTH = 74
+
+/**
+ * Panel width at which the transform readout's three axis groups fit on one row: three
+ * groups of three {@link AXIS_FIELD_MIN_WIDTH} fields, plus the gaps between fields, groups,
+ * and the panel's own padding. Below it the groups stack instead of squeezing the values.
+ */
+export const TRANSFORM_ROW_MIN_WIDTH = 720
+
+/** Width of the vertical tool rail (sm+): icon buttons plus the button group's own border. */
+export const TOOL_RAIL_WIDTH = 40
+
+/**
+ * Anchor for the floating tool panels (cut / measure / paint / brim ears / added part) so they
+ * always clear the tools, whichever way the tools are laid out: on phones the tools stay a
+ * horizontal strip across the top, so the panels sit BELOW it; from `sm` up the tools live in the
+ * vertical left rail (photo-editor style), so the panels sit BESIDE it and reclaim the top edge.
+ */
+export const TOOL_PANEL_ANCHOR = {
+  top: { xs: 52, sm: 8 },
+  left: { xs: 8, sm: TOOL_RAIL_WIDTH + 12 }
+} as const
 
 /**
  * Plate selector strip: a live thumbnail per plate (rendered offscreen from the
@@ -305,17 +348,65 @@ interface ToolbarEntry {
  * attributes land on this component, so they must be forwarded to the real
  * button (still a direct DOM child: Tooltip renders no wrapper element).
  */
-function ToolbarButton({ entry, isMobile, ...groupAttrs }: {
+function ToolbarButton({ entry, layout, ...groupAttrs }: {
   entry: ToolbarEntry
-  isMobile: boolean
+  /**
+   * `stacked` — icon above a caption (the desktop top strip).
+   * `icon` — icon only (phones, where captions never fit).
+   * `rail` — icon plus a label that stays collapsed until the rail is hovered; the rail
+   *   container owns that hover rule (see RAIL_HOVER_LABEL_SX), so hovering anywhere on the
+   *   rail expands every button together rather than one at a time.
+   */
+  layout: 'stacked' | 'icon' | 'rail'
   'data-first-child'?: string
   'data-last-child'?: string
 }) {
   const variant = entry.active ? ('solid' as const) : ('soft' as const)
   const color = entry.active ? ('primary' as const) : ('neutral' as const)
+  const railLabel = entry.short ?? entry.label
+  // In the rail the label is already on screen while hovering, so a tooltip repeating it is
+  // just noise — keep one only where the full label says more than the short caption.
+  const tooltipTitle = layout === 'rail' && railLabel === entry.label ? '' : entry.label
   return (
-    <Tooltip title={entry.label}>
-      {isMobile ? (
+    <Tooltip title={tooltipTitle} placement={layout === 'rail' ? 'right' : 'bottom'}>
+      {layout === 'rail' ? (
+        <Button
+          {...groupAttrs}
+          variant={variant}
+          color={color}
+          disabled={entry.disabled}
+          onClick={entry.onClick}
+          aria-label={entry.label}
+          sx={{
+            justifyContent: 'flex-start',
+            gap: 0,
+            px: 0.75,
+            py: 0.5,
+            minWidth: 0,
+            '--Icon-fontSize': '1.125rem'
+          }}
+        >
+          {entry.icon}
+          <Box
+            component="span"
+            data-tool-label
+            sx={{
+              // Collapsed by default; the rail's :hover rule opens it. Animating max-width
+              // (not width) keeps the label's natural size while still being transitionable.
+              maxWidth: 0,
+              opacity: 0,
+              overflow: 'hidden',
+              whiteSpace: 'nowrap',
+              fontSize: '0.75rem',
+              lineHeight: 1.2,
+              transition: 'max-width 160ms ease, opacity 120ms ease, margin-inline-start 160ms ease',
+              '@media (prefers-reduced-motion: reduce)': { transition: 'none' }
+            }}
+          >
+            {railLabel}
+          </Box>
+        </Button>
+      ) : layout === 'icon' ? (
         <IconButton {...groupAttrs} variant={variant} color={color} disabled={entry.disabled} onClick={entry.onClick} aria-label={entry.label}>
           {entry.icon}
         </IconButton>
@@ -354,7 +445,8 @@ export function GizmoToolbar({
   onChange,
   onDropToBed,
   onAutoOrient,
-  onArrangeAll
+  onArrangeAll,
+  orientation = 'horizontal'
 }: {
   mode: GizmoMode
   disabled: boolean
@@ -366,8 +458,15 @@ export function GizmoToolbar({
   onDropToBed: () => void
   onAutoOrient: () => void
   onArrangeAll: () => void
+  /**
+   * `vertical` is the photo-editor left rail (sm+): icon-only buttons stacked down the
+   * viewport's left edge. `horizontal` is the phone layout — a wrapping strip across the top.
+   */
+  orientation?: 'horizontal' | 'vertical'
 }) {
   const isMobile = useMobileViewport()
+  // Captions would make the rail far too wide, so the vertical form is icon-only like phones.
+  const layout = orientation === 'vertical' ? ('rail' as const) : isMobile ? ('icon' as const) : ('stacked' as const)
   // Selection tools: everything here needs a selected object — the modal editing
   // tools (the active one highlights) plus the one-shot Drop/Orient actions.
   const tools: ToolbarEntry[] = [
@@ -415,18 +514,21 @@ export function GizmoToolbar({
     [`&& .${buttonClasses.root}:disabled, && .${iconButtonClasses.root}:disabled`]: {
       '--ButtonGroup-separatorColor': 'var(--joy-palette-neutral-outlinedBorder)'
     },
-    ...(isMobile ? { '--IconButton-size': '30px' } : null)
+    ...(layout === 'icon' ? { '--IconButton-size': '30px' } : null)
   }
-  return (
+  const groups = (
     <>
-      <ButtonGroup size="sm" variant="soft" sx={groupSx}>
-        {tools.map((entry) => <ToolbarButton key={entry.key} entry={entry} isMobile={isMobile} />)}
+      <ButtonGroup size="sm" variant="soft" orientation={orientation} sx={groupSx}>
+        {tools.map((entry) => <ToolbarButton key={entry.key} entry={entry} layout={layout} />)}
       </ButtonGroup>
-      <ButtonGroup size="sm" variant="soft" sx={groupSx}>
-        {utilities.map((entry) => <ToolbarButton key={entry.key} entry={entry} isMobile={isMobile} />)}
+      <ButtonGroup size="sm" variant="soft" orientation={orientation} sx={groupSx}>
+        {utilities.map((entry) => <ToolbarButton key={entry.key} entry={entry} layout={layout} />)}
       </ButtonGroup>
     </>
   )
+  // Vertical: own the column layout so the two groups stack with a gap. Horizontal: stay
+  // wrapper-free so the caller's flex-wrap strip can break the groups onto separate rows.
+  return orientation === 'vertical' ? <Stack spacing={1}>{groups}</Stack> : groups
 }
 
 /** A small "?" affordance documenting the editor keyboard shortcuts. */
@@ -506,7 +608,8 @@ export function TransformPanel({
   onToggleUniformScale,
   onPosition,
   onRotation,
-  onScale
+  onScale,
+  floating = false
 }: {
   transform: SelectedTransform
   /**
@@ -520,48 +623,105 @@ export function TransformPanel({
   onPosition: (axis: 'x' | 'y' | 'z', value: number) => void
   onRotation: (axis: 'x' | 'y' | 'z', value: number) => void
   onScale: (axis: 'x' | 'y' | 'z', value: number) => void
+  /**
+   * Floating over the viewport (the sm+ placement, top-centre) rather than docked in the
+   * sidebar: an elevated soft card with a shadow so it reads over the 3D scene, and tighter
+   * gaps so it stays compact.
+   */
+  floating?: boolean
 }) {
   return (
-    <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Sheet
+      variant={floating ? 'soft' : 'outlined'}
+      sx={{
+        p: floating ? 0.75 : 1,
+        borderRadius: 'sm',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: floating ? 0.5 : 1,
+        // Establish the query container the axis grid above measures itself against.
+        containerType: 'inline-size',
+        ...(floating ? { boxShadow: 'md' } : {})
+      }}
+    >
       {heading && <Typography level="body-xs" sx={{ fontWeight: 600 }}>{heading}</Typography>}
-      <AxisRow label="Position (mm)" values={transform.position} step={1} onChange={onPosition} />
-      <AxisRow label="Rotation (°)" values={transform.rotationDeg} step={1} onChange={onRotation} />
-      <Stack spacing={0.5}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Typography level="body-xs" textColor="text.tertiary">Scale (%)</Typography>
-          <Tooltip title={uniformScale ? 'Uniform scale (locked)' : 'Independent axes'}>
-            <IconButton
-              size="sm"
-              variant={uniformScale ? 'solid' : 'outlined'}
-              color={uniformScale ? 'primary' : 'neutral'}
-              onClick={() => onToggleUniformScale(!uniformScale)}
-              aria-label="Toggle uniform scale"
-              aria-pressed={uniformScale}
-            >
-              {uniformScale ? <LockRoundedIcon fontSize="small" /> : <LockOpenRoundedIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-        </Stack>
-        <AxisInputs values={transform.scalePct} step={1} onChange={onScale} />
-      </Stack>
+      {/*
+        Position / Rotation / Scale sit side by side on ONE row when the panel is wide enough
+        for all three, and stack into three rows when it is not. A container query (keyed to
+        this panel's own inline size, not the viewport) is what makes it all-or-nothing —
+        plain flex-wrap would leave a ragged 2-then-1 at in-between widths.
+      */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: floating ? 0.75 : 1,
+          gridTemplateColumns: 'minmax(0, 1fr)',
+          [`@container (min-width: ${TRANSFORM_ROW_MIN_WIDTH}px)`]: {
+            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))'
+          }
+        }}
+      >
+        <AxisGroup label="Position (mm)" values={transform.position} step={1} onChange={onPosition} />
+        <AxisGroup label="Rotation (°)" values={transform.rotationDeg} step={1} onChange={onRotation} />
+        <AxisGroup
+          label="Scale (%)"
+          values={transform.scalePct}
+          step={1}
+          onChange={onScale}
+          action={
+            <Tooltip title={uniformScale ? 'Uniform scale (locked)' : 'Independent axes'}>
+              <IconButton
+                size="sm"
+                variant={uniformScale ? 'solid' : 'outlined'}
+                color={uniformScale ? 'primary' : 'neutral'}
+                onClick={() => onToggleUniformScale(!uniformScale)}
+                aria-label="Toggle uniform scale"
+                aria-pressed={uniformScale}
+                sx={{ flexShrink: 0, '--IconButton-size': `${AXIS_HEADER_HEIGHT}px` }}
+              >
+                {uniformScale ? <LockRoundedIcon fontSize="small" /> : <LockOpenRoundedIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+          }
+        />
+      </Box>
     </Sheet>
   )
 }
 
-function AxisRow({
+/**
+ * One labelled axis group (Position / Rotation / Scale).
+ *
+ * The header is a fixed-height row so every group's inputs sit on the same baseline —
+ * Scale carries the uniform-lock button, and without a pinned height that one button made
+ * its header taller and pushed the Scale fields out of line with the other two.
+ */
+function AxisGroup({
   label,
+  action,
   values,
   step,
   onChange
 }: {
   label: string
+  /** Optional header control (Scale's uniform-lock toggle); must fit AXIS_HEADER_HEIGHT. */
+  action?: React.ReactNode
   values: { x: number; y: number; z: number }
   step: number
   onChange: (axis: 'x' | 'y' | 'z', value: number) => void
 }) {
   return (
-    <Stack spacing={0.5}>
-      <Typography level="body-xs" textColor="text.tertiary">{label}</Typography>
+    <Stack spacing={0.5} sx={{ minWidth: 0 }}>
+      <Stack
+        direction="row"
+        justifyContent="space-between"
+        alignItems="center"
+        spacing={0.5}
+        sx={{ minHeight: AXIS_HEADER_HEIGHT }}
+      >
+        <Typography level="body-xs" textColor="text.tertiary" noWrap>{label}</Typography>
+        {action}
+      </Stack>
       <AxisInputs values={values} step={step} onChange={onChange} />
     </Stack>
   )
@@ -624,7 +784,17 @@ function NumberField({
       }}
       onBlur={() => setDraft(null)}
       startDecorator={<Typography level="body-xs" textColor="text.tertiary">{axis.toUpperCase()}</Typography>}
-      sx={{ minWidth: 0, flex: 1, '--Input-decoratorChildHeight': '1rem' }}
+      sx={{
+        // Room for a signed two-decimal value ("-152.57") plus the axis letter. Without a
+        // floor the flex row squeezed these until every value ellipsised to "1…".
+        flex: 1,
+        minWidth: AXIS_FIELD_MIN_WIDTH,
+        '--Input-decoratorChildHeight': '1rem',
+        '--Input-paddingInline': '0.375rem',
+        '--Input-gap': '0.25rem',
+        // An <input> should scroll its value, never ellipsise it.
+        '& input': { minWidth: 0, textOverflow: 'clip' }
+      }}
     />
   )
 }
@@ -843,16 +1013,26 @@ function FilamentBadge({
   color,
   options,
   onReassign,
-  title
+  title,
+  mixedColors
 }: {
   filamentId: number | null
   color: string | null
   options?: FilamentOption[]
   onReassign?: (filamentId: number) => void
   title?: string
+  /**
+   * INDETERMINATE state for a multi-part object whose parts do not all share one material:
+   * the distinct part colours, painted as a gradient across the swatch instead of a single
+   * fill + material number. A object whose parts DO agree passes a plain `filamentId`/`color`
+   * like any single-material row, so the badge always says something truthful about the
+   * object rather than the bare "+" it used to show for every multi-part object.
+   */
+  mixedColors?: string[]
 }) {
   const interactive = Boolean(onReassign && options && options.length > 0)
-  if (filamentId == null && !interactive) return null
+  const mixed = Boolean(mixedColors && mixedColors.length > 1)
+  if (filamentId == null && !mixed && !interactive) return null
   const swatch = (
     <Box
       sx={{
@@ -860,24 +1040,30 @@ function FilamentBadge({
         width: 20,
         height: 20,
         borderRadius: '4px',
-        bgcolor: color || 'neutral.softBg',
+        // A hard-stop gradient reads as "several materials" without inventing an icon; the
+        // stops are evenly split so 2-4 colours each get a clear band.
+        ...(mixed
+          ? { background: buildMixedSwatchGradient(mixedColors!) }
+          : { bgcolor: color || 'neutral.softBg' }),
         border: '1px solid rgba(255,255,255,0.18)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center'
       }}
     >
-      <Typography level="body-xs" sx={{ fontWeight: 700, lineHeight: 1, color: filamentTextColor(color) }}>
-        {filamentId ?? '+'}
-      </Typography>
+      {!mixed && (
+        <Typography level="body-xs" sx={{ fontWeight: 700, lineHeight: 1, color: filamentTextColor(color) }}>
+          {filamentId ?? '+'}
+        </Typography>
+      )}
     </Box>
   )
   if (!interactive) {
-    return <Tooltip title={title ?? `Material ${filamentId}`}>{swatch}</Tooltip>
+    return <Tooltip title={title ?? (mixed ? 'Mixed materials' : `Material ${filamentId}`)}>{swatch}</Tooltip>
   }
   return (
     <Dropdown>
-      <Tooltip title={title ?? 'Change material'}>
+      <Tooltip title={title ?? (mixed ? 'Mixed materials — choose one for every part' : 'Change material')}>
         <MenuButton
           variant="plain"
           color="neutral"
@@ -904,6 +1090,17 @@ function FilamentBadge({
       </Menu>
     </Dropdown>
   )
+}
+
+/** Even hard-stop bands across up to four distinct part colours (see FilamentBadge's mixed mode). */
+function buildMixedSwatchGradient(colors: string[]): string {
+  const bands = colors.slice(0, 4).map((entry) => entry || 'rgba(255,255,255,0.25)')
+  const step = 100 / bands.length
+  const stops = bands.flatMap((entry, index) => [
+    `${entry} ${index * step}%`,
+    `${entry} ${(index + 1) * step}%`
+  ])
+  return `linear-gradient(135deg, ${stops.join(', ')})`
 }
 
 /** The "Change type" options for session-ADDED part volumes (never normal parts). */
@@ -1057,6 +1254,10 @@ export function ModelList({
         const overrideCount = sliceObject != null ? perObject!.overrideCountFor(sliceObject) : 0
         // Objects can hold multiple parts, each on its own filament — list them nested.
         const showParts = instance.parts.length > 1
+        // The object-level badge summarises its parts: one material when they agree (show it
+        // like any single-material row), otherwise the indeterminate mixed swatch. Single-part
+        // objects fall back to the instance's own filament.
+        const partMaterial = summarizeInstanceMaterial(instance, resolveId, liveColor)
         return (
           <Fragment key={instance.key}>
             <ListItem
@@ -1088,25 +1289,23 @@ export function ModelList({
                 </Typography>
                 {perObjectId != null && onReassignFilament && instance.parts.length > 0 ? (
                   <FilamentBadge
-                    filamentId={showParts ? null : resolveId(instance.filamentId)}
-                    color={showParts ? null : liveColor(resolveId(instance.filamentId), instance.color)}
+                    filamentId={partMaterial.uniformId}
+                    color={partMaterial.uniformId != null ? liveColor(partMaterial.uniformId, partMaterial.uniformColor) : null}
+                    mixedColors={partMaterial.mixedColors}
                     options={filamentOptions}
-                    title={showParts ? "Set all parts' material" : 'Change material'}
+                    title={showParts
+                      ? (partMaterial.mixedColors ? "Mixed materials — set all parts' material" : "Set all parts' material")
+                      : 'Change material'}
                     onReassign={(fid) => onReassignFilament(instance.parts.map((p) => ({ objectId: perObjectId, componentObjectId: p.componentObjectId })), fid)}
                   />
                 ) : (!showParts && <FilamentBadge filamentId={resolveId(instance.filamentId)} color={liveColor(resolveId(instance.filamentId), instance.color)} />)}
                 {perObject && sliceObject != null && (
-                  <Tooltip title="Per-object settings">
-                    <IconButton
-                      size="sm"
-                      variant={overrideCount > 0 ? 'soft' : 'plain'}
-                      color={overrideCount > 0 ? 'primary' : 'neutral'}
-                      onClick={() => perObject.onEditObject(sliceObject, instance.name)}
-                      aria-label={`Per-object settings for ${instance.name}`}
-                    >
-                      <TuneRoundedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
+                  <SettingsTuneButton
+                    changedCount={overrideCount}
+                    title="Per-object settings"
+                    ariaLabel={`Per-object settings for ${instance.name}`}
+                    onClick={() => perObject.onEditObject(sliceObject, instance.name)}
+                  />
                 )}
               </Stack>
             </ListItem>
@@ -1156,17 +1355,12 @@ export function ModelList({
                   {perObject?.onEditPart && sliceObject != null && (() => {
                     const partOverrides = perObject!.partOverrideCountFor?.(sliceObject, part.componentObjectId) ?? 0
                     return (
-                      <Tooltip title="Per-part settings">
-                        <IconButton
-                          size="sm"
-                          variant={partOverrides > 0 ? 'soft' : 'plain'}
-                          color={partOverrides > 0 ? 'primary' : 'neutral'}
-                          onClick={() => perObject!.onEditPart!(sliceObject, part.componentObjectId, part.name ?? `Part ${index + 1}`)}
-                          aria-label={`Per-part settings for ${part.name ?? `Part ${index + 1}`}`}
-                        >
-                          <TuneRoundedIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <SettingsTuneButton
+                        changedCount={partOverrides}
+                        title="Per-part settings"
+                        ariaLabel={`Per-part settings for ${part.name ?? `Part ${index + 1}`}`}
+                        onClick={() => perObject!.onEditPart!(sliceObject, part.componentObjectId, part.name ?? `Part ${index + 1}`)}
+                      />
                     )
                   })()}
                 </Stack>

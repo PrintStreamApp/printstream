@@ -1260,3 +1260,35 @@ export function cloneEditorState(state: EditorState): EditorState {
       : {})
   }
 }
+
+/**
+ * The material a multi-part object should advertise: `uniformId` when every part resolves to the
+ * same filament (or the object has a single part), otherwise `mixedColors` with the distinct part
+ * colours for the indeterminate swatch. Exactly one of the two is set.
+ */
+export function summarizeInstanceMaterial(
+  instance: EditorInstance,
+  resolveId: (id: number | null) => number | null,
+  /** Same live-colour resolver the single-material badges use, so a recolour updates the bands. */
+  liveColor: (filamentId: number | null, fallback: string | null) => string | null
+): { uniformId: number | null; uniformColor: string | null; mixedColors?: string[] } {
+  if (instance.parts.length <= 1) {
+    return { uniformId: resolveId(instance.filamentId), uniformColor: instance.color }
+  }
+  const ids = instance.parts.map((part) => resolveId(part.filamentId))
+  const distinct = [...new Set(ids)]
+  if (distinct.length === 1) {
+    const only = instance.parts[0]
+    return { uniformId: distinct[0] ?? null, uniformColor: only?.color ?? instance.color }
+  }
+  // Keep first-seen order so the bands match the part list's reading order.
+  const seen = new Set<number | null>()
+  const mixedColors: string[] = []
+  instance.parts.forEach((part, index) => {
+    const id = ids[index] ?? null
+    if (seen.has(id)) return
+    seen.add(id)
+    mixedColors.push(liveColor(id, part.color) || 'rgba(255,255,255,0.25)')
+  })
+  return { uniformId: null, uniformColor: null, mixedColors }
+}

@@ -18,7 +18,6 @@ import { NotificationTemplatesPanel } from '../components/NotificationTemplatesP
 import { BridgeSettingsSection } from '../components/settings/BridgeManagementSection'
 import { NavTabOrderEditor } from '../components/settings/NavTabOrderEditor'
 import { SlicerDeveloperModeCard } from '../components/settings/SlicerDeveloperModeCard'
-import { SlicingProfilesSettingsSection } from '../components/settings/SlicingProfilesSection'
 import { PluginManagerSection } from '../components/PluginManagerSection'
 import { apiFetch } from '../lib/apiClient'
 import { authQueryKeys, resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
@@ -216,7 +215,7 @@ export function SettingsView({
           {showsTenantSlicingProfiles && (
             <SettingsOverviewCard
               title="Slicing"
-              description="Upload BambuStudio printer, filament, and quality profiles for server-side slicing."
+              description="Slicing behaviour for this workspace; manage custom presets from the editor."
               onAction={() => navigate(settingsPath('/settings/slicing'))}
             />
           )}
@@ -519,10 +518,9 @@ export function SettingsView({
               { label: 'Settings', onClick: () => navigate(settingsPath()) },
               { label: 'Slicing' }
             ]}
-            description="Upload BambuStudio profiles used by server-side slicing."
+            description="Slicing behaviour for this workspace. Custom presets are managed from the editor’s settings."
           />
           <SlicerDeveloperModeCard />
-          <SlicingProfilesSettingsSection />
         </Stack>
       ) : (
         <Stack spacing={1.5}>

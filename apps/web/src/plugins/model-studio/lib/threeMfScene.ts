@@ -250,7 +250,9 @@ export function createPreviewPlateSurface({
   depth,
   centerX,
   centerY,
-  excludeAreas = []
+  excludeAreas = [],
+  showSurfaceFill = true,
+  axisLabelEdge = 'front'
 }: {
   width: number
   depth: number
@@ -258,35 +260,51 @@ export function createPreviewPlateSurface({
   centerY: number
   /** Unprintable / single-nozzle zones (bed coords, absolute) with optional labels. */
   excludeAreas?: Array<{ polygon: Array<{ x: number; y: number }>; label?: string | null }>
+  /**
+   * Draw the tinted surface fill. Turned off when the real 3D build plate is rendered underneath,
+   * where it only z-fights the mesh. Everything else — grid, measurement ticks, printable outline,
+   * unprintable zones — is drawn either way; the modelled plate supplies a surface, not a scale.
+   */
+  showSurfaceFill?: boolean
+  /**
+   * Which edge the measurement ticks run along. `rear` is used with the 3D plate: every bed mesh
+   * extends well past the print area at the FRONT for its handle (H2D: -18.5mm), so front ticks
+   * would land on top of it — the rear edge is clear.
+   */
+  axisLabelEdge?: 'front' | 'rear'
 }): THREE.Object3D {
   const plateGroup = new THREE.Group()
-
-  const bed = new THREE.Mesh(
-    new THREE.PlaneGeometry(width, depth),
-    new THREE.MeshStandardMaterial({
-      color: 0x1b2636,
-      transparent: true,
-      opacity: 0.74,
-      roughness: 0.94,
-      metalness: 0.03,
-      side: THREE.FrontSide,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1
-    })
-  )
-  bed.position.set(centerX, centerY, -0.05)
-  bed.renderOrder = -1
-  bed.receiveShadow = true
-  plateGroup.add(bed)
 
   const minX = centerX - width / 2
   const maxX = centerX + width / 2
   const minY = centerY - depth / 2
   const maxY = centerY + depth / 2
+
+  if (showSurfaceFill) {
+    const bed = new THREE.Mesh(
+      new THREE.PlaneGeometry(width, depth),
+      new THREE.MeshStandardMaterial({
+        color: 0x1b2636,
+        transparent: true,
+        opacity: 0.74,
+        roughness: 0.94,
+        metalness: 0.03,
+        side: THREE.FrontSide,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1
+      })
+    )
+    bed.position.set(centerX, centerY, -0.05)
+    bed.renderOrder = -1
+    bed.receiveShadow = true
+    plateGroup.add(bed)
+  }
+  // The grid and the measurement ticks are the plate's SCALE, which the modelled bed does not
+  // provide, so both are drawn in either presentation.
   plateGroup.add(createBedGridLines(minX, maxX, minY, maxY))
-  plateGroup.add(createBedAxisLabels(minX, maxX, minY, maxY))
+  plateGroup.add(createBedAxisLabels(minX, maxX, minY, maxY, axisLabelEdge))
 
   const outline = new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints([
@@ -402,7 +420,7 @@ export function createBedGridLines(minX: number, maxX: number, minY: number, max
  * (X along the front edge, Y along the left edge), so users can read where they
  * are placing objects in real bed millimetres.
  */
-function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: number): THREE.Object3D {
+function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: number, edge: 'front' | 'rear' = 'front'): THREE.Object3D {
   const group = new THREE.Group()
   // mm of text height on the bed. Sized to stay legible when the whole bed is in
   // view (a 256mm plate): at 5mm the numbers were an invisible speck until heavily
@@ -414,7 +432,9 @@ function createBedAxisLabels(minX: number, maxX: number, minY: number, maxY: num
   for (let x = firstX; x <= maxX + 1e-6; x += BED_GRID_MAJOR_STEP_MM) {
     const label = createAxisTickLabel(String(Math.round(x)), labelHeight)
     if (!label) continue
-    label.position.set(x, minY - margin, 0.02)
+    // Along the front edge by default; past the rear edge when the plate's handle occupies
+    // the space in front of the print area.
+    label.position.set(x, edge === 'rear' ? maxY + margin : minY - margin, 0.02)
     group.add(label)
   }
   const firstY = Math.ceil(minY / BED_GRID_MAJOR_STEP_MM) * BED_GRID_MAJOR_STEP_MM

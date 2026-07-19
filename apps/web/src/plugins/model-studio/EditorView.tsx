@@ -45,6 +45,7 @@ import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import ViewListRoundedIcon from '@mui/icons-material/ViewListRounded'
 import UndoRoundedIcon from '@mui/icons-material/UndoRounded'
 import RedoRoundedIcon from '@mui/icons-material/RedoRounded'
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import { useQuery } from '@tanstack/react-query'
@@ -77,6 +78,9 @@ import { LibraryFilePickerDialog } from '../../components/LibraryFilePickerDialo
 import { LibraryDestinationDialog } from '../../components/LibraryDestinationDialog'
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
 import { useMobileViewport } from '../../components/useMobileViewport'
+import { useLocalStorageState } from '../../hooks/useLocalStorageState'
+import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
+import { EditorSettingsDialog, type EditorSidebarSide } from '../../components/library/EditorSettingsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import {
   createPreviewPlateSurface,
@@ -173,7 +177,7 @@ import {
   largestHullFaceNormal,
   nextPaint,
   PAINT_CHANNEL_SPECS,
-  paintChannelForGizmoMode,
+  isTransformGizmoMode,
   printableMeshBox,
   rasterizePolygonCells,
   restObjectOnBed,
@@ -201,7 +205,8 @@ import {
   PlateThumbnailStrip,
   SaveSplitButton,
   SliceSplitButton,
-  TOOL_PANEL_TOP,
+  RAIL_HOVER_LABEL_SX,
+  TOOL_PANEL_ANCHOR,
   TransformPanel
 } from './editorPanels'
 import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from '../../components/library/PlateGcodeSections'
@@ -481,6 +486,26 @@ function EditorView({
   const [sceneReady, setSceneReady] = useState(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
+  // 3D build plate (BambuStudio's modelled bed), on by default now that it fades when the camera
+  // drops below it — the reason it originally shipped opt-in. Stored per device, and a device
+  // that explicitly turned it off keeps that choice. Printers with no bundled bed mesh fall back
+  // to the plain grid on their own, so defaulting this on is safe everywhere.
+  const [showBedModel, setShowBedModel] = useLocalStorageState(
+    'bambu.editor.bedModel3d',
+    true,
+    (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
+    String
+  )
+  // Which side the settings/objects panel sits on (desktop only — the narrow layout stacks it
+  // below the viewport regardless). Right by default: that is where it has always been.
+  const [sidebarSide, setSidebarSide] = useLocalStorageState<EditorSidebarSide>(
+    'bambu.editor.sidebarSide',
+    'right',
+    (raw) => (raw === 'left' || raw === 'right' ? raw : null),
+    String
+  )
+  const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
+  const [editorSettingsOpen, setEditorSettingsOpen] = useState(false)
   // Cut tool: plane axis + offset (world mm), the selected object's range along that axis,
   // sides to keep, and the staging-in-flight flag for the Cut button. The offset is kept raw
   // while typing; consumers clamp it to the range.
@@ -503,6 +528,37 @@ function EditorView({
   useEffect(() => {
     if (gizmoMode !== 'measure') setMeasurePoints([])
   }, [gizmoMode])
+
+  // Fetch the printer's 3D plate mesh only while the option is on. A printer with no bundled
+  // bed simply resolves null and the grid stays — see lib/bedModel.ts.
+  //
+  // Each cached geometry is released when it is replaced: switching printer model refetches, and
+  // without this every switch leaked a bed geometry (CPU arrays plus its GPU upload). Disposing
+  // the CACHED original is safe because the rendered beds are clones of it, so a live plate is
+  // never pulled out from under the scene.
+  useEffect(() => {
+    const replaceGeometry = (next: THREE.BufferGeometry | null) => {
+      setBedModelGeometry((previous) => {
+        if (previous && previous !== next) previous.dispose()
+        return next
+      })
+    }
+    if (!showBedModel || !targetPrinterModel) {
+      replaceGeometry(null)
+      return undefined
+    }
+    const controller = new AbortController()
+    void loadBedModelGeometry({
+      printerModel: targetPrinterModel,
+      slicerTargetId: sliceConfig?.selectedSlicerTargetId ?? null,
+      signal: controller.signal
+    }).then((geometry) => {
+      // A switch that lands after this fetch resolved must not strand the geometry it produced.
+      if (controller.signal.aborted) geometry?.dispose()
+      else replaceGeometry(geometry)
+    })
+    return () => controller.abort()
+  }, [showBedModel, targetPrinterModel, sliceConfig?.selectedSlicerTargetId])
   useEffect(() => {
     setMeasurePoints([])
   }, [activePlateIndex])
@@ -597,7 +653,7 @@ function EditorView({
     () => (editingObject && perObject ? perObject.value[String(editingObject.ids[0])] ?? EMPTY_OBJECT_OVERRIDES : EMPTY_OBJECT_OVERRIDES),
     [editingObject, perObject]
   )
-  const { sidebarWidth, resizeHandleProps } = useSidebarResize()
+  const { sidebarWidth, resizeHandleProps } = useSidebarResize(sidebarSide)
   const isMobile = useMobileViewport()
   // On phones the 3D view and settings can't sit side by side, so the user toggles
   // between them; the model/per-object list lives in a slide-up bottom sheet.
@@ -1862,7 +1918,10 @@ function EditorView({
     // 256 fallback -> the printer's real 350x320). Replace the bed when its signature changed rather
     // than skipping because "a bed already exists", which stranded the stale bed until an Arrange /
     // add-model forced the atomic-swap path. The atomic (staging) path always rebuilds the bed.
-    const bedSignature = JSON.stringify([bedWidth, bedDepth, bedCenterX, bedCenterY, activePlate.bed.excludeAreas])
+    // The 3D plate rides on the bed surface group, so its presence belongs in the signature —
+    // otherwise toggling the option leaves the previously-built bed in place.
+    const bedModel = showBedModel ? bedModelGeometry : null
+    const bedSignature = JSON.stringify([bedWidth, bedDepth, bedCenterX, bedCenterY, activePlate.bed.excludeAreas, Boolean(bedModel)])
     if (incremental) {
       const existingBed = plateRoot.children.find((child) => child.userData?.isBedSurface)
       if (!existingBed || existingBed.userData.bedSignature !== bedSignature) {
@@ -1871,9 +1930,10 @@ function EditorView({
           plateRoot.remove(existingBed)
         }
         // Show the destination plate's empty bed straight away; models append onto it as they build.
-        const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas })
+        const liveBed = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas, showSurfaceFill: !bedModel, axisLabelEdge: bedModel ? 'rear' : 'front' })
         liveBed.userData.isBedSurface = true
         liveBed.userData.bedSignature = bedSignature
+        if (bedModel) liveBed.add(createBedModelObject({ geometry: bedModel, originX: bedCenterX - bedWidth / 2, originY: bedCenterY - bedDepth / 2 }))
         plateRoot.add(liveBed)
       }
     }
@@ -1884,11 +1944,12 @@ function EditorView({
       const staging = incremental ? null : new THREE.Group()
       const target = staging ?? plateRoot
       if (staging) {
-        const bedSurface = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas })
+        const bedSurface = createPreviewPlateSurface({ width: bedWidth, depth: bedDepth, centerX: bedCenterX, centerY: bedCenterY, excludeAreas: activePlate.bed.excludeAreas, showSurfaceFill: !bedModel, axisLabelEdge: bedModel ? 'rear' : 'front' })
         // Tagged so the thumbnail renderer hides it (Bambu-style model-only thumbnails); the
         // signature lets a later incremental rebuild detect a bed-dimension change.
         bedSurface.userData.isBedSurface = true
         bedSurface.userData.bedSignature = bedSignature
+        if (bedModel) bedSurface.add(createBedModelObject({ geometry: bedModel, originX: bedCenterX - bedWidth / 2, originY: bedCenterY - bedDepth / 2 }))
         staging.add(bedSurface)
       }
       const builtGroups = new Map<string, THREE.Group>()
@@ -2016,8 +2077,10 @@ function EditorView({
       setBuildProgress(null)
       setBuildIncremental(false)
     }
+    // showBedModel/bedModelGeometry are read when building the bed surface, so a toggle (or a
+    // late-arriving mesh) has to rebuild the plate — without them the option appears to do nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePlateIndex, activeInstanceKeys, buildInstanceGroup, sceneReady, rebuildToken])
+  }, [activePlateIndex, activeInstanceKeys, buildInstanceGroup, sceneReady, rebuildToken, showBedModel, bedModelGeometry])
 
   const reattachGizmo = useCallback(() => {
     const transform = transformRef.current
@@ -2041,7 +2104,7 @@ function EditorView({
     // The manual-input panel mirrors whatever the gizmo holds: the object, or a selected
     // part's object-local placement (BambuStudio's "Volume Operations").
     let panelTarget: THREE.Object3D = group
-    if (gizmoMode === 'layFace' || gizmoMode === 'cut' || gizmoMode === 'brimEars' || gizmoMode === 'measure' || paintChannelForGizmoMode(gizmoMode) !== null) {
+    if (!isTransformGizmoMode(gizmoMode)) {
       transform.detach()
     } else if (selectedAddedPartKey) {
       // A selected added part volume takes the gizmo (object-local transform).
@@ -3984,31 +4047,36 @@ function EditorView({
                 <Box
                   sx={{
                     position: 'absolute',
+                    // Phones keep the wrapping strip across the top; from sm up the tools move
+                    // into the vertical left rail, so this row only carries undo/redo + help
+                    // and hugs the right edge, leaving the top-centre free for the transform.
                     top: 8,
-                    left: 8,
+                    left: { xs: 8, sm: 'auto' },
                     right: 8,
                     zIndex: (theme) => theme.zIndex.tooltip,
                     display: 'flex',
                     gap: 1,
                     flexWrap: 'wrap',
                     alignItems: 'center',
-                    justifyContent: 'center',
+                    justifyContent: { xs: 'center', sm: 'flex-end' },
                     // Don't block clicks/drags on the 3D scene showing through the
                     // full-width centering strip; the controls re-enable themselves.
                     pointerEvents: 'none',
                     '& > *': { pointerEvents: 'auto' }
                   }}
                 >
-                  <GizmoToolbar
-                    mode={gizmoMode}
-                    disabled={!selectedKey || controlsBusy}
-                    busy={controlsBusy}
-                    arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
-                    onChange={setGizmoMode}
-                    onDropToBed={handleDropToBed}
-                    onAutoOrient={handleAutoOrient}
-                    onArrangeAll={handleArrangeAll}
-                  />
+                  {isMobile && (
+                    <GizmoToolbar
+                      mode={gizmoMode}
+                      disabled={!selectedKey || controlsBusy}
+                      busy={controlsBusy}
+                      arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
+                      onChange={setGizmoMode}
+                      onDropToBed={handleDropToBed}
+                      onAutoOrient={handleAutoOrient}
+                      onArrangeAll={handleArrangeAll}
+                    />
+                  )}
                   <ButtonGroup size="sm" variant="outlined" aria-label="Undo and redo">
                     <Tooltip title="Undo (Ctrl/Cmd+Z)">
                       <IconButton onClick={undo} disabled={!canUndo || controlsBusy} aria-label="Undo">
@@ -4021,8 +4089,75 @@ function EditorView({
                       </IconButton>
                     </Tooltip>
                   </ButtonGroup>
+                  <Tooltip title="Editor settings">
+                    <IconButton
+                      size="sm"
+                      variant="soft"
+                      color="neutral"
+                      onClick={() => setEditorSettingsOpen(true)}
+                      aria-label="Editor settings"
+                    >
+                      <TuneRoundedIcon />
+                    </IconButton>
+                  </Tooltip>
                   <KeyboardHelpButton />
                 </Box>
+                {/* Photo-editor tool rail (sm+): the modal tools run down the left edge, which
+                    frees the top edge for the transform readout. Phones keep the top strip above. */}
+                {!isMobile && (
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      top: 8,
+                      left: 8,
+                      zIndex: (theme) => theme.zIndex.tooltip,
+                      // Hovering (or tabbing into) the rail expands every button's label at once.
+                      ...RAIL_HOVER_LABEL_SX
+                    }}
+                  >
+                    <GizmoToolbar
+                      mode={gizmoMode}
+                      disabled={!selectedKey || controlsBusy}
+                      busy={controlsBusy}
+                      arrangeDisabled={controlsBusy || (activePlate?.instances.length ?? 0) === 0}
+                      onChange={setGizmoMode}
+                      onDropToBed={handleDropToBed}
+                      onAutoOrient={handleAutoOrient}
+                      onArrangeAll={handleArrangeAll}
+                      orientation="vertical"
+                    />
+                  </Box>
+                )}
+                {/* Transform readout, top-centre (sm+). On phones it stays docked in the objects
+                    panel/bottom sheet, where there is no room to float it. */}
+                {!isMobile && selectedTransform && isTransformGizmoMode(gizmoMode) && (
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      top: 8,
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      zIndex: (theme) => theme.zIndex.tooltip,
+                      // Wide enough for the one-row axis layout when the viewport allows it,
+                      // always clearing the tool rail (left) and undo/redo + help (right);
+                      // the panel's own container query stacks the axes when it lands narrow.
+                      width: 'min(820px, calc(100% - 260px))'
+                    }}
+                  >
+                    <TransformPanel
+                      floating
+                      transform={selectedTransform}
+                      // With a part on the gizmo the values are the PART's placement inside
+                      // its object (and edits apply to every copy) — say so.
+                      heading={selectedAddedPartKey || selectedBakedPart ? 'Part placement (within the object)' : undefined}
+                      uniformScale={uniformScale}
+                      onToggleUniformScale={setUniformScale}
+                      onPosition={applyManualPosition}
+                      onRotation={applyManualRotation}
+                      onScale={applyManualScale}
+                    />
+                  </Box>
+                )}
                 {gizmoMode === 'cut' && selectedKey && cutRange && (
                   <CutToolPanel
                     cutAxis={cutAxis}
@@ -4069,7 +4204,7 @@ function EditorView({
                   <Sheet
                     variant="soft"
                     sx={{
-                      position: 'absolute', top: TOOL_PANEL_TOP, left: 8, zIndex: (theme) => theme.zIndex.tooltip,
+                      position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: (theme) => theme.zIndex.tooltip,
                       p: 1.25, borderRadius: 'sm', boxShadow: 'sm',
                       width: 'min(280px, calc(100% - 16px))',
                       display: 'flex', flexDirection: 'column', gap: 0.75
@@ -4219,7 +4354,7 @@ function EditorView({
                     onAddPrimitive={(kind) => void handleAddPrimitive(kind)}
                   />
                 </Stack>
-                {selectedTransform && (
+                {isMobile && selectedTransform && isTransformGizmoMode(gizmoMode) && (
                   <TransformPanel
                     transform={selectedTransform}
                     // With a part on the gizmo the values are the PART's placement inside
@@ -4366,19 +4501,25 @@ function EditorView({
                   minHeight: 0,
                   display: 'grid',
                   gap: 1,
-                  gridTemplateColumns: { xs: '1fr', sm: `minmax(0, 1fr) ${sidebarWidth}px` },
+                  // The panel column flips side with the preference; the viewport column stays
+                  // flexible either way. Narrow screens always stack, so only sm+ varies.
+                  gridTemplateColumns: {
+                    xs: '1fr',
+                    sm: sidebarSide === 'left' ? `${sidebarWidth}px minmax(0, 1fr)` : `minmax(0, 1fr) ${sidebarWidth}px`
+                  },
                   gridTemplateRows: { xs: 'auto minmax(0, 1fr) auto', sm: 'auto minmax(0, 1fr)' },
                   gridTemplateAreas: {
                     xs: '"plates" "viewport" "panel"',
-                    sm: '"plates panel" "viewport panel"'
+                    sm: sidebarSide === 'left' ? '"panel plates" "panel viewport"' : '"plates panel" "viewport panel"'
                   }
                 }}
               >
                 <Box sx={{ gridArea: 'plates', minWidth: 0 }}>{plateStrip}</Box>
                 {viewport}
                 <Box sx={{ gridArea: 'panel', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                  {/* Desktop-only grab strip straddling the grid gap on the panel's left edge;
-                      drag to resize the sidebar, double-click to reset (useSidebarResize). */}
+                  {/* Desktop-only grab strip straddling the grid gap on the panel's INNER edge —
+                      the one facing the viewport, so it flips with the panel's side; drag to
+                      resize the sidebar, double-click to reset (useSidebarResize). */}
                   <Box
                     aria-hidden
                     onPointerDown={resizeHandleProps.onPointerDown}
@@ -4386,7 +4527,7 @@ function EditorView({
                     sx={{
                       display: { xs: 'none', sm: 'block' },
                       position: 'absolute',
-                      left: -9,
+                      ...(sidebarSide === 'left' ? { right: -9 } : { left: -9 }),
                       top: 0,
                       bottom: 0,
                       width: 10,
@@ -4545,6 +4686,17 @@ function EditorView({
         )}
       </ModalDialog>
     </Modal>
+
+    <EditorSettingsDialog
+      open={editorSettingsOpen}
+      onClose={() => setEditorSettingsOpen(false)}
+      viewport={{
+        showBedModel,
+        onShowBedModelChange: setShowBedModel,
+        sidebarSide,
+        onSidebarSideChange: setSidebarSide
+      }}
+    />
 
     {libraryPickerOpen && (
       <LibraryFilePickerDialog

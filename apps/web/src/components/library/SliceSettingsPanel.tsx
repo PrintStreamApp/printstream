@@ -14,7 +14,7 @@
 import type React from 'react'
 import { useState } from 'react'
 import {
-  Alert, AutocompleteOption, Badge, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormLabel, IconButton, Input, Link,
+  Alert, AutocompleteOption, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormLabel, IconButton, Input,
   List, ListItem, ListItemContent, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
 } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
@@ -52,10 +52,10 @@ import {
 } from '../../lib/sliceProfileMatching'
 import { MaterialEditDialog } from './MaterialEditDialog'
 import { SlicingProfileAutocomplete } from './SlicingProfileAutocomplete'
+import { SettingsTuneButton } from '../SettingsTuneButton'
 import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from './PlateGcodeSections'
 import { useFilamentChangedCount, useProcessChangedCount } from './useBakedPresetChanges'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
-import { buildTenantWorkspacePath } from '../../lib/workspaceRoute'
 
 /**
  * Stateful bridge from `SliceFileModal` to the shared `SliceSettingsPanel`.
@@ -277,7 +277,6 @@ export function SliceSettingsPanel({ controller, mode }: {
 }) {
   const {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview,
-    tenantSlug, navigate, onClose,
     slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId, slicerStatus,
     printers, selectedPrinter, lockedPreferredPrinter, targetMode, setTargetMode, setPrinterId,
     selectedPrinterModel, manualPrinterModelTouchedRef, setManualPrinterModel, printerModelOptions,
@@ -573,20 +572,6 @@ export function SliceSettingsPanel({ controller, mode }: {
               </Tooltip>
             </Stack>
           </FormControl>
-          {tenantSlug && (
-            <Link
-              level="body-xs"
-              component="button"
-              type="button"
-              onClick={() => {
-                onClose()
-                navigate(buildTenantWorkspacePath(tenantSlug, '/settings/slicing'))
-              }}
-              sx={{ alignSelf: 'flex-start' }}
-            >
-              Manage custom presets
-            </Link>
-          )}
         </Stack>
       </Sheet>
       {(projectFilaments.length > 0 || showMaterialEditing) && (
@@ -780,23 +765,13 @@ export function SliceSettingsPanel({ controller, mode }: {
                       <Typography level="body-sm" noWrap sx={{ flex: 1, minWidth: 0, opacity: printing ? 1 : 0.5 }}>
                         {object.name}
                       </Typography>
-                      <Tooltip title={selectedProcessProfile ? 'Per-object settings' : 'Choose a quality profile first'}>
-                        <span>
-                          <IconButton
-                            size="sm"
-                            variant={overrideCount > 0 ? 'soft' : 'plain'}
-                            color={overrideCount > 0 ? 'primary' : 'neutral'}
-                            disabled={!selectedProcessProfile || !selectedSlicerTargetIdForGuards}
-                            onClick={() => openSliceObjectSettings(object.id, object.name)}
-                            aria-label={`Per-object settings for ${object.name}`}
-                          >
-                            <TuneRoundedIcon fontSize="small" />
-                            {overrideCount > 0 && (
-                              <Chip size="sm" variant="solid" color="primary" sx={{ ml: 0.5 }}>{overrideCount}</Chip>
-                            )}
-                          </IconButton>
-                        </span>
-                      </Tooltip>
+                      <SettingsTuneButton
+                        changedCount={overrideCount}
+                        title={selectedProcessProfile ? 'Per-object settings' : 'Choose a quality profile first'}
+                        ariaLabel={`Per-object settings for ${object.name}`}
+                        disabled={!selectedProcessProfile || !selectedSlicerTargetIdForGuards}
+                        onClick={() => openSliceObjectSettings(object.id, object.name)}
+                      />
                     </Stack>
                   </ListItem>
                 )
@@ -885,26 +860,14 @@ function FilamentTuneButton(props: {
     ?? (selectedOption?.id.startsWith('profile:') ? selectedOption.id.slice('profile:'.length) : null)
   const changedCount = useFilamentChangedCount({ slicerTargetId, filamentProfileId, sourceFileId, projectFilamentId, overrides })
   return (
-    <Tooltip title={filamentProfileId
-      ? (changedCount > 0 ? `Edit filament settings — ${changedCount} changed vs preset` : 'Edit filament settings')
-      : 'Choose a material profile first'}
-    >
-      <span>
-        {/* Corner badge (not an inline chip) so the button width — and the whole material
-            row's column alignment — stays constant whether or not there are changes. */}
-        <Badge badgeContent={changedCount} size="sm" color="primary" badgeInset="15%">
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            disabled={!filamentProfileId || !slicerTargetId}
-            onClick={onOpen}
-            aria-label={`Edit filament settings for material ${filamentIndex + 1}`}
-          >
-            <TuneRoundedIcon fontSize="small" />
-          </IconButton>
-        </Badge>
-      </span>
-    </Tooltip>
+    <SettingsTuneButton
+      changedCount={changedCount}
+      title={filamentProfileId
+        ? (changedCount > 0 ? `Edit filament settings — ${changedCount} changed vs preset` : 'Edit filament settings')
+        : 'Choose a material profile first'}
+      ariaLabel={`Edit filament settings for material ${filamentIndex + 1}`}
+      disabled={!filamentProfileId || !slicerTargetId}
+      onClick={onOpen}
+    />
   )
 }

@@ -3,7 +3,7 @@
  * ears, plus Clear/Done. Presentational only — placement and the ear state live in EditorView.
  */
 import { Button, Chip, Sheet, Slider, Stack, Typography } from '@mui/joy'
-import { TOOL_PANEL_TOP } from './editorPanels'
+import { TOOL_PANEL_ANCHOR } from './editorPanels'
 
 export interface BrimEarsPanelProps {
   /** Brim ears are only supported on in-project objects (not imported meshes). */
@@ -19,7 +19,7 @@ export function BrimEarsPanel({ paintTargetIsObject, brimEarDiameter, setBrimEar
     <Sheet
       variant="soft"
       sx={{
-        position: 'absolute', top: TOOL_PANEL_TOP, left: 8, zIndex: (theme) => theme.zIndex.tooltip,
+        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: (theme) => theme.zIndex.tooltip,
         p: 1.25, borderRadius: 'sm', boxShadow: 'sm',
         width: 'min(280px, calc(100% - 16px))',
         display: 'flex', flexDirection: 'column', gap: 0.75

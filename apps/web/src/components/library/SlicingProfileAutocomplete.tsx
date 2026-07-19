@@ -48,9 +48,10 @@ export function SlicingProfileAutocomplete({
       <Box>
         <DeferredKeyboardAutocomplete
           options={profiles}
-          value={value}
+          // disableClearable narrows Joy's value type to `T | undefined`.
+          value={value ?? undefined}
           inputValue={inputValue}
-          onChange={(_event, profile) => onChange(profile)}
+          onChange={(_event, profile) => onChange(profile ?? null)}
           onInputChange={(_event, nextValue, reason) => {
             if (reason === 'reset') return
             setInputValue(nextValue)
@@ -64,9 +65,17 @@ export function SlicingProfileAutocomplete({
           filterOptions={(options, state) => (
             value && state.inputValue === valueDisplayName ? options : filterByDisplayName(options, state)
           )}
-          isOptionEqualToValue={(option, selected) => option.id === selected.id}
+          // `selected` can be undefined: with disableClearable the value is passed as
+          // `value ?? undefined`, and Joy still runs this comparator while filtering — which it
+          // does exactly when the current selection stops being compatible (switching the printer
+          // model to one the selected profile does not support). Optional-chain or it throws
+          // mid-render and takes the editor down with it.
+          isOptionEqualToValue={(option, selected) => option.id === selected?.id}
           groupBy={(profile) => isProjectSlicingProfileId(profile.id) ? '3MF project profiles' : profile.source === 'custom' ? 'Workspace profiles' : 'Built-in profiles'}
           placeholder={placeholder}
+          // There is always a selected profile — a cleared value would leave the slice with no
+          // process at all — so drop Joy's clear (x) affordance.
+          disableClearable
           selectOnFocus
           handleHomeEndKeys
           openOnFocus

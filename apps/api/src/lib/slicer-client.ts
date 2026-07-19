@@ -232,6 +232,37 @@ export class SlicerClient {
     return null
   }
 
+  /**
+   * The 3D build-plate mesh (binary STL) for a printer model, from the slicer's bundled
+   * BambuStudio resources, or null when this target has none. Decoration for the editor's bed
+   * view, so a miss is normal and logged at debug volume only — the client falls back to the
+   * plain millimetre grid. See apps/slicer/src/bed-model.ts.
+   */
+  async bedModel(targetId: string | null | undefined, printerModel: string): Promise<Buffer | null> {
+    for (const baseUrl of this.baseUrls) {
+      try {
+        const params = new URLSearchParams()
+        if (targetId?.trim()) params.set('targetId', targetId.trim())
+        params.set('printerModel', printerModel)
+        const response = await fetch(`${baseUrl}/bed-model?${params.toString()}`, {
+          headers: this.headers(),
+          // Tens of kilobytes at most; the short-request cap is plenty.
+          signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
+        })
+        // 404 = this target ships no bed for that model. Expected, not a failure to report.
+        if (response.status === 404) return null
+        if (!response.ok) {
+          console.warn('[slicer] bedModel failed', `slicer service at ${baseUrl} returned ${response.status}`)
+          continue
+        }
+        return Buffer.from(await response.arrayBuffer())
+      } catch (error) {
+        console.warn('[slicer] bedModel failed', `${baseUrl}: ${(error as Error).message}`)
+      }
+    }
+    return null
+  }
+
   async run(input: SlicerRunInput): Promise<SlicerRunResult> {
     const baseUrl = this.claimInstance(input.jobId)
     try {

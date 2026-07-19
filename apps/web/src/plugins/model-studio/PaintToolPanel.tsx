@@ -10,7 +10,7 @@
  */
 import { Button, ButtonGroup, Checkbox, Chip, Option, Select, Sheet, Slider, Stack, Typography } from '@mui/joy'
 import { PAINT_TOOL_LABELS, PAINT_TOOLS_BY_CHANNEL } from './editorGeometry'
-import { TOOL_PANEL_TOP } from './editorPanels'
+import { TOOL_PANEL_ANCHOR } from './editorPanels'
 import { FilamentOptionContent, type FilamentOption } from '../../components/library/PlateGcodeSections'
 import type { EditorPaint } from './useEditorPaint'
 
@@ -36,7 +36,7 @@ export function PaintToolPanel({ paint, paintTargetIsObject, filamentOptions, on
     <Sheet
       variant="soft"
       sx={{
-        position: 'absolute', top: TOOL_PANEL_TOP, left: 8, zIndex: (theme) => theme.zIndex.tooltip,
+        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: (theme) => theme.zIndex.tooltip,
         p: 1.25, borderRadius: 'sm', boxShadow: 'sm',
         width: 'min(280px, calc(100% - 16px))',
         display: 'flex', flexDirection: 'column', gap: 0.75

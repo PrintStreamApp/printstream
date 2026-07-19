@@ -208,6 +208,9 @@ export type DirectoryFiltersConfig = {
   children: ReactNode
 }
 
+/** A `top` value for the pinned toolbar: one length, or a responsive record of them. */
+export type ModalSafeStickyTop = number | string | Record<string, number | string>
+
 export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends string | number, TGroup extends string = string>({
   searchValue,
   onSearchChange,
@@ -232,12 +235,27 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   disableIconModeOnMobile = false,
   compactControls = false,
   pinnable = true,
-  pinStorageKey
+  pinStorageKey,
+  stickyTop,
+  stickySurface
 }: {
   searchValue: string
   onSearchChange: (value: string) => void
   searchPlaceholder: string
   searchAriaLabel: string
+  /**
+   * Offset the pinned toolbar sticks at, within ITS scroll container. Defaults to sitting below
+   * the page's sticky tab nav, which is only correct on a page. A toolbar rendered inside its
+   * own scroller (a dialog body) must pass its own offset — with the page value it pins ~86px
+   * down from the top of that scroller, floating in the middle of the content.
+   */
+  stickyTop?: ModalSafeStickyTop
+  /**
+   * Solid background for the pinned toolbar. The default (blur only) is tuned for the page's
+   * atmospheric gradient, where a fill reads as a dark band — but on a flat surface like a
+   * dialog the blur is too weak and the scrolling rows show through the controls.
+   */
+  stickySurface?: string
   /** Optional control rendered at the right end of the search field (e.g. a scope toggle). */
   searchEndDecorator?: ReactNode
   filters?: DirectoryFiltersConfig
@@ -331,8 +349,9 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
             // underneath is frosted rather than overlapping the controls sharply. The
             // controls are children, so they stay crisp on top of the blurred backdrop.
             position: 'sticky',
-            top: { xs: 'calc(var(--app-top-inset, 0px) + 8px)', sm: 'calc(var(--app-top-inset, 0px) + 86px)' },
+            top: stickyTop ?? { xs: 'calc(var(--app-top-inset, 0px) + 8px)', sm: 'calc(var(--app-top-inset, 0px) + 86px)' },
             zIndex: 19,
+            ...(stickySurface ? { bgcolor: stickySurface } : null),
             backdropFilter: 'blur(14px) saturate(1.2)',
             WebkitBackdropFilter: 'blur(14px) saturate(1.2)'
           }

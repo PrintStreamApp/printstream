@@ -37,6 +37,7 @@ import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
 import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
 import { buildPerMaterialFilamentOverrides, selectCliProfileFiles } from './cli-profile-selection.js'
 import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } from './machine-switch-guard.js'
+import { readBedModel } from './bed-model.js'
 import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
 import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
 import { formatSliceEngineCrashError, formatSlicePresetIncompatibilityError } from './slice-error.js'
@@ -91,6 +92,30 @@ app.get('/profiles', async (request, response) => {
     return
   }
   response.json({ profiles: await listBuiltinProfiles(target.profileDir) })
+})
+
+/**
+ * The 3D build-plate mesh for a printer model, from the bundled BambuStudio resources.
+ * Optional decoration for the editor's bed view — a miss answers 404 so the client falls
+ * back to the plain millimetre grid rather than showing an error.
+ */
+app.get('/bed-model', async (request, response) => {
+  const registry = await getSlicerTargetRegistry()
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const target = resolveSlicerTarget(registry, targetId)
+  if (!target) {
+    response.status(400).json({ error: targetId ? 'Unknown slicer target' : 'No slicer targets are configured' })
+    return
+  }
+  const printerModel = typeof request.query.printerModel === 'string' ? request.query.printerModel : ''
+  const bed = await readBedModel(target.appDir ?? null, printerModel)
+  if (!bed) {
+    response.status(404).json({ error: 'No bed model for this printer' })
+    return
+  }
+  response.setHeader('Content-Type', 'model/stl')
+  response.setHeader('X-PrintStream-Bed-Model', bed.fileName)
+  response.send(bed.bytes)
 })
 
 const resolveProcessConfigSchema = z.object({

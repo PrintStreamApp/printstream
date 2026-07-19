@@ -8,7 +8,7 @@
 import { Button, ButtonGroup, Checkbox, Input, Sheet, Slider, Stack, Typography } from '@mui/joy'
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import { CUT_AXIS_SIDES } from './editorGeometry'
-import { TOOL_PANEL_TOP } from './editorPanels'
+import { TOOL_PANEL_ANCHOR } from './editorPanels'
 import type { CutAxis } from './lib/meshCut'
 
 export interface CutToolPanelProps {
@@ -38,7 +38,7 @@ export function CutToolPanel({
     <Sheet
       variant="soft"
       sx={{
-        position: 'absolute', top: TOOL_PANEL_TOP, left: 8, zIndex: (theme) => theme.zIndex.tooltip,
+        position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: (theme) => theme.zIndex.tooltip,
         p: 1.25, borderRadius: 'sm', boxShadow: 'sm',
         width: 'min(260px, calc(100% - 16px))',
         display: 'flex', flexDirection: 'column', gap: 0.75

@@ -7,7 +7,7 @@
  * "Choose from printer" opens the host slice dialog's printer-material picker Modal,
  * which stacks above this dialog and closes itself after a pick.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AutocompleteOption, Box, Button, DialogActions, FormControl, FormHelperText, FormLabel,
   ListItemContent, ModalDialog, Option, Select, Stack, Typography
@@ -48,8 +48,20 @@ export function MaterialEditDialog({
   chooseFromPrinter: { disabled: boolean; onOpen: () => void } | null
   onClose: () => void
 }) {
+  // Edits apply LIVE through the controller (that is what keeps the editor's dirty flag and undo
+  // history correct, and what lets the "Choose from printer" picker write straight through). So
+  // Cancel restores the values the dialog opened with rather than staging edits until Done —
+  // same outcome for the user, without diverging from that live-apply contract.
+  const opened = useRef({ option: selectedOption, color, typeFilter })
+  const revertAndClose = () => {
+    const initial = opened.current
+    if (initial.typeFilter !== typeFilter) onTypeFilterChange(initial.typeFilter)
+    if (initial.option?.id !== selectedOption?.id) onMaterialOptionChange(initial.option)
+    if (initial.color !== color) onColorChange(initial.color)
+    onClose()
+  }
   return (
-    <BackAwareModal open onClose={onClose}>
+    <BackAwareModal open onClose={revertAndClose}>
       <ModalDialog sx={{ maxWidth: 420, width: '100%' }}>
         <Typography level="h4">Material {filamentIndex + 1}</Typography>
         <Stack spacing={1.25}>
@@ -116,6 +128,7 @@ export function MaterialEditDialog({
         {/* buttonFlex keeps the lone action button-sized (DialogActions stretches children
             to fill by default) and right-aligned, per dialog conventions. */}
         <DialogActions buttonFlex="0 1 auto" sx={{ pt: 1, justifyContent: 'flex-end' }}>
+          <Button type="button" variant="plain" color="neutral" onClick={revertAndClose}>Cancel</Button>
           <Button type="button" onClick={onClose} sx={{ minWidth: 96 }}>Done</Button>
         </DialogActions>
       </ModalDialog>
@@ -148,9 +161,12 @@ function SliceMaterialAutocomplete({
   return (
     <DeferredKeyboardAutocomplete
       options={options}
-      value={value}
+      // A material slot always resolves to a preset — clearing it would leave the slot with no
+      // material at all — so drop Joy's clear (x) affordance.
+      disableClearable
+      value={value ?? undefined}
       inputValue={inputValue}
-      onChange={(_event, option) => onChange(option)}
+      onChange={(_event, option) => onChange(option ?? null)}
       onInputChange={(_event, nextValue, reason) => {
         if (reason === 'reset') return
         setInputValue(nextValue)

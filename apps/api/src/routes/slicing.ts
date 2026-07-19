@@ -108,6 +108,22 @@ slicingRouter.get('/profiles', requireRequestPermission(LIBRARY_VIEW_PERMISSION)
   await sendModelBuffer(request, response, Buffer.from(JSON.stringify({ profiles: [...customProfiles, ...builtinProfiles] }), 'utf8'), 'application/json')
 })
 
+/**
+ * The 3D build-plate mesh for a printer model, proxied from the slicer's bundled BambuStudio
+ * resources (the browser cannot reach the slicer directly). Optional editor decoration: a
+ * printer with no bundled bed answers 404 and the editor keeps its millimetre grid.
+ */
+slicingRouter.get('/bed-model', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const printerModel = typeof request.query.printerModel === 'string' ? request.query.printerModel.trim() : ''
+  if (!printerModel) throw badRequest('printerModel is required')
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const bytes = await slicerClient.bedModel(targetId, printerModel)
+  if (!bytes) throw notFound('No bed model for this printer')
+  // Immutable per slicer image; let the browser keep it for the session.
+  response.setHeader('Cache-Control', 'private, max-age=86400')
+  await sendModelBuffer(request, response, bytes, 'model/stl')
+})
+
 slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const parsed = resolveProcessConfigRequestSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid resolve request')

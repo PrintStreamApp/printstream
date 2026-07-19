@@ -72,6 +72,16 @@ export const PAINT_CHANNEL_SPECS: Record<TrianglePaintChannel, {
   color: { stateKey: 'colorPaint', overlayName: 'colorPaintOverlay', palette: SUPPORT_PAINT_COLORS, offsetFactor: -4 }
 }
 
+/**
+ * Modes that put the move/rotate/scale gizmo on the selection — i.e. the ones where a
+ * transform readout means anything. Every other mode (paint, cut, lay-face, brim ears,
+ * measure) detaches the gizmo and drives its own floating panel instead. Single source of
+ * truth for both the detach decision and whether the readout renders, so the two can't drift.
+ */
+export function isTransformGizmoMode(mode: GizmoMode): boolean {
+  return mode === 'translate' || mode === 'rotate' || mode === 'scale'
+}
+
 export function paintChannelForGizmoMode(mode: GizmoMode): TrianglePaintChannel | null {
   return mode === 'paintSupports' ? 'supports' : mode === 'paintSeam' ? 'seam' : mode === 'paintColor' ? 'color' : null
 }
