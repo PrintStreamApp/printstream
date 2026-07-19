@@ -1237,7 +1237,11 @@ function normalizeProjectFilaments(projectFilaments: readonly ThreeMfProjectFila
     filamentName: normalizeNullableText(filament.filamentName),
     color: normalizeNullableText(filament.color),
     nozzleId: filament.nozzleId ?? null,
-    chamberTemperature: filament.chamberTemperature ?? null
+    chamberTemperature: filament.chamberTemperature ?? null,
+    // Null means "the project never said", which downstream classification treats as unknown —
+    // preserve that rather than collapsing a missing flag to false.
+    isSupport: filament.isSupport ?? null,
+    isSoluble: filament.isSoluble ?? null
   }))
 }
 

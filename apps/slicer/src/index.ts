@@ -39,6 +39,8 @@ import { buildPerMaterialFilamentOverrides, selectCliProfileFiles } from './cli-
 import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } from './machine-switch-guard.js'
 import { readBedModel } from './bed-model.js'
 import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
+import { buildFilamentMapArgs } from './filament-map-args.js'
+import { ensurePositionalInputArgument, insertArgsBeforePositionalInput } from './cli-input-args.js'
 import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
 import { formatSliceEngineCrashError, formatSlicePresetIncompatibilityError } from './slice-error.js'
 import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
@@ -221,6 +223,10 @@ app.post('/slice', async (request, response) => {
     if (workDirCleaned) return
     workDirCleaned = true
     activeSliceOutput.delete(parsed.data.jobId)
+    if (env.SLICER_KEEP_WORK_DIR) {
+      console.warn(`[slicer] SLICER_KEEP_WORK_DIR is set: retaining ${workDir}`)
+      return
+    }
     void rm(workDir, { recursive: true, force: true }).catch(() => undefined)
   }
   response.on('close', () => {
@@ -269,6 +275,7 @@ app.post('/slice', async (request, response) => {
       metadata: slicedArtifactMetadata,
       supportedFlags,
       rewroteProjectSettings: preparedInput.rewroteProjectSettings,
+      manualFilamentMap: preparedInput.manualFilamentMap,
       bambuHomeDir,
       bambuConfigDir,
       bambuCacheDir,
@@ -362,6 +369,8 @@ async function runCli(input: {
   metadata: SlicedArtifactMetadata | null
   supportedFlags: ReadonlySet<string>
   rewroteProjectSettings: boolean
+  /** Manual dual-nozzle assignment to pin on the CLI; null when nozzle mode stays automatic. */
+  manualFilamentMap: string[] | null
   bambuHomeDir: string
   bambuConfigDir: string
   bambuCacheDir: string
@@ -436,10 +445,13 @@ async function runCli(input: {
   // toggle) arrive as build items marked printable="0". The CLI only honors that via --skip-objects
   // (by identify_id), so translate it here. Empty when nothing is excluded.
   const skipObjectArgs = buildSkipObjectsArgs(await deriveSkipObjectIdentifyIds(preparedInputPath))
-  const inputArgIndex = templateArgs.indexOf(preparedInputPath)
-  const args = inputArgIndex >= 0
-    ? [...templateArgs.slice(0, inputArgIndex), ...profileArgs, ...skipObjectArgs, ...templateArgs.slice(inputArgIndex)]
-    : [...templateArgs, ...profileArgs, ...skipObjectArgs]
+  // Manual dual-nozzle assignment: only the CLI flag makes it take effect (filament-map-args.ts).
+  const filamentMapArgs = buildFilamentMapArgs(input.manualFilamentMap)
+  const args = insertArgsBeforePositionalInput(templateArgs, preparedInputPath, [
+    ...profileArgs,
+    ...skipObjectArgs,
+    ...filamentMapArgs
+  ])
 
   await executeCli({
     slicerTarget: input.slicerTarget,
@@ -467,6 +479,8 @@ async function runMergedAllPlateFallback(input: {
   profileArgs: string[]
   metadata: SlicedArtifactMetadata | null
   supportedFlags: ReadonlySet<string>
+  /** Manual dual-nozzle assignment to pin on the CLI; null when nozzle mode stays automatic. */
+  manualFilamentMap: string[] | null
   bambuHomeDir: string
   bambuConfigDir: string
   bambuCacheDir: string
@@ -490,6 +504,7 @@ async function runMergedAllPlateFallback(input: {
       plate: plateId,
       supportedFlags: input.supportedFlags,
       profileArgs: input.profileArgs,
+      manualFilamentMap: input.manualFilamentMap,
       removedFlags: ['--export-json'],
       removedStandaloneFlags: [],
       bambuHomeDir: input.bambuHomeDir,
@@ -860,10 +875,6 @@ function stripStandaloneFlags(args: string[], flagNames: string[]): string[] {
   return args.filter((value) => !removableFlags.has(value.toLowerCase()))
 }
 
-function ensurePositionalInputArgument(args: string[], inputPath: string): string[] {
-  return args.includes(inputPath) ? args : [...args, inputPath]
-}
-
 function buildCliArgs(input: {
   slicerTarget: RuntimeSlicerTarget
   inputPath: string
@@ -872,6 +883,8 @@ function buildCliArgs(input: {
   plate: number
   supportedFlags: ReadonlySet<string>
   profileArgs: string[]
+  /** Manual dual-nozzle assignment to pin on the CLI; null when nozzle mode stays automatic. */
+  manualFilamentMap: string[] | null
   removedFlags: string[]
   removedStandaloneFlags: string[]
   bambuHomeDir: string
@@ -906,10 +919,10 @@ function buildCliArgs(input: {
     input.inputPath
   )
 
-  const inputArgIndex = templateArgs.indexOf(input.inputPath)
-  return inputArgIndex >= 0
-    ? [...templateArgs.slice(0, inputArgIndex), ...input.profileArgs, ...templateArgs.slice(inputArgIndex)]
-    : [...templateArgs, ...input.profileArgs]
+  return insertArgsBeforePositionalInput(templateArgs, input.inputPath, [
+    ...input.profileArgs,
+    ...buildFilamentMapArgs(input.manualFilamentMap)
+  ])
 }
 
 async function mkfifo(pipePath: string): Promise<void> {
@@ -1101,6 +1114,8 @@ async function prepareInputThreeMf(input: {
 }): Promise<{
   inputPath: string
   rewroteProjectSettings: boolean
+  /** 1-based slicer extruder per filament when Manual nozzle mode is forced; null otherwise. */
+  manualFilamentMap: string[] | null
 }> {
   const projectSettings = await readThreeMfProjectSettings(input.inputPath)
   const machineSwitchProfileName = input.profileFiles.find((profile) => profile.kind === 'machine')?.name ?? null
@@ -1138,13 +1153,17 @@ async function prepareInputThreeMf(input: {
   if (!metadata && !machineSwitchProfile && !input.stripEmbeddedProfileRefs && !applyEmbeddedProcessOverrides) {
     return {
       inputPath: input.inputPath,
-      rewroteProjectSettings: false
+      rewroteProjectSettings: false,
+      manualFilamentMap: null
     }
   }
   // The slicer CLI reads `filament_map_mode` from model_settings.config (per plate),
   // not project_settings.config — so a manual nozzle choice must be forced there or the
-  // CLI auto-assigns nozzles for flush and ignores the chosen Left/Right. Build the
-  // per-plate Manual map from the same assignment we write into project_settings — against
+  // CLI auto-assigns nozzles for flush and ignores the chosen Left/Right. The MAP that goes
+  // with that mode is a separate matter: the CLI ignores it in both configs and only reads
+  // `--filament-map`, so the assignment is also returned for the CLI args (see
+  // `filament-map-args.ts` — without the flag the slice aborts on a garbage extruder id).
+  // Build the per-plate Manual map from the same assignment we write into project_settings — against
   // the TARGET machine's extruder map when the project is being retargeted (the source's
   // single-nozzle map would otherwise suppress the assignment on a switch to dual-nozzle).
   const nozzleAssignmentSettings = projectSettings && machineSwitchProfile
@@ -1168,9 +1187,12 @@ async function prepareInputThreeMf(input: {
     return rewrittenSettings
   }, modelSettingsTransform)
   if (!hasEmbeddedProjectSettings) {
+    // The rewritten copy is discarded, so the Manual mode this assignment depends on was never
+    // written — passing the map on the CLI would pin an assignment the plate never asked for.
     return {
       inputPath: input.inputPath,
-      rewroteProjectSettings: false
+      rewroteProjectSettings: false,
+      manualFilamentMap: null
     }
   }
   if (machineSwitchProfile && machineSwitchProfileName) {
@@ -1185,7 +1207,8 @@ async function prepareInputThreeMf(input: {
   }
   return {
     inputPath: input.outputPath,
-    rewroteProjectSettings: true
+    rewroteProjectSettings: true,
+    manualFilamentMap: manualNozzle?.filament_map ?? null
   }
 }
 

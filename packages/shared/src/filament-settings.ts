@@ -62,6 +62,28 @@ export function isFilamentSettingKey(key: string): boolean {
 }
 
 /**
+ * Keys that say WHICH material a slot holds, not how it is tuned. They are excluded from the
+ * "changed vs preset" math: a saved project always records them (the writer keeps them as the
+ * slot's identity — see FILAMENT_IDENTITY_KEYS in the API's scene builder), and they routinely
+ * disagree with the preset for reasons the user never chose. Bambu's "Support For PLA/PETG"
+ * preset, for instance, declares `filament_type: PLA` while the material is selected as PLA-S,
+ * so counting it reported a permanent phantom change on a filament nobody had edited.
+ */
+const FILAMENT_IDENTITY_SETTING_KEYS: ReadonlySet<string> = new Set([
+  'filament_type',
+  'filament_colour',
+  'filament_settings_id',
+  'filament_ids',
+  'filament_nozzle_map',
+  'filament_notes'
+])
+
+/** True when `key` identifies the material rather than tuning it. */
+export function isFilamentIdentitySettingKey(key: string): boolean {
+  return FILAMENT_IDENTITY_SETTING_KEYS.has(key)
+}
+
+/**
  * Collapse every per-filament array to its element-0 scalar — the value BambuStudio's filament tab
  * edits (`get_option(key, 0)`). A filament preset resolved for a multi-extruder-variant machine
  * serializes each per-filament setting as an N-element vector (e.g. `["0","0"]`), while a project's
@@ -142,13 +164,14 @@ export function resolvedFilamentModifiedKeys(state: ResolvedFilamentState, overr
   const finalConfig = { ...state.effective, ...scalarizeFilamentConfig(overrides) }
   const keys = new Set<string>()
   for (const key of Object.keys(finalConfig)) {
-    if (!FILAMENT_SETTING_KEYS.has(key)) continue
+    if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
     if (!processConfigValuesEqual(state.baseline[key], finalConfig[key])) keys.add(key)
   }
   // Record-marked keys stay flagged while untouched relative to the embedded config (parent
   // baseline unresolved), mirroring the dialog's bakedKeys condition.
   for (const key of state.bakedKeys) {
-    if (FILAMENT_SETTING_KEYS.has(key) && processConfigValuesEqual(finalConfig[key], state.effective[key])) keys.add(key)
+    if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
+    if (processConfigValuesEqual(finalConfig[key], state.effective[key])) keys.add(key)
   }
   return [...keys]
 }

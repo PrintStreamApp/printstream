@@ -679,15 +679,25 @@ export function buildSliceDialogProjectFilaments(
     // wrongly drop a painted secondary colour (e.g. black on a white base) from the
     // print/slice material list. With no trustworthy per-plate data, treat every
     // project material as in use.
-    const usedOnPlate = new Set(
-      plateHasSliceData(selectedPlateData) ? selectedPlateData!.filaments.map((filament) => filament.id) : []
-    )
+    const platedFilamentIds = plateHasSliceData(selectedPlateData)
+      ? selectedPlateData!.filaments.map((filament) => filament.id)
+      : []
+    const usedOnPlate = new Set(platedFilamentIds)
+    // Support materials are referenced by process SETTINGS (support_filament /
+    // support_interface_filament), not by any object's extruder id, so a plate's sliced
+    // filament list omits them until a slice actually consumed them. Without this a material
+    // assigned as the support interface is missing from the print dialog entirely — it cannot be
+    // mapped to a tray, and the print goes out without it. Union only when the plate HAS slice
+    // data: with none, every material is already treated as in use below.
+    if (platedFilamentIds.length > 0) {
+      for (const id of bakedIndex.supportFilamentIds ?? []) usedOnPlate.add(id)
+    }
     return bakedIndex.projectFilaments.map((filament) => ({
       projectFilamentId: filament.id,
       label: filament.filamentName ?? filament.filamentType ?? `Filament ${filament.id}`,
       color: filament.color,
       nozzleId: filament.nozzleId ?? null,
-      usedOnSelectedPlate: usedOnPlate.size === 0 ? true : usedOnPlate.has(filament.id)
+      usedOnSelectedPlate: platedFilamentIds.length === 0 ? true : usedOnPlate.has(filament.id)
     }))
   }
   return file.projectFilamentChips.map((filament, index) => ({

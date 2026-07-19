@@ -312,6 +312,26 @@ model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outpu
   (`three-mf-scene-builder.ts`, `three-mf-output.ts`) live only in the api modules.)
 - **Nozzle-id mapping** in the slicer's `output-metadata.ts` must stay byte-for-byte —
   see the slicer development notes.
+- **A `slice_info.config` record must describe the project's CURRENT filament set, or not exist.**
+  It records one `<filament>` entry per filament a PREVIOUS slice used, and BambuStudio builds its
+  per-plate nozzle grouping from those entries
+  (`MultiNozzleUtils::load_nozzle_infos_with_compatibility` consumes `slice_filaments_info`). A
+  record covering fewer filaments than the project has makes the engine derive a SHORT filament map
+  and read it out of bounds, aborting the slice on a garbage extruder id (issue #63: a project
+  sliced with one material, then given a second, failed with "can not be printed on extruder
+  21840"). The editor save therefore DROPS a record that no longer matches the filament set it is
+  saving (`three-mf-scene-builder.ts`) rather than carrying it forward: the per-filament usage a
+  slice produced cannot be invented for a material that was never sliced, so the honest state is no
+  record until the project is sliced again. `sliceRecordFilamentIds` in
+  `@printstream/shared/three-mf` is the shared check.
+- **A manual dual-nozzle assignment must be passed on the CLI, not only written into the 3MF.**
+  The MODE comes from the per-plate `filament_map_mode` metadata in `model_settings.config`; the
+  MAP goes on the `--filament-map` flag (`apps/slicer/src/filament-map-args.ts`, comma-separated,
+  one entry per filament). BambuStudio takes `filament_map` from its command-line config, falling
+  back to the plate's map and then to a one-entry default `{1}`; when that fallback reaches the
+  default, the manual-mode check reads it out of bounds and aborts with a garbage extruder id
+  (issue #63). The flag removes the dependency on that fallback. Keep writing the map into the
+  3MF so the saved artifact matches the gcode, but do not rely on it to take effect.
 - **Editor nozzle assignment** (`SceneEditFilament.nozzleId`, 0 = right / 1 = left) is persisted on
   save by `three-mf-scene-builder.ts`: `filament_nozzle_map` is written **verbatim** as the runtime
   nozzle id (same inverse-free mirror as the slicer, per that same invariant), each `slice_info`

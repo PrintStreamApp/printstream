@@ -128,6 +128,27 @@ export function LibraryPickerModal({
     showRoot: bridgeEntries.length !== 1
   })
 
+  /**
+   * Single entry point for folder moves (browser rows/tiles and the breadcrumb alike).
+   * Clearing the search is what makes a searched-for folder reachable: in "All folders"
+   * scope the API ignores `folderId` while `search` is set and re-returns the same flat
+   * whole-bridge list, so the click would otherwise appear to do nothing.
+   */
+  const navigateToFolder = (folderEntryId: string | null) => {
+    setSearch('')
+    if (folderEntryId === null) {
+      setFolderId(null)
+      setBridgeId(null)
+      return
+    }
+    if (isBridgeFolderId(folderEntryId)) {
+      setBridgeId(fromBridgeFolderId(folderEntryId))
+      setFolderId(null)
+      return
+    }
+    setFolderId(folderEntryId)
+  }
+
   const pickerEmptyState = favoritesOnly
     ? <LibraryPickerEmptyState favoritesOnly />
     : deferredSearch.trim()
@@ -156,14 +177,7 @@ export function LibraryPickerModal({
         surfaceStyle="dialog"
         hideFilamentSwatches
         emptyState={emptyStateNode}
-        onFolderOpen={(folder) => {
-          if (isBridgeFolderId(folder.id)) {
-            setBridgeId(fromBridgeFolderId(folder.id))
-            setFolderId(null)
-            return
-          }
-          setFolderId(folder.id)
-        }}
+        onFolderOpen={(folder) => navigateToFolder(folder.id)}
         onFilePick={onPick}
         isFilePickable={(file) => {
           if (isDirectPrintableFileName(file.name)) {
@@ -206,19 +220,7 @@ export function LibraryPickerModal({
               <LibraryBreadcrumbRow favoritesOnly={favoritesOnly} onFavoritesOnlyChange={setFavoritesOnly}>
                 <LibraryBreadcrumb
                   crumbs={breadcrumb}
-                  onNavigate={(folderEntryId) => {
-                    if (folderEntryId === null) {
-                      setFolderId(null)
-                      setBridgeId(null)
-                      return
-                    }
-                    if (isBridgeFolderId(folderEntryId)) {
-                      setBridgeId(fromBridgeFolderId(folderEntryId))
-                      setFolderId(null)
-                      return
-                    }
-                    setFolderId(folderEntryId)
-                  }}
+                  onNavigate={navigateToFolder}
                 />
               </LibraryBreadcrumbRow>
           </DialogSection>

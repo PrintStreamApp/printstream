@@ -122,14 +122,21 @@ export function useEditorSave({
           method: 'POST',
           body: payload
         })
-        await invalidateLibraryQueries(queryClient)
         if (asProject) {
           markSaved()
           // The saved 3MF bakes the session's material add/removes as its filament list;
           // tell the controller so it rebases its overlay once the refetched index lands
           // (otherwise an added material renders twice until the editor is reopened).
+          //
+          // MUST be armed BEFORE the invalidation below. The controller detects the refetch by
+          // watching its base material list change, so arming after `invalidateLibraryQueries`
+          // resolves loses the race whenever the refetch lands inside that await: the change it
+          // was waiting for has already happened, the overlay is never folded in, and the added
+          // material renders twice — then bakes into the NEXT save as a real duplicate slot,
+          // taking its per-slot colour/preset/nozzle state (keyed by the pre-save id) with it.
           sliceConfigRef.current?.onProjectSaved()
         }
+        await invalidateLibraryQueries(queryClient)
         toast.success(successMessage)
         if (asProject) onSaved?.(file)
         // Keep the editor open after saving so the user can keep arranging/printing.

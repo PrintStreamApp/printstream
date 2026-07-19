@@ -711,13 +711,16 @@ export function SliceSettingsPanel({ controller, mode }: {
                       const inUse = filamentInUse?.(filament.projectFilamentId) ?? false
                       const supportOnly = filamentSupportOnly?.(filament.projectFilamentId) ?? false
                       const removeDisabled = projectFilaments.length <= 1 || inUse
+                      // `inUse` covers OBJECT references only. A material used just by a process
+                      // setting stays removable — the setting falls back to "Default" — so say so
+                      // rather than leaving the user to guess what happens to their supports.
                       const removeTitle = projectFilaments.length <= 1
                         ? 'A project needs at least one material'
                         : inUse
-                          ? (supportOnly
-                              ? 'This material is used for supports — change the support filament before removing'
-                              : 'This material is used by an object — reassign it before removing')
-                          : 'Remove material'
+                          ? 'This material is used by an object — reassign it before removing'
+                          : supportOnly
+                            ? 'Remove material — supports using it fall back to the default material'
+                            : 'Remove material'
                       return (
                         <Tooltip title={removeTitle}>
                           <span>

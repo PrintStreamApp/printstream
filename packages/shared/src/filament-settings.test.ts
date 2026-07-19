@@ -129,3 +129,27 @@ test('override + resolve schemas validate their shapes', () => {
   const req = resolveFilamentConfigRequestSchema.parse({ filamentProfileId: 'builtin:filament:x', projectFilamentId: 2 })
   assert.equal(req.projectFilamentId, 2)
 })
+
+// Regression (2026-07-19, reported on the H2D "Kawasaki" project): a support material read as
+// permanently "changed vs preset" the moment the project was reopened. Its embedded config held
+// only identity keys — filament_type PLA-S against Bambu's "Support For PLA/PETG" preset, which
+// declares itself PLA — so the badge counted a difference the user never made.
+test('identity keys never count as a filament settings change', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
+  const state = prepareResolvedFilamentState({
+    config: { filament_type: 'PLA-S', filament_notes: '' },
+    baseConfig: { filament_type: ['PLA'] },
+    overriddenKeys: []
+  } as never)
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), [])
+})
+
+test('a real tuning difference still counts alongside identity keys', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
+  const state = prepareResolvedFilamentState({
+    config: { filament_type: 'PLA-S', nozzle_temperature: '250' },
+    baseConfig: { filament_type: ['PLA'], nozzle_temperature: ['220'] },
+    overriddenKeys: []
+  } as never)
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), ['nozzle_temperature'])
+})

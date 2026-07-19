@@ -31,6 +31,8 @@ import { DialogFileTitle } from '../../components/DialogFileTitle'
 import { LibraryPlateCardPicker } from '../../components/LibraryPlateSelect'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { formatLibraryFileName } from '../../lib/libraryDisplay'
+import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
+import { useShowBedModel } from './lib/useShowBedModel'
 import {
   createPreviewPlateSurface,
   createThreeMfMatrix,
@@ -183,6 +185,40 @@ export function PreviewView(props: Record<string, unknown>) {
     refetchOnMount: 'always'
   })
   const plates = useMemo(() => platesQuery.data?.plates ?? [], [platesQuery.data])
+
+  // The 3D build plate, honouring the same preference the editor writes — a plate that looks one
+  // way while editing and another while previewing the slice of that same file is exactly the
+  // inconsistency this shares. The scene carries the printer it was placed for; a file whose
+  // printer is unknown, or a printer with no bundled mesh, keeps the plain grid.
+  const [showBedModel] = useShowBedModel()
+  const scenePrinterModel = sceneQuery.data?.bed.printerModel ?? null
+  const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
+  useEffect(() => {
+    // Mirrors EditorView: the CACHED original is disposed when replaced, which is safe because
+    // every rendered bed is a clone of it, so a live plate is never pulled out from under a scene.
+    const replaceGeometry = (next: THREE.BufferGeometry | null) => {
+      setBedModelGeometry((previous) => {
+        if (previous && previous !== next) previous.dispose()
+        return next
+      })
+    }
+    if (!open || !showBedModel || !scenePrinterModel) {
+      replaceGeometry(null)
+      return undefined
+    }
+    const controller = new AbortController()
+    void loadBedModelGeometry({
+      printerModel: scenePrinterModel,
+      // The preview has no slicer target of its own; the API falls back to the default target.
+      slicerTargetId: null,
+      signal: controller.signal
+    }).then((geometry) => {
+      if (controller.signal.aborted) geometry?.dispose()
+      else replaceGeometry(geometry)
+    })
+    return () => controller.abort()
+  }, [open, showBedModel, scenePrinterModel])
+  const bedModel = showBedModel ? bedModelGeometry : null
 
   useEffect(() => {
     setSelectedPlate(requestedPlateIndex ?? 1)
@@ -590,7 +626,7 @@ export function PreviewView(props: Record<string, unknown>) {
           setGcodeMoveEnd(null)
           setGcodeMoveCount(preview.moveCount(preview.layerCount - 1))
           setGcodeStats(parsed.stats)
-          attachObject(buildPlateGcodePreviewObject(preview.object, sceneQuery.data?.bed ?? null))
+          attachObject(buildPlateGcodePreviewObject(preview.object, sceneQuery.data?.bed ?? null, bedModel))
         })
         .catch(handleLoadError)
     } else {
@@ -603,7 +639,7 @@ export function PreviewView(props: Record<string, unknown>) {
       // Show the plate (correctly oriented) immediately, then stream the parts in off the main thread
       // so each model appears as it parses with an "N of M" bar — instead of the whole plate blocking
       // on one big synchronous DOM parse and popping in at once.
-      const plateGroup = buildPlatePreviewBed(sceneData)
+      const plateGroup = buildPlatePreviewBed(sceneData, bedModel)
       attachObject(plateGroup)
       void streamThreeMfSceneParts(resourceBase, sceneData, plateGroup, loadAbortController.signal, (done, total) => {
         if (cancelled) return
@@ -652,7 +688,10 @@ export function PreviewView(props: Record<string, unknown>) {
     sceneQuery.error,
     sceneQuery.isLoading,
     previewMode,
-    selectedPlate
+    selectedPlate,
+    // The bed mesh resolves asynchronously (and flips with the preference), so the content has to
+    // rebuild when it lands — otherwise the plate keeps whichever surface it was first built with.
+    bedModel
   ])
 
   // Track the scrubbable move count of the current top layer; changing layers resets the
@@ -1168,16 +1207,43 @@ function isMeshPreviewMode(mode: PreviewMode): boolean {
 }
 
 /** Build just the plate surface (bed + exclude zones) so it can be shown before any parts load. */
-function buildPlatePreviewBed(scene: LibraryThreeMfScene): THREE.Group {
+function buildPlatePreviewBed(scene: LibraryThreeMfScene, bedModel: THREE.BufferGeometry | null): THREE.Group {
   const plateGroup = new THREE.Group()
-  plateGroup.add(createPreviewPlateSurface({
-    width: Math.max(scene.bed.maxX - scene.bed.minX, 1),
-    depth: Math.max(scene.bed.maxY - scene.bed.minY, 1),
-    centerX: (scene.bed.minX + scene.bed.maxX) / 2,
-    centerY: (scene.bed.minY + scene.bed.maxY) / 2,
+  plateGroup.add(buildPreviewPlateSurface({
+    minX: scene.bed.minX,
+    maxX: scene.bed.maxX,
+    minY: scene.bed.minY,
+    maxY: scene.bed.maxY,
     excludeAreas: scene.bed.excludeAreas
-  }))
+  }, bedModel))
   return plateGroup
+}
+
+/**
+ * The plate surface for a preview, with the modelled 3D bed under it when one is loaded.
+ *
+ * Matches the editor's treatment exactly (`EditorView`): with a bed model the flat surface fill is
+ * dropped and the coordinate ticks move to the rear edge, so the mesh reads as the plate rather
+ * than competing with a painted-on square. The mesh is positioned from the printable area's
+ * ORIGIN (its minimum corner), never its centre — see lib/bedModel.ts for why centring skews it.
+ */
+function buildPreviewPlateSurface(
+  bed: { minX: number; maxX: number; minY: number; maxY: number; excludeAreas: LibraryThreeMfScene['bed']['excludeAreas'] },
+  bedModel: THREE.BufferGeometry | null
+): THREE.Object3D {
+  const width = Math.max(bed.maxX - bed.minX, 1)
+  const depth = Math.max(bed.maxY - bed.minY, 1)
+  const surface = createPreviewPlateSurface({
+    width,
+    depth,
+    centerX: (bed.minX + bed.maxX) / 2,
+    centerY: (bed.minY + bed.maxY) / 2,
+    excludeAreas: bed.excludeAreas,
+    showSurfaceFill: !bedModel,
+    axisLabelEdge: bedModel ? 'rear' : 'front'
+  })
+  if (bedModel) surface.add(createBedModelObject({ geometry: bedModel, originX: bed.minX, originY: bed.minY }))
+  return surface
 }
 
 /**
@@ -1239,7 +1305,11 @@ async function streamThreeMfSceneParts(
   }
 }
 
-function buildPlateGcodePreviewObject(object: THREE.Object3D, bed: LibraryThreeMfScene['bed'] | null): THREE.Object3D {
+function buildPlateGcodePreviewObject(
+  object: THREE.Object3D,
+  bed: LibraryThreeMfScene['bed'] | null,
+  bedModel: THREE.BufferGeometry | null
+): THREE.Object3D {
   // The layered parser already emits raw G-code coordinates (printer Z-up), matching the
   // Z-up plated scene — so, unlike three's Y-up GCodeLoader output, no rotation is needed.
   object.updateMatrixWorld(true)
@@ -1255,13 +1325,7 @@ function buildPlateGcodePreviewObject(object: THREE.Object3D, bed: LibraryThreeM
     // Real printer plate (absolute bed coordinates): the G-code is authored in bed space, so
     // the surface spans the machine's true footprint and exclude zones rather than a generic
     // square centred on the toolpaths (which read as a small A1-style bed for an H2D plate).
-    plateGroup.add(createPreviewPlateSurface({
-      width: Math.max(bed.maxX - bed.minX, 1),
-      depth: Math.max(bed.maxY - bed.minY, 1),
-      centerX: (bed.minX + bed.maxX) / 2,
-      centerY: (bed.minY + bed.maxY) / 2,
-      excludeAreas: bed.excludeAreas
-    }))
+    plateGroup.add(buildPreviewPlateSurface(bed, bedModel))
   } else {
     // Fallback when the scene/bed is unavailable: a generic square grid under the toolpaths.
     const center = bounds.getCenter(new THREE.Vector3())

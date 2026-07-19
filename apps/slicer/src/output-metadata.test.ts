@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyManualFilamentMapToModelSettings, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata } from './output-metadata.js'
+import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata } from './output-metadata.js'
 
 test('rewriteSliceInfoMetadata replaces stale printer model and filament metadata', () => {
   const metadata = buildSlicedArtifactMetadata({
@@ -157,7 +157,7 @@ test('rewriteProjectSettingsMetadata blanks the inherited machine/process parent
   assert.deepEqual(rewritten.inherits_group, ['', 'Bambu PLA Basic @BBL P1S 0.4 nozzle', ''])
 })
 
-test('rewriteProjectSettingsMetadata falls back to cleaned material names when no filament profile id is provided', () => {
+test('rewriteProjectSettingsMetadata leaves filament_settings_id alone when no filament profile id is provided', () => {
   const metadata = buildSlicedArtifactMetadata({
     sourceFileId: 'source-file',
     target: {
@@ -183,7 +183,10 @@ test('rewriteProjectSettingsMetadata falls back to cleaned material names when n
     filament_settings_id: ['Bambu ABS @base', 'Bambu ABS @BBL H2D']
   }, metadata)
 
-  assert.deepEqual(rewritten.filament_settings_id, ['Bambu PETG HF', 'Bambu PETG HF'])
+  // Was: overwritten with the cleaned material names. A material name is a DISPLAY identity, not
+  // a preset the catalog contains, so writing it left the project naming a preset nothing could
+  // resolve — and an already-partial config could then never be repaired at slice time.
+  assert.deepEqual(rewritten.filament_settings_id, ['Bambu ABS @base', 'Bambu ABS @BBL H2D'])
 })
 
 test('rewriteProjectSettingsMetadata preserves selected dual-nozzle assignments', () => {
@@ -447,4 +450,82 @@ test('applyManualFilamentMapToModelSettings inserts the assignment when the sour
   assert.match(out, /filament_map_mode" value="Manual"/)
   assert.match(out, /filament_maps" value="1 2 2"/)
   assert.match(out, /plater_id" value="1"/)
+})
+
+// Production + dev incident (2026-07-19, H2D): a support material with no nozzle choice was
+// skipped, leaving filament_map SHORTER than the filament count. Manual mode makes that array
+// authoritative for every filament and BambuStudio indexes it unchecked
+// (`filament_maps[plate_filaments[i] - 1]`, BambuStudio.cpp ~6822), so the short array was an
+// out-of-bounds vector read: "filament Sup.PLA can not be printed on extruder 21840, under manual
+// mode for multi extruder printer" (exit 188). Every slot must carry a valid extruder.
+// A mapping with no resolved profile carries the material's DISPLAY identity ("Bambu PETG Basic"),
+// not a preset name. Writing that into filament_settings_id overwrote the project's own correct
+// preset ("Bambu PETG Basic @BBL H2D 0.4 nozzle") with a string no catalog contains — so a project
+// whose config was partial could no longer be repaired, and the slice failed naming a filament the
+// user never picked (print-from-printer-card, no materials chosen).
+test('rewriteProjectSettingsMetadata keeps the project preset when a mapping has no resolved profile', () => {
+  const metadata = buildSlicedArtifactMetadata({
+    sourceFileId: 'file-1',
+    plate: 1,
+    target: {
+      mode: 'manualProfile',
+      printerModel: 'H2D',
+      printerProfileId: 'machine-profile',
+      filamentMappings: [
+        // No profileId: the AMS/display identity only.
+        { projectFilamentId: 1, material: 'Bambu PETG Basic', source: 'manual' },
+        { projectFilamentId: 2, material: 'Bambu Support For PLA/PETG', source: 'manual' }
+      ]
+    }
+  } as never, [{ id: 'machine-profile', kind: 'machine', name: 'Bambu Lab H2D 0.4 nozzle' }])
+  assert.ok(metadata)
+
+  const next = rewriteProjectSettingsMetadata({
+    filament_settings_id: ['Bambu PETG Basic @BBL H2D 0.4 nozzle', 'Bambu Support For PLA/PETG @BBL H2D'],
+    filament_colour: ['#001489', '#808080'],
+    filament_type: ['PETG', 'PLA-S']
+  }, metadata)
+
+  assert.deepEqual(
+    next.filament_settings_id,
+    ['Bambu PETG Basic @BBL H2D 0.4 nozzle', 'Bambu Support For PLA/PETG @BBL H2D'],
+    'the project\'s own preset names must survive a slice that resolved no filament profile'
+  )
+})
+
+test('buildManualNozzleAssignment covers every filament, including ones with no nozzle choice', () => {
+  const metadata = buildSlicedArtifactMetadata({
+    sourceFileId: 'source-file',
+    target: {
+      mode: 'manualProfile',
+      printerModel: 'H2D',
+      printerProfileId: 'machine-profile',
+      processProfileId: 'process-profile',
+      filamentMappings: [
+        // Only the first material has a nozzle; the support material has none.
+        { projectFilamentId: 1, material: 'PLA', color: '#001489', source: 'manual', toolheadId: 'nozzle-1' },
+        { projectFilamentId: 2, material: 'PLA-S', color: '#808080', source: 'manual' }
+      ]
+    },
+    outputFileName: 'example.gcode.3mf',
+    plate: 1
+  }, [
+    { id: 'machine-profile', kind: 'machine', name: 'Bambu Lab H2D 0.4 nozzle' },
+    { id: 'process-profile', kind: 'process', name: '0.20mm Standard @BBL H2D' }
+  ])
+  assert.ok(metadata)
+
+  const assignment = buildManualNozzleAssignment({
+    physical_extruder_map: ['1', '0'],
+    filament_colour: ['#001489', '#808080'],
+    filament_type: ['PLA', 'PLA-S']
+  }, metadata)
+
+  assert.ok(assignment)
+  assert.equal(assignment.filament_map_mode, 'Manual')
+  assert.equal(assignment.filament_map.length, 2, 'one entry per filament — a short array is an OOB read in the CLI')
+  for (const value of assignment.filament_map) {
+    assert.ok(Number.isFinite(Number.parseInt(value, 10)), `"${value}" is not a usable extruder`)
+    assert.ok(Number.parseInt(value, 10) >= 1, 'extruders are 1-based in filament_map')
+  }
 })

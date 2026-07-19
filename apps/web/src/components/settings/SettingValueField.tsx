@@ -6,7 +6,7 @@
  * came from, so both dialogs render identical controls.
  */
 import { Box, Input, Option, Select, Stack, Switch, Textarea, Typography } from '@mui/joy'
-import { serializeProcessBool, type ProcessSettingOption } from '@printstream/shared'
+import { FILAMENT_INDEX_PROCESS_KEYS, serializeProcessBool, type ProcessSettingOption } from '@printstream/shared'
 
 /**
  * One fixed width for every scalar value control (numeric inputs, percent fields, and enum
@@ -21,6 +21,15 @@ export interface SettingFilamentChoice {
   id: number
   label: string
   color: string | null
+  /**
+   * Material character, used only to classify a newly-chosen support interface material for the
+   * recommendation prompt (`recommendSupportSettingsForInterfaceFilament`) — never for rendering.
+   * Optional so hosts that only need the picker can omit them; `isSupport`/`isSoluble` are null
+   * when the project carried no `filament_is_support`/`filament_soluble` flag for the slot.
+   */
+  filamentType?: string | null
+  isSupport?: boolean | null
+  isSoluble?: boolean | null
 }
 
 export interface SettingValueFieldProps {
@@ -64,10 +73,12 @@ function FilamentSwatch({ color }: { color: string | null }) {
 export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
   const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, isCode, modified, filamentChoices, onScalarChange } = props
 
-  // Filament-index settings (the catalog marks them `i_enum_open` ints) pick a project
-  // material by its 1-based index; render them as a material select when the host supplied
-  // the material list. "0" is BambuStudio's "Default" (use the object's own filament).
-  if (option.type === 'int' && option.guiType === 'i_enum_open' && filamentChoices && filamentChoices.length > 0) {
+  // Filament-index settings pick a project material by its 1-based index; render them as a
+  // material select when the host supplied the material list. "0" is BambuStudio's "Default"
+  // (use the object's own filament). Keyed off the explicit list, NOT the catalog's
+  // `i_enum_open` gui type — BambuStudio shares that widget with numeric settings that ship
+  // preset choices, so matching on it turned "Top interface layers" into a material picker.
+  if (option.type === 'int' && FILAMENT_INDEX_PROCESS_KEYS.includes(settingKey) && filamentChoices && filamentChoices.length > 0) {
     const current = Number.parseInt(scalar, 10)
     const normalized = Number.isFinite(current) && current > 0 ? String(current) : '0'
     // A value pointing past the current material list (stale baked config) still needs a

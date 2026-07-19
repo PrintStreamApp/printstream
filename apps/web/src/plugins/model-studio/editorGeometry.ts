@@ -403,11 +403,18 @@ export function rasterizePolygonCells(polygon: Array<{ x: number; y: number }>):
   return cells
 }
 
-/** Which nozzle (1 = left, 2 = right) an exclude zone's label requires, or null. */
+/**
+ * Which nozzle an exclude zone's label requires, as a RUNTIME nozzle id (1 = left, 0 = right) —
+ * the same space `filament.nozzleId` uses everywhere else. It previously answered in a private
+ * 1 = left / 2 = right space while every caller compared it against runtime ids, so `has(2)` was
+ * never true: right-nozzle objects were never held out of a left-nozzle-only zone, and a
+ * right-nozzle object sitting legitimately in the "Right nozzle only area" was flagged
+ * unreachable.
+ */
 export function zoneRequiredNozzle(label: string | null): number | null {
   if (!label) return null
   if (/left/i.test(label)) return 1
-  if (/right/i.test(label)) return 2
+  if (/right/i.test(label)) return 0
   return null
 }
 

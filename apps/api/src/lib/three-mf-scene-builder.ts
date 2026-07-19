@@ -17,7 +17,7 @@
 import { createWriteStream } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { canonicalCurrBedType, isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTransform, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
-import { PRINTSTREAM_MODEL_KIND_KEY, PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT, sliceExtruderForNozzleId, stringArray } from '@printstream/shared/three-mf'
+import { PRINTSTREAM_MODEL_KIND_KEY, PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT, sliceExtruderForNozzleId, sliceRecordFilamentIds, stringArray } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import type { ImportedMesh } from './mesh-import.js'
@@ -1303,10 +1303,24 @@ export function applyNozzleAssignmentToProjectSettings(projectSettingsJson: stri
   if (!filaments.some((filament) => filament.nozzleId != null)) return projectSettingsJson
 
   const nozzleMap = Array.isArray(record.filament_nozzle_map) ? record.filament_nozzle_map.map((value) => String(value)) : []
+  // Gap filler for slots this edit does not assign. A hole in `filament_nozzle_map` is NOT
+  // survivable on a multi-extruder machine: BambuStudio reads the empty entry as an extruder
+  // index and lands on garbage, failing the slice with "filament <name> can not be printed on
+  // extruder 23075, under manual mode for multi extruder printer" (seen in production). So an
+  // unassigned slot inherits its existing mapping, else the first assigned slot's nozzle.
+  const fallbackNozzleId = filaments.find((filament) => filament.nozzleId != null)?.nozzleId ?? 0
+  const nozzleMapEntry = (index: number): string => {
+    const existing = nozzleMap[index]
+    return existing != null && existing.trim() !== '' ? existing : String(fallbackNozzleId)
+  }
   const extruderUsage = new Array<number>(physicalExtruderMap.length).fill(0)
   filaments.forEach((filament, index) => {
-    if (filament.nozzleId == null) return
-    while (nozzleMap.length <= index) nozzleMap.push('')
+    if (filament.nozzleId == null) {
+      while (nozzleMap.length <= index) nozzleMap.push(nozzleMapEntry(nozzleMap.length))
+      nozzleMap[index] = nozzleMapEntry(index)
+      return
+    }
+    while (nozzleMap.length <= index) nozzleMap.push(nozzleMapEntry(nozzleMap.length))
     nozzleMap[index] = String(filament.nozzleId)
     const extruder = sliceExtruderForNozzleId(filament.nozzleId, physicalExtruderMap)
     if (extruder != null && extruder < extruderUsage.length) extruderUsage[extruder] = (extruderUsage[extruder] ?? 0) + 1
@@ -1740,7 +1754,8 @@ export async function buildEditedThreeMf(
     if (customGcodeContent !== null) {
       extraEntries.push({ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent })
     }
-    const transforms = new Map<string, (xml: string) => string>([
+    // A transform may return null to DROP the entry from the saved 3MF (see rewriteThreeMfEntries).
+    const transforms = new Map<string, (xml: string) => string | null>([
       ['3D/3dmodel.model', () => modelXml],
       ['Metadata/model_settings.config', () => modelSettingsXml]
     ])
@@ -1809,9 +1824,25 @@ export async function buildEditedThreeMf(
     // slice_info.config: move each reassigned filament's group_id onto the chosen nozzle so a
     // reopened sliced project reflects the new assignment (group ids outrank filament_nozzle_map
     // once the project carries concrete slice usage). Only when the source shipped slice_info.
-    if (edit.filaments && edit.filaments.length > 0 && baseSliceInfoXml !== null && physicalExtruderMap.length >= 2) {
+    //
+    // A record that covers a DIFFERENT filament set than the one being saved is dropped instead.
+    // It describes a slice of a project that no longer exists — this save changed the materials —
+    // and carrying it forward is not survivable: BambuStudio builds its per-plate nozzle grouping
+    // from these entries, so a record listing fewer filaments than the project has makes the
+    // engine derive a SHORT filament map and read it out of bounds, aborting the next slice on a
+    // garbage extruder id (issue #63). Only the entries can be rewritten here — the per-filament
+    // usage a slice produced cannot be invented for a material that was never sliced — so the
+    // honest result is no record until the project is sliced again.
+    if (edit.filaments && edit.filaments.length > 0 && baseSliceInfoXml !== null) {
       const filaments = edit.filaments
-      transforms.set(SLICE_INFO_ENTRY, (xml) => rewriteSliceInfoNozzleGroups(xml, filaments, physicalExtruderMap))
+      const recordedIds = sliceRecordFilamentIds(baseSliceInfoXml)
+      const describesSavedFilaments = recordedIds.length === filaments.length
+        && recordedIds.every((id) => id >= 1 && id <= filaments.length)
+      if (recordedIds.length > 0 && !describesSavedFilaments) {
+        transforms.set(SLICE_INFO_ENTRY, () => null)
+      } else if (physicalExtruderMap.length >= 2) {
+        transforms.set(SLICE_INFO_ENTRY, (xml) => rewriteSliceInfoNozzleGroups(xml, filaments, physicalExtruderMap))
+      }
     }
     // Split-out imported sub-models: write each part file and declare it in the sub-model rels so
     // BambuStudio loads them (transform the existing rels, or add a fresh one if the source had none).
@@ -1994,7 +2025,7 @@ export async function writeArrangedThreeMf(sourcePath: string, outputPath: strin
 function rewriteThreeMfEntries(
   sourcePath: string,
   outputPath: string,
-  transforms: Map<string, (xml: string) => string>,
+  transforms: Map<string, (xml: string) => string | null>,
   extraEntries: Array<{ name: string; content: string }> = []
 ): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -2044,7 +2075,15 @@ function rewriteThreeMfEntries(
         if (transform) {
           readZipEntryBuffer(sourceZip, entry).then(
             (buffer) => {
-              outputZip.addBuffer(Buffer.from(transform(buffer.toString('utf8')), 'utf8'), entry.fileName, { mtime: entry.getLastModDate() })
+              const rewritten = transform(buffer.toString('utf8'))
+              // null DROPS the entry: the caller decided the source entry must not survive into
+              // the save (a slice record that no longer describes the project's filaments).
+              // Forget the name too, so an appended entry may still supply a replacement.
+              if (rewritten === null) {
+                writtenNames.delete(entry.fileName)
+              } else {
+                outputZip.addBuffer(Buffer.from(rewritten, 'utf8'), entry.fileName, { mtime: entry.getLastModDate() })
+              }
               sourceZip.readEntry()
             },
             finish

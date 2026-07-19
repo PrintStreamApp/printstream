@@ -1040,6 +1040,16 @@ export const libraryThreeMfSceneBedSchema = z.object({
   minY: z.number(),
   maxY: z.number(),
   plateType: z.string().nullable(),
+  /**
+   * The printer whose bed this placement describes — the slice dialog's target when one is
+   * chosen, else the model resolved from the file's own project settings. Null when neither is
+   * known (the generic 256mm fallback bed).
+   *
+   * Surfaced so viewers can fetch that printer's modelled 3D plate mesh
+   * (`GET /api/slicing/bed-model`); the editor knows its target printer independently, but the
+   * read-only previews only ever see this scene.
+   */
+  printerModel: printerModelSchema.nullable().default(null),
   /** Unprintable / single-nozzle zones (bed coords) as labeled closed polygons. */
   excludeAreas: z.array(z.object({
     polygon: z.array(z.object({ x: z.number(), y: z.number() })),
@@ -1443,7 +1453,14 @@ export const threeMfProjectFilamentSchema = z.object({
   filamentName: z.string().nullable(),
   color: z.string().nullable(),
   nozzleId: z.number().int().min(0).nullable(),
-  chamberTemperature: z.number().nullable()
+  chamberTemperature: z.number().nullable(),
+  /**
+   * The project's `filament_is_support` / `filament_soluble` flags for this slot. Null when the
+   * 3MF (or an older server/bridge) carried neither — "unknown", not false. The support-interface
+   * recommendation prompt classifies materials from these, falling back to naming when null.
+   */
+  isSupport: z.boolean().nullable().optional(),
+  isSoluble: z.boolean().nullable().optional()
 })
 export type ThreeMfProjectFilament = z.infer<typeof threeMfProjectFilamentSchema>
 

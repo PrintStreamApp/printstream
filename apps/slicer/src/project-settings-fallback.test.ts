@@ -156,6 +156,54 @@ test('ensureEmbeddedProjectSettings is a no-op when there are no --load-settings
   }
 })
 
+// Regression for the print-from-printer-card failure: a project whose embedded config is
+// INCOMPLETE and names presets this slicer cannot resolve (a workspace-only custom process such
+// as "0.24mm Standard @BBL H2D - Ryan") used to be sliced as-is. The BBL-project loader segfaults
+// on a partial config at "Start to load files", so the user got an opaque exit 139 — three times,
+// because the crash classifier retried it. Fail with what is actually wrong instead.
+test('ensureEmbeddedProjectSettings fails fast when the embedded config is incomplete and names no resolvable presets', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const partial = JSON.stringify({
+      // Missing the completeness sentinels (printable_area / layer_height / nozzle_temperature).
+      printer_settings_id: 'Bambu Lab H2D 0.4 nozzle',
+      print_settings_id: '0.24mm Standard @BBL H2D - Ryan',
+      filament_settings_id: ['Bambu PETG Basic @BBL H2D 0.4 nozzle']
+    })
+    const input = await writeThreeMf(dir, 'partial.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': partial
+    })
+    const emptyProfiles = path.join(dir, 'profiles')
+    await mkdir(emptyProfiles, { recursive: true })
+
+    await assert.rejects(
+      () => ensureEmbeddedProjectSettings({
+        inputPath: input,
+        cliPath: '/nonexistent/should-not-run',
+        appDir: null,
+        profileArgs: [],
+        profileDir: emptyProfiles,
+        workDir: dir,
+        env: {},
+        log: () => {}
+      }),
+      (error: Error) => {
+        // Names the missing pieces and the presets it could not resolve, so the failure is
+        // actionable rather than an exit code.
+        assert.match(error.message, /incomplete/i)
+        assert.match(error.message, /0\.24mm Standard @BBL H2D - Ryan/)
+        // Must NOT look like a CLI exit, or the API's retry classifiers would burn retries on a
+        // deterministic failure.
+        assert.doesNotMatch(error.message, /exited with code/i)
+        return true
+      }
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('ensureEmbeddedProjectSettings completes a project-preset slice (no load args) via the presets the settings name', async () => {
   // Regression for the deterministic exit-139: a slice using the PROJECT process preset loads no
   // external profiles, so the CLI reads the embedded settings bare — and a partial config (what a
@@ -396,7 +444,7 @@ test('ensureEmbeddedProjectSettings THROWS when the export runs but produces no 
   }
 })
 
-test('ensureEmbeddedProjectSettings slices as-is when a partial project-preset config names unknown presets', async () => {
+test('ensureEmbeddedProjectSettings refuses a partial project-preset config naming unknown presets', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
   try {
     const profileDir = path.join(dir, 'profiles')
@@ -404,17 +452,24 @@ test('ensureEmbeddedProjectSettings slices as-is when a partial project-preset c
       '3D/3dmodel.model': '<model/>',
       'Metadata/project_settings.config': '{"printer_settings_id":"My Custom Machine","filament_colour":["#FFFFFF"]}'
     })
-    const result = await ensureEmbeddedProjectSettings({
-      inputPath: input,
-      cliPath: '/nonexistent/should-not-run',
-      appDir: null,
-      profileArgs: [],
-      profileDir,
-      workDir: dir,
-      env: {},
-      log: () => {}
-    })
-    assert.equal(result, input)
+    // Was "slices as-is": a partial config reaching the BBL-project loader is a deterministic
+    // segfault, so proceeding could only ever turn a nameable problem into an opaque exit 139.
+    await assert.rejects(
+      () => ensureEmbeddedProjectSettings({
+        inputPath: input,
+        cliPath: '/nonexistent/should-not-run',
+        appDir: null,
+        profileArgs: [],
+        profileDir,
+        workDir: dir,
+        env: {},
+        log: () => {}
+      }),
+      (error: Error) => {
+        assert.match(error.message, /My Custom Machine/)
+        return true
+      }
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

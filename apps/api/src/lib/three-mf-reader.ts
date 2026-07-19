@@ -78,6 +78,11 @@ export interface ThreeMfSceneBed {
   minY: number
   maxY: number
   plateType: string | null
+  /**
+   * The printer this bed was placed for (slice-dialog target, else the file's own model); null
+   * for the generic fallback bed. Surfaced to viewers so they can fetch its 3D plate mesh.
+   */
+  printerModel: PrinterModel | null
   /** Unprintable zones (bed coords), as closed polygons, from `bed_exclude_area`. */
   excludeAreas: ThreeMfExcludeZone[]
 }
@@ -954,12 +959,12 @@ export function extractSceneBed(
   if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
     const rawDimensions = fallbackModel ? RAW_SCENE_BED_DIMENSIONS_BY_PRINTER_MODEL[fallbackModel] : null
     if (rawDimensions) {
-      return createSceneBedPlacement(0, rawDimensions.width, 0, rawDimensions.depth, plateType, excludeAreas)
+      return createSceneBedPlacement(0, rawDimensions.width, 0, rawDimensions.depth, plateType, excludeAreas, fallbackModel)
     }
-    return createSceneBedPlacement(-128, 128, -128, 128, plateType, excludeAreas)
+    return createSceneBedPlacement(-128, 128, -128, 128, plateType, excludeAreas, fallbackModel)
   }
 
-  return createSceneBedPlacement(minX, maxX, minY, maxY, plateType, excludeAreas)
+  return createSceneBedPlacement(minX, maxX, minY, maxY, plateType, excludeAreas, fallbackModel)
 }
 
 /**
@@ -1060,7 +1065,7 @@ function bedPlacementForPrinterModel(model: PrinterModel, plateType: string | nu
   if (corner) excludeAreas.push({ polygon: corner.map((point) => ({ ...point })), label: null })
   const extruders = BBL_FALLBACK_EXTRUDER_PRINTABLE_AREA_BY_MODEL[model]
   if (extruders) excludeAreas.push(...computeNozzleOnlyZones(extruders.map((polygon) => polygon.map((point) => ({ ...point })))))
-  return createSceneBedPlacement(0, dimensions.width, 0, dimensions.depth, plateType, excludeAreas)
+  return createSceneBedPlacement(0, dimensions.width, 0, dimensions.depth, plateType, excludeAreas, model)
 }
 
 function createSceneBedPlacement(
@@ -1069,7 +1074,10 @@ function createSceneBedPlacement(
   minY: number,
   maxY: number,
   plateType: string | null,
-  excludeAreas: ThreeMfExcludeZone[] = []
+  excludeAreas: ThreeMfExcludeZone[] = [],
+  /** The printer this bed belongs to; null for the generic fallback. Carried to viewers so they
+      can request its 3D plate mesh. */
+  printerModel: PrinterModel | null = null
 ): ThreeMfSceneBedPlacement {
   return {
     bed: {
@@ -1078,6 +1086,7 @@ function createSceneBedPlacement(
       minY,
       maxY,
       plateType,
+      printerModel,
       excludeAreas
     },
     centerX: (minX + maxX) / 2,

@@ -35,13 +35,12 @@ import type {
 import { PER_OBJECT_PROCESS_KEYS } from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
-import { bambuModelKeysAreCompatible } from '../../lib/bambuPrinterModels'
 import { resolveFilamentDisplay } from '../../lib/filamentColor'
+import { remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
 import { FilamentOptionLabel } from './FilamentOptionLabel'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import {
   extractLayerHeightToken,
-  isProjectProfileAllowedForTarget,
   isSelectableOrProjectFallbackSlicingProfile,
   isSelectableSlicingProfile,
   pickMostSimilarSlicingProfileByName,
@@ -337,15 +336,6 @@ export function SliceFileModal({
     () => resolveSliceDialogTargetPrinterModel(selectedPrinterModel, selectedMachineProfile),
     [selectedMachineProfile, selectedPrinterModel]
   )
-  // BambuStudio drops the 3MF project's embedded presets when the chosen
-  // printer is incompatible with the project's source model and falls back to
-  // the target machine's defaults. We mirror that: project profiles stay
-  // available for same-family targets (e.g. X1C project -> P1S) but are hidden
-  // when the target is cross-family (e.g. X1C project -> H2D).
-  const projectProfilesCompatibleWithTarget = useMemo(
-    () => bambuModelKeysAreCompatible(sourcePrinterModel, targetPrinterModel),
-    [sourcePrinterModel, targetPrinterModel]
-  )
   const selectedNozzleDiameters = useMemo(() => {
     const diameter = Number.parseFloat(nozzleDiameter)
     return Number.isFinite(diameter) && diameter > 0 ? [diameter] : []
@@ -367,8 +357,17 @@ export function SliceFileModal({
     [compatibleMachineProfiles]
   )
   const printerCompatibleProcessProfiles = useMemo(
-    () => processProfiles.filter((profile) => isSelectableOrProjectFallbackSlicingProfile(profile, processProfiles, bakedIndex?.processProfileName ?? null) && isProjectProfileAllowedForTarget(profile, projectProfilesCompatibleWithTarget) && isProcessProfileCompatible(profile, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters, '')),
-    [bakedIndex?.processProfileName, processProfiles, projectProfilesCompatibleWithTarget, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel]
+    // The project's OWN presets are never filtered by the chosen target: the 3MF is the basis for
+    // the slice, and picking a printer is a convenience (it pre-fills settings and offers AMS
+    // materials), not a re-selection of presets. A model change is a rewrite WE author
+    // (`retargetProjectSettingsToMachine`), so the CLI always receives a project that natively
+    // targets the chosen machine — it never has to reconcile a mismatch. Excluding the project's
+    // presets here instead substituted builtins for the target model, which on a project naming a
+    // workspace-only process ("0.24mm Standard @BBL H2D - Ryan") sent an incompatible preset and
+    // failed the slice ("process not compatible with printer", then a loader segfault).
+    // `isProcessProfileCompatible` already exempts project presets, so this needs no gate.
+    () => processProfiles.filter((profile) => isSelectableOrProjectFallbackSlicingProfile(profile, processProfiles, bakedIndex?.processProfileName ?? null) && isProcessProfileCompatible(profile, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters, '')),
+    [bakedIndex?.processProfileName, processProfiles, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel]
   )
   const plateTypeOptions = useMemo(
     () => resolveCompatiblePlateTypes(file, bakedIndex, selectedMachineProfile, printerCompatibleProcessProfiles),
@@ -385,8 +384,10 @@ export function SliceFileModal({
   const selectedAnyProcessProfile = processProfiles.find((profile) => profile.id === processProfileId) ?? null
   const selectedProcessProfile = compatibleProcessProfiles.find((profile) => profile.id === processProfileId) ?? null
   const compatibleFilamentProfiles = useMemo(
-    () => filamentProfiles.filter((profile) => isProjectProfileAllowedForTarget(profile, projectProfilesCompatibleWithTarget) && isFilamentProfileCompatible(profile, selectedMachineProfile, selectedProcessProfile, selectedPrinterModel, selectedNozzleDiameters)),
-    [filamentProfiles, projectProfilesCompatibleWithTarget, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel, selectedProcessProfile]
+    // Project filament presets stay available for every target, for the same reason as the
+    // process list above.
+    () => filamentProfiles.filter((profile) => isFilamentProfileCompatible(profile, selectedMachineProfile, selectedProcessProfile, selectedPrinterModel, selectedNozzleDiameters)),
+    [filamentProfiles, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel, selectedProcessProfile]
   )
   const loadedMaterialSource = useMemo<LoadedMaterialSource | null>(
     () => targetMode === 'realPrinter' && selectedPrinterStatus
@@ -659,16 +660,26 @@ export function SliceFileModal({
   // Material choices for filament-index process settings ("Support/raft base" etc.).
   // Ids are the 1-based POSITION in the full ordered list — the index the slicer reads —
   // not projectFilamentId, which can diverge from position after a removal.
+  //
+  // `filamentType`/`isSupport`/`isSoluble` ride along for the support-interface recommendation
+  // prompt in ProcessSettingsDialog (they are never rendered). They come from the project's
+  // baked config; a slot the user has since pointed at a different material profile keeps the
+  // baked character, which is acceptable — a wrong classification only means the prompt is
+  // offered or withheld, and the user still decides.
   const processFilamentChoices = useMemo(
     () => projectFilaments.map((filament, index) => {
       const option = materialOptions.find((entry) => entry.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
+      const baked = bakedIndex?.projectFilaments.find((entry) => entry.id === filament.projectFilamentId) ?? null
       return {
         id: index + 1,
         label: option?.label ?? filament.label,
-        color: normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF')
+        color: normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF'),
+        filamentType: baked?.filamentType ?? null,
+        isSupport: baked?.isSupport ?? null,
+        isSoluble: baked?.isSoluble ?? null
       }
     }),
-    [projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors]
+    [projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, bakedIndex]
   )
   // Slice-time layer G-code (filament changes + pauses): session edits keyed by plate
   // index, displayed over the file's baked entries (now part of the plates index). Edits
@@ -786,6 +797,16 @@ export function SliceFileModal({
     })
   }, [projectFilaments, baseProjectFilaments])
   const handleRemoveFilament = useCallback((projectFilamentId: number) => {
+    // BambuStudio parity: a material can be removed even while a process setting references it —
+    // the setting falls back to "Default" rather than the delete being refused. Those settings
+    // store the material's POSITION in the ordered list, so every reference above the removed
+    // one also shifts down; see lib/filamentIndexOverrides.ts. Done BEFORE the removal so the
+    // position still resolves against the pre-removal list.
+    const removedPosition = projectFilaments.findIndex((filament) => filament.projectFilamentId === projectFilamentId) + 1
+    if (removedPosition > 0) {
+      setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition))
+      setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition))
+    }
     setAddedFilaments((current) => current.filter((entry) => entry.projectFilamentId !== projectFilamentId))
     setAddedFilamentSourceIndex((current) => {
       if (!(projectFilamentId in current)) return current
@@ -799,7 +820,11 @@ export function SliceFileModal({
       next.add(projectFilamentId)
       return next
     })
-  }, [baseProjectFilaments])
+    // `projectFilaments` is a dependency, not incidental: `removedPosition` must resolve against
+    // the CURRENT ordered list. Captured stale (deps of `[baseProjectFilaments]` alone), a removal
+    // that follows an add computes the position from the pre-add list and remaps the wrong
+    // filament-index override.
+  }, [projectFilaments, baseProjectFilaments])
   // Identity of the BASE material list (ids/labels/colors/nozzles — not the plate-usage flag,
   // which changes on plate switches). Used to detect the post-save refetch below.
   const baseFilamentSignature = useMemo(

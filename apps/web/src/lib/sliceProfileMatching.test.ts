@@ -131,6 +131,28 @@ test('flags only the selected plate\'s materials as used', () => {
   )
 })
 
+test('counts a support material as used even when the sliced plate never consumed it', () => {
+  // Regression: support materials are referenced by process settings
+  // (support_filament / support_interface_filament), not by an object's extruder id, so a plate
+  // sliced before the assignment lists only filament 1. The material assigned as the support
+  // interface then vanished from the print dialog, leaving it unmappable to a tray.
+  const withSupport = bakedIndex({ supportFilamentIds: [2] })
+  assert.deepEqual(
+    buildSliceDialogProjectFilaments(emptyFile, withSupport, 1).map((f) => [f.projectFilamentId, f.usedOnSelectedPlate]),
+    [[1, true], [2, true], [3, false], [4, false]]
+  )
+})
+
+test('a support material does not narrow an unsliced plate to itself', () => {
+  // The union must not turn "no trustworthy plate data -> show everything" into
+  // "show only the support material".
+  const unsliced = bakedIndex({ plates: [unslicedPlate(1, [1])], supportFilamentIds: [2] })
+  assert.deepEqual(
+    buildSliceDialogProjectFilaments(emptyFile, unsliced, 1).map((f) => f.usedOnSelectedPlate),
+    [true, true, true, true]
+  )
+})
+
 test('does not narrow to an UNSLICED plate (its geometry estimate misses colour-painted filaments)', () => {
   // Regression for an unsliced colour-painted project (white base id 1 + painted
   // black id 2): the plate records only the base extruder, so narrowing to it would

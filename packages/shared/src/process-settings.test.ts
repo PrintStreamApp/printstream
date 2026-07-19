@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  FILAMENT_INDEX_PROCESS_KEYS,
   applyProcessConfigDefaults,
   computeProcessFieldStates,
   defaultProcessVisibilityContext,
@@ -170,4 +171,26 @@ test('resolvedProcessModifiedKeys counts final-vs-baseline diffs, healed by over
     resolvedProcessModifiedKeys({ config: { layer_height: '0.28' }, baseConfig: { layer_height: '0.28' }, overriddenKeys: ['layer_height'] }),
     ['layer_height']
   )
+})
+
+// Regression: the material picker used to key off the catalogue's `i_enum_open` gui type.
+// BambuStudio shares that widget with numeric settings that ship preset choices, so
+// "Top interface layers" (a LAYER COUNT defaulting to 3) rendered as a material select and
+// showed material 3. The filament-index list must stay exactly the settings whose value IS a
+// filament index — and every one of them must be an int with no enum choices of its own.
+test('the filament-index process keys are filament indices, not numeric settings sharing the widget', async () => {
+  const { processSettingsCatalog } = await import('./generated/process-settings.generated.js')
+  const catalog = processSettingsCatalog.options as unknown as Record<string, { type: string; enumValues?: string[]; guiType?: string }>
+
+  for (const key of FILAMENT_INDEX_PROCESS_KEYS) {
+    const option = catalog[key]
+    assert.ok(option, `${key} is missing from the catalog`)
+    assert.equal(option.type, 'int', `${key} must be an int filament index`)
+    assert.ok(!option.enumValues?.length, `${key} carries enum choices, so it is a numeric setting, not a filament index`)
+  }
+
+  // Layer counts share `i_enum_open` but must never be treated as materials.
+  for (const key of ['support_interface_top_layers', 'support_interface_bottom_layers']) {
+    assert.ok(!FILAMENT_INDEX_PROCESS_KEYS.includes(key), `${key} is a layer count, not a filament index`)
+  }
 })

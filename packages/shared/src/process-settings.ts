@@ -100,6 +100,25 @@ export const processSettingOverridesSchema = z.record(
 export type ProcessSettingOverrides = z.infer<typeof processSettingOverridesSchema>
 
 /**
+ * Process settings whose int value is a 1-based PROJECT FILAMENT INDEX (0 = "Default", i.e. use
+ * the object's own filament). Editors render these as a material picker.
+ *
+ * Enumerated explicitly rather than detected from the catalogue's `guiType`: BambuStudio marks
+ * these `i_enum_open`, but it uses that same widget for plain numeric settings that ship preset
+ * choices — `support_interface_top_layers` / `_bottom_layers` are LAYER COUNTS with enum values
+ * 0..3. Keying the material picker off `i_enum_open` therefore rendered "Top interface layers"
+ * as a material select, showing its default of 3 as "material 3" and letting a material choice
+ * be written back as a layer count.
+ */
+export const FILAMENT_INDEX_PROCESS_KEYS: readonly string[] = [
+  'support_filament',
+  'support_interface_filament',
+  'wall_filament',
+  'sparse_infill_filament',
+  'solid_infill_filament'
+]
+
+/**
  * Curated subset of process settings that may be overridden per object (Bambu Studio exposes a
  * subset, not the full process config, in its per-object panel). Editors restrict the per-object
  * catalog to these keys.

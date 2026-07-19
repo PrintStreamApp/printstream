@@ -136,6 +136,10 @@ export function LibraryFilePickerDialog({
   })
 
   const navigate = (folderEntryId: string | null) => {
+    // Clear the search on every folder move, matching the Library page: a term left
+    // standing keeps filtering the destination's children, so entering a folder that
+    // only matched by name lands the user in an apparently empty folder.
+    setSearch('')
     if (folderEntryId === null) {
       setFolderId(null)
       setBridgeId(null)

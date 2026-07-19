@@ -127,6 +127,7 @@ import {
   type EditorState,
   isObjectMarkedForRepair
 } from './lib/editorModel'
+import { useShowBedModel } from './lib/useShowBedModel'
 import { useSidebarResize } from './lib/useSidebarResize'
 import {
   fetchImportMesh,
@@ -486,16 +487,10 @@ function EditorView({
   const [sceneReady, setSceneReady] = useState(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
-  // 3D build plate (BambuStudio's modelled bed), on by default now that it fades when the camera
-  // drops below it — the reason it originally shipped opt-in. Stored per device, and a device
-  // that explicitly turned it off keeps that choice. Printers with no bundled bed mesh fall back
-  // to the plain grid on their own, so defaulting this on is safe everywhere.
-  const [showBedModel, setShowBedModel] = useLocalStorageState(
-    'bambu.editor.bedModel3d',
-    true,
-    (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
-    String
-  )
+  // 3D build plate (BambuStudio's modelled bed) — shared with the read-only previews, so the
+  // preference and its default live in the hook. Printers with no bundled bed mesh fall back to
+  // the plain grid on their own.
+  const [showBedModel, setShowBedModel] = useShowBedModel()
   // Which side the settings/objects panel sits on (desktop only — the narrow layout stacks it
   // below the viewport regardless). Right by default: that is where it has always been.
   const [sidebarSide, setSidebarSide] = useLocalStorageState<EditorSidebarSide>(
@@ -989,8 +984,9 @@ function EditorView({
   const activePlateFilamentCountRef = useRef(0)
   activePlateFilamentCountRef.current = platesQuery.data?.plates
     .find((plate) => plate.index === activePlateIndex)?.filaments.length ?? 0
-  // filamentId -> nozzleId (1 = left, 2 = right) for the active plate, so per-object
-  // nozzle reach can be checked against the labeled nozzle-only zones.
+  // filamentId -> runtime nozzleId (1 = left, 0 = right) for the active plate, so per-object
+  // nozzle reach can be checked against the labeled nozzle-only zones. Values come straight from
+  // the parsed index, so they are runtime ids — `zoneRequiredNozzle` answers in the same space.
   const filamentNozzleRef = useRef<Map<number, number>>(new Map())
   {
     const map = new Map<number, number>()
@@ -3445,8 +3441,10 @@ function EditorView({
       for (const point of zone.polygon) {
         zx0 = Math.min(zx0, point.x); zx1 = Math.max(zx1, point.x)
       }
+      // Runtime nozzle ids: 0 = right, 1 = left. A RIGHT-only zone bounds how far right the LEFT
+      // nozzle may reach, and vice versa.
       const required = zoneRequiredNozzle(zone.label)
-      if (required === 2) leftMaxX = Math.min(leftMaxX, zx0)
+      if (required === 0) leftMaxX = Math.min(leftMaxX, zx0)
       else if (required === 1) rightMinX = Math.max(rightMinX, zx1)
       // Truly unprintable zones are blocked cell-by-cell below — no rect shrinking,
       // so a corner cutout doesn't cost the whole edge strip.
@@ -3454,7 +3452,7 @@ function EditorView({
     for (const instance of plate.instances) {
       const nozzles = instanceNozzlesRef.current(instance)
       if (nozzles.has(1)) safeMaxX = Math.min(safeMaxX, leftMaxX)
-      if (nozzles.has(2)) safeMinX = Math.max(safeMinX, rightMinX)
+      if (nozzles.has(0)) safeMinX = Math.max(safeMinX, rightMinX)
     }
 
     // Block truly unprintable zones cell-by-cell (any shape, anywhere on the plate)

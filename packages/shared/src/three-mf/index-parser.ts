@@ -31,8 +31,9 @@ import type {
  * Version of the parsed-index logic. Both apps key their caches on this (the bridge's in-memory LRU
  * and the API's derived-index cache), so bumping it once invalidates stale indexes everywhere.
  * v13: per-plate `filamentChanges`/`pauses` from `custom_gcode_per_layer.xml`.
+ * v14: per-filament `isSupport`/`isSoluble` from `filament_is_support`/`filament_soluble`.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 13
+export const THREE_MF_INDEX_PARSER_VERSION = 14
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -373,6 +374,12 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
   const types = stringArray(record.filament_type)
   const names = stringArray(record.filament_settings_id)
   const chamberTemperatures = nullableNumberArray(record.chamber_temperatures)
+  // Per-slot material CHARACTER, parallel '0'/'1' arrays alongside filament_type. Distinct from
+  // the index's `supportFilamentIds`, which also folds in whichever slots the support_filament /
+  // support_interface_filament settings currently point at: these flags describe the material
+  // itself, so classification (see `support-recommendations.ts`) must read them, not that union.
+  const supportFlags = stringArray(record.filament_is_support)
+  const solubleFlags = stringArray(record.filament_soluble)
   const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length)
   const out: BridgeLibraryThreeMfProjectFilament[] = []
   for (let i = 0; i < length; i++) {
@@ -382,10 +389,22 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
       filamentName: cleanFilamentName(names[i]) ?? null,
       color: normalizeColor(colors[i]),
       nozzleId: null,
-      chamberTemperature: chamberTemperatures[i] ?? null
+      chamberTemperature: chamberTemperatures[i] ?? null,
+      isSupport: configFlag(supportFlags[i]),
+      isSoluble: configFlag(solubleFlags[i])
     })
   }
   return out
+}
+
+/**
+ * Read one entry of a BambuStudio '0'/'1' flag array. Null (rather than false) when the slot is
+ * absent, so consumers can tell "the project said no" from "the project never said", and fall
+ * back to their own heuristics only in the latter case.
+ */
+function configFlag(value: string | undefined): boolean | null {
+  if (value === undefined) return null
+  return value === '1'
 }
 
 export function nullableNumberArray(value: unknown): Array<number | null> {
@@ -562,7 +581,25 @@ function extractNozzleMapping(
     if (shouldPreferFilamentNozzleMap(physicalExtruderMap, mapping, mappingFromFilamentNozzleMap, sliceInfoXml)) {
       return mappingFromFilamentNozzleMap
     }
-    return mapping
+    // `slice_info` only lists the filaments its LAST SLICE used, so on a project sliced before a
+    // material was added it is authoritative but incomplete. Keep its precedence for the filaments
+    // it knows about, and fall back to `filament_nozzle_map` for the ones it predates — returning
+    // it alone dropped those, so a nozzle the user picked and saved (correctly written to
+    // `filament_nozzle_map`) read back as "no nozzle" forever, and the next save wrote that
+    // nothing straight back into the file.
+    //
+    // Those fallback entries are read VERBATIM as runtime nozzle ids, not through
+    // `physical_extruder_map`: a slot slice_info never covered was written by our own editor save
+    // (`applyNozzleAssignmentToProjectSettings`), which stores the runtime id directly. The
+    // remapping above applies to slots BambuStudio itself authored alongside slice_info.
+    const merged = new Map(mapping)
+    for (let i = 0; i < filamentNozzleMap.length; i++) {
+      const filamentId = i + 1
+      if (merged.has(filamentId)) continue
+      const runtimeNozzleId = numberAt(filamentNozzleMap, i)
+      if (runtimeNozzleId !== null) merged.set(filamentId, runtimeNozzleId)
+    }
+    return merged
   }
 
   if (mappingFromFilamentNozzleMap.size > 0) return mappingFromFilamentNozzleMap
@@ -646,6 +683,19 @@ function sliceInfoHasConcreteFilamentUsage(sliceInfoXml: string | null): boolean
     }
   }
   return false
+}
+
+/**
+ * The 1-based filament ids a `slice_info.config` record covers, ascending.
+ *
+ * `slice_info.config` describes a PREVIOUS slice: one `<filament>` entry per filament that slice
+ * used. Callers writing a 3MF use this to check the record still describes the project's current
+ * filament set — BambuStudio builds its per-plate nozzle grouping from these entries, so a record
+ * covering a different set makes the engine derive a mismatched filament map (a SHORTER one is an
+ * out-of-bounds read that aborts the slice; see docs/slicer-architecture.md).
+ */
+export function sliceRecordFilamentIds(xml: string): number[] {
+  return extractSliceFilamentIds(xml)
 }
 
 function extractSliceFilamentIds(xml: string): number[] {

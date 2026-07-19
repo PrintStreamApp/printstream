@@ -216,16 +216,19 @@ export function useEditorHistory({
     return {
       ...sliceConfig,
       onAddFilament: () => { recordMaterialsHistory(); sliceConfig.onAddFilament() },
-      // BambuStudio parity: a material that's still referenced can't be removed — reassign first.
-      // `filamentSupportOnly` flags the materials used ONLY for supports so the UI can word the
-      // block accurately ("used for supports" vs "used by an object").
-      filamentInUse: (projectFilamentId: number) => usedFilamentIds.has(projectFilamentId),
+      // BambuStudio parity: only an OBJECT reference blocks removal — reassign the object first.
+      // A material referenced solely by a process setting (support / support interface, infill or
+      // wall filament) is removable: BambuStudio drops the setting back to "Default" instead of
+      // refusing, and the controller does the same, remapping the surviving references to their
+      // new positions (`lib/filamentIndexOverrides.ts`). Blocking on those instead stranded a
+      // material that could not be deleted until the project was saved and reopened, because the
+      // support set is seeded from the LAST SAVED index and a cleared override never removes it.
+      filamentInUse: (projectFilamentId: number) =>
+        usedFilamentIds.has(projectFilamentId) && !supportOnlyFilamentIds.has(projectFilamentId),
       filamentSupportOnly: (projectFilamentId: number) => supportOnlyFilamentIds.has(projectFilamentId),
       onRemoveFilament: (projectFilamentId: number) => {
-        if (usedFilamentIds.has(projectFilamentId)) {
-          toast.error(supportOnlyFilamentIds.has(projectFilamentId)
-            ? 'This material is used for supports. Change the support filament before removing it.'
-            : 'This material is used by one or more objects. Reassign them to another material before removing it.')
+        if (usedFilamentIds.has(projectFilamentId) && !supportOnlyFilamentIds.has(projectFilamentId)) {
+          toast.error('This material is used by one or more objects. Reassign them to another material before removing it.')
           return
         }
         recordMaterialsHistory()

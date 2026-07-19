@@ -701,7 +701,14 @@ export const bridgeLibraryThreeMfProjectFilamentSchema = z.object({
   filamentName: z.string().nullable(),
   color: z.string().nullable(),
   nozzleId: z.number().int().nonnegative().nullable(),
-  chamberTemperature: z.number().nullable()
+  chamberTemperature: z.number().nullable(),
+  /**
+   * The project's `filament_is_support` / `filament_soluble` flags for this slot. Null when the
+   * 3MF (or a bridge running an older parser) carried neither, which consumers must treat as
+   * "unknown" and not as false — see `support-recommendations.ts`.
+   */
+  isSupport: z.boolean().nullable().optional(),
+  isSoluble: z.boolean().nullable().optional()
 })
 
 export type BridgeLibraryThreeMfProjectFilament = z.infer<typeof bridgeLibraryThreeMfProjectFilamentSchema>

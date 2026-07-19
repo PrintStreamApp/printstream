@@ -32,6 +32,7 @@ import {
   isProcessOptionVisibleInMode,
   processConfigValuesEqual,
   processSettingsCatalog,
+  recommendSupportSettingsForInterfaceFilament,
   validateProcessConfig,
   type ProcessConfig,
   type ProcessSettingOption,
@@ -92,6 +93,13 @@ export interface ProcessSettingsDialogProps {
   onApply: (overrides: ProcessSettingOverrides) => void
 }
 
+/**
+ * The one setting whose change offers a follow-up recommendation (see
+ * `offerSupportRecommendation`). Not in `PER_OBJECT_PROCESS_KEYS`, so the prompt can only ever
+ * appear in the global process dialog — per-object editing never reaches it.
+ */
+const SUPPORT_INTERFACE_FILAMENT_KEY = 'support_interface_filament'
+
 type ResolveResponse = {
   config: Record<string, string | string[]>
   baseConfig?: Record<string, string | string[]>
@@ -123,7 +131,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const [query, setQuery] = useState('')
   const [showChangedOnly, setShowChangedOnly] = useState(false)
   const normalizedQuery = query.trim().toLowerCase()
-  const { promptText } = usePromptDialog()
+  const { confirm, promptText } = usePromptDialog()
 
   // Callers pass `visibilityContext` as a fresh object literal each render (e.g. the editor:
   // `visibilityContext={{ ...perObject.visibilityContext, isGlobalConfig: false }}`), so identity-
@@ -259,13 +267,66 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
 
   const setScalar = (key: string, scalar: string) => {
     const current = config[key]
+    let value: string | string[] = scalar
     if (Array.isArray(current)) {
-      const next = [...current]
-      next[0] = scalar
-      setValue(key, next)
-    } else {
-      setValue(key, scalar)
+      const vector = [...current]
+      vector[0] = scalar
+      value = vector
     }
+    const next = { ...config, [key]: value }
+    commit(next)
+    if (key === SUPPORT_INTERFACE_FILAMENT_KEY) void offerSupportRecommendation(next, scalar)
+  }
+
+  /**
+   * BambuStudio's "Suggestion" prompt: choosing a support interface material that calls for a
+   * different support geometry (soluble, a dedicated support material, or PLA over TPU) offers
+   * the settings it recommends. Decision logic — including "the config already matches, say
+   * nothing" — lives in `recommendSupportSettingsForInterfaceFilament`; this only asks and applies.
+   *
+   * Applies through `commit`, the same path a manual edit takes, so the proposed values land in
+   * the dialog's config and ride the existing modified/reset markers and the Apply diff. Nothing
+   * is written anywhere until the user hits Apply, exactly as with a hand edit.
+   *
+   * `nextConfig` is captured rather than re-read after the await: the confirm is a blocking modal
+   * over this dialog, so no other edit can land in between.
+   */
+  const offerSupportRecommendation = async (nextConfig: ProcessConfig, interfaceScalar: string) => {
+    if (!filamentChoices || filamentChoices.length === 0) return
+    const accessorForNext = createProcessConfigAccessor(nextConfig)
+    const recommendation = recommendSupportSettingsForInterfaceFilament({
+      interfaceFilamentId: Number.parseInt(interfaceScalar, 10) || 0,
+      supportFilamentId: Number.parseInt(accessorForNext.str('support_filament'), 10) || 0,
+      filaments: filamentChoices.map((choice) => ({
+        id: choice.id,
+        filamentType: choice.filamentType ?? null,
+        filamentName: choice.label,
+        isSupport: choice.isSupport ?? null,
+        isSoluble: choice.isSoluble ?? null
+      })),
+      config: nextConfig
+    })
+    if (!recommendation) return
+
+    const changedLabels = Object.keys(recommendation.changes)
+      .map((key) => processSettingsCatalog.options[key]?.label ?? key)
+    const accepted = await confirm({
+      title: 'Suggestion',
+      description: (
+        <Stack spacing={1}>
+          <Typography level="body-sm">{recommendation.reason} We recommend changing:</Typography>
+          <Stack component="ul" spacing={0.25} sx={{ pl: 2.5, my: 0 }}>
+            {changedLabels.map((label) => (
+              <Typography key={label} component="li" level="body-sm">{label}</Typography>
+            ))}
+          </Stack>
+        </Stack>
+      ),
+      confirmLabel: 'Change them for me',
+      cancelLabel: 'Leave them as they are'
+    })
+    if (!accepted) return
+    commit({ ...nextConfig, ...recommendation.changes })
   }
 
   /** Reverts a key to its resolved system value (BambuStudio "back to system value"). */

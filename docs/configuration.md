@@ -45,6 +45,7 @@ See `.env.dev.example` in the workspace root for local development and `.env.ser
 | `SLICER_ENABLE_PIPE_PROGRESS` | `true` | When `true`, append Bambu/Orca CLI `--pipe` progress JSON frames into slicing job output so the UI can render determinate progress updates. |
 | `SLICER_BAMBUSTUDIO_HOME_DIR` | under slicer work dir | Isolated home directory used when launching BambuStudio. Subdirectories are created per target id. |
 | `SLICER_BAMBUSTUDIO_DATA_DIR` | under slicer work dir | Persistent `--datadir` used for slicer presets and first-run state. Subdirectories are created per target id. |
+| `SLICER_KEEP_WORK_DIR` | `false` | Debugging aid: keep each slice job's work directory (the rewritten input 3MF and the materialized profiles the CLI loaded) instead of deleting it when the job ends. The work dirs are large and are never swept, so leave this off outside an investigation. |
 | `PRINT_JOB_THUMBNAIL_RETENTION_DAYS` | `90` | How long completed-job thumbnail PNGs and persisted final-frame snapshot JPGs are retained before scheduled cleanup removes them. |
 | `PLUGINS_DIR` | `./data/plugins` | Directory for installed external plugins. |
 | `TRUST_PROXY` | *(unset)* | Express `trust proxy` setting; set when behind a reverse proxy. |

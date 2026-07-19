@@ -43,6 +43,12 @@ const envSchema = z.object({
   SLICER_BAMBUSTUDIO_DATA_DIR: z.string().default('/tmp/printstream-slicer/bambustudio-data'),
   SLICER_BAMBUSTUDIO_PROFILE_DIR: z.string().default('/opt/bambustudio/squashfs-root/resources/profiles/BBL'),
   SLICER_ENABLE_PIPE_PROGRESS: booleanEnv(true),
+  // Debug aid: keep each job's work dir (the rewritten input 3MF and the materialized
+  // profiles the CLI actually loaded) instead of deleting it when the response closes.
+  // The rewritten input is the only place the effective `filament_map`/`filament_map_mode`
+  // pair can be inspected, so a slice that fails inside BambuStudio's config handling is
+  // otherwise undiagnosable. Off by default: the work dirs are large and never swept.
+  SLICER_KEEP_WORK_DIR: booleanEnv(false),
   SLICER_TIMEOUT_MS: positiveIntEnv(30 * 60 * 1000),
   // Hard hang guard: if the CLI emits NO output at all for this long (before it reports
   // success), treat it as wedged, terminate it, and fail fast — instead of waiting out

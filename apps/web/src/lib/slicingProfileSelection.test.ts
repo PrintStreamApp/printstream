@@ -4,7 +4,6 @@ import type { SlicingProfileSummary } from '@printstream/shared'
 import {
   extractLayerHeightToken,
   formatSlicingProfileDisplayName,
-  isProjectProfileAllowedForTarget,
   isSelectableOrProjectFallbackSlicingProfile,
   isSelectableSlicingProfile,
   pickMachineDefaultFilamentProfile,
@@ -196,18 +195,6 @@ test('extractLayerHeightToken pulls the leading layer-height token from a proces
   assert.equal(extractLayerHeightToken('0.20 mm Standard @BBL H2D'), '0.20mm')
   assert.equal(extractLayerHeightToken('Standard'), null)
   assert.equal(extractLayerHeightToken(null), null)
-})
-
-test('isProjectProfileAllowedForTarget hides project profiles only for cross-family targets', () => {
-  const projectProfile = buildProfile('project:process:0.20mm%20Ryan%20%40BBL%20X1C', '0.20mm Ryan @BBL X1C')
-  const builtinProfile = buildProfile('builtin:process:standard-h2d', '0.20mm Standard @BBL H2D')
-
-  // Same family (compatible): project profile is kept.
-  assert.equal(isProjectProfileAllowedForTarget(projectProfile, true), true)
-  // Cross family (incompatible): project profile is dropped.
-  assert.equal(isProjectProfileAllowedForTarget(projectProfile, false), false)
-  // Built-in/installed profiles are always allowed regardless of compatibility.
-  assert.equal(isProjectProfileAllowedForTarget(builtinProfile, false), true)
 })
 
 test('pickMachineDefaultFilamentProfile resolves the machine default and prefers a matching filament type', () => {

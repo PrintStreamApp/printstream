@@ -682,6 +682,27 @@ export function TemplateLibraryFilePickerDialog({
     }),
     [activeBridgeName, allFolders, bridgeEntries.length, currentFolderId, resolvedBridgeId]
   )
+  /**
+   * Single entry point for folder moves (browser rows/tiles and the breadcrumb alike).
+   * The search is cleared on every move, matching the Library page: a term left standing
+   * keeps filtering the destination's children, so entering a folder that only matched by
+   * name lands the user in an apparently empty folder.
+   */
+  const navigateToFolder = (folderEntryId: string | null) => {
+    setSearch('')
+    if (folderEntryId === null) {
+      setCurrentFolderId(null)
+      setBridgeId(null)
+      return
+    }
+    if (isBridgeFolderId(folderEntryId)) {
+      setBridgeId(fromBridgeFolderId(folderEntryId))
+      setCurrentFolderId(null)
+      return
+    }
+    setCurrentFolderId(folderEntryId)
+  }
+
   const pickerError = (browseQuery.error ?? foldersQuery.error) as Error | undefined
 
   return (
@@ -707,19 +728,7 @@ export function TemplateLibraryFilePickerDialog({
                 <LibraryBreadcrumbRow favoritesOnly={favoritesOnly} onFavoritesOnlyChange={setFavoritesOnly}>
                   <LibraryBreadcrumb
                     crumbs={breadcrumb}
-                    onNavigate={(folderEntryId) => {
-                      if (folderEntryId === null) {
-                        setCurrentFolderId(null)
-                        setBridgeId(null)
-                        return
-                      }
-                      if (folderEntryId && isBridgeFolderId(folderEntryId)) {
-                        setBridgeId(fromBridgeFolderId(folderEntryId))
-                        setCurrentFolderId(null)
-                        return
-                      }
-                      setCurrentFolderId(folderEntryId)
-                    }}
+                    onNavigate={navigateToFolder}
                   />
                 </LibraryBreadcrumbRow>
 
@@ -797,14 +806,7 @@ export function TemplateLibraryFilePickerDialog({
                       sort={sort}
                       surfaceStyle="dialog"
                       emptyState={emptyStateNode}
-                      onFolderOpen={(folder) => {
-                        if (isBridgeFolderId(folder.id)) {
-                          setBridgeId(fromBridgeFolderId(folder.id))
-                          setCurrentFolderId(null)
-                          return
-                        }
-                        setCurrentFolderId(folder.id)
-                      }}
+                      onFolderOpen={(folder) => navigateToFolder(folder.id)}
                       onFilePick={onPick}
                       isFilePickable={(file) => isDirectPrintableFileName(file.name) || isUnslicedThreeMfFile(file)}
                       getFileDisabledReason={(file) => (

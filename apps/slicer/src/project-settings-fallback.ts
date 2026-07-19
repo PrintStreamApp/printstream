@@ -93,6 +93,23 @@ function firstStringValue(value: unknown): string | null {
   return null
 }
 
+/**
+ * The preset names an embedded config claims, for an error message that tells the user WHICH
+ * presets could not be resolved (typically a project-only custom process such as
+ * "0.24mm Standard @BBL H2D - Ryan" that exists nowhere but inside the 3MF). Returns null when
+ * the config names nothing at all.
+ */
+function describeEmbeddedPresetNames(embedded: Record<string, unknown>): string | null {
+  const parts: string[] = []
+  const machine = firstStringValue(embedded.printer_settings_id)
+  const process = firstStringValue(embedded.print_settings_id)
+  const filament = firstStringValue(embedded.filament_settings_id)
+  if (machine) parts.push(`printer "${machine}"`)
+  if (process) parts.push(`process "${process}"`)
+  if (filament) parts.push(`filament "${filament}"`)
+  return parts.length > 0 ? `it names ${parts.join(', ')}` : null
+}
+
 async function builtinProfilePathForName(profileDir: string, kind: 'machine' | 'process' | 'filament', name: string | null): Promise<string | null> {
   if (!name) return null
   const filePath = path.join(profileDir, `${kind}_full`, `${sanitizeProfileFileName(name)}.json`)
@@ -326,11 +343,23 @@ export async function ensureEmbeddedProjectSettings(input: {
       ? await buildExportArgsFromEmbeddedPresetNames(embedded, input.profileDir)
       : null
     if (!derived) {
-      // Nothing to synthesize from (no embedded settings to name presets, or none resolved).
-      // Slicing proceeds as-is; if the config is partial the CLI may crash at load, so leave a
-      // trace for that diagnosis.
+      // Reaching here means the embedded config FAILED the completeness check above and nothing
+      // can repair it: no `--load-*` args, and none of the preset names it carries resolve. That
+      // is deterministically fatal — the BBL-project loader segfaults on a partial config at
+      // "Start to load files" — so fail with what is actually wrong instead of slicing into an
+      // opaque exit 139 (and, because the crash classifier then retries, doing it three times).
+      //
+      // Deliberately NOT shaped like `Slicer CLI exited with code N`: this is not recoverable by
+      // dropping profiles or by retrying, so it must not match the API's compatibility/crash
+      // retry classifiers (`isLikelyBuiltinProfileCompatibilityExit` /
+      // `isTransientSlicerCrashExit` in slicing-jobs) the export-failure branch deliberately does.
       if (embedded !== null) {
-        input.log('Embedded project settings are incomplete and name no resolvable presets; slicing as-is')
+        const missing = COMPLETE_SETTINGS_SENTINEL_KEYS.filter((key) => embedded[key] === undefined)
+        const named = describeEmbeddedPresetNames(embedded)
+        throw new Error(
+          `This project's embedded settings are incomplete (missing ${missing.join(', ')}) and name no presets this slicer can resolve${named ? ` (${named})` : ''}. `
+          + 'Pick a process and filament profile for the slice, or re-save the project so it embeds complete settings.'
+        )
       }
       return input.inputPath
     }

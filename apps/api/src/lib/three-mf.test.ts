@@ -88,6 +88,24 @@ test('buildThreeMfIndex surfaces project support filament ids', () => {
   assert.deepEqual(buildThreeMfIndex(null, JSON.stringify({ support_filament: '0' }), new Map()).supportFilamentIds, [])
 })
 
+test('buildThreeMfIndex carries per-slot support/soluble flags on project filaments', () => {
+  // Distinct from `supportFilamentIds`: these describe the MATERIAL, so the support-interface
+  // recommendation can classify a slot without circularly reading which slot support currently
+  // points at. Absent arrays must read as null ("project never said"), never false.
+  const settings = JSON.stringify({
+    filament_type: ['PLA', 'PVA', 'PLA-S'],
+    filament_is_support: ['0', '0', '1'],
+    filament_soluble: ['0', '1', '0']
+  })
+  const filaments = buildThreeMfIndex(null, settings, new Map()).projectFilaments
+  assert.deepEqual(filaments.map((filament) => filament.isSupport), [false, false, true])
+  assert.deepEqual(filaments.map((filament) => filament.isSoluble), [false, true, false])
+
+  const unflagged = buildThreeMfIndex(null, JSON.stringify({ filament_type: ['PLA'] }), new Map()).projectFilaments
+  assert.equal(unflagged[0]?.isSupport, null)
+  assert.equal(unflagged[0]?.isSoluble, null)
+})
+
 test('buildThreeMfIndex backfills unsliced plate nozzle sizes from project settings', () => {
   // No slice_info: plates come from project metadata only, so nozzle chips must fall
   // back to the project's configured nozzle_diameter list.
@@ -273,6 +291,58 @@ test('nozzle assignment round-trips a left<->right swap through the index parser
   assert.equal(after.projectFilaments[1]?.nozzleId, 1)
   assert.equal(after.plates[0]?.filaments[0]?.nozzleId, 0)
   assert.equal(after.plates[0]?.filaments[1]?.nozzleId, 1)
+})
+
+// Production incident (2026-07-19, H2D): a support material saved with no nozzle assignment left
+// an EMPTY entry in filament_nozzle_map. BambuStudio read it as an extruder index and landed on
+// garbage — "filament Sup.PLA can not be printed on extruder 23075, under manual mode for multi
+// extruder printer", exit 188. The file must never be written with a hole in the map.
+test('an unassigned filament never leaves a hole in filament_nozzle_map', () => {
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C'],
+    filament_type: ['PLA'],
+    filament_settings_id: ['PLA Left'],
+    physical_extruder_map: H2D_PHYSICAL_EXTRUDER_MAP,
+    filament_nozzle_map: ['1']
+  })
+  const filaments: SceneEditFilament[] = [
+    { color: '#FFC72C', sourceIndex: 0, nozzleId: 1 },
+    // The support slot whose assignment was lost client-side.
+    { color: '#808080', sourceIndex: 0, nozzleId: null }
+  ]
+  const written = JSON.parse(applyNozzleAssignmentToProjectSettings(projectSettings, filaments)) as Record<string, unknown>
+  const nozzleMap = written.filament_nozzle_map as string[]
+  assert.equal(nozzleMap.length, 2)
+  assert.ok(nozzleMap.every((entry) => entry.trim() !== ''), `no empty entries, got ${JSON.stringify(nozzleMap)}`)
+  // The unassigned slot inherits a real nozzle rather than an empty string.
+  assert.equal(nozzleMap[1], '1')
+})
+
+// Regression (2026-07-19, H2D "Kawasaki" project): a nozzle the user picked for a SECOND material
+// saved correctly into filament_nozzle_map but read back as "no nozzle", so the L|R control showed
+// nothing and the next save wrote that nothing into the file. slice_info was stale — recorded by an
+// earlier slice that used only filament 1 — and its mapping won outright, dropping filament 2.
+test('a stale slice_info does not drop nozzles for filaments it predates', () => {
+  const sliceInfo = `
+<config>
+  <plate>
+    <metadata key="index" value="1"/>
+    <filament id="1" type="PLA" color="#001489" used_m="10" used_g="30" group_id="0"/>
+  </plate>
+</config>
+`.trim()
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#001489', '#808080'],
+    filament_type: ['PLA', 'PLA-S'],
+    filament_settings_id: ['Bambu PLA Basic', 'Bambu Support For PLA/PETG'],
+    physical_extruder_map: H2D_PHYSICAL_EXTRUDER_MAP,
+    // The user put material 2 on the right nozzle; slice_info has never heard of it.
+    filament_nozzle_map: ['1', '0']
+  })
+
+  const index = buildThreeMfIndex(sliceInfo, projectSettings)
+  assert.equal(index.projectFilaments[0]?.nozzleId, 1, 'filament 1 keeps its slice_info assignment')
+  assert.equal(index.projectFilaments[1]?.nozzleId, 0, 'filament 2 falls back to filament_nozzle_map')
 })
 
 test('nozzle assignment round-trips with no slice_info filament assignments (verbatim filament_nozzle_map)', () => {
@@ -2160,6 +2230,46 @@ test('writeArrangedThreeMf persists a material profile change: filament_settings
   }
 })
 
+// Root cause of issue #63. `slice_info.config` records one <filament> entry per filament a
+// PREVIOUS slice used, and BambuStudio builds its per-plate nozzle grouping from those entries.
+// Adding a material to an already-sliced project used to carry the old, shorter record forward
+// (only group_id was rewritten, never the entry set), so the next slice derived a SHORT filament
+// map and read it out of bounds — "filament Sup.PLA can not be printed on extruder 21840", exit
+// 188. A record that does not describe the saved filament set must not survive the save.
+test('saving a material onto an already-sliced project drops the now-mismatched slice record', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-slicerecord-'))
+  const scaffoldPath = path.join(tempDir, 'scaffold.3mf')
+  const slicedPath = path.join(tempDir, 'sliced.3mf')
+  const savedPath = path.join(tempDir, 'saved.3mf')
+  try {
+    await buildEditedThreeMf(null, scaffoldPath, { plates: [{ index: 1 }], instances: [] }, [])
+    // A project sliced with ONE material: the record covers filament 1 only.
+    const sliceInfo = '<?xml version="1.0"?>\n<config>\n  <plate>\n    <metadata key="index" value="1"/>\n'
+      + '    <filament id="1" tray_info_idx="GFG00" type="PETG" used_g="12" group_id="0"/>\n  </plate>\n</config>'
+    await rewriteThreeMfEntries(scaffoldPath, slicedPath, {}, [{ name: 'Metadata/slice_info.config', content: sliceInfo }])
+    assert.match((await readEntry(slicedPath, 'Metadata/slice_info.config')).toString('utf8'), /<filament id="1"/)
+
+    // Now the editor adds a SECOND material and saves.
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [],
+      filaments: [
+        { color: '#001489', type: 'PETG', settingsId: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' },
+        { color: '#808080', type: 'PLA-S', settingsId: 'Bambu Support For PLA/PETG @BBL H2D' }
+      ]
+    }
+    await buildEditedThreeMf(slicedPath, savedPath, edit, [])
+
+    await assert.rejects(
+      readEntry(savedPath, 'Metadata/slice_info.config'),
+      'a record covering 1 filament must not survive a save that made the project 2-filament'
+    )
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('saving from a settings-less new-project scaffold synthesizes project_settings.config (materials + plate type survive)', async () => {
   // Regression: a new-project scaffold carries no Metadata/project_settings.config, and the
   // filament/plate-type rewrites used to be registered only as copy-pass transforms of an
@@ -3307,4 +3417,20 @@ test('extractSceneBed override resolves every canonical Bambu model key to a rea
   expectBed('A2L', 330, 320)
   expectBed('X2D', 256, 256)
   expectBed('H2D', 350, 320)
+})
+
+// The read-only previews only ever see the scene, so the bed has to name its printer or they
+// cannot fetch that printer's 3D plate mesh and silently fall back to the plain grid.
+test('extractSceneBed reports the printer the bed was placed for', async () => {
+  const { extractSceneBed } = await import('./three-mf-reader.js')
+
+  // Slice-dialog override wins.
+  assert.equal(extractSceneBed(null, null, 'H2D' as never).bed.printerModel, 'H2D')
+
+  // Otherwise the model resolved from the file's own project settings.
+  const embedded = extractSceneBed(JSON.stringify({ printer_model: 'Bambu Lab X1 Carbon' }), null)
+  assert.equal(embedded.bed.printerModel, 'X1C')
+
+  // Null when neither is known — the generic fallback bed, which has no plate mesh to fetch.
+  assert.equal(extractSceneBed(null, null).bed.printerModel, null)
 })

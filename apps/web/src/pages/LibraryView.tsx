@@ -377,6 +377,13 @@ export function LibraryView() {
 
   const navigateToFolder = (folderId: string | null) => {
     if (!tenantSlug) return
+    // Drop the search term on every folder move. A term left standing makes the
+    // destination unreachable: in "All folders" scope the API ignores `folderId`
+    // while `search` is set and re-returns the same flat whole-bridge list (so the
+    // click looks dead), and in "This folder" scope the term keeps filtering the
+    // new folder's children client-side (so it looks empty). The scope toggle is
+    // deliberately left as the user set it.
+    setSearch('')
     if (folderId && isBridgeFolderId(folderId)) {
       navigate(buildLibraryFolderRoute(tenantSlug, null, fromBridgeFolderId(folderId)))
       return

@@ -146,13 +146,6 @@ export function extractLayerHeightToken(value: string | null | undefined): strin
  * the project's source model, so this gate hides them in that case while leaving
  * installed/built-in profiles untouched.
  */
-export function isProjectProfileAllowedForTarget(
-  profile: SlicingProfileSummary,
-  projectProfilesCompatibleWithTarget: boolean
-): boolean {
-  return !isProjectSlicingProfileId(profile.id) || projectProfilesCompatibleWithTarget
-}
-
 /**
  * Resolves the machine profile's `default_filament_profile` to a concrete
  * profile from the supplied (compatible) list, mirroring how BambuStudio picks
