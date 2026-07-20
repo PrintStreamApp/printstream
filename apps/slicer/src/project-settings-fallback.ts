@@ -131,19 +131,21 @@ async function buildExportArgsFromEmbeddedPresetNames(
 ): Promise<string[] | null> {
   const machinePath = await builtinProfilePathForName(profileDir, 'machine', firstStringValue(embedded.printer_settings_id))
   const processPath = await builtinProfilePathForName(profileDir, 'process', firstStringValue(embedded.print_settings_id))
-  const filamentNames = Array.isArray(embedded.filament_settings_id)
-    ? embedded.filament_settings_id.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-    : []
-  const filamentPaths = (await Promise.all(
-    filamentNames.map((name) => builtinProfilePathForName(profileDir, 'filament', name))
-  )).filter((entry): entry is string => entry !== null)
+  // Slot COUNT is load-bearing, so resolve filaments through the padding helper rather than
+  // dropping the names that miss. This used to filter unresolved slots out, emitting a
+  // `--load-filaments` list SHORTER than the project's filament count — BambuStudio then reads
+  // its per-filament vectors out of bounds and segfaults while loading (opaque exit 139, the
+  // same out-of-bounds shape as the `filament_map` crash in issue #63). A 3MF whose
+  // `filament_settings_id` holds an unresolvable DISPLAY name ("Bambu PETG Basic" instead of
+  // "Bambu PETG Basic @BBL H2D 0.4 nozzle") is exactly the case that triggers it.
+  const filamentCoverage = await buildFilamentCoverageFromEmbedded(embedded, profileDir)
 
   const settingsPaths = [machinePath, processPath].filter((entry): entry is string => entry !== null)
   // The export needs at least the machine or process preset to be meaningful; filaments alone
   // don't anchor a printable config.
   if (settingsPaths.length === 0) return null
   const args = ['--load-settings', settingsPaths.join(';')]
-  if (filamentPaths.length > 0) args.push('--load-filaments', filamentPaths.join(';'))
+  if (filamentCoverage) args.push('--load-filaments', filamentCoverage)
   return args
 }
 
@@ -154,6 +156,12 @@ async function buildExportArgsFromEmbeddedPresetNames(
  * when the settings name no filaments. This is what makes a material-changed project (whose editor
  * save DROPPED the old material's physics — see the API's `applyFilamentList`) re-derive the NEW
  * material's temperatures/flow instead of collapsing to a single Generic PLA baseline.
+ *
+ * **Invariant: the returned list covers EVERY named slot or is null — never a short list.**
+ * BambuStudio sizes its per-filament vectors from the loaded filament count and indexes them by
+ * the project's slot ids, so a list shorter than the project's filament count reads out of bounds
+ * and segfaults the loader (exit 139). Returning null instead leaves the caller to slice without
+ * the export, which fails with a message rather than a crash.
  */
 async function buildFilamentCoverageFromEmbedded(
   embedded: Record<string, unknown> | null,
@@ -167,9 +175,12 @@ async function buildFilamentCoverageFromEmbedded(
   for (const name of names) {
     const resolved = name.trim() ? await builtinProfilePathForName(profileDir, 'filament', name) : null
     const covered = resolved ?? genericPla
-    if (covered) paths.push(covered)
+    // No preset AND no Generic PLA to pad with (a broken profile dir): a partial list would
+    // crash the loader, so abandon the coverage entirely rather than under-fill it.
+    if (!covered) return null
+    paths.push(covered)
   }
-  return paths.length > 0 ? paths.join(';') : null
+  return paths.join(';')
 }
 
 /**

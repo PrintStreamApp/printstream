@@ -9,16 +9,18 @@ import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import http from 'node:http'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { spawn } from 'node:child_process'
 import { z } from 'zod'
 import {
+  buildBuiltinSlicingPresetId,
   createSlicingJobSchema,
   extractProfileMetadata,
   isDirectPrintableFileName,
+  isProjectSlicingPresetId,
   sliceEnvelopeSchema,
   stringValue,
   type SliceProfileFile,
@@ -48,6 +50,7 @@ import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from '
 import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
 import { resolveCustomProfileConfig } from './custom-profile-resolve.js'
 import { sanitizeProfileFileName } from './profile-file-name.js'
+import { buildFilamentSlotCoverage, type FilamentSlotRequest } from './filament-slot-coverage.js'
 import { sanitizeBuiltinSlicerProfileJson } from './profile-json.js'
 import { isVisibleBambuStudioProfile } from './profile-visibility.js'
 import { getPublicSlicerTargets, getSlicerTargetRegistry, resolveSlicerTarget, type RuntimeSlicerTarget } from './slicer-targets.js'
@@ -272,6 +275,7 @@ app.post('/slice', async (request, response) => {
       processSettingOverrides: parsed.data.request.target.processSettingOverrides ?? {},
       filamentSettingOverrides: parsed.data.request.target.filamentSettingOverrides ?? {},
       perMaterialFilamentOverrides: buildPerMaterialFilamentOverrides(parsed.data.request.target.filamentMappings ?? []),
+      filamentSlots: parsed.data.request.target.filamentMappings ?? [],
       metadata: slicedArtifactMetadata,
       supportedFlags,
       rewroteProjectSettings: preparedInput.rewroteProjectSettings,
@@ -364,8 +368,10 @@ async function runCli(input: {
   profileFiles: SliceProfileFile[]
   processSettingOverrides: Record<string, string | string[]>
   filamentSettingOverrides: Record<string, string | string[]>
-  /** Per-material overrides keyed by the slot's filament profileId (from the material dialog). */
-  perMaterialFilamentOverrides: Record<string, Record<string, string | string[]>>
+  /** Per-material "tune" overrides keyed by 1-based project filament SLOT (from the material dialog). */
+  perMaterialFilamentOverrides: Record<number, Record<string, string | string[]>>
+  /** The request's filament mappings, one per project slot; drives `--load-filaments` coverage. */
+  filamentSlots: readonly FilamentSlotRequest[]
   metadata: SlicedArtifactMetadata | null
   supportedFlags: ReadonlySet<string>
   rewroteProjectSettings: boolean
@@ -382,7 +388,17 @@ async function runCli(input: {
   const cliProfileFiles = selectCliProfileFiles(input.profileFiles, {
     rewroteProjectSettings: input.rewroteProjectSettings
   })
-  const profileArgs = await prepareProfileArgs(cliProfileFiles, path.dirname(input.outputPath), input.slicerTarget.profileDir, input.processSettingOverrides, input.filamentSettingOverrides, input.perMaterialFilamentOverrides)
+  const profileArgs = await prepareProfileArgs({
+    profileFiles: cliProfileFiles,
+    workDir: path.dirname(input.outputPath),
+    profileDir: input.slicerTarget.profileDir,
+    inputPath: input.inputPath,
+    filamentSlots: input.filamentSlots,
+    processSettingOverrides: input.processSettingOverrides,
+    filamentSettingOverrides: input.filamentSettingOverrides,
+    perMaterialFilamentOverrides: input.perMaterialFilamentOverrides,
+    log: (message) => appendStructuredOutput(input.outputLines, 'system', message)
+  })
   // A "from scratch" scaffold 3MF (calibration prints, new-project saves) carries the BBL marker
   // but no — or only a partial — embedded project_settings.config, which segfaults the CLI's
   // BBL-project loader. Synthesize/complete it from the slice's own profiles so it loads; a no-op
@@ -994,7 +1010,7 @@ async function listBuiltinProfiles(profileDir: string): Promise<BuiltinProfileSu
       const profile = await readDisplayProfile(path.join(directory, entry.name), kind, profileDir)
       if (!profile) continue
       const { name, metadata } = profile
-      profiles.push({ id: buildBuiltinProfileId(kind, name), source: 'builtin', kind, name, ...metadata, updatedAt: null })
+      profiles.push({ id: buildBuiltinSlicingPresetId(kind, name), source: 'builtin', kind, name, ...metadata, updatedAt: null })
     }
   }
   profiles.sort((left, right) => left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name))
@@ -1021,35 +1037,93 @@ async function readDisplayProfile(filePath: string, kind: SlicingProfileKind, pr
   }
 }
 
-async function prepareProfileArgs(
-  profileFiles: SliceProfileFile[],
-  workDir: string,
-  profileDir: string,
-  processSettingOverrides: Record<string, string | string[]> = {},
-  filamentSettingOverrides: Record<string, string | string[]> = {},
-  perMaterialFilamentOverrides: Record<string, Record<string, string | string[]>> = {}
-): Promise<string[]> {
+async function prepareProfileArgs(input: {
+  profileFiles: SliceProfileFile[]
+  workDir: string
+  profileDir: string
+  /**
+   * The 3MF the CLI will actually load — already carrying the request's per-slot
+   * choices in `filament_settings_id` (the pre-slice metadata rewrite ran in
+   * `prepareInputThreeMf`). It is the authority for the filament slot COUNT.
+   */
+  inputPath: string
+  /** The request's filament mappings, one per project filament slot. */
+  filamentSlots: readonly FilamentSlotRequest[]
+  processSettingOverrides?: Record<string, string | string[]>
+  filamentSettingOverrides?: Record<string, string | string[]>
+  /** Per-material "tune" overrides keyed by 1-based project filament slot. */
+  perMaterialFilamentOverrides?: Record<number, Record<string, string | string[]>>
+  /** Surfaces slot-coverage decisions into the job's output so they are not invisible. */
+  log?: (message: string) => void
+}): Promise<string[]> {
   const settingsPaths: string[] = []
-  const filamentPaths: string[] = []
-  const customDir = path.join(workDir, 'profiles')
+  const customDir = path.join(input.workDir, 'profiles')
+  const processSettingOverrides = input.processSettingOverrides ?? {}
+  const filamentSettingOverrides = input.filamentSettingOverrides ?? {}
+  const perMaterialFilamentOverrides = input.perMaterialFilamentOverrides ?? {}
 
-  for (const profile of profileFiles) {
-    // Filament overrides = the target-level map (applies to every filament, e.g. flow calibration)
-    // with THIS slot's per-material overrides layered on top (slot values win).
-    const overrides = profile.kind === 'process'
-      ? processSettingOverrides
-      : profile.kind === 'filament'
-        ? { ...filamentSettingOverrides, ...(perMaterialFilamentOverrides[profile.id] ?? {}) }
-        : undefined
-    const profilePath = await materializeProfileFile(profile, customDir, profileDir, overrides)
-    if (profile.kind === 'filament') filamentPaths.push(profilePath)
-    else settingsPaths.push(profilePath)
+  // Non-filament presets materialize once each; filaments materialize PER SLOT below,
+  // because two slots may share a preset yet carry different per-material tunes.
+  const filamentFilesById = new Map<string, SliceProfileFile>()
+  for (const profile of input.profileFiles) {
+    if (profile.kind === 'filament') {
+      filamentFilesById.set(profile.id, profile)
+      continue
+    }
+    settingsPaths.push(await materializeProfileFile(profile, customDir, input.profileDir, profile.kind === 'process' ? processSettingOverrides : undefined))
+  }
+
+  // `--load-filaments` is POSITIONAL: one entry per project slot, or none at all.
+  // Pushing only the presets the request resolved to a file sent a short list
+  // whenever a slot stayed on the project's own preset, which BambuStudio then
+  // broadcast across every slot before segfaulting (issue #66).
+  const embeddedSettings = await readThreeMfProjectSettings(input.inputPath).catch((error: unknown) => {
+    // Not fatal — the request's own mappings still give a slot count — but it costs us
+    // the per-slot preset names, so say so rather than silently degrading coverage.
+    console.warn('[slicer] could not read embedded project settings for filament slot coverage', (error as Error).message)
+    return null
+  })
+  const embeddedPresetNames = stringArrayValue(embeddedSettings?.filament_settings_id)
+  const slotSources = await buildFilamentSlotCoverage({
+    slots: input.filamentSlots,
+    requestedProfileIds: new Set(filamentFilesById.keys()),
+    embeddedPresetNames,
+    hasBuiltinPreset: (name) => builtinFilamentPresetExists(input.profileDir, name)
+  })
+  const slotCount = Math.max(input.filamentSlots.length, embeddedPresetNames.length)
+  if (!slotSources && slotCount > 0) {
+    // The invariant chose "no filament presets" over a short list. Record it: an
+    // unexplained absence here is what made the out-of-bounds crash opaque before.
+    input.log?.(`No filament preset covers all ${slotCount} project slots — slicing from the project's own embedded settings instead.`)
+  }
+
+  const filamentPaths: string[] = []
+  for (const [index, source] of (slotSources ?? []).entries()) {
+    const slotNumber = index + 1
+    // Slot-scoped overrides on a slot-unique output path: materializing by profile id
+    // let two slots sharing a preset clobber each other's tune.
+    const overrides = { ...filamentSettingOverrides, ...(perMaterialFilamentOverrides[slotNumber] ?? {}) }
+    const profile: SliceProfileFile = source.origin === 'requested'
+      ? { ...(filamentFilesById.get(source.profileId) as SliceProfileFile), id: `filament-slot-${slotNumber}` }
+      : { id: `filament-slot-${slotNumber}`, source: 'builtin', kind: 'filament', name: source.name }
+    filamentPaths.push(await materializeProfileFile(profile, customDir, input.profileDir, overrides))
   }
 
   const args: string[] = []
   if (settingsPaths.length > 0) args.push('--load-settings', settingsPaths.join(';'))
   if (filamentPaths.length > 0) args.push('--load-filaments', filamentPaths.join(';'))
   return args
+}
+
+/** Trimmed non-empty strings of a `ConfigOptionStrings` value, preserving slot order. */
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((entry) => typeof entry === 'string' ? entry : '') : []
+}
+
+/** Whether a bundled builtin filament preset of this name exists in the catalogue. */
+async function builtinFilamentPresetExists(profileDir: string, name: string): Promise<boolean> {
+  const filePath = path.join(profileDir, 'filament_full', `${sanitizeProfileFileName(name)}.json`)
+  return access(filePath).then(() => true, () => false)
 }
 
 async function materializeProfileFile(
@@ -1145,7 +1219,7 @@ async function prepareInputThreeMf(input: {
   // profile file, so its overrides must be merged into the 3MF's own
   // project_settings.config rather than a materialized preset.
   const applyEmbeddedProcessOverrides =
-    (input.request.target.processProfileId ?? '').startsWith('project:') &&
+    isProjectSlicingPresetId(input.request.target.processProfileId) &&
     Object.keys(input.processSettingOverrides).length > 0
 
   const metadata = buildSlicedArtifactMetadata(input.request, input.profileFiles)
@@ -1404,10 +1478,6 @@ async function readMergedMachineProfile(profileDir: string, machineProfileName: 
 
   await readProfileRecord(machineProfileName)
   return mergeInheritedMachineProfile(machineProfileName, records)
-}
-
-function buildBuiltinProfileId(kind: SlicingProfileKind, name: string): string {
-  return `builtin:${kind}:${Buffer.from(name, 'utf8').toString('base64url')}`
 }
 
 async function normalizeCliOutput(input: {

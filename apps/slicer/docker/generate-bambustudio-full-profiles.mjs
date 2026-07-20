@@ -190,8 +190,13 @@ async function listJsonFiles(directory) {
   return files.sort((left, right) => left.localeCompare(right))
 }
 
+// Must stay byte-identical to `sanitizeProfileFileName` in apps/slicer/src/profile-file-name.ts:
+// this is the WRITE side and that is the READ side. A preset written under a different filename
+// than every reader looks for silently resolves to nothing, and the slot then falls back to a
+// stand-in material — a wrong-material slice, not an error. (No bundled preset name contains
+// `:` or `;` today, so widening this is a no-op now and a trap removed later.)
 function sanitizeFileName(value) {
-  return String(value).replace(/[\\/]/g, '-')
+  return String(value).replace(/[\\/:;]/g, '-')
 }
 
 // Run as a CLI when invoked directly (not when imported). Must stay at the end of

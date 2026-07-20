@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, SlicingProfileSummary, ThreeMfFilament, ThreeMfIndex, ThreeMfProjectFilament } from '@printstream/shared'
-import { buildFilamentMappings, buildSliceDialogProjectFilaments, isFilamentProfileCompatible, slicingProfilesResponseIsUsable, type SliceMaterialOption } from './sliceProfileMatching'
+import { buildFilamentMappings, buildProjectSlicingProfiles, buildSliceDialogProjectFilaments, buildSliceMaterialOptions, isFilamentProfileCompatible, narrowMaterialOptions, resolveProfileMaterialType, slicingProfilesResponseIsUsable, type SliceMaterialOption } from './sliceProfileMatching'
 
 function materialOption(overrides: Partial<SliceMaterialOption> & { id: string }): SliceMaterialOption {
   return {
@@ -363,7 +363,7 @@ test('buildFilamentMappings attaches per-material setting overrides to the match
     materialOption({ id: 'opt-petg', profileId: 'builtin:filament:PETG' }),
     materialOption({ id: 'opt-pla', profileId: 'builtin:filament:PLA', material: 'Bambu PLA Basic' })
   ]
-  const mappings = buildFilamentMappings(
+  const { mappings, unresolved } = buildFilamentMappings(
     projectFilaments,
     { 1: 'opt-petg', 2: 'opt-pla' },
     {}, {}, options,
@@ -371,10 +371,97 @@ test('buildFilamentMappings attaches per-material setting overrides to the match
   )
   assert.deepEqual(mappings[0]?.settingOverrides, { nozzle_temperature: ['255'] })
   assert.equal(mappings[1]?.settingOverrides, undefined)
+  assert.deepEqual(unresolved, [])
 })
 
 test('buildFilamentMappings omits settingOverrides when the map is empty', () => {
   const projectFilaments = [{ projectFilamentId: 1, label: 'PETG', color: '#00AE42', nozzleId: null }]
-  const mappings = buildFilamentMappings(projectFilaments, { 1: 'opt-petg' }, {}, {}, [materialOption({ id: 'opt-petg' })], { 1: {} })
+  const { mappings } = buildFilamentMappings(projectFilaments, { 1: 'opt-petg' }, {}, {}, [materialOption({ id: 'opt-petg' })], { 1: {} })
   assert.equal(mappings[0]?.settingOverrides, undefined)
+})
+
+// Issue #66: a slot must never vanish from the request. An unselected slot and a
+// selection whose option no longer exists are both reported, not dropped.
+test('buildFilamentMappings reports unresolved slots instead of silently dropping them', () => {
+  const projectFilaments = [
+    { projectFilamentId: 1, label: 'PETG', color: '#00AE42', nozzleId: null },
+    { projectFilamentId: 2, label: 'PLA', color: '#FFFFFF', nozzleId: null },
+    { projectFilamentId: 3, label: 'Support', color: '#101010', nozzleId: null }
+  ]
+  const { mappings, unresolved } = buildFilamentMappings(
+    projectFilaments,
+    { 1: 'opt-petg', 3: 'opt-that-no-longer-exists' },
+    {}, {}, [materialOption({ id: 'opt-petg' })]
+  )
+
+  assert.deepEqual(mappings.map((mapping) => mapping.projectFilamentId), [1])
+  assert.deepEqual(unresolved, [
+    { projectFilamentId: 2, label: 'PLA', reason: 'unselected' },
+    { projectFilamentId: 3, label: 'Support', reason: 'staleSelection' }
+  ])
+})
+
+// Issue #66: the material picker filters by EXACT type equality, and support presets
+// are typed by base polymer (`filament_type: ["PLA"]` + `filament_is_support`) while a
+// project filament / AMS tray reports the derived `PLA-S`. Comparing those two
+// spellings directly hid every valid support preset from the picker.
+const SUPPORT_PLA_PRESET: SlicingProfileSummary = {
+  id: 'builtin:filament:support-pla',
+  source: 'builtin',
+  kind: 'filament',
+  name: 'Bambu Support For PLA @BBL H2D',
+  filamentType: 'PLA',
+  filamentIds: ['GFS02'],
+  filamentIsSupport: true,
+  filamentVendor: 'Bambu Lab'
+}
+
+test('a support preset is typed by its DERIVED display type, so a PLA-S filter finds it', () => {
+  assert.equal(resolveProfileMaterialType(SUPPORT_PLA_PRESET), 'PLA-S')
+
+  const options = buildSliceMaterialOptions([SUPPORT_PLA_PRESET], [])
+  assert.deepEqual(narrowMaterialOptions(options, 'PLA-S').map((option) => option.materialType), ['PLA-S'])
+  // ...and it must not leak into the plain-PLA bucket, where it would slice a model
+  // body in support material.
+  assert.deepEqual(narrowMaterialOptions(options, 'PLA'), [])
+})
+
+test('a model PLA preset stays out of the PLA-S bucket', () => {
+  const modelPreset: SlicingProfileSummary = {
+    id: 'builtin:filament:pla-basic',
+    source: 'builtin',
+    kind: 'filament',
+    name: 'Bambu PLA Basic @BBL H2D',
+    filamentType: 'PLA',
+    filamentIsSupport: false
+  }
+  assert.equal(resolveProfileMaterialType(modelPreset), 'PLA')
+  assert.deepEqual(narrowMaterialOptions(buildSliceMaterialOptions([modelPreset], []), 'PLA-S'), [])
+})
+
+// A 3MF's own support filament carries `filament_is_support` per slot, so the project
+// preset it synthesizes must be typed PLA-S too — otherwise the project's own material
+// disappears from its own picker.
+test("a project 3MF's support filament synthesizes a preset typed PLA-S", () => {
+  const bakedIndex = {
+    projectFilaments: [
+      { id: 1, filamentName: 'Bambu Support For PLA', filamentType: 'PLA', isSupport: true, color: '#101010', nozzleId: null }
+    ],
+    plates: []
+  } as unknown as ThreeMfIndex
+
+  const [projectPreset] = buildProjectSlicingProfiles(bakedIndex, 'filament')
+  assert.equal(projectPreset?.filamentIsSupport, true)
+  assert.equal(resolveProfileMaterialType(projectPreset as SlicingProfileSummary), 'PLA-S')
+})
+
+// The name-only fallback (a preset carrying no filament_type/filament_is_support at all)
+// must land in the same bucket rather than inventing a bare `SUPPORT` type.
+test('a preset known only by name still derives the support display type', () => {
+  assert.equal(resolveProfileMaterialType({
+    id: 'project:filament:legacy',
+    source: 'custom',
+    kind: 'filament',
+    name: 'Bambu Support For PLA'
+  }), 'PLA-S')
 })

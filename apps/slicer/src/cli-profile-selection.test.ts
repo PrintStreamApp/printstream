@@ -31,20 +31,31 @@ test('keeps machine presets when project settings were not rewritten', () => {
   ])
 })
 
-test('buildPerMaterialFilamentOverrides keys overrides by profileId and skips empties', () => {
+test('buildPerMaterialFilamentOverrides keys overrides by project slot and skips empties', () => {
   const map = buildPerMaterialFilamentOverrides([
-    { profileId: 'builtin:filament:PETG', settingOverrides: { nozzle_temperature: ['255'] } },
-    { profileId: 'builtin:filament:PLA', settingOverrides: {} }, // empty -> skipped
-    { profileId: null, settingOverrides: { nozzle_temperature: ['999'] } }, // no profile -> skipped
-    { profileId: 'builtin:filament:ABS' } // no overrides -> skipped
+    { projectFilamentId: 1, settingOverrides: { nozzle_temperature: ['255'] } },
+    { projectFilamentId: 2, settingOverrides: {} }, // empty -> skipped
+    { projectFilamentId: 3 } // no overrides -> skipped
   ])
-  assert.deepEqual(map, { 'builtin:filament:PETG': { nozzle_temperature: ['255'] } })
+  assert.deepEqual(map, { 1: { nozzle_temperature: ['255'] } })
 })
 
-test('buildPerMaterialFilamentOverrides merges two slots sharing a profileId (last write wins)', () => {
+// Regression: keyed by profileId, a slot left on the project's own preset carried no
+// profileId at all, so the user's tune was silently discarded before reaching the CLI.
+test('buildPerMaterialFilamentOverrides keeps a tune on a slot that has no chosen preset', () => {
   const map = buildPerMaterialFilamentOverrides([
-    { profileId: 'builtin:filament:PLA', settingOverrides: { nozzle_temperature: ['210'], filament_flow_ratio: ['0.98'] } },
-    { profileId: 'builtin:filament:PLA', settingOverrides: { nozzle_temperature: ['215'] } }
+    { projectFilamentId: 1, settingOverrides: { nozzle_temperature: ['255'] } }
   ])
-  assert.deepEqual(map['builtin:filament:PLA'], { nozzle_temperature: ['215'], filament_flow_ratio: ['0.98'] })
+  assert.deepEqual(map[1], { nozzle_temperature: ['255'] })
+})
+
+// Regression: keyed by profileId, two slots sharing one preset merged last-write-wins,
+// so one slot silently printed with the other's temperature.
+test('buildPerMaterialFilamentOverrides keeps two slots sharing a preset independent', () => {
+  const map = buildPerMaterialFilamentOverrides([
+    { projectFilamentId: 1, settingOverrides: { nozzle_temperature: ['210'], filament_flow_ratio: ['0.98'] } },
+    { projectFilamentId: 2, settingOverrides: { nozzle_temperature: ['215'] } }
+  ])
+  assert.deepEqual(map[1], { nozzle_temperature: ['210'], filament_flow_ratio: ['0.98'] })
+  assert.deepEqual(map[2], { nozzle_temperature: ['215'] })
 })

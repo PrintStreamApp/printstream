@@ -1026,7 +1026,11 @@ function parseAms(
       }
 
       const trays = Array.isArray(entry.tray) ? entry.tray : []
-      for (const [index, tray] of trays.filter(isObject).entries()) {
+      // Index taken BEFORE the filter: it is the fallback slot id, so it has to be the
+      // slot's position on the wire. Indexing the filtered array would shift every tray
+      // after a non-object entry down one, writing a slot's state onto its neighbour.
+      for (const [index, tray] of trays.entries()) {
+        if (!isObject(tray)) continue
         const slotId = numberOrNull(tray.id) ?? index
         const previousSlot = nextUnit.slots.find((slot) => slot.slot === slotId)
         const reportedFilamentType = 'tray_type' in tray ? stringOrNull(tray.tray_type) : undefined
@@ -1729,12 +1733,15 @@ function parseNozzles(
   const device = isObject(print.device) ? print.device : null
   const nozzleSpecsByInstalledId = parseInstalledNozzleSpecs(device)
   const extruder = device && isObject(device.extruder) ? device.extruder : null
+  // Carry each entry's ORIGINAL wire position: it is the fallback extruder id, so
+  // filtering first and indexing the survivors would misattribute an extruder's
+  // state to its neighbour whenever a malformed entry preceded it.
   const extruderInfo = extruder && Array.isArray(extruder.info)
-    ? extruder.info.filter(isObject)
+    ? extruder.info.flatMap((entry, index) => isObject(entry) ? [{ entry, index }] : [])
     : null
 
   if (extruderInfo && extruderInfo.length > 0) {
-    return extruderInfo.map((entry, index) => {
+    return extruderInfo.map(({ entry, index }) => {
       const extruderId = numberOrNull(entry.id) ?? index
       const previous = previousById.get(extruderId)
       const decoded = decodeNozzleTemperature(entry.temp, previous?.targetTemp ?? null)

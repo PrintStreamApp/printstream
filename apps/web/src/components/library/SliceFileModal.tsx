@@ -48,6 +48,7 @@ import {
   pickSelectableSlicingProfileByName,
   pickSlicingProfileByBakedName,
   pickStandardProcessProfile,
+  resolveProfileLayerHeight,
   resolveSliceDisabledReason
 } from '../../lib/slicingProfileSelection'
 import {
@@ -281,8 +282,15 @@ export function SliceFileModal({
     [bakedIndex, profiles]
   )
   const selectedPrinter = printers.find((printer) => printer.id === printerId) ?? null
-  const [manualPrinterModel, setManualPrinterModel] = useState<string>(() => resolveInitialManualPrinterModel(file, machineProfiles, lockedPreferredPrinter?.model ?? printers[0]?.model))
-  const [printerProfileId, setPrinterProfileId] = useState(() => pickMachineProfileForPrinter(machineProfiles, lockedPreferredPrinter ?? printers[0])?.id ?? machineProfiles[0]?.id ?? '')
+  // Seed from the PROJECT (its compatible models / baked machine profile) or from a
+  // printer the caller explicitly locked — never from `printers[0]`. These initializers
+  // run on the first render, before the 3MF index resolves, so an arbitrary "first
+  // printer in the workspace" here is a guess that sticks: it sent slices as
+  // `manualProfile` with a wrong model and no printer id (issue #66). With no such
+  // signal the fields stay empty and the baked-defaults effect fills them in once the
+  // index and profile catalogue land.
+  const [manualPrinterModel, setManualPrinterModel] = useState<string>(() => resolveInitialManualPrinterModel(file, machineProfiles, lockedPreferredPrinter?.model))
+  const [printerProfileId, setPrinterProfileId] = useState(() => pickMachineProfileForPrinter(machineProfiles, lockedPreferredPrinter)?.id ?? machineProfiles[0]?.id ?? '')
   // Default a fresh selection to the 0.20mm Standard preset rather than whatever is first
   // in the list; an existing file's baked profile still overrides this via the effects below.
   const [processProfileId, setProcessProfileId] = useState(() => pickStandardProcessProfile(processProfiles)?.id ?? processProfiles[0]?.id ?? '')
@@ -305,7 +313,7 @@ export function SliceFileModal({
     plateTypeTouchedRef.current = true
     setPlateType(value)
   }, [])
-  const [nozzleDiameter, setNozzleDiameter] = useState(() => resolveInitialNozzleDiameter(file, lockedPreferredPrinter ?? printers[0], null, null))
+  const [nozzleDiameter, setNozzleDiameter] = useState(() => resolveInitialNozzleDiameter(file, lockedPreferredPrinter, null, null))
   const [nozzleFlow, setNozzleFlow] = useState<PrinterNozzleFlow>('standard')
   const [filamentMaterialOptionIds, setFilamentMaterialOptionIds] = useState<Record<number, string>>(() => buildInitialFilamentMaterialOptionSelection(file, null, filamentProfiles))
   const [filamentMaterialTypeFilters, setFilamentMaterialTypeFilters] = useState<Record<number, string>>({})
@@ -382,6 +390,9 @@ export function SliceFileModal({
     [plateType, printerCompatibleProcessProfiles, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel]
   )
   const selectedAnyProcessProfile = processProfiles.find((profile) => profile.id === processProfileId) ?? null
+  // Narrowed to a primitive so the machine-switch effect below can depend on the layer
+  // height itself rather than on the profile object's identity.
+  const selectedProcessLayerHeight = selectedAnyProcessProfile ? resolveProfileLayerHeight(selectedAnyProcessProfile) : null
   const selectedProcessProfile = compatibleProcessProfiles.find((profile) => profile.id === processProfileId) ?? null
   const compatibleFilamentProfiles = useMemo(
     // Project filament presets stay available for every target, for the same reason as the
@@ -457,8 +468,10 @@ export function SliceFileModal({
     // default_print_profile when it shares the previous profile's layer height,
     // otherwise keep the closest layer-height match by name.
     const machineDefaultProfile = pickSlicingProfileByBakedName(compatibleProcessProfiles, selectedMachineProfile?.defaultProcessProfile)
-    const previousLayerHeight = extractLayerHeightToken(previousName)
-    if (machineDefaultProfile && (!previousLayerHeight || extractLayerHeightToken(machineDefaultProfile.name) === previousLayerHeight)) {
+    // Read the previous profile's real layer height when we still hold its summary;
+    // only a bare baked NAME has to fall back to the name token.
+    const previousLayerHeight = selectedProcessLayerHeight ?? extractLayerHeightToken(previousName)
+    if (machineDefaultProfile && (!previousLayerHeight || resolveProfileLayerHeight(machineDefaultProfile) === previousLayerHeight)) {
       setProcessProfileId(machineDefaultProfile.id)
       return
     }
@@ -482,7 +495,7 @@ export function SliceFileModal({
     }
     if (!firstProfile) return
     setProcessProfileId(firstProfile.id)
-  }, [bakedIndex?.processProfileName, compatibleProcessProfiles, processProfileId, selectedAnyProcessProfile?.name, selectedMachineProfile?.defaultProcessProfile])
+  }, [bakedIndex?.processProfileName, compatibleProcessProfiles, processProfileId, selectedAnyProcessProfile?.name, selectedProcessLayerHeight, selectedMachineProfile?.defaultProcessProfile])
   // Default the plate type from the SELECTED PRINTER's loaded plate (e.g. High Temp) when the
   // project carries none of its own — a new project inherits the printer's current plate rather
   // than always landing on Textured PEI. Only while the user hasn't picked a plate themselves and
@@ -730,7 +743,16 @@ export function SliceFileModal({
   )
   const sliceToolheads = buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, targetMode === 'realPrinter' ? selectedPrinterStatus : undefined, selectedPrinterModel)
   const materialToolheadOptions = sliceToolheads.length > 1 ? sliceToolheads : []
-  const missingFilamentProfile = visibleProjectFilaments.some((filament) => !filamentMaterialOptionIds[filament.projectFilamentId])
+  // Built once and reused by every submit path so the gate below and the request
+  // that goes out can never disagree about which slots resolved.
+  const filamentMappingResult = useMemo(
+    () => buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById),
+    [visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById]
+  )
+  // Covers BOTH "nothing chosen" and "the chosen option no longer exists" — the
+  // latter (e.g. after a printer change rebuilt the AMS options) used to drop the
+  // slot from the request silently while this gate still read as satisfied.
+  const missingFilamentProfile = filamentMappingResult.unresolved.length > 0
   const missingFilamentToolhead = materialToolheadOptions.length > 0 && visibleProjectFilaments.some((filament) => !filamentToolheadIds[filament.projectFilamentId])
   // A nozzle reassignment (which extruder a material prints on) must also persist: otherwise the
   // saved 3MF keeps the old `filament_nozzle_map` / slice_info group ids and reopens on the old
@@ -976,7 +998,7 @@ export function SliceFileModal({
           toolheads: sliceToolheads,
           processProfileId,
           processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
-          filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById)
+          filamentMappings: filamentMappingResult.mappings
         }
       : {
           mode: 'manualProfile',
@@ -987,7 +1009,7 @@ export function SliceFileModal({
           toolheads: sliceToolheads,
           processProfileId,
           processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
-          filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById)
+          filamentMappings: filamentMappingResult.mappings
         }
   })
 
@@ -1052,7 +1074,7 @@ export function SliceFileModal({
         toolheads: sliceToolheads,
         processProfileId,
         processSettingOverrides: Object.keys(processSettingOverrides).length > 0 ? processSettingOverrides : undefined,
-        filamentMappings: buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById)
+        filamentMappings: filamentMappingResult.mappings
       }
     : null
 
@@ -1145,6 +1167,7 @@ export function SliceFileModal({
     processProfileIncompatible,
     nozzleDiameterCount: selectedNozzleDiameters.length,
     missingFilamentProfile,
+    staleFilamentSelection: filamentMappingResult.unresolved.some((slot) => slot.reason === 'staleSelection'),
     missingFilamentToolhead,
     targetMode,
     printerId,

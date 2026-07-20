@@ -37,8 +37,37 @@ export function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-/** Drop empty strings, empty arrays, and nullish values so absent metadata stays absent. */
-export function omitEmptyMetadata<T extends Record<string, string | string[] | number[] | undefined>>(metadata: T): Partial<T> {
+/** First entry of {@link numberList}, i.e. the leading positive number of a `;`/`,`-delimited value. */
+export function firstNumber(value: unknown): number | undefined {
+  return numberList(value)[0]
+}
+
+/**
+ * Read a BambuStudio `ConfigOptionBools` field, which serializes as the strings
+ * `"1"`/`"0"` (usually inside a one-entry array), into a real boolean.
+ *
+ * Returns `undefined` only when the field is **absent**, and that distinction
+ * matters: metadata merges an `inherits` parent with `child ?? parent`, so an
+ * explicit `"0"` on a child must resolve to `false` and override an inherited
+ * `true` rather than falling through to it.
+ */
+export function booleanValue(value: unknown): boolean | undefined {
+  const raw = Array.isArray(value) ? value[0] : value
+  if (typeof raw === 'boolean') return raw
+  if (typeof raw === 'number') return raw !== 0
+  const trimmed = stringValue(raw)?.toLowerCase()
+  if (trimmed === '1' || trimmed === 'true') return true
+  if (trimmed === '0' || trimmed === 'false') return false
+  return undefined
+}
+
+/**
+ * Drop empty strings, empty arrays, and nullish values so absent metadata stays
+ * absent. `false` and `0` are deliberately KEPT — they are meaningful values,
+ * not absence, and dropping them would let an inherited `true` leak past an
+ * explicit override during the `??` merge.
+ */
+export function omitEmptyMetadata<T extends Record<string, string | string[] | number | number[] | boolean | undefined>>(metadata: T): Partial<T> {
   return Object.fromEntries(Object.entries(metadata).filter(([, value]) => {
     if (Array.isArray(value)) return value.length > 0
     return value != null && value !== ''
@@ -57,7 +86,9 @@ export function extractProfileMetadata(record: Record<string, unknown>) {
   return omitEmptyMetadata({
     filamentIds: stringList(record.filament_id),
     filamentType: firstString(record.filament_type),
+    filamentIsSupport: booleanValue(record.filament_is_support),
     filamentVendor: firstString(record.filament_vendor),
+    layerHeight: firstNumber(record.layer_height),
     printerModels: stringList(record.printer_model),
     compatiblePrinters: stringList(record.compatible_printers),
     compatiblePrints: stringList(record.compatible_prints),

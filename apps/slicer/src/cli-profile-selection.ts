@@ -26,18 +26,22 @@ export function selectCliProfileFiles<T extends SliceProfileKind>(
 
 /**
  * Collapse the per-material filament overrides (each mapping's `settingOverrides` from the material
- * "tune" dialog) into a map keyed by the slot's filament `profileId`, so the slice-arg builder can
- * apply the right slot's override to that slot's filament file. Mappings without a profileId or
- * without overrides are skipped. Two slots sharing a profileId with differing overrides merge (last
- * write wins per key) — a rare case BambuStudio itself avoids by minting distinct project presets.
+ * "tune" dialog) into a map keyed by the 1-based **project filament slot**.
+ *
+ * Keyed by SLOT, not by `profileId`, for two reasons the previous keying got wrong:
+ * - A slot left on the project's own preset has no `profileId`, so its tune was skipped
+ *   entirely and the user's edit vanished with no warning.
+ * - Two slots sharing one preset merged into a single entry, last-write-wins, so one slot
+ *   silently inherited the other's temperature/flow.
  */
 export function buildPerMaterialFilamentOverrides(
-  mappings: ReadonlyArray<{ profileId?: string | null; settingOverrides?: Record<string, string | string[]> }>
-): Record<string, Record<string, string | string[]>> {
-  const byProfileId: Record<string, Record<string, string | string[]>> = {}
+  mappings: ReadonlyArray<{ projectFilamentId: number; settingOverrides?: Record<string, string | string[]> }>
+): Record<number, Record<string, string | string[]>> {
+  const bySlot: Record<number, Record<string, string | string[]>> = {}
   for (const mapping of mappings) {
-    if (!mapping.profileId || !mapping.settingOverrides || Object.keys(mapping.settingOverrides).length === 0) continue
-    byProfileId[mapping.profileId] = { ...(byProfileId[mapping.profileId] ?? {}), ...mapping.settingOverrides }
+    if (!mapping.settingOverrides || Object.keys(mapping.settingOverrides).length === 0) continue
+    if (!Number.isInteger(mapping.projectFilamentId) || mapping.projectFilamentId < 1) continue
+    bySlot[mapping.projectFilamentId] = { ...(bySlot[mapping.projectFilamentId] ?? {}), ...mapping.settingOverrides }
   }
-  return byProfileId
+  return bySlot
 }

@@ -153,3 +153,82 @@ async function createPresetArchiveBase64(entries: Array<[string, Record<string, 
 
   return buffer.toString('base64')
 }
+
+// Seam: a workspace preset inherits its parent's identity fields, and an explicit
+// override on the child wins. `filament_is_support` is the one where absent-vs-false
+// matters — an omitted false would let an inherited `true` leak through the `??` merge
+// and type a model filament as support (issue #66).
+test('listCustomSlicingProfiles inherits the support flag and lets a child override it off', async () => {
+  let settingValue: string | null = null
+  rootPrisma.setting.findUnique = (async () => settingValue ? { key: 'tenant.slicing.profiles.tenant-1', value: settingValue } : null) as typeof rootPrisma.setting.findUnique
+  rootPrisma.setting.upsert = (async (args) => {
+    settingValue = typeof args.update.value === 'string' ? args.update.value : null
+    return { key: args.where.key, value: settingValue }
+  }) as typeof rootPrisma.setting.upsert
+
+  await createCustomSlicingProfiles('tenant-1', {
+    encoding: 'utf8',
+    kind: 'filament',
+    content: JSON.stringify({
+      type: 'filament',
+      name: 'My support blend',
+      inherits: 'Bambu Support For PLA @BBL H2D'
+    })
+  })
+  await createCustomSlicingProfiles('tenant-1', {
+    encoding: 'utf8',
+    kind: 'filament',
+    content: JSON.stringify({
+      type: 'filament',
+      name: 'My model blend',
+      inherits: 'Bambu Support For PLA @BBL H2D',
+      filament_is_support: ['0']
+    })
+  })
+
+  const builtinParent: SlicingProfileSummary = {
+    id: 'builtin:filament:support-pla',
+    source: 'builtin',
+    kind: 'filament',
+    name: 'Bambu Support For PLA @BBL H2D',
+    filamentType: 'PLA',
+    filamentIsSupport: true,
+    filamentIds: ['GFS02'],
+    updatedAt: null
+  }
+  const profiles = await listCustomSlicingProfiles('tenant-1', [builtinParent])
+  const inherited = profiles.find((profile) => profile.name === 'My support blend')
+  const overridden = profiles.find((profile) => profile.name === 'My model blend')
+
+  assert.equal(inherited?.filamentIsSupport, true)
+  assert.equal(inherited?.filamentType, 'PLA')
+  assert.equal(overridden?.filamentIsSupport, false)
+})
+
+// Seam: process presets inherit the real layer height rather than leaving the slice
+// picker to scrape a `0.20mm` token out of a name the user may have renamed.
+test('listCustomSlicingProfiles inherits layerHeight from a built-in parent', async () => {
+  let settingValue: string | null = null
+  rootPrisma.setting.findUnique = (async () => settingValue ? { key: 'tenant.slicing.profiles.tenant-1', value: settingValue } : null) as typeof rootPrisma.setting.findUnique
+  rootPrisma.setting.upsert = (async (args) => {
+    settingValue = typeof args.update.value === 'string' ? args.update.value : null
+    return { key: args.where.key, value: settingValue }
+  }) as typeof rootPrisma.setting.upsert
+
+  await createCustomSlicingProfile('tenant-1', {
+    encoding: 'utf8',
+    kind: 'process',
+    content: JSON.stringify({ type: 'process', name: 'Ryan fine', inherits: '0.20mm Standard @BBL X1C' })
+  })
+
+  const profiles = await listCustomSlicingProfiles('tenant-1', [{
+    id: 'builtin:process:parent',
+    source: 'builtin',
+    kind: 'process',
+    name: '0.20mm Standard @BBL X1C',
+    layerHeight: 0.2,
+    updatedAt: null
+  }])
+
+  assert.equal(profiles[0]?.layerHeight, 0.2)
+})

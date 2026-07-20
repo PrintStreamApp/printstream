@@ -11,6 +11,7 @@ import {
   createSlicingJobSchema,
   filamentSettingsCatalog,
   isDirectPrintableFileName,
+  isProjectSlicingPresetId,
   JOBS_DELETE_PERMISSION,
   JOBS_VIEW_PERMISSION,
   LIBRARY_UPLOAD_PERMISSION,
@@ -128,7 +129,7 @@ slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY
   const parsed = resolveProcessConfigRequestSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid resolve request')
   const tenantId = requireRequestTenantId(request)
-  if (parsed.data.processProfileId.startsWith(PROJECT_PROFILE_ID_PREFIX)) {
+  if (isProjectSlicingPresetId(parsed.data.processProfileId)) {
     const project = await resolveProjectProcessConfig(parsed.data.sourceFileId ?? null)
     // Baseline = the resolved parent profile (reset target + diff source). When it resolves, the
     // value-diff against it yields only the project's own overrides. When it doesn't (parent not
@@ -157,7 +158,7 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
   const parsed = resolveFilamentConfigRequestSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid resolve request')
   const tenantId = requireRequestTenantId(request)
-  if (parsed.data.filamentProfileId.startsWith(PROJECT_PROFILE_ID_PREFIX)) {
+  if (isProjectSlicingPresetId(parsed.data.filamentProfileId)) {
     // A project-embedded filament: its config lives in the source 3MF's project_settings.config at
     // the given slot column (projectFilamentId, 1-based). Same contract as resolve-process:
     // "modified" means the embedded config differs from the preset outside the project, so the
@@ -296,8 +297,6 @@ function collectRequestedProfileIds(input: CreateSlicingJob): Array<{ id: string
   ]
 }
 
-/** Profile id prefix for presets embedded in a project 3MF rather than installed. */
-const PROJECT_PROFILE_ID_PREFIX = 'project:'
 const PROJECT_SETTINGS_ENTRY_PATH = 'Metadata/project_settings.config'
 
 interface ProjectProcessConfig {

@@ -474,3 +474,66 @@ test('ensureEmbeddedProjectSettings refuses a partial project-preset config nami
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+// Regression for the exit-139 reproduced from the field: a 2-filament project whose FIRST slot
+// names an unresolvable display name ("Bambu PETG Basic" rather than the real
+// "Bambu PETG Basic @BBL H2D 0.4 nozzle" — a name poisoned into the 3MF by an old save). The
+// export args used to filter the miss out and pass ONE `--load-filaments` path for a TWO-filament
+// project; BambuStudio sizes its per-filament vectors from that count, indexes them by the
+// project's slot ids, and segfaults the loader at "Start to load files".
+test('an unresolvable filament name is PADDED, never dropped, so --load-filaments keeps the slot count', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    await writeFile(
+      fakeCli,
+      // One arg per LINE: preset paths contain spaces, so a flat `echo "$@"` is unparseable.
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$(dirname "$0")/cli-args.txt"\nfor last; do :; done\nprintf %s \'{"printable_area":["0x0"],"layer_height":"0.2","nozzle_temperature":["220"]}\' > "$last"\n',
+      { mode: 0o755 }
+    )
+    const profileDir = path.join(dir, 'profiles')
+    const machineName = 'Bambu Lab H2D 0.4 nozzle'
+    const processName = '0.20mm Standard @BBL H2D'
+    const supportName = 'Bambu Support For PLA/PETG @BBL H2D'
+    await mkdir(path.join(profileDir, 'machine_full'), { recursive: true })
+    await mkdir(path.join(profileDir, 'process_full'), { recursive: true })
+    await mkdir(path.join(profileDir, 'filament_full'), { recursive: true })
+    await writeFile(path.join(profileDir, 'machine_full', `${machineName}.json`), '{"type":"machine"}')
+    await writeFile(path.join(profileDir, 'process_full', `${processName}.json`), '{"type":"process"}')
+    await writeFile(path.join(profileDir, 'filament_full', 'Generic PLA.json'), '{"type":"filament"}')
+    // Written with the reader's sanitizer, which maps the "/" in the preset name to "-".
+    await writeFile(path.join(profileDir, 'filament_full', 'Bambu Support For PLA-PETG @BBL H2D.json'), '{"type":"filament"}')
+
+    const input = await writeThreeMf(dir, 'poisoned-filament-name.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': JSON.stringify({
+        printer_settings_id: machineName,
+        print_settings_id: processName,
+        // Slot 1 carries a DISPLAY name no catalog contains; slot 2 resolves.
+        filament_settings_id: ['Bambu PETG Basic', supportName],
+        filament_colour: ['#001489', '#808080']
+      })
+    })
+
+    await ensureEmbeddedProjectSettings({
+      inputPath: input,
+      cliPath: fakeCli,
+      appDir: null,
+      profileArgs: [],
+      profileDir,
+      workDir: dir,
+      env: {},
+      log: () => {}
+    })
+
+    const cliArgs = (await readFile(path.join(dir, 'cli-args.txt'), 'utf8')).split('\n')
+    const loaded = cliArgs[cliArgs.indexOf('--load-filaments') + 1] ?? ''
+    const loadedPaths = loaded.split(';').filter(Boolean)
+    assert.equal(loadedPaths.length, 2, `expected one filament path per project slot, got: ${loaded}`)
+    // The miss is padded with Generic PLA; the slot that DID resolve keeps its own preset.
+    assert.match(loadedPaths[0] ?? '', /Generic PLA\.json$/)
+    assert.match(loadedPaths[1] ?? '', /Bambu Support For PLA-PETG @BBL H2D\.json$/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

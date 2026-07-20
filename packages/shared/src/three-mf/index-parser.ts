@@ -32,8 +32,10 @@ import type {
  * and the API's derived-index cache), so bumping it once invalidates stale indexes everywhere.
  * v13: per-plate `filamentChanges`/`pauses` from `custom_gcode_per_layer.xml`.
  * v14: per-filament `isSupport`/`isSoluble` from `filament_is_support`/`filament_soluble`.
+ * v15: filament slot count also counts the support/soluble flag arrays (a project whose flags
+ *      outran its colours/types/names used to lose its trailing filament slots).
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 14
+export const THREE_MF_INDEX_PARSER_VERSION = 15
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -380,7 +382,10 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
   // itself, so classification (see `support-recommendations.ts`) must read them, not that union.
   const supportFlags = stringArray(record.filament_is_support)
   const solubleFlags = stringArray(record.filament_soluble)
-  const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length)
+  // Every parallel array counts toward the slot total, including the support/soluble
+  // flags: omitting them truncated the filament list whenever they were the longest,
+  // and those flags now drive preset filtering (`resolveDisplayFilamentType`).
+  const length = Math.max(colors.length, types.length, names.length, chamberTemperatures.length, supportFlags.length, solubleFlags.length)
   const out: BridgeLibraryThreeMfProjectFilament[] = []
   for (let i = 0; i < length; i++) {
     out.push({

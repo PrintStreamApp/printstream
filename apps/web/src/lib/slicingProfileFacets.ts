@@ -14,7 +14,7 @@
  */
 import type { SlicingProfileSummary } from '@printstream/shared'
 import { filterSlicingProfiles, type SlicingProfileKind } from './slicingProfileDirectory'
-import { extractLayerHeightToken } from './slicingProfileSelection'
+import { resolveProfileLayerHeight } from './slicingProfileSelection'
 
 /** Selected values per facet id. A facet absent (or empty) constrains nothing. */
 export type SlicingProfileFacetSelections = Record<string, string[]>
@@ -60,9 +60,9 @@ const PROCESS_FACETS: ReadonlyArray<SlicingProfileFacet> = [
     id: 'layerHeight',
     label: 'Layer height',
     placeholder: 'All layer heights',
-    // Process presets carry no layer-height field; BambuStudio encodes it in the name
-    // ("0.20mm Standard @BBL X1C"), which is also how the slice picker reads it.
-    valuesOf: (profile) => uniqueStrings([extractLayerHeightToken(profile.name)])
+    // The preset's real `layer_height`, falling back to the name token for presets
+    // that carry none (3MF project profiles) — same rule as the slice picker.
+    valuesOf: (profile) => uniqueStrings([resolveProfileLayerHeight(profile)])
   }
 ]
 

@@ -11,7 +11,9 @@ import yauzl, { type Entry } from 'yauzl'
 import { z } from 'zod'
 import {
   extractProfileMetadata,
+  isProjectSlicingPresetId,
   omitEmptyMetadata,
+  parseBuiltinSlicingPresetId,
   slicingProfileKindSchema,
   stringValue,
   type SlicingProfileKind,
@@ -22,7 +24,6 @@ import { badRequest, notFound } from './http-error.js'
 import { rootPrisma } from './prisma.js'
 
 const SETTINGS_KEY_PREFIX = 'tenant.slicing.profiles.'
-const PROJECT_SLICING_PROFILE_ID_PREFIX = 'project:'
 
 const storedSlicingProfileSchema = z.object({
   id: z.string().trim().min(1),
@@ -33,18 +34,18 @@ const storedSlicingProfileSchema = z.object({
 })
 
 type StoredSlicingProfile = z.infer<typeof storedSlicingProfileSchema>
-type ProfileMetadata = Pick<SlicingProfileSummary,
-  'filamentIds'
-  | 'filamentType'
-  | 'filamentVendor'
-  | 'printerModels'
-  | 'compatiblePrinters'
-  | 'compatiblePrints'
-  | 'nozzleDiameters'
-  | 'plateTypes'
-  | 'compatiblePrintersCondition'
-  | 'compatiblePrintsCondition'
->
+/**
+ * A preset summary's metadata: everything that is NOT its identity.
+ *
+ * Defined by EXCLUSION on purpose. Listing the metadata keys instead meant every
+ * field added to `slicingProfileSummarySchema` had to be added here, to the merge,
+ * and to the pick — and missing one silently dropped it from custom (tenant-uploaded)
+ * presets while builtin presets carried it (issue #66). Inverting it puts the
+ * maintenance burden on the small, stable identity set, so a new metadata field
+ * flows through with no change here at all.
+ */
+type ProfileIdentityKey = 'id' | 'source' | 'kind' | 'name' | 'updatedAt'
+type ProfileMetadata = Omit<SlicingProfileSummary, ProfileIdentityKey>
 
 export interface ResolvedSlicingProfileFile {
   id: string
@@ -52,20 +53,6 @@ export interface ResolvedSlicingProfileFile {
   kind: SlicingProfileKind
   name: string
   content?: string
-}
-
-export function parseBuiltinSlicingProfileId(id: string): { kind: SlicingProfileKind; name: string } | null {
-  const match = /^builtin:([^:]+):(.+)$/.exec(id)
-  if (!match) return null
-  const parsedKind = slicingProfileKindSchema.safeParse(match[1])
-  if (!parsedKind.success) return null
-  try {
-    const name = Buffer.from(match[2] as string, 'base64url').toString('utf8').trim()
-    if (!name) return null
-    return { kind: parsedKind.data, name }
-  } catch {
-    return null
-  }
 }
 
 export async function listCustomSlicingProfiles(tenantId: string, inheritedProfiles: SlicingProfileSummary[] = []): Promise<SlicingProfileSummary[]> {
@@ -140,8 +127,9 @@ export async function resolveSlicingProfileFiles(tenantId: string, profileIds: A
   for (const requested of profileIds) {
     const id = requested.id?.trim()
     if (!id) continue
-    if (id.startsWith(PROJECT_SLICING_PROFILE_ID_PREFIX)) continue
-    const builtin = parseBuiltinSlicingProfileId(id)
+    // A `project:` preset needs no file: the input 3MF's own embedded settings ARE that preset.
+    if (isProjectSlicingPresetId(id)) continue
+    const builtin = parseBuiltinSlicingPresetId(id)
     if (builtin) {
       if (builtin.kind !== requested.kind) throw badRequest('Selected slicing profile type does not match the requested field')
       resolved.push({ id, source: 'builtin', kind: builtin.kind, name: builtin.name })
@@ -269,34 +257,26 @@ function resolveInheritedProfileMetadata(
   return inheritedParent ? pickProfileMetadata(inheritedParent) : {}
 }
 
+/**
+ * Merge an `inherits` parent's metadata with the child's, the child winning per key.
+ *
+ * `extractProfileMetadata` already drops absent keys, so a key present on the child
+ * is a real value and correctly shadows the parent — including an explicit `false`
+ * (a child that turns `filament_is_support` off must not inherit the parent's `true`).
+ */
 function mergeProfileMetadata(parent: Partial<ProfileMetadata>, child: Partial<ProfileMetadata>): Partial<ProfileMetadata> {
-  return omitEmptyMetadata({
-    filamentIds: child.filamentIds ?? parent.filamentIds,
-    filamentType: child.filamentType ?? parent.filamentType,
-    filamentVendor: child.filamentVendor ?? parent.filamentVendor,
-    printerModels: child.printerModels ?? parent.printerModels,
-    compatiblePrinters: child.compatiblePrinters ?? parent.compatiblePrinters,
-    compatiblePrints: child.compatiblePrints ?? parent.compatiblePrints,
-    nozzleDiameters: child.nozzleDiameters ?? parent.nozzleDiameters,
-    plateTypes: child.plateTypes ?? parent.plateTypes,
-    compatiblePrintersCondition: child.compatiblePrintersCondition ?? parent.compatiblePrintersCondition,
-    compatiblePrintsCondition: child.compatiblePrintsCondition ?? parent.compatiblePrintsCondition
-  })
+  return omitEmptyMetadata({ ...parent, ...child })
 }
 
+/**
+ * The metadata half of a resolved summary — everything but the identity keys.
+ *
+ * Destructured rather than key-listed so a field added to the summary schema is
+ * carried automatically; only the (stable) identity set is spelled out.
+ */
 function pickProfileMetadata(profile: SlicingProfileSummary): Partial<ProfileMetadata> {
-  return omitEmptyMetadata({
-    filamentIds: profile.filamentIds,
-    filamentType: profile.filamentType,
-    filamentVendor: profile.filamentVendor,
-    printerModels: profile.printerModels,
-    compatiblePrinters: profile.compatiblePrinters,
-    compatiblePrints: profile.compatiblePrints,
-    nozzleDiameters: profile.nozzleDiameters,
-    plateTypes: profile.plateTypes,
-    compatiblePrintersCondition: profile.compatiblePrintersCondition,
-    compatiblePrintsCondition: profile.compatiblePrintsCondition
-  })
+  const { id: _id, source: _source, kind: _kind, name: _name, updatedAt: _updatedAt, ...metadata } = profile
+  return omitEmptyMetadata(metadata)
 }
 
 function buildProfileLookupKey(kind: SlicingProfileKind, name: string): string {

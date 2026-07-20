@@ -7,7 +7,7 @@
  * slices go to the least-busy instance, progress polls follow the instance
  * that owns the job, and reads (health/profiles/resolve) fail over in order.
  */
-import { slicingMetadataSchema, slicingTargetDescriptorSchema, type CreateSlicingJob, type SliceEnvelope, type SlicingMetadata, type SlicingOutputLine, type SlicingProfileSummary, type SlicingTargetDescriptor } from '@printstream/shared'
+import { slicingMetadataSchema, slicingOutputLineSchema, slicingProfileSummarySchema, slicingTargetDescriptorSchema, type CreateSlicingJob, type SliceEnvelope, type SlicingMetadata, type SlicingOutputLine, type SlicingProfileSummary, type SlicingTargetDescriptor } from '@printstream/shared'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rename, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -509,64 +509,28 @@ function parseSlicerTargets(value: unknown): SlicingTargetDescriptor[] {
   })
 }
 
+/**
+ * Parse the slicer's `/profiles` response through the SHARED summary schema.
+ *
+ * Deliberately not a hand-written field list: this used to rebuild each summary
+ * field by field, so every field added to `slicingProfileSummarySchema` was
+ * silently dropped here on its way to the browser — `filamentIsSupport` and
+ * `layerHeight` both arrived at the API and never reached the slice dialog
+ * (issue #66). Validating against the schema keeps this hop honest as the
+ * contract grows.
+ *
+ * Non-conforming entries are skipped rather than failing the whole catalogue: a
+ * single malformed preset must not blank the slice dialog.
+ */
 function parseProfiles(value: unknown): SlicingProfileSummary[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((entry) => {
-    if (typeof entry !== 'object' || entry == null) return []
-    const candidate = entry as {
-      id?: unknown
-      source?: unknown
-      kind?: unknown
-      name?: unknown
-      filamentIds?: unknown
-      filamentType?: unknown
-      filamentVendor?: unknown
-      printerModels?: unknown
-      compatiblePrinters?: unknown
-      compatiblePrints?: unknown
-      nozzleDiameters?: unknown
-      plateTypes?: unknown
-      compatiblePrintersCondition?: unknown
-      compatiblePrintsCondition?: unknown
-      defaultProcessProfile?: unknown
-      defaultFilamentProfiles?: unknown
-      updatedAt?: unknown
-    }
-    if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') return []
-    if (candidate.source !== 'builtin') return []
-    if (candidate.kind !== 'machine' && candidate.kind !== 'process' && candidate.kind !== 'filament') return []
-    return [{
-      id: candidate.id,
-      source: candidate.source,
-      kind: candidate.kind,
-      name: candidate.name,
-      filamentIds: parseStringList(candidate.filamentIds),
-      filamentType: typeof candidate.filamentType === 'string' && candidate.filamentType.trim() ? candidate.filamentType.trim() : undefined,
-      filamentVendor: typeof candidate.filamentVendor === 'string' && candidate.filamentVendor.trim() ? candidate.filamentVendor.trim() : undefined,
-      printerModels: parseStringList(candidate.printerModels),
-      compatiblePrinters: parseStringList(candidate.compatiblePrinters),
-      compatiblePrints: parseStringList(candidate.compatiblePrints),
-      nozzleDiameters: parseNumberList(candidate.nozzleDiameters),
-      plateTypes: parseStringList(candidate.plateTypes),
-      compatiblePrintersCondition: typeof candidate.compatiblePrintersCondition === 'string' ? candidate.compatiblePrintersCondition : undefined,
-      compatiblePrintsCondition: typeof candidate.compatiblePrintsCondition === 'string' ? candidate.compatiblePrintsCondition : undefined,
-      defaultProcessProfile: typeof candidate.defaultProcessProfile === 'string' && candidate.defaultProcessProfile.trim() ? candidate.defaultProcessProfile.trim() : undefined,
-      defaultFilamentProfiles: parseStringList(candidate.defaultFilamentProfiles),
-      updatedAt: typeof candidate.updatedAt === 'string' ? candidate.updatedAt : null
-    }]
+    const parsed = slicingProfileSummarySchema.safeParse(entry)
+    // Builtin presets are the only kind the slicer owns; a `custom` preset coming
+    // back from it would shadow the tenant's own stored presets.
+    if (!parsed.success || parsed.data.source !== 'builtin') return []
+    return [parsed.data]
   })
-}
-
-function parseStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const list = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-  return list.length > 0 ? list : undefined
-}
-
-function parseNumberList(value: unknown): number[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const list = value.filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry) && entry > 0)
-  return list.length > 0 ? list : undefined
 }
 
 function decodeHeaderValue(value: string | null | undefined): string | null {
@@ -587,18 +551,25 @@ function parseOutputLinesHeader(value: string | null | undefined): SlicingOutput
   }
 }
 
+/**
+ * Parse the worker's slice output lines through the SHARED schema, for the same
+ * reason as {@link parseProfiles} — a hand-listed field set silently drops
+ * anything the contract grows (issue #66).
+ *
+ * `createdAt` is stamped here when the worker omitted it rather than rejecting
+ * the line: these lines are the only diagnostic trail a failed slice leaves, so
+ * losing one to a missing timestamp costs more than the timestamp is worth.
+ */
 function parseOutputLines(value: unknown): SlicingOutputLine[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((entry) => {
     if (typeof entry !== 'object' || entry == null) return []
-    const candidate = entry as { stream?: unknown; text?: unknown; createdAt?: unknown }
-    if (candidate.stream !== 'stdout' && candidate.stream !== 'stderr' && candidate.stream !== 'system') return []
-    if (typeof candidate.text !== 'string') return []
-    return [{
-      stream: candidate.stream,
-      text: candidate.text,
-      createdAt: typeof candidate.createdAt === 'string' ? candidate.createdAt : new Date().toISOString()
-    }]
+    const record = entry as Record<string, unknown>
+    const candidate = typeof record.createdAt === 'string'
+      ? record
+      : { ...record, createdAt: new Date().toISOString() }
+    const parsed = slicingOutputLineSchema.safeParse(candidate)
+    return parsed.success ? [parsed.data] : []
   })
 }
 

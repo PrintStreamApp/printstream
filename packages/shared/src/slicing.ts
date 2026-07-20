@@ -32,10 +32,24 @@ export const slicingProfileSummarySchema = z.object({
   name: z.string().trim().min(1),
   /** BambuStudio filament profile ids from `filament_id`; used to match printer AMS/tray ids exactly. */
   filamentIds: z.array(z.string().trim().min(1)).optional(),
-  /** BambuStudio filament material family from `filament_type`; preferred over parsing the profile name. */
+  /**
+   * BambuStudio filament material family from `filament_type`, i.e. the BASE polymer
+   * (`"PLA"` even for a support filament); preferred over parsing the profile name.
+   * For the type users see and filter by, derive it with `resolveDisplayFilamentType`
+   * — do not compare this field against a `PLA-S`-style display type.
+   */
   filamentType: z.string().trim().min(1).optional(),
+  /**
+   * BambuStudio's `filament_is_support` flag. Carried explicitly because the derived
+   * display type (`PLA-S`) cannot be recovered from `filamentType` alone — matching a
+   * project's `PLA-S` filament against support presets typed `PLA` is what hid every
+   * valid support preset from the material picker (issue #66).
+   */
+  filamentIsSupport: z.boolean().optional(),
   /** BambuStudio filament vendor from `filament_vendor`; preferred over parsing the profile name. */
   filamentVendor: z.string().trim().min(1).optional(),
+  /** Process-only: `layer_height` in mm; preferred over scraping a `0.20mm` token out of the profile name. */
+  layerHeight: z.number().positive().optional(),
   printerModels: z.array(z.string().trim().min(1)).optional(),
   compatiblePrinters: z.array(z.string().trim().min(1)).optional(),
   compatiblePrints: z.array(z.string().trim().min(1)).optional(),

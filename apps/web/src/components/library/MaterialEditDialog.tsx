@@ -89,7 +89,16 @@ export function MaterialEditDialog({
                   }
                 }
               }}
-              onChange={(_event, value) => onTypeFilterChange(value ?? '')}
+              // Switching type clears the preset: the old pick belongs to the previous
+              // material and is no longer in the narrowed list, so leaving it selected
+              // shows a preset that contradicts the type above it. Done stays disabled
+              // until a preset from the new type is chosen.
+              onChange={(_event, value) => {
+                const nextType = value ?? ''
+                if (nextType === typeFilter) return
+                onTypeFilterChange(nextType)
+                if (selectedOption && selectedOption.materialType !== nextType) onMaterialOptionChange(null)
+              }}
             >
               <Option value="">All material types</Option>
               {typeOptions.map((option) => <Option key={option} value={option}>{option}</Option>)}
@@ -103,8 +112,16 @@ export function MaterialEditDialog({
               placeholder="Choose a material profile"
               onChange={onMaterialOptionChange}
             />
-            {/* The field itself shows the preset in effect; only flag the case
-                where a loaded filament resolved to NO preset at all. */}
+            {/* The field itself shows the preset in effect; only flag the cases needing
+                the user to act — and always say WHY Done is disabled rather than
+                leaving a dead button with no explanation. */}
+            {!selectedOption && (
+              <FormHelperText sx={{ color: 'warning.400' }}>
+                {materialOptions.length > 0
+                  ? 'Choose a preset for this material to continue.'
+                  : 'No preset is available for this type on the selected printer — pick another type.'}
+              </FormHelperText>
+            )}
             {selectedOption && selectedOption.source !== 'manual' && !selectedOption.profileId && (
               <FormHelperText sx={{ color: 'warning.400' }}>
                 No preset matches this filament — pick one from the list.
@@ -129,7 +146,9 @@ export function MaterialEditDialog({
             to fill by default) and right-aligned, per dialog conventions. */}
         <DialogActions buttonFlex="0 1 auto" sx={{ pt: 1, justifyContent: 'flex-end' }}>
           <Button type="button" variant="plain" color="neutral" onClick={revertAndClose}>Cancel</Button>
-          <Button type="button" onClick={onClose} sx={{ minWidth: 96 }}>Done</Button>
+          {/* A slot with no preset would be dropped from the slice request, so Done cannot
+              confirm one — the user picks a preset or cancels back to what was there. */}
+          <Button type="button" onClick={onClose} disabled={!selectedOption} sx={{ minWidth: 96 }}>Done</Button>
         </DialogActions>
       </ModalDialog>
     </BackAwareModal>
@@ -161,10 +180,13 @@ function SliceMaterialAutocomplete({
   return (
     <DeferredKeyboardAutocomplete
       options={options}
-      // A material slot always resolves to a preset — clearing it would leave the slot with no
-      // material at all — so drop Joy's clear (x) affordance.
-      disableClearable
-      value={value ?? undefined}
+      // "No preset" is a real, reachable state — switching the type clears the previous
+      // pick, and a tray whose preset never resolved opens with none. So the field is
+      // nullable and clearable; `Done` is what refuses to confirm an empty slot. (This
+      // was `disableClearable` with `value ?? undefined` on the assumption that a slot
+      // always had a preset; a null value then reached Joy as `undefined` and crashed
+      // its option/value diffing.)
+      value={value}
       inputValue={inputValue}
       onChange={(_event, option) => onChange(option ?? null)}
       onInputChange={(_event, nextValue, reason) => {
@@ -172,7 +194,9 @@ function SliceMaterialAutocomplete({
         setInputValue(nextValue)
       }}
       getOptionLabel={(option) => option.label}
-      isOptionEqualToValue={(option, selected) => option.id === selected.id}
+      // Joy calls this while reconciling an empty/!changing selection, so both sides
+      // must tolerate absence rather than assuming a value is always present.
+      isOptionEqualToValue={(option, selected) => option?.id === selected?.id}
       groupBy={(option) => option.group}
       placeholder={placeholder}
       selectOnFocus

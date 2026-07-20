@@ -260,3 +260,60 @@ function makeRequest() {
     }
   }
 }
+// Seam: slicer -> API -> browser. This hop used to rebuild each summary field by
+// hand, so a field added to the shared schema was silently dropped on the way to
+// the slice dialog — `filamentIsSupport` reached the API and never reached the
+// picker, hiding every support preset (issue #66).
+test('slicer client carries every schema field through, including the support flag and layer height', async () => {
+  const server = createServer((request, response) => {
+    if (!request.url?.startsWith('/profiles')) {
+      response.writeHead(404).end()
+      return
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({
+      profiles: [
+        {
+          id: 'builtin:filament:support-pla',
+          source: 'builtin',
+          kind: 'filament',
+          name: 'Bambu Support For PLA @BBL H2D',
+          filamentType: 'PLA',
+          filamentIsSupport: true,
+          filamentIds: ['GFS02'],
+          filamentVendor: 'Bambu Lab',
+          compatiblePrinters: ['Bambu Lab H2D 0.4 nozzle'],
+          updatedAt: null
+        },
+        {
+          id: 'builtin:process:standard',
+          source: 'builtin',
+          kind: 'process',
+          name: '0.20mm Standard @BBL H2D',
+          layerHeight: 0.2,
+          updatedAt: null
+        },
+        // A custom preset from the slicer would shadow tenant storage; still dropped.
+        { id: 'custom:nope', source: 'custom', kind: 'filament', name: 'Not the slicer’s to own' },
+        // A malformed entry must not blank the whole catalogue.
+        { id: '', source: 'builtin', kind: 'filament', name: '' }
+      ]
+    }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, resolve))
+  const port = (server.address() as { port: number }).port
+
+  try {
+    const client = new SlicerClient([`http://127.0.0.1:${port}`])
+    const profiles = await client.profiles()
+
+    assert.equal(profiles.length, 2)
+    const filament = profiles.find((profile) => profile.kind === 'filament')
+    assert.equal(filament?.filamentIsSupport, true)
+    assert.equal(filament?.filamentType, 'PLA')
+    assert.deepEqual(filament?.filamentIds, ['GFS02'])
+    assert.equal(profiles.find((profile) => profile.kind === 'process')?.layerHeight, 0.2)
+  } finally {
+    server.close()
+  }
+})

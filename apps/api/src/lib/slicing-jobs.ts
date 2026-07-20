@@ -1067,6 +1067,15 @@ async function rewriteThreeMfProjectSettings(
   return null
 }
 
+/**
+ * Replace every entry of a positional config array with `''`, keeping its LENGTH.
+ * Used to drop a preset reference without changing the slot count its sibling
+ * arrays are sized to. A non-array value is left alone.
+ */
+function blankEachEntry(value: unknown): unknown {
+  return Array.isArray(value) ? value.map(() => '') : value
+}
+
 function sanitizeProjectSettingsConfig(
   json: string,
   kinds: Set<ResolvedSlicingProfileFile['kind']>
@@ -1097,11 +1106,20 @@ function sanitizeProjectSettingsConfig(
     }
   }
   if (kinds.has('filament')) {
-    record.filament_settings_id = []
-    record.filament_type = []
-    record.filament_colour = []
-    record.filament_vendor = []
-    record.default_filament_profile = []
+    // Clear the preset IDENTITY per slot while PRESERVING the slot count. Every
+    // `filament_*` array in this config is positional and sized to the filament
+    // count (`nozzle_temperature`, `filament_flow_ratio`, `filament_is_support`,
+    // `filament_map`, `flush_volumes_matrix` at N², …), so emptying one to `[]`
+    // left ~100 siblings at length N and made BambuStudio read its per-filament
+    // vectors out of bounds — the fallback RETRY then crashed and masked the
+    // original compatibility error it was meant to recover from (issue #66).
+    record.filament_settings_id = blankEachEntry(record.filament_settings_id)
+    // `filament_type`/`filament_colour`/`filament_vendor` are the project's own
+    // per-slot DATA, not a reference to the dropped preset — clearing them threw
+    // away the materials themselves. `default_filament_profile` is EXTRUDER-indexed
+    // machine domain (see MACHINE_DOMAIN_ARRAY_KEYS in three-mf-scene-builder.ts,
+    // "must never be remapped or dropped by the filament rewrite"), so a filament
+    // branch must not touch it at all.
   }
   return JSON.stringify(record, null, 2)
 }

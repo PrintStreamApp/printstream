@@ -22,7 +22,16 @@ import type {
   ThreeMfIndex,
   ThreeMfPlate
 } from '@printstream/shared'
-import { amsTrayIndex, formatNozzleLabel, getPrinterControlCapabilities, printerModelSchema } from '@printstream/shared'
+import {
+  amsTrayIndex,
+  buildProjectSlicingPresetId,
+  formatNozzleLabel,
+  getPrinterControlCapabilities,
+  isProjectSlicingPresetId,
+  printerModelSchema,
+  PROJECT_SLICING_PRESET_ID_PREFIX,
+  resolveDisplayFilamentType
+} from '@printstream/shared'
 import {
   KNOWN_BAMBU_PRINTER_MODEL_KEYS,
   bambuModelKeysAreCompatible,
@@ -32,7 +41,7 @@ import {
 } from './bambuPrinterModels'
 import { resolveFilamentIdentity } from './filamentColor'
 import type { SlotFilamentIdentityLookup } from './slotFilamentIdentity'
-import { normalizeProfileText, resolveLoadedMaterialPreset } from './loadedMaterialProfileSelection'
+import { resolveFilamentPreset } from './filamentPresetResolver'
 import { formatSlicingProfileDisplayName, pickMachineDefaultFilamentProfile, pickSlicingProfileByBakedName } from './slicingProfileSelection'
 import { amsUnitLetter } from './printerTrayMapping'
 
@@ -64,7 +73,7 @@ export function sortSlicingProfiles(profiles: SlicingProfileSummary[]): SlicingP
   })
 }
 
-export const PROJECT_SLICING_PROFILE_ID_PREFIX = 'project:'
+export const PROJECT_SLICING_PROFILE_ID_PREFIX = PROJECT_SLICING_PRESET_ID_PREFIX
 
 export function buildProjectSlicingProfiles(bakedIndex: ThreeMfIndex | null, kind: SlicingProfileSummary['kind']): SlicingProfileSummary[] {
   if (!bakedIndex) return []
@@ -80,6 +89,9 @@ export function buildProjectSlicingProfiles(bakedIndex: ThreeMfIndex | null, kin
       kind,
       name,
       filamentType: filament.filamentType ?? undefined,
+      // The 3MF records `filament_is_support` per slot, so a project's support
+      // material carries its flag rather than relying on its name reading as one.
+      filamentIsSupport: filament.isSupport ?? undefined,
       updatedAt: null
     })
   }
@@ -104,11 +116,11 @@ export function mergeProjectSlicingProfiles(installedProfiles: SlicingProfileSum
 }
 
 export function buildProjectSlicingProfileId(kind: SlicingProfileSummary['kind'], name: string): string {
-  return `${PROJECT_SLICING_PROFILE_ID_PREFIX}${kind}:${encodeURIComponent(name)}`
+  return buildProjectSlicingPresetId(kind, name)
 }
 
 export function isProjectSlicingProfile(profile: SlicingProfileSummary): boolean {
-  return profile.id.startsWith(PROJECT_SLICING_PROFILE_ID_PREFIX)
+  return isProjectSlicingPresetId(profile.id)
 }
 
 export function isVisibleProcessProfile(profile: SlicingProfileSummary): boolean {
@@ -708,6 +720,45 @@ export function buildSliceDialogProjectFilaments(
   }))
 }
 
+/** A project filament slot that produced no mapping, and why. */
+export interface UnresolvedFilamentSlot {
+  projectFilamentId: number
+  label: string
+  /** `unselected`: nothing chosen yet. `staleSelection`: the chosen option no longer exists (e.g. the printer changed and its AMS options were rebuilt). */
+  reason: 'unselected' | 'staleSelection'
+}
+
+/** One resolved slot of a slice request's `filamentMappings`. */
+export interface ResolvedFilamentMapping {
+  projectFilamentId: number
+  /** The chosen preset's id, or undefined for a tray whose preset never resolved. */
+  profileId: string | undefined
+  source: SliceMaterialOption['source']
+  trayId: number | null
+  toolheadId: string | undefined
+  /** DISPLAY text for the slot. Never treated as a preset name — see `output-metadata.ts`. */
+  material: string
+  color: string
+  settingOverrides: Record<string, string | string[]> | undefined
+}
+
+export interface FilamentMappingResult {
+  mappings: ResolvedFilamentMapping[]
+  /**
+   * Slots that produced no mapping. Callers MUST surface these and refuse the
+   * slice rather than submitting a short list: a dropped slot reaches the CLI as
+   * a filament the project declares but the request never describes, which
+   * downstream becomes a partial config and an opaque segfault (issue #66).
+   */
+  unresolved: UnresolvedFilamentSlot[]
+}
+
+/**
+ * Build the per-slot filament mappings for a slice request.
+ *
+ * Every project filament yields either a mapping or an entry in `unresolved` —
+ * a slot is never silently dropped.
+ */
 export function buildFilamentMappings(
   projectFilaments: Array<{ projectFilamentId: number; label: string; color: string | null; nozzleId: number | null }>,
   optionIds: Record<number, string>,
@@ -716,24 +767,44 @@ export function buildFilamentMappings(
   materialOptions: SliceMaterialOption[],
   /** Per-material filament setting overrides (from the material "tune" dialog), keyed by projectFilamentId. */
   settingOverridesById: Record<number, Record<string, string | string[]>> = {}
-) {
-  return projectFilaments.flatMap((filament) => {
+): FilamentMappingResult {
+  const mappings: FilamentMappingResult['mappings'] = []
+  const unresolved: UnresolvedFilamentSlot[] = []
+
+  for (const filament of projectFilaments) {
     const optionId = optionIds[filament.projectFilamentId]
-    if (!optionId) return []
+    if (!optionId) {
+      unresolved.push({ projectFilamentId: filament.projectFilamentId, label: filament.label, reason: 'unselected' })
+      continue
+    }
     const option = materialOptions.find((entry) => entry.id === optionId)
-    if (!option) return []
-    const overrides = settingOverridesById[filament.projectFilamentId]
-    return [{
-      projectFilamentId: filament.projectFilamentId,
-      profileId: option.profileId ?? undefined,
-      source: option.source,
-      trayId: option.trayId,
-      toolheadId: toolheadIds[filament.projectFilamentId] || option.toolheadId || (filament.nozzleId != null ? buildSliceToolheadId(filament.nozzleId) : undefined),
-      material: option.material ?? option.label ?? filament.label,
-      color: normalizeSliceFilamentColor(colors[filament.projectFilamentId] ?? filament.color),
-      settingOverrides: overrides && Object.keys(overrides).length > 0 ? overrides : undefined
-    }]
-  })
+    if (!option) {
+      unresolved.push({ projectFilamentId: filament.projectFilamentId, label: filament.label, reason: 'staleSelection' })
+      continue
+    }
+    mappings.push(buildFilamentMapping(filament, option, colors, toolheadIds, settingOverridesById[filament.projectFilamentId]))
+  }
+
+  return { mappings, unresolved }
+}
+
+function buildFilamentMapping(
+  filament: { projectFilamentId: number; label: string; color: string | null; nozzleId: number | null },
+  option: SliceMaterialOption,
+  colors: Record<number, string>,
+  toolheadIds: Record<number, string>,
+  overrides: Record<string, string | string[]> | undefined
+): ResolvedFilamentMapping {
+  return {
+    projectFilamentId: filament.projectFilamentId,
+    profileId: option.profileId ?? undefined,
+    source: option.source,
+    trayId: option.trayId,
+    toolheadId: toolheadIds[filament.projectFilamentId] || option.toolheadId || (filament.nozzleId != null ? buildSliceToolheadId(filament.nozzleId) : undefined),
+    material: option.material ?? option.label ?? filament.label,
+    color: normalizeSliceFilamentColor(colors[filament.projectFilamentId] ?? filament.color),
+    settingOverrides: overrides && Object.keys(overrides).length > 0 ? overrides : undefined
+  }
 }
 
 export function buildSliceMaterialOptions(profiles: SlicingProfileSummary[], loadedMaterials: SliceMaterialOption[]): SliceMaterialOption[] {
@@ -759,20 +830,6 @@ export function buildSliceMaterialOptions(profiles: SlicingProfileSummary[], loa
     remainPercent: null
   }))
   return [...loadedMaterials, ...dedupeSliceMaterialProfileOptions(profileOptions)]
-}
-
-/**
- * Find a filament profile by name — full name or vendor-stripped display name —
- * e.g. a spool's pinned slicing preset. Display-name matching lets a pin like
- * "Generic PLA" resolve to whichever machine-compatible variant is in the
- * (already machine-filtered) list, so pins stay portable across printers.
- */
-function findProfileByName(profiles: SlicingProfileSummary[], name: string | null | undefined): SlicingProfileSummary | null {
-  const normalized = name ? normalizeProfileText(name) : ''
-  if (!normalized) return null
-  return profiles.find((profile) => profile.kind === 'filament' && normalizeProfileText(profile.name) === normalized)
-    ?? profiles.find((profile) => profile.kind === 'filament' && normalizeProfileText(formatSlicingProfileDisplayName(profile)) === normalized)
-    ?? null
 }
 
 export function dedupeSliceMaterialProfileOptions(options: SliceMaterialOption[]): SliceMaterialOption[] {
@@ -818,19 +875,15 @@ export function buildLoadedPrinterMaterialOptions(
       // filament "Bambu Lab ..." and unlocked marketing colours.
       const spool = spoolContext?.resolveSpool(spoolContext.printerId, unit.unitId, slot.slot) ?? null
       const identity = resolveFilamentIdentity({ ...slot, spool })
-      // A spool pinned to a slicing preset uses it outright (the caller's profile
-      // list is already machine-filtered, so an incompatible pin simply doesn't
-      // resolve and falls back to the auto-match).
-      const pinnedProfile = findProfileByName(profiles, spool?.slicingPresetName)
-      const preset = pinnedProfile
-        ? { name: pinnedProfile.name, profile: pinnedProfile }
-        : resolveLoadedMaterialPreset(profiles, {
-            trayName: slot.trayName,
-            trayInfoIdx: slot.trayInfoIdx,
-            trayFilamentType: slot.filamentType,
-            selectedMachineProfile,
-            selectedPrinterModel
-          })
+      const resolution = resolveFilamentPreset(profiles, {
+        trayName: slot.trayName,
+        trayInfoIdx: slot.trayInfoIdx,
+        trayFilamentType: slot.filamentType,
+        pinnedPresetName: spool?.slicingPresetName ?? null,
+        selectedMachineProfile,
+        selectedPrinterModel
+      })
+      const preset = { profile: resolution.status === 'resolved' ? resolution.profile : null }
       const identityMaterial = identity.presetName
         ?? ([identity.brand, identity.subtype ?? identity.type].filter(Boolean).join(' ') || null)
       // A tracked spool names the row outright ("Michael's PLA"); otherwise the
@@ -841,13 +894,13 @@ export function buildLoadedPrinterMaterialOptions(
       const color = normalizeSliceFilamentColor(identity.colorHex ?? slot.color ?? slot.colors[0] ?? null)
       const trayId = amsTrayIndex(unit.type, unit.unitId, slot.slot)
       options.push({
-        id: `loaded:ams:${unit.unitId}:${slot.slot}:${preset.profile?.id ?? preset.name ?? fallbackLabel}:${color}`,
+        id: `loaded:ams:${unit.unitId}:${slot.slot}:${preset.profile?.id ?? fallbackLabel}:${color}`,
         label,
         group,
-        materialType: resolveLoadedMaterialType(slot.filamentType, preset.profile, preset.name ?? label),
+        materialType: resolveLoadedMaterialType(slot.filamentType, preset.profile, preset.profile?.name ?? label),
         brand: identity.brand ?? '',
         profileId: preset.profile?.id ?? null,
-        material: preset.profile ? preset.name ?? label : identityMaterial ?? slot.filamentType?.trim() ?? label,
+        material: preset.profile ? preset.profile.name : identityMaterial ?? slot.filamentType?.trim() ?? label,
         color,
         colors: identity.colors.length > 0 ? identity.colors : slot.colors,
         source: 'ams',
@@ -875,16 +928,15 @@ export function buildLoadedPrinterMaterialOptions(
     // slicing preset. External spools track with a null slot id.
     const trackedSpool = spoolContext?.resolveSpool(spoolContext.printerId, spool.amsId, null) ?? null
     const identity = resolveFilamentIdentity({ ...spool, spool: trackedSpool })
-    const pinnedProfile = findProfileByName(profiles, trackedSpool?.slicingPresetName)
-    const preset = pinnedProfile
-      ? { name: pinnedProfile.name, profile: pinnedProfile }
-      : resolveLoadedMaterialPreset(profiles, {
-          trayName: spool.trayName,
-          trayInfoIdx: spool.trayInfoIdx,
-          trayFilamentType: spool.filamentType,
-          selectedMachineProfile,
-          selectedPrinterModel
-        })
+    const resolution = resolveFilamentPreset(profiles, {
+      trayName: spool.trayName,
+      trayInfoIdx: spool.trayInfoIdx,
+      trayFilamentType: spool.filamentType,
+      pinnedPresetName: trackedSpool?.slicingPresetName ?? null,
+      selectedMachineProfile,
+      selectedPrinterModel
+    })
+    const preset = { profile: resolution.status === 'resolved' ? resolution.profile : null }
     const identityMaterial = identity.presetName
       ?? ([identity.brand, identity.subtype ?? identity.type].filter(Boolean).join(' ') || null)
     const label = trackedSpool
@@ -893,13 +945,13 @@ export function buildLoadedPrinterMaterialOptions(
     const color = normalizeSliceFilamentColor(identity.colorHex ?? spool.color ?? spool.colors[0] ?? null)
     const sourceLabel = spool.amsId === 254 ? 'Left external spool' : spool.amsId === 255 ? 'Right external spool' : 'External spool'
     options.push({
-      id: `loaded:external:${spool.amsId}:${preset.profile?.id ?? preset.name ?? fallbackLabel}:${color}`,
+      id: `loaded:external:${spool.amsId}:${preset.profile?.id ?? fallbackLabel}:${color}`,
       label,
       group: formatPrinterMaterialSourceGroup(sourceLabel, spool.nozzleId, nozzleCount),
-      materialType: resolveLoadedMaterialType(spool.filamentType, preset.profile, preset.name ?? label),
+      materialType: resolveLoadedMaterialType(spool.filamentType, preset.profile, preset.profile?.name ?? label),
       brand: identity.brand ?? '',
       profileId: preset.profile?.id ?? null,
-      material: preset.profile ? preset.name ?? label : identityMaterial ?? spool.filamentType?.trim() ?? label,
+      material: preset.profile ? preset.profile.name : identityMaterial ?? spool.filamentType?.trim() ?? label,
       color,
       colors: identity.colors.length > 0 ? identity.colors : spool.colors,
       source: 'externalSpool',
@@ -977,27 +1029,49 @@ export function narrowMaterialOptions(options: SliceMaterialOption[], materialTy
   return options.filter((option) => !materialType || option.materialType === materialType || option.id === keepId)
 }
 
+/**
+ * The material type a preset is FILTERED and LABELLED by — BambuStudio's derived
+ * display type, not the preset's raw `filament_type`.
+ *
+ * A support preset is typed by its base polymer (`filament_type: ["PLA"]`) plus a
+ * `filament_is_support` flag, while the AMS and a 3MF's project filaments both
+ * speak the derived `PLA-S`. Comparing those two spellings directly matched
+ * nothing and hid every support preset from the material picker (issue #66), so
+ * both sides go through `resolveDisplayFilamentType` and the exact-equality
+ * filter in {@link narrowMaterialOptions} becomes correct rather than forgiving.
+ */
 export function resolveProfileMaterialType(profile: SlicingProfileSummary): string {
-  return normalizeMaterialTypeLabel(profile.filamentType) ?? extractMaterialType(profile.name)
+  const derivedType = resolveDisplayFilamentType({
+    filamentType: profile.filamentType,
+    filamentIds: profile.filamentIds,
+    filamentIsSupport: profile.filamentIsSupport
+  })
+  return normalizeMaterialTypeLabel(derivedType) ?? extractMaterialType(profile.name)
 }
 
 export function resolveLoadedMaterialType(filamentType: string | null | undefined, profile: SlicingProfileSummary | null | undefined, fallbackLabel: string): string {
+  // The tray's own reported type is already BambuStudio's derived spelling ("PLA-S").
   return normalizeMaterialTypeLabel(filamentType)
-    ?? normalizeMaterialTypeLabel(profile?.filamentType)
+    ?? (profile ? normalizeMaterialTypeLabel(resolveProfileMaterialType(profile)) : null)
     ?? extractMaterialType(fallbackLabel)
 }
 
 export function extractMaterialType(value: string): string {
-  // Fallback only: BambuStudio's `filament_type` is preferred when present,
-  // but project profiles from 3MFs may only expose a display name. This list
-  // mirrors BambuStudio's filament_type enum, with local AMS families appended.
+  // Fallback only, for presets carrying no `filament_type`/`filament_is_support`
+  // at all (e.g. a 3MF project profile that exposes just a display name). This
+  // list mirrors BambuStudio's filament_type enum, with local AMS families appended.
   const normalized = normalizedProfileText(value).toUpperCase()
-  if (normalized.includes('SUPPORT')) return 'SUPPORT'
+  const readsAsSupport = normalized.includes('SUPPORT')
   for (const type of BAMBU_STUDIO_MATERIAL_TYPE_MATCH_ORDER) {
     const normalizedType = normalizedProfileText(type).toUpperCase()
-    if (new RegExp(`(^|[^A-Z0-9])${escapeRegExp(normalizedType)}([^A-Z0-9]|$)`).test(normalized)) return type
+    if (new RegExp(`(^|[^A-Z0-9])${escapeRegExp(normalizedType)}([^A-Z0-9]|$)`).test(normalized)) {
+      // Mirror the derived-type rule for the name-only path too, so a preset named
+      // "Bambu Support For PLA" lands on `PLA-S` alongside the flagged presets
+      // instead of a bare `SUPPORT` bucket that matches no real filament type.
+      return readsAsSupport ? (resolveDisplayFilamentType({ filamentType: type, filamentIsSupport: true }) ?? type) : type
+    }
   }
-  return 'Other'
+  return readsAsSupport ? 'SUPPORT' : 'Other'
 }
 
 export function normalizeMaterialTypeLabel(value: string | null | undefined): string | null {

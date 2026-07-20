@@ -6,12 +6,10 @@
  * string. Project profiles carry the 3MF's saved overrides and are treated
  * specially so a user's authored settings survive through to the slicer.
  */
-import type { SlicingProfileSummary } from '@printstream/shared'
-
-const PROJECT_SLICING_PROFILE_ID_PREFIX = 'project:'
+import { isProjectSlicingPresetId, type SlicingProfileSummary } from '@printstream/shared'
 
 export function isProjectSlicingProfileId(id: string): boolean {
-  return id.startsWith(PROJECT_SLICING_PROFILE_ID_PREFIX)
+  return isProjectSlicingPresetId(id)
 }
 
 export function isSelectableSlicingProfile(profile: SlicingProfileSummary): boolean {
@@ -134,6 +132,24 @@ export function pickSlicingProfileByBakedName(
     ?? null
 }
 
+/**
+ * A process preset's layer height as a display token (`0.20mm`).
+ *
+ * Prefers the preset's real `layer_height`, falling back to the name only for
+ * presets that carry no such field (3MF project profiles, which expose just a
+ * name). Reading the number rather than the name is what stops a user-renamed
+ * preset from reporting the wrong height.
+ */
+export function resolveProfileLayerHeight(profile: SlicingProfileSummary): string | null {
+  if (profile.layerHeight != null) return formatLayerHeightToken(profile.layerHeight)
+  return extractLayerHeightToken(profile.name)
+}
+
+/** Format a layer height in mm as the `0.20mm` token used for display and comparison. */
+export function formatLayerHeightToken(value: number): string {
+  return `${value.toFixed(2)}mm`
+}
+
 /** Extracts the leading layer-height token (e.g. `0.20mm`) from a profile name. */
 export function extractLayerHeightToken(value: string | null | undefined): string | null {
   return value?.toLowerCase().match(/\d+\.\d+\s*mm/)?.[0]?.replace(/\s+/g, '') ?? null
@@ -178,7 +194,9 @@ export function pickMachineDefaultFilamentProfile(
  * to a 0.20mm preset of any name if no explicit "Standard" exists.
  */
 export function pickStandardProcessProfile(profiles: SlicingProfileSummary[]): SlicingProfileSummary | null {
-  const twentyMicron = profiles.filter((profile) => extractLayerHeightToken(profile.name) === '0.20mm')
+  const twentyMicron = profiles.filter((profile) => resolveProfileLayerHeight(profile) === '0.20mm')
+  // The quality TIER genuinely has no field of its own — BambuStudio encodes it in
+  // the preset name ("0.20mm Standard @BBL X1C"), so this one stays a name read.
   return twentyMicron.find((profile) => profile.name.toLowerCase().includes('standard')) ?? twentyMicron[0] ?? null
 }
 
@@ -204,6 +222,12 @@ export interface SliceDisabledReasonInput {
   processProfileIncompatible: boolean
   nozzleDiameterCount: number
   missingFilamentProfile: boolean
+  /**
+   * A slot's chosen material no longer exists in the options (e.g. the printer
+   * changed and its AMS options were rebuilt). Distinguished from a slot that was
+   * never chosen because the user already made a choice and needs telling it lapsed.
+   */
+  staleFilamentSelection?: boolean
   missingFilamentToolhead: boolean
   targetMode: 'realPrinter' | 'manualProfile'
   printerId: string
@@ -229,6 +253,7 @@ export function resolveSliceDisabledReason(input: SliceDisabledReasonInput): str
   if (input.processProfileId.length === 0) return 'Choose a print-settings profile.'
   if (input.processProfileIncompatible) return 'The selected print settings aren’t compatible with the target printer — choose a compatible profile.'
   if (input.nozzleDiameterCount === 0) return 'Choose a nozzle size.'
+  if (input.staleFilamentSelection) return 'A material slot’s filament is no longer available — choose it again.'
   if (input.missingFilamentProfile) return 'Assign a filament to every material slot.'
   if (input.missingFilamentToolhead) return 'Assign a nozzle to every material slot.'
   if (input.targetMode === 'realPrinter' && input.printerId.length === 0) return 'Choose a printer to slice for.'

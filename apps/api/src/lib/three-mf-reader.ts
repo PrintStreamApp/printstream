@@ -1179,13 +1179,28 @@ function hasOneToOneSceneFilamentMap(filamentMaps: number[]): boolean {
   return new Set(normalized).size === normalized.length
 }
 
+/**
+ * BambuStudio's per-plate `filament_maps`: a space-separated, POSITIONAL list
+ * mapping extruder slot -> filament id, read by index in
+ * {@link mapSceneExtruderToFilamentId} and inverted by index in the scene
+ * builder's `buildFilamentToExtruderMap`.
+ *
+ * An unparseable token becomes `0` (which both readers already treat as "no
+ * mapping") rather than being filtered out: dropping it would shift every later
+ * slot one position left, so each part after the bad entry would resolve to the
+ * WRONG filament — and the editor would then write that wrong slot back into
+ * `model_settings.config` on save. A silent wrong-material save is far worse than
+ * an ignored entry.
+ */
 function parseSceneFilamentMaps(value: string | undefined): number[] {
   if (!value) return []
   return value
     .trim()
     .split(/\s+/)
-    .map((entry) => Number.parseInt(entry, 10))
-    .filter((entry) => Number.isInteger(entry) && entry >= 0)
+    .map((entry) => {
+      const parsed = Number.parseInt(entry, 10)
+      return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0
+    })
 }
 
 function parseThreeMfTransform(value: string | undefined): number[] | null {
