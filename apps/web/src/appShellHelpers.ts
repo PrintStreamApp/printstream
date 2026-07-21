@@ -34,6 +34,14 @@ export const DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY = 'bambu.general.unconstrai
  * BambuStudio's develop-tier options follows the browser across workspaces.
  */
 export const DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY = 'printstream.slicer.developerMode.override'
+/**
+ * Model studio viewport overrides. Tenant-scoped (like the nav-order and landing-page overrides,
+ * and unlike the device-global theme/developer-mode ones): each workspace sets its own shared
+ * default, so a device override that leaked across workspaces would silently shadow a default it
+ * was never chosen against. The suffix is the workspace slug — see `lib/editorViewportSettings.ts`.
+ */
+export const DEVICE_EDITOR_SHOW_BED_MODEL_OVERRIDE_KEY_PREFIX = 'printstream.editor.bedModel3d.override'
+export const DEVICE_EDITOR_SIDEBAR_SIDE_OVERRIDE_KEY_PREFIX = 'printstream.editor.sidebarSide.override'
 
 export function tenantScopedRoutePath(path: string): string {
   return path === '/' ? '/workspaces/:tenantSlug' : `/workspaces/:tenantSlug${path}`

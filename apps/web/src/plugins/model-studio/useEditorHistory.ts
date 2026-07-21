@@ -2,11 +2,18 @@
  * Undo/redo + unsaved-edit tracking for the 3MF project editor.
  *
  * Thin React wrapper over the framework-free {@link EditorHistoryModel}: it owns the
- * scene-restore side effects (cloning, setState, material restore) and mirrors the
+ * scene-restore side effects (cloning, setState, slice-config restore) and mirrors the
  * model's flags into React state so the toolbar/Save button re-render. It also wraps
- * the slice controller's material add/remove so those edits route through the same
- * undo/redo as scene edits. Pulled out of EditorView so the component body keeps to
- * scene wiring and rendering.
+ * the slice controller's structural edits — printer target, nozzle, plate type, material
+ * add/remove — so those route through the same undo/redo as scene edits. Pulled out of
+ * EditorView so the component body keeps to scene wiring and rendering.
+ *
+ * The slice config lives in the host `SliceFileModal`, not in the editor's scene state, so
+ * it is snapshotted through the controller's `configSnapshot`/`restoreConfig` pair rather
+ * than cloned here. A user gesture must reach this wrapper as ONE call: the controller
+ * exposes combined actions (`selectPrinter`, `selectPrinterModel`) for the picks that would
+ * otherwise be two setter calls, because two calls would push two history frames and cost
+ * two Ctrl+Z to reverse one action.
  *
  * Dirtiness rules live in EditorHistoryModel: undoable edits clear when fully undone;
  * non-undoable material profile/colour edits stay dirty until save. The component
@@ -53,9 +60,9 @@ export interface EditorHistory {
   /** Snapshot the current scene before a scene mutation begins. */
   recordHistory: () => void
   recordHistoryRef: MutableRefObject<() => void>
-  /** Snapshot the current material set before a material add/remove begins. */
-  recordMaterialsHistory: () => void
-  /** Slice controller wrapped so material add/remove records an undo checkpoint first. */
+  /** Snapshot the current slice configuration before a settings mutation begins. */
+  recordSliceConfigHistory: () => void
+  /** Slice controller wrapped so settings edits record an undo checkpoint first. */
   sliceConfigForPanel: SliceSettingsController | undefined
 }
 
@@ -102,15 +109,15 @@ export function useEditorHistory({
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [])
 
-  // Material edits live in the slice controller; refs keep undo/redo reading the latest
+  // Slice-settings edits live in the slice controller; refs keep undo/redo reading the latest
   // snapshot/restore without re-creating those callbacks on every controller render.
-  const materialsSnapshotRef = useRef(sliceConfig?.materialsSnapshot)
-  materialsSnapshotRef.current = sliceConfig?.materialsSnapshot
-  const restoreMaterialsRef = useRef(sliceConfig?.restoreMaterials)
-  restoreMaterialsRef.current = sliceConfig?.restoreMaterials
+  const configSnapshotRef = useRef(sliceConfig?.configSnapshot)
+  configSnapshotRef.current = sliceConfig?.configSnapshot
+  const restoreConfigRef = useRef(sliceConfig?.restoreConfig)
+  restoreConfigRef.current = sliceConfig?.restoreConfig
 
-  // Material profile/colour/nozzle and plate-type edits are not snapshotted for undo, so they
-  // stay dirty until save (sticky), unlike scene edits which clear when fully undone.
+  // Material profile/colour edits are not snapshotted for undo, so they stay dirty until
+  // save (sticky), unlike scene edits which clear when fully undone.
   const markSettingsDirty = useCallback(() => {
     modelRef.current!.markNonUndoableDirty()
     syncFlags()
@@ -129,31 +136,33 @@ export function useEditorHistory({
   // A pending cross-model retarget (selected machine differs from the project's source) is
   // itself unsaved work, so it enables Save. Derived, not a marked flag: once saved, the
   // project's source model matches the target and `retargetTarget` clears on its own — the
-  // button greys again with no post-save re-lighting.
+  // button greys again with no post-save re-lighting. Still needed alongside `dirty` even
+  // though a printer pick is now a recorded checkpoint: a project with no source machine
+  // (a new-project scaffold) gets its target SEEDED rather than picked, so nothing records.
   const hasUnsavedChanges = dirty || sliceConfig?.retargetTarget != null
 
   /** Snapshot the current scene before a scene mutation begins. */
   const recordHistory = useCallback(() => {
     const current = stateRef.current
     if (!current) return
-    modelRef.current!.record({ state: cloneEditorState(current), materials: null })
+    modelRef.current!.record({ state: cloneEditorState(current), sliceConfig: null })
     syncFlags()
   }, [syncFlags, stateRef])
   const recordHistoryRef = useRef(recordHistory)
   recordHistoryRef.current = recordHistory
 
-  /** Snapshot the current material set before a material add/remove begins. */
-  const recordMaterialsHistory = useCallback(() => {
-    const snapshot = materialsSnapshotRef.current
+  /** Snapshot the current slice configuration before a settings mutation begins. */
+  const recordSliceConfigHistory = useCallback(() => {
+    const snapshot = configSnapshotRef.current
     const model = modelRef.current!
-    // No snapshot to capture (e.g. materials not loaded): the edit still happened, but it
-    // can't be undone, so fall back to a sticky non-undoable dirty mark.
+    // No snapshot to capture (e.g. the slice config not loaded): the edit still happened, but
+    // it can't be undone, so fall back to a sticky non-undoable dirty mark.
     if (!snapshot) {
       model.markNonUndoableDirty()
       syncFlags()
       return
     }
-    model.record({ state: null, materials: snapshot })
+    model.record({ state: null, sliceConfig: snapshot })
     syncFlags()
   }, [syncFlags])
 
@@ -164,9 +173,9 @@ export function useEditorHistory({
   useEffect(() => {
     const ref = sliceConfig?.processEditListenerRef
     if (!ref) return
-    ref.current = recordMaterialsHistory
+    ref.current = recordSliceConfigHistory
     return () => { ref.current = null }
-  }, [sliceConfig, recordMaterialsHistory])
+  }, [sliceConfig, recordSliceConfigHistory])
 
   const restoreHistoryState = useCallback((target: EditorState) => {
     const restored = cloneEditorState(target)
@@ -178,15 +187,15 @@ export function useEditorHistory({
 
   // Apply one history entry, returning the inverse entry for the opposite stack.
   const applyHistoryEntry = useCallback((entry: EditorHistoryEntry): EditorHistoryEntry => {
-    const inverse: EditorHistoryEntry = { state: null, materials: null }
+    const inverse: EditorHistoryEntry = { state: null, sliceConfig: null }
     if (entry.state) {
       const current = stateRef.current
       inverse.state = current ? cloneEditorState(current) : null
       restoreHistoryState(entry.state)
     }
-    if (entry.materials) {
-      inverse.materials = materialsSnapshotRef.current ?? null
-      restoreMaterialsRef.current?.(entry.materials)
+    if (entry.sliceConfig) {
+      inverse.sliceConfig = configSnapshotRef.current ?? null
+      restoreConfigRef.current?.(entry.sliceConfig)
     }
     return inverse
   }, [restoreHistoryState, stateRef])
@@ -208,14 +217,32 @@ export function useEditorHistory({
     syncFlags()
   }, [syncFlags])
 
-  // The settings panel calls the controller's material add/remove directly; wrap them so
-  // each records an undo checkpoint first (routing material edits through the same
-  // undo/redo as scene edits — Ctrl+Z / the toolbar buttons).
+  // The settings panel calls the controller's setters directly; wrap the ones that change the
+  // saved project so each records an undo checkpoint first, routing settings edits through the
+  // same undo/redo as scene edits (Ctrl+Z / the toolbar buttons).
+  //
+  // Every wrapped setter here must correspond to ONE user gesture. The printer picks arrive as
+  // the controller's combined `selectPrinter`/`selectPrinterModel` actions for exactly that
+  // reason — wrapping the underlying id/mode/touched setters separately would record a frame
+  // each and take two undos to reverse one pick.
+  //
+  // Changing the printer target also re-derives state the editor owns: the scene queries are
+  // keyed on the target model, so each plate's bed and unprintable zones are rewritten when the
+  // new target's scenes arrive (see the resync effect in EditorView). That rewrite is NOT
+  // recorded, and must not be — it is derived, so undoing back to the previous target restores
+  // the previous bed on its own from the cached scene.
   const sliceConfigForPanel = useMemo<SliceSettingsController | undefined>(() => {
     if (!sliceConfig) return undefined
     return {
       ...sliceConfig,
-      onAddFilament: () => { recordMaterialsHistory(); sliceConfig.onAddFilament() },
+      // Printer target. A model switch re-resolves the process and filament presets, so the
+      // snapshot these record deliberately spans the whole slice config, not just the target.
+      selectPrinter: (printer) => { recordSliceConfigHistory(); sliceConfig.selectPrinter(printer) },
+      selectPrinterModel: (model) => { recordSliceConfigHistory(); sliceConfig.selectPrinterModel(model) },
+      setSelectedSlicerTargetId: (value) => { recordSliceConfigHistory(); sliceConfig.setSelectedSlicerTargetId(value) },
+      setNozzleDiameter: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleDiameter(value) },
+      setNozzleFlow: (value) => { recordSliceConfigHistory(); sliceConfig.setNozzleFlow(value) },
+      onAddFilament: () => { recordSliceConfigHistory(); sliceConfig.onAddFilament() },
       // BambuStudio parity: only an OBJECT reference blocks removal — reassign the object first.
       // A material referenced solely by a process setting (support / support interface, infill or
       // wall filament) is removable: BambuStudio drops the setting back to "Default" instead of
@@ -231,19 +258,21 @@ export function useEditorHistory({
           toast.error('This material is used by one or more objects. Reassign them to another material before removing it.')
           return
         }
-        recordMaterialsHistory()
+        recordSliceConfigHistory()
         sliceConfig.onRemoveFilament(projectFilamentId)
       },
-      // Material profile/colour/nozzle edits feed `desiredFilaments` — and the plate type feeds
-      // the plates' `plateType` (written as `curr_bed_type`) — into the saved 3MF, so they count
-      // as unsaved changes; they are not snapshotted for undo (the controller owns that), so
-      // they only need to flip the sticky dirty flag for the Save button.
+      // The plate type feeds the plates' `plateType` (written as `curr_bed_type`) into the saved
+      // 3MF and is part of the config snapshot, so it undoes like the rest of the target.
+      setPlateType: (value) => { recordSliceConfigHistory(); sliceConfig.setPlateType(value) },
+      // Material profile/colour edits feed `desiredFilaments` into the saved 3MF, so they count as
+      // unsaved changes. They are applied through the controller's own picker Modal rather than
+      // this wrapper (see materialEditListenerRef), so a checkpoint recorded here would capture
+      // the wrong moment — they only flip the sticky dirty flag for the Save button.
       handleMaterialOptionChange: (projectFilamentId, option) => { markSettingsDirty(); sliceConfig.handleMaterialOptionChange(projectFilamentId, option) },
       setFilamentColors: (value) => { markSettingsDirty(); sliceConfig.setFilamentColors(value) },
-      setFilamentToolheadIds: (value) => { markSettingsDirty(); sliceConfig.setFilamentToolheadIds(value) },
-      setPlateType: (value) => { markSettingsDirty(); sliceConfig.setPlateType(value) }
+      setFilamentToolheadIds: (value) => { markSettingsDirty(); sliceConfig.setFilamentToolheadIds(value) }
     }
-  }, [sliceConfig, recordMaterialsHistory, markSettingsDirty, usedFilamentIds, supportOnlyFilamentIds])
+  }, [sliceConfig, recordSliceConfigHistory, markSettingsDirty, usedFilamentIds, supportOnlyFilamentIds])
 
   return {
     dirtyRef,
@@ -257,7 +286,7 @@ export function useEditorHistory({
     redoRef,
     recordHistory,
     recordHistoryRef,
-    recordMaterialsHistory,
+    recordSliceConfigHistory,
     sliceConfigForPanel
   }
 }

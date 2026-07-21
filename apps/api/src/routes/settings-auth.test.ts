@@ -53,7 +53,9 @@ test('settings read remains available without auth permissions', async () => {
       navTabOrder: [],
       quickStartDismissed: false,
       supportAccessEnabled: true,
-      supportAccessPermissions: listAllWorkspaceSupportPermissions()
+      supportAccessPermissions: listAllWorkspaceSupportPermissions(),
+      editorShowBedModel: true,
+      editorSidebarSide: 'right'
     })
   })
 })
@@ -119,7 +121,9 @@ test('settings write allows actors with settings.manage permission', async () =>
       navTabOrder: [],
       quickStartDismissed: false,
       supportAccessEnabled: true,
-      supportAccessPermissions: listAllWorkspaceSupportPermissions()
+      supportAccessPermissions: listAllWorkspaceSupportPermissions(),
+      editorShowBedModel: true,
+      editorSidebarSide: 'right'
     })
   })
 })
@@ -322,7 +326,9 @@ test('settings write for support access allows a recently verified admin', async
       navTabOrder: [],
       quickStartDismissed: false,
       supportAccessEnabled: false,
-      supportAccessPermissions: ['printers.view']
+      supportAccessPermissions: ['printers.view'],
+      editorShowBedModel: true,
+      editorSidebarSide: 'right'
     })
   })
 })

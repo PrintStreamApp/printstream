@@ -22,6 +22,23 @@ export function decodeFootprintCellKey(key: number): [number, number] {
   return [Math.floor(key / 32768) - 16384, (key % 32768) - 16384]
 }
 
+/**
+ * Translate a footprint cell set by a whole number of grid cells. A pure move keeps an object's
+ * footprint SHAPE, so the placement-warning recompute can shift the cached cells (O(cells)) instead
+ * of re-rasterizing every triangle (O(triangles)) — the difference between a smooth and a frozen
+ * drop for a high-poly / many-part object. The shift rounds to the 2mm grid, which is the
+ * collision resolution anyway, so no accuracy is lost.
+ */
+export function shiftFootprintCells(cells: Set<number>, dCellX: number, dCellY: number): Set<number> {
+  if (dCellX === 0 && dCellY === 0) return cells
+  const shifted = new Set<number>()
+  for (const key of cells) {
+    const [cx, cy] = decodeFootprintCellKey(key)
+    shifted.add(footprintCellKey(cx + dCellX, cy + dCellY))
+  }
+  return shifted
+}
+
 export interface ArrangeItemInput {
   key: string
   /** Footprint cell keys at the item's CURRENT position. */

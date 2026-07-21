@@ -241,9 +241,9 @@ function flattenPlanarPatchNormals(geometry: THREE.BufferGeometry): THREE.Buffer
 }
 
 /**
- * Build the bed surface for a plate: a translucent plane, a millimetre grid with
- * edge coordinate labels, and an outline, centred at `(centerX, centerY)` on the
- * z=0 plane.
+ * Build the bed surface for a plate: a translucent plane and a millimetre grid with edge
+ * coordinate labels, centred at `(centerX, centerY)` on the z=0 plane. The print area gets no
+ * border square — the grid is the plate.
  */
 export function createPreviewPlateSurface({
   width,
@@ -262,8 +262,8 @@ export function createPreviewPlateSurface({
   excludeAreas?: Array<{ polygon: Array<{ x: number; y: number }>; label?: string | null }>
   /**
    * Draw the tinted surface fill. Turned off when the real 3D build plate is rendered underneath,
-   * where it only z-fights the mesh. Everything else — grid, measurement ticks, printable outline,
-   * unprintable zones — is drawn either way; the modelled plate supplies a surface, not a scale.
+   * where it only z-fights the mesh. Everything else — grid, measurement ticks, unprintable zones
+   * — is drawn either way; the modelled plate supplies a surface, not a scale.
    */
   showSurfaceFill?: boolean
   /**
@@ -302,20 +302,11 @@ export function createPreviewPlateSurface({
     plateGroup.add(bed)
   }
   // The grid and the measurement ticks are the plate's SCALE, which the modelled bed does not
-  // provide, so both are drawn in either presentation.
+  // provide, so both are drawn in either presentation. The print area is deliberately NOT
+  // outlined with a border square: the grid alone reads as the plate, and the border only added
+  // a hard frame around it (the modelled bed already shows the physical plate edge).
   plateGroup.add(createBedGridLines(minX, maxX, minY, maxY))
   plateGroup.add(createBedAxisLabels(minX, maxX, minY, maxY, axisLabelEdge))
-
-  const outline = new THREE.LineLoop(
-    new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(centerX - width / 2, centerY - depth / 2, 0.02),
-      new THREE.Vector3(centerX + width / 2, centerY - depth / 2, 0.02),
-      new THREE.Vector3(centerX + width / 2, centerY + depth / 2, 0.02),
-      new THREE.Vector3(centerX - width / 2, centerY + depth / 2, 0.02)
-    ]),
-    new THREE.LineBasicMaterial({ color: 0x6ea6a3, transparent: true, opacity: 0.8, depthWrite: false })
-  )
-  plateGroup.add(outline)
 
   // Unprintable / single-nozzle zones: a translucent red fill, diagonal hatching, a
   // bright outline, and (when present) a Bambu-style text label so the user can see

@@ -20,6 +20,7 @@ import { conflict, HttpError, notFound } from './http-error.js'
 import { persistHistoryThumbnailFromLibrary } from './job-history-thumbnail-source.js'
 import { persistLibraryFileFromLocalPath } from './library-files.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
+import { authorProjectMachineFromProfile } from './save-retarget.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from './three-mf.js'
 import { healUnweldedThreeMfMeshes } from './three-mf-mesh-weld.js'
@@ -492,6 +493,37 @@ export class SlicingJobs {
           customGcode: hasGcodeEdits ? { filamentChanges: job.request.filamentChanges, pauses: job.request.pauses } : undefined
         })
         sourcePath = filteredPath
+      }
+
+      // We author the 3MF; the CLI only slices it. Write the SELECTED machine's complete settings
+      // into whatever project we are about to hand over, so it leaves here fully self-defined —
+      // including an H2-family printer's extruder-indexed dual-nozzle topology. A project can name
+      // `printer_model: H2D` while carrying none of that topology (a new editor project, and any
+      // 3MF we build from scratch such as the calibration plates), and the CLI then refuses it
+      // ("missing its dual-nozzle machine data") or slices with no print volume — "no object fully
+      // inside the print volume", exit 206. Deliberately applied to EVERY slice path, not just
+      // editor (sceneEdit) slices: calibration and plain library slices bake no scene but hand over
+      // the same under-defined projects. Never rely on the slicer to retarget or on built-in profile
+      // fallbacks surviving; best-effort, so an unresolvable machine degrades to the old behaviour.
+      {
+        const machineProfile = job.profileFiles.find((profile) => profile.kind === 'machine')
+        if (machineProfile) {
+          const authoredPath = await authorProjectMachineFromProfile({
+            arrangedPath: sourcePath,
+            fileName: path.basename(job.sourceFileName) || 'source.3mf',
+            slicerTargetId: job.request.slicerTargetId,
+            machineFile: machineProfile
+          }).catch((error: unknown) => {
+            this.logJobEvent(job, 'warn', `Could not author the machine into the project: ${error instanceof Error ? error.message : String(error)}`)
+            return null
+          })
+          if (authoredPath) {
+            rewrittenSourcePaths.push(authoredPath)
+            sourcePath = authoredPath
+          } else {
+            this.logJobEvent(job, 'warn', `Slicing without an authored machine — could not resolve ${machineProfile.name}`)
+          }
+        }
       }
 
       // Heal index-level triangle-soup meshes (older editor imports) before slicing:

@@ -117,7 +117,9 @@ settingsRouter.put('/', async (request, response) => {
       ...(parsed.data.supportAccessEnabled !== undefined ? { supportAccessEnabled: parsed.data.supportAccessEnabled } : {}),
       ...(parsed.data.supportAccessPermissions !== undefined
         ? { supportAccessPermissionCount: parsed.data.supportAccessPermissions.length }
-        : {})
+        : {}),
+      ...(parsed.data.editorShowBedModel !== undefined ? { editorShowBedModel: parsed.data.editorShowBedModel } : {}),
+      ...(parsed.data.editorSidebarSide !== undefined ? { editorSidebarSide: parsed.data.editorSidebarSide } : {})
     }
   })
   response.json(updated)

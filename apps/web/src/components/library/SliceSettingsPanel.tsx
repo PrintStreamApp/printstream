@@ -2,7 +2,7 @@
  * Shared slice-settings surface extracted from `pages/LibraryView.tsx`.
  *
  * Owns the `SliceSettingsPanel` (the slicer/printer/plate/process/materials
- * controls) plus the `SliceSettingsController` and `SliceMaterialsSnapshot`
+ * controls) plus the `SliceSettingsController` and `SliceConfigSnapshot`
  * contracts that bridge `SliceFileModal`'s state into it, so the SAME panel
  * renders both in the slim slice dialog (`mode='simple'`) and inside the model
  * studio's 3D editor (`mode='editor'`). Each material renders as one compact
@@ -97,11 +97,20 @@ export interface SliceSettingsController {
   selectedPrinter: Printer | null
   lockedPreferredPrinter: Printer | null
   targetMode: 'realPrinter' | 'manualProfile'
-  setTargetMode: React.Dispatch<React.SetStateAction<'realPrinter' | 'manualProfile'>>
-  setPrinterId: React.Dispatch<React.SetStateAction<string>>
+  /**
+   * Pick (or clear) the real printer to target. ONE action rather than the underlying
+   * `printerId` + `targetMode` setters so a single user gesture stays a single undoable
+   * step in the editor — two wrapped setters would push two history frames and take two
+   * Ctrl+Z to reverse. Same reason {@link selectPrinterModel} exists.
+   */
+  selectPrinter: (printer: Printer | null) => void
   selectedPrinterModel: string
-  manualPrinterModelTouchedRef: React.MutableRefObject<boolean>
-  setManualPrinterModel: React.Dispatch<React.SetStateAction<string>>
+  /**
+   * Pick the manual printer model. Also marks the choice as user-made, which stops the
+   * baked-defaults effects from steering it — that flag is part of the same gesture, so it
+   * must not be a separate call the editor's undo wrapper cannot see.
+   */
+  selectPrinterModel: (model: string) => void
   printerModelOptions: string[]
   nozzleDiameter: string
   setNozzleDiameter: React.Dispatch<React.SetStateAction<string>>
@@ -213,12 +222,12 @@ export interface SliceSettingsController {
    */
   filamentSupportOnly?: (projectFilamentId: number) => boolean
   /**
-   * Point-in-time snapshot of the material-edit state + a restore fn, so the editor's
-   * undo/redo can revert add/remove of materials alongside the scene (the material state
+   * Point-in-time snapshot of the whole slice configuration + a restore fn, so the editor's
+   * undo/redo can revert a printer/material/process edit alongside the scene (this state
    * lives here, in the slice controller, not in the editor's scene state).
    */
-  materialsSnapshot: SliceMaterialsSnapshot
-  restoreMaterials: (snapshot: SliceMaterialsSnapshot) => void
+  configSnapshot: SliceConfigSnapshot
+  restoreConfig: (snapshot: SliceConfigSnapshot) => void
   /**
    * Mutable listener the full editor sets to its `markDirty`, invoked whenever a material
    * is changed through this controller's own picker Modal (which the editor renders behind
@@ -244,7 +253,34 @@ export interface SliceSettingsController {
   processEditListenerRef: React.MutableRefObject<(() => void) | null>
 }
 
-export interface SliceMaterialsSnapshot {
+/**
+ * Everything the editor's undo/redo must be able to put back when a slice-settings edit is
+ * reversed. It covers the WHOLE configuration, not just materials: the printer target and
+ * nozzle/plate choices sit here too, because changing the printer model re-resolves the
+ * process and filament presets, so reverting only the materials would leave the project on
+ * the new machine with the old machine's presets.
+ *
+ * The fields are interdependent (a machine profile is only valid for some models, a nozzle
+ * diameter only for some machine profiles), which is why the snapshot is restored WHOLESALE:
+ * `SliceFileModal`'s reconciliation effects re-derive an invalid combination, and putting the
+ * values back one at a time would trip them mid-restore. Restoring a set that was valid when
+ * captured leaves every one of those effects a no-op.
+ */
+export interface SliceConfigSnapshot {
+  // Printer target. Includes the "user touched this" flags because they steer the
+  // baked-defaults effects — restoring values without them would leave those effects
+  // steering differently than they did at capture time.
+  selectedSlicerTargetId: string
+  targetMode: 'realPrinter' | 'manualProfile'
+  printerId: string
+  printerProfileId: string
+  manualPrinterModel: string
+  manualPrinterModelTouched: boolean
+  nozzleDiameter: string
+  nozzleFlow: PrinterNozzleFlow
+  plateType: string
+  plateTypeTouched: boolean
+  // Materials
   removedFilamentIds: number[]
   profileEditedFilamentIds: number[]
   addedFilaments: Array<{ projectFilamentId: number; label: string; color: string | null; nozzleId: number | null; usedOnSelectedPlate: boolean }>
@@ -253,10 +289,14 @@ export interface SliceMaterialsSnapshot {
   filamentMaterialOptionIds: Record<number, string>
   filamentToolheadIds: Record<number, string>
   filamentMaterialTypeFilters: Record<number, string>
+  /** Per-material "tune" overrides, so undo reverts a material-settings edit too. */
+  filamentSettingOverridesById: Record<number, Record<string, string | string[]>>
+  // Process
   /** Per-object process overrides, so the editor's undo/redo can revert a gear edit. */
   objectProcessOverrides: Record<string, Record<string, string | string[]>>
   /** Selected process profile id, so undo can revert a profile switch alongside its overrides. */
   processProfileId: string
+  processProfileSelectionTouched: boolean
   /** Global process-setting overrides, so the editor's undo/redo can revert a global process edit. */
   processSettingOverrides: Record<string, string | string[]>
 }
@@ -278,8 +318,8 @@ export function SliceSettingsPanel({ controller, mode }: {
   const {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview,
     slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId, slicerStatus,
-    printers, selectedPrinter, lockedPreferredPrinter, targetMode, setTargetMode, setPrinterId,
-    selectedPrinterModel, manualPrinterModelTouchedRef, setManualPrinterModel, printerModelOptions,
+    printers, selectedPrinter, lockedPreferredPrinter, targetMode, selectPrinter,
+    selectedPrinterModel, selectPrinterModel, printerModelOptions,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
     plateType, setPlateType, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
@@ -387,10 +427,7 @@ export function SliceSettingsPanel({ controller, mode }: {
                 disabled={Boolean(lockedPreferredPrinter)}
                 getOptionLabel={(printer) => printer.name}
                 isOptionEqualToValue={(option, selected) => option.id === selected.id}
-                onChange={(_event, value) => {
-                  setPrinterId(value?.id ?? '')
-                  setTargetMode(value ? 'realPrinter' : 'manualProfile')
-                }}
+                onChange={(_event, value) => selectPrinter(value)}
                 renderOption={(props, printer) => (
                   <AutocompleteOption {...props} key={printer.id}>
                     <ListItemContent>{printer.name}</ListItemContent>
@@ -405,8 +442,7 @@ export function SliceSettingsPanel({ controller, mode }: {
                 disabled={targetMode === 'realPrinter' || Boolean(lockedPreferredPrinter)}
                 onChange={(_event, value) => {
                   if (targetMode === 'realPrinter') return
-                  manualPrinterModelTouchedRef.current = true
-                  setManualPrinterModel(value ?? printerModelOptions[0] ?? 'unknown')
+                  selectPrinterModel(value ?? printerModelOptions[0] ?? 'unknown')
                 }}
               >
                 {printerModelOptions.map((model) => (

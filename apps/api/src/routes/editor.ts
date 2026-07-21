@@ -21,6 +21,8 @@ import { Router } from 'express'
 import multer from 'multer'
 import {
   LIBRARY_DOWNLOAD_PERMISSION,
+  DEFAULT_FILAMENT_COLOR,
+  DEFAULT_FILAMENT_PRESET_NAME,
   LIBRARY_UPLOAD_PERMISSION,
   exportArrangedThreeMfSchema,
   saveArrangedThreeMfSchema,
@@ -32,7 +34,7 @@ import { z } from 'zod'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
-import { healSavedProjectMachineTopology, retargetSavedProjectMachine } from '../lib/save-retarget.js'
+import { healSavedProjectMachineTopology, projectHasCompleteMachine, retargetSavedProjectMachine } from '../lib/save-retarget.js'
 import { badRequest, HttpError, notFound } from '../lib/http-error.js'
 import { getStagedImport, resolveSceneEditImports, stageImport } from '../lib/import-store.js'
 import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
@@ -229,7 +231,11 @@ async function bakeArrangedThreeMf(
   // silently keeping the source machine. buildEditedThreeMf alone never switches the machine.
   let bakedPath = workingPath
   let machineTopologyHealed = false
-  if (retarget) {
+  if (retarget && !(await projectHasCompleteMachine(workingPath, retarget.printerModel))) {
+    // Either a genuine printer CHANGE, or the same printer on a project that never carried that
+    // machine's full definition (e.g. one naming `printer_model: H2D` without H2D's dual-nozzle
+    // topology). Both need the machine authored in — we are the source of truth for the 3MF, so a
+    // saved project must define its own machine rather than leaning on slice-time fallbacks.
     bakedPath = await retargetSavedProjectMachine({
       tenantId,
       arrangedPath: workingPath,
@@ -238,6 +244,9 @@ async function bakeArrangedThreeMf(
       retarget
     })
     extraCleanupDirs.push(path.dirname(bakedPath))
+  } else if (retarget) {
+    // Already complete for this machine — nothing to author, and re-running the retarget would
+    // overwrite the user's process settings for no gain.
   } else {
     // Same-model save: if the base project LOST its dual-nozzle machine block (a filament
     // rewrite once stripped the extruder-indexed machine arrays), re-author it from the
@@ -373,7 +382,16 @@ editorRouter.post('/new-project', requireRequestPermission(LIBRARY_UPLOAD_PERMIS
   const workDir = await mkdtemp(path.join(tmpdir(), 'printstream-editor-new-'))
   const outputPath = path.join(workDir, 'new.3mf')
   try {
-    await buildEditedThreeMf(null, outputPath, { plates: [{ index: 1 }], instances: [] }, [])
+    // Seed one guaranteed-present filament so a from-scratch project opens WITH a material rather
+    // than an empty, unsliceable slot list. Generic PLA (white) resolves for every machine; the
+    // user can change it in the slice settings. Without this the scaffold's project_settings has no
+    // filament arrays and the editor shows zero materials.
+    await buildEditedThreeMf(
+      null,
+      outputPath,
+      { plates: [{ index: 1 }], instances: [], filaments: [{ color: DEFAULT_FILAMENT_COLOR, type: 'PLA', settingsId: DEFAULT_FILAMENT_PRESET_NAME }] },
+      []
+    )
     const sizeBytes = (await stat(outputPath)).size
     const { file: created } = await persistLibraryFileFromLocalPath({
       tenantId,

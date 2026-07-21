@@ -93,6 +93,16 @@ export const BAMBU_FILAMENT_PRESET_NAMES: Record<string, string> = {
   GFU99: 'Generic TPU'
 }
 
+/**
+ * The filament to seed a slot with when nothing better can be resolved — a brand-new project's
+ * first material, or an added slot with no template to clone. "Generic PLA" (GFL99) is a system
+ * preset present for every machine and nozzle, so it is always sliceable; callers that DO know the
+ * machine prefer its own `default_filament_profile` (Bambu PLA Basic) and only fall back to this.
+ * White is the conventional neutral default (matches the inline `#FFFFFF` used across the slice UI).
+ */
+export const DEFAULT_FILAMENT_PRESET_NAME = 'Generic PLA'
+export const DEFAULT_FILAMENT_COLOR = '#FFFFFF'
+
 export function brandFromPresetName(name: string): string {
   const first = name.split(' ')[0]
   return first || 'Other'

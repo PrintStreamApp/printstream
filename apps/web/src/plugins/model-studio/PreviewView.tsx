@@ -190,7 +190,7 @@ export function PreviewView(props: Record<string, unknown>) {
   // way while editing and another while previewing the slice of that same file is exactly the
   // inconsistency this shares. The scene carries the printer it was placed for; a file whose
   // printer is unknown, or a printer with no bundled mesh, keeps the plain grid.
-  const [showBedModel] = useShowBedModel()
+  const showBedModel = useShowBedModel()
   const scenePrinterModel = sceneQuery.data?.bed.printerModel ?? null
   const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
   useEffect(() => {

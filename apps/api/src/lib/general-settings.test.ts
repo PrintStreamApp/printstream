@@ -23,7 +23,9 @@ test('getGeneralSettings defaults unconstrained width off when unset', async () 
     navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
-    supportAccessPermissions: listAllWorkspaceSupportPermissions()
+    supportAccessPermissions: listAllWorkspaceSupportPermissions(),
+    editorShowBedModel: true,
+    editorSidebarSide: 'right'
   })
 })
 
@@ -48,7 +50,9 @@ test('getGeneralSettings reads a persisted unconstrained width flag', async () =
     navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
-    supportAccessPermissions: listAllWorkspaceSupportPermissions()
+    supportAccessPermissions: listAllWorkspaceSupportPermissions(),
+    editorShowBedModel: true,
+    editorSidebarSide: 'right'
   })
 })
 
@@ -72,7 +76,9 @@ test('updateGeneralSettings upserts the shared unconstrained width flag', async 
     navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
-    supportAccessPermissions: listAllWorkspaceSupportPermissions()
+    supportAccessPermissions: listAllWorkspaceSupportPermissions(),
+    editorShowBedModel: true,
+    editorSidebarSide: 'right'
   })
   assert.deepEqual(receivedArgs, {
     where: { key: 'platform:app:general:unconstrainedWidth' },
@@ -87,7 +93,9 @@ test('updateGeneralSettings writes support access policy in workspace scope with
   const settings = await withTenantRequestContext({ id: 'tenant-1', slug: 'alpha', name: 'Alpha' }, async () => {
     return await updateGeneralSettings({
       supportAccessEnabled: false,
-      supportAccessPermissions: ['printers.view', 'jobs.view']
+      supportAccessPermissions: ['printers.view', 'jobs.view'],
+      editorShowBedModel: true,
+      editorSidebarSide: 'right'
     }, {
       async findUnique(args) {
         if (args.where.key === 'tenant:tenant-1:app:general:unconstrainedWidth') {
@@ -110,7 +118,9 @@ test('updateGeneralSettings writes support access policy in workspace scope with
     navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: false,
-    supportAccessPermissions: ['printers.view', 'jobs.view']
+    supportAccessPermissions: ['printers.view', 'jobs.view'],
+    editorShowBedModel: true,
+    editorSidebarSide: 'right'
   })
   assert.deepEqual(upserts, [
     {

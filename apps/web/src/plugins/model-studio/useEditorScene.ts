@@ -31,7 +31,7 @@ import {
   DOWN_VECTOR,
   effectivePaintTool,
   footprintHitsExcludeZones,
-  groupTransformSignature,
+  groupShapeSignature,
   ISO_UP,
   PAINT_CHANNEL_SPECS,
   paintChannelForGizmoMode,
@@ -47,6 +47,7 @@ import {
   type PaintToolType,
   type PlacementWarning
 } from './editorGeometry'
+import { FOOTPRINT_CELL_MM, shiftFootprintCells } from './lib/arrange'
 import { type EditorInstance, type EditorPlate } from './lib/editorModel'
 import { type PartSelection } from './lib/selectionModel'
 import { type SupportPaintBrushMode } from './lib/supportPaint'
@@ -148,7 +149,7 @@ export interface EditorSceneParams {
   activePlateRef: MutableRefObject<EditorPlate | null>
   isInstancePrintedRef: MutableRefObject<(instance: EditorInstance) => boolean>
   instanceNozzlesRef: MutableRefObject<(instance: EditorInstance) => Set<number>>
-  footprintCacheRef: MutableRefObject<Map<string, { sig: string; cells: Set<number> }>>
+  footprintCacheRef: MutableRefObject<Map<string, { shapeSig: string; cells: Set<number>; baseX: number; baseY: number }>>
   lastWarningSigRef: MutableRefObject<string>
   placementWarningsSetterRef: MutableRefObject<Dispatch<SetStateAction<PlacementWarning[]>>>
   // Assigned here so callers (the plate-build effect) can force an immediate placement-warning
@@ -373,7 +374,11 @@ export function useEditorScene(params: EditorSceneParams): void {
         selectionBox = null
       }
       if (group) {
-        selectionBoxValue.copy(printableMeshBox(group))
+        // Cheap (transformed-AABB) box on selection: the precise per-vertex walk froze selecting a
+        // many-part high-poly object for a beat — the hitch when you drag an object that wasn't
+        // already selected (the pointer-down selects it first). It is exact for an axis-aligned
+        // object and only loosens slightly around a reoriented one, and the box is visual-only.
+        selectionBoxValue.copy(printableMeshBox(group, false))
         selectionBoxSig = selectionBoxSignature(group)
         selectionBox = new THREE.Box3Helper(selectionBoxValue, new THREE.Color(0x35e07f))
         const material = selectionBox.material as THREE.LineBasicMaterial
@@ -550,6 +555,11 @@ export function useEditorScene(params: EditorSceneParams): void {
     // body- and tower-drag state below, it lets the validation loop skip its expensive
     // placement-warning recompute mid-drag and run it once when the drag finishes.
     let gizmoDragging = false
+    // Did the drag that just ended change the object's ORIENTATION (rotate/scale)? A pure move keeps
+    // the object axis-aligned, so its cheap transformed-AABB selection box is already exact — only a
+    // rotate/scale needs the expensive per-vertex precise walk on the drop frame. Without this, every
+    // drop of a high-poly / many-part object re-walked all vertices and froze for a beat.
+    let lastDragChangedOrientation = false
     const throttledPanelSync = (group: THREE.Object3D) => {
       panelSyncTick += 1
       if (panelSyncTick % PANEL_SYNC_EVERY === 0) syncSelectedTransformRef.current?.(group)
@@ -585,6 +595,8 @@ export function useEditorScene(params: EditorSceneParams): void {
       const dragging = Boolean(event.value)
       gizmoDragging = dragging
       interactionActiveRef.current = dragging
+      // A rotate/scale gizmo drag reorients the object; a translate gizmo drag does not.
+      if (dragging) lastDragChangedOrientation = gizmoModeRef.current === 'rotate' || gizmoModeRef.current === 'scale'
       // Snapshot once at drag start (onObjectChange fires per-frame, so not there).
       if (dragging) {
         panelSyncTick = 0
@@ -708,6 +720,9 @@ export function useEditorScene(params: EditorSceneParams): void {
       dragOffset.set(group.position.x - dragPoint.x, group.position.y - dragPoint.y, 0)
       bodyDragGroup = group
       bodyDragRecorded = false
+      // A body drag only translates, so the drop frame can keep the cheap (exact-for-translation)
+      // selection box instead of re-walking every vertex.
+      lastDragChangedOrientation = false
     }
     let towerDragObject: THREE.Object3D | null = null
     // Pointer-down position on empty space; deselect only happens on pointer-up if the
@@ -1062,8 +1077,21 @@ export function useEditorScene(params: EditorSceneParams): void {
           // drag / mutateSelectedGroup paths.
           const worldNormal = faceHit.face.normal.clone().transformDirection(faceHit.object.matrixWorld).normalize()
           bakeExactMatrixRef.current(group)
+          // Reorient IN PLACE: the rotation spins the geometry about the group origin, so an off-centre
+          // object (and especially a flip to the OPPOSITE face) swings sideways across the bed. Capture
+          // the footprint's XY centre before, then translate it back after re-resting so "place on
+          // face" only changes orientation + bed height, matching BambuStudio. Cheap AABB is enough
+          // for a centre.
+          const beforeBox = printableMeshBox(group, false)
           rotorOf(group).quaternion.premultiply(new THREE.Quaternion().setFromUnitVectors(worldNormal, DOWN_VECTOR))
           restObjectOnBed(group)
+          const afterBox = printableMeshBox(group, false)
+          // Guarded like restObjectOnBed: an object with no printable geometry has an empty box,
+          // whose "centre" would be NaN and would corrupt the position.
+          if (!beforeBox.isEmpty() && !afterBox.isEmpty()) {
+            group.position.x += (beforeBox.min.x + beforeBox.max.x) / 2 - (afterBox.min.x + afterBox.max.x) / 2
+            group.position.y += (beforeBox.min.y + beforeBox.max.y) / 2 - (afterBox.min.y + afterBox.max.y) / 2
+          }
           writeBackGroupTransform(group)
           syncSelectedTransformRef.current?.(group)
           regenerateActiveThumbnailRef.current?.()
@@ -1287,10 +1315,22 @@ export function useEditorScene(params: EditorSceneParams): void {
         for (const instance of plate.instances) {
           const group = groupByKeyRef.current.get(instance.key)
           if (!group || !isInstancePrintedRef.current(instance)) continue
-          const sig = groupTransformSignature(group)
+          // Footprint rasterization is O(triangles) — brutal for a many-part high-poly object and,
+          // forced on every drop, the freeze after dragging one around the plate. It only depends on
+          // SHAPE (orientation+scale), so a pure move keeps the cached cells and just shifts them by
+          // the whole-cell translation delta (O(cells)); only a rotate/scale (shape sig change)
+          // re-rasterizes. Shift from the ORIGINAL rasterization each time so rounding never drifts.
+          const shapeSig = groupShapeSignature(group)
           const cached = footprintCacheRef.current.get(instance.key)
-          const cells = cached && cached.sig === sig ? cached.cells : computeFootprintCells(group)
-          footprintCacheRef.current.set(instance.key, { sig, cells })
+          let cells: Set<number>
+          if (cached && cached.shapeSig === shapeSig) {
+            const dCellX = Math.round((group.position.x - cached.baseX) / FOOTPRINT_CELL_MM)
+            const dCellY = Math.round((group.position.y - cached.baseY) / FOOTPRINT_CELL_MM)
+            cells = shiftFootprintCells(cached.cells, dCellX, dCellY)
+          } else {
+            cells = computeFootprintCells(group)
+            footprintCacheRef.current.set(instance.key, { shapeSig, cells, baseX: group.position.x, baseY: group.position.y })
+          }
           footprints.set(instance.key, cells)
         }
         // Purge/prime tower footprint in world (== plate-local) coords, read from the
@@ -1348,7 +1388,11 @@ export function useEditorScene(params: EditorSceneParams): void {
         const sig = selectionBoxSignature(selectionTarget)
         if (sig !== selectionBoxSig || dragJustEnded) {
           selectionBoxSig = sig
-          selectionBoxValue.copy(printableMeshBox(selectionTarget, !interacting))
+          // Precise (per-vertex) is only needed to hug a REORIENTED object. Mid-drag stays cheap; a
+          // move-drop stays cheap too (translation keeps the box exact); only a rotate/scale drop —
+          // or a non-drag change (undo, manual rotate) — pays the precise walk.
+          const precise = interacting ? false : (dragJustEnded ? lastDragChangedOrientation : true)
+          selectionBoxValue.copy(printableMeshBox(selectionTarget, precise))
         }
       }
       // Keep ear markers flat on the bed through rotations/scales (their matrices bake

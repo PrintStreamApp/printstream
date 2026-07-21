@@ -6,6 +6,7 @@ import {
   buildSceneEdit,
   buildSingleObjectExportState,
   cloneEditorState,
+  deriveObjectFilamentId,
   decomposeInstanceTransform,
   exactTransformIfShearing,
   duplicateInstance,
@@ -13,8 +14,10 @@ import {
   instanceFromStagedImport,
   isObjectMarkedForRepair,
   replaceInstanceGeometry,
+  findFreePlatePosition,
   seedEditorState,
   seedEmptyEditorState,
+  stagedFootprint,
   type EditorState
 } from './editorModel'
 
@@ -613,4 +616,75 @@ test('buildSingleObjectExportState recentres a shearing instance through its exa
 
 test('buildSingleObjectExportState returns null for an unplaced key', () => {
   assert.equal(buildSingleObjectExportState(seedEmptyEditorState(), 'missing'), null)
+})
+
+test('deriveObjectFilamentId keeps the object fallback stable unless every part agrees', () => {
+  const parts = (...ids: Array<number | null>) => ids.map((filamentId) => ({ filamentId }))
+  // Uniform parts (e.g. a whole-object reassignment) adopt the common material.
+  assert.equal(deriveObjectFilamentId(parts(2, 2, 2), 1), 2)
+  // A single-part object tracks its one part.
+  assert.equal(deriveObjectFilamentId(parts(3), 1), 3)
+  // Diverging parts keep the prior object default rather than snapping to part[0].
+  assert.equal(deriveObjectFilamentId(parts(1, 2, 2), 2), 2)
+  // THE regression: object set to 2, then part[0] retargeted to 1 while later parts are still
+  // unassigned. Deriving from part[0] would drop the fallback to 1 and collapse every unassigned
+  // part onto it at bake time ("everything became material 1"); consensus keeps the fallback at 2.
+  assert.equal(deriveObjectFilamentId(parts(1, null, null), 2), 2)
+  // No parts / empty keeps the previous value.
+  assert.equal(deriveObjectFilamentId(parts(), 2), 2)
+})
+
+test('reassigning one part of a multi-solid import leaves the object fallback material intact', () => {
+  // End-to-end guard for the fresh-assembly first-save regression, exercising the SAME rule the
+  // EditorView reassignFilament handler applies: whole object -> filament 2 (every part), then the
+  // second solid -> filament 1. The object's fallback (instance.filamentId) must stay 2 so the
+  // unassigned-in-bake solids don't collapse onto the retargeted part.
+  const state: EditorState = seedEmptyEditorState()
+  const instance = instanceFromStagedImport(MULTI)
+  state.plates[0]!.instances.push(instance)
+  // 1) Whole-object change: reassignFilament targets EVERY part -> all become 2.
+  instance.parts = instance.parts.map((part) => ({ ...part, filamentId: 2 }))
+  instance.filamentId = deriveObjectFilamentId(instance.parts, instance.filamentId)
+  assert.equal(instance.filamentId, 2)
+  // 2) Retarget only the second solid to 1.
+  instance.parts = instance.parts.map((part, i) => (i === 1 ? { ...part, filamentId: 1 } : part))
+  instance.filamentId = deriveObjectFilamentId(instance.parts, instance.filamentId)
+  assert.equal(instance.filamentId, 2, 'object fallback stays 2, not the retargeted part\'s 1')
+
+  const edit = buildSceneEdit(state)
+  const byPart = new Map((edit.importPartFilaments ?? []).map((entry) => [entry.partIndex, entry.filamentId]))
+  assert.equal(byPart.get(0), 2)
+  assert.equal(byPart.get(1), 1)
+  assert.equal(edit.instances[0]?.filamentId, 2)
+})
+
+test('stagedFootprint reports an import\'s XY centre and size from its file-coordinate bounds', () => {
+  const staged: StagedImport = {
+    ...STAGED,
+    // Sits in the positive octant (origin at a corner), like a typical STL/STEP export.
+    bounds: { min: { x: 10, y: 4, z: 0 }, max: { x: 50, y: 24, z: 8 } }
+  }
+  assert.deepEqual(stagedFootprint(staged), { center: { x: 30, y: 14 }, size: { width: 40, depth: 20 } })
+})
+
+test('findFreePlatePosition keeps a large model on the bed and clear of what is already placed', () => {
+  const plate = seedEmptyEditorState().plates[0]!
+  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, excludeAreas: [] }
+  // A 60x60 model already occupies the plate centre.
+  const occupied = [{ minX: 70, maxX: 130, minY: 70, maxY: 130 }]
+  const size = { width: 60, depth: 60 }
+  const spot = findFreePlatePosition(plate, { size, occupied, gapMm: 6 })
+  // Fully on the bed...
+  assert.ok(spot.x - 30 >= 0 && spot.x + 30 <= 200, `x on bed: ${JSON.stringify(spot)}`)
+  assert.ok(spot.y - 30 >= 0 && spot.y + 30 <= 200, `y on bed: ${JSON.stringify(spot)}`)
+  // ...and clear of the occupant (separated on at least one axis, gap included).
+  const clearX = spot.x - 30 - 6 >= 130 || spot.x + 30 + 6 <= 70
+  const clearY = spot.y - 30 - 6 >= 130 || spot.y + 30 + 6 <= 70
+  assert.ok(clearX || clearY, `overlaps the placed model: ${JSON.stringify(spot)}`)
+})
+
+test('findFreePlatePosition centres the first model on an empty plate', () => {
+  const plate = seedEmptyEditorState().plates[0]!
+  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, excludeAreas: [] }
+  assert.deepEqual(findFreePlatePosition(plate, { size: { width: 40, depth: 40 }, occupied: [] }), { x: 100, y: 100 })
 })

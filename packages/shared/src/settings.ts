@@ -32,6 +32,10 @@ export type AppLandingPageSetting = z.infer<typeof appLandingPageSettingSchema>
  */
 const navTabOrderSchema = z.array(z.string()).default([])
 
+/** Which side of the 3D viewport the model studio's settings/objects panel sits on. */
+export const editorSidebarSideSchema = z.enum(['left', 'right'])
+export type EditorSidebarSideSetting = z.infer<typeof editorSidebarSideSchema>
+
 /**
  * Shared application-level settings exposed by the core API.
  *
@@ -45,6 +49,11 @@ const navTabOrderSchema = z.array(z.string()).default([])
  * until then that page is the workspace's default landing page.
  * `supportAccessEnabled` allows support users to enter the current workspace.
  * `supportAccessPermissions` controls what non-bypass support users can do.
+ * `editorShowBedModel` and `editorSidebarSide` are the model studio's viewport
+ * preferences. Like `slicerDeveloperMode` these are workspace-wide DEFAULTS that a
+ * per-device override (browser localStorage) can shadow — a workspace can set the
+ * house style while a given machine still differs (e.g. a left-handed layout, or a
+ * weak GPU skipping the modelled plate).
  */
 export const generalSettingsSchema = z.object({
   appTheme: appThemeSettingSchema.default('default'),
@@ -54,7 +63,9 @@ export const generalSettingsSchema = z.object({
   navTabOrder: navTabOrderSchema,
   quickStartDismissed: z.boolean().default(false),
   supportAccessEnabled: z.boolean().default(true),
-  supportAccessPermissions: uniquePermissionArraySchema.default([])
+  supportAccessPermissions: uniquePermissionArraySchema.default([]),
+  editorShowBedModel: z.boolean().default(true),
+  editorSidebarSide: editorSidebarSideSchema.default('right')
 })
 
 export type GeneralSettings = z.infer<typeof generalSettingsSchema>
@@ -67,9 +78,11 @@ export const updateGeneralSettingsSchema = z.object({
   navTabOrder: z.array(z.string()).optional(),
   quickStartDismissed: z.boolean().optional(),
   supportAccessEnabled: z.boolean().optional(),
-  supportAccessPermissions: uniquePermissionArraySchema.optional()
+  supportAccessPermissions: uniquePermissionArraySchema.optional(),
+  editorShowBedModel: z.boolean().optional(),
+  editorSidebarSide: editorSidebarSideSchema.optional()
 }).refine(
-  (value) => value.appTheme !== undefined || value.unconstrainedWidth !== undefined || value.slicerDeveloperMode !== undefined || value.landingPage !== undefined || value.navTabOrder !== undefined || value.quickStartDismissed !== undefined || value.supportAccessEnabled !== undefined || value.supportAccessPermissions !== undefined,
+  (value) => value.appTheme !== undefined || value.unconstrainedWidth !== undefined || value.slicerDeveloperMode !== undefined || value.landingPage !== undefined || value.navTabOrder !== undefined || value.quickStartDismissed !== undefined || value.supportAccessEnabled !== undefined || value.supportAccessPermissions !== undefined || value.editorShowBedModel !== undefined || value.editorSidebarSide !== undefined,
   'At least one general setting must be provided.'
 )
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { arrangePlateItems, decodeFootprintCellKey, FOOTPRINT_CELL_MM, footprintCellKey } from './arrange'
+import { arrangePlateItems, decodeFootprintCellKey, FOOTPRINT_CELL_MM, footprintCellKey, shiftFootprintCells } from './arrange'
 
 /** Rasterize an axis-aligned rect (mm) into footprint cell keys. */
 function rectCells(minX: number, minY: number, maxX: number, maxY: number): number[] {
@@ -95,4 +95,21 @@ test('blocked cells are never covered', () => {
   assert.equal(result.unplaced.length, 0)
   const bounds = movedBounds(square, result.moves.get('s')!)
   assert.ok(bounds.minX >= 50, `expected right half, got ${JSON.stringify(bounds)}`)
+})
+
+test('shiftFootprintCells translates cells by whole cells, matching a re-rasterization of the moved shape', () => {
+  // The placement-warning recompute relies on this: a pure move keeps the footprint SHAPE, so
+  // shifting the cached cells must equal rasterizing the shape at the new position — the difference
+  // between a smooth and a frozen drop for a many-part object.
+  const shape = new Set(rectCells(10, 10, 30, 24))
+  const dCellX = 15
+  const dCellY = -8
+  const shifted = shiftFootprintCells(shape, dCellX, dCellY)
+  const expected = new Set(rectCells(
+    10 + dCellX * FOOTPRINT_CELL_MM, 10 + dCellY * FOOTPRINT_CELL_MM,
+    30 + dCellX * FOOTPRINT_CELL_MM, 24 + dCellY * FOOTPRINT_CELL_MM
+  ))
+  assert.deepEqual([...shifted].sort((a, b) => a - b), [...expected].sort((a, b) => a - b))
+  // A zero delta returns the same set instance (no allocation on an idle poll tick).
+  assert.equal(shiftFootprintCells(shape, 0, 0), shape)
 })

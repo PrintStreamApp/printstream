@@ -10,8 +10,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import yazl from 'yazl'
-import type { SceneEditFilament } from '@printstream/shared'
-import { healSavedProjectMachineTopology } from './save-retarget.js'
+import { hasDualNozzleMachineShape, type SceneEditFilament } from '@printstream/shared'
+import { authorProjectMachineFromProfile, healSavedProjectMachineTopology, projectHasCompleteMachine } from './save-retarget.js'
 import { slicerClient } from './slicer-client.js'
 import { readEntry } from './three-mf-internal.js'
 
@@ -137,4 +137,63 @@ test('returns null (never throws) when the machine preset cannot be resolved', a
   assert.equal(await healSavedProjectMachineTopology({
     tenantId: 'tenant-1', arrangedPath, fileName: 'c.3mf', slicerTargetId: null, filaments: null
   }), null)
+})
+
+test('authorProjectMachineFromProfile gives an editor slice the dual-nozzle topology its project lacks', async () => {
+  // Production exit 206: a new project sliced straight from the editor named printer_model H2D but
+  // carried none of H2D's extruder-indexed machine topology, so the CLI either refused it ("missing
+  // its dual-nozzle machine data") or sliced with no print volume ("no object fully inside the print
+  // volume"). Only saving first fixed it, because the save authored the machine. The transient slice
+  // bake now authors the SELECTED machine itself, so the 3MF leaves PrintStream fully self-defined
+  // and the slicer never has to retarget or lean on built-in profile fallbacks.
+  slicerClient.resolveMachineConfig = (async () => H2D_MACHINE_CONFIG) as typeof slicerClient.resolveMachineConfig
+  assert.equal(hasDualNozzleMachineShape(DAMAGED_H2D_SETTINGS), false, 'fixture must start WITHOUT the topology')
+  const arrangedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify(DAMAGED_H2D_SETTINGS)
+  })
+
+  const authoredPath = await authorProjectMachineFromProfile({
+    arrangedPath,
+    fileName: 'project.3mf',
+    slicerTargetId: null,
+    machineFile: { source: 'builtin', name: 'Bambu Lab H2D 0.4 nozzle' }
+  })
+  assert.ok(authoredPath)
+  cleanupDirs.push(path.dirname(authoredPath))
+  const authored = JSON.parse((await readEntry(authoredPath, 'Metadata/project_settings.config')).toString('utf8')) as Record<string, unknown>
+
+  // The project now defines its own machine — this is what the CLI was missing.
+  assert.equal(hasDualNozzleMachineShape(authored), true)
+  assert.deepEqual(authored.physical_extruder_map, ['1', '0'])
+  assert.deepEqual(authored.extruder_type, ['Direct Drive', 'Direct Drive'])
+  assert.deepEqual(authored.printable_area, ['0x0', '350x0', '350x320', '0x320'])
+  // We author the MACHINE, not the user's materials.
+  assert.deepEqual(authored.filament_settings_id, DAMAGED_H2D_SETTINGS.filament_settings_id)
+  assert.deepEqual(authored.filament_colour, DAMAGED_H2D_SETTINGS.filament_colour)
+})
+
+test('projectHasCompleteMachine separates "same printer" from "fully defined"', async () => {
+  // A save used to skip authoring whenever the selected model matched the project's, which left a
+  // project naming printer_model H2D but carrying none of H2D's dual-nozzle topology exactly as it
+  // was — the state that made the slicer fail with exit 206. Matching the model is not enough.
+  const damagedPath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    'Metadata/project_settings.config': JSON.stringify(DAMAGED_H2D_SETTINGS)
+  })
+  assert.equal(await projectHasCompleteMachine(damagedPath, 'Bambu Lab H2D'), false, 'right model, missing topology')
+
+  const completePath = await writeThreeMf({
+    '3D/3dmodel.model': '<model/>',
+    // hasDualNozzleMachineShape also requires extruder_nozzle_stats, which the machine preset
+    // fixture omits but a real retarget rebuilds.
+    'Metadata/project_settings.config': JSON.stringify({ ...DAMAGED_H2D_SETTINGS, ...H2D_MACHINE_CONFIG, extruder_nozzle_stats: ['Standard#1', 'Standard#1'] })
+  })
+  assert.equal(await projectHasCompleteMachine(completePath, 'Bambu Lab H2D'), true, 'right model with topology')
+  // A different target still needs authoring even though this project is complete for H2D.
+  assert.equal(await projectHasCompleteMachine(completePath, 'Bambu Lab A1 mini'), false, 'cross-model')
+
+  // A settings-less scaffold is incomplete — the safe direction (author rather than assume).
+  const scaffoldPath = await writeThreeMf({ '3D/3dmodel.model': '<model/>' })
+  assert.equal(await projectHasCompleteMachine(scaffoldPath, 'Bambu Lab H2D'), false, 'no settings at all')
 })

@@ -7,6 +7,7 @@ import {
   isSelectableOrProjectFallbackSlicingProfile,
   isSelectableSlicingProfile,
   pickMachineDefaultFilamentProfile,
+  resolveDefaultFilamentProfile,
   pickMostSimilarSlicingProfileByName,
   pickProjectFallbackSlicingProfileByName,
   pickSelectableSlicingProfileByName,
@@ -321,3 +322,36 @@ test('resolveSliceDisabledReason flags unmapped filament slots', () => {
   )
 })
 
+
+test('resolveDefaultFilamentProfile prefers the machine default filament', () => {
+  const profiles = [
+    buildFilamentProfile('builtin:filament:pla-basic-h2d', 'Bambu PLA Basic @BBL H2D', 'PLA'),
+    buildFilamentProfile('builtin:filament:generic-pla', 'Generic PLA @BBL H2D', 'PLA')
+  ]
+  const machine = buildMachineProfile('builtin:machine:h2d-04', 'Bambu Lab H2D 0.4 nozzle', {
+    defaultFilamentProfiles: ['Bambu PLA Basic @BBL H2D']
+  })
+  assert.equal(resolveDefaultFilamentProfile(profiles, machine)?.id, 'builtin:filament:pla-basic-h2d')
+})
+
+test('resolveDefaultFilamentProfile falls back to Bambu PLA Basic then Generic PLA by name when no machine default', () => {
+  const withBasic = [
+    buildFilamentProfile('builtin:filament:generic-pla', 'Generic PLA @BBL H2D', 'PLA'),
+    buildFilamentProfile('builtin:filament:pla-basic', 'Bambu PLA Basic @BBL H2D', 'PLA')
+  ]
+  // No machine default -> prefer Bambu PLA Basic over Generic PLA.
+  assert.equal(resolveDefaultFilamentProfile(withBasic, null)?.id, 'builtin:filament:pla-basic')
+
+  // No Basic -> Generic PLA.
+  const genericOnly = [buildFilamentProfile('builtin:filament:generic-pla', 'Generic PLA @BBL H2D', 'PLA')]
+  assert.equal(resolveDefaultFilamentProfile(genericOnly, null)?.id, 'builtin:filament:generic-pla')
+
+  // Neither -> any PLA.
+  const otherPla = [buildFilamentProfile('builtin:filament:pla-matte', 'Bambu PLA Matte @BBL H2D', 'PLA')]
+  assert.equal(resolveDefaultFilamentProfile(otherPla, null)?.id, 'builtin:filament:pla-matte')
+})
+
+test('resolveDefaultFilamentProfile returns null when the catalogue has no PLA at all', () => {
+  const noPla = [buildFilamentProfile('builtin:filament:petg', 'Bambu PETG HF @BBL H2D', 'PETG')]
+  assert.equal(resolveDefaultFilamentProfile(noPla, null), null)
+})

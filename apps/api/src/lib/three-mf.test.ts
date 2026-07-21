@@ -2121,6 +2121,29 @@ async function readProjectSettings(filePath: string): Promise<Record<string, unk
   return JSON.parse((await readEntry(filePath, 'Metadata/project_settings.config')).toString('utf8')) as Record<string, unknown>
 }
 
+
+test('a from-scratch project seeds one guaranteed default filament (new-project scaffold)', async () => {
+  // Mirrors POST /api/editor/new-project: bake from null with a single default filament so the
+  // project opens WITH a material instead of an empty, unsliceable slot list.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-newproj-'))
+  const outputPath = path.join(tempDir, 'scaffold.3mf')
+  try {
+    await buildEditedThreeMf(
+      null,
+      outputPath,
+      { plates: [{ index: 1 }], instances: [], filaments: [{ color: '#FFFFFF', type: 'PLA', settingsId: 'Generic PLA' }] },
+      []
+    )
+    const settings = await readProjectSettings(outputPath)
+    assert.deepEqual(settings.filament_settings_id, ['Generic PLA'])
+    assert.deepEqual(settings.filament_type, ['PLA'])
+    assert.deepEqual(settings.filament_colour, ['#FFFFFF'])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('writeArrangedThreeMf adds a filament: parallel arrays grow, new slot clones its sourceIndex, flush matrix rebuilds', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-filadd-'))
   const sourcePath = path.join(tempDir, 'source.3mf')
@@ -2493,6 +2516,51 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
     // The per-part process override persisted onto the matching part.
     const overridden = reParts.find((part) => part.componentObjectId === bakedParts[1]!.componentObjectId)
     assert.deepEqual(overridden?.processOverrides, { sparse_infill_density: '99%' })
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('buildEditedThreeMf keeps a multi-solid import\'s per-part materials when the filament set changes (no double-remap)', async () => {
+  // Regression (fresh multi-solid STEP import saved as "everything material 1"): the material
+  // add/remove `remapPartExtruders` pass used to run over the WHOLE model_settings, so it
+  // double-remapped the freshly-baked import parts — which are ALREADY authored in new-filament-id
+  // space — through an OLD-slot->NEW-id map. When that map didn't cover a part's id it fell back to
+  // filament 1, collapsing every solid onto material 1. The remap must touch only the BASE project's
+  // inherited parts; imported solids are injected afterward and left as written.
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-remap-'))
+  const outputPath = path.join(tempDir, 'assembly.3mf')
+  try {
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    const mesh = { ...quad(0), parts: [{ name: 'Body', mesh: quad(0) }, { name: 'Inlay', mesh: quad(5) }] }
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 2 }
+      ],
+      // Whole object on filament 2, one solid overridden to filament 1.
+      importPartFilaments: [
+        { importId: 'imp-1', partIndex: 0, filamentId: 2 },
+        { importId: 'imp-1', partIndex: 1, filamentId: 1 }
+      ],
+      // A material list whose OLD-slot->NEW-id map is incomplete (both desired slots derive from old
+      // slot 0, e.g. a duplicated material). Under the old whole-document remap, filament 2 had no
+      // mapping and fell back to 1; the fix injects the import parts after the base-only remap.
+      filaments: [
+        { color: '#FFFFFF', sourceIndex: 0 },
+        { color: '#000000', sourceIndex: 0 }
+      ]
+    }
+    await buildEditedThreeMf(null, outputPath, edit, [{ importId: 'imp-1', name: 'Assembly', mesh, parts: mesh.parts }])
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const extruders = [...settingsXml.matchAll(/<part\b[\s\S]*?<metadata key="extruder" value="(\d+)"/g)].map((m) => m[1])
+    // The two solids keep the materials the user assigned (2 and 1), not collapsed to filament 1.
+    assert.deepEqual(extruders, ['2', '1'])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

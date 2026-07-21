@@ -4,7 +4,7 @@ import { EditorHistoryModel, type ApplyAndInvert } from './editorHistoryModel'
 import { type EditorHistoryEntry } from './editorGeometry'
 
 /** A throwaway entry — the model treats entries opaquely, so the contents do not matter here. */
-const entry = (): EditorHistoryEntry => ({ state: null, materials: null })
+const entry = (): EditorHistoryEntry => ({ state: null, sliceConfig: null })
 /** Restore is faked: the model only needs an inverse back for the opposite stack. */
 const apply: ApplyAndInvert = (e) => e
 

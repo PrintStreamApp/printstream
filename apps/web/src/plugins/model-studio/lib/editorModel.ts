@@ -561,6 +561,23 @@ export function instanceFromStagedImport(staged: StagedImport): EditorInstance {
   }
 }
 
+/**
+ * The XY footprint of a staged import: where its centre sits in MESH coordinates, and how big it
+ * is. An import keeps its file coordinates (origin is often a corner, not the centre), so placement
+ * needs both — the centre to drop the model centred on a free spot, and the size to pick a spot
+ * that actually fits it clear of what's already on the plate.
+ */
+export function stagedFootprint(staged: StagedImport): {
+  center: { x: number; y: number }
+  size: { width: number; depth: number }
+} {
+  const { min, max } = staged.bounds
+  return {
+    center: { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2 },
+    size: { width: Math.abs(max.x - min.x), depth: Math.abs(max.y - min.y) }
+  }
+}
+
 /** Identity 12-element (column-major 3x3 + translation) part transform. */
 const IDENTITY_PART_TRANSFORM = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
 
@@ -630,30 +647,100 @@ export function duplicateInstance(instance: EditorInstance): EditorInstance {
 }
 
 /**
- * Find a free plate-local position for a newly added/duplicated model: start at the
- * plate centre and spiral outward until a spot at least `spacing` mm from every
- * existing instance is found (kept within the bed). Approximates Bambu's "place new
- * objects where they don't overlap" without needing per-object geometry sizes.
+ * The OBJECT-level filament for an instance after a per-part material reassignment.
+ *
+ * `EditorInstance.filamentId` is the object's fallback material — the value the bake writes for
+ * any part of a multi-solid import (STEP assembly) that carries no explicit assignment
+ * (`objectExtruder` in `three-mf-scene-builder.ts`). Derive it from CONSENSUS: adopt a new value
+ * only when every part agrees, and otherwise keep the prior object default. Deriving it from a
+ * single part (e.g. `parts[0]`) is the trap it replaces — retargeting the first part would drop
+ * the object fallback onto that part's new material, collapsing every still-unassigned part onto
+ * it on save (the "everything became material 1" regression on a fresh assembly's first save).
  */
-export function findFreePlatePosition(plate: EditorPlate, spacing = 60): { x: number; y: number } {
+export function deriveObjectFilamentId(
+  parts: ReadonlyArray<{ filamentId: number | null }>,
+  previous: number | null
+): number | null {
+  const first = parts[0]?.filamentId ?? null
+  const uniform = parts.length > 0 && parts.every((part) => part.filamentId != null && part.filamentId === first)
+  return uniform ? first : previous
+}
+
+/** An axis-aligned bed footprint in plate coordinates (mm), for placement collision tests. */
+export interface PlateFootprintRect { minX: number; maxX: number; minY: number; maxY: number }
+
+/** Nominal footprint assumed for a model/instance whose real size wasn't supplied. */
+const NOMINAL_FOOTPRINT_MM = 60
+
+/**
+ * Find a free plate position for a newly added/duplicated model, returning where its FOOTPRINT
+ * CENTRE should sit (callers offset by the model's centroid to place it).
+ *
+ * Size-aware: the placed model is kept fully inside the bed and clear of the footprints already on
+ * the plate. The previous version treated every model as a POINT with a fixed 60mm radius, so a
+ * large model could land overlapping its neighbours or hanging off the plate, and a big existing
+ * model only blocked a small disc around its origin. Supply `size`/`occupied` for true footprint
+ * placement; without them each instance falls back to a nominal square at its origin (the old
+ * behaviour) so callers that can't measure geometry still spread models out.
+ *
+ * Returns the plate centre when nothing fits — the caller still places the model (overlapping),
+ * matching the previous "always return somewhere" contract; the placement warnings then flag it.
+ */
+export function findFreePlatePosition(
+  plate: EditorPlate,
+  options: {
+    /** Footprint of the model being placed (mm). */
+    size?: { width: number; depth: number }
+    /** Measured footprints already on the plate. Falls back to nominal squares when omitted. */
+    occupied?: readonly PlateFootprintRect[]
+    /** Clearance kept between footprints (mm). */
+    gapMm?: number
+  } = {}
+): { x: number; y: number } {
+  const gap = options.gapMm ?? 6
+  const halfW = Math.max(options.size?.width ?? NOMINAL_FOOTPRINT_MM, 1) / 2
+  const halfD = Math.max(options.size?.depth ?? NOMINAL_FOOTPRINT_MM, 1) / 2
   const centerX = (plate.bed.minX + plate.bed.maxX) / 2
   const centerY = (plate.bed.minY + plate.bed.maxY) / 2
-  const taken = plate.instances.map((instance) => ({ x: instance.position.x, y: instance.position.y }))
-  const margin = spacing / 2
-  const inBed = (x: number, y: number) =>
-    x >= plate.bed.minX + margin && x <= plate.bed.maxX - margin
-    && y >= plate.bed.minY + margin && y <= plate.bed.maxY - margin
-  const isFree = (x: number, y: number) => taken.every((point) => Math.hypot(point.x - x, point.y - y) >= spacing)
-  if (isFree(centerX, centerY)) return { x: centerX, y: centerY }
-  for (let ring = 1; ring <= 10; ring += 1) {
-    for (let step = 0; step < ring * 8; step += 1) {
-      const angle = (step / (ring * 8)) * Math.PI * 2
-      const x = centerX + Math.cos(angle) * spacing * ring
-      const y = centerY + Math.sin(angle) * spacing * ring
-      if (inBed(x, y) && isFree(x, y)) return { x, y }
+  const half = NOMINAL_FOOTPRINT_MM / 2
+  const occupied = options.occupied ?? plate.instances.map((instance) => ({
+    minX: instance.position.x - half, maxX: instance.position.x + half,
+    minY: instance.position.y - half, maxY: instance.position.y + half
+  }))
+  const fitsBed = (x: number, y: number) =>
+    x - halfW >= plate.bed.minX && x + halfW <= plate.bed.maxX
+    && y - halfD >= plate.bed.minY && y + halfD <= plate.bed.maxY
+  // Separated on either axis (gap included) => no overlap.
+  const isFree = (x: number, y: number) => occupied.every((rect) =>
+    x - halfW - gap >= rect.maxX || x + halfW + gap <= rect.minX
+    || y - halfD - gap >= rect.maxY || y + halfD + gap <= rect.minY)
+  if (fitsBed(centerX, centerY) && isFree(centerX, centerY)) return { x: centerX, y: centerY }
+  // Scan the positions where the model FITS on the bed and take the free one nearest the centre.
+  // A ring/spiral walk skips narrow gaps (on a 200mm bed a 60mm model beside a 60mm occupant only
+  // fits in a ~4mm band of X, which rings step straight over); a grid sweep can't miss it.
+  const loX = plate.bed.minX + halfW
+  const hiX = plate.bed.maxX - halfW
+  const loY = plate.bed.minY + halfD
+  const hiY = plate.bed.maxY - halfD
+  if (loX > hiX || loY > hiY) return { x: centerX, y: centerY } // larger than the bed
+  const step = Math.max(2, Math.min(halfW, halfD) / 2)
+  // Include both extremes (and the centre) so a tight edge fit isn't stepped over.
+  const axis = (lo: number, hi: number, mid: number): number[] => {
+    const values = [lo, hi]
+    if (mid > lo && mid < hi) values.push(mid)
+    for (let v = lo + step; v < hi; v += step) values.push(v)
+    return values
+  }
+  let best: { x: number; y: number } | null = null
+  let bestDistance = Infinity
+  for (const x of axis(loX, hiX, centerX)) {
+    for (const y of axis(loY, hiY, centerY)) {
+      if (!isFree(x, y)) continue
+      const distance = (x - centerX) ** 2 + (y - centerY) ** 2
+      if (distance < bestDistance) { bestDistance = distance; best = { x, y } }
     }
   }
-  return { x: centerX, y: centerY }
+  return best ?? { x: centerX, y: centerY }
 }
 
 /** Re-number plates to a contiguous 1-based sequence, preserving order. */

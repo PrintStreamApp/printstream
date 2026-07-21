@@ -11,7 +11,7 @@
  * ./editorGeometry; the filament-option shape is a type-only import from
  * ./EditorView (erased, no runtime cycle).
  */
-import { Fragment, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import {
   Box,
   Button,
@@ -690,6 +690,38 @@ export function TransformPanel({
 }
 
 /**
+ * Performance wrapper around {@link TransformPanel} that OWNS the live transform values.
+ *
+ * The readout updates at drag frequency (~30x/sec). If those values lived in EditorView's state,
+ * every tick would re-render the whole editor — including the object/part sidebar, which for a
+ * many-part model is hundreds of Joy rows and janks the drag. Instead this component holds the
+ * value locally and exposes its setter through `setterRef`, so the render loop pushes live values
+ * straight here without touching EditorView. `initial` seeds it (and re-seeds on selection change,
+ * which is low-frequency); during a drag `initial` is stable, so the seed effect never fights the
+ * live pushes. Returns null until a value exists (mirrors the old `selectedTransform && …` gate).
+ */
+export function LiveTransformPanel({
+  initial,
+  setterRef,
+  ...panelProps
+}: {
+  initial: SelectedTransform | null
+  /** EditorView-owned ref the render loop calls to push live values without a React re-render. */
+  setterRef: MutableRefObject<((value: SelectedTransform | null) => void) | null>
+} & Omit<Parameters<typeof TransformPanel>[0], 'transform'>) {
+  const [transform, setTransform] = useState<SelectedTransform | null>(initial)
+  // Re-seed when the selection changes (new `initial`); stable during a drag so live pushes win.
+  useEffect(() => { setTransform(initial) }, [initial])
+  // Publish the setter so EditorView's throttled panel sync can drive values imperatively.
+  useEffect(() => {
+    setterRef.current = setTransform
+    return () => { if (setterRef.current === setTransform) setterRef.current = null }
+  }, [setterRef])
+  if (!transform) return null
+  return <TransformPanel transform={transform} {...panelProps} />
+}
+
+/**
  * One labelled axis group (Position / Rotation / Scale).
  *
  * The header is a fixed-height row so every group's inputs sit on the same baseline —
@@ -833,7 +865,7 @@ export function AddModelMenu({
       {/* Soft variant so the caret matches the main button (outlined fills the
           Button but leaves the IconButton transparent in this theme). */}
       <Tooltip title={disabled && disabledReason ? disabledReason : ''} variant="soft">
-      <ButtonGroup ref={anchorRef} size="sm" variant="soft" color="neutral" aria-label="add model">
+      <ButtonGroup ref={anchorRef} size="sm" variant="soft" color="primary" aria-label="add model">
         <Button
           onClick={onAddFromLibrary}
           disabled={blocked}

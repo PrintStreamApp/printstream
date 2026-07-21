@@ -43,6 +43,92 @@ function stripSliceInfoPrinterModelId(sliceInfoXml: string): string {
   return sliceInfoXml.replace(/[ \t]*<metadata\s+key="printer_model_id"\s+value="[^"]*"\s*\/>\s*\r?\n?/g, '')
 }
 
+/**
+ * Author a resolved machine's COMPLETE settings into a baked project 3MF; returns the new path.
+ *
+ * The companion to {@link retargetSavedProjectMachine} for callers that already hold the resolved
+ * machine profile — notably the transient SLICE bake. PrintStream is the source of truth for the
+ * 3MF: every project we emit must define its own machine, so the slicer never has to retarget it
+ * and never depends on built-in profile fallbacks surviving. Without this an editor slice can hand
+ * over a project that names `printer_model: H2D` while carrying none of H2D's extruder-indexed
+ * dual-nozzle topology, and the CLI then either refuses it ("missing its dual-nozzle machine data")
+ * or slices with no print volume — "no object fully inside the print volume", exit 206.
+ *
+ * Best-effort: returns null rather than throwing when the machine can't be resolved or the embedded
+ * settings are unreadable, so an unexpected profile downgrades to the previous behaviour instead of
+ * failing a slice that would otherwise work. Callers log the miss.
+ */
+export async function authorProjectMachineFromProfile(input: {
+  arrangedPath: string
+  fileName: string
+  slicerTargetId: string | null | undefined
+  machineFile: { source: 'builtin' | 'custom'; name: string; content?: string }
+}): Promise<string | null> {
+  const machineConfig = await slicerClient.resolveMachineConfig(input.slicerTargetId, {
+    source: input.machineFile.source,
+    name: input.machineFile.name,
+    content: input.machineFile.content
+  })
+  if (!machineConfig) return null
+
+  // A scaffold with no embedded settings authors from an empty object — the machine profile
+  // supplies every field, exactly like BambuStudio picking a printer for a fresh project.
+  const projectSettingsRaw = await readEntry(input.arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
+  let projectSettings: Record<string, unknown> = {}
+  if (projectSettingsRaw && projectSettingsRaw.length > 0) {
+    try {
+      projectSettings = JSON.parse(projectSettingsRaw.toString('utf8')) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+
+  const authored = retargetProjectSettingsToMachine(projectSettings, machineConfig, {
+    printerSettingsId: input.machineFile.name,
+    printerModel: firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(input.machineFile.name)
+  })
+
+  const outDir = await mkdtemp(path.join(tmpdir(), 'printstream-authored-machine-'))
+  const stagePath = path.join(outDir, 'stage-project-settings.3mf')
+  const outPath = path.join(outDir, path.basename(input.fileName) || 'authored.3mf')
+  const authoredJson = JSON.stringify(authored)
+  await rewriteThreeMfEntries(
+    input.arrangedPath,
+    stagePath,
+    { [PROJECT_SETTINGS_ENTRY]: () => authoredJson },
+    [{ name: PROJECT_SETTINGS_ENTRY, content: authoredJson }]
+  )
+  await rewriteModelSettingsThreeMf(stagePath, outPath, stripSliceInfoPrinterModelId, SLICE_INFO_ENTRY)
+  return outPath
+}
+
+/**
+ * Does the project already define `targetModel` COMPLETELY — the right machine, with the full
+ * topology that machine needs?
+ *
+ * "Same printer" is not the same as "fully defined": a project can name `printer_model: H2D` while
+ * carrying none of H2D's extruder-indexed dual-nozzle arrays, which is precisely the state that made
+ * the CLI refuse it ("missing its dual-nozzle machine data") or slice with no print volume. Callers
+ * use this to decide whether a same-model save still needs the machine authored in. Unreadable or
+ * absent settings count as incomplete — the safe direction, since that is what a scaffold looks like.
+ */
+export async function projectHasCompleteMachine(arrangedPath: string, targetModel: string | null): Promise<boolean> {
+  const raw = await readEntry(arrangedPath, PROJECT_SETTINGS_ENTRY).catch(() => null)
+  if (!raw || raw.length === 0) return false
+  let settings: Record<string, unknown>
+  try {
+    settings = JSON.parse(raw.toString('utf8')) as Record<string, unknown>
+  } catch {
+    return false
+  }
+  const model = canonicalBambuModelKey(firstString(settings.printer_model) ?? firstString(settings.printer_settings_id))
+  if (!model) return false
+  const target = canonicalBambuModelKey(targetModel)
+  if (target && model !== target) return false
+  // Only the H2 family carries a topology beyond the plain machine fields.
+  return H2_DUAL_NOZZLE_MODEL_KEYS.has(model) ? hasDualNozzleMachineShape(settings) : true
+}
+
 export interface RetargetSavedProjectInput {
   tenantId: string
   /** Path to the freshly-baked arranged 3MF (still carries the project's embedded machine). */

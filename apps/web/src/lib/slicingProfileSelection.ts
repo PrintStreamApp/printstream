@@ -6,7 +6,7 @@
  * string. Project profiles carry the 3MF's saved overrides and are treated
  * specially so a user's authored settings survive through to the slicer.
  */
-import { isProjectSlicingPresetId, type SlicingProfileSummary } from '@printstream/shared'
+import { DEFAULT_FILAMENT_PRESET_NAME, isProjectSlicingPresetId, type SlicingProfileSummary } from '@printstream/shared'
 
 export function isProjectSlicingProfileId(id: string): boolean {
   return isProjectSlicingPresetId(id)
@@ -185,6 +185,23 @@ export function pickMachineDefaultFilamentProfile(
     if (typed) return typed
   }
   return candidates[0] ?? null
+}
+
+/**
+ * A guaranteed-present filament profile to seed a slot with when there is nothing better — a
+ * newly added material with no template to clone, or a from-scratch project. Prefers the selected
+ * machine's own `default_filament_profile` (BambuStudio's out-of-the-box "Bambu PLA Basic" for that
+ * printer), then falls back by name to Bambu PLA Basic / Generic PLA / any PLA in the catalogue.
+ * Null only when the catalogue holds no PLA at all (slicer profiles not loaded yet).
+ */
+export function resolveDefaultFilamentProfile(
+  profiles: SlicingProfileSummary[],
+  machineProfile: SlicingProfileSummary | null
+): SlicingProfileSummary | null {
+  const machineDefault = pickMachineDefaultFilamentProfile(profiles, machineProfile, 'PLA')
+  if (machineDefault) return machineDefault
+  const byName = (pattern: RegExp) => profiles.find((profile) => pattern.test(profile.name))
+  return byName(/bambu pla basic/i) ?? byName(new RegExp(DEFAULT_FILAMENT_PRESET_NAME, 'i')) ?? byName(/\bpla\b/i) ?? null
 }
 
 /**

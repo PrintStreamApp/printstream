@@ -78,9 +78,8 @@ import { LibraryFilePickerDialog } from '../../components/LibraryFilePickerDialo
 import { LibraryDestinationDialog } from '../../components/LibraryDestinationDialog'
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
 import { useMobileViewport } from '../../components/useMobileViewport'
-import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
-import { EditorSettingsDialog, type EditorSidebarSide } from '../../components/library/EditorSettingsDialog'
+import { EditorSettingsDialog } from '../../components/library/EditorSettingsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import {
   createPreviewPlateSurface,
@@ -104,6 +103,7 @@ import {
 import { createPlateThumbnailRenderer, type PlateThumbnailRenderer } from './lib/plateThumbnail'
 import {
   buildSceneEdit,
+  deriveObjectFilamentId,
   duplicateInstance,
   fillPlateFromScene,
   findFreePlatePosition,
@@ -117,6 +117,7 @@ import {
   nextInstanceKey,
   seedEditorState,
   seedEmptyEditorState,
+  stagedFootprint,
   supportPaintKey,
   type EditorAddedPart,
   type EditorBrimEar,
@@ -125,9 +126,11 @@ import {
   type EditorInstance,
   type EditorPlate,
   type EditorState,
+  type PlateFootprintRect,
   isObjectMarkedForRepair
 } from './lib/editorModel'
 import { useShowBedModel } from './lib/useShowBedModel'
+import { useEffectiveSidebarSide } from '../../lib/editorViewportSettings'
 import { useSidebarResize } from './lib/useSidebarResize'
 import {
   fetchImportMesh,
@@ -208,7 +211,7 @@ import {
   SliceSplitButton,
   RAIL_HOVER_LABEL_SX,
   TOOL_PANEL_ANCHOR,
-  TransformPanel
+  LiveTransformPanel
 } from './editorPanels'
 import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from '../../components/library/PlateGcodeSections'
 import { BrimEarsPanel } from './BrimEarsPanel'
@@ -317,6 +320,9 @@ type TransformControlsSnap = {
   setTranslationSnap: (snap: number | null) => void
   setScaleSnap: (snap: number | null) => void
 }
+
+/** How a plate edit touches the live 3D scene — see {@link EditorView}'s `updatePlates`. */
+type PlateEditKind = 'structure' | 'transform' | 'material' | 'visibility' | 'inert'
 
 /** Stable empty per-object overrides so the override editor doesn't re-fetch each render. */
 const EMPTY_OBJECT_OVERRIDES: ProcessSettingOverrides = {}
@@ -490,15 +496,11 @@ function EditorView({
   // 3D build plate (BambuStudio's modelled bed) — shared with the read-only previews, so the
   // preference and its default live in the hook. Printers with no bundled bed mesh fall back to
   // the plain grid on their own.
-  const [showBedModel, setShowBedModel] = useShowBedModel()
+  const showBedModel = useShowBedModel()
   // Which side the settings/objects panel sits on (desktop only — the narrow layout stacks it
-  // below the viewport regardless). Right by default: that is where it has always been.
-  const [sidebarSide, setSidebarSide] = useLocalStorageState<EditorSidebarSide>(
-    'bambu.editor.sidebarSide',
-    'right',
-    (raw) => (raw === 'left' || raw === 'right' ? raw : null),
-    String
-  )
+  // below the viewport regardless). Read-only here: the workspace default and this device's
+  // override are both edited in the editor settings dialog's Viewport tab.
+  const sidebarSide = useEffectiveSidebarSide()
   const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [editorSettingsOpen, setEditorSettingsOpen] = useState(false)
   // Cut tool: plane axis + offset (world mm), the selected object's range along that axis,
@@ -593,6 +595,13 @@ function EditorView({
   // the first open) rather than swapping in a finished plate atomically. Drives the lighter,
   // non-blocking progress chip so the models are clearly visible as they pop in.
   const [buildIncremental, setBuildIncremental] = useState(false)
+  /**
+   * Instance keys whose geometry is actually IN the 3D scene. The object list is driven off this
+   * while a build runs so the sidebar never lists models the viewport hasn't shown yet (a plate of
+   * heavy assemblies used to populate the list instantly and then trickle into the view). Filled as
+   * each model lands (incremental builds) and set to the finished set on the atomic swap.
+   */
+  const [renderedInstanceKeys, setRenderedInstanceKeys] = useState<ReadonlySet<string>>(new Set())
   const [placementWarnings, setPlacementWarnings] = useState<PlacementWarning[]>([])
   const placementWarningsSetterRef = useRef(setPlacementWarnings)
   // Dismissing the warnings panel hides the CURRENT set of issues (keyed by the same
@@ -609,7 +618,7 @@ function EditorView({
   const recomputeWarningsRef = useRef<() => void>(() => undefined)
   // Cached XY footprint cell-sets per instance, keyed by transform signature so
   // collision checks only re-rasterize objects that actually moved.
-  const footprintCacheRef = useRef<Map<string, { sig: string; cells: Set<number> }>>(new Map())
+  const footprintCacheRef = useRef<Map<string, { shapeSig: string; cells: Set<number>; baseX: number; baseY: number }>>(new Map())
   const [importing, setImporting] = useState(false)
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
   // When set, the next picked library file / uploaded local file replaces this instance's
@@ -679,6 +688,12 @@ function EditorView({
   // unchanged (e.g. undoing a move); also bumped by other scene mutations, so it lives here
   // rather than inside useEditorHistory (which only writes it, via setRebuildToken).
   const [rebuildToken, setRebuildToken] = useState(0)
+  // Incremental-sync tokens: a scene edit that changes only transforms or only part materials must
+  // NOT tear down and rebuild every part's geometry (murder on a hundred-part object). Instead of
+  // bumping `rebuildToken`, such edits bump one of these and a light effect updates the live groups
+  // in place — positions for `transform`, mesh colours for `material`. See `updatePlates`.
+  const [transformSyncToken, setTransformSyncToken] = useState(0)
+  const [materialSyncToken, setMaterialSyncToken] = useState(0)
   // Bumped to rebuild ONLY the place-on-face hull (not the whole plate) after a lay-flat re-orients
   // the part — the hull bakes the rotor's rotation in group-local space, so it must be rebuilt to
   // follow the new orientation instead of lingering stale.
@@ -705,7 +720,7 @@ function EditorView({
     redoRef,
     recordHistory,
     recordHistoryRef,
-    recordMaterialsHistory,
+    recordSliceConfigHistory,
     sliceConfigForPanel
   } = useEditorHistory({
     stateRef,
@@ -882,6 +897,9 @@ function EditorView({
     // plate fill). Composing over `prev` makes the writes additive.
     const filledPlates = new Map<number, EditorPlate>()
     const nextBeds = new Map<number, EditorPlate['bed']>()
+    // Per-plate {dx,dy} to shift already-placed instances when the bed's ORIGIN moves under them —
+    // see below. Absent for plates whose bed didn't move that way.
+    const recenter = new Map<number, { dx: number; dy: number }>()
     for (const plate of snapshot.plates) {
       const scene = scenesByPlate.get(plate.index)
       if (!scene) continue
@@ -896,7 +914,24 @@ function EditorView({
         minX: scene.bed.minX, maxX: scene.bed.maxX, minY: scene.bed.minY, maxY: scene.bed.maxY,
         excludeAreas: scene.bed.excludeAreas
       }
-      if (!bedsEqual(plate.bed, nextBed)) nextBeds.set(plate.index, nextBed)
+      if (!bedsEqual(plate.bed, nextBed)) {
+        nextBeds.set(plate.index, nextBed)
+        // Objects placed before the real printer bed resolved were positioned against the
+        // origin-centred FALLBACK bed (min < 0, centre at 0,0). When the real, 0-based bed
+        // (min >= 0) arrives, an object left at its fallback coordinates sits near the machine's
+        // front-left corner — partly off the plate — and the slice fails with BambuStudio's
+        // CLI_NO_SUITABLE_OBJECTS (exit 206). Shift each placed instance by the bed-centre delta so
+        // it keeps the same position RELATIVE TO THE PLATE instead of stranding at the old origin.
+        // Only for this fallback -> real transition (not real -> real printer switches, which
+        // preserve exact placement, BambuStudio-style).
+        const wasFallback = plate.bed.minX < 0 && plate.bed.minY < 0
+        const isRealBed = nextBed.minX >= 0 && nextBed.minY >= 0
+        if (wasFallback && isRealBed && plate.instances.length > 0) {
+          const dx = (nextBed.minX + nextBed.maxX) / 2 - (plate.bed.minX + plate.bed.maxX) / 2
+          const dy = (nextBed.minY + nextBed.maxY) / 2 - (plate.bed.minY + plate.bed.maxY) / 2
+          if (dx !== 0 || dy !== 0) recenter.set(plate.index, { dx, dy })
+        }
+      }
     }
     if (filledPlates.size === 0 && nextBeds.size === 0) return
     setState((prev) => {
@@ -907,10 +942,25 @@ function EditorView({
           const filled = filledPlates.get(plate.index)
           if (filled) return filled
           const bed = nextBeds.get(plate.index)
-          return bed ? { ...plate, bed } : plate
+          if (!bed) return plate
+          const shift = recenter.get(plate.index)
+          if (!shift) return { ...plate, bed }
+          return {
+            ...plate,
+            bed,
+            instances: plate.instances.map((instance) => ({
+              ...instance,
+              position: instance.position.clone().add(new THREE.Vector3(shift.dx, shift.dy, 0))
+            }))
+          }
         })
       }
     })
+    // A bed change (printer-model switch) or late plate fill rebuilds the plate. Ideally a
+    // bed-only change would replace just the bed surface and keep the models, but the 3D build
+    // plate model (`bedModelGeometry`) is a dependency of the build effect and reloads on a
+    // printer switch, so the build effect rebuilds regardless — decoupling the bed surface from
+    // the model build is a separate change. See docs/slicer-architecture.md.
     setRebuildToken((token) => token + 1)
   }, [scenesByPlate])
 
@@ -972,6 +1022,20 @@ function EditorView({
   )
   const activePlateRef = useRef<EditorPlate | null>(null)
   activePlateRef.current = activePlate
+  /**
+   * Instances to LIST in the sidebar: only the models the viewport has actually rendered
+   * ({@link renderedInstanceKeys}), so the list and the 3D view always agree.
+   *
+   * Filtered UNCONDITIONALLY — not just while `viewportBuilding` — because the plate's instances are
+   * seeded a beat BEFORE the build effect starts, so a "show everything when not building" guard
+   * listed them all, blanked on build start, then refilled (a visible flash on open). The set can't
+   * go stale: `activeInstanceKeys` is a dependency of the build effect, so any instance-set change
+   * re-runs a build that finalises this to exactly what it rendered.
+   */
+  const listedInstances = useMemo(
+    () => (activePlate?.instances ?? []).filter((instance) => renderedInstanceKeys.has(instance.key)),
+    [activePlate, renderedInstanceKeys]
+  )
   // The support brush only paints in-project parts (imports/cut halves are baked as
   // fresh meshes whose client/server triangle order isn't contractually aligned yet).
   const paintTargetIsObject = useMemo(() => {
@@ -1199,6 +1263,9 @@ function EditorView({
   // Latest panel-sync + rotation-readout callbacks for non-React handlers.
   const syncSelectedTransformRef = useRef<((object: THREE.Object3D) => void) | null>(null)
   const setRotationReadoutRef = useRef<((angleDeg: number | null) => void) | null>(null)
+  // Setter published by the isolated LiveTransformPanel so drag-frequency readout updates bypass
+  // EditorView's render (and the many-part sidebar). Null while no transform readout is mounted.
+  const transformReadoutSetterRef = useRef<((value: SelectedTransform | null) => void) | null>(null)
   setRotationReadoutRef.current = setRotationReadout
   const regenerateActiveThumbnailRef = useRef<(() => void) | null>(null)
 
@@ -1781,27 +1848,26 @@ function EditorView({
    * or — when the gizmo holds a part (added mesh / baked part group) — the part's
    * OBJECT-local placement, BambuStudio's "Volume Operations" behaviour.
    */
-  const syncSelectedTransform = useCallback((object: THREE.Object3D) => {
-    const fromTrs = (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => {
-      setSelectedTransform({
-        position: { x: position.x, y: position.y, z: position.z },
-        rotationDeg: {
-          x: THREE.MathUtils.radToDeg(rotation.x),
-          y: THREE.MathUtils.radToDeg(rotation.y),
-          z: THREE.MathUtils.radToDeg(rotation.z)
-        },
-        scalePct: { x: scale.x * 100, y: scale.y * 100, z: scale.z * 100 }
-      })
-    }
+  // Compute the manual-panel transform (position/rotation/scale) from a gizmo target. Pure — the
+  // caller decides whether to push it live (drag) or into state (selection); see below.
+  const computeSelectedTransform = useCallback((object: THREE.Object3D): SelectedTransform | null => {
+    const fromTrs = (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3): SelectedTransform => ({
+      position: { x: position.x, y: position.y, z: position.z },
+      rotationDeg: {
+        x: THREE.MathUtils.radToDeg(rotation.x),
+        y: THREE.MathUtils.radToDeg(rotation.y),
+        z: THREE.MathUtils.radToDeg(rotation.z)
+      },
+      scalePct: { x: scale.x * 100, y: scale.y * 100, z: scale.z * 100 }
+    })
     if (typeof object.userData.addedPartKey === 'string') {
       // Added part mesh: its local TRS IS the object-local placement.
-      fromTrs(object.position, object.rotation as THREE.Euler, object.scale)
-      return
+      return fromTrs(object.position, object.rotation as THREE.Euler, object.scale)
     }
     if (object.userData.partRef != null) {
       // Baked part group: effective placement = drag delta x baked child matrix.
       const mesh = object.children.find((child) => (child as THREE.Mesh).isMesh === true)
-      if (!mesh) return
+      if (!mesh) return null
       object.updateMatrix()
       mesh.updateMatrix()
       const effective = new THREE.Matrix4().multiplyMatrices(object.matrix, mesh.matrix)
@@ -1809,11 +1875,17 @@ function EditorView({
       const quaternion = new THREE.Quaternion()
       const scale = new THREE.Vector3()
       effective.decompose(position, quaternion, scale)
-      fromTrs(position, new THREE.Euler().setFromQuaternion(quaternion, 'XYZ'), scale)
-      return
+      return fromTrs(position, new THREE.Euler().setFromQuaternion(quaternion, 'XYZ'), scale)
     }
-    fromTrs(object.position, rotorOf(object).rotation, object.scale)
+    return fromTrs(object.position, rotorOf(object).rotation, object.scale)
   }, [])
+  // High-frequency path (drag / gizmo): push live values straight into the isolated LiveTransformPanel
+  // via its setter ref, so a drag never re-renders EditorView (and the many-part sidebar). Selection
+  // changes seed the panel through `selectedTransform` state instead (the low-frequency effect below).
+  const syncSelectedTransform = useCallback((object: THREE.Object3D) => {
+    const value = computeSelectedTransform(object)
+    if (value) transformReadoutSetterRef.current?.(value)
+  }, [computeSelectedTransform])
   syncSelectedTransformRef.current = syncSelectedTransform
 
   // Rebuild the viewport whenever the active plate changes or its instance set
@@ -2006,7 +2078,12 @@ function EditorView({
             builtGroups.set(instance.key, group)
             // Incremental: register each model live as it lands so a superseding rebuild sees the
             // plate is non-empty and takes the atomic-swap path (no duplicate, no empty flash).
-            if (incremental) groupByKeyRef.current.set(instance.key, group)
+            if (incremental) {
+              groupByKeyRef.current.set(instance.key, group)
+              // ...and let the object list show it now that it is actually on screen.
+              const landedKey = instance.key
+              setRenderedInstanceKeys((prev) => (prev.has(landedKey) ? prev : new Set(prev).add(landedKey)))
+            }
           }
         } catch (error) {
           if (cancelled || abort.signal.aborted) { discardStaging(); return }
@@ -2055,7 +2132,15 @@ function EditorView({
       // rebuild-driven change (undo/redo, delete, duplicate, plate switch) reflects in the panel
       // immediately rather than on the next rAF poll tick (which can lag, or never arrive if a
       // drag flag was left stuck). The poll remains as a backstop for non-rebuild moves.
+      // Everything this build produced is now on screen (the atomic swap above reveals it all at
+      // once; incremental builds have been adding to this as each model landed).
+      setRenderedInstanceKeys(new Set(builtGroups.keys()))
       recomputeWarningsRef.current()
+      // Reconcile part colours from the CURRENT state. An incremental build colours each mesh from
+      // the instance snapshot it was built with, so a material reassigned WHILE the solids were
+      // still streaming in would otherwise keep its old colour until the next rebuild. The
+      // material-sync effect is not a dependency of this build effect, so this never re-triggers it.
+      setMaterialSyncToken((token) => token + 1)
       setBuildProgress(null)
       setBuildIncremental(false)
       setViewportBuilding(false)
@@ -2138,8 +2223,11 @@ function EditorView({
       transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
       transform.setMode(gizmoMode)
     }
-    syncSelectedTransform(panelTarget)
-  }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, syncSelectedTransform])
+    // Selection/gizmo change is low-frequency: seed the readout through state, which both mounts the
+    // panel (the gate) and re-seeds its value. Live drag updates then flow through the setter ref.
+    const seeded = computeSelectedTransform(panelTarget)
+    if (seeded) setSelectedTransform(seeded)
+  }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, computeSelectedTransform])
 
   const reattachGizmoRef = useRef(reattachGizmo)
   reattachGizmoRef.current = reattachGizmo
@@ -2422,11 +2510,14 @@ function EditorView({
     setPaintColorFilamentId(filamentOptions[1]?.id ?? filamentOptions[0]?.id ?? null)
   }, [filamentOptions, paintColorFilamentId, setPaintColorFilamentId])
 
+  // Layer G-code edits recolour via the shared band-shader uniforms (the effect above, keyed on
+  // state) — every part material already reads them, and the continuous render loop shows the new
+  // bands next frame — so they need no rebuild ('inert').
   /** Replace the active plate's layer-based filament changes (history-recorded). */
   const setActivePlateFilamentChanges = useCallback((changes: EditorFilamentChange[]) => {
     updatePlates((plates) => plates.map((plate) => (
       plate.index === activePlateIndex ? { ...plate, filamentChangesOverride: changes } : plate
-    )))
+    )), 'inert')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlateIndex])
 
@@ -2434,11 +2525,23 @@ function EditorView({
   const setActivePlatePauses = useCallback((pauses: EditorPause[]) => {
     updatePlates((plates) => plates.map((plate) => (
       plate.index === activePlateIndex ? { ...plate, pausesOverride: pauses } : plate
-    )))
+    )), 'inert')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlateIndex])
 
-  const updatePlates = useCallback((updater: (plates: EditorPlate[]) => EditorPlate[]) => {
+  /**
+   * How a plate edit affects the live 3D scene, so it only pays for the work it needs:
+   * - `structure` (default): geometry/identity changed (add, delete, cut, split, replace, paste,
+   *   move-to-plate) → full teardown + rebuild of the active plate.
+   * - `transform`: positions/rotations/scales only (auto-arrange, prime-tower move) → copy the new
+   *   transforms onto the existing groups; no geometry re-parse.
+   * - `material`: part filament reassignment → recolour the existing meshes in place.
+   * - `visibility`: printable toggles → the re-dim effect (keyed on state) already handles it.
+   * - `inert`: no active-plate viewport change (renames, per-plate layer G-code, other-plate edits).
+   * Non-`structure` kinds MUST NOT change the geometry or key set of the active plate — only the
+   * listed attribute — or the in-place sync will desync from state. When unsure, use `structure`.
+   */
+  const updatePlates = useCallback((updater: (plates: EditorPlate[]) => EditorPlate[], kind: PlateEditKind = 'structure') => {
     recordHistory()
     setState((current) => {
       if (!current) return current
@@ -2447,10 +2550,83 @@ function EditorView({
       // survive a plate-structure edit instead of being silently dropped.
       return { ...current, plates: updater(current.plates) }
     })
-    // Force the plate to rebuild so position-only / colour-only edits (auto-arrange,
-    // filament reassignment) re-sync the 3D groups; key changes (add/delete) already do.
-    setRebuildToken((token) => token + 1)
+    // Route to the cheapest sync that covers `kind`. `visibility`/`inert` need no viewport work
+    // beyond effects that already react to the state change.
+    if (kind === 'structure') setRebuildToken((token) => token + 1)
+    else if (kind === 'transform') setTransformSyncToken((token) => token + 1)
+    else if (kind === 'material') setMaterialSyncToken((token) => token + 1)
   }, [recordHistory])
+
+  // TRANSFORM sync: copy each instance's position/rotation/scale onto its live group, mirroring the
+  // build (group.position/scale + rotor.rotation, EditorView build lines ~1440). Runs after the
+  // state commit (stateRef is refreshed in the render body). An exact-matrix instance renders a
+  // baked matrix with matrixAutoUpdate off and rotor identity, so its transform can't be set this
+  // way — if any is present we fall back to a full rebuild (rare: rotated + non-uniformly scaled).
+  useEffect(() => {
+    if (transformSyncToken === 0) return
+    const current = stateRef.current
+    if (!current) return
+    const byKey = new Map<string, EditorInstance>()
+    for (const plate of current.plates) for (const instance of plate.instances) byKey.set(instance.key, instance)
+    let needsRebuild = false
+    for (const [key, group] of groupByKeyRef.current) {
+      const instance = byKey.get(key)
+      if (!instance) continue
+      // A group in exact-matrix render mode (matrixAutoUpdate off, built for a shearing object)
+      // can't be moved by setting position — and an arrange can bake such an object to T·S·R,
+      // leaving its group still in that mode until a rebuild. Detect the render state, not the
+      // instance flag, and fall back to a full rebuild for the whole plate (rare).
+      if (!group.matrixAutoUpdate) { needsRebuild = true; break }
+      group.position.copy(instance.position)
+      group.scale.copy(instance.scale)
+      rotorOf(group).rotation.copy(instance.rotation)
+    }
+    if (needsRebuild) { setRebuildToken((token) => token + 1); return }
+    recomputeWarningsRef.current()
+    regenerateActiveThumbnailRef.current?.()
+  }, [transformSyncToken])
+
+  // MATERIAL sync: recolour the live meshes in place after a filament reassignment, mirroring the
+  // build's per-part colouring (recolor.filamentId + fallbackColor) and the swatch recolour effect
+  // in useEditorPaint. A part mesh's owning part is its nearest partRef/importPartRef ancestor; a
+  // single-mesh import has neither, so it tracks the instance filament.
+  useEffect(() => {
+    if (materialSyncToken === 0) return
+    const current = stateRef.current
+    if (!current) return
+    const byKey = new Map<string, EditorInstance>()
+    for (const plate of current.plates) for (const instance of plate.instances) byKey.set(instance.key, instance)
+    for (const [key, group] of groupByKeyRef.current) {
+      const instance = byKey.get(key)
+      if (!instance) continue
+      group.traverse((node) => {
+        const mesh = node as THREE.Mesh
+        if (!mesh.isMesh) return
+        const recolor = mesh.userData.recolor as { filamentId: number | null; fallbackColor?: string } | undefined
+        if (!recolor) return
+        // Find this mesh's part via the nearest ancestor carrying a part ref.
+        let ref: { componentObjectId: number } | undefined
+        for (let node2: THREE.Object3D | null = mesh; node2 && !ref; node2 = node2.parent) {
+          ref = (node2.userData.partRef ?? node2.userData.importPartRef) as { componentObjectId: number } | undefined
+        }
+        const part = ref ? instance.parts.find((entry) => entry.componentObjectId === ref!.componentObjectId) : undefined
+        const filamentId = resolveColorFilamentIdRef.current(part ? part.filamentId : instance.filamentId)
+        recolor.filamentId = filamentId
+        const live = filamentId != null ? filamentColorsRef.current?.[filamentId] : undefined
+        const hex = live || recolor.fallbackColor || '#D3DDE7'
+        const material = mesh.material as THREE.MeshStandardMaterial
+        material.color.set(hex)
+        if (material.emissive) material.emissive.set(hex).multiplyScalar(0.12)
+        // The colour-paint overlay tint follows the live filament colour; its cache is keyed by code
+        // (not colour), so drop it and let the overlay refresh rebuild the new tint.
+        mesh.userData['paintOverlayCache:color'] = undefined
+      })
+    }
+    refreshPaintOverlaysRef.current()
+    // Keyed ONLY on materialSyncToken: colours are read via refs so a swatch-colour tick does NOT
+    // re-run this full-scene traversal (that's the useEditorPaint recolour effect's job).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [materialSyncToken])
 
   const handleSelect = useCallback((key: string, modifiers?: { additive?: boolean; range?: boolean }) => {
     if (modifiers?.range) {
@@ -2569,9 +2745,12 @@ function EditorView({
           return part
         })
         if (!changed) return instance
-        return { ...instance, parts, filamentId: parts[0]?.filamentId ?? instance.filamentId }
+        // The object-level `filamentId` is the bake's fallback for a multi-solid import's
+        // unassigned parts; derive it from part consensus so retargeting one part never collapses
+        // the others onto it. See {@link deriveObjectFilamentId}.
+        return { ...instance, parts, filamentId: deriveObjectFilamentId(parts, instance.filamentId) }
       })
-    })))
+    })), 'material')
   }, [updatePlates])
 
   // Change parts' Bambu volume type (BambuStudio's "Change type": normal / negative /
@@ -2626,16 +2805,21 @@ function EditorView({
       target.source.kind === 'import'
         ? instance.source.kind === 'import' && instance.source.importId === target.source.importId
         : instance.source.kind === 'object' && instance.objectId === target.objectId
+    // A rename changes only the object-list label; the 3D viewport shows no names ('inert').
     updatePlates((plates) => plates.map((plate) => ({
       ...plate,
       instances: plate.instances.map((instance) =>
         sameObject(instance) ? { ...instance, name: trimmed, nameOverridden: true } : instance
       )
-    })))
+    })), 'inert')
   }, [promptText, updatePlates])
 
   // Place a freshly created instance at a free spot on the active plate, then add it.
-  const addInstanceToActivePlate = useCallback((instance: EditorInstance) => {
+  const addInstanceToActivePlate = useCallback((
+    instance: EditorInstance,
+    /** The new model's XY footprint: where its centre sits in mesh coords, and how big it is. */
+    footprint?: { center: { x: number; y: number }; size: { width: number; depth: number } }
+  ) => {
     // BambuStudio parity: a project must have a material before any object (import, primitive,
     // cut/split half) can be added. This is the single chokepoint for every add path.
     if ((sliceConfigRef.current?.projectFilaments?.length ?? 0) === 0) {
@@ -2644,8 +2828,25 @@ function EditorView({
     }
     const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
     if (plate) {
-      const spot = findFreePlatePosition(plate)
-      instance.position.set(spot.x, spot.y, instance.position.z)
+      // Measure what is already on the plate (cheap AABB per built model) so placement accounts for
+      // the real footprints instead of a fixed radius around each origin — otherwise a large model
+      // lands on top of its neighbours. Empty => let findFreePlatePosition use its nominal fallback.
+      const occupied: PlateFootprintRect[] = []
+      for (const placed of plate.instances) {
+        const group = groupByKeyRef.current.get(placed.key)
+        if (!group) continue
+        const box = printableMeshBox(group, false)
+        if (!box.isEmpty()) occupied.push({ minX: box.min.x, maxX: box.max.x, minY: box.min.y, maxY: box.max.y })
+      }
+      const spot = findFreePlatePosition(plate, {
+        size: footprint?.size,
+        occupied: occupied.length > 0 ? occupied : undefined
+      })
+      // `instance.position` places the object's LOCAL ORIGIN, but an imported mesh keeps its file
+      // coordinates (origin often at a corner), so dropping the origin on the free spot lands the
+      // model off-centre. Offset by the mesh's XY centroid so the model's CENTRE sits on the spot.
+      // Primitives are already origin-centred (centroid ~ 0), so this is a no-op for them.
+      instance.position.set(spot.x - (footprint?.center.x ?? 0), spot.y - (footprint?.center.y ?? 0), instance.position.z)
     }
     updatePlates((plates) =>
       plates.map((plate) =>
@@ -2655,20 +2856,24 @@ function EditorView({
     setSelectedKey(instance.key)
   }, [activePlateIndex, updatePlates])
 
-  // Persist a dragged prime tower's new lower-left corner into the active plate.
+  // Persist a dragged prime tower's new lower-left corner into the active plate. The drag already
+  // moved the live tower object (useEditorScene), so this is an `inert` state write — a full plate
+  // rebuild here just flashes the "loading object" overlay for a move that is already on screen.
   const handleMovePrimeTower = useCallback((cornerX: number, cornerY: number) => {
     updatePlates((plates) => plates.map((plate) =>
       plate.index === activePlateIndex && plate.primeTower
         ? { ...plate, primeTower: { ...plate.primeTower, x: cornerX, y: cornerY } }
         : plate
-    ))
+    ), 'inert')
   }, [activePlateIndex, updatePlates])
   movePrimeTowerRef.current = handleMovePrimeTower
 
   /** Add an import-backed instance onto the active plate from a staged foreign model. */
   const addStagedImport = useCallback((staged: StagedImport) => {
     // The material guard lives in addInstanceToActivePlate (the shared add chokepoint).
-    addInstanceToActivePlate(instanceFromStagedImport(staged))
+    // Centre the model on the drop spot using its bounds' XY midpoint (imports keep file coords),
+    // and hand over its size so placement keeps it clear of what's already on the plate.
+    addInstanceToActivePlate(instanceFromStagedImport(staged), stagedFootprint(staged))
   }, [addInstanceToActivePlate])
 
   /**
@@ -3195,10 +3400,8 @@ function EditorView({
       const stl = triangleSoupToBinaryStl(primitiveTriangleSoup(kind))
       const file = new File([stl], `${PRIMITIVE_LABELS[kind]}.stl`, { type: 'application/octet-stream' })
       const staged = await stageImportFromFile(file)
-      const instance = instanceFromStagedImport(staged)
-      const spot = findFreePlatePosition(plate)
-      instance.position.set(spot.x, spot.y, 0)
-      addInstanceToActivePlate(instance)
+      // Centre on the drop spot via the mesh's XY midpoint (addInstanceToActivePlate places it).
+      addInstanceToActivePlate(instanceFromStagedImport(staged), stagedFootprint(staged))
       toast.success(`Added a ${PRIMITIVE_LABELS[kind].toLowerCase()}.`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to add the primitive.')
@@ -3338,7 +3541,7 @@ function EditorView({
       ...plate,
       instances: plate.instances.map((entry) =>
         keySet.has(entry.key) && entry.printable !== printable ? { ...entry, printable } : entry)
-    })))
+    })), 'visibility')
   }, [updatePlates])
 
   /**
@@ -3402,7 +3605,7 @@ function EditorView({
       ...plate,
       instances: plate.instances.map((entry) =>
         entry.key === key ? { ...entry, printable: !entry.printable } : entry)
-    })))
+    })), 'visibility')
   }, [updatePlates])
 
   /**
@@ -3497,7 +3700,7 @@ function EditorView({
         // at its new position rather than the original baked-in one.
         return { ...instance, position, exactMatrix: undefined }
       })
-    }))
+    }), 'transform')
     if (result.unplaced.length > 0) {
       toast.error(`${result.unplaced.length} model${result.unplaced.length === 1 ? '' : 's'} did not fit and stayed in place.`)
     }
@@ -3762,7 +3965,8 @@ function EditorView({
     })
     if (name === null) return
     const trimmed = name.trim()
-    updatePlates((plates) => plates.map((entry) => entry.index === index ? { ...entry, name: trimmed || null } : entry))
+    // Plate name shows only in the plate strip (React), not the 3D viewport ('inert').
+    updatePlates((plates) => plates.map((entry) => entry.index === index ? { ...entry, name: trimmed || null } : entry), 'inert')
   }, [promptText, updatePlates])
 
   const handleReorderPlate = useCallback((fromIndex: number, toIndex: number) => {
@@ -3863,12 +4067,12 @@ function EditorView({
       <ModalDialog
         variant="outlined"
         layout="center"
-        // A large centred dialog with equal margins on all four sides.
+        // A near-fullscreen centred dialog with a thin equal margin on all four sides.
         sx={{
-          width: '96vw',
-          height: '96dvh',
-          maxWidth: '96vw',
-          maxHeight: '96dvh',
+          width: '99vw',
+          height: '99dvh',
+          maxWidth: '99vw',
+          maxHeight: '99dvh',
           p: { xs: 1.5, sm: 2 },
           display: 'flex',
           flexDirection: 'column',
@@ -4142,9 +4346,10 @@ function EditorView({
                       width: 'min(820px, calc(100% - 260px))'
                     }}
                   >
-                    <TransformPanel
+                    <LiveTransformPanel
                       floating
-                      transform={selectedTransform}
+                      initial={selectedTransform}
+                      setterRef={transformReadoutSetterRef}
                       // With a part on the gizmo the values are the PART's placement inside
                       // its object (and edits apply to every copy) — say so.
                       heading={selectedAddedPartKey || selectedBakedPart ? 'Part placement (within the object)' : undefined}
@@ -4353,8 +4558,9 @@ function EditorView({
                   />
                 </Stack>
                 {isMobile && selectedTransform && isTransformGizmoMode(gizmoMode) && (
-                  <TransformPanel
-                    transform={selectedTransform}
+                  <LiveTransformPanel
+                    initial={selectedTransform}
+                    setterRef={transformReadoutSetterRef}
                     // With a part on the gizmo the values are the PART's placement inside
                     // its object (and edits apply to every copy) — say so.
                     heading={selectedAddedPartKey || selectedBakedPart ? 'Part placement (within the object)' : undefined}
@@ -4374,7 +4580,7 @@ function EditorView({
                     </Box>
                   ) : (
                     <ModelList
-                      instances={activePlate.instances}
+                      instances={listedInstances}
                       selectedKey={selectedKey}
                       extraSelectedKeys={extraSelectedKeys}
                       partSelection={partSelection}
@@ -4688,12 +4894,7 @@ function EditorView({
     <EditorSettingsDialog
       open={editorSettingsOpen}
       onClose={() => setEditorSettingsOpen(false)}
-      viewport={{
-        showBedModel,
-        onShowBedModelChange: setShowBedModel,
-        sidebarSide,
-        onSidebarSideChange: setSidebarSide
-      }}
+      viewport
     />
 
     {libraryPickerOpen && (
@@ -4858,8 +5059,8 @@ function EditorView({
         titlePrefix="Object settings"
         onApply={(overrides) => {
           // Snapshot for undo (overrides live in the borrowed slice config, captured by the
-          // materials history); recording also flags the project dirty so Save lights up / close warns.
-          recordMaterialsHistory()
+          // slice-config history); recording also flags the project dirty so Save lights up / close warns.
+          recordSliceConfigHistory()
           const next = { ...perObject.value }
           // Bulk apply (context menu on a multi-selection) REPLACES every selected
           // object's override set with the dialog result, like BambuStudio's

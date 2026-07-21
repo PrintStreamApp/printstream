@@ -691,7 +691,25 @@ function buildEditedThreeMfDocuments(
   let modelXml = injectResourcesObjects(baseModelXml, meshObjects.join('\n'))
   modelXml = replaceThreeMfBuildSection(modelXml, renderArrangedBuildItems(arranged, genUuid))
 
-  let modelSettingsXml = injectModelSettingsObjects(baseModelSettingsXml, settingsObjects.join('\n'))
+  // A material add/remove remaps each part's `extruder` from its OLD filament slot to the new id.
+  // This applies ONLY to parts inherited from the BASE project: every part the bake authors below
+  // (imported solids via `settingsObjects`, added volumes, per-part reassignments) is already
+  // written in the NEW filament-id space, so it must not be remapped. Remapping the base HERE —
+  // before those parts are injected — is what keeps a fresh multi-solid import's per-part materials
+  // from being double-remapped and collapsed to filament 1. No-op when the filament set is unchanged.
+  let baseModelSettingsForInject = baseModelSettingsXml
+  if (edit.filaments && edit.filaments.length > 0) {
+    const oldIndexToNewId = new Map<number, number>()
+    edit.filaments.forEach((filament, i) => {
+      // null sourceIndex means "same slot" (identity), matching applyFilamentList; the
+      // first new slot referencing an old index wins (kept slots precede cloned adds).
+      const src = filament.sourceIndex ?? i
+      if (!oldIndexToNewId.has(src)) oldIndexToNewId.set(src, i + 1)
+    })
+    baseModelSettingsForInject = remapPartExtruders(baseModelSettingsXml, oldIndexToNewId)
+  }
+
+  let modelSettingsXml = injectModelSettingsObjects(baseModelSettingsForInject, settingsObjects.join('\n'))
   modelSettingsXml = replaceModelSettingsPlates(
     modelSettingsXml,
     renderArrangedModelSettingsPlates(arranged, edit.plates, parseModelSettingsIdentifyIds(baseModelSettingsXml))
@@ -742,21 +760,9 @@ function buildEditedThreeMfDocuments(
     }
   }
 
-  // The filament arrays themselves live in project_settings.config (rewritten in
-  // buildEditedThreeMf); here we remap each part's filament reference from its OLD slot
-  // to the new one. Adding/removing materials reorders the list, so a part that used a
-  // now-removed material reassigns to material 1 (matching Bambu Studio); a part that
-  // used a material after a removed one shifts down with it.
-  if (edit.filaments && edit.filaments.length > 0) {
-    const oldIndexToNewId = new Map<number, number>()
-    edit.filaments.forEach((filament, i) => {
-      // null sourceIndex means "same slot" (identity), matching applyFilamentList; the
-      // first new slot referencing an old index wins (kept slots precede cloned adds).
-      const src = filament.sourceIndex ?? i
-      if (!oldIndexToNewId.has(src)) oldIndexToNewId.set(src, i + 1)
-    })
-    modelSettingsXml = remapPartExtruders(modelSettingsXml, oldIndexToNewId)
-  }
+  // NOTE: the OLD-slot -> NEW-id part-extruder remap for a material add/remove happens on the
+  // BASE model_settings BEFORE the bake-authored parts are injected (see above), so the imported
+  // solids / added volumes / per-part reassignments keep the new-id extruders written for them.
 
   return { modelXml, modelSettingsXml, importIdToObjectId, partFileEntries }
 }

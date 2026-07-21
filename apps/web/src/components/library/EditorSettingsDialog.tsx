@@ -3,18 +3,23 @@
  * slice flow rather than to the workspace.
  *
  * Slicer profile management lives here (it moved out of Settings > Slicing: managing presets is
- * something you do WHILE preparing a print, not a workspace administration task), alongside
- * viewport preferences contributed by the editor.
+ * something you do WHILE preparing a print, not a workspace administration task), alongside the
+ * model studio's viewport preferences.
+ *
+ * The viewport cards are self-contained (`settings/EditorViewportSettingsCards.tsx`) and own both
+ * tiers of the standard setting shape — a workspace default plus a per-device override — so this
+ * dialog only decides whether the tab is shown at all.
  *
  * Core, not part of the model-studio plugin, because both the editor (a plugin) and the shared
  * slice settings panel (core) open it — core must never import a plugin.
  */
 import { useState } from 'react'
-import { Box, Button, DialogActions, Option, Select, Stack, Switch, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy'
-import type { ReactNode } from 'react'
+import { Box, Button, DialogActions, Stack, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy'
+import type { EditorSidebarSideSetting } from '@printstream/shared'
 import { BackAwareModal } from '../BackAwareModal'
 import { ScrollableModalDialog } from '../ScrollableDialog'
 import { SlicingProfilesSettingsSection } from '../settings/slicing-profiles/SlicingProfilesSection'
+import { BuildPlateSettingCard, PanelPositionSettingCard } from '../settings/EditorViewportSettingsCards'
 
 /**
  * The scrolling tab panel, mirroring `ScrollableDialogBody`'s scrollbar treatment so this dialog
@@ -40,25 +45,17 @@ const SCROLL_GUTTER_SX = { minWidth: 0, pr: 0.75 } as const
 type EditorSettingsTab = 'viewport' | 'profiles'
 
 /** Which side of the 3D viewport the editor's settings/objects panel sits on. */
-export type EditorSidebarSide = 'left' | 'right'
+export type EditorSidebarSide = EditorSidebarSideSetting
 
-export interface EditorViewportSettings {
-  /** Render BambuStudio's modelled build plate instead of the plain millimetre grid. */
-  showBedModel: boolean
-  onShowBedModelChange: (value: boolean) => void
-  /** Sidebar side. Desktop only — the narrow layout always stacks the panel below the viewport. */
-  sidebarSide: EditorSidebarSide
-  onSidebarSideChange: (value: EditorSidebarSide) => void
-}
-
-export function EditorSettingsDialog({ open, onClose, viewport }: {
+export function EditorSettingsDialog({ open, onClose, viewport = false }: {
   open: boolean
   onClose: () => void
   /**
-   * Viewport preferences, supplied by the 3D editor. Omitted elsewhere (e.g. the slim slice
-   * dialog), where the Viewport tab has nothing to show and is hidden.
+   * Whether to offer the Viewport tab. True from the 3D editor; false elsewhere (e.g. the slim
+   * slice dialog), which has no viewport to configure. The tab's cards read and write their own
+   * state, so nothing is passed through here.
    */
-  viewport?: EditorViewportSettings
+  viewport?: boolean
 }): JSX.Element {
   // Tabs carry explicit string values rather than positional indices, so reordering them cannot
   // silently repoint a panel. Opens on the leftmost tab that exists: Viewport for the editor,
@@ -93,32 +90,9 @@ export function EditorSettingsDialog({ open, onClose, viewport }: {
           </TabPanel>
           {viewport && (
             <TabPanel value="viewport" sx={SCROLLING_TAB_PANEL_SX}>
-                <Stack spacing={2} sx={SCROLL_GUTTER_SX}>
-                  <ViewportSettingRow
-                    title="3D build plate"
-                    description="Show the printer’s modelled build plate instead of the plain grid. Turn it off for a plain grid on every printer, including those with no plate model."
-                  >
-                    <Switch
-                      checked={viewport.showBedModel}
-                      onChange={(event) => viewport.onShowBedModelChange(event.target.checked)}
-                      slotProps={{ input: { 'aria-label': 'Show the 3D build plate' } }}
-                    />
-                  </ViewportSettingRow>
-                  <ViewportSettingRow
-                    title="Panel position"
-                    description="Which side of the 3D view the settings and objects panel sits on. Narrow screens always stack it below the view."
-                  >
-                    <Select
-                      size="sm"
-                      value={viewport.sidebarSide}
-                      onChange={(_event, value) => value && viewport.onSidebarSideChange(value)}
-                      slotProps={{ button: { 'aria-label': 'Panel position' }, listbox: { disablePortal: true } }}
-                      sx={{ minWidth: 120 }}
-                    >
-                      <Option value="left">Left</Option>
-                      <Option value="right">Right</Option>
-                    </Select>
-                  </ViewportSettingRow>
+                <Stack spacing={1.5} sx={SCROLL_GUTTER_SX}>
+                  <BuildPlateSettingCard />
+                  <PanelPositionSettingCard />
                 </Stack>
             </TabPanel>
           )}
@@ -128,22 +102,5 @@ export function EditorSettingsDialog({ open, onClose, viewport }: {
         </DialogActions>
       </ScrollableModalDialog>
     </BackAwareModal>
-  )
-}
-
-/** One labelled viewport preference: title + helper copy on the left, its control on the right. */
-function ViewportSettingRow({ title, description, children }: {
-  title: string
-  description: string
-  children: ReactNode
-}): JSX.Element {
-  return (
-    <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={2}>
-      <Stack spacing={0.25} sx={{ minWidth: 0 }}>
-        <Typography level="title-sm">{title}</Typography>
-        <Typography level="body-xs" textColor="text.tertiary">{description}</Typography>
-      </Stack>
-      {children}
-    </Stack>
   )
 }

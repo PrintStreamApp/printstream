@@ -13,7 +13,7 @@
 import * as THREE from 'three'
 import { ConvexGeometry } from 'three-stdlib'
 import type { LibraryThreeMfPrimeTower, SceneEditAddedPartSubtype, SceneEditPartSubtype } from '@printstream/shared'
-import type { SliceMaterialsSnapshot } from '../../components/library/SliceSettingsPanel'
+import type { SliceConfigSnapshot } from '../../components/library/SliceSettingsPanel'
 import type { TrianglePaintChannel } from './lib/threeMfScene'
 import { FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
 import { estimateWipeTowerFootprint } from './lib/primeTower'
@@ -120,8 +120,8 @@ export const CUT_AXIS_SIDES: Record<CutAxis, { lower: string; upper: string }> =
   z: { lower: 'lower', upper: 'upper' }
 }
 
-/** One undo/redo step: either a scene snapshot or a material-edit snapshot (not both). */
-export type EditorHistoryEntry = { state: EditorState | null; materials: SliceMaterialsSnapshot | null }
+/** One undo/redo step: either a scene snapshot or a slice-config snapshot (not both). */
+export type EditorHistoryEntry = { state: EditorState | null; sliceConfig: SliceConfigSnapshot | null }
 
 export const DOWN_VECTOR = new THREE.Vector3(0, 0, -1)
 
@@ -440,6 +440,19 @@ export function groupTransformSignature(group: THREE.Object3D): string {
   const r = (n: number) => Math.round(n * 100) / 100
   const { position: p, quaternion: q, scale: s } = group
   return `${r(p.x)},${r(p.y)},${r(p.z)}|${r(q.x)},${r(q.y)},${r(q.z)},${r(q.w)}|${r(s.x)},${r(s.y)},${r(s.z)}`
+}
+
+/**
+ * An object's footprint SHAPE signature: its orientation + scale but NOT its position. Two poses
+ * with the same shape signature differ only by a translation, so their footprints are the same
+ * shape shifted — letting the placement-warning recompute shift cached cells instead of
+ * re-rasterizing (see {@link shiftFootprintCells}). Same fields/precision as
+ * {@link groupTransformSignature} minus position.
+ */
+export function groupShapeSignature(group: THREE.Object3D): string {
+  const r = (n: number) => Math.round(n * 100) / 100
+  const { quaternion: q, scale: s } = group
+  return `${r(q.x)},${r(q.y)},${r(q.z)},${r(q.w)}|${r(s.x)},${r(s.y)},${r(s.z)}`
 }
 
 /**
