@@ -65,7 +65,7 @@ export function createPlateThumbnailRenderer(): PlateThumbnailRenderer {
       // printed models — like Bambu's. Restored after the snapshot.
       const hidden: THREE.Object3D[] = []
       group.traverse((child) => {
-        if ((child.userData?.isBedSurface || child.userData?.isPrimeTower || child.userData?.isModifier) && child.visible) {
+        if ((child.userData?.isBedSurface || child.userData?.isPrimeTower || child.userData?.isHelperVolume) && child.visible) {
           child.visible = false
           hidden.push(child)
         }

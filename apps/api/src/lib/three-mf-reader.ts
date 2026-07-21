@@ -23,7 +23,9 @@ import { stat } from 'node:fs/promises'
 import {
   MemoryLruCache,
   createAbortError,
+  isNonRenderableThreeMfPartSubtype,
   isProcessSettingKey,
+  threeMfPartSubtypeCarriesFilament,
   throwIfAborted,
   type BridgeLibraryThreeMfFilament,
   type BridgeLibraryThreeMfIndex,
@@ -283,14 +285,6 @@ const BBL_FALLBACK_EXTRUDER_PRINTABLE_AREA_BY_MODEL: Partial<Record<PrinterModel
 }
 
 const NOZZLE_ONLY_ZONE_LABELS = ['Left nozzle only area', 'Right nozzle only area']
-const NON_RENDERABLE_THREE_MF_PART_SUBTYPES = new Set([
-  'negativepart',
-  'negativevolume',
-  'modifierpart',
-  'parametermodifier',
-  'supportblocker',
-  'supportenforcer'
-])
 
 const THREE_MF_PARSER_CACHE_VERSION = THREE_MF_INDEX_PARSER_VERSION
 const THREE_MF_PARSER_CACHE_MAX_ENTRIES = 128
@@ -467,16 +461,20 @@ export async function readSceneManifest(
 
     const instanceParts: ThreeMfSceneInstancePart[] = []
     let instanceName: string | null = null
-    // Filament of each printed (non-modifier) part, in part order; null = the part carries
+    // Filament of each printed (non-helper) part, in part order; null = the part carries
     // no extruder metadata of its own (it inherits the object default).
     const printedPartFilamentIds: Array<number | null> = []
     for (const component of components) {
       const metadata = partMetadata.get(component.objectId) ?? null
       const subtype = metadata?.subtype ?? null
-      // Support blockers/enforcers and modifier/negative volumes are rendered (translucently) too,
-      // so keep them — but they carry no filament and don't define the instance's name/material.
-      const isModifier = isNonRenderableThreeMfPartSubtype(subtype)
-      const filamentId = isModifier ? null : mapSceneExtruderToFilamentId(metadata?.extruderId ?? null, plate.filamentMaps)
+      // Helper volumes are rendered (translucently) too, so keep them — but they never define
+      // the instance's name/material. Only a modifier among them carries a filament of its own
+      // (it can change the material printed inside its region); a support blocker/enforcer or
+      // negative volume has none, and must not inherit one.
+      const isHelper = isNonRenderableThreeMfPartSubtype(subtype)
+      const filamentId = threeMfPartSubtypeCarriesFilament(subtype)
+        ? mapSceneExtruderToFilamentId(metadata?.extruderId ?? null, plate.filamentMaps)
+        : null
       const filament = filamentId != null ? projectFilamentsById.get(filamentId) ?? null : null
       const transform = composeThreeMfTransforms(buildTransform, component.transform)
       transform[9] = (transform[9] ?? 0) - plateOrigin.x
@@ -499,7 +497,7 @@ export async function readSceneManifest(
         subtype,
         ...(metadata?.processOverrides ? { processOverrides: metadata.processOverrides } : {})
       })
-      if (isModifier) continue
+      if (isHelper) continue
       if (instanceName == null) instanceName = metadata?.name ?? null
       printedPartFilamentIds.push(filamentId)
     }
@@ -859,12 +857,18 @@ export function parseModelSettingsScene(xml: string): {
         if (key == null || value == null || !isProcessSettingKey(key)) continue
         partOverrides[key] = decodeXmlAttributeValue(value)
       }
+      // Only a printed part inherits the object's extruder when it declares none of its own.
+      // BambuStudio seeds a helper volume's extruder to 0 ("default"), and a modifier that
+      // reads its object's material instead would silently claim a filament the user never
+      // assigned to that region.
+      const subtype = readThreeMfPartSubtype(partBlock, partAttrs)
+      const ownExtruderId = readModelSettingsMetadataInt(partBlock, 'extruder')
       partMap.set(partId, {
         id: partId,
         name: readModelSettingsMetadataString(partBlock, 'name') ?? objectName,
         sourceFile: readModelSettingsMetadataString(partBlock, 'source_file'),
-        extruderId: readModelSettingsMetadataInt(partBlock, 'extruder') ?? objectExtruderId,
-        subtype: readThreeMfPartSubtype(partBlock, partAttrs),
+        extruderId: ownExtruderId ?? (isNonRenderableThreeMfPartSubtype(subtype) ? null : objectExtruderId),
+        subtype,
         ...(Object.keys(partOverrides).length > 0 ? { processOverrides: partOverrides } : {})
       })
     }
@@ -1262,16 +1266,3 @@ function readThreeMfPartSubtype(partBlock: string, partAttrs: Record<string, str
   return partAttrs.subtype?.trim() || readModelSettingsMetadataString(partBlock, 'volume_type') || null
 }
 
-/**
- * Whether a part subtype is a helper volume (negative/modifier/support blocker/enforcer)
- * rather than printed geometry. Exported for the 3MF geometry-import extractor, which
- * mirrors the STL exporter's rule: helper volumes are never part of imported geometry.
- */
-export function isNonRenderableThreeMfPartSubtype(subtype: string | null): boolean {
-  if (!subtype) return false
-  return NON_RENDERABLE_THREE_MF_PART_SUBTYPES.has(normalizeThreeMfPartSubtype(subtype))
-}
-
-function normalizeThreeMfPartSubtype(subtype: string): string {
-  return subtype.trim().toLowerCase().replace(/[^a-z0-9]+/g, '')
-}

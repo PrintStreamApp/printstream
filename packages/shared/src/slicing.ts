@@ -675,6 +675,26 @@ const arrangedThreeMfBakeSchema = z.object({
    * still land as a NEW version of the file — the old version is never mutated.
    */
   baseVersionId: z.string().trim().min(1).nullable().optional(),
+  /**
+   * Bake purely from `sceneEdit` + its staged imports, ignoring the base file's BYTES while still
+   * targeting it (name/folder/bridge, and a `newVersion` save still lands on it as usual).
+   *
+   * Exists so the editor can stay open on a project it created instead of re-mounting on the
+   * just-saved file after every save. A new project's instances stay IMPORT-backed for the whole
+   * session, so each save re-injects those imports; re-reading the previous save's output then
+   * leaves the base's now-unreferenced component objects behind as orphans. The placed instance
+   * stays correct, but a multi-solid import strands one dead mesh object PER SOLID PER SAVE — a
+   * 134-part assembly bloats the file on every save. Baking from the editor state alone
+   * reproduces the first save's output exactly, so repeated saves are stable.
+   *
+   * Only an EDITOR-BORN project may set this. A project opened from a real file must not: the
+   * bake copies every base entry it has no transform for through verbatim, and that passthrough
+   * is the only thing preserving what `SceneEdit` cannot express (`Auxiliaries/` attachments,
+   * plate thumbnails, `_rels/`, `[Content_Types].xml`, future vendor parts). A new-project
+   * scaffold holds none of that — it is itself a from-null bake of one plate and one default
+   * filament (`POST /api/editor/new-project`), both of which the editor state already models.
+   */
+  ignoreBaseContent: z.boolean().optional(),
   sceneEdit: sceneEditSchema,
   /**
    * Stamp the baked 3MF as a single-object model export (`printstream_model_kind` in

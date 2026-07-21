@@ -8,7 +8,7 @@ import { SETTINGS_MANAGE_PERMISSION, type LicenseStatusResponse, setLicenseReque
 import { Router } from 'express'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { badRequest } from '../lib/http-error.js'
-import { getNativeLicenseEnforcement, invalidateNativeLicenseCache } from '../lib/license-enforcement.js'
+import { getLicenseEnforcement, invalidateLicenseCache } from '../lib/license-enforcement.js'
 import { clearInstalledLicenseKey, getInstalledLicenseStatus, setInstalledLicenseKey } from '../lib/license-state.js'
 
 export const licenseRouter = Router()
@@ -16,7 +16,7 @@ export const licenseRouter = Router()
 licenseRouter.get('/', async (_request, response) => {
   const body: LicenseStatusResponse = {
     status: await getInstalledLicenseStatus(),
-    enforcement: await getNativeLicenseEnforcement()
+    enforcement: await getLicenseEnforcement()
   }
   response.json(body)
 })
@@ -30,16 +30,16 @@ licenseRouter.put('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), asy
   if (!ok) {
     throw badRequest('That license key is not valid.')
   }
-  invalidateNativeLicenseCache()
+  invalidateLicenseCache()
   const body: LicenseStatusResponse = {
     status: await getInstalledLicenseStatus(),
-    enforcement: await getNativeLicenseEnforcement()
+    enforcement: await getLicenseEnforcement()
   }
   response.json(body)
 })
 
 licenseRouter.delete('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (_request, response) => {
   await clearInstalledLicenseKey()
-  invalidateNativeLicenseCache()
+  invalidateLicenseCache()
   response.status(204).end()
 })

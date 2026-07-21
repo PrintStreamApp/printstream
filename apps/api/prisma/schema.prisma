@@ -54,6 +54,7 @@ model Tenant {
   stats              TenantStats?
   printerStats       PrinterStats[]
   subscription       TenantSubscription?
+  licenses           License[]
 
   @@unique([name])
 }
@@ -92,13 +93,36 @@ model TenantSubscription {
   @@index([paddleCustomerId])
 }
 
-/// Vendor-issued self-hosted license keys (cloud-only issuer state). Not
-/// tenant-owned — these track keys sold (commercial) or granted (community) for
-/// self-hosted installs. Harmless/unused in self-hosted or OSS deployments.
+/// Vendor-issued self-hosted license keys (cloud-only issuer state) — the
+/// authoritative record behind every key in a customer's hands. Harmless/unused
+/// in self-hosted or OSS deployments, which only ever hold the signed token.
+///
+/// Tenancy is deliberately loose: `tenantId` is set only for
+/// `source = "subscription"` keys (a workspace's Pro plan extended to its own
+/// self-hosted install) and is null for `purchase`/`community` keys, which are
+/// bought or granted by people who may have no workspace at all. It is
+/// therefore NOT tenant-scoped in `TENANT_SCOPED_MODELS` — every access here is
+/// a deliberate platform-wide issuer operation via `rootPrisma`.
+///
+/// Lifecycle: rows are never deleted. Ending a subscription flips `status` to
+/// "revoked", which stops refreshes; the customer's key then runs out its
+/// remaining `expiresAt` window rather than dying mid-print. Revoked rows are
+/// retained because they are billing evidence.
+///
+/// Snapshot-vs-live: `key` is the token as last *issued*, so `expiresAt` here
+/// tracks the newest signed key, not what the install currently holds — an
+/// install that has not refreshed carries an older, shorter-lived token.
 model License {
   id                  String    @id @default(cuid())
   /// "community" | "commercial".
   edition             String
+  /// How this key came about: "purchase" (one-time Lifetime), "subscription"
+  /// (backed by a live Pro plan, refreshed while it lasts), or "community"
+  /// (free, non-commercial, perpetual). Drives whether refresh re-signs it.
+  source              String    @default("purchase")
+  /// The workspace whose Pro subscription backs this key; null for
+  /// purchase/community keys, which are not tied to a workspace.
+  tenantId            String?
   licensee            String
   email               String?
   /// The signed license token (PSL1.*) delivered to the customer.
@@ -107,11 +131,26 @@ model License {
   status              String    @default("active")
   paddleCustomerId    String?
   paddleTransactionId String?   @unique
+  /// Updates & priority support included until this instant; null = perpetual
+  /// (community). Lapsing blocks updates and support, never the app itself.
   updatesUntil        DateTime?
+  /// When the right to run ends; null = perpetual (Lifetime/community). Kept in
+  /// step with the `expiresAt` baked into `key` on every re-issue.
+  expiresAt           DateTime?
+  /// Printer allowance signed into the key; null = unlimited.
+  maxPrinters         Int?
+  /// Last time an install successfully refreshed this key — the only signal we
+  /// have that a self-hosted deployment is alive, and the support-side answer to
+  /// "is their install actually picking up the new key?".
+  lastRefreshedAt     DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
+  tenant              Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
   @@index([email])
+  @@index([tenantId])
+  @@index([paddleCustomerId])
 }
 
 /// A Bambu printer registered to a workspace. The central vendor-identity

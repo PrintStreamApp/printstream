@@ -66,11 +66,13 @@ import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
 import TouchAppRoundedIcon from '@mui/icons-material/TouchAppRounded'
 import type { LibraryFile, SceneEditAddedPartSubtype, SceneEditPartSubtype } from '@printstream/shared'
+import { canonicalThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { SettingsTuneButton } from '../../components/SettingsTuneButton'
-import { ADDED_PART_SPECS, PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform } from './editorGeometry'
-import { summarizeInstanceMaterial } from './lib/editorModel'
+import { PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform } from './editorGeometry'
+import { HELPER_VOLUME_SPECS, helperVolumeCssColor } from './lib/helperVolumes'
+import { printedParts, summarizeInstanceMaterial } from './lib/editorModel'
 import type { EditorAddedPart, EditorInstance, EditorPlate } from './lib/editorModel'
 import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
 import type { FilamentOption } from './EditorView'
@@ -1144,6 +1146,31 @@ const ADDED_PART_TYPE_OPTIONS = PART_SUBTYPE_OPTIONS.filter((option) => option.s
  * visible at a glance in the list. Added part volumes pass the reduced option list
  * (they can never become normal parts).
  */
+/**
+ * Row marker for a helper volume (support blocker/enforcer, negative part, modifier), in the
+ * subtype's viewport colour so the sidebar reads the same as the 3D scene. Stands where a printed
+ * part shows nothing: a coloured chip leading the row means "this volume is not printed geometry".
+ *
+ * Shared by the saved-part rows and the session-added-part rows below them so a blocker looks
+ * identical before and after the save that turns it into a real `<component>`.
+ */
+function HelperVolumeSwatch({ subtype }: { subtype: SceneEditAddedPartSubtype }) {
+  const spec = HELPER_VOLUME_SPECS[subtype]
+  return (
+    <Tooltip title={`${spec.label} — ${spec.hint}`}>
+      <Box
+        sx={{
+          width: 12,
+          height: 12,
+          borderRadius: '3px',
+          flexShrink: 0,
+          bgcolor: helperVolumeCssColor(spec.color)
+        }}
+      />
+    </Tooltip>
+  )
+}
+
 function PartTypeMenu({
   subtype,
   partName,
@@ -1155,7 +1182,9 @@ function PartTypeMenu({
   options?: ReadonlyArray<{ subtype: SceneEditPartSubtype; label: string }>
   onChange: (subtype: SceneEditPartSubtype) => void
 }) {
-  const current = subtype ?? 'normal_part'
+  // Canonicalize: a 3MF may spell the type `ParameterModifier` (older `volume_type` metadata)
+  // rather than `modifier_part`, and a raw compare would leave the menu showing "Normal part".
+  const current = canonicalThreeMfPartSubtype(subtype)
   const isSpecial = current !== 'normal_part'
   const currentLabel = options.find((option) => option.subtype === current)?.label ?? current
   return (
@@ -1286,9 +1315,11 @@ export function ModelList({
         const overrideCount = sliceObject != null ? perObject!.overrideCountFor(sliceObject) : 0
         // Objects can hold multiple parts, each on its own filament — list them nested.
         const showParts = instance.parts.length > 1
-        // The object-level badge summarises its parts: one material when they agree (show it
-        // like any single-material row), otherwise the indeterminate mixed swatch. Single-part
-        // objects fall back to the instance's own filament.
+        // The object-level badge summarises its PRINTED parts: one material when they agree (show
+        // it like any single-material row), otherwise the indeterminate mixed swatch. Single-part
+        // objects fall back to the instance's own filament. Helper volumes are excluded from both
+        // the summary and the reassignment behind it — see printedParts().
+        const materialParts = printedParts(instance)
         const partMaterial = summarizeInstanceMaterial(instance, resolveId, liveColor)
         return (
           <Fragment key={instance.key}>
@@ -1319,16 +1350,16 @@ export function ModelList({
                 >
                   {instance.name}
                 </Typography>
-                {perObjectId != null && onReassignFilament && instance.parts.length > 0 ? (
+                {perObjectId != null && onReassignFilament && materialParts.length > 0 ? (
                   <FilamentBadge
                     filamentId={partMaterial.uniformId}
                     color={partMaterial.uniformId != null ? liveColor(partMaterial.uniformId, partMaterial.uniformColor) : null}
                     mixedColors={partMaterial.mixedColors}
                     options={filamentOptions}
-                    title={showParts
+                    title={materialParts.length > 1
                       ? (partMaterial.mixedColors ? "Mixed materials — set all parts' material" : "Set all parts' material")
                       : 'Change material'}
-                    onReassign={(fid) => onReassignFilament(instance.parts.map((p) => ({ objectId: perObjectId, componentObjectId: p.componentObjectId })), fid)}
+                    onReassign={(fid) => onReassignFilament(materialParts.map((p) => ({ objectId: perObjectId, componentObjectId: p.componentObjectId })), fid)}
                   />
                 ) : (!showParts && <FilamentBadge filamentId={resolveId(instance.filamentId)} color={liveColor(resolveId(instance.filamentId), instance.color)} />)}
                 {perObject && sliceObject != null && (
@@ -1347,6 +1378,12 @@ export function ModelList({
                   && partSelection.componentObjectIds.includes(part.componentObjectId))
                   || (selectedBakedPart?.objectId === perObjectId
                     && selectedBakedPart.componentObjectId === part.componentObjectId))
+              // BambuStudio draws the extruder swatch for normal parts and modifiers only: a
+              // blocker/enforcer/negative volume has no material to show, so its row leads with
+              // the subtype chip instead — the same marker the session-added rows below use.
+              const partSubtype = canonicalThreeMfPartSubtype(part.subtype)
+              const helperSubtype = partSubtype === 'normal_part' ? null : partSubtype
+              const partCarriesFilament = threeMfPartSubtypeCarriesFilament(part.subtype)
               return (
               <ListItem
                 key={`${instance.key}:${index}`}
@@ -1357,6 +1394,7 @@ export function ModelList({
                 sx={{ pl: 3, borderRadius: 'sm', bgcolor: partSelected ? 'neutral.softBg' : undefined }}
               >
                 <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
+                  {helperSubtype && <HelperVolumeSwatch subtype={helperSubtype} />}
                   <Typography
                     level="body-xs"
                     noWrap
@@ -1371,12 +1409,15 @@ export function ModelList({
                   >
                     {part.name ?? `Part ${index + 1}`}
                   </Typography>
-                  <FilamentBadge
-                    filamentId={resolveId(part.filamentId)}
-                    color={liveColor(resolveId(part.filamentId), part.color)}
-                    options={filamentOptions}
-                    onReassign={onReassignFilament && perObjectId != null ? (fid) => onReassignFilament([{ objectId: perObjectId, componentObjectId: part.componentObjectId }], fid) : undefined}
-                  />
+                  {partCarriesFilament && (
+                    <FilamentBadge
+                      filamentId={resolveId(part.filamentId)}
+                      color={liveColor(resolveId(part.filamentId), part.color)}
+                      options={filamentOptions}
+                      title={helperSubtype ? 'Material printed inside this modifier' : undefined}
+                      onReassign={onReassignFilament && perObjectId != null ? (fid) => onReassignFilament([{ objectId: perObjectId, componentObjectId: part.componentObjectId }], fid) : undefined}
+                    />
+                  )}
                   {onChangePartType && perObjectId != null && (
                     <PartTypeMenu
                       subtype={part.subtype}
@@ -1409,15 +1450,7 @@ export function ModelList({
                 sx={{ pl: 3, borderRadius: 'sm', bgcolor: part.key === selectedAddedPartKey ? 'neutral.softBg' : undefined }}
               >
                 <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
-                  <Box
-                    sx={{
-                      width: 12,
-                      height: 12,
-                      borderRadius: '3px',
-                      flexShrink: 0,
-                      bgcolor: `#${ADDED_PART_SPECS[part.subtype].color.toString(16).padStart(6, '0')}`
-                    }}
-                  />
+                  <HelperVolumeSwatch subtype={part.subtype} />
                   <Typography
                     level="body-xs"
                     noWrap

@@ -36,7 +36,13 @@ export function LibraryCreateAction(props: Record<string, unknown>) {
       })
       onRequestSlice(file, {
         onDiscard: () => {
-          void apiFetch(`/api/editor/scaffold/${file.id}/discard`, { method: 'POST' }).catch(() => undefined)
+          // Best-effort: abandoning a new project should never surface an error to the user, and
+          // the server sweeps un-discarded scaffolds anyway (pruneHiddenLibraryFiles). But it must
+          // not be SILENT — a discard that keeps failing is invisible except as hidden scaffold
+          // rows piling up, which is exactly how the leak this replaced went unnoticed.
+          void apiFetch(`/api/editor/scaffold/${file.id}/discard`, { method: 'POST' }).catch((error: unknown) => {
+            console.warn(`[model-studio] could not discard the abandoned project scaffold ${file.id}`, error)
+          })
         }
       })
     } catch (error) {

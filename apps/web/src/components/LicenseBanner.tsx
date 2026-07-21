@@ -1,37 +1,33 @@
 /**
- * License banner for self-hosted installs (core). Two jobs:
+ * License banner for self-hosted installs (core). Surfaces enforcement state:
+ * a countdown while the install is inside its grace window, and a "paused"
+ * notice once printer adds and print dispatch lock.
  *
- * - **Native (paid) build**: surfaces the commercial-license requirement — a
- *   countdown during the evaluation window, and a limited notice once printer
- *   adds/dispatch lock. Not dismissible; it reflects enforcement.
- * - **Docker/OSS build**: a one-time, dismissible nudge on unlicensed installs
- *   pointing at the free community key (personal, non-commercial use). Pure
- *   information — nothing is enforced there — and it disappears permanently
- *   once dismissed on this device or once any key is installed.
+ * Both self-hosted builds are enforced, and the copy differs only in what
+ * satisfies them: Docker/OSS takes a **free community key** for personal,
+ * non-commercial use, while the native (paid) app requires a commercial one.
+ * Docker/OSS gets the longer window because the requirement is new there — an
+ * install that has been running for a year first sees this on upgrade, so the
+ * banner has to read as "here is what to do", not "you did something wrong".
  *
- * Renders nothing in the cloud (the query only runs when self-hosted).
+ * Deliberately **not dismissible**: it reflects a countdown to real loss of
+ * function. (It used to be a dismissible nudge, back when Docker/OSS was pure
+ * honour system — do not restore that; a dismissed banner would let an install
+ * hit the lock with no warning.)
+ *
+ * Renders nothing in the cloud (the query only runs when self-hosted) or on a
+ * licensed install.
  */
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import { Alert, IconButton, Typography } from '@mui/joy'
+import { Alert, Typography } from '@mui/joy'
 import type { LicenseStatusResponse } from '@printstream/shared'
 import { useQuery } from '@tanstack/react-query'
-import { parseNullableBoolean } from '../appShellHelpers'
-import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { apiFetch } from '../lib/apiClient'
 import { COMMUNITY_LICENSE_URL } from '../lib/licenseUrls'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 
-const NUDGE_DISMISSED_KEY = 'bambu.licenseNudgeDismissed'
-
 export function LicenseBanner() {
   const { selfHosted } = useRuntimePolicy()
-  const [nudgeDismissed, setNudgeDismissed] = useLocalStorageState<boolean | null>(
-    NUDGE_DISMISSED_KEY,
-    null,
-    parseNullableBoolean
-  )
   const licenseQuery = useQuery({
     queryKey: ['license'],
     queryFn: ({ signal }) => apiFetch<LicenseStatusResponse>('/api/license', { signal }),
@@ -42,64 +38,49 @@ export function LicenseBanner() {
   const data = licenseQuery.data
   if (!data) return null
   const { status, enforcement } = data
+  if (!enforcement.enforced || enforcement.mode === 'unrestricted') return null
 
-  // Native build: enforcement state (countdown / limited). Not dismissible.
-  if (enforcement.native && enforcement.mode !== 'unrestricted') {
-    const graceEndsAt = enforcement.graceEndsAt ? new Date(enforcement.graceEndsAt) : null
-    const daysLeft = graceEndsAt ? Math.max(0, Math.ceil((graceEndsAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000))) : 0
-    return (
-      <Alert
-        color={enforcement.mode === 'limited' ? 'danger' : 'warning'}
-        variant="soft"
-        startDecorator={<WarningAmberRoundedIcon />}
-        sx={{ mb: 1 }}
-      >
-        <Typography level="body-sm">
-          {enforcement.mode === 'limited'
-            ? 'The evaluation period has ended — adding printers and starting prints are paused until a commercial license is entered under Settings → License.'
-            : `Evaluating PrintStream: ${daysLeft} day${daysLeft === 1 ? '' : 's'} left. The native app requires a commercial license — enter it under Settings → License (community keys cover the Docker build only).`}
-        </Typography>
-      </Alert>
-    )
-  }
+  const graceEndsAt = enforcement.graceEndsAt ? new Date(enforcement.graceEndsAt) : null
+  const daysLeft = graceEndsAt
+    ? Math.max(0, Math.ceil((graceEndsAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
+    : 0
+  const limited = enforcement.mode === 'limited'
+  // An expired key is a different problem from never having had one, and the
+  // fix is different too (check the subscription, not "go get a key").
+  const expired = status.expired
 
-  // Docker/OSS build: one-time community-key nudge for unlicensed installs.
-  if (!enforcement.native && !status.valid && nudgeDismissed !== true) {
-    return (
-      <Alert
-        color="primary"
-        variant="soft"
-        startDecorator={<InfoOutlinedIcon />}
-        endDecorator={
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="primary"
-            aria-label="Dismiss license reminder"
-            onClick={() => setNudgeDismissed(true)}
-          >
-            <CloseRoundedIcon />
-          </IconButton>
-        }
-        sx={{ mb: 1 }}
-      >
-        <Typography level="body-sm">
-          Self-hosting for personal use? Grab your{' '}
-          <Typography
-            component="a"
-            href={COMMUNITY_LICENSE_URL}
-            target="_blank"
-            rel="noreferrer noopener"
-            level="body-sm"
-            sx={{ color: 'inherit', textDecoration: 'underline' }}
-          >
-            free community license key
-          </Typography>
-          {' '}— it takes a minute and covers personal, non-commercial use. Business use needs a commercial license.
-        </Typography>
-      </Alert>
-    )
-  }
-
-  return null
+  return (
+    <Alert
+      color={limited ? 'danger' : 'warning'}
+      variant="soft"
+      startDecorator={<WarningAmberRoundedIcon />}
+      sx={{ mb: 1 }}
+    >
+      <Typography level="body-sm">
+        {limited
+          ? 'Adding printers and starting prints are paused until a license is entered under Settings → License. Everything already set up keeps working.'
+          : expired
+            ? `This install's license has expired: ${daysLeft} day${daysLeft === 1 ? '' : 's'} until adding printers and starting prints pause. If it came with a Pro subscription, check the subscription is active.`
+            : `This install needs a license: ${daysLeft} day${daysLeft === 1 ? '' : 's'} left before adding printers and starting prints pause.`}
+        {enforcement.native ? (
+          ' The native app requires a commercial license (community keys cover the Docker build only).'
+        ) : (
+          <>
+            {' '}Personal, non-commercial use is free — grab a{' '}
+            <Typography
+              component="a"
+              href={COMMUNITY_LICENSE_URL}
+              target="_blank"
+              rel="noreferrer noopener"
+              level="body-sm"
+              sx={{ color: 'inherit', textDecoration: 'underline' }}
+            >
+              community key
+            </Typography>
+            . Business use needs Pro or a Lifetime license.
+          </>
+        )}
+      </Typography>
+    </Alert>
+  )
 }

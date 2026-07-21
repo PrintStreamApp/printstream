@@ -38,7 +38,7 @@ import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded'
 import ThreeSixtyRoundedIcon from '@mui/icons-material/ThreeSixtyRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import VerticalAlignBottomRoundedIcon from '@mui/icons-material/VerticalAlignBottomRounded'
-import { ADDED_PART_SPECS, ADDED_PART_SUBTYPES } from './editorGeometry'
+import { HELPER_VOLUME_SPECS, HELPER_VOLUME_SUBTYPES } from './lib/helperVolumes'
 import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX } from './contextMenuChrome'
 import { ContextMenuBackItem, FilamentMenuItems } from './contextMenuItems'
 import type { FilamentOption } from './EditorView'
@@ -307,10 +307,10 @@ export function EditorContextMenu({
           {isObject && (
             <>
               <ListDivider />
-              {ADDED_PART_SUBTYPES.map((subtype) => (
+              {HELPER_VOLUME_SUBTYPES.map((subtype) => (
                 <MenuItem key={subtype} onClick={() => { onAddPartVolume(key, subtype); onClose() }}>
                   <ListItemDecorator><CategoryRoundedIcon /></ListItemDecorator>
-                  Add {ADDED_PART_SPECS[subtype].label.toLowerCase()}
+                  Add {HELPER_VOLUME_SPECS[subtype].label.toLowerCase()}
                 </MenuItem>
               ))}
             </>

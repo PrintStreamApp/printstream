@@ -7,7 +7,7 @@
  * places re-imported meshes.
  *
  * Negative parts, modifiers, and support blockers/enforcers are excluded: their meshes
- * are tagged `isModifier` and skipped by `collectWorldTriangles`, and without a mesh
+ * are tagged `isHelperVolume` and skipped by `collectWorldTriangles`, and without a mesh
  * boolean pass exporting a negative volume as solid geometry would be wrong
  * (BambuStudio's no-boolean export path drops them the same way). Callers can detect
  * that via `groupHasExcludedVolumes` and tell the user.
@@ -123,7 +123,7 @@ export function partsExportName(
 export function groupHasExcludedVolumes(group: THREE.Object3D): boolean {
   let found = false
   group.traverse((node) => {
-    if ((node as THREE.Mesh).isMesh && node.userData.isModifier) found = true
+    if ((node as THREE.Mesh).isMesh && node.userData.isHelperVolume) found = true
   })
   return found
 }

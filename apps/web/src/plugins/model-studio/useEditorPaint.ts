@@ -15,10 +15,10 @@
  */
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import * as THREE from 'three'
+import { isNonRenderableThreeMfPartSubtype } from '@printstream/shared'
 import {
   disposeObject3D,
   getGeometryTrianglePaint,
-  isModifierVolumeSubtype,
   type SupportPaintCodes,
   type TrianglePaintChannel
 } from './lib/threeMfScene'
@@ -437,7 +437,7 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     const stateKey = PAINT_CHANNEL_SPECS[channel].stateKey
     const channelPaint = state[stateKey] ?? (state[stateKey] = {})
     for (const part of instance.parts) {
-      if (isModifierVolumeSubtype(part.subtype)) continue
+      if (isNonRenderableThreeMfPartSubtype(part.subtype)) continue
       // An empty map means "no paint" — emitted so existing source paint is stripped.
       channelPaint[supportPaintKey(instance.objectId, part.componentObjectId)] = {}
     }

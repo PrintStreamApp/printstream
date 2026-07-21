@@ -76,7 +76,7 @@ import { buildPlateGcodeFileHint, extractObservedPrintPlateIndex } from '@prints
 import { syncBridgePrinterConfig } from '../lib/bridge-printer-config.js'
 import { printerDiscovery } from '../lib/printer-discovery.js'
 import { assertPrinterQuotaOrThrow, notifyPrinterCountChanged } from '../lib/printer-quota.js'
-import { assertNativeLicenseAllowsPrinterAdd } from '../lib/license-enforcement.js'
+import { assertLicenseAllowsPrinterAdd } from '../lib/license-enforcement.js'
 import { reconnectPrinter } from '../lib/printer-reconnect.js'
 import { validatePrinterLanConnection } from '../lib/printer-connection-validation.js'
 import {
@@ -367,7 +367,7 @@ printersRouter.post('/', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), a
   await assertBridgeAssignmentExists(parsed.data.bridgeId)
   const tenantId = requireRequestTenantId(request)
   await assertPrinterQuotaOrThrow(tenantId)
-  await assertNativeLicenseAllowsPrinterAdd()
+  await assertLicenseAllowsPrinterAdd()
   const last = await prisma.printer.findFirst({ orderBy: { position: 'desc' } })
   const created = await prisma.printer.create({
     data: {

@@ -134,10 +134,12 @@ const envSchema = z.object({
    */
   BILLING_ENFORCEMENT: booleanEnv(false),
   /**
-   * Set by the native (paid) self-hosted distribution at boot. Arms native
-   * license enforcement: a commercial license is required after the evaluation
-   * window (community keys cover the Docker build only). Never set in Docker,
-   * OSS, or cloud deployments.
+   * Set by the native (paid) self-hosted distribution at boot. Selects the
+   * stricter half of license enforcement: a *commercial* key is required after
+   * the evaluation window, where the Docker/OSS build also accepts a free
+   * community key. Enforcement itself applies to every self-hosted build (see
+   * `license-enforcement.ts`), so this is not the switch that arms it. Never
+   * set in Docker, OSS, or cloud deployments.
    */
   PRINTSTREAM_NATIVE: booleanEnv(false),
   PADDLE_API_KEY: optionalStringEnv(),
@@ -153,15 +155,25 @@ const envSchema = z.object({
   PADDLE_PRICE_PRO_BASE: optionalStringEnv(),
   /** Paddle price id for each additional printer beyond the base allotment. */
   PADDLE_PRICE_PRO_PER_PRINTER: optionalStringEnv(),
-  /** Paddle price ids for the self-host commercial license (one-time + annual renewal). */
-  PADDLE_PRICE_SELFHOST_LICENSE: optionalStringEnv(),
-  PADDLE_PRICE_SELFHOST_RENEWAL: optionalStringEnv(),
   /**
-   * Ed25519 private key (PEM/PKCS8) used by the cloud to sign self-hosted license
-   * keys. Cloud-only secret; unset elsewhere. Must match the public key embedded
-   * in `src/lib/license.ts`.
+   * Paddle price id for the Lifetime self-hosted license: a one-time,
+   * perpetual, commercial-use key. Self-hosted only — it confers no cloud plan.
    */
-  PRINTSTREAM_LICENSE_SIGNING_KEY: optionalStringEnv(),
+  PADDLE_PRICE_LIFETIME: optionalStringEnv(),
+  /**
+   * Paddle price id for the annual updates & priority support addon. Applies to
+   * Lifetime keys only; a Pro subscription already includes both for as long as
+   * it runs, so the addon is never sold against one.
+   */
+  PADDLE_PRICE_UPDATES_RENEWAL: optionalStringEnv(),
+  /**
+   * Where a self-hosted install refreshes a subscription-backed license key
+   * (see `license-refresh-client.ts`). Ships pointed at the vendor cloud; an
+   * override exists only so staging can be exercised against sandbox billing.
+   * Perpetual keys never contact it, so this is unused on community/Lifetime
+   * installs.
+   */
+  LICENSE_REFRESH_ORIGIN: z.string().url().default('https://printstream.app'),
   LIBRARY_DIR: z.string().default('./data/library'),
   LIBRARY_MAX_UPLOAD_BYTES: positiveIntEnv(1024 * 1024 * 1024),
   LIBRARY_TRANSIENT_RETENTION_DAYS: positiveIntEnv(7),

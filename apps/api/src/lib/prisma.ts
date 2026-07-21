@@ -98,6 +98,12 @@ export const TENANT_SCOPED_MODELS = new Set([
  *   nullable point-in-time snapshot (no FK) recording which workspace the
  *   conversation came from; the inbox is platform-wide and every query goes
  *   through `rootPrisma` in the private cloud support routes.
+ * - `License` — vendor-issued self-hosted keys. Its `tenantId` is **nullable**
+ *   and set only for subscription-backed keys; Lifetime purchases and community
+ *   grants belong to buyers who may have no workspace. The issuer and the
+ *   key-refresh endpoint are platform-wide operations (the refresh request
+ *   arrives from a self-hosted install with no tenant request context at all),
+ *   so every access goes through `rootPrisma` in the private cloud modules.
  *
  * This set exists so the "every tenantId model is accounted for" invariant holds
  * and a future tenantId model is consciously classified rather than silently left
@@ -107,7 +113,8 @@ export const TENANT_SCOPED_MODELS = new Set([
 export const TENANT_SCOPED_EXCEPTION_MODELS = new Set([
   'AuthGroup',
   'AuthTenantMembership',
-  'SupportConversation'
+  'SupportConversation',
+  'License'
 ])
 
 /** Read/bulk-write operations where we merge `{ tenantId }` into the `where` clause. */

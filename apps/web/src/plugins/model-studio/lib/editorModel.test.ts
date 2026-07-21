@@ -13,11 +13,13 @@ import {
   fillPlateFromScene,
   instanceFromStagedImport,
   isObjectMarkedForRepair,
+  printedParts,
   replaceInstanceGeometry,
   findFreePlatePosition,
   seedEditorState,
   seedEmptyEditorState,
   stagedFootprint,
+  summarizeInstanceMaterial,
   type EditorState
 } from './editorModel'
 
@@ -687,4 +689,84 @@ test('findFreePlatePosition centres the first model on an empty plate', () => {
   const plate = seedEmptyEditorState().plates[0]!
   plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, excludeAreas: [] }
   assert.deepEqual(findFreePlatePosition(plate, { size: { width: 40, depth: 40 }, occupied: [] }), { x: 100, y: 100 })
+})
+
+/**
+ * A one-object plate with a printed part, a support blocker, and a modifier — the shape that
+ * exposed helper volumes wearing the object's material in the sidebar.
+ */
+const sceneWithHelperParts = () => libraryThreeMfSceneSchema.parse({
+  plateIndex: 1,
+  plateName: null,
+  bed: { minX: 0, maxX: 256, minY: 0, maxY: 256, plateType: null },
+  parts: [
+    {
+      entryPath: '/3D/Objects/object_1.model', objectId: 1, transform: IDENTITY_3MF,
+      name: 'Body', sourceFile: null, filamentId: 2, filamentName: null, color: '#ff0000',
+      subtype: 'normal_part'
+    },
+    {
+      entryPath: '/3D/Objects/object_1.model', objectId: 4, transform: IDENTITY_3MF,
+      name: 'Blocker', sourceFile: null, filamentId: null, filamentName: null, color: null,
+      subtype: 'support_blocker'
+    },
+    {
+      entryPath: '/3D/Objects/object_1.model', objectId: 5, transform: IDENTITY_3MF,
+      name: 'Dense zone', sourceFile: null, filamentId: 3, filamentName: null, color: '#00ff00',
+      subtype: 'modifier_part'
+    }
+  ],
+  instances: [{
+    objectId: 1, instanceId: 0, name: 'Widget', transform: IDENTITY_3MF,
+    filamentId: 2, filamentName: null, color: '#ff0000',
+    parts: [
+      { entryPath: '/3D/Objects/object_1.model', componentObjectId: 1, transform: IDENTITY_3MF, subtype: 'normal_part' },
+      { entryPath: '/3D/Objects/object_1.model', componentObjectId: 4, transform: IDENTITY_3MF, subtype: 'support_blocker' },
+      { entryPath: '/3D/Objects/object_1.model', componentObjectId: 5, transform: IDENTITY_3MF, subtype: 'modifier_part' }
+    ]
+  }]
+})
+
+test('seeding never gives a support blocker the object material, and never bakes one back', () => {
+  const state = seedEditorState(
+    threeMfIndexSchema.parse({
+      plates: [{ index: 1, name: null, hasThumbnail: false, plateType: null, nozzleSizes: [], filaments: [], objects: [] }],
+      projectFilaments: [],
+      compatiblePrinterModels: []
+    }),
+    new Map([[1, sceneWithHelperParts()]])
+  )
+  const parts = state.plates[0]!.instances[0]!.parts
+  const byName = new Map(parts.map((part) => [part.subtype, part]))
+  // The printed part keeps its material; the blocker gets none even though the object has one...
+  assert.equal(byName.get('normal_part')?.filamentId, 2)
+  assert.equal(byName.get('support_blocker')?.filamentId, null)
+  assert.equal(byName.get('support_blocker')?.color, null)
+  // ...and a modifier keeps the filament its region was explicitly assigned.
+  assert.equal(byName.get('modifier_part')?.filamentId, 3)
+
+  // The save must not write an `extruder` back onto the blocker.
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(
+    edit.partFilaments?.map((entry) => entry.componentObjectId).sort(),
+    [1, 5]
+  )
+})
+
+test('summarizeInstanceMaterial and printedParts ignore helper volumes', () => {
+  const state = seedEditorState(
+    threeMfIndexSchema.parse({
+      plates: [{ index: 1, name: null, hasThumbnail: false, plateType: null, nozzleSizes: [], filaments: [], objects: [] }],
+      projectFilaments: [],
+      compatiblePrinterModels: []
+    }),
+    new Map([[1, sceneWithHelperParts()]])
+  )
+  const instance = state.plates[0]!.instances[0]!
+  // Only the one printed part counts, so the object reads as a single material rather than
+  // "mixed" against a blocker with no material and a modifier on its own filament.
+  assert.deepEqual(printedParts(instance).map((part) => part.componentObjectId), [1])
+  const summary = summarizeInstanceMaterial(instance, (id) => id, (_id, fallback) => fallback)
+  assert.equal(summary.uniformId, 2)
+  assert.equal(summary.mixedColors, undefined)
 })

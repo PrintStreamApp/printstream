@@ -23,6 +23,7 @@ import type {
   StagedImport,
   ThreeMfIndex
 } from '@printstream/shared'
+import { isNonRenderableThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
 import { randomUUID } from '../../../lib/randomId'
 import { createThreeMfMatrix } from './threeMfScene'
 import { importMeshUrl } from './editorImports'
@@ -395,14 +396,22 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
       : {}),
     parts: instance.parts.map((part) => {
       const info = partInfo.get(partInfoKey(part.entryPath, part.componentObjectId))
+      // Object-material inheritance is for PRINTED parts only. A support blocker/enforcer or
+      // negative volume has no material at all, and a modifier's is "default" until the user
+      // assigns one (BambuStudio writes extruder 0 for every helper volume). Inheriting here is
+      // what put a filament swatch on a blocker in the sidebar and, worse, baked that extruder
+      // back into its `<part>` metadata on the next save.
+      const subtype = part.subtype ?? null
+      const inherited = isNonRenderableThreeMfPartSubtype(subtype) ? null : instance.filamentId
+      const carriesFilament = threeMfPartSubtypeCarriesFilament(subtype)
       return {
         entryPath: part.entryPath,
         componentObjectId: part.componentObjectId,
         transform: [...part.transform],
-        filamentId: info?.filamentId ?? instance.filamentId,
+        filamentId: carriesFilament ? info?.filamentId ?? inherited : null,
         name: info?.name ?? null,
-        color: info?.color ?? instance.color,
-        subtype: part.subtype ?? null
+        color: carriesFilament ? info?.color ?? (inherited != null ? instance.color : null) : null,
+        subtype
       }
     })
   }
@@ -656,13 +665,17 @@ export function duplicateInstance(instance: EditorInstance): EditorInstance {
  * single part (e.g. `parts[0]`) is the trap it replaces — retargeting the first part would drop
  * the object fallback onto that part's new material, collapsing every still-unassigned part onto
  * it on save (the "everything became material 1" regression on a fresh assembly's first save).
+ *
+ * Helper volumes are not part of the consensus: a support blocker has no filament at all, so
+ * counting it would permanently pin the object to its previous default.
  */
 export function deriveObjectFilamentId(
-  parts: ReadonlyArray<{ filamentId: number | null }>,
+  parts: ReadonlyArray<{ filamentId: number | null; subtype?: string | null }>,
   previous: number | null
 ): number | null {
-  const first = parts[0]?.filamentId ?? null
-  const uniform = parts.length > 0 && parts.every((part) => part.filamentId != null && part.filamentId === first)
+  const printed = parts.filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype ?? null))
+  const first = printed[0]?.filamentId ?? null
+  const uniform = printed.length > 0 && printed.every((part) => part.filamentId != null && part.filamentId === first)
   return uniform ? first : previous
 }
 
@@ -1349,9 +1362,19 @@ export function cloneEditorState(state: EditorState): EditorState {
 }
 
 /**
- * The material a multi-part object should advertise: `uniformId` when every part resolves to the
- * same filament (or the object has a single part), otherwise `mixedColors` with the distinct part
- * colours for the indeterminate swatch. Exactly one of the two is set.
+ * The parts of an object that a material summary or an object-level reassignment applies to:
+ * the printed ones. Helper volumes are excluded even when they can hold a filament (a modifier),
+ * because the object badge answers "what is this object printed in" and "set all parts' material"
+ * must not retarget a modifier region the user deliberately put on another filament.
+ */
+export function printedParts(instance: EditorInstance): EditorInstancePart[] {
+  return instance.parts.filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype))
+}
+
+/**
+ * The material a multi-part object should advertise: `uniformId` when every printed part resolves
+ * to the same filament (or the object has a single one), otherwise `mixedColors` with the distinct
+ * part colours for the indeterminate swatch. Exactly one of the two is set.
  */
 export function summarizeInstanceMaterial(
   instance: EditorInstance,
@@ -1359,19 +1382,20 @@ export function summarizeInstanceMaterial(
   /** Same live-colour resolver the single-material badges use, so a recolour updates the bands. */
   liveColor: (filamentId: number | null, fallback: string | null) => string | null
 ): { uniformId: number | null; uniformColor: string | null; mixedColors?: string[] } {
-  if (instance.parts.length <= 1) {
-    return { uniformId: resolveId(instance.filamentId), uniformColor: instance.color }
+  const parts = printedParts(instance)
+  if (parts.length <= 1) {
+    return { uniformId: resolveId(parts[0]?.filamentId ?? instance.filamentId), uniformColor: parts[0]?.color ?? instance.color }
   }
-  const ids = instance.parts.map((part) => resolveId(part.filamentId))
+  const ids = parts.map((part) => resolveId(part.filamentId))
   const distinct = [...new Set(ids)]
   if (distinct.length === 1) {
-    const only = instance.parts[0]
+    const only = parts[0]
     return { uniformId: distinct[0] ?? null, uniformColor: only?.color ?? instance.color }
   }
   // Keep first-seen order so the bands match the part list's reading order.
   const seen = new Set<number | null>()
   const mixedColors: string[] = []
-  instance.parts.forEach((part, index) => {
+  parts.forEach((part, index) => {
     const id = ids[index] ?? null
     if (seen.has(id)) return
     seen.add(id)

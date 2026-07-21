@@ -22,6 +22,7 @@ import * as THREE from 'three'
 import { STLLoader, mergeVertices, toCreasedNormals } from 'three-stdlib'
 import type { LibraryThreeMfScene } from '@printstream/shared'
 import { buildApiUrl } from '../../../lib/apiUrl'
+import { helperVolumeSpec } from './helperVolumes'
 import { fetchModelText } from './modelFetch'
 import { buildTrianglePaintOverlay, SUPPORT_PAINT_COLORS } from './supportPaint'
 
@@ -591,32 +592,6 @@ function createPolygonHatchLines(points: THREE.Vector2[], spacing: number): THRE
 }
 
 /**
- * True for non-printed helper volumes (support blockers/enforcers, modifier and negative
- * parts). Note Bambu marks ordinary parts as `subtype="normal_part"` — a present subtype
- * does NOT imply a modifier, so callers must use this predicate rather than truthiness.
- */
-export function isModifierVolumeSubtype(subtype: string | null): boolean {
-  return modifierVolumeColor(subtype) !== null
-}
-
-/**
- * Render colour for a special part subtype (support blocker/enforcer, modifier/negative volume),
- * mirroring BambuStudio's translucent volume colours, or null for a normal printed part.
- */
-function modifierVolumeColor(subtype: string | null): number | null {
-  if (!subtype) return null
-  switch (subtype.trim().toLowerCase().replace(/[^a-z0-9]+/g, '')) {
-    case 'supportblocker': return 0xff4d4d // translucent red
-    case 'supportenforcer': return 0x4d4dff // translucent blue
-    case 'modifierpart':
-    case 'parametermodifier': return 0x9aa0b3 // translucent grey-blue
-    case 'negativepart':
-    case 'negativevolume': return 0xcfd4dc // translucent light grey
-    default: return null
-  }
-}
-
-/**
  * Build the renderable object for one 3MF/STL part: a shaded mesh plus, for parts
  * resting on the bed, subtle edge outlines — matching the read-only preview so the
  * editor and preview render identically.
@@ -654,13 +629,13 @@ export function createThreeMfPartObject(
 
   // Support blockers/enforcers and modifier/negative volumes render as translucent coloured
   // volumes (BambuStudio-style) and don't participate in resting/collision/clearance — they're
-  // tagged isModifier so the editor's bounds + footprint checks skip them.
-  const modifierColor = modifierVolumeColor(options.subtype ?? null)
-  if (modifierColor !== null) {
+  // tagged isHelperVolume so the editor's bounds + footprint checks skip them.
+  const helperColor = helperVolumeSpec(options.subtype)?.color ?? null
+  if (helperColor !== null) {
     const mesh = new THREE.Mesh(
       baseGeometry,
       new THREE.MeshStandardMaterial({
-        color: modifierColor,
+        color: helperColor,
         transparent: true,
         opacity: 0.45,
         roughness: 0.6,
@@ -671,8 +646,8 @@ export function createThreeMfPartObject(
     )
     if (options.transform) mesh.applyMatrix4(options.transform)
     mesh.renderOrder = 3
-    mesh.userData.isModifier = true
-    group.userData.isModifier = true
+    mesh.userData.isHelperVolume = true
+    group.userData.isHelperVolume = true
     group.add(mesh)
     return group
   }

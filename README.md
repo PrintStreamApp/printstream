@@ -78,6 +78,7 @@ Optional features ship as plugins you can switch on per workspace: sign-in provi
 
 ## Good to know
 
+- **This edition needs a license key.** Self-hosting for personal, non-commercial use is free: request a [community key](https://printstream.app/community-license) and paste it under Settings → License. New installs get a 30-day grace period, after which adding printers and starting prints pause until a key is entered. Nothing else is affected, existing printers keep working, and your data is never locked away. A community key is perpetual and never contacts our servers. Business use needs a Pro subscription (which covers self-hosting at no extra cost) or a one-time Lifetime license.
 - Direct printing is limited to `.gcode` and `.gcode.3mf` files; plain `.3mf` projects stay browsable (and sliceable) but are never dispatched raw.
 - The print dialog blocks hard mismatches (wrong printer model, wrong nozzle) and asks before overriding softer ones.
 - Printer file transfers are serialized and retried carefully so flaky LAN connections don't wedge a printer.
@@ -107,6 +108,8 @@ The software is provided **"as is", without warranty of any kind**. To the fulle
 ## License
 
 PrintStream's source is licensed under the **PolyForm Noncommercial License 1.0.0** (see [`LICENSE`](LICENSE)). You may use, modify, and share it for any noncommercial purpose; all commercial rights are reserved. For a commercial license, contact the copyright holder. This is a source-available license, not an OSI-approved open-source license.
+
+The in-app license key is the runtime side of the same terms: a free community key covers the noncommercial use this license already grants, and a commercial key (Pro subscription or Lifetime) covers the business use it reserves. See [Good to know](#good-to-know) for what happens without one.
 
 ### Third-party software
 

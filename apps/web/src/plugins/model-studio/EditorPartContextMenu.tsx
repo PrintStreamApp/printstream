@@ -30,8 +30,14 @@ export interface EditorPartContextMenuProps {
   listboxRef: MutableRefObject<HTMLDivElement | null>
   onClose: () => void
   onChangeType: (subtype: SceneEditPartSubtype) => void
-  /** Hidden when the project has no materials. */
+  /** Hidden when the project has no materials, or when no selected part can hold one. */
   filamentOptions: ReadonlyArray<FilamentOption>
+  /**
+   * Whether any selected part accepts a material at all. False for a selection made up purely of
+   * support blockers/enforcers and negative volumes, which have none (BambuStudio shows no
+   * extruder for them either) — the item is hidden rather than offered as a no-op.
+   */
+  materialAssignable: boolean
   onChangeMaterial: (filamentId: number) => void
   /**
    * Export-the-selected-parts-as-one-STL targets. Each is present only when the user
@@ -45,8 +51,8 @@ export interface EditorPartContextMenuProps {
 }
 
 export function EditorPartContextMenu({
-  contextMenu, count, listboxRef, onClose, onChangeType, filamentOptions, onChangeMaterial,
-  onExportDownload, onExportToLibrary, onEditSettings
+  contextMenu, count, listboxRef, onClose, onChangeType, filamentOptions, materialAssignable,
+  onChangeMaterial, onExportDownload, onExportToLibrary, onEditSettings
 }: EditorPartContextMenuProps) {
   const [view, setView] = useState<'root' | 'type' | 'material' | 'export'>('root')
   const suffix = count > 1 ? ` (${count} parts)` : ''
@@ -95,7 +101,7 @@ export function EditorPartContextMenu({
             <ListItemDecorator><CategoryRoundedIcon /></ListItemDecorator>
             Change type{suffix}…
           </MenuItem>
-          {filamentOptions.length > 0 && (
+          {filamentOptions.length > 0 && materialAssignable && (
             <MenuItem onClick={(event) => { event.stopPropagation(); setView('material') }}>
               <ListItemDecorator><PaletteRoundedIcon /></ListItemDecorator>
               Change material{suffix}…

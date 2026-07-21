@@ -29,7 +29,7 @@ test('buildObjectStl merges model meshes and skips modifier and overlay meshes',
   const group = new THREE.Group()
   group.add(cubeMesh([0, 0, 0]))
   group.add(cubeMesh([3, 0, 0]))
-  group.add(cubeMesh([6, 0, 0], { isModifier: true }))
+  group.add(cubeMesh([6, 0, 0], { isHelperVolume: true }))
   group.add(cubeMesh([9, 0, 0], { isPaintOverlay: true }))
   const stl = buildObjectStl(group)
   assert.ok(stl)
@@ -72,7 +72,7 @@ test('buildObjectStl returns null when the group has no solid geometry', () => {
   const empty = new THREE.Group()
   assert.equal(buildObjectStl(empty), null)
   const modifiersOnly = new THREE.Group()
-  modifiersOnly.add(cubeMesh([0, 0, 0], { isModifier: true }))
+  modifiersOnly.add(cubeMesh([0, 0, 0], { isHelperVolume: true }))
   assert.equal(buildObjectStl(modifiersOnly), null)
 })
 
@@ -104,7 +104,7 @@ test('buildObjectsStl merges several groups into one STL, keeping relative place
 function partGroup(tag: 'partRef' | 'importPartRef', componentObjectId: number, position: [number, number, number], modifier = false): THREE.Group {
   const group = new THREE.Group()
   group.userData[tag] = { componentObjectId }
-  group.add(cubeMesh(position, modifier ? { isModifier: true } : {}))
+  group.add(cubeMesh(position, modifier ? { isHelperVolume: true } : {}))
   return group
 }
 
@@ -136,7 +136,7 @@ test('groupHasExcludedVolumes detects modifier-tagged meshes', () => {
   const plain = new THREE.Group()
   plain.add(cubeMesh([0, 0, 0]))
   assert.equal(groupHasExcludedVolumes(plain), false)
-  plain.add(cubeMesh([2, 0, 0], { isModifier: true }))
+  plain.add(cubeMesh([2, 0, 0], { isHelperVolume: true }))
   assert.equal(groupHasExcludedVolumes(plain), true)
 })
 

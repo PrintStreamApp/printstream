@@ -2326,6 +2326,86 @@ test('saving from a settings-less new-project scaffold synthesizes project_setti
   }
 })
 
+test('re-saving an editor-born project onto its own output is stable (no duplicate or lost parts)', async () => {
+  // The editor keeps a new project's instances IMPORT-backed for the whole session — nothing
+  // re-reads the file to turn a staged import into an in-project object. This pins the invariant
+  // that makes that safe, and with it the editor's ability to stay open after saving instead of
+  // re-mounting on the just-saved file: because `SceneEdit.instances` is authoritative for what is
+  // placed, re-baking the same edit onto the previous save's output neither duplicates the import
+  // nor strands the old object's geometry — and per-part materials survive the round trip (the
+  // failure mode of the remapPartExtruders double-remap bug, which surfaced on exactly this path).
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-resave-'))
+  try {
+    // Two solids so per-part filament assignment is observable.
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    const mesh = { ...quad(0), parts: [{ name: 'Solid A', mesh: quad(0) }, { name: 'Solid B', mesh: quad(5) }] }
+    const imports = [{ importId: 'imp-1', name: 'Assembly', mesh, parts: mesh.parts }]
+    // The SAME edit the editor re-emits on every save of the session: still import-backed, with
+    // the second solid on material 2 and the first left on material 1.
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 10, y: 20, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      filaments: [
+        { color: '#00AE42', type: 'PLA', settingsId: 'Bambu PLA Basic @BBL P1P' },
+        { color: '#112233', type: 'PETG', settingsId: 'Bambu PETG HF @BBL P1P' }
+      ],
+      importPartFilaments: [{ importId: 'imp-1', partIndex: 1, filamentId: 2 }]
+    }
+
+    const scaffoldPath = path.join(tempDir, 'scaffold.3mf')
+    await buildEditedThreeMf(null, scaffoldPath, { plates: [{ index: 1 }], instances: [] }, [])
+
+    const inspect = async (filePath: string) => {
+      const modelXml = (await readEntry(filePath, '3D/3dmodel.model')).toString('utf8')
+      const settingsXml = (await readEntry(filePath, 'Metadata/model_settings.config')).toString('utf8')
+      return {
+        placed: (await readSceneManifest(filePath, 1)).instances.length,
+        objects: (modelXml.match(/<object /g) ?? []).length,
+        extruders: [...settingsXml.matchAll(/key="extruder" value="(\d+)"/g)].map((match) => match[1]!)
+      }
+    }
+
+    // Save #1 comes off the scaffold either way (there is nothing else to build from).
+    const firstPath = path.join(tempDir, 'save-1.3mf')
+    await buildEditedThreeMf(scaffoldPath, firstPath, edit, imports)
+    const first = await inspect(firstPath)
+    assert.equal(first.placed, 1)
+    // One root object plus one mesh object per solid.
+    assert.equal(first.objects, 3)
+    // The solid moved to material 2 carries its own extruder; the other inherits the object's.
+    assert.deepEqual(first.extruders, ['2'])
+
+    // Saves #2 and #3 bake from the editor state alone (`ignoreBaseContent`), which is what the
+    // API does for an editor-born project. Each reproduces save #1 exactly, so the editor can
+    // stay open across saves.
+    let previousPath = firstPath
+    for (let saveNumber = 2; saveNumber <= 3; saveNumber += 1) {
+      const savePath = path.join(tempDir, `save-${saveNumber}.3mf`)
+      await buildEditedThreeMf(null, savePath, edit, imports)
+      assert.deepEqual(await inspect(savePath), first, `save #${saveNumber} drifted from save #1`)
+      previousPath = savePath
+    }
+
+    // The reason the flag exists: re-reading the previous save's bytes instead stacks up the
+    // now-unreferenced component objects (3 -> 5 for two solids), so an import-backed project
+    // would grow by one dead mesh object per solid on every save.
+    const rereadPath = path.join(tempDir, 'save-reading-base.3mf')
+    await buildEditedThreeMf(previousPath, rereadPath, edit, imports)
+    const reread = await inspect(rereadPath)
+    assert.equal(reread.placed, 1, 'the placed instance stays correct either way')
+    assert.equal(reread.objects, first.objects + mesh.parts.length, 'orphaned solids accumulate')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('a from-scratch build with filaments embeds project_settings.config directly', async () => {
   const { buildEditedThreeMf } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-freshsettings-'))
@@ -3204,6 +3284,62 @@ test('readSceneManifest keeps support/modifier parts and tags their subtype', as
     // The instance carries both parts (including the blocker) with their subtype.
     assert.equal(scene.instances.length, 1)
     assert.ok(scene.instances[0]!.parts.some((part) => part.subtype === 'support_blocker'))
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('readSceneManifest gives a filament to modifiers only, never to blockers/enforcers/negative volumes', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-helper-filament-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  try {
+    const modelXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<model xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">',
+      '  <resources>',
+      '    <object id="3" type="model"><components>',
+      '      <component p:path="/3D/Objects/object_3.model" objectid="1" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>',
+      '      <component p:path="/3D/Objects/object_3.model" objectid="4" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>',
+      '      <component p:path="/3D/Objects/object_3.model" objectid="5" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>',
+      '      <component p:path="/3D/Objects/object_3.model" objectid="6" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>',
+      '    </components></object>',
+      '  </resources>',
+      '  <build><item objectid="3" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/></build>',
+      '</model>'
+    ].join('\n')
+    // The object sits on filament 1. The blocker carries a stale explicit extruder (an earlier
+    // PrintStream save baked one on); the bare modifier carries none.
+    const modelSettingsXml = [
+      '<config>',
+      '  <object id="3"><metadata key="name" value="Widget"/><metadata key="extruder" value="1"/>',
+      '    <part id="1" subtype="normal_part"><metadata key="name" value="Body"/></part>',
+      '    <part id="4" subtype="support_blocker"><metadata key="name" value="Blocker"/><metadata key="extruder" value="2"/></part>',
+      '    <part id="5" subtype="modifier_part"><metadata key="name" value="Dense zone"/><metadata key="extruder" value="3"/></part>',
+      '    <part id="6" subtype="modifier_part"><metadata key="name" value="Bare zone"/></part>',
+      '  </object>',
+      '  <plate>',
+      '    <metadata key="plater_id" value="1"/>',
+      '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/></model_instance>',
+      '  </plate>',
+      '</config>'
+    ].join('\n')
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(modelXml, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(modelSettingsXml, 'utf8')]
+    ])
+
+    const scene = await readSceneManifest(sourcePath, 1)
+    const byName = new Map(scene.parts.map((part) => [part.name, part]))
+    // A printed part with no extruder of its own still inherits the object's.
+    assert.equal(byName.get('Body')?.filamentId, 1)
+    // A blocker has no material even when the file says otherwise.
+    assert.equal(byName.get('Blocker')?.filamentId, null)
+    // A modifier's own extruder is its region's material and survives the read.
+    assert.equal(byName.get('Dense zone')?.filamentId, 3)
+    // ...but an unassigned modifier stays "default" rather than inheriting the object's.
+    assert.equal(byName.get('Bare zone')?.filamentId, null)
+    // Helper volumes never define the instance's material either.
+    assert.equal(scene.instances[0]?.filamentId, 1)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

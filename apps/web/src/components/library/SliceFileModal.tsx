@@ -12,7 +12,7 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Box, Button, DialogActions, ModalDialog, Sheet, Stack, Typography
+  Box, Button, DialogActions, Stack, Typography
 } from '@mui/joy'
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
@@ -35,10 +35,7 @@ import type {
 import { DEFAULT_FILAMENT_COLOR, PER_OBJECT_PROCESS_KEYS } from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
-import { resolveFilamentDisplay } from '../../lib/filamentColor'
 import { remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
-import { FilamentOptionLabel } from './FilamentOptionLabel'
-import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import {
   extractLayerHeightToken,
   isSelectableOrProjectFallbackSlicingProfile,
@@ -65,7 +62,6 @@ import {
   buildSliceMaterialOptions,
   dedupeVisibleProcessProfiles,
   ensurePrinterModelOptions,
-  groupSliceMaterialOptionsByGroup,
   isFilamentProfileCompatible,
   isMachineProfileCompatible,
   isProcessProfileCompatible,
@@ -92,7 +88,6 @@ import {
 } from '../../lib/sliceProfileMatching'
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { slicingProfilesQueryOptions } from '../../lib/slicingProfilesQuery'
-import { estimateRemainGrams } from '../../lib/slotRemaining'
 import { useMobileViewport } from '../useMobileViewport'
 import { LibraryDestinationDialog } from '../LibraryDestinationDialog'
 import { BackAwareModal as Modal } from '../BackAwareModal'
@@ -332,12 +327,11 @@ export function SliceFileModal({
   const [filamentMaterialTypeFilters, setFilamentMaterialTypeFilters] = useState<Record<number, string>>({})
   const [filamentColors, setFilamentColors] = useState<Record<number, string>>(() => buildInitialFilamentColorSelection(file, null))
   const [filamentToolheadIds, setFilamentToolheadIds] = useState<Record<number, string>>(() => buildInitialFilamentToolheadSelection(file, null))
-  const [printerMaterialPickerFilamentId, setPrinterMaterialPickerFilamentId] = useState<number | null>(null)
-  // The full editor renders this controller's own "Choose material" picker Modal behind itself
-  // (the host slice dialog stays mounted), so a pick made there calls THIS controller's
-  // `handleMaterialOptionChange` directly — not the markDirty-wrapped copy the editor hands to the
-  // settings panel. The editor registers `markDirty` here so picker-driven material edits still
-  // light its Save button. Null in the simple slice path.
+  // The full editor renders this controller's own material dialogs behind itself (the host slice
+  // dialog stays mounted), so an edit made there — the filament-settings dialog's overrides — calls
+  // THIS controller directly, not the markDirty-wrapped copy the editor hands to the settings panel.
+  // The editor registers `markDirty` here so those edits still light its Save button. Null in the
+  // simple slice path.
   const materialEditListenerRef = useRef<(() => void) | null>(null)
   // Sibling of materialEditListenerRef for global process-setting edits (profile switch + the
   // process-settings dialog's overrides). The editor registers a snapshot-then-dirty handler so
@@ -1073,13 +1067,8 @@ export function SliceFileModal({
   }
 
   const printerModelOptions = ensurePrinterModelOptions(file.compatiblePrinterModels, selectedPrinter?.model, machineProfiles)
-  const selectedPrinterMaterialPickerFilament = projectFilaments.find((filament) => filament.projectFilamentId === printerMaterialPickerFilamentId) ?? null
-  const selectedPrinterMaterialPickerOptions = selectedPrinterMaterialPickerFilament
-    ? prioritizeLoadedMaterialOptionsForFilament(loadedMaterialOptions, selectedPrinterMaterialPickerFilament.nozzleId ?? null)
-    : []
-  const groupedSelectedPrinterMaterialPickerOptions = groupSliceMaterialOptionsByGroup(selectedPrinterMaterialPickerOptions)
-  // Maps a loaded option's trayId back to its tray so the picker can show how much
-  // filament that tray has left (only for RFID/Bambu spools that report it).
+  // Maps a loaded option's trayId back to its tray so the settings panel's material menu can show
+  // how much that tray has left (only for RFID/Bambu spools that report it).
   const printerTrayMap = useMemo(() => buildPrinterTrayMap(selectedPrinterStatus), [selectedPrinterStatus])
   const handleMaterialOptionChange = (projectFilamentId: number, option: SliceMaterialOption | null) => {
     setFilamentMaterialOptionIds((current) => ({ ...current, [projectFilamentId]: option?.id ?? '' }))
@@ -1173,11 +1162,11 @@ export function SliceFileModal({
       onTogglePrint: toggleSliceObject
     } : null,
     usedFilamentIdsForPlate: (plateIndex: number) => new Set(bakedIndex?.plates.find((plate) => plate.index === plateIndex)?.filaments.map((filament) => filament.id) ?? []),
-    projectFilaments: visibleProjectFilaments, materialOptions, loadedMaterialOptions, materialToolheadOptions,
+    projectFilaments: visibleProjectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
     filamentSettingOverridesById, openFilamentSettings: setFilamentSettingsFilamentId,
-    setPrinterMaterialPickerFilamentId, handleMaterialOptionChange,
+    handleMaterialOptionChange,
     desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onRemoveFilament: handleRemoveFilament,
     configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, processEditListenerRef
   }
@@ -1460,58 +1449,6 @@ export function SliceFileModal({
         name="library.overlays"
         context={{ previewFileId, previewPlateIndex: Number.parseInt(plateNumber, 10), onPreviewClose: () => setPreviewFileId(null) }}
       />
-      <Modal open={Boolean(printerMaterialPickerFilamentId)} onClose={() => setPrinterMaterialPickerFilamentId(null)}>
-        <ModalDialog size="md" sx={{ maxWidth: 480, width: '100%' }}>
-          <Typography level="h4">Choose material {selectedPrinterMaterialPickerFilament ? projectFilaments.findIndex((filament) => filament.projectFilamentId === selectedPrinterMaterialPickerFilament.projectFilamentId) + 1 : ''}</Typography>
-          <Stack spacing={1}>
-            {selectedPrinterMaterialPickerOptions.length === 0 ? (
-              <Typography level="body-sm" textColor="text.tertiary">No loaded printer materials are available for this material.</Typography>
-            ) : groupedSelectedPrinterMaterialPickerOptions.map((group) => (
-              <Stack key={group.label} spacing={0.5}>
-                <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{group.label}</Typography>
-                {group.options.map((option) => {
-                  const tray = option.trayId != null ? printerTrayMap.get(option.trayId) : undefined
-                  // Remaining: the tracked spool's figure first (covers non-RFID custom
-                  // filament); otherwise only RFID/Bambu spools report a reliable estimate.
-                  const remainGrams = option.remainingGrams
-                    ?? (tray && tray.trayUuid != null ? estimateRemainGrams(tray.remainPercent) : null)
-                  const remainPercent = option.remainPercent ?? tray?.remainPercent
-                  // Pre-fold "brand + type" so the brand isn't doubled when the label already carries it,
-                  // then hand the whole identity to the shared label as the name (type left to the label).
-                  const brandLabel = option.brand && !option.label.toLowerCase().includes(option.brand.toLowerCase())
-                    ? `${option.brand} ${option.label}`
-                    : option.label
-                  return (
-                    <Sheet
-                      key={option.id}
-                      variant="outlined"
-                      onClick={() => {
-                        if (!selectedPrinterMaterialPickerFilament) return
-                        handleMaterialOptionChange(selectedPrinterMaterialPickerFilament.projectFilamentId, option)
-                        setPrinterMaterialPickerFilamentId(null)
-                      }}
-                      sx={{ p: 1, borderRadius: 'sm', cursor: 'pointer', transition: 'border-color 120ms', '&:hover': { borderColor: 'primary.500' } }}
-                    >
-                      <FilamentOptionLabel
-                        color={option.color}
-                        colors={option.colors}
-                        colorName={option.colorName ?? (tray ? resolveFilamentDisplay(tray).name : null)}
-                        filamentName={brandLabel}
-                        swatchLabel={option.slotLabel}
-                        remainingGrams={remainGrams}
-                        remainPercent={remainPercent}
-                      />
-                    </Sheet>
-                  )
-                })}
-              </Stack>
-            ))}
-          </Stack>
-          <DialogActions>
-            <Button type="button" variant="plain" onClick={() => setPrinterMaterialPickerFilamentId(null)}>Cancel</Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
     </>
   )
 }

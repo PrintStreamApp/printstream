@@ -1,11 +1,13 @@
 /**
  * Material edit dialog — the expanded type/preset/color inputs for ONE material slot,
- * opened by clicking the material's compact swatch row in `SliceSettingsPanel` (the row
+ * opened from the material's compact swatch row in `SliceSettingsPanel` (directly when no
+ * printer is targeted, otherwise through that row's "Choose manually" menu item; the row
  * itself keeps only the swatch + nozzle picker). Edits apply immediately through the
  * slice controller's setters — the same live semantics the inputs had when they sat
  * inline on the row — so "Done" only closes; there is no separate apply/cancel state.
- * "Choose from printer" opens the host slice dialog's printer-material picker Modal,
- * which stacks above this dialog and closes itself after a pick.
+ *
+ * This is the MANUAL path only: assigning what the printer already has loaded is the swatch
+ * menu's job, so the dialog carries no printer shortcut of its own.
  */
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -28,7 +30,6 @@ export function MaterialEditDialog({
   onMaterialOptionChange,
   color,
   onColorChange,
-  chooseFromPrinter,
   onClose
 }: {
   filamentIndex: number
@@ -44,14 +45,11 @@ export function MaterialEditDialog({
   /** Normalized current color hex. */
   color: string
   onColorChange: (color: string) => void
-  /** Present only when a real printer is targeted (the shortcut needs loaded trays). */
-  chooseFromPrinter: { disabled: boolean; onOpen: () => void } | null
   onClose: () => void
 }) {
-  // Edits apply LIVE through the controller (that is what keeps the editor's dirty flag and undo
-  // history correct, and what lets the "Choose from printer" picker write straight through). So
-  // Cancel restores the values the dialog opened with rather than staging edits until Done —
-  // same outcome for the user, without diverging from that live-apply contract.
+  // Edits apply LIVE through the controller — that is what keeps the editor's dirty flag and undo
+  // history correct. So Cancel restores the values the dialog opened with rather than staging edits
+  // until Done — same outcome for the user, without diverging from that live-apply contract.
   const opened = useRef({ option: selectedOption, color, typeFilter })
   const revertAndClose = () => {
     const initial = opened.current
@@ -65,17 +63,6 @@ export function MaterialEditDialog({
       <ModalDialog sx={{ maxWidth: 420, width: '100%' }}>
         <Typography level="h4">Material {filamentIndex + 1}</Typography>
         <Stack spacing={1.25}>
-          {chooseFromPrinter && (
-            <Button
-              type="button"
-              variant="outlined"
-              color="neutral"
-              disabled={chooseFromPrinter.disabled}
-              onClick={chooseFromPrinter.onOpen}
-            >
-              Choose from printer
-            </Button>
-          )}
           <FormControl>
             <FormLabel>Type</FormLabel>
             <Select<string>

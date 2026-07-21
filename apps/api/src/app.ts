@@ -31,7 +31,8 @@ import { editorRouter } from './routes/editor.js'
 import { deleteOperationsRouter } from './routes/delete-operations.js'
 import { printerViewsRouter } from './routes/printer-views.js'
 import { licenseRouter } from './routes/license.js'
-import { registerNativeLicensePrintGuard } from './lib/license-enforcement.js'
+import { registerLicenseEnforcement } from './lib/license-enforcement.js'
+import { startLicenseRefreshScheduler } from './lib/license-refresh-client.js'
 import { settingsRouter } from './routes/settings.js'
 import { bridgesRouter } from './routes/bridges.js'
 import { bridgeRuntimeRouter } from './routes/bridge-runtime.js'
@@ -200,9 +201,13 @@ app.use('/api/logs', logsRouter)
 app.use('/api/notifications', notificationsRouter)
 app.use('/api/settings', settingsRouter)
 app.use('/api/license', licenseRouter)
-// Native (paid) builds require a commercial license: past the evaluation
-// window, dispatch is guarded and printer adds are blocked. No-op elsewhere.
-registerNativeLicensePrintGuard()
+// Self-hosted builds (native and Docker/OSS alike) require a license: past the
+// grace window, dispatch is guarded and printer adds are blocked. The cloud
+// licenses via subscriptions, so both calls are a no-op there.
+registerLicenseEnforcement()
+// Keeps a subscription-backed key alive. Skipped for perpetual keys, so a
+// community or Lifetime install never makes an outbound request.
+startLicenseRefreshScheduler()
 app.use('/api/bridges', bridgesRouter)
 app.use('/api/bridge-runtime', bridgeRuntimeRouter)
 app.use('/api/stats', tenantStatsRouter)

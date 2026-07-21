@@ -12,7 +12,7 @@
  */
 import * as THREE from 'three'
 import { ConvexGeometry } from 'three-stdlib'
-import type { LibraryThreeMfPrimeTower, SceneEditAddedPartSubtype, SceneEditPartSubtype } from '@printstream/shared'
+import type { LibraryThreeMfPrimeTower, SceneEditPartSubtype } from '@printstream/shared'
 import type { SliceConfigSnapshot } from '../../components/library/SliceSettingsPanel'
 import type { TrianglePaintChannel } from './lib/threeMfScene'
 import { FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
@@ -35,13 +35,6 @@ export const BRIM_EAR_MARKER_COLOR = 0xeec25a
 
 /** Viewport meshes for added part volumes (negative parts, modifiers, blockers). */
 export const ADDED_PART_MESH_NAME = 'addedPartVolume'
-export const ADDED_PART_SPECS: Record<SceneEditAddedPartSubtype, { label: string; color: number; hint: string }> = {
-  negative_part: { label: 'Negative part', color: 0x8a8f98, hint: 'Its shape is cut out of the model when slicing.' },
-  modifier_part: { label: 'Modifier', color: 0x2fae6a, hint: 'Apply per-object process overrides inside its volume.' },
-  support_blocker: { label: 'Support blocker', color: 0xd24a4a, hint: 'Supports are never generated inside its volume.' },
-  support_enforcer: { label: 'Support enforcer', color: 0x3a62e0, hint: 'Supports are always generated inside its volume.' }
-}
-export const ADDED_PART_SUBTYPES = Object.keys(ADDED_PART_SPECS) as SceneEditAddedPartSubtype[]
 
 /** BambuStudio's "Change type" options, in its menu order, with its labels. */
 export const PART_SUBTYPE_OPTIONS: ReadonlyArray<{ subtype: SceneEditPartSubtype; label: string }> = [
@@ -295,7 +288,7 @@ export function printableMeshBox(object: THREE.Object3D, precise = true): THREE.
     // (`isFaceHull`), the prime tower, and brim-ear markers. Including the face hull was the
     // "lay flat leaves the part floating" bug — the hull's z=0 box made restObjectOnBed think the
     // object already touched the bed, so it never dropped the freshly rotated geometry.
-    if (mesh.userData.isModifier || mesh.userData.isFaceHull || mesh.userData.isPrimeTower) return
+    if (mesh.userData.isHelperVolume || mesh.userData.isFaceHull || mesh.userData.isPrimeTower) return
     // Paint overlays are a lifted visual aid (and can be 100k+ triangles) — never part of the
     // printable bounds, and walking them per-vertex here is what made dragging a painted part hitch.
     if (mesh.userData.isPaintOverlay) return
@@ -372,7 +365,7 @@ export function computeFootprintCells(group: THREE.Object3D): Set<number> {
   const c = new THREE.Vector3()
   group.traverse((child) => {
     const mesh = child as THREE.Mesh
-    if (!mesh.isMesh || mesh.userData.isFaceHull || mesh.userData.isPrimeTower || mesh.userData.isModifier || mesh.userData.isPaintOverlay) return
+    if (!mesh.isMesh || mesh.userData.isFaceHull || mesh.userData.isPrimeTower || mesh.userData.isHelperVolume || mesh.userData.isPaintOverlay) return
     const position = mesh.geometry.getAttribute('position')
     if (!position) return
     const index = mesh.geometry.getIndex()

@@ -26,7 +26,7 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | --- | --- | --- |
 | **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves staged as imports) |
 | **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (STL parse + STEP tessellation), `lib/three-mf-mesh-extract.ts` (3MF geometry-only import: first non-empty plate → one part per placed part, helper volumes dropped, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
-| **Slicing** | web | the slice UI in `components/library/` — `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs behind a swatch row), `FilamentSettingsDialog.tsx` (material settings, shares `components/settings/SettingValueField.tsx`) — plus `components/ProcessSettingsDialog.tsx` and `components/PerObjectSettingsDialog.tsx` |
+| **Slicing** | web | the slice UI in `components/library/` — `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings, shares `components/settings/SettingValueField.tsx`) — plus `components/ProcessSettingsDialog.tsx` and `components/PerObjectSettingsDialog.tsx` |
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-profiles.ts` |
 | **Slicing** | slicer | `apps/slicer/**` — the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
 | **Shared 3MF model** | shared | `packages/shared/src/slicing.ts` (`SceneEdit`, slicing job contracts), the scene/index schemas in `printer.ts` |
@@ -43,7 +43,12 @@ instance it carries the geometry reference (`objectId` or staged `importId`), `p
 decomposed transform (or a full `matrix`), optional `filamentId`, and `printable`.
 
 Per-part extensions ride alongside the instances: `partFilaments` (material
-reassignment), `objectNames` (renames), and the three paint channels `supportPaint` /
+reassignment — only for parts that HAVE a material: normal parts and modifiers, whose
+region can change the printed filament. A support blocker/enforcer or negative volume
+never carries one, is never given the object's, and never gets an `extruder` written back;
+this mirrors BambuStudio, which draws the extruder swatch for `MODEL_PART` and
+`PARAMETER_MODIFIER` only. `threeMfPartSubtypeCarriesFilament` in `@printstream/shared` is
+the single predicate for it), `objectNames` (renames), and the three paint channels `supportPaint` /
 `seamPaint` / `colorPaint` — the support, seam, and colour brushes' complete per-part
 triangle paint maps (`paint_supports` / `paint_seam` codes: `'4'` enforcer, `'8'`
 blocker; `paint_color` whole-triangle states map to 1-based filament ids, '4'/'8'/'0C'/
@@ -168,7 +173,7 @@ conditional visibility rules.
 
 Global (project-wide) process edits made in the editor persist into the saved 3MF,
 not just a one-off slice. The dialog is owned by the host `SliceFileModal` and writes
-the shared slice controller, so — like the material picker's `materialEditListenerRef` —
+the shared slice controller, so — like the filament-settings dialog's `materialEditListenerRef` —
 the controller exposes a `processEditListenerRef` the editor points at
 `recordMaterialsHistory`; the modal fires it **before** a profile switch / overrides
 apply, so the edit lands in undo history and lights Save. On save, `useEditorSave` sends
@@ -179,6 +184,41 @@ the controller's `processSettingOverrides` as `SaveArrangedThreeMf.processSettin
 option rather than the `SceneEdit` contract so the slice path — which applies these via
 the slice request instead — is untouched. On reopen the baked config becomes the
 baseline, so the override map resets to empty (no phantom "modified" marker).
+
+### An editor-born project bakes from the editor state, not from its own last save
+
+A project **created** in the editor (the "New 3MF" scaffold, or a fileless start) keeps its
+instances **import-backed for the whole session** — nothing re-reads the file to turn a staged
+import into an in-project object. Its saves therefore set
+`SaveArrangedThreeMf.ignoreBaseContent`, which makes the API skip the base file's *bytes* while
+still using it as the save **target** (name/folder/bridge; a `newVersion` save still lands on it).
+
+Why it matters: without it, each save re-injects the staged imports on top of the previous save's
+output, and the base's now-unreferenced component objects are left behind. The *placed* instance
+stays correct — `SceneEdit.instances` is authoritative for what is on the plate — so this is
+invisible in the scene, but a multi-solid import strands **one dead mesh object per solid per
+save**, and a large STEP assembly bloats the file every time the user hits Save. Baking from the
+editor state alone reproduces the first save's output byte-for-byte, so repeated saves are stable.
+That stability is what lets the editor **adopt** the saved file in place (`savedFile` in
+`useEditorSave`) and stay open, instead of re-mounting on it — a plain Save used to look like the
+project had reloaded, because a new project has no Save-version path and fell through to Save-As.
+
+The scaffold itself is a hidden throwaway: `LibraryCreateAction` hands the host an `onDiscard`,
+which `LibraryView` fires from `closeSliceDialog`. Cleanup is therefore tied to a **clean dialog
+close** — a killed tab or a refresh skips it, and `pruneHiddenLibraryFiles` sweeps the remainder
+after `LIBRARY_TRANSIENT_RETENTION_DAYS`. Note the historical trap: re-opening the editor on a
+saved file (`onSavedAs` → `openSliceForSavedFile` with no opts) **overwrites that cleanup ref with
+null**, so before the adopt-in-place change every save of a new project orphaned its scaffold.
+
+The flag is **only** for editor-born projects. A project opened from a real library file must keep
+reading its base: `rewriteThreeMfEntries` copies every entry it has no transform for through
+verbatim, and that passthrough is the only thing preserving what `SceneEdit` cannot express —
+`Auxiliaries/` attachments, plate thumbnails, `_rels/`, `[Content_Types].xml`, and whatever a
+future BambuStudio adds. A new-project scaffold holds none of that: it is itself a from-null bake
+of one plate and one default filament (`POST /api/editor/new-project`), both already modelled by
+the editor state. A genuine **Save As** from an already-saved project still re-mounts on the new
+file, deliberately — an older file stays behind, and re-reading is also what converts that
+session's staged imports into in-project objects.
 
 ## Printability ("Printable" toggle)
 

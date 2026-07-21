@@ -30,6 +30,25 @@ The default stack runs `db` (PostgreSQL) plus the **combined app image** (`ghcr.
 
 On first start the API auto-creates a default workspace when the database has no workspaces yet.
 
+### License key
+
+A self-hosted install needs a license key. Personal, non-commercial use is free:
+request a [community key](https://printstream.app/self-host/community-license)
+and paste it under **Settings → License**. A community key is perpetual, covers
+unlimited printers, and never contacts our servers — nothing about a personal
+install phones home.
+
+New installs get a 30-day grace period, counted from the first boot of a build
+that enforces this, so upgrading an existing deployment does not lock it
+immediately. After the grace period, adding printers and starting prints pause
+until a key is entered. Nothing else changes: existing printers stay visible,
+the library and job history stay intact, and no data is locked away.
+
+Business use needs a commercial key — either a Pro subscription (which covers
+self-hosting at no extra cost over the hosted service) or a one-time Lifetime
+license. A Pro-backed key carries an expiry and refreshes itself daily against
+`LICENSE_REFRESH_ORIGIN`; that refresh sends the key and nothing else.
+
 ### Updating
 
 ```bash

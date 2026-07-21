@@ -40,6 +40,12 @@ export interface EditorSaveParams {
   baseFileId: string | null
   baseVersionId: string | null | undefined
   saveAsBridgeId: string | null | undefined
+  /**
+   * This project was CREATED in the editor (a new-project scaffold or a fileless start) rather
+   * than opened from a library file. Such a project keeps its instances import-backed for the
+   * whole session, so its saves bake from the editor state alone — see {@link EditorSave.savedFile}.
+   */
+  editorBorn: boolean
   /** Slice-time apply (only present when launched from the slice dialog). */
   onApply: ((edit: SceneEdit) => void) | undefined
   onSaved: ((file: { id: string; name: string }) => void) | undefined
@@ -50,6 +56,13 @@ export interface EditorSaveParams {
 }
 
 export interface EditorSave {
+  /**
+   * The library file an editor-born project was saved into, once it has been saved. The editor
+   * ADOPTS that file in place — it keeps its scene and stays open rather than re-mounting on the
+   * saved file, so a plain Save no longer looks like the project reloaded. Null until the first
+   * save (and always null for a project opened from a file, which already has its own base).
+   */
+  savedFile: { id: string; name: string } | null
   /** A save is in flight (drives the disabled/loading state of Save/Slice/Close). */
   saving: boolean
   saveAsOpen: boolean
@@ -79,6 +92,7 @@ export function useEditorSave({
   baseFileId,
   baseVersionId,
   saveAsBridgeId,
+  editorBorn,
   onApply,
   onSaved,
   onSavedAs,
@@ -88,6 +102,11 @@ export function useEditorSave({
   const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
   const [saveAsOpen, setSaveAsOpen] = useState(false)
+  const [savedFile, setSavedFile] = useState<{ id: string; name: string } | null>(null)
+  // Saves of an editor-born project target the adopted file once it exists, and always bake from
+  // the editor state — never from the bytes of the save before them (see `ignoreBaseContent`).
+  const effectiveBaseFileId = savedFile?.id ?? baseFileId
+  const effectiveBaseVersionId = savedFile ? null : baseVersionId
 
   const handleApply = useCallback(() => {
     const current = stateRef.current
@@ -205,13 +224,15 @@ export function useEditorSave({
 
   const handleSaveVersion = useCallback(() => {
     const current = stateRef.current
-    if (!current || baseFileId === null) return
+    if (!current || effectiveBaseFileId === null) return
     void (async () => {
       const thumbnails = await captureAllPlateThumbnails(current)
       const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
       await runSave(
         {
-          baseFileId, baseVersionId, mode: 'newVersion', sceneEdit: buildSceneEditOut(current, { thumbnails }),
+          baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId,
+          mode: 'newVersion', ignoreBaseContent: editorBorn,
+          sceneEdit: buildSceneEditOut(current, { thumbnails }),
           objectProcessOverrides: collectObjectProcessOverrides(),
           processSettingOverrides: collectProcessSettingOverrides(),
           retarget,
@@ -220,7 +241,7 @@ export function useEditorSave({
         retarget ? `Saved a new version for ${retarget.printerModel}` : 'Saved a new version'
       )
     })()
-  }, [baseFileId, baseVersionId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
 
   const handleSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
@@ -229,9 +250,16 @@ export function useEditorSave({
     void (async () => {
       const thumbnails = await captureAllPlateThumbnails(current)
       const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+      // A project born in the editor has never been persisted, so its first save is a "save as"
+      // only mechanically — there is no earlier file to strand the user on, and its own scaffold
+      // holds nothing the editor state doesn't model. Bake from the state so the editor can adopt
+      // the result instead of re-mounting on it.
+      const firstSaveOfEditorBornProject = editorBorn && savedFile === null
       const saved = await runSave(
         {
-          baseFileId, baseVersionId, mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
+          baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId,
+          mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
+          ignoreBaseContent: firstSaveOfEditorBornProject,
           sceneEdit: buildSceneEditOut(current, { thumbnails }),
           objectProcessOverrides: collectObjectProcessOverrides(),
           processSettingOverrides: collectProcessSettingOverrides(),
@@ -240,11 +268,21 @@ export function useEditorSave({
         },
         `Saved “${name}”`
       )
-      // "Save as" makes a NEW file; leaving the editor on the old project is confusing (the user's
-      // edits, and any further edits, target the old file). Re-open the editor on the new file.
-      if (saved) onSavedAs?.(saved)
+      if (!saved) return
+      if (firstSaveOfEditorBornProject) {
+        // Adopt the new file in place: the editor keeps its scene and its (still import-backed)
+        // state, and later saves become ordinary new-version saves against it. Re-mounting here
+        // is what made a plain Save look like the project reloaded.
+        setSavedFile(saved)
+        return
+      }
+      // A real "save as" DOES make a new file while an older one stays behind, so leaving the
+      // editor on the old project would silently send further edits to the wrong file. Re-open
+      // on the new one — and re-reading it is also what turns this session's staged imports into
+      // in-project objects, which an adopted project deliberately skips.
+      onSavedAs?.(saved)
     })()
-  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
 
   /**
    * "Export object as 3MF": bake ONLY the given object into a new single-plate 3MF library
@@ -335,6 +373,7 @@ export function useEditorSave({
   }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
 
   return {
+    savedFile,
     saving,
     saveAsOpen,
     setSaveAsOpen,

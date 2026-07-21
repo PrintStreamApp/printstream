@@ -60,7 +60,6 @@ function renderDialog(props: {
         onMaterialOptionChange={props.onMaterialOptionChange ?? (() => {})}
         color="#FFFFFF"
         onColorChange={() => {}}
-        chooseFromPrinter={null}
         onClose={() => {}}
       />
     </CssVarsProvider>
@@ -93,7 +92,6 @@ test('clearing an existing preset does not crash the field', () => {
         onMaterialOptionChange={() => {}}
         color="#FFFFFF"
         onColorChange={() => {}}
-        chooseFromPrinter={null}
         onClose={() => {}}
       />
     </CssVarsProvider>

@@ -200,6 +200,25 @@ function buildSoftAlertStyles(color: string) {
   }
 }
 
+/**
+ * Hover/keyboard-focus feedback for the app's selectable ROWS — menu items, select options,
+ * autocomplete options, list buttons.
+ *
+ * Joy's own plain-variant hover is a `neutral-800` fill, which on these dark palettes lands a few
+ * points away from the popup surface it sits on and reads as no feedback at all (reported as
+ * "I couldn't see it until I really looked"). This lift is deliberately a background *image*, not
+ * a background-color: it composites OVER whatever fill the row already has, so a selected row
+ * keeps its primary tint and still visibly reacts, and no palette needs its own hover token.
+ *
+ * `.Mui-focusVisible` gets the same treatment so keyboard navigation through a menu is as legible
+ * as the pointer.
+ */
+const ROW_HOVER_STYLES = {
+  '&:hover, &.Mui-focusVisible': {
+    backgroundImage: 'linear-gradient(rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.09))'
+  }
+}
+
 export function createAppTheme(palette: PrintStreamThemePalette) {
   const usesGlassSurfacePanels = palette.chrome.surfacePanelStyle === 'glass'
 
@@ -540,8 +559,19 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
             overflow: 'hidden',
             '& > *': {
               minWidth: 0
-            }
+            },
+            ...ROW_HOVER_STYLES
           }
+        }
+      },
+      JoyListItemButton: {
+        styleOverrides: {
+          root: ROW_HOVER_STYLES
+        }
+      },
+      JoyAutocompleteOption: {
+        styleOverrides: {
+          root: ROW_HOVER_STYLES
         }
       },
       JoySelect: {
@@ -576,7 +606,8 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap'
-            }
+            },
+            ...ROW_HOVER_STYLES
           }
         }
       }

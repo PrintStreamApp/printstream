@@ -62,7 +62,13 @@ import type {
   StagedImport,
   ThreeMfIndex
 } from '@printstream/shared'
-import { LIBRARY_DOWNLOAD_PERMISSION, LIBRARY_UPLOAD_PERMISSION, PER_OBJECT_PROCESS_KEYS } from '@printstream/shared'
+import {
+  LIBRARY_DOWNLOAD_PERMISSION,
+  LIBRARY_UPLOAD_PERMISSION,
+  PER_OBJECT_PROCESS_KEYS,
+  isNonRenderableThreeMfPartSubtype,
+  threeMfPartSubtypeCarriesFilament
+} from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { resolveProjectFilamentColorName } from '../../lib/filamentColor'
 import { buildApiUrl } from '../../lib/apiUrl'
@@ -87,7 +93,6 @@ import {
   createThreeMfPartObject,
   disposeObject3D,
   getGeometryTrianglePaint,
-  isModifierVolumeSubtype,
   threeMfTransformFromMatrix
 } from './lib/threeMfScene'
 import { arrangePlateItems, FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
@@ -115,6 +120,7 @@ import {
   effectiveFilamentChanges,
   effectivePauses,
   nextInstanceKey,
+  printedParts,
   seedEditorState,
   seedEmptyEditorState,
   stagedFootprint,
@@ -129,6 +135,7 @@ import {
   type PlateFootprintRect,
   isObjectMarkedForRepair
 } from './lib/editorModel'
+import { HELPER_VOLUME_SPECS, HELPER_VOLUME_SUBTYPES, helperVolumeCssColor } from './lib/helperVolumes'
 import { useShowBedModel } from './lib/useShowBedModel'
 import { useEffectiveSidebarSide } from '../../lib/editorViewportSettings'
 import { useSidebarResize } from './lib/useSidebarResize'
@@ -158,8 +165,6 @@ import {
 } from './lib/objectExport'
 import {
   ADDED_PART_MESH_NAME,
-  ADDED_PART_SPECS,
-  ADDED_PART_SUBTYPES,
   applyLayerBandOverlays,
   bedsEqual,
   BRIM_EAR_MARKER_COLOR,
@@ -1378,7 +1383,7 @@ function EditorView({
             // baked-part gizmo/selection write-back, whose transforms bake by REAL 3MF object id —
             // an import's synthetic identity must stay out of that path.
             partGroup.userData.importPartRef = { componentObjectId: part.componentObjectId }
-            if (!isModifierVolumeSubtype(part.subtype)) {
+            if (!isNonRenderableThreeMfPartSubtype(part.subtype)) {
               const partMesh = partGroup.children.find((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true)
               if (partMesh) {
                 applyLayerBandOverlays(partMesh.material as THREE.Material, layerBandUniformsRef.current)
@@ -1431,7 +1436,7 @@ function EditorView({
           // Printed parts (not blocker/enforcer/modifier volumes) are paintable with the
           // support/seam brushes; tag the mesh and show any existing paint as overlays.
           // Bambu marks ordinary parts subtype="normal_part", so test via the predicate.
-          if (!isModifierVolumeSubtype(part.subtype)) {
+          if (!isNonRenderableThreeMfPartSubtype(part.subtype)) {
             const paintableMesh = partGroup.children.find(
               (child): child is THREE.Mesh => (child as THREE.Mesh).isMesh === true
             )
@@ -1548,7 +1553,7 @@ function EditorView({
       const mesh = new THREE.Mesh(
         geometry,
         new THREE.MeshStandardMaterial({
-          color: ADDED_PART_SPECS[part.subtype].color,
+          color: HELPER_VOLUME_SPECS[part.subtype].color,
           transparent: true,
           opacity: 0.45,
           roughness: 0.5,
@@ -1562,7 +1567,7 @@ function EditorView({
       mesh.scale.copy(part.scale)
       mesh.userData.addedPartKey = part.key
       // Aids, not printed geometry: excluded from bed-rest, selection box, footprints.
-      mesh.userData.isModifier = true
+      mesh.userData.isHelperVolume = true
       mesh.renderOrder = 3
       rotor.add(mesh)
     }
@@ -2738,7 +2743,10 @@ function EditorView({
         if (ownerId == null) return instance
         let changed = false
         const parts = instance.parts.map((part) => {
-          if (targetSet.has(`${ownerId}:${part.componentObjectId}`)) {
+          // A support blocker/enforcer or negative volume has no material, so it is never a
+          // reassignment target even when a bulk selection sweeps it up. Enforced here rather
+          // than at each call site so no caller can bake an extruder onto a helper volume.
+          if (targetSet.has(`${ownerId}:${part.componentObjectId}`) && threeMfPartSubtypeCarriesFilament(part.subtype)) {
             changed = true
             return { ...part, filamentId }
           }
@@ -2752,6 +2760,22 @@ function EditorView({
       })
     })), 'material')
   }, [updatePlates])
+
+  /**
+   * Whether a material change means anything for these parts — true as soon as ONE of them can
+   * hold a filament. A selection of only support blockers/enforcers and negative volumes has no
+   * material to change, so the part context menu drops the item instead of offering a no-op
+   * (`reassignFilament` would skip them anyway).
+   */
+  const partsAcceptFilament = useCallback((objectId: number, componentObjectIds: ReadonlyArray<number>) => {
+    const ids = new Set(componentObjectIds)
+    for (const instance of activePlateRef.current?.instances ?? []) {
+      const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
+      if (ownerId !== objectId) continue
+      if (instance.parts.some((part) => ids.has(part.componentObjectId) && threeMfPartSubtypeCarriesFilament(part.subtype))) return true
+    }
+    return false
+  }, [])
 
   // Change parts' Bambu volume type (BambuStudio's "Change type": normal / negative /
   // modifier / support blocker / enforcer), for one part or a whole part selection. The
@@ -2771,9 +2795,16 @@ function EditorView({
           // object identity (replacedObjectId) — same ownership rule as filament reassignment.
           const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
           if (ownerId == null || !instance.parts.some((part) => targetSet.has(`${ownerId}:${part.componentObjectId}`))) return instance
+          // Retyping to a support blocker/enforcer or negative volume drops the part's material:
+          // it no longer has one, and a leftover filamentId would be baked back as `extruder`
+          // metadata on the next save. Retyping back to a printed part leaves it unassigned, so
+          // it inherits the object's filament again.
+          const keepsFilament = threeMfPartSubtypeCarriesFilament(subtype)
           return {
             ...instance,
-            parts: instance.parts.map((part) => targetSet.has(`${ownerId}:${part.componentObjectId}`) ? { ...part, subtype } : part)
+            parts: instance.parts.map((part) => targetSet.has(`${ownerId}:${part.componentObjectId}`)
+              ? { ...part, subtype, ...(keepsFilament ? {} : { filamentId: null, color: null }) }
+              : part)
           }
         })
       }))
@@ -3161,7 +3192,7 @@ function EditorView({
       toast.error('Save the project first, then add parts to this imported model.')
       return
     }
-    const spec = ADDED_PART_SPECS[subtype]
+    const spec = HELPER_VOLUME_SPECS[subtype]
     const box = printableMeshBox(group)
     const maxDim = box.isEmpty() ? 20 : Math.max(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z)
     const size = Math.min(20, Math.max(4, maxDim * 0.25))
@@ -3555,7 +3586,9 @@ function EditorView({
       if (!keySet.has(instance.key)) continue
       const ownerId = instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId
       if (ownerId == null) continue
-      for (const part of instance.parts) targets.push({ objectId: ownerId, componentObjectId: part.componentObjectId })
+      // Printed parts only — an object-level material change must not retarget a helper volume
+      // (a blocker has no material at all, and a modifier's region is deliberately its own).
+      for (const part of printedParts(instance)) targets.push({ objectId: ownerId, componentObjectId: part.componentObjectId })
     }
     reassignFilament(targets, filamentId)
   }, [selectionFor, reassignFilament])
@@ -4004,6 +4037,7 @@ function EditorView({
   }, [sliceConfig])
 
   const {
+    savedFile,
     saving,
     saveAsOpen,
     setSaveAsOpen,
@@ -4024,12 +4058,17 @@ function EditorView({
     baseFileId,
     baseVersionId,
     saveAsBridgeId,
+    editorBorn: isNewProject,
     onApply,
     onSaved,
     onSavedAs,
     onClose,
     confirm
   })
+  // Once an editor-born project has been saved it is a real library file, so it stops presenting
+  // as "New Project" and gains the ordinary Save-version path — without the editor re-mounting.
+  const savedAsProject = savedFile !== null
+  const showAsNewProject = isNewProject && !savedAsProject
 
   // ---- Render ----------------------------------------------------------------
   const loading = !hasNoBaseFile && (
@@ -4083,8 +4122,10 @@ function EditorView({
         <ModalClose onClick={handleCloseRequest} sx={{ top: 12, right: 12 }} />
         {/* The project's name (hidden for the New Project scaffold, whose generated name is meaningless). */}
         <DialogFileTitle
-          title={isNewProject ? 'New Project' : 'Edit Project'}
-          fileName={!isNewProject && baseFileQuery.data ? formatLibraryFileName(baseFileQuery.data.file.name) : null}
+          title={showAsNewProject ? 'New Project' : 'Edit Project'}
+          fileName={savedFile
+            ? formatLibraryFileName(savedFile.name)
+            : (!isNewProject && baseFileQuery.data ? formatLibraryFileName(baseFileQuery.data.file.name) : null)}
           sx={{ mb: 1 }}
         />
 
@@ -4414,8 +4455,8 @@ function EditorView({
                     }}
                   >
                     <Stack direction="row" spacing={0.75} alignItems="center">
-                      <Box sx={{ width: 12, height: 12, borderRadius: '3px', flexShrink: 0, bgcolor: `#${ADDED_PART_SPECS[selectedAddedPart.subtype].color.toString(16).padStart(6, '0')}` }} />
-                      <Typography level="title-sm" sx={{ flex: 1 }}>{ADDED_PART_SPECS[selectedAddedPart.subtype].label}</Typography>
+                      <Box sx={{ width: 12, height: 12, borderRadius: '3px', flexShrink: 0, bgcolor: helperVolumeCssColor(HELPER_VOLUME_SPECS[selectedAddedPart.subtype].color) }} />
+                      <Typography level="title-sm" sx={{ flex: 1 }}>{HELPER_VOLUME_SPECS[selectedAddedPart.subtype].label}</Typography>
                       <Select
                         size="sm"
                         variant="plain"
@@ -4423,13 +4464,13 @@ function EditorView({
                         onChange={(_event, subtype) => { if (subtype) handleChangeAddedPartType(selectedAddedPart.key, subtype) }}
                         slotProps={{ button: { 'aria-label': 'Change part type' } }}
                       >
-                        {ADDED_PART_SUBTYPES.map((subtype) => (
-                          <Option key={subtype} value={subtype}>{ADDED_PART_SPECS[subtype].label}</Option>
+                        {HELPER_VOLUME_SUBTYPES.map((subtype) => (
+                          <Option key={subtype} value={subtype}>{HELPER_VOLUME_SPECS[subtype].label}</Option>
                         ))}
                       </Select>
                     </Stack>
                     <Typography level="body-xs" textColor="text.tertiary">
-                      {ADDED_PART_SPECS[selectedAddedPart.subtype].hint} Move, rotate, or scale it with
+                      {HELPER_VOLUME_SPECS[selectedAddedPart.subtype].hint} Move, rotate, or scale it with
                       the gizmo; click the model body to go back to the whole object.
                     </Typography>
                     <Stack direction="row" spacing={0.75} justifyContent="space-between">
@@ -4791,7 +4832,7 @@ function EditorView({
             saving={saving}
             disabled={!state || (sliceConfig != null && !hasMaterials)}
             dirty={hasUnsavedChanges}
-            canSaveVersion={baseFileId !== null && !isNewProject}
+            canSaveVersion={savedAsProject || (baseFileId !== null && !isNewProject)}
             onSaveVersion={handleSaveVersion}
             onSaveAs={() => setSaveAsOpen(true)}
           />
@@ -4879,6 +4920,7 @@ function EditorView({
               subtype
             )}
             filamentOptions={filamentOptions}
+            materialAssignable={partsAcceptFilament(contextMenu.objectId, contextMenu.componentObjectIds)}
             onChangeMaterial={(filamentId) => reassignFilament(
               contextMenu.componentObjectIds.map((componentObjectId) => ({ objectId: contextMenu.objectId, componentObjectId })),
               filamentId

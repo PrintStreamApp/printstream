@@ -9,6 +9,10 @@ import { apiFetch } from '../lib/apiClient'
  * newer build. The server applies visibility (everyone for the published image,
  * platform users only for the cloud image, nobody for a source/dev run), so this
  * renders nothing whenever there is no build to show.
+ *
+ * `updatesLapsed` is the same hint with a renewal prompt: a newer build exists
+ * but the install's updates & support period has ended. It is deliberately
+ * still a chip and not a warning — the build they own keeps running.
  */
 export function AppVersionFooter() {
   const { data } = useQuery({
@@ -21,7 +25,8 @@ export function AppVersionFooter() {
 
   if (!data || data.revision == null || data.shortRevision == null) return null
   const update = data.update
-  const hasUpdate = update?.status === 'updateAvailable'
+  const lapsed = update?.status === 'updatesLapsed'
+  const hasUpdate = update?.status === 'updateAvailable' || lapsed
 
   return (
     <Stack
@@ -36,8 +41,8 @@ export function AppVersionFooter() {
       </Typography>
       {hasUpdate && update && (
         <Tooltip variant="soft" title={describeUpdate(update)}>
-          <Chip size="sm" variant="soft" color="warning">
-            Update available
+          <Chip size="sm" variant="soft" color={lapsed ? 'neutral' : 'warning'}>
+            {lapsed ? 'Updates lapsed' : 'Update available'}
           </Chip>
         </Tooltip>
       )}
@@ -47,6 +52,9 @@ export function AppVersionFooter() {
 
 function describeUpdate(update: NonNullable<AppVersionResponse['update']>): string {
   const target = update.latestShortRevision ? ` (build ${update.latestShortRevision})` : ''
+  if (update.status === 'updatesLapsed') {
+    return `A newer build is available${target}, but updates and priority support for this license have ended. Renew to install it — the build you have keeps running.`
+  }
   const pull = update.imageRef ? ` Pull ${update.imageRef} to update.` : ''
   return `A newer image is available${target}.${pull}`
 }

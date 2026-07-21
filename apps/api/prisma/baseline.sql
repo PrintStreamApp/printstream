@@ -39,6 +39,8 @@ CREATE TABLE "TenantSubscription" (
 CREATE TABLE "License" (
     "id" TEXT NOT NULL,
     "edition" TEXT NOT NULL,
+    "source" TEXT NOT NULL DEFAULT 'purchase',
+    "tenantId" TEXT,
     "licensee" TEXT NOT NULL,
     "email" TEXT,
     "key" TEXT NOT NULL,
@@ -46,6 +48,9 @@ CREATE TABLE "License" (
     "paddleCustomerId" TEXT,
     "paddleTransactionId" TEXT,
     "updatesUntil" TIMESTAMP(3),
+    "expiresAt" TIMESTAMP(3),
+    "maxPrinters" INTEGER,
+    "lastRefreshedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -950,6 +955,12 @@ CREATE UNIQUE INDEX "License_paddleTransactionId_key" ON "License"("paddleTransa
 CREATE INDEX "License_email_idx" ON "License"("email");
 
 -- CreateIndex
+CREATE INDEX "License_tenantId_idx" ON "License"("tenantId");
+
+-- CreateIndex
+CREATE INDEX "License_paddleCustomerId_idx" ON "License"("paddleCustomerId");
+
+-- CreateIndex
 CREATE INDEX "Printer_tenantId_bridgeId_position_idx" ON "Printer"("tenantId", "bridgeId", "position");
 
 -- CreateIndex
@@ -1317,6 +1328,9 @@ CREATE INDEX "PendingRegistration_email_expiresAt_idx" ON "PendingRegistration"(
 
 -- AddForeignKey
 ALTER TABLE "TenantSubscription" ADD CONSTRAINT "TenantSubscription_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "License" ADD CONSTRAINT "License_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Printer" ADD CONSTRAINT "Printer_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

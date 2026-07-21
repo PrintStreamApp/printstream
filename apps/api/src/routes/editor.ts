@@ -196,7 +196,11 @@ async function bakeArrangedThreeMf(
     : null
   if (baseVersionId && !baseVersion) throw notFound('Base version not found')
 
-  const baseSource = baseVersion ?? baseFile
+  // `ignoreBaseContent` keeps the base file as the save TARGET (name/folder/bridge, resolved
+  // above) but bakes from the editor state alone — see the schema doc: re-reading the previous
+  // save's bytes strands one orphaned mesh object per solid per save for an import-backed
+  // project, which is what forced the editor to re-mount on the saved file after every save.
+  const baseSource = input.ignoreBaseContent ? null : (baseVersion ?? baseFile)
   const basePath = baseSource ? await resolveLibraryFileToLocalPath(baseSource) : null
   const imports = resolveSceneEditImports(tenantId, sceneEdit)
 
@@ -313,7 +317,7 @@ editorRouter.post(
         action: 'upload',
         resource: 'library file',
         summary: `Saved edited 3MF ${created.name}.`,
-        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, importCount: baked.importCount, retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
+        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, bakedFromEditorStateOnly: parsed.ignoreBaseContent === true, importCount: baked.importCount, retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
       })
       response.status(201).json({ file: { id: created.id, name: created.name } })
     } finally {

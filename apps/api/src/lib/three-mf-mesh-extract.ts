@@ -22,12 +22,12 @@
  * (`apps/web/src/plugins/model-studio/lib/editorImports.ts`), and the save bakes it
  * through `resolveSceneEditImports` like any other import.
  */
+import { isNonRenderableThreeMfPartSubtype } from '@printstream/shared'
 import { badRequest } from './http-error.js'
 import { MAX_IMPORT_TRIANGLES, type ImportedMesh, type ImportedMeshPart } from './mesh-import.js'
 import { readEntry } from './three-mf-internal.js'
 import {
   composeThreeMfTransforms,
-  isNonRenderableThreeMfPartSubtype,
   parseRootBuildItemTransforms,
   parseRootModelComponents,
   readPlateIndex,

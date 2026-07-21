@@ -15,9 +15,14 @@ import { z } from 'zod'
 /**
  * - `current`: the running revision matches the registry's latest tag.
  * - `updateAvailable`: the registry's latest tag is a different build.
+ * - `updatesLapsed`: a newer build exists, but this install's updates &
+ *   support period has ended. The app keeps running the build it has — a
+ *   perpetual license never stops working — so this is a renewal prompt, not
+ *   an error. Only reachable on a licensed install whose key carries an
+ *   `updatesUntil` in the past; community keys are perpetual and never lapse.
  * - `unknown`: the check has not completed or could not reach the registry.
  */
-export const appUpdateStatusSchema = z.enum(['current', 'updateAvailable', 'unknown'])
+export const appUpdateStatusSchema = z.enum(['current', 'updateAvailable', 'updatesLapsed', 'unknown'])
 export type AppUpdateStatusValue = z.infer<typeof appUpdateStatusSchema>
 
 export const appUpdateInfoSchema = z.object({

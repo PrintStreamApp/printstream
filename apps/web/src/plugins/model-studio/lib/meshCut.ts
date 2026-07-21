@@ -44,7 +44,7 @@ export function collectWorldTriangles(
   root.traverse((node) => {
     const mesh = node as THREE.Mesh
     if (!mesh.isMesh || mesh.userData.isFaceHull || mesh.userData.isPaintOverlay || mesh.userData.isPrimeTower) return
-    if (mesh.userData.isModifier && !options?.includeModifierVolumes) return
+    if (mesh.userData.isHelperVolume && !options?.includeModifierVolumes) return
     const geometry = mesh.geometry
     const position = geometry.getAttribute('position')
     if (!position) return

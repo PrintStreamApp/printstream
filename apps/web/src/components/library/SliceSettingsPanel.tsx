@@ -6,10 +6,11 @@
  * contracts that bridge `SliceFileModal`'s state into it, so the SAME panel
  * renders both in the slim slice dialog (`mode='simple'`) and inside the model
  * studio's 3D editor (`mode='editor'`). Each material renders as one compact
- * swatch row (number + preset/colour name, plus the nozzle picker); the expanded
- * type/preset/color inputs live in `MaterialEditDialog`, opened by clicking the
- * swatch. State stays owned by the caller; only values/setters flow through the
- * controller.
+ * swatch row (number + preset/colour name, plus the nozzle picker) whose click is
+ * owned by `MaterialSwatchButton`: the printer's loaded materials when one is
+ * targeted, otherwise the expanded type/preset/color inputs in
+ * `MaterialEditDialog`. State stays owned by the caller; only values/setters flow
+ * through the controller.
  */
 import type React from 'react'
 import { useState } from 'react'
@@ -39,18 +40,21 @@ import { formatNozzleDiameterLabel } from '@printstream/shared'
 import { useNavigate } from 'react-router-dom'
 import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
-import { filamentTextColor, resolveProjectFilamentColorName } from '../../lib/filamentColor'
+import type { PrinterTrayOption } from '../../lib/libraryViewHelpers'
+import { resolveProjectFilamentColorName } from '../../lib/filamentColor'
 import {
   buildSliceDialogProjectFilaments,
   buildSliceDialogToolheads,
   formatPlateTypeLabel,
   formatPrinterModelLabel,
+  groupSliceMaterialOptionsByGroup,
   narrowMaterialOptions,
   normalizeSliceFilamentColor,
   resolveMaterialTypeOptions,
   type SliceMaterialOption
 } from '../../lib/sliceProfileMatching'
 import { MaterialEditDialog } from './MaterialEditDialog'
+import { MaterialSwatchButton } from './MaterialSwatchButton'
 import { SlicingProfileAutocomplete } from './SlicingProfileAutocomplete'
 import { SettingsTuneButton } from '../SettingsTuneButton'
 import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from './PlateGcodeSections'
@@ -180,6 +184,11 @@ export interface SliceSettingsController {
   usedFilamentIdsForPlate: (plateIndex: number) => Set<number>
   materialOptions: SliceMaterialOption[]
   loadedMaterialOptions: SliceMaterialOption[]
+  /**
+   * Live trays of the targeted printer keyed by mapping value, so a loaded-material row can
+   * show how much that tray has left. Empty when no real printer is targeted.
+   */
+  printerTrayMap: Map<number, PrinterTrayOption>
   materialToolheadOptions: ReturnType<typeof buildSliceDialogToolheads>
   filamentMaterialOptionIds: Record<number, string>
   filamentMaterialTypeFilters: Record<number, string>
@@ -192,7 +201,6 @@ export interface SliceSettingsController {
   filamentSettingOverridesById: Record<number, Record<string, string | string[]>>
   /** Open the material settings dialog for a given filament slot. */
   openFilamentSettings: React.Dispatch<React.SetStateAction<number | null>>
-  setPrinterMaterialPickerFilamentId: React.Dispatch<React.SetStateAction<number | null>>
   handleMaterialOptionChange: (projectFilamentId: number, option: SliceMaterialOption | null) => void
   /**
    * Add/remove materials (Bambu-style). `desiredFilaments` is the full ordered filament
@@ -229,10 +237,10 @@ export interface SliceSettingsController {
   configSnapshot: SliceConfigSnapshot
   restoreConfig: (snapshot: SliceConfigSnapshot) => void
   /**
-   * Mutable listener the full editor sets to its `markDirty`, invoked whenever a material
-   * is changed through this controller's own picker Modal (which the editor renders behind
-   * itself). Lets picker-driven edits flip the editor's unsaved-changes flag even though they
-   * bypass the markDirty-wrapped controller the editor hands to the settings panel.
+   * Mutable listener the full editor sets to its `markDirty`, invoked whenever a material is
+   * changed through one of this controller's OWN dialogs (the filament-settings dialog, which
+   * the editor renders behind itself). Lets those edits flip the editor's unsaved-changes flag
+   * even though they bypass the markDirty-wrapped controller the editor hands to this panel.
    */
   materialEditListenerRef: React.MutableRefObject<(() => void) | null>
   /**
@@ -326,11 +334,11 @@ export function SliceSettingsPanel({ controller, mode }: {
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
     processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, processEditListenerRef,
     hasPlateObjects, selectedSliceObjectIds, plateObjects, onToggleSliceObject, openSliceObjectSettings, plateGcode, perObjectSettings,
-    projectFilaments, materialOptions, loadedMaterialOptions, materialToolheadOptions,
+    projectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
     filamentSettingOverridesById, openFilamentSettings,
-    setPrinterMaterialPickerFilamentId, handleMaterialOptionChange,
+    handleMaterialOptionChange,
     onAddFilament, onRemoveFilament, filamentInUse, filamentSupportOnly
   } = controller
   const showPlateSection = mode === 'simple'
@@ -640,48 +648,32 @@ export function SliceSettingsPanel({ controller, mode }: {
                 }) ?? normalizedColor.toUpperCase()
                 const presetName = selectedOption ? (selectedOption.presetLabel ?? selectedOption.label) : filament.label
                 const presetUnmatched = Boolean(selectedOption && selectedOption.source !== 'manual' && !selectedOption.profileId)
+                // What the printer currently has loaded for this slot, in the priority order the
+                // pickers use. Empty for a manual-profile target, which is exactly when the swatch
+                // has nothing to list and falls back to opening the dialog on click.
+                const loadedMaterialsForFilament = targetMode === 'realPrinter'
+                  ? prioritizeLoadedMaterialOptionsForFilament(loadedMaterialOptions, filament.nozzleId ?? null)
+                  : []
                 return (
                   <Stack key={filament.projectFilamentId} direction="row" alignItems="center" sx={{ flexWrap: 'wrap', columnGap: 0.75, rowGap: 0.5 }}>
-                    <Box
-                      component="button"
-                      type="button"
-                      onClick={() => setMaterialDialogFilamentId(filament.projectFilamentId)}
-                      title={presetUnmatched
-                        ? 'No preset matches this filament — click to pick one'
-                        : `${presetName} · ${colorName} — edit material`}
-                      aria-label={`Edit material ${filamentIndex + 1}: ${presetName}, ${colorName}`}
-                      sx={{
-                        appearance: 'none',
-                        flex: '1 1 140px',
-                        minWidth: 0,
-                        height: 'var(--Input-minHeight, 2.25rem)',
-                        px: 1,
-                        py: 0,
-                        borderRadius: 'sm',
-                        border: (theme) => `1px solid ${theme.vars.palette.divider}`,
-                        background: normalizedColor,
-                        color: filamentTextColor(null, normalizedColor),
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 0.75,
-                        overflow: 'hidden',
-                        transition: 'transform 80ms ease, border-color 80ms ease',
-                        '&:hover': { transform: 'scale(1.02)', borderColor: 'primary.outlinedBorder' },
-                        '&:focus-visible': {
-                          outline: (theme) => `2px solid ${theme.vars.palette.focusVisible}`,
-                          outlineOffset: 2
-                        }
-                      }}
-                    >
-                      <Typography level="body-xs" sx={{ fontWeight: 700, lineHeight: 1, color: 'inherit', flexShrink: 0 }}>
-                        {filamentIndex + 1}
-                      </Typography>
-                      <Typography level="body-xs" fontWeight="md" noWrap sx={{ color: 'inherit' }}>
-                        {presetName} · {colorName}
-                      </Typography>
-                      {presetUnmatched && <WarningAmberRoundedIcon fontSize="small" sx={{ ml: 'auto', flexShrink: 0 }} />}
-                    </Box>
+                    <MaterialSwatchButton
+                      filamentIndex={filamentIndex}
+                      presetName={presetName}
+                      colorName={colorName}
+                      color={normalizedColor}
+                      presetUnmatched={presetUnmatched}
+                      selectedMaterialOptionId={selectedOption?.id ?? null}
+                      loadedMaterials={loadedMaterialsForFilament.length > 0
+                        ? {
+                            groups: groupSliceMaterialOptionsByGroup(loadedMaterialsForFilament),
+                            trayMap: printerTrayMap,
+                            // Through the controller (not the picker Modal) so the editor's dirty
+                            // flag and undo see the pick without the materialEditListenerRef detour.
+                            onSelect: (option) => handleMaterialOptionChange(filament.projectFilamentId, option)
+                          }
+                        : null}
+                      onOpenMaterialDialog={() => setMaterialDialogFilamentId(filament.projectFilamentId)}
+                    />
                     {materialToolheadOptions.length > 0 && (useToolheadButtonSet ? (
                       <ButtonGroup
                         size="sm"
@@ -840,9 +832,9 @@ export function SliceSettingsPanel({ controller, mode }: {
         </>
       )}
       {materialDialogFilamentId != null && (() => {
-        // Deriving here (not stored) keeps the dialog live: a "Choose from printer" pick
-        // that lands while it is open updates type/preset/color in place. A filament
-        // removed out from under it (editor undo) simply renders nothing.
+        // Deriving here (not stored) keeps the dialog live against the controller: an edit that
+        // lands while it is open updates type/preset/color in place, and a filament removed out
+        // from under it (editor undo) simply renders nothing.
         const filamentIndex = projectFilaments.findIndex((entry) => entry.projectFilamentId === materialDialogFilamentId)
         const filament = filamentIndex >= 0 ? projectFilaments[filamentIndex] : null
         if (!filament) return null
@@ -860,12 +852,6 @@ export function SliceSettingsPanel({ controller, mode }: {
             onMaterialOptionChange={(option) => handleMaterialOptionChange(filament.projectFilamentId, option)}
             color={normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color)}
             onColorChange={(color) => setFilamentColors((current) => ({ ...current, [filament.projectFilamentId]: normalizeSliceFilamentColor(color) }))}
-            chooseFromPrinter={targetMode === 'realPrinter'
-              ? {
-                  disabled: prioritizeLoadedMaterialOptionsForFilament(loadedMaterialOptions, filament.nozzleId ?? null).length === 0,
-                  onOpen: () => setPrinterMaterialPickerFilamentId(filament.projectFilamentId)
-                }
-              : null}
             onClose={() => setMaterialDialogFilamentId(null)}
           />
         )
