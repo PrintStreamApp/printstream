@@ -2662,7 +2662,7 @@ export const processSettingsCatalog: ProcessSettingsCatalog = {
         "1000 (unlimited)"
       ],
       "mode": "advanced",
-      "default": "400",
+      "default": "400%",
       "guiType": "f_enum_open"
     },
     "sparse_infill_anchor_max": {
@@ -4014,7 +4014,7 @@ export const processSettingsCatalog: ProcessSettingsCatalog = {
       "mode": "advanced",
       "min": 0,
       "max": 1000,
-      "default": "200"
+      "default": "200%"
     },
     "timelapse_type": {
       "type": "enum",

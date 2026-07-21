@@ -7,6 +7,7 @@
  * EditorView is lazy-loaded from SlicingEditorAction/LibraryCreateAction.
  */
 import { Suspense, lazy } from 'react'
+import { LazyDialogFallback } from '../../components/LazyDialogFallback'
 
 const PreviewView = lazy(() => import('./PreviewView').then((module) => ({ default: module.PreviewView })))
 
@@ -14,7 +15,7 @@ export function PreviewOverlay(props: Record<string, unknown>) {
   // Only mount (and thus fetch the chunk) once a preview has been requested.
   if (typeof props.previewFileId !== 'string' || !props.previewFileId) return null
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<LazyDialogFallback variant="fullscreen" label="Opening the 3D preview…" />}>
       <PreviewView {...props} />
     </Suspense>
   )

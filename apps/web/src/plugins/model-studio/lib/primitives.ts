@@ -45,12 +45,24 @@ export function primitiveTriangleSoup(kind: PrimitiveKind): Float32Array {
 }
 
 /**
- * Cube soup for an added PART volume (negative part / modifier / support blocker):
- * `size` mm per side, centred on the origin so the part places at a point inside the
- * parent object rather than resting on the bed.
+ * Primitive soup for an added PART volume (normal part / negative part / modifier / support
+ * blocker or enforcer), scaled so its largest dimension is `size` mm and centred on the ORIGIN in
+ * every axis — unlike {@link primitiveTriangleSoup}, whose primitives rest on the bed. Centring is
+ * what lets the caller place the part by a single point relative to its host model, and it makes
+ * the gizmo pivot the part's own centre rather than a corner.
  */
-export function primitivePartSoup(size: number): Float32Array {
-  const geometry = new THREE.BoxGeometry(size, size, size).toNonIndexed()
+export function primitivePartSoup(kind: PrimitiveKind, size: number): Float32Array {
+  const geometry = buildPrimitiveGeometry(kind).toNonIndexed()
+  // Three.js primitives are Y-up; parts live in the host's Z-up object space.
+  geometry.rotateX(Math.PI / 2)
+  geometry.computeBoundingBox()
+  const box = geometry.boundingBox
+  if (box) {
+    const extent = Math.max(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z)
+    const center = box.getCenter(new THREE.Vector3())
+    geometry.translate(-center.x, -center.y, -center.z)
+    if (extent > 0) geometry.scale(size / extent, size / extent, size / extent)
+  }
   const positions = geometry.getAttribute('position')
   const soup = new Float32Array(positions.array.length)
   soup.set(positions.array as Float32Array)

@@ -25,7 +25,7 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | Concern | Layer | Key modules |
 | --- | --- | --- |
 | **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves staged as imports) |
-| **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (STL parse + STEP tessellation), `lib/three-mf-mesh-extract.ts` (3MF geometry-only import: first non-empty plate → one part per placed part, helper volumes dropped, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
+| **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (STL parse + STEP tessellation), `lib/three-mf-mesh-extract.ts` (3MF geometry import: first non-empty plate → one part per placed part, helper volumes CARRIED with their subtype but excluded from the merged mesh + re-centring, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
 | **Slicing** | web | the slice UI in `components/library/` — `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings, shares `components/settings/SettingValueField.tsx`) — plus `components/ProcessSettingsDialog.tsx` and `components/PerObjectSettingsDialog.tsx` |
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-profiles.ts` |
 | **Slicing** | slicer | `apps/slicer/**` — the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
@@ -33,6 +33,59 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | **Shared 3MF model** | api/bridge/shared | the `apps/api/src/lib/three-mf-*.ts` modules (read + write, re-exported via the `three-mf.ts` barrel); the pure **index** parse lives in `@printstream/shared/three-mf` and is shared by `three-mf-reader.ts` and the bridge's `apps/bridge/src/library-3mf.ts` (no hand-kept mirror) |
 | **Printer retarget** | shared/api | "Save as a different printer" — rewrites a project's machine + process settings (no slicing). `packages/shared/src/machine-retarget.ts`, `apps/api/src/lib/save-retarget.ts`. See `docs/project-printer-retarget.md` |
 | **Calibration** | api/web plugin | Builds disposable calibration prints (PA towers, flow plates) and runs them through the slicing pipeline + dispatcher. `apps/api/src/plugins/calibration/**`, `apps/web/src/plugins/calibration/**`. See "Calibration (plugin surface)" below |
+
+## The no-save-first rule
+
+Every editor edit must work on a model with **no baked 3MF identity yet** — a staged import, a
+Cut/Split/Assemble output, or an independent copy. That is a hard contract, not a nicety: the
+editor is the only place a project is arranged, and "save, reopen, then you can do it" makes an
+edit that the UI already offered silently unavailable or silently lost.
+
+Concretely, a per-object or per-part seam must address the model by its **editor-side identity** and
+resolve it to a real `object_id` server-side at bake time. Three established patterns cover every
+case — use one, do not invent a fourth:
+
+| Editor-side identity | Carried as | Resolved by |
+| --- | --- | --- |
+| Staged import | `importId` (+ 0-based solid index for its parts) | `importIdToObjectId` while injecting the import |
+| Independent copy | negative placeholder `objectId` | `objectClones` pre-pass (`three-mf-object-clone.ts`) |
+| Data riding the save/slice REQUEST, not the edit | the same editor-side id | `replacedObjectIds` / `clonedObjectIds` + `rekeyReplacedObjectOverrides` |
+
+The failure has a quiet form worth watching for: a collector in `buildSceneEdit` whose
+`placedObjectIds` set is built only from `source.kind === 'object'` accepts the user's edit in the
+UI and then drops it at bake time, with no error anywhere.
+
+## Saves are delta-against-the-base — and what that constrains
+
+A `SceneEdit` is deliberately **not** a whole-file description. A 3MF carries far more than the
+editor models (the full process/machine config, slice_info, sub-model layout, vendor metadata), and
+the base file is the carrier for all of it — so the edit describes only the domains the editor
+owns, and everything else is copied through.
+
+That makes two rules load-bearing:
+
+1. **Within a domain the editor owns, the payload is COMPLETE STATE, never a diff.** A part's paint
+   map is the whole desired map for that part; `brimEars` is the whole desired ear set for the
+   object; `filaments` is the whole desired filament list. This is why a cleared value can be
+   expressed at all (an empty map/list means "remove", which a diff could not say).
+2. **An emit may be SKIPPED only when the base file already carries that value.** Skipping is how an
+   untouched project avoids a pointless rewrite — but it is only safe because the base still holds
+   the answer. The moment the editor synthesises state the base does NOT have, skipping is silent
+   data loss.
+
+Rule 2 is the one that has actually bitten, and its subtlety is worth spelling out because the
+obvious reading of it is wrong. `desiredFilaments` was gated on "changed versus the base". A new
+project's scaffold DOES seed one filament (`POST /editor/new-project`), so "the base has none" is
+false — yet an editor-born save passes **`ignoreBaseContent`**, and the route then bakes with
+`baseSource = null`. The base file is a save TARGET only; none of its bytes are carried. So nothing
+could differ from the scaffold, the list was never emitted, the base contributed nothing, and a new
+project saved with its default material reopened with **no materials at all** — which in turn
+stranded colour paint, whose codes are filament ids, rendering it in the fallback palette.
+
+The correct question for a gate is therefore not "did the user change it?" and not even "does the
+base file contain it?", but: **"will this save carry the base's content at all?"** Since that is not
+knowable where most of these values are computed, the safe rule is simply to always emit complete
+state for an editor-owned domain and let the writer no-op when nothing differs.
 
 ## The `SceneEdit` contract (the seam)
 
@@ -81,18 +134,48 @@ dialog's edits ride `createSlicingJob`'s top-level `filamentChanges`/`pauses`
 (same replace-per-plate schemas; ignored when a `sceneEdit` is present, which carries
 its own), and the API merges them into the slice input via the object-customization
 rewrite — a slice-only edit that never touches the library file.
-`addedParts` carries new volumes added INSIDE objects (Bambu's negative parts,
-modifiers, support blockers/enforcers): each references a staged import's mesh plus
-an object-local 12-number matrix; the writer injects the mesh as a new object
-resource, references it as a `<component>` of the parent root object, and adds a
-`<part subtype="...">` to the parent's `model_settings.config` entry. Modifier
+`addedParts` carries new volumes added INSIDE models (BambuStudio's "Add part" plus
+the helper volumes — negative parts, modifiers, support blockers/enforcers): each
+references its own mesh as `meshImportId` (a staged import, whether a generated
+primitive or a loaded model file) plus an object-local 12-number matrix; the writer
+injects the mesh as a new object resource, references it as a `<component>` of the
+host root object, and adds a `<part subtype="...">` to the host's
+`model_settings.config` entry. **The host is `objectId` XOR `importId`** — an
+in-project object, or a staged import for a part added to a model the user has not
+saved yet, resolved through the same `importIdToObjectId` map that places the import
+itself (so `applyAddedParts` must run after the imports are injected). A part whose
+subtype carries a filament (`threeMfPartSubtypeCarriesFilament`: normal parts and
+modifiers) also ships `filamentId`, written as the part's `extruder` metadata —
+without it an added printed part would silently print in filament 1. Modifier
 parts may carry per-volume process overrides (`settings`, edited via the same
 restricted-catalog ProcessSettingsDialog as per-object overrides), written as
 `<metadata key value/>` entries inside the part block — exactly how BambuStudio
-persists ModelVolume config, so the slicer applies them inside the volume. Parents
+persists ModelVolume config, so the slicer applies them inside the volume. Hosts
 carrying an inline mesh are first wrapped (mesh moves to its own object behind an
-identity component) so 3MF's mesh-XOR-components rule holds. Painting/ears/parts
-are limited to in-project parts; imports/cut halves are not supported yet.
+identity component) so 3MF's mesh-XOR-components rule holds — the normal path for a
+freshly baked import host. Painting and brim ears are still limited to in-project
+parts; imports/cut halves are not supported for those yet.
+A 3MF **import** carries its volume types in: `three-mf-mesh-extract.ts` keeps helper volumes as
+parts with their raw `subtype` (BambuStudio's "Import Object" is `LoadStrategy::LoadModel`, which
+loads a 3MF's ModelVolumes whole and applies each type unconditionally — only the CONFIG is
+dropped), the staged import records it per solid, and the bake writes it back unless
+`importPartTypes` overrides. Helper volumes are kept OUT of the import's merged mesh and out of
+its re-centring, since those drive bounds, the thumbnail, and where the import rests. A helper
+volume never receives an `extruder`, so it cannot inherit the object's material.
+`objectClones` carries INDEPENDENT object copies — BambuStudio's Ctrl+C/V
+(`Model::add_object(*src_object)`), as opposed to placing another instance against the same
+`objectId`, which is its toolbar "+" (`increase_instances`) and stays fully linked. A copy is
+addressed throughout the edit by a NEGATIVE placeholder object id; a pre-pass
+(`three-mf-object-clone.ts`) deep-copies the source object's XML, its `model_settings` entry, and
+its `/3D/Objects` mesh sub-model into fresh ids, then rewrites the whole edit so every placeholder
+and every SOURCE component id becomes the copy's real id. Running it first is what let every other
+seam stay clone-agnostic. The mesh sub-model must be copied, not shared: paint and mesh repair are
+applied per (ZIP entry, object id), so a shared mesh would make painting the copy repaint its source.
+`importPartTransforms` is the import counterpart of `partTransforms`: a multi-solid import's solids
+can be moved with the part gizmo before the project is ever saved, keyed by import + 0-based solid
+index because an unsaved import has no baked 3MF part ids. It is applied as that solid's
+`<component transform>` while the import bakes into one object; untouched solids stay at identity,
+since an import's per-solid meshes already share assembly space.
 `partTypeChanges` / `importPartTypes` carry BambuStudio's "Change type" (normal /
 negative / modifier / support blocker / enforcer) on existing parts: the first keys by
 objectId+componentObjectId (baked parts, applied by rewriting the `<part>`'s `subtype`
@@ -337,6 +420,35 @@ model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outpu
   (state predating a printer switch) blocks submission with a named reason instead of reaching
   the slicer at all (`printerProfileIncompatible`/`processProfileIncompatible` in
   `SliceFileModal`).
+- **`flush_volumes_matrix` is `filaments^2 x extruders`, not `filaments^2`.** BambuStudio stores
+  one `filaments x filaments` block PER EXTRUDER (`PrintConfig.hpp` `get_flush_volumes_matrix`
+  slices block `e`; `BambuStudio.cpp` sizes it `project_filament_count^2 * new_extruder_count`).
+  A machine retarget changes the extruder count, so anything that rewrites project settings must
+  re-derive the matrix for the NEW topology — `retargetProjectSettingsToMachine` and
+  `applyFilamentList` both do, via `repairFlushVolumesMatrix`
+  (`packages/shared/src/flush-volumes-matrix.ts`). Getting this wrong is not a soft failure:
+  BambuStudio only repairs an undersized matrix inside its flush-volume recompute block, which it
+  SKIPS unless `--filament-colour` was passed, the matrix is absent entirely, the extruder count
+  differs from the project's own, or `nozzle_volume_type` mismatches — a retarget satisfies none
+  of them, so the short matrix survives and the engine reads the missing block out of bounds:
+  a deterministic SIGSEGV at ~71% ("Detect overhangs for auto-lift", CLI exit 139). An ABSENT
+  matrix is safe (absence is one of the recompute triggers), so it is deliberately not flagged.
+  Projects already saved with the defect are NOT healed at rest — the shared index parser flags
+  them (`needsSettingsRepair` on the 3MF index and the `LibraryFile` DTO), the editor shows a
+  banner on open, `SliceFileModal` blocks the library-flow slice with a named reason, and both
+  offer the user an explicit Repair (`POST /api/library/:id/repair-settings`, which lands the
+  corrected project as a NEW library version). An editor slice needs no gate: its bake re-authors
+  project settings through `applyFilamentList` and is therefore already correct.
+- **A project newer than the engine is refused, not degraded.** BambuStudio compares the 3MF's
+  version against its own **major.minor only** and exits `CLI_FILE_VERSION_NOT_SUPPORTED` (-24,
+  process exit 232) before loading anything, so no preset or retry can rescue the slice. The shared
+  index parser surfaces the project's version (`projectVersion`, parser v17) and
+  `packages/shared/src/bambu-file-version.ts` owns the comparison; `SliceFileModal` warns and
+  blocks, and the user may override with an explicit acknowledgement that passes the CLI's own
+  `--allow-newer-file` escape hatch. The override is deliberately not automatic: bypassing the
+  vendor's gate lets an older engine silently misread newer settings, so a slice that succeeds is
+  not proof the G-code is right. Beta engines can be bundled for this (`prerelease: true` in
+  `apps/slicer/docker/slicer-targets.mjs`) but are never selected by default.
 - **Calibration PA-tower brim must be `outer_only`, never `brim_ears`.** In our
   BambuStudio fork `brim_ears` is the *painted* brim type: it emits nothing unless manual
   ear points are painted into `Metadata/brim_ear_points.txt`, which the tower has none of,

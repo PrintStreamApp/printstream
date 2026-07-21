@@ -35,9 +35,12 @@ function toSummary(record: StagedImportRecord): StagedImport {
     ? record.mesh.parts.map((part) => ({
         name: part.name,
         triangleCount: Math.floor(part.mesh.indices.length / 3),
-        bounds: part.mesh.bounds
+        bounds: part.mesh.bounds,
+        // A 3MF import's helper volumes keep their type so the editor renders them as aids
+        // rather than printed geometry (the bake re-reads it from the record, not from here).
+        subtype: part.subtype ?? null
       }))
-    : [{ name: record.name, triangleCount: Math.floor(record.mesh.indices.length / 3), bounds: record.mesh.bounds }]
+    : [{ name: record.name, triangleCount: Math.floor(record.mesh.indices.length / 3), bounds: record.mesh.bounds, subtype: null }]
   return {
     importId: record.importId,
     name: record.name,
@@ -83,8 +86,10 @@ export function resolveSceneEditImports(tenantId: string, edit: SceneEdit): Impo
   for (const instance of edit.instances) {
     if (instance.importId) importIds.add(instance.importId)
   }
+  // Only the part's OWN mesh is staged geometry to resolve; `part.importId` names a HOST that is
+  // itself an instance, so it is already collected by the instance loop above.
   for (const part of edit.addedParts ?? []) {
-    importIds.add(part.importId)
+    importIds.add(part.meshImportId)
   }
   const resolved: ImportedObjectInput[] = []
   for (const importId of importIds) {

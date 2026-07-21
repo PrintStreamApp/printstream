@@ -35,6 +35,7 @@ import {
   ISO_UP,
   PAINT_CHANNEL_SPECS,
   paintChannelForGizmoMode,
+  partGroupRef,
   printableMeshBox,
   restObjectOnBed,
   rotorOf,
@@ -440,7 +441,7 @@ export function useEditorScene(params: EditorSceneParams): void {
           const group = groupByKeyRef.current.get(instance.key)
           if (!group) continue
           group.traverse((node) => {
-            const ref = node.userData.partRef as { componentObjectId: number } | undefined
+            const ref = partGroupRef(node)
             if (ref && selection.componentObjectIds.includes(ref.componentObjectId)) {
               wanted.set(`${instance.key}:${ref.componentObjectId}`, node)
             }
@@ -568,7 +569,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     /** The part the gizmo is attached to: an added part volume's mesh or a baked part's group. */
     const attachedPartMesh = (): THREE.Object3D | null => {
       const target = (transform as unknown as { object?: THREE.Object3D }).object
-      return target && (typeof target.userData.addedPartKey === 'string' || target.userData.partRef != null) ? target : null
+      return target && (typeof target.userData.addedPartKey === 'string' || partGroupRef(target)) ? target : null
     }
 
     // Extras co-moved by the TRANSLATE gizmo (multi-select): per-group offsets from the
@@ -1042,12 +1043,17 @@ export function useEditorScene(params: EditorSceneParams): void {
         // BambuStudio drill-down: a MOTIONLESS click on an already-selected multi-part
         // object selects the baked part under the cursor (resolved on pointer-up, so a
         // drag still moves the whole object). Single-part objects stay object-level.
-        const partRef = firstMesh?.object.parent?.userData.partRef as { componentObjectId: number } | undefined
+        const partRef = firstMesh?.object.parent ? partGroupRef(firstMesh.object.parent) : null
         if (partRef && extraSelectedKeysRef.current.length === 0) {
           const instance = activePlateRef.current?.instances.find((entry) => entry.key === key)
-          if (instance && instance.source.kind === 'object' && instance.parts.length > 1) {
+          // Imports drill down too — their solids carry `importPartRef` and take the gizmo the
+          // same way (see handleSelectPart), keyed by the import's synthetic object identity.
+          const ownerId = instance
+            ? (instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId ?? null)
+            : null
+          if (instance && ownerId != null && instance.parts.length > 1) {
             bakedPartClickCandidate = {
-              part: { objectId: instance.objectId, componentObjectId: partRef.componentObjectId },
+              part: { objectId: ownerId, componentObjectId: partRef.componentObjectId },
               x: event.clientX,
               y: event.clientY
             }

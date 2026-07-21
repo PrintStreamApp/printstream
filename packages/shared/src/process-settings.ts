@@ -658,12 +658,22 @@ export function isProcessOptionVisibleInMode(option: ProcessSettingOption, showD
 /**
  * Computes the sparse override map of keys whose value changed from the base.
  * Vector values are compared element-wise.
+ *
+ * Comparison is option-aware (see {@link processConfigValuesEqual}), so a key that only differs
+ * in its SERIALIZED FORM ("45.0" vs "45%") produces no override.
+ *
+ * `catalog` selects which option metadata types the values; it defaults to the process catalog.
+ * `diffFilamentConfig` in `filament-settings.ts` passes the filament catalog.
  */
-export function diffProcessConfig(base: ProcessConfig, edited: ProcessConfig): ProcessSettingOverrides {
+export function diffProcessConfig(
+  base: ProcessConfig,
+  edited: ProcessConfig,
+  catalog: ProcessSettingsCatalog = processSettingsCatalog
+): ProcessSettingOverrides {
   const overrides: ProcessSettingOverrides = {}
   for (const [key, value] of Object.entries(edited)) {
     const baseValue = base[key]
-    if (!processConfigValuesEqual(baseValue, value)) {
+    if (!processConfigValuesEqual(baseValue, value, catalog.options[key])) {
       overrides[key] = value
     }
   }
@@ -671,19 +681,94 @@ export function diffProcessConfig(base: ProcessConfig, edited: ProcessConfig): P
 }
 
 /**
- * Value-equality for process config entries. Scalars compare by string; vectors
- * compare element-wise. A scalar and a single-element vector with the same value
- * are treated as equal (BambuStudio serializes some scalars as 1-length vectors).
+ * Value-equality for process/filament config entries. Vectors compare element-wise; a scalar and a
+ * single-element vector with the same value are equal (BambuStudio serializes some scalars as
+ * 1-length vectors).
+ *
+ * Pass `option` whenever the key is known. Without it this degrades to raw string equality, which
+ * reports FALSE CHANGES: BambuStudio serializes one value several ways depending on where it was
+ * written. A preset JSON stores `monotonic_travel_into_wall` as `"45.0"` while the same setting in
+ * a 3MF's project config is `"45%"` (`ConfigOptionPercent::serialize` always appends `%`, and its
+ * `deserialize` deliberately ignores the suffix) — the same 45% either way. Comparing the strings
+ * flagged the key as modified in the settings dialogs and emitted a pointless slice override.
+ *
+ * The one type where the suffix is meaningful is `floatOrPercent`: there `"400"` is 400 mm and
+ * `"400%"` is 400% of the ratio-over width, so those must stay unequal.
+ *
+ * An ABSENT value equals an EMPTY one (see {@link isUnsetProcessValue}): a preset that never
+ * mentions `post_process` and a project that writes `"post_process": []` both mean "no scripts".
  */
-export function processConfigValuesEqual(a: ProcessConfigValue | undefined, b: ProcessConfigValue | undefined): boolean {
-  if (a === undefined || b === undefined) return a === b
+export function processConfigValuesEqual(
+  a: ProcessConfigValue | undefined,
+  b: ProcessConfigValue | undefined,
+  option?: ProcessSettingOption
+): boolean {
+  if (isUnsetProcessValue(a) && isUnsetProcessValue(b)) return true
+  if (a === undefined || b === undefined) return false
   if (Array.isArray(a) || Array.isArray(b)) {
     const aa = Array.isArray(a) ? a : [a]
     const bb = Array.isArray(b) ? b : [b]
     if (aa.length !== bb.length) return false
-    return aa.every((v, i) => v === bb[i])
+    return aa.every((v, i) => processScalarsEqual(v, bb[i], option))
   }
-  return a === b
+  return processScalarsEqual(a, b, option)
+}
+
+/**
+ * True when a config entry carries no value: missing entirely, an empty string, or a vector of
+ * nothing but empty strings.
+ *
+ * These forms are interchangeable across the places a value is written, and the difference is not
+ * something a user can see or act on. A builtin process preset never mentions `post_process`, while
+ * BambuStudio's project config always serializes the full option set and writes `"post_process": []`
+ * — treated as different, the "Post-processing Scripts" box read as MODIFIED with an empty textarea
+ * on both sides of a reset.
+ */
+function isUnsetProcessValue(value: ProcessConfigValue | undefined): boolean {
+  if (value === undefined) return true
+  if (Array.isArray(value)) return value.every((entry) => entry === '')
+  return value === ''
+}
+
+/** Scalar half of {@link processConfigValuesEqual} — one serialized value against another. */
+function processScalarsEqual(a: string, b: string | undefined, option?: ProcessSettingOption): boolean {
+  if (b === undefined) return false
+  if (a === b) return true
+  switch (option?.type) {
+    // A percent option is ALWAYS a percentage, so the `%` carries no information (BambuStudio
+    // parses the number and drops the suffix). "45", "45.0" and "45%" are one value.
+    case 'percent':
+      return numericallyEqual(stripPercentSuffix(a), stripPercentSuffix(b))
+    // Here the suffix picks the unit, so it is part of the value; only the number may vary in form.
+    case 'floatOrPercent':
+      return isPercentLiteral(a) === isPercentLiteral(b)
+        && numericallyEqual(stripPercentSuffix(a), stripPercentSuffix(b))
+    case 'int':
+    case 'float':
+      return numericallyEqual(a, b)
+    // enum / bool / string / point are compared verbatim: BambuStudio's bool deserialize is a
+    // literal `str == "1"` test, so "true" genuinely is not "1".
+    default:
+      return false
+  }
+}
+
+function isPercentLiteral(value: string): boolean {
+  return value.trim().endsWith('%')
+}
+
+function stripPercentSuffix(value: string): string {
+  const trimmed = value.trim()
+  return trimmed.endsWith('%') ? trimmed.slice(0, -1) : trimmed
+}
+
+/** True when both strings parse as the same finite number. Unparseable input is never "equal". */
+function numericallyEqual(a: string, b: string): boolean {
+  if (a.trim() === '' || b.trim() === '') return false
+  const na = Number(a)
+  const nb = Number(b)
+  if (!Number.isFinite(na) || !Number.isFinite(nb)) return false
+  return na === nb
 }
 
 /** Serialize a boolean to BambuStudio's "1"/"0" form. */
@@ -709,12 +794,12 @@ export function resolvedProcessModifiedKeys(
   const keys = new Set<string>()
   for (const key of Object.keys(finalConfig)) {
     if (!isProcessSettingKey(key)) continue
-    if (!processConfigValuesEqual(baseline[key], finalConfig[key])) keys.add(key)
+    if (!processConfigValuesEqual(baseline[key], finalConfig[key], processSettingsCatalog.options[key])) keys.add(key)
   }
   // 3MF-recorded changes whose baseline couldn't resolve stay flagged while untouched relative to
   // the effective config, mirroring the dialog's bakedKeys condition.
   for (const key of response.overriddenKeys ?? []) {
-    if (isProcessSettingKey(key) && processConfigValuesEqual(finalConfig[key], effective[key])) keys.add(key)
+    if (isProcessSettingKey(key) && processConfigValuesEqual(finalConfig[key], effective[key], processSettingsCatalog.options[key])) keys.add(key)
   }
   return [...keys]
 }

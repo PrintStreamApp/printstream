@@ -759,7 +759,21 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
    * project_settings.config): a full project by construction, but treated as a reusable
    * MODEL by default (preview on click) with slice/edit still reachable from menus.
    */
-  objectExport: z.boolean().default(false)
+  objectExport: z.boolean().default(false),
+  /**
+   * The project's embedded settings contradict its own machine topology (today: a
+   * `flush_volumes_matrix` that is not `filaments^2 x extruders`, which BambuStudio reads out of
+   * bounds and dies on mid-slice). Advisory only — nothing repairs it automatically; the editor
+   * and slice dialog offer the user an explicit Repair. Defaulted false so an index from a
+   * not-yet-updated bridge keeps the pre-existing behavior.
+   */
+  needsSettingsRepair: z.boolean().default(false),
+  /**
+   * The Bambu Studio version that saved the project (zero-padded, e.g. `"02.08.00.50"`), or null
+   * when unknown. BambuStudio refuses to open a project saved by a newer version than the engine
+   * slicing it, so the slice dialog compares this against the chosen slicer target.
+   */
+  projectVersion: z.string().nullable().default(null)
 })
 
 export type BridgeLibraryThreeMfIndex = z.infer<typeof bridgeLibraryThreeMfIndexSchema>
@@ -771,7 +785,16 @@ export const bridgeLibraryInspect3mfParamsSchema = z.object({
 export type BridgeLibraryInspect3mfParams = z.infer<typeof bridgeLibraryInspect3mfParamsSchema>
 
 export const bridgeLibraryInspect3mfResultSchema = z.object({
-  index: bridgeLibraryThreeMfIndexSchema
+  index: bridgeLibraryThreeMfIndexSchema,
+  /**
+   * The `THREE_MF_INDEX_PARSER_VERSION` the bridge built this index with. The bridge deploys
+   * separately from the API, so after a parser bump an un-upgraded bridge returns indexes that are
+   * silently missing the new fields — Zod fills their defaults and nothing looks wrong. The API
+   * compares this against its own parser version and re-parses the file locally when the bridge
+   * lags, instead of caching (and version-stamping as current) an index that was never complete.
+   * Defaults 0 so a bridge from before this field always reads as outdated.
+   */
+  parserVersion: z.number().int().nonnegative().default(0)
 })
 
 export type BridgeLibraryInspect3mfResult = z.infer<typeof bridgeLibraryInspect3mfResultSchema>

@@ -18,6 +18,7 @@
  * strips anything the schema omits) and bump {@link THREE_MF_INDEX_PARSER_VERSION} so both apps'
  * caches re-derive instead of serving stale indexes.
  */
+import { inspectProjectFlushVolumesMatrix } from '../flush-volumes-matrix.js'
 import type { PrinterModel } from '../printer.js'
 import type {
   BridgeLibraryThreeMfFilament,
@@ -34,8 +35,12 @@ import type {
  * v14: per-filament `isSupport`/`isSoluble` from `filament_is_support`/`filament_soluble`.
  * v15: filament slot count also counts the support/soluble flag arrays (a project whose flags
  *      outran its colours/types/names used to lose its trailing filament slots).
+ * v16: `needsSettingsRepair` — flush matrix vs machine topology mismatch (see
+ *      flush-volumes-matrix.ts).
+ * v17: `projectVersion` — the Bambu Studio version that saved the project, for the
+ *      newer-than-the-engine refusal check (see bambu-file-version.ts).
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 15
+export const THREE_MF_INDEX_PARSER_VERSION = 17
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -198,8 +203,17 @@ export function buildThreeMfIndex(
   // model_settings, so self-authored projects can never classify as geometry-only.
   const geometryOnly = parsedPlates.length === 0 && modelSettingsPlates.length === 0
   const objectExport = extractModelKindMarker(projectSettingsJson) === PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT
+  // The project's embedded settings contradict its own machine topology, which makes BambuStudio
+  // read out of bounds and abort the slice (see flush-volumes-matrix.ts). Surfaced so the editor
+  // and the slice dialog can offer a repair instead of letting the user hit an opaque CLI crash;
+  // nothing repairs it automatically — the file is only rewritten when the user asks.
+  const needsSettingsRepair = inspectProjectFlushVolumesMatrix(projectSettingsJson)?.inconsistent === true
+  // The Bambu Studio build that saved this project. BambuStudio REFUSES to open a project from a
+  // newer version than the engine slicing it (major.minor only — see bambu-file-version.ts), so
+  // the slice dialog needs this to warn before the user burns a job on an exit-232 refusal.
+  const projectVersion = extractProjectVersion(projectSettingsJson)
 
-  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, ...bakedProfiles }
+  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, projectVersion, ...bakedProfiles }
 }
 
 /**
@@ -439,6 +453,27 @@ export function extractPlateType(projectSettingsJson: string | null): string | n
   return typeof record.curr_bed_type === 'string'
     ? normalizePlateType(record.curr_bed_type)
     : null
+}
+
+/**
+ * The Bambu Studio version stamped into `project_settings.config` (`version`, zero-padded like
+ * `"02.08.00.50"`). Mirrors the `3D/3dmodel.model` `Application` metadata; project_settings is used
+ * because the parser already receives it. Null when absent or unparseable — callers must treat that
+ * as "unknown" and never as "compatible".
+ */
+export function extractProjectVersion(projectSettingsJson: string | null): string | null {
+  if (!projectSettingsJson) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(projectSettingsJson)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const raw = (parsed as Record<string, unknown>).version
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  return /^\d+(\.\d+)*$/.test(trimmed) ? trimmed : null
 }
 
 /**

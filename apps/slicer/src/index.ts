@@ -44,7 +44,8 @@ import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-object
 import { buildFilamentMapArgs } from './filament-map-args.js'
 import { ensurePositionalInputArgument, insertArgsBeforePositionalInput } from './cli-input-args.js'
 import { bedSizeFromPrintableArea, buildObjectPlateIndex, recenterBuildItemsXml } from './recenter-plates.js'
-import { formatSliceEngineCrashError, formatSlicePresetIncompatibilityError } from './slice-error.js'
+import { formatSliceCliExitError } from './cli-exit-codes.js'
+import { formatSliceEngineCrashError, formatSliceFileVersionError, formatSlicePresetIncompatibilityError } from './slice-error.js'
 import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
 import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from './machine-switch-repair.js'
 import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
@@ -280,6 +281,7 @@ app.post('/slice', async (request, response) => {
       supportedFlags,
       rewroteProjectSettings: preparedInput.rewroteProjectSettings,
       manualFilamentMap: preparedInput.manualFilamentMap,
+      allowNewerProjectFile: parsed.data.request.allowNewerProjectFile === true,
       bambuHomeDir,
       bambuConfigDir,
       bambuCacheDir,
@@ -377,6 +379,8 @@ async function runCli(input: {
   rewroteProjectSettings: boolean
   /** Manual dual-nozzle assignment to pin on the CLI; null when nozzle mode stays automatic. */
   manualFilamentMap: string[] | null
+  /** The request's explicit "slice it anyway" for a project newer than this engine. */
+  allowNewerProjectFile: boolean
   bambuHomeDir: string
   bambuConfigDir: string
   bambuCacheDir: string
@@ -463,10 +467,23 @@ async function runCli(input: {
   const skipObjectArgs = buildSkipObjectsArgs(await deriveSkipObjectIdentifyIds(preparedInputPath))
   // Manual dual-nozzle assignment: only the CLI flag makes it take effect (filament-map-args.ts).
   const filamentMapArgs = buildFilamentMapArgs(input.manualFilamentMap)
+  // The user was warned this project is newer than the engine and chose to slice anyway; without
+  // the flag BambuStudio refuses to open it at all (exit 232). Never inferred — only ever set from
+  // the request's explicit acknowledgement, because bypassing the vendor's version gate can let an
+  // older engine silently misread newer settings.
+  const allowNewerFileArgs = input.allowNewerProjectFile && supportedFlags.has('--allow-newer-file')
+    ? ['--allow-newer-file']
+    : []
+  if (input.allowNewerProjectFile && allowNewerFileArgs.length === 0) {
+    // The user accepted the override but this engine has no such flag, so the slice will still be
+    // refused. Say so, or the failure looks like the acknowledgement was ignored at random.
+    console.warn('[slicer] allowNewerProjectFile requested but this engine does not support --allow-newer-file; the project version refusal still applies')
+  }
   const args = insertArgsBeforePositionalInput(templateArgs, preparedInputPath, [
     ...profileArgs,
     ...skipObjectArgs,
-    ...filamentMapArgs
+    ...filamentMapArgs,
+    ...allowNewerFileArgs
   ])
 
   await executeCli({
@@ -821,6 +838,13 @@ async function executeCli(input: {
             reject(new Error(compatibilityError))
             return
           }
+          // A project saved by a NEWER Bambu Studio than this engine is refused outright before
+          // anything loads (exit 232). Name that, or it reads as a broken model.
+          const fileVersionError = formatSliceFileVersionError(`${stdoutCombined}\n${stderrCombined}`)
+          if (fileVersionError) {
+            reject(new Error(fileVersionError))
+            return
+          }
           // BambuStudio reports preset/printer incompatibility on stdout and exits
           // non-zero (code 251); surface its reason instead of the opaque exit code.
           const presetError = formatSlicePresetIncompatibilityError(`${stdoutCombined}\n${stderrCombined}`)
@@ -839,7 +863,9 @@ async function executeCli(input: {
               return
             }
           }
-          reject(new Error(`Slicer CLI exited with code ${code ?? 'unknown'}`))
+          // Everything else: keep the classified `exited with code N` shape, but name the CLI's
+          // own reason when we recognise the code instead of leaving the user a bare number.
+          reject(new Error(formatSliceCliExitError(`${stdoutCombined}\n${stderrCombined}`, code)))
         }
       })
     })

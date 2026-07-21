@@ -101,3 +101,40 @@ test('weldImportedMeshVertices drops triangles degenerate after welding', () => 
   assert.equal(mesh.positions.length, 3 * 3)
   assert.deepEqual(mesh.indices, [0, 1, 2])
 })
+
+/**
+ * THE IMPORT PAINT CONTRACT. Triangle painting stores codes by triangle INDEX, so the mesh the
+ * editor renders and the mesh the bake writes must agree on triangle order exactly — otherwise
+ * painting an import marks the wrong facets, silently and without any error.
+ *
+ * Both sides read the stored `ImportedMesh.indices` in the same order: `meshToBinaryStl` (what the
+ * editor loads through `/mesh`) and `renderImportedMeshObjectXml` (what the bake writes). This test
+ * is what lets painting be OFFERED on an unsaved import; break it and paint silently misapplies.
+ */
+test('a staged import serializes triangles in the same order to STL and to 3MF', async () => {
+  const { renderImportedMeshObjectXmlForTest } = await import('./three-mf-scene-builder.js')
+  const mesh = {
+    positions: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 2, 0, 0],
+    // Deliberately not sequential, so a serializer that ignored `indices` would be caught.
+    indices: [0, 1, 2, 2, 3, 0, 1, 4, 2],
+    bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 2, y: 1, z: 0 } }
+  }
+  const stl = meshToBinaryStl(mesh)
+  const xml = renderImportedMeshObjectXmlForTest(1, mesh)
+  const xmlTriangles = [...xml.matchAll(/<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"\/>/g)]
+    .map((match) => [Number(match[1]), Number(match[2]), Number(match[3])])
+
+  const triangleCount = stl.readUInt32LE(80)
+  assert.equal(triangleCount, 3)
+  assert.equal(xmlTriangles.length, 3)
+  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+    for (let vertex = 0; vertex < 3; vertex += 1) {
+      const offset = 84 + triangle * 50 + 12 + vertex * 12
+      const stlVertex = [stl.readFloatLE(offset), stl.readFloatLE(offset + 4), stl.readFloatLE(offset + 8)]
+      // The XML names a vertex INDEX; resolve it and compare coordinates.
+      const index = xmlTriangles[triangle]![vertex]!
+      const xmlVertex = [mesh.positions[index * 3]!, mesh.positions[index * 3 + 1]!, mesh.positions[index * 3 + 2]!]
+      assert.deepEqual(stlVertex, xmlVertex, `triangle ${triangle} vertex ${vertex} disagrees`)
+    }
+  }
+})

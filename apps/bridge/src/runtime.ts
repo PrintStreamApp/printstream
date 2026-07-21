@@ -107,6 +107,7 @@ import {
   readBridgeLibraryThreeMfIndex,
   readBridgeLibraryThumbnail
 } from './library-3mf.js'
+import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
 import { BridgePrinterMonitor } from './printer-monitor.js'
 import { collectBridgeMetrics, recordApiReconnect } from './bridge-metrics.js'
 import { clearBridgeCredentials, loadBridgeState, writeBridgeState, type BridgeState } from './state-store.js'
@@ -920,7 +921,9 @@ export class BridgeRuntimeClient {
         socket.send(JSON.stringify({
           type: 'bridge.rpc.success',
           id: request.id,
-          result: bridgeLibraryInspect3mfResultSchema.parse({ index })
+          // Report the parser version this index was built with: the API re-parses locally when
+          // this bridge lags behind its own parser, instead of caching an incomplete index.
+          result: bridgeLibraryInspect3mfResultSchema.parse({ index, parserVersion: THREE_MF_INDEX_PARSER_VERSION })
         }))
         return
       }

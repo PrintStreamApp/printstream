@@ -12,6 +12,8 @@
  * the runtime maps that depend on BOTH the machine topology and the project's filaments
  * (`filament_nozzle_map`, extruder variants, …). See docs/project-printer-retarget.md.
  */
+import { repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
+
 export type ProfileRecord = Record<string, unknown>
 
 /** Profile-level metadata keys that are NOT slice settings and must not leak into project_settings. */
@@ -94,6 +96,19 @@ export function retargetProjectSettingsToMachine(
   // not compatible with printer <old machine>". Blank it so the rewritten printer_settings_id is
   // the system identity.
   clearInheritsGroupSlot(next, 'machine')
+  // `flush_volumes_matrix` is a PROJECT key, not a machine-profile one, so the overwrite above
+  // leaves it at the SOURCE machine's extruder count while `nozzle_diameter` above just changed
+  // that count. Retargeting a single-nozzle project onto a dual-nozzle printer therefore left one
+  // block where two are required, and BambuStudio read the missing block out of bounds and
+  // segfaulted mid-slice (see flush-volumes-matrix.ts). Re-derive it for the new topology.
+  const filamentCount = Array.isArray(next.filament_colour) ? next.filament_colour.length : 0
+  const extruderCount = Array.isArray(next.nozzle_diameter) ? Math.max(next.nozzle_diameter.length, 1) : 1
+  const repairedMatrix = repairFlushVolumesMatrix(
+    Array.isArray(next.flush_volumes_matrix) ? next.flush_volumes_matrix : null,
+    filamentCount,
+    extruderCount
+  )
+  if (repairedMatrix) next.flush_volumes_matrix = repairedMatrix
   return repairEstimateModeProjectSettings(next, machineProfile)
 }
 

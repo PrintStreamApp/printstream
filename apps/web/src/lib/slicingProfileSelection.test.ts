@@ -355,3 +355,17 @@ test('resolveDefaultFilamentProfile returns null when the catalogue has no PLA a
   const noPla = [buildFilamentProfile('builtin:filament:petg', 'Bambu PETG HF @BBL H2D', 'PETG')]
   assert.equal(resolveDefaultFilamentProfile(noPla, null), null)
 })
+
+test('resolveSliceDisabledReason blocks a project newer than the selected slicer', () => {
+  // A genuine gate, unlike the settings-repair notice: BambuStudio refuses to open the file at all,
+  // so it must be reported ahead of any per-field reason.
+  assert.equal(
+    resolveSliceDisabledReason(buildSliceDisabledReasonInput({ blockedByProjectVersion: true, printerProfileId: '' })),
+    'This project was saved by a newer Bambu Studio than the selected slicer.'
+  )
+  // Accepting the override clears it and normal validation resumes.
+  assert.equal(
+    resolveSliceDisabledReason(buildSliceDisabledReasonInput({ blockedByProjectVersion: false, canSlice: true })),
+    null
+  )
+})

@@ -7,8 +7,13 @@
  * placed part (multi-instance objects contribute one part per copy), keeping the parts'
  * as-authored arrangement but re-centred as a group on the XY origin at Z=0 (see
  * {@link recentreParts}), so the editor can place the import like any STL/STEP. Helper volumes
- * (negative/modifier/support blocker/enforcer) are never included — same rule as the
- * editor's STL export. Project-level data (materials, paint, settings, plates beyond
+ * (negative/modifier/support blocker/enforcer) ARE carried, each keeping its `subtype`, because
+ * BambuStudio's "Import Object" (`LoadType::LoadGeometry` -> `LoadStrategy::LoadModel`) loads a
+ * 3MF's ModelObjects whole and its importer applies every volume's type unconditionally
+ * (`bbs_3mf.cpp`: `volume->set_type(...)`) — only the CONFIG is dropped. They are deliberately
+ * excluded from the MERGED mesh and from the re-centring, though: those drive bounds, the
+ * thumbnail, and where the import rests, and an aid must not print, shift the model, or lift it
+ * off the bed. Project-level data (materials, paint, settings, plates beyond
  * the first) is deliberately dropped: this is a geometry import, not a project merge.
  * With `objectId`, only that object's first instance is extracted, in object-local
  * coordinates (the Replace flow keeps the target's placement).
@@ -48,6 +53,8 @@ interface ExtractedPartSource {
   /** Transform into the import's shared space (baked into the vertices). */
   transform: readonly number[]
   name: string | null
+  /** Raw 3MF subtype for a helper volume; null for printed geometry. */
+  subtype: string | null
 }
 
 /**
@@ -80,7 +87,7 @@ export async function extractThreeMfImportMesh(
     const base = source.name?.trim() || `Part ${parts.length + 1}`
     const count = (nameCounts.get(base) ?? 0) + 1
     nameCounts.set(base, count)
-    parts.push({ name: count === 1 ? base : `${base} (${count})`, mesh })
+    parts.push({ name: count === 1 ? base : `${base} (${count})`, mesh, subtype: source.subtype })
   }
   if (parts.length === 0) {
     throw badRequest('This 3MF contains no importable model geometry.')
@@ -89,15 +96,22 @@ export async function extractThreeMfImportMesh(
 }
 
 /**
- * Translate every part by ONE shared offset so the import's merged footprint is centred
+ * Translate every part by ONE shared offset so the import's PRINTED footprint is centred
  * on the XY origin and rests on Z=0, preserving the parts' relative arrangement. The
  * extracted meshes otherwise carry the source file's plate-absolute coordinates, and the
  * editor places an import by its instance position assuming near-origin mesh coordinates
  * (like a typical STL/STEP) — without this the import lands plate-offset-plus-spot, off
  * the bed.
+ *
+ * The offset is measured from the printed geometry ALONE, then applied to every part including
+ * the helper volumes (they must keep their position relative to the model they act on). Letting a
+ * blocker into the measurement would shift the model sideways and, worse, a volume floating above
+ * the part would set min-z and leave the model hovering off the bed.
  */
 function recentreParts(parts: ImportedMeshPart[]): ImportedMeshPart[] {
-  const merged = parts.length === 1 ? parts[0]!.mesh : mergeMeshes(parts.map((part) => part.mesh))
+  const printed = parts.filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype ?? null))
+  const measured = printed.length > 0 ? printed : parts
+  const merged = measured.length === 1 ? measured[0]!.mesh : mergeMeshes(measured.map((part) => part.mesh))
   const offsetX = (merged.bounds.min.x + merged.bounds.max.x) / 2
   const offsetY = (merged.bounds.min.y + merged.bounds.max.y) / 2
   const offsetZ = merged.bounds.min.z
@@ -138,25 +152,25 @@ async function resolveSceneSources(filePath: string, objectId?: number): Promise
       // only the component transforms apply, so the caller controls final placement.
       const instance = scene.instances.find((entry) => entry.objectId === objectId)
       if (!instance) continue
-      return instance.parts
-        .filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype))
-        .map((part) => ({
-          entryPath: part.entryPath,
-          objectId: part.componentObjectId,
-          transform: part.transform,
-          name: instance.name
-        }))
-    }
-    // Whole-file: the first plate that has printable parts, at plate-local placements.
-    const parts = scene.parts
-      .filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype))
-      .map((part) => ({
+      return instance.parts.map((part) => ({
         entryPath: part.entryPath,
-        objectId: part.objectId,
+        objectId: part.componentObjectId,
         transform: part.transform,
-        name: part.name
+        name: instance.name,
+        subtype: part.subtype
       }))
-    if (parts.length > 0) return parts
+    }
+    // Whole-file: the first plate that has PRINTABLE parts, at plate-local placements. Helper
+    // volumes ride along but can't qualify a plate on their own — a plate holding only aids has
+    // nothing to import.
+    const parts = scene.parts.map((part) => ({
+      entryPath: part.entryPath,
+      objectId: part.objectId,
+      transform: part.transform,
+      name: part.name,
+      subtype: part.subtype
+    }))
+    if (parts.some((part) => !isNonRenderableThreeMfPartSubtype(part.subtype))) return parts
   }
   return []
 }
@@ -174,7 +188,9 @@ async function resolveVanillaSources(filePath: string, objectId?: number): Promi
         entryPath: component.entryPath,
         objectId: component.objectId,
         transform: placement ? composeThreeMfTransforms(placement, component.transform) : component.transform,
-        name: namesByObjectId.get(rootObjectId) ?? null
+        name: namesByObjectId.get(rootObjectId) ?? null,
+        // A vanilla (non-Bambu) 3MF has no volume types at all — everything is printed geometry.
+        subtype: null
       })
     }
   }
@@ -356,8 +372,19 @@ function mergeMeshes(meshes: ImportedMesh[]): ImportedMesh {
 }
 
 /** Merged import mesh; `parts` carried only when there is more than one (the STEP rule). */
+/**
+ * Fold the parts into the staged import's shape: a merged mesh plus (when there is more than one
+ * solid) the per-part list the editor renders and the bake writes as `<component>` parts.
+ *
+ * The merged mesh is PRINTED geometry only — it feeds bounds, the triangle count, the thumbnail,
+ * and the single-solid render path, none of which may show or be inflated by an aid. A lone
+ * printed solid therefore still keeps a parts list whenever a helper volume rides with it;
+ * collapsing to the bare merged mesh (the single-part shortcut) would drop the aid entirely.
+ */
 function mergeParts(parts: ImportedMeshPart[]): ImportedMesh {
   if (parts.length === 1) return parts[0]!.mesh
-  const merged = mergeMeshes(parts.map((part) => part.mesh))
+  const printed = parts.filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype ?? null))
+  const measured = printed.length > 0 ? printed : parts
+  const merged = measured.length === 1 ? measured[0]!.mesh : mergeMeshes(measured.map((part) => part.mesh))
   return { ...merged, parts }
 }

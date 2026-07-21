@@ -16,13 +16,14 @@
  */
 import { createWriteStream } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { canonicalCurrBedType, isProcessSettingKey, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTransform, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
+import { canonicalCurrBedType, isProcessSettingKey, threeMfPartSubtypeCarriesFilament, type SceneEdit, type SceneEditFilament, type SceneEditObjectBrimEars, type SceneEditPartFilament, type SceneEditPartPaint, type SceneEditPartProcessOverride, type SceneEditPartTransform, type SceneEditPartTypeChange, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
 import { PRINTSTREAM_MODEL_KIND_KEY, PRINTSTREAM_MODEL_KIND_OBJECT_EXPORT, sliceExtruderForNozzleId, sliceRecordFilamentIds, stringArray } from '@printstream/shared/three-mf'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import type { ImportedMesh } from './mesh-import.js'
 import { escapeXmlAttribute, readEntry, readZipEntryBuffer } from './three-mf-internal.js'
-import { repairObjectMeshesInModelEntry } from './three-mf-mesh-repair.js'
+import { repairImportedMeshGeometry, repairObjectMeshesInModelEntry } from './three-mf-mesh-repair.js'
+import { applyObjectClones } from './three-mf-object-clone.js'
 import { BRIM_EAR_POINTS_ENTRY, CUSTOM_GCODE_PER_LAYER_ENTRY, extractPlateType, extractSceneBed, LOGICAL_PART_PLATE_GAP, normalizeColor, parseAttrs, parseModelSettingsScene, parseRootModelComponents, parseRootModelObjectIdOrder } from './three-mf-reader.js'
 
 /**
@@ -304,7 +305,7 @@ export interface ImportedObjectInput {
    * its own `model_settings` `<part>` entry — instead of a single merged `<object><mesh>`. The
    * top-level {@link ImportedObjectInput.mesh} is the merged geometry, used only when this is absent.
    */
-  parts?: Array<{ name: string; mesh: ImportedMesh }>
+  parts?: Array<{ name: string; mesh: ImportedMesh; subtype?: string | null }>
 }
 
 // The `Application: BambuStudio-…` metadata is what makes BambuStudio recognize the file as its
@@ -341,6 +342,23 @@ const THREE_MF_RELS_XML = [
   '  <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>',
   '</Relationships>'
 ].join('\n')
+
+/**
+ * The `/3D/Objects/*.model` ZIP entries holding the meshes of the given root objects (no leading
+ * slash, ready for `readEntry`). Used by the independent-copy path, which must duplicate a source
+ * object's mesh entry rather than reference it.
+ */
+function subModelPathsForObjects(modelXml: string, objectIds: ReadonlySet<number>): Set<string> {
+  const out = new Set<string>()
+  for (const match of modelXml.matchAll(/<object\b[^>]*\bid="(\d+)"[^>]*>([\s\S]*?)<\/object>/g)) {
+    if (!objectIds.has(Number.parseInt(match[1] ?? '', 10))) continue
+    for (const component of (match[2] ?? '').matchAll(/<component\b([^>]*)\/>/g)) {
+      const path = parseAttrs(component[1] ?? '')['p:path']
+      if (path) out.add(path.replace(/^\//, ''))
+    }
+  }
+  return out
+}
 
 /** Sub-model relationships file: lists the `/3D/Objects/…model` part files the root model references. */
 const THREE_MF_MODEL_RELS_ENTRY = '3D/_rels/3dmodel.model.rels'
@@ -387,14 +405,37 @@ function maxThreeMfObjectId(...xmls: string[]): number {
 }
 
 /** Render an imported mesh as a self-contained `<object><mesh>` for `3D/3dmodel.model` resources. */
-function renderImportedMeshObjectXml(objectId: number, mesh: ImportedMesh, genUuid: (() => string) | null): string {
+/** Test seam for the import paint contract (see `mesh-import.test.ts`). */
+export function renderImportedMeshObjectXmlForTest(objectId: number, mesh: ImportedMesh): string {
+  return renderImportedMeshObjectXml(objectId, mesh, null)
+}
+
+function renderImportedMeshObjectXml(
+  objectId: number,
+  mesh: ImportedMesh,
+  genUuid: (() => string) | null,
+  /**
+   * Triangle paint for this mesh, by channel attribute and triangle index. Indices are positions
+   * in `mesh.indices` — the SAME order the editor rendered through `meshToBinaryStl`, which is
+   * what makes painting an unsaved import safe (contract pinned in `mesh-import.test.ts`).
+   */
+  paint?: ReadonlyMap<TrianglePaintAttribute, Record<string, string>>
+): string {
   const vertices: string[] = []
   for (let i = 0; i < mesh.positions.length; i += 3) {
     vertices.push(`     <vertex x="${formatMeshCoordinate(mesh.positions[i] ?? 0)}" y="${formatMeshCoordinate(mesh.positions[i + 1] ?? 0)}" z="${formatMeshCoordinate(mesh.positions[i + 2] ?? 0)}"/>`)
   }
   const triangles: string[] = []
   for (let i = 0; i < mesh.indices.length; i += 3) {
-    triangles.push(`     <triangle v1="${mesh.indices[i] ?? 0}" v2="${mesh.indices[i + 1] ?? 0}" v3="${mesh.indices[i + 2] ?? 0}"/>`)
+    const triangleIndex = i / 3
+    let attrs = ''
+    if (paint) {
+      for (const [attribute, codes] of paint) {
+        const code = codes[String(triangleIndex)]
+        if (code) attrs += ` ${attribute}="${escapeXmlAttribute(code)}"`
+      }
+    }
+    triangles.push(`     <triangle v1="${mesh.indices[i] ?? 0}" v2="${mesh.indices[i + 1] ?? 0}" v3="${mesh.indices[i + 2] ?? 0}"${attrs}/>`)
   }
   return [
     `  <object id="${objectId}"${productionUuidAttr(genUuid)} type="model">`,
@@ -443,13 +484,23 @@ function renderImportedComponentsObjectXml(
   objectId: number,
   componentObjectIds: number[],
   genUuid: (() => string) | null,
-  partPath: string | null = null
+  partPath: string | null = null,
+  /**
+   * Per-solid object-local placement, by the same index as `componentObjectIds`. An import's
+   * per-solid meshes already share assembly space, so a solid the user never moved stays at
+   * identity; `SceneEdit.importPartTransforms` supplies the rest (the gizmo on an import sub-part).
+   */
+  partTransforms?: ReadonlyMap<number, readonly number[]>
 ): string {
   const pathAttr = partPath ? ` p:path="${escapeXmlAttribute(partPath)}"` : ''
   return [
     `  <object id="${objectId}"${productionUuidAttr(genUuid)} type="model">`,
     '   <components>',
-    ...componentObjectIds.map((id) => `    <component${pathAttr} objectid="${id}"${productionUuidAttr(genUuid)} transform="${IDENTITY_THREE_MF_TRANSFORM}"/>`),
+    ...componentObjectIds.map((id, index) => {
+      const matrix = partTransforms?.get(index)
+      const transform = matrix ? matrix.map(formatThreeMfTransformValue).join(' ') : IDENTITY_THREE_MF_TRANSFORM
+      return `    <component${pathAttr} objectid="${id}"${productionUuidAttr(genUuid)} transform="${transform}"/>`
+    }),
     '   </components>',
     '  </object>'
   ].join('\n')
@@ -564,24 +615,65 @@ function buildEditedThreeMfDocuments(
   baseModelSettingsXml: string,
   projectSettingsJson: string | null,
   edit: SceneEdit,
-  imports: ImportedObjectInput[]
-): { modelXml: string; modelSettingsXml: string; importIdToObjectId: ReadonlyMap<string, number>; partFileEntries: ImportedPartFileEntry[] } {
-  let nextObjectId = maxThreeMfObjectId(baseModelXml, baseModelSettingsXml) + 1
+  imports: ImportedObjectInput[],
+  /** Source `/3D/Objects/*.model` bodies, needed only to copy an object independently. */
+  subModelEntries: ReadonlyMap<string, string> = new Map()
+): {
+  modelXml: string
+  modelSettingsXml: string
+  importIdToObjectId: ReadonlyMap<string, number>
+  partFileEntries: ImportedPartFileEntry[]
+  clonedObjectIds: Array<{ originalObjectId: number; bakedObjectId: number }>
+} {
   // When the source is a Production-Extension project, BambuStudio's GUI requires a p:UUID on every
   // injected object/component/build-item (see modelUsesProductionExtension); a fresh/core 3MF needs
   // none. Null disables UUID emission for the non-production case.
   const genUuid: (() => string) | null = modelUsesProductionExtension(baseModelXml) ? () => randomUUID() : null
+  // Independent object copies FIRST: everything below (instances, paint, part edits, added parts)
+  // addresses a copy by a negative placeholder, and this resolves those to real ids so the rest of
+  // the pipeline only ever sees real objects. See `three-mf-object-clone.ts`.
+  const cloned = applyObjectClones(
+    baseModelXml,
+    baseModelSettingsXml,
+    edit,
+    maxThreeMfObjectId(baseModelXml, baseModelSettingsXml) + 1,
+    genUuid,
+    subModelEntries
+  )
+  baseModelXml = cloned.modelXml
+  baseModelSettingsXml = cloned.modelSettingsXml
+  edit = cloned.edit
+  let nextObjectId = cloned.nextObjectId
   const importIdToObjectId = new Map<string, number>()
   const meshObjects: string[] = []
   const settingsObjects: string[] = []
   // Split-out sub-model part files for imported objects (Production-Extension layout). Populated only
   // for production-extension projects; each entry is written to the ZIP and declared in
   // 3D/_rels/3dmodel.model.rels by buildEditedThreeMf.
-  const partFileEntries: ImportedPartFileEntry[] = []
+  // Seeded with the copies' sub-model files (see the clone pre-pass above); imports append theirs.
+  const partFileEntries: ImportedPartFileEntry[] = [...cloned.partFileEntries]
   // Imports consumed as added PART volumes become components of an existing object:
   // they get a mesh object resource but no standalone model_settings object entry and
   // are never placed by build items.
-  const partImportIds = new Set((edit.addedParts ?? []).map((part) => part.importId))
+  const partImportIds = new Set((edit.addedParts ?? []).map((part) => part.meshImportId))
+  // "Repair mesh" on a not-yet-saved import: repair the geometry on its way into the document,
+  // since there is no mesh XML to rewrite yet. Applied to the merged mesh AND each solid so a
+  // multi-solid assembly repairs like a single one.
+  const repairedImportIds = new Set(edit.repairedImportIds ?? [])
+  if (repairedImportIds.size > 0) {
+    imports = imports.map((imported) => {
+      if (!repairedImportIds.has(imported.importId)) return imported
+      const repairMesh = (mesh: ImportedMesh): ImportedMesh => {
+        const repaired = repairImportedMeshGeometry(mesh.positions, mesh.indices)
+        return repaired ? { ...mesh, positions: repaired.positions, indices: repaired.indices } : mesh
+      }
+      return {
+        ...imported,
+        mesh: repairMesh(imported.mesh),
+        ...(imported.parts ? { parts: imported.parts.map((part) => ({ ...part, mesh: repairMesh(part.mesh) })) } : {})
+      }
+    })
+  }
   // Material for each imported object: the first placing instance's filament, written
   // as the part's `extruder` (mapped through filament_maps like part reassignment).
   const filamentToExtruder = buildFilamentToExtruderMap(baseModelSettingsXml)
@@ -606,6 +698,24 @@ function buildEditedThreeMfDocuments(
     byPart.set(entry.partIndex, entry.overrides)
   }
   // Part-type changes for multi-solid imports: importId -> (solid index -> Bambu subtype).
+  const importPartTransforms = new Map<string, Map<number, readonly number[]>>()
+  for (const entry of edit.importPartTransforms ?? []) {
+    let byPart = importPartTransforms.get(entry.importId)
+    if (!byPart) { byPart = new Map(); importPartTransforms.set(entry.importId, byPart) }
+    byPart.set(entry.partIndex, entry.matrix)
+  }
+  // Triangle paint authored on a not-yet-saved import: importId -> solid index -> attribute -> codes.
+  const importPaint = new Map<string, Map<number, Map<TrianglePaintAttribute, Record<string, string>>>>()
+  for (const entry of edit.importPaint ?? []) {
+    const attribute: TrianglePaintAttribute = entry.channel === 'seam'
+      ? 'paint_seam'
+      : entry.channel === 'color' ? 'paint_color' : 'paint_supports'
+    let byPart = importPaint.get(entry.importId)
+    if (!byPart) { byPart = new Map(); importPaint.set(entry.importId, byPart) }
+    let byAttribute = byPart.get(entry.partIndex)
+    if (!byAttribute) { byAttribute = new Map(); byPart.set(entry.partIndex, byAttribute) }
+    byAttribute.set(attribute, entry.triangles)
+  }
   const importPartTypes = new Map<string, Map<number, string>>()
   for (const entry of edit.importPartTypes ?? []) {
     let byPart = importPartTypes.get(entry.importId)
@@ -632,18 +742,20 @@ function buildEditedThreeMfDocuments(
       const partFilaments = importPartFilament.get(imported.importId)
       const partProcess = importPartProcess.get(imported.importId)
       const partTypes = importPartTypes.get(imported.importId)
-      const solidMeshXmls = multiParts.map((part, i) => renderImportedMeshObjectXml(componentIds[i]!, part.mesh, genUuid))
+      const partTransforms = importPartTransforms.get(imported.importId)
+      const solidPaint = importPaint.get(imported.importId)
+      const solidMeshXmls = multiParts.map((part, i) => renderImportedMeshObjectXml(componentIds[i]!, part.mesh, genUuid, solidPaint?.get(i)))
       if (genUuid) {
         // Production extension: emit the solids as a separate /3D/Objects sub-model and reference
         // them by p:path — so a plate fetches/parses only this import's part file, not the whole
         // root model, and the layout matches BambuStudio's. The root keeps just the small assembly.
         const partFilePath = `3D/Objects/printstream_object_${objectId}.model`
         partFileEntries.push({ name: partFilePath, content: renderImportedPartFileModel(solidMeshXmls) })
-        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid, `/${partFilePath}`))
+        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid, `/${partFilePath}`, partTransforms))
       } else {
         // Non-production project: keep the solids inline in the root model (same-file components).
         meshObjects.push(...solidMeshXmls)
-        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid))
+        meshObjects.push(renderImportedComponentsObjectXml(objectId, componentIds, genUuid, null, partTransforms))
       }
       settingsObjects.push(renderImportedMultiPartModelSettingsXml(
         objectId,
@@ -652,15 +764,22 @@ function buildEditedThreeMfDocuments(
         multiParts.map((part, i) => ({
           componentObjectId: componentIds[i]!,
           name: part.name,
-          extruder: toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder,
+          // A helper volume carries no material (BambuStudio writes extruder 0), so it must
+          // never inherit the object's — see threeMfPartSubtypeCarriesFilament.
+          extruder: threeMfPartSubtypeCarriesFilament(partTypes?.get(i) ?? part.subtype ?? null)
+            ? toExtruder(partFilaments?.get(i) ?? null) ?? objectExtruder
+            : null,
           // Per-part process overrides set on the unsaved import (keyed by solid index).
           processOverrides: partProcess?.get(i),
-          // Part type chosen on the unsaved import (Change type); defaults to normal_part.
-          subtype: partTypes?.get(i)
+          // The type the user chose on the unsaved import ("Change type") wins; otherwise the
+          // solid keeps the type it was imported WITH — a 3MF's support blocker stays a blocker
+          // instead of silently baking as printed geometry.
+          subtype: partTypes?.get(i) ?? part.subtype ?? undefined
         }))
       ))
     } else {
-      meshObjects.push(renderImportedMeshObjectXml(objectId, imported.mesh, genUuid))
+      // Solid index 0 is a single-solid import's only mesh.
+      meshObjects.push(renderImportedMeshObjectXml(objectId, imported.mesh, genUuid, importPaint.get(imported.importId)?.get(0)))
       if (!isPartImport) {
         settingsObjects.push(renderImportedModelSettingsObjectXml(objectId, imported.name, objectExtruder))
       }
@@ -722,7 +841,7 @@ function buildEditedThreeMfDocuments(
       const id = nextObjectId
       nextObjectId += 1
       return id
-    }, genUuid)
+    }, genUuid, filamentToExtruder)
     modelXml = applied.modelXml
     modelSettingsXml = applied.modelSettingsXml
   }
@@ -764,20 +883,25 @@ function buildEditedThreeMfDocuments(
   // BASE model_settings BEFORE the bake-authored parts are injected (see above), so the imported
   // solids / added volumes / per-part reassignments keep the new-id extruders written for them.
 
-  return { modelXml, modelSettingsXml, importIdToObjectId, partFileEntries }
+  return { modelXml, modelSettingsXml, importIdToObjectId, partFileEntries, clonedObjectIds: cloned.resolvedIds }
 }
 
 const IDENTITY_THREE_MF_TRANSFORM = '1 0 0 0 1 0 0 0 1 0 0 0'
 
 /**
- * Bake the edit's added part volumes (negative parts, modifiers, support
+ * Bake the edit's added part volumes (normal parts, negative parts, modifiers, support
  * blockers/enforcers) into the documents: each part's already-injected mesh object is
- * referenced as a `<component>` of its parent root object (object-local transform),
- * and the parent's `model_settings.config` entry gains a `<part>` with the Bambu
- * subtype. Parents that carry their mesh inline (imports saved by an earlier session,
+ * referenced as a `<component>` of its host root object (object-local transform),
+ * and the host's `model_settings.config` entry gains a `<part>` with the Bambu
+ * subtype. Hosts that carry their mesh inline (imports saved by an earlier session,
  * generic 3MFs) are first wrapped: the mesh moves to a new object referenced by an
- * identity component, and the parent's existing settings `<part>` is re-keyed to that
+ * identity component, and the host's existing settings `<part>` is re-keyed to that
  * new id so 3MF's object = mesh XOR components rule holds.
+ *
+ * Must run AFTER the edit's imports are injected: an added part's host may itself be a staged
+ * import (a part added to a model the user has not saved yet), which is only resolvable through
+ * `importIdToObjectId`. The inline-mesh wrapping branch below is the normal path for such a host,
+ * since a freshly baked import always carries its mesh inline.
  */
 function applyAddedParts(
   modelXml: string,
@@ -785,17 +909,22 @@ function applyAddedParts(
   addedParts: NonNullable<SceneEdit['addedParts']>,
   importIdToObjectId: ReadonlyMap<string, number>,
   allocateObjectId: () => number,
-  genUuid: (() => string) | null
+  genUuid: (() => string) | null,
+  filamentToExtruder: ReadonlyMap<number, number>
 ): { modelXml: string; modelSettingsXml: string } {
   for (const part of addedParts) {
-    const partObjectId = importIdToObjectId.get(part.importId)
+    const partObjectId = importIdToObjectId.get(part.meshImportId)
     if (partObjectId == null) {
       throw new Error('Scene edit adds a part from an unknown imported mesh')
     }
-    const parentPattern = new RegExp(`(<object\\b[^>]*\\bid="${part.objectId}"(?:[^>]*)>)([\\s\\S]*?)(</object>)`)
+    const hostObjectId = part.objectId ?? (part.importId != null ? importIdToObjectId.get(part.importId) : undefined)
+    if (hostObjectId == null) {
+      throw new Error('Scene edit adds a part to an unknown host model')
+    }
+    const parentPattern = new RegExp(`(<object\\b[^>]*\\bid="${hostObjectId}"(?:[^>]*)>)([\\s\\S]*?)(</object>)`)
     const parentMatch = modelXml.match(parentPattern)
     if (!parentMatch) {
-      throw new Error(`Scene edit adds a part to a missing object ${part.objectId}`)
+      throw new Error(`Scene edit adds a part to a missing object ${hostObjectId}`)
     }
     const transform = part.matrix.map(formatThreeMfTransformValue).join(' ')
     const componentXml = `    <component objectid="${partObjectId}"${productionUuidAttr(genUuid)} transform="${transform}"/>`
@@ -824,13 +953,19 @@ function applyAddedParts(
       // The parent's existing settings <part> keyed by the parent id now describes the
       // moved mesh component.
       modelSettingsXml = modelSettingsXml.replace(
-        new RegExp(`(<object\\b[^>]*\\bid="${part.objectId}"[^>]*>[\\s\\S]*?)<part id="${part.objectId}"`),
+        new RegExp(`(<object\\b[^>]*\\bid="${hostObjectId}"[^>]*>[\\s\\S]*?)<part id="${hostObjectId}"`),
         `$1<part id="${meshObjectId}"`
       )
     } else {
-      throw new Error(`Object ${part.objectId} has neither mesh nor components`)
+      throw new Error(`Object ${hostObjectId} has neither mesh nor components`)
     }
-    modelSettingsXml = addModelSettingsPartEntry(modelSettingsXml, part.objectId, partObjectId, part.subtype, part.name, part.settings)
+    // Only a filament-carrying subtype gets an extruder; see threeMfPartSubtypeCarriesFilament.
+    const extruder = part.filamentId != null && threeMfPartSubtypeCarriesFilament(part.subtype)
+      ? filamentToExtruder.get(part.filamentId) ?? part.filamentId
+      : undefined
+    modelSettingsXml = addModelSettingsPartEntry(
+      modelSettingsXml, hostObjectId, partObjectId, part.subtype, part.name, part.settings, extruder
+    )
   }
   return { modelXml, modelSettingsXml }
 }
@@ -845,7 +980,8 @@ function addModelSettingsPartEntry(
   partObjectId: number,
   subtype: string,
   name: string,
-  settings?: Record<string, string>
+  settings?: Record<string, string>,
+  extruder?: number
 ): string {
   // Process-setting keys only: the name/extruder/matrix entries are authored explicitly, so a
   // structural key smuggled through the settings map must not duplicate or clobber them.
@@ -854,6 +990,7 @@ function addModelSettingsPartEntry(
   const partXml = [
     `    <part id="${partObjectId}" subtype="${escapeXmlAttribute(subtype)}">`,
     `      <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
+    ...(extruder != null ? [`      <metadata key="extruder" value="${extruder}"/>`] : []),
     ...settingsXml,
     '    </part>'
   ].join('\n')
@@ -1227,11 +1364,24 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
       // destroys the project's machine topology. Never touch them here.
       if (MACHINE_DOMAIN_ARRAY_KEYS.has(key)) continue
       if (key === 'flush_volumes_matrix') {
-        if (value.length === oldCount * oldCount) {
+        // One `filaments x filaments` block PER EXTRUDER, not a single square — see
+        // `expectedFlushVolumesMatrixLength`. Remapping only the first block (which is all a
+        // square rebuild produces) leaves a dual-nozzle project a block short, and BambuStudio
+        // reads the missing block out of bounds and segfaults mid-slice.
+        const extruderCount = Math.max(stringArray(record.nozzle_diameter).length, 1)
+        const sourceBlocks = value.length > 0 && value.length % (oldCount * oldCount) === 0
+          ? value.length / (oldCount * oldCount)
+          : 0
+        if (sourceBlocks > 0) {
           const next: unknown[] = []
-          for (let row = 0; row < newCount; row++) {
-            for (let col = 0; col < newCount; col++) {
-              next.push(value[sourceFor(row) * oldCount + sourceFor(col)])
+          for (let extruder = 0; extruder < extruderCount; extruder++) {
+            // A retarget that ADDED an extruder has no block for it yet; seed it from the last
+            // one the project actually has rather than zero-filling a usable matrix away.
+            const base = Math.min(extruder, sourceBlocks - 1) * oldCount * oldCount
+            for (let row = 0; row < newCount; row++) {
+              for (let col = 0; col < newCount; col++) {
+                next.push(value[base + sourceFor(row) * oldCount + sourceFor(col)] ?? '0')
+              }
             }
           }
           record[key] = next
@@ -1613,6 +1763,13 @@ export interface BuildEditedThreeMfResult {
    * per-object process overrides — such as `print_flow_ratio` per patch — onto the baked objects.
    */
   importObjectIds: Array<{ importId: string; objectId: number }>
+  /**
+   * For each INDEPENDENT object copy (`edit.objectClones`), the placeholder id it was addressed by
+   * and the real `object_id` it baked as. Per-object PROCESS overrides ride the save/slice request
+   * rather than the `SceneEdit`, so they are still keyed by the placeholder and must be re-keyed
+   * through this — the same treatment a replaced object's overrides get.
+   */
+  clonedObjectIds: Array<{ originalObjectId: number; bakedObjectId: number }>
 }
 
 export async function buildEditedThreeMf(
@@ -1676,12 +1833,28 @@ export async function buildEditedThreeMf(
       .catch(() => null)
   }
 
+  // Sub-model bodies for the objects being copied independently. Read only when the edit declares
+  // a copy: a Bambu project keeps each object's mesh in its own `/3D/Objects/*.model`, and the copy
+  // needs its OWN mesh entry (sharing the source's would make painting the copy repaint its source,
+  // since paint is applied per entry + object id).
+  const subModelEntries = new Map<string, string>()
+  if (baseSourcePath && (edit.objectClones?.length ?? 0) > 0) {
+    const clonedSourceIds = new Set((edit.objectClones ?? []).map((clone) => clone.sourceObjectId))
+    for (const entryPath of subModelPathsForObjects(baseModelXml, clonedSourceIds)) {
+      const body = await readEntry(baseSourcePath, entryPath, undefined, 256 * 1024 * 1024)
+        .then((buffer) => buffer.toString('utf8'))
+        .catch(() => null)
+      if (body) subModelEntries.set(entryPath, body)
+    }
+  }
+
   const documents = buildEditedThreeMfDocuments(
     baseModelXml,
     baseModelSettingsXml,
     projectSettingsJson,
     edit,
-    imports
+    imports,
+    subModelEntries
   )
   let modelXml = documents.modelXml
   const modelSettingsXml = documents.modelSettingsXml
@@ -1721,8 +1894,14 @@ export async function buildEditedThreeMf(
 
   // Manual brim ears: when the edit carries the set, the sidecar file is rewritten
   // wholesale (or emptied, clearing the source's ears); absent keeps the source file.
-  const brimEarPointsContent = edit.brimEars !== undefined
-    ? serializeBrimEarPoints(edit.brimEars, modelXml)
+  // Ears authored on a not-yet-saved import are keyed by importId; resolve them onto the object id
+  // the import baked as, so they serialize by root-resource ordinal like any other object's.
+  const importEars: SceneEditObjectBrimEars[] = (edit.importBrimEars ?? []).flatMap((entry) => {
+    const objectId = documents.importIdToObjectId.get(entry.importId)
+    return objectId != null ? [{ objectId, points: entry.points }] : []
+  })
+  const brimEarPointsContent = edit.brimEars !== undefined || importEars.length > 0
+    ? serializeBrimEarPoints([...(edit.brimEars ?? []), ...importEars], modelXml)
     : null
   // Layer-based filament changes + layer pauses: merged with the source sidecar
   // (preserving unedited entry types and plates); both absent keeps the source file untouched.
@@ -1862,7 +2041,7 @@ export async function buildEditedThreeMf(
       }
     }
     await rewriteThreeMfEntries(baseSourcePath, outputPath, transforms, extraEntries)
-    return { replacedObjectIds, importObjectIds }
+    return { replacedObjectIds, importObjectIds, clonedObjectIds: documents.clonedObjectIds }
   }
 
   await writeFreshThreeMf(outputPath, [
@@ -1875,7 +2054,7 @@ export async function buildEditedThreeMf(
     ...(customGcodeContent ? [{ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent }] : []),
     ...(options.extraEntries ?? [])
   ])
-  return { replacedObjectIds, importObjectIds }
+  return { replacedObjectIds, importObjectIds, clonedObjectIds: documents.clonedObjectIds }
 }
 
 /**

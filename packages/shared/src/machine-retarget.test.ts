@@ -124,3 +124,29 @@ test('applyProcessProfileToProjectSettings blanks the inherited process parent a
   assert.equal(out.print_settings_id, '0.20mm Standard @BBL H2D')
   assert.deepEqual(out.inherits_group, ['', 'Bambu PLA Basic @BBL A1M', ''])
 })
+
+test('retarget to a dual-nozzle machine resizes flush_volumes_matrix for the new extruder count', () => {
+  // Regression: `flush_volumes_matrix` is a PROJECT key, so the machine-profile overwrite never
+  // touched it and a single-nozzle-sized matrix survived onto a 2-extruder machine. BambuStudio
+  // then read the missing second block out of bounds and segfaulted at ~71% (CLI exit 139) —
+  // reproduced on real projects retargeted onto both dual-nozzle machine families.
+  const singleFilamentProject = { ...a1Project, filament_colour: ['#F2754E'], flush_volumes_matrix: ['0'] }
+  const out = retargetProjectSettingsToMachine(singleFilamentProject, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(out.flush_volumes_matrix, ['0', '0'])
+})
+
+test('retarget preserves an already correctly sized flush_volumes_matrix', () => {
+  const twoFilamentProject = {
+    ...a1Project,
+    filament_colour: ['#000000', '#FFFFFF'],
+    flush_volumes_matrix: ['0', '632', '136', '0', '0', '632', '136', '0']
+  }
+  const out = retargetProjectSettingsToMachine(twoFilamentProject, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(out.flush_volumes_matrix, ['0', '632', '136', '0', '0', '632', '136', '0'])
+})

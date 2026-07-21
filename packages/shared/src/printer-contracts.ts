@@ -980,6 +980,20 @@ export const libraryFileSchema = z.object({
    * available from explicit menu actions.
    */
   objectExport: z.boolean().optional(),
+  /**
+   * The project's embedded settings contradict its own machine topology — today a
+   * `flush_volumes_matrix` that is not `filaments^2 x extruders`, which a machine retarget to a
+   * dual-nozzle printer leaves behind and which BambuStudio reads out of bounds, killing the
+   * slice. Advisory: nothing is repaired automatically, and the file is rewritten only when the
+   * user takes the explicit Repair action (`POST /api/library/:id/repair-settings`).
+   */
+  needsSettingsRepair: z.boolean().optional(),
+  /**
+   * The Bambu Studio version that saved this project (e.g. `"02.08.00.50"`). Absent for non-3MFs
+   * and for projects that carry no version. BambuStudio REFUSES a project newer than the engine
+   * slicing it (major.minor only), so the slice dialog warns before the job is queued.
+   */
+  projectVersion: z.string().nullable().optional(),
   /** Display name of whoever added/replaced/restored the current content. */
   createdByName: z.string().nullable().optional(),
   /** Set when the content was produced by restoring this older version number. */

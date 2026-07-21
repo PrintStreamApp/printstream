@@ -16,6 +16,7 @@ import { Button } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import type { SceneEdit } from '@printstream/shared'
 import type { SliceSettingsController } from '../../components/library/SliceSettingsPanel'
+import { LazyDialogFallback } from '../../components/LazyDialogFallback'
 
 const EditorView = lazy(() => import('./EditorView'))
 
@@ -74,7 +75,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
         </Button>
       )}
       {open && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<LazyDialogFallback variant="fullscreen" label="Opening the editor…" />}>
           <EditorView
             // Re-mount on a different file/version so all per-file state and one-shot guards
             // (seeded scene, re-hydration set, frozen preferred plate) reset cleanly.

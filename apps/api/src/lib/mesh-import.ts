@@ -35,10 +35,17 @@ export interface ImportedMesh {
   parts?: ImportedMeshPart[]
 }
 
-/** One named solid from a multi-solid import (a STEP assembly's part). */
+/** One named solid from a multi-solid import (a STEP assembly's part, or a 3MF's volume). */
 export interface ImportedMeshPart {
   name: string
   mesh: ImportedMesh
+  /**
+   * Raw 3MF `subtype` when this solid is a HELPER volume (support blocker/enforcer, modifier,
+   * negative part). Absent/null for printed geometry — and always so for STL/STEP, which have no
+   * volume concept. Carried from the 3MF extractor to the bake so an imported blocker is written
+   * back as a blocker (see `renderImportedMultiPartModelSettingsXml`).
+   */
+  subtype?: string | null
 }
 
 /** Ceiling for any staged import's merged triangle count (STL/STEP parse and 3MF extraction). */

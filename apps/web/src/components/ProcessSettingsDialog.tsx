@@ -205,8 +205,9 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
    */
   const isModified = (key: string): boolean => {
     if (baseConfig === null) return false
-    if (!processConfigValuesEqual(baseConfig[key], config[key])) return true
-    return bakedKeys.has(key) && processConfigValuesEqual(config[key], sliceBase[key])
+    const option = processSettingsCatalog.options[key]
+    if (!processConfigValuesEqual(baseConfig[key], config[key], option)) return true
+    return bakedKeys.has(key) && processConfigValuesEqual(config[key], sliceBase[key], option)
   }
 
   /** Number of visible settings matching the search query on each page (0 when not searching). */
@@ -340,7 +341,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
 
   /** True when a key can be reset — i.e. a distinct baseline value exists to revert to. */
   const canReset = (key: string): boolean =>
-    baseConfig !== null && !processConfigValuesEqual(baseConfig[key], config[key])
+    baseConfig !== null && !processConfigValuesEqual(baseConfig[key], config[key], processSettingsCatalog.options[key])
 
   const modifiedKeyCount = useMemo(() => {
     if (!baseConfig) return 0

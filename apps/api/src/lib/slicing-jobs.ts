@@ -453,17 +453,18 @@ export class SlicingJobs {
         const arrangedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-arrange-'))
         const arrangedPath = path.join(arrangedDir, path.basename(job.sourceFileName) || 'source.3mf')
         rewrittenSourcePaths.push(arrangedPath)
-        const { replacedObjectIds } = await buildEditedThreeMf(sourcePath, arrangedPath, sceneEdit, imports)
+        const { replacedObjectIds, clonedObjectIds } = await buildEditedThreeMf(sourcePath, arrangedPath, sceneEdit, imports)
         sourcePath = arrangedPath
 
         // Per-object PROCESS overrides set in the editor are applied to the arranged 3MF here:
         // the single-plate object-customization path below is skipped whenever an edit is present
         // (it expresses object selection via the edit's printability instead). Overrides for an
         // object replaced via "Replace with…" are re-keyed onto the baked object_id its
-        // replacement landed on, so the object's overrides follow the new mesh.
+        // replacement landed on, so the object's overrides follow the new mesh; an INDEPENDENT
+        // COPY is re-keyed the same way, off its placeholder id, so slicing one never needs a save.
         const editorOverrides = job.request.objectProcessOverrides
         if (editorOverrides && Object.keys(editorOverrides).length > 0) {
-          const effectiveOverrides = rekeyReplacedObjectOverrides(editorOverrides, replacedObjectIds)
+          const effectiveOverrides = rekeyReplacedObjectOverrides(editorOverrides, [...replacedObjectIds, ...clonedObjectIds])
           const customizedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-objcustom-'))
           const customizedPath = path.join(customizedDir, path.basename(job.sourceFileName) || 'source.3mf')
           rewrittenSourcePaths.push(customizedPath)

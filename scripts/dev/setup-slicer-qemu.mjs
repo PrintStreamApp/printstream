@@ -24,6 +24,13 @@
  *
  * Invoked by scripts/dev/run-dev.mjs on arm64. The slicer service then reads
  * SLICER_TARGETS_FILE=<data>/slicers/targets.json.
+ *
+ * Installs EVERY engine in apps/slicer/docker/slicer-targets.mjs by default, so version-specific
+ * behaviour is reproducible locally without re-provisioning (e.g. a project saved by a newer Bambu
+ * Studio, which the default engine refuses outright). Each engine is a few hundred MB of download +
+ * profile flattening, paid once — the step is idempotent and skips anything already extracted. Set
+ * PRINTSTREAM_DEV_SLICER_TARGETS=default for just the stable default, or a comma-separated list of
+ * ids, when a faster first run matters.
  */
 import { createWriteStream, existsSync } from 'node:fs'
 import { chmodSync, mkdirSync, rmSync, writeFileSync, copyFileSync } from 'node:fs'
@@ -58,10 +65,39 @@ if (!hasCommand('qemu-x86_64-static')) {
   process.exit(1)
 }
 
-const target = slicerTargets.find((entry) => entry.isDefault) ?? slicerTargets[0]
-if (!target) {
+const defaultTarget = slicerTargets.find((entry) => entry.isDefault) ?? slicerTargets[0]
+if (!defaultTarget) {
   console.error('[setup-slicer-qemu] no slicer targets defined in slicer-targets.mjs')
   process.exit(1)
+}
+
+// Dev installs EVERY bundled engine by default, so any version-specific behaviour is reproducible
+// locally without re-provisioning — notably a project saved by a newer Bambu Studio, which the
+// default engine refuses outright. The cost is paid once: each AppImage is a few hundred MB to
+// download, extract and flatten profiles for. Narrow it with
+// PRINTSTREAM_DEV_SLICER_TARGETS=default (just the stable default) or a comma-separated list of
+// ids for a faster first run.
+const requestedTargets = (process.env.PRINTSTREAM_DEV_SLICER_TARGETS ?? '').trim()
+const targets = resolveRequestedTargets(requestedTargets)
+console.log(`[setup-slicer-qemu] installing ${targets.length} target(s): ${targets.map((entry) => entry.id).join(', ')}`)
+
+function resolveRequestedTargets(request) {
+  if (!request || request.toLowerCase() === 'all') return slicerTargets
+  if (request.toLowerCase() === 'default') return [defaultTarget]
+  const wanted = request.split(',').map((value) => value.trim()).filter(Boolean)
+  const resolved = []
+  for (const id of wanted) {
+    const match = slicerTargets.find((entry) => entry.id === id)
+    if (!match) {
+      console.error(`[setup-slicer-qemu] unknown target id "${id}". Known ids: ${slicerTargets.map((entry) => entry.id).join(', ')}`)
+      process.exit(1)
+    }
+    resolved.push(match)
+  }
+  // Always keep the stable default installed so the manifest's defaultTargetId resolves to a
+  // real install even when the request only names betas.
+  if (!resolved.some((entry) => entry.id === defaultTarget.id)) resolved.unshift(defaultTarget)
+  return resolved
 }
 
 console.log('[setup-slicer-qemu] ensuring slicer emulation environment (first run downloads ~400MB; persists in the slicer volume).')
@@ -71,30 +107,35 @@ buildX86Sysroot({
   cacheDir: path.join(DATA_ROOT, 'cache'),
   log: (message) => console.log(`[setup-slicer-qemu] ${message}`)
 })
-const targetRoot = path.join(INSTALL_ROOT, target.id)
-const appDir = path.join(targetRoot, 'app')
-const profileDir = path.join(targetRoot, 'profiles')
-await installAppImage()
+const installed = []
+for (const target of targets) {
+  await installAppImage(target)
+  installed.push({
+    target,
+    appDir: appDirOf(target),
+    profileDir: profileDirOf(target)
+  })
+}
 installWrapper()
-writeTargets({ appDir, profileDir })
+writeTargets(installed)
 console.log(`[setup-slicer-qemu] done. SLICER_TARGETS_FILE=${TARGETS_FILE}`)
 
-async function installAppImage() {
-  if (existsSync(path.join(appDirOf(), 'AppRun'))) {
-    console.log('[setup-slicer-qemu] AppImage already extracted; skipping download.')
+async function installAppImage(target) {
+  if (existsSync(path.join(appDirOf(target), 'AppRun'))) {
+    console.log(`[setup-slicer-qemu] ${target.id}: AppImage already extracted; skipping download.`)
   } else {
-    const downloadPath = path.join(targetRootOf(), `${target.id}.AppImage`)
-    mkdirSync(targetRootOf(), { recursive: true })
+    const downloadPath = path.join(targetRootOf(target), `${target.id}.AppImage`)
+    mkdirSync(targetRootOf(target), { recursive: true })
     console.log(`[setup-slicer-qemu] downloading ${target.label}`)
     await downloadFile(target.downloadUrl, downloadPath)
-    extractAppImage(downloadPath, appDirOf())
+    extractAppImage(downloadPath, appDirOf(target))
     rmSync(downloadPath, { force: true })
   }
-  if (!existsSync(path.join(profileDirOf(), 'machine_full'))) {
-    console.log('[setup-slicer-qemu] flattening profiles')
-    await generateFullProfiles(path.join(appDirOf(), 'resources', 'profiles'), profileDirOf())
+  if (!existsSync(path.join(profileDirOf(target), 'machine_full'))) {
+    console.log(`[setup-slicer-qemu] ${target.id}: flattening profiles`)
+    await generateFullProfiles(path.join(appDirOf(target), 'resources', 'profiles'), profileDirOf(target))
   } else {
-    console.log('[setup-slicer-qemu] profiles already generated; skipping.')
+    console.log(`[setup-slicer-qemu] ${target.id}: profiles already generated; skipping.`)
   }
 }
 
@@ -114,20 +155,23 @@ function installWrapper() {
   chmodSync(CLI_WRAPPER, 0o755)
 }
 
-function writeTargets({ appDir, profileDir }) {
+function writeTargets(entries) {
   const manifest = {
-    defaultTargetId: target.id,
-    targets: [{
+    // Mirrors the production installer: never let a beta be the default, even if one was the only
+    // thing explicitly requested (the stable default is always installed alongside).
+    defaultTargetId: (entries.find(({ target }) => target.id === defaultTarget.id) ?? entries[0]).target.id,
+    targets: entries.map(({ target, appDir, profileDir }) => ({
       id: target.id,
       label: `${target.label} (arm64/qemu)`,
       family: target.family,
       version: target.version,
       slicerName: target.slicerName,
-      isDefault: true,
+      isDefault: target.id === defaultTarget.id,
+      prerelease: target.prerelease === true,
       cliPath: CLI_WRAPPER,
       appDir,
       profileDir
-    }]
+    }))
   }
   writeFileSync(TARGETS_FILE, `${JSON.stringify(manifest, null, 2)}\n`)
 }
@@ -142,6 +186,6 @@ function hasCommand(command) {
   return spawnSync('sh', ['-c', `command -v ${command}`], { stdio: 'ignore' }).status === 0
 }
 
-function targetRootOf() { return path.join(INSTALL_ROOT, target.id) }
-function appDirOf() { return path.join(targetRootOf(), 'app') }
-function profileDirOf() { return path.join(targetRootOf(), 'profiles') }
+function targetRootOf(target) { return path.join(INSTALL_ROOT, target.id) }
+function appDirOf(target) { return path.join(targetRootOf(target), 'app') }
+function profileDirOf(target) { return path.join(targetRootOf(target), 'profiles') }

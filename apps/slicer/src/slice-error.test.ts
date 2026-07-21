@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatSliceEngineCrashError, formatSlicePresetIncompatibilityError } from './slice-error.js'
+import { formatSliceEngineCrashError, formatSliceFileVersionError, formatSlicePresetIncompatibilityError } from './slice-error.js'
 
 const OVERHANG_CRASH_OUTPUT = [
   '{"message":"Slicing begins","plate_count":1,"plate_index":1,"plate_percent":4,"total_percent":6}',
@@ -44,4 +44,25 @@ test('lifts a filament/printer incompatibility from BambuStudio stdout', () => {
 test('returns null when there is no incompatibility line', () => {
   assert.equal(formatSlicePresetIncompatibilityError('some unrelated CLI noise\nexit 0'), null)
   assert.equal(formatSlicePresetIncompatibilityError(''), null)
+})
+
+test('formatSliceFileVersionError names both versions and what to do about it', () => {
+  // The real CLI line from BambuStudio 2.7.1.62 refusing a 2.8.0.50 project (exit 232),
+  // captured on the native x86 slicer 2026-07-21.
+  const output = [
+    '[2026-07-21 19:53:46.471944] [0x00007] [warning] cli mode, Current BambuStudio Version 02.07.01.62',
+    '[2026-07-21 19:53:46.540199] [0x00007] [error]   Version Check: File Version 2.8.0.50 not supported by current cli version 02.07.01.62',
+    'run found error, return -24, exit...'
+  ].join('\n')
+  const message = formatSliceFileVersionError(output)
+  assert.ok(message)
+  // The CLI version is zero-padded in the log; users know it as 2.7.1.62.
+  assert.match(message, /Bambu Studio 2\.8\.0\.50/)
+  assert.match(message, /2\.7\.1\.62/)
+  assert.doesNotMatch(message, /02\.07\.01\.62/)
+})
+
+test('formatSliceFileVersionError ignores unrelated output', () => {
+  assert.equal(formatSliceFileVersionError(''), null)
+  assert.equal(formatSliceFileVersionError('[error] some other failure\nrun found error, return -5, exit...'), null)
 })

@@ -234,6 +234,16 @@ export function parseDefault(stmt, fieldType) {
     const n = parseNumber(inner)
     return n === undefined ? undefined : `${n}%`
   }
+  if (fieldType === 'floatOrPercent') {
+    const n = parseNumber(inner)
+    if (n === undefined) return undefined
+    // The SECOND constructor argument is the percent flag — `ConfigOptionFloatOrPercent(400, true)`
+    // and `ConfigOptionFloatsOrPercents{FloatOrPercent(10, true)}` both mean "400%"/"10%", not
+    // 400 mm/10 mm. Dropping it made the catalog default a length, so a settings-dialog reset
+    // silently converted an anchor length from 400% of the line width to 400 mm.
+    const flagged = /\(\s*-?[\d.]+(?:e-?\d+)?\s*,\s*(true|1)\s*\)/i.test(inner)
+    return flagged ? `${n}%` : String(n)
+  }
   const n = parseNumber(inner)
   return n === undefined ? undefined : String(n)
 }

@@ -228,6 +228,53 @@ export function repairSingleMeshXml(meshXml: string): { xml: string; stats: Mesh
 }
 
 /**
+ * Repair a STAGED IMPORT's mesh numerically — the same weld + prune {@link repairSingleMeshXml}
+ * does to a baked object, applied to the geometry before it is written into the 3MF.
+ *
+ * The XML path cannot serve an import: an unsaved import has no mesh in the document yet. Repairing
+ * here is what lets "Repair mesh" work without saving the project first, and it is deliberately the
+ * same rules (nearby-vertex weld, then drop zero-area and duplicate facets) so a model repaired
+ * before a save and one repaired after come out identical.
+ *
+ * Returns null when the mesh is already clean, so the caller can keep the original array.
+ */
+export function repairImportedMeshGeometry(
+  positions: readonly number[],
+  indices: readonly number[]
+): { positions: number[]; indices: number[]; stats: MeshRepairStats } | null {
+  const vertices: ParsedVertex[] = []
+  for (let i = 0; i + 2 < positions.length; i += 3) {
+    vertices.push({ x: positions[i]!, y: positions[i + 1]!, z: positions[i + 2]!, tag: '' })
+  }
+  if (vertices.length === 0) return null
+
+  const { remap, canonical } = buildNearbyWeldRemap(vertices, weldToleranceFor(vertices))
+  const weldedVertices = vertices.length - canonical.length
+  let degenerateTrianglesRemoved = 0
+  let duplicateTrianglesRemoved = 0
+  const seenTriangles = new Set<string>()
+  const nextIndices: number[] = []
+  for (let i = 0; i + 2 < indices.length; i += 3) {
+    const a = remap[indices[i]!]
+    const b = remap[indices[i + 1]!]
+    const c = remap[indices[i + 2]!]
+    if (a == null || b == null || c == null) return null
+    // Zero area after welding: two corners collapsed onto one vertex.
+    if (a === b || b === c || c === a) { degenerateTrianglesRemoved += 1; continue }
+    // Sorted triple, so a duplicate written with a different corner-start or winding is caught.
+    const key = [a, b, c].sort((p, q) => p - q).join('_')
+    if (seenTriangles.has(key)) { duplicateTrianglesRemoved += 1; continue }
+    seenTriangles.add(key)
+    nextIndices.push(a, b, c)
+  }
+  const stats: MeshRepairStats = { weldedVertices, degenerateTrianglesRemoved, duplicateTrianglesRemoved }
+  if (isEmpty(stats)) return null
+  const nextPositions: number[] = []
+  for (const vertex of canonical) nextPositions.push(vertex.x, vertex.y, vertex.z)
+  return { positions: nextPositions, indices: nextIndices, stats }
+}
+
+/**
  * Repair the meshes of SPECIFIC objects inside one 3MF model entry, leaving every other object in
  * that entry untouched. `objectIds` are the mesh-carrying object ids within THIS entry — a root
  * object's resolved components, which the caller maps via the root model's `<components>` (a Bambu

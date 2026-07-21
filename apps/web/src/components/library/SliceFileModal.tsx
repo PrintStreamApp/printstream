@@ -11,6 +11,7 @@
  * payload shape is the shared `SliceFileSubmitInput`.
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { LazyDialogFallback } from '../LazyDialogFallback'
 import {
   Box, Button, DialogActions, Stack, Typography
 } from '@mui/joy'
@@ -32,7 +33,9 @@ import type {
   SlicingManualProfileTarget,
   ThreeMfIndex
 } from '@printstream/shared'
-import { DEFAULT_FILAMENT_COLOR, PER_OBJECT_PROCESS_KEYS } from '@printstream/shared'
+import { DEFAULT_FILAMENT_COLOR, PER_OBJECT_PROCESS_KEYS,
+  isProjectNewerThanSlicer
+} from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
@@ -92,6 +95,8 @@ import { useMobileViewport } from '../useMobileViewport'
 import { LibraryDestinationDialog } from '../LibraryDestinationDialog'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
+import { RepairProjectSettingsAlert } from './RepairProjectSettingsAlert'
+import { ProjectVersionWarningAlert } from './ProjectVersionWarningAlert'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { formatLibraryFileName } from '../../lib/libraryDisplay'
 import { useDeepStableValue } from '../../hooks/useDeepStableValue'
@@ -216,7 +221,16 @@ export function SliceFileModal({
   const [editorPlatePreference, setEditorPlatePreference] = useState<number | null>(null)
   const slicerTargets = capabilities?.targets ?? EMPTY_SLICER_TARGETS
   const configured = Boolean(capabilities?.configured && capabilities?.healthy && slicerTargets.length > 0)
-  const [selectedSlicerTargetId, setSelectedSlicerTargetId] = useState(() => capabilities?.defaultTargetId ?? capabilities?.targets[0]?.id ?? '')
+  const [selectedSlicerTargetId, setSelectedSlicerTargetId] = useState(
+    () => capabilities?.defaultTargetId ?? capabilities?.targets.find((target) => !target.prerelease)?.id ?? capabilities?.targets[0]?.id ?? ''
+  )
+  // Reset whenever the chosen engine changes: an acknowledgement is about ONE project/engine pair.
+  const [allowNewerProjectFile, setAllowNewerProjectFile] = useState(false)
+  useEffect(() => {
+    // Scoped to ONE project/engine pair: switching slicer version must re-ask, or an ack given for
+    // a 2.7 engine would silently carry over to a different one.
+    setAllowNewerProjectFile(false)
+  }, [selectedSlicerTargetId, file.id])
   const shouldLoadSlicingProfiles = configured && selectedSlicerTargetId.length > 0
   // Shared definition (key, usability check, retry/staleness) so views can PREFETCH the
   // same cache entry before this dialog opens — see `lib/slicingProfilesQuery.ts`.
@@ -437,7 +451,13 @@ export function SliceFileModal({
     if (printerId !== lockedPreferredPrinter.id) setPrinterId(lockedPreferredPrinter.id)
   }, [lockedPreferredPrinter, printerId, targetMode])
   useEffect(() => {
-    const fallbackTargetId = capabilities?.defaultTargetId ?? slicerTargets[0]?.id ?? ''
+    // Never fall back onto a BETA engine: betas are opt-in only (they exist so a project saved
+    // by a beta desktop build can be sliced), so prefer the declared default, then the first
+    // stable target, and only then anything at all.
+    const fallbackTargetId = capabilities?.defaultTargetId
+      ?? slicerTargets.find((target) => !target.prerelease)?.id
+      ?? slicerTargets[0]?.id
+      ?? ''
     if (!fallbackTargetId) {
       if (selectedSlicerTargetId) setSelectedSlicerTargetId('')
       return
@@ -730,20 +750,6 @@ export function SliceFileModal({
     const entries = Object.entries(platePauseEdits).map(([plateIndex, pauses]) => ({ plateIndex: Number(plateIndex), pauses }))
     return entries.length > 0 ? entries : undefined
   }, [platePauseEdits])
-  const filamentCountChanged = removedFilamentIds.size > 0 || addedFilaments.length > 0
-  // A material PROFILE change (e.g. PLA -> PETG) must persist its new `filament_settings_id`,
-  // otherwise the saved 3MF keeps the old preset and reopens as the previous material.
-  const filamentProfilesChanged = profileEditedFilamentIds.size > 0
-  // A recolor (without add/remove) must also persist: otherwise a saved 3MF keeps the old
-  // filament_colour even though the live preview/thumbnail shows the new colour.
-  const filamentColorsChanged = useMemo(
-    () => baseProjectFilaments.some((filament) => {
-      const id = filament.projectFilamentId
-      const current = filamentColors[id]
-      return current != null && normalizeSliceFilamentColor(current) !== normalizeSliceFilamentColor(filament.color ?? '#FFFFFF')
-    }),
-    [baseProjectFilaments, filamentColors]
-  )
   const sliceToolheads = buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, targetMode === 'realPrinter' ? selectedPrinterStatus : undefined, selectedPrinterModel)
   const materialToolheadOptions = sliceToolheads.length > 1 ? sliceToolheads : []
   // Built once and reused by every submit path so the gate below and the request
@@ -757,23 +763,24 @@ export function SliceFileModal({
   // slot from the request silently while this gate still read as satisfied.
   const missingFilamentProfile = filamentMappingResult.unresolved.length > 0
   const missingFilamentToolhead = materialToolheadOptions.length > 0 && visibleProjectFilaments.some((filament) => !filamentToolheadIds[filament.projectFilamentId])
-  // A nozzle reassignment (which extruder a material prints on) must also persist: otherwise the
-  // saved 3MF keeps the old `filament_nozzle_map` / slice_info group ids and reopens on the old
-  // nozzle. Compared against each slot's baked nozzle so a nozzle-only change still lights up Save
-  // (dual-nozzle only — there are no toolhead options to change on a single-nozzle machine).
-  const filamentNozzlesChanged = useMemo(
-    () => materialToolheadOptions.length > 0 && baseProjectFilaments.some((filament) => {
-      const selected = parseSliceToolheadNozzleId(filamentToolheadIds[filament.projectFilamentId])
-      return selected != null && selected !== (filament.nozzleId ?? null)
-    }),
-    [materialToolheadOptions.length, baseProjectFilaments, filamentToolheadIds]
-  )
-  // The full ordered filament list to bake into the saved/sliced 3MF — only when the user changed
-  // the material count, a colour, a profile, or a nozzle (an otherwise unchanged project never
-  // rewrites project_settings.config). `sourceIndex` tells the writer which original filament to
-  // clone slicer settings from for each slot; `nozzleId` carries the per-slot nozzle assignment.
+  /**
+   * The full ordered filament list baked into the saved/sliced 3MF. `sourceIndex` tells the writer
+   * which original filament to clone slicer settings from for each slot; `nozzleId` carries the
+   * per-slot nozzle assignment.
+   *
+   * ALWAYS emitted (materials are a domain the editor owns, so the save carries their complete
+   * state — see the delta-save rule in `docs/slicer-architecture.md`). This used to be gated on
+   * "did the user change the count / a colour / a profile / a nozzle", to spare an unchanged
+   * project a project_settings rewrite. That gate lost data twice: nothing can "change" relative to
+   * an editor-born project's scaffold, and an editor-born save passes `ignoreBaseContent`, so the
+   * base contributes nothing either — a new project saved with its default material reopened with
+   * NO materials at all, which in turn stranded colour paint (its codes are filament ids, so they
+   * rendered in the fallback palette). For an unchanged project the rewrite is an identity no-op:
+   * each slot clones itself, and a slot with no explicit type/settingsId keeps the source's.
+   */
   const desiredFilaments = useMemo<SceneEditFilament[] | null>(() => {
-    if (!filamentCountChanged && !filamentColorsChanged && !filamentProfilesChanged && !filamentNozzlesChanged) return null
+    // Only genuinely-absent materials emit nothing (the writer ignores an empty list anyway).
+    if (projectFilaments.length === 0) return null
     return projectFilaments.map((filament) => {
       const isAdded = addedFilamentIds.has(filament.projectFilamentId)
       const sourceIndex = isAdded
@@ -797,7 +804,7 @@ export function SliceFileModal({
         nozzleId: parseSliceToolheadNozzleId(filamentToolheadIds[filament.projectFilamentId]) ?? filament.nozzleId ?? null
       }
     })
-  }, [filamentCountChanged, filamentColorsChanged, filamentProfilesChanged, filamentNozzlesChanged, projectFilaments, addedFilamentIds, addedFilamentSourceIndex, baseProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, filamentToolheadIds])
+  }, [projectFilaments, addedFilamentIds, addedFilamentSourceIndex, baseProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, filamentToolheadIds])
   // A guaranteed-present filament option to seed an added slot (or a project with no materials)
   // with, so a new slot is always sliceable instead of an undefined one. The machine's own default
   // filament (Bambu PLA Basic) when resolvable, else Generic PLA — see resolveDefaultFilamentProfile.
@@ -992,6 +999,23 @@ export function SliceFileModal({
     && processProfileId.length > 0
     && selectedProcessProfile == null
 
+  // The project was saved by a NEWER Bambu Studio than the selected engine, which BambuStudio
+  // refuses to open at all (exit 232 before anything loads). Unlike the settings-repair notice
+  // this DOES gate: no retry or setting can get past the vendor's version check. The user can
+  // override it with an explicit acknowledgement, which passes `--allow-newer-file` — the same
+  // escape hatch Bambu Studio itself offers behind a warning.
+  const selectedSlicerTarget = slicerTargets.find((target) => target.id === selectedSlicerTargetId) ?? null
+  const projectIsNewerThanSlicer = isProjectNewerThanSlicer(file.projectVersion, selectedSlicerTarget?.version)
+  const blockedByProjectVersion = projectIsNewerThanSlicer && !allowNewerProjectFile
+
+  // ADVISORY ONLY — deliberately does not block slicing. A slice that targets a printer re-authors
+  // the machine into the temporary copy handed to the engine (`authorProjectMachineFromProfile`,
+  // applied to every slice path), and that write sizes the flush matrix for the target, so these
+  // projects usually slice fine without being repaired. Gating them refused work that succeeds.
+  // The stored file is still wrong — for a download into Bambu Studio, or a slice that re-authors
+  // no machine — so the notice stays and offers the repair; only the user triggers it.
+  const needsSettingsRepair = file.needsSettingsRepair === true && !sceneEdit
+
   const canSubmit = Boolean(configured)
     && selectedSlicerTargetId.length > 0
     && suggestedOutputFileName.trim().length > 0
@@ -999,6 +1023,7 @@ export function SliceFileModal({
     && processProfileId.length > 0
     && !printerProfileIncompatible
     && !processProfileIncompatible
+    && !blockedByProjectVersion
     && selectedNozzleDiameters.length > 0
     && !missingFilamentProfile
     && !missingFilamentToolhead
@@ -1027,6 +1052,7 @@ export function SliceFileModal({
     // sent). With a sceneEdit the edit carries its own entries, so these are omitted.
     filamentChanges: sceneEdit ? undefined : submitFilamentChanges,
     pauses: sceneEdit ? undefined : submitPauses,
+    allowNewerProjectFile: allowNewerProjectFile || undefined,
     target: targetMode === 'realPrinter'
       ? {
           mode: 'realPrinter',
@@ -1120,6 +1146,14 @@ export function SliceFileModal({
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview, isMobileViewport,
     tenantSlug, navigate, onClose,
     slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId,
+    projectVersionWarning: projectIsNewerThanSlicer
+      ? {
+          projectVersion: file.projectVersion ?? null,
+          engineVersion: selectedSlicerTarget?.version ?? null,
+          acknowledged: allowNewerProjectFile,
+          onAcknowledgedChange: setAllowNewerProjectFile
+        }
+      : null,
     slicerStatus: {
       capabilitiesLoading,
       hasCapabilities: capabilities != null,
@@ -1180,6 +1214,7 @@ export function SliceFileModal({
     && processProfileId.length > 0
     && !printerProfileIncompatible
     && !processProfileIncompatible
+    && !blockedByProjectVersion
     && selectedNozzleDiameters.length > 0
     && !missingFilamentProfile
     && !missingFilamentToolhead
@@ -1200,6 +1235,7 @@ export function SliceFileModal({
     processProfileId,
     printerProfileIncompatible,
     processProfileIncompatible,
+    blockedByProjectVersion,
     nozzleDiameterCount: selectedNozzleDiameters.length,
     missingFilamentProfile,
     staleFilamentSelection: filamentMappingResult.unresolved.some((slot) => slot.reason === 'staleSelection'),
@@ -1278,6 +1314,9 @@ export function SliceFileModal({
                     {dialogDescription}
                   </Typography>
                 )}
+              {/* Above the slice settings because it describes the project itself, not a setting. */}
+              {needsSettingsRepair && <RepairProjectSettingsAlert fileId={file.id} onRepaired={onClose} />}
+              {sliceController.projectVersionWarning && <ProjectVersionWarningAlert {...sliceController.projectVersionWarning} />}
               {/* The panel renders its own slicer availability/loading notices. */}
               <SliceSettingsPanel controller={sliceController} mode="simple" />
               {(!saveDestinationOpen || submitAction !== 'save') && submitError && <Typography level="body-sm" color="danger">{submitError}</Typography>}
@@ -1334,7 +1373,7 @@ export function SliceFileModal({
         // panel's gear). Baselined on the global effective config (profile + global
         // overrides) so per-object edits read and reset relative to what the object would
         // otherwise inherit — matching Bambu Studio.
-        <Suspense fallback={null}>
+        <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
           <ProcessSettingsDialog
             open
             onClose={() => setEditingSliceObject(null)}
@@ -1361,7 +1400,7 @@ export function SliceFileModal({
         </Suspense>
       )}
       {processSettingsDialogOpen && selectedProcessProfile && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
           <ProcessSettingsDialog
             open={processSettingsDialogOpen}
             onClose={() => setProcessSettingsDialogOpen(false)}
@@ -1397,7 +1436,7 @@ export function SliceFileModal({
         // Bambu system presets are read-only; only a workspace custom preset can be updated in place.
         const canEditOriginal = !profileId.startsWith('builtin:') && !profileId.startsWith('project:')
         return (
-          <Suspense fallback={null}>
+          <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
             <FilamentSettingsDialog
               open
               onClose={() => setFilamentSettingsFilamentId(null)}

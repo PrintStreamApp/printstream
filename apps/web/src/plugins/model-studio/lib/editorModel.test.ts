@@ -3,9 +3,12 @@ import test from 'node:test'
 import { libraryThreeMfSceneSchema, threeMfIndexSchema, type StagedImport } from '@printstream/shared'
 import * as THREE from 'three'
 import {
+  addedPartHostId,
   buildSceneEdit,
+  makeInstanceIndependent,
   buildSingleObjectExportState,
   cloneEditorState,
+  dropAddedPartsForReplacedHost,
   deriveObjectFilamentId,
   decomposeInstanceTransform,
   exactTransformIfShearing,
@@ -31,7 +34,7 @@ const STAGED: StagedImport = {
   format: 'stl',
   triangleCount: 12,
   bounds: BOUNDS,
-  parts: [{ name: 'Bracket.stl', triangleCount: 12, bounds: BOUNDS }]
+  parts: [{ name: 'Bracket.stl', triangleCount: 12, bounds: BOUNDS, subtype: null }]
 }
 
 test('seedEmptyEditorState yields one empty plate', () => {
@@ -59,8 +62,8 @@ test('instanceFromStagedImport carries a multi-solid import as one instance with
     triangleCount: 20,
     bounds: BOUNDS,
     parts: [
-      { name: 'Cylinder', triangleCount: 12, bounds: BOUNDS },
-      { name: 'Hole modifier 1', triangleCount: 8, bounds: BOUNDS }
+      { name: 'Cylinder', triangleCount: 12, bounds: BOUNDS, subtype: null },
+      { name: 'Hole modifier 1', triangleCount: 8, bounds: BOUNDS, subtype: null }
     ]
   }
   const instance = instanceFromStagedImport(multi)
@@ -76,8 +79,8 @@ const MULTI: StagedImport = {
   triangleCount: 20,
   bounds: BOUNDS,
   parts: [
-    { name: 'Cylinder', triangleCount: 12, bounds: BOUNDS },
-    { name: 'Hole modifier 1', triangleCount: 8, bounds: BOUNDS }
+    { name: 'Cylinder', triangleCount: 12, bounds: BOUNDS, subtype: null },
+    { name: 'Hole modifier 1', triangleCount: 8, bounds: BOUNDS, subtype: null }
   ]
 }
 
@@ -484,7 +487,7 @@ test('buildSceneEdit emits added parts only for placed objects; clone keeps them
   assert.equal(edit.addedParts?.length, 1)
   assert.deepEqual(edit.addedParts?.[0], {
     objectId: 3,
-    importId: 'part-imp-1',
+    meshImportId: 'part-imp-1',
     subtype: 'negative_part',
     name: 'Hole punch',
     matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 6, 7]
@@ -497,6 +500,197 @@ test('buildSceneEdit emits added parts only for placed objects; clone keeps them
 
   // No added parts -> the field is omitted entirely.
   assert.equal(buildSceneEdit(seedEmptyEditorState()).addedParts, undefined)
+})
+
+test('an added part on an UNSAVED import emits its host as an importId', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const imported = instanceFromStagedImport(STAGED)
+  state.plates[0]!.instances.push(imported)
+  const hostId = addedPartHostId(imported)
+  assert.ok(hostId != null, 'a fresh import has a synthetic host identity')
+  assert.ok(hostId < 0, 'that identity is synthetic (negative), never a real 3MF object id')
+
+  state.addedParts = {
+    [hostId]: [{
+      key: 'p1',
+      importId: 'part-imp-1',
+      subtype: 'support_blocker',
+      name: 'Support blocker',
+      position: new THREE.Vector3(1, 2, 3),
+      rotation: new THREE.Euler(),
+      scale: new THREE.Vector3(1, 1, 1),
+      soup: new Float32Array(9)
+    }]
+  }
+
+  // The host is addressed by importId, NOT by the synthetic object id (which means nothing
+  // server-side) and not by objectId 0 — the bake resolves it through importIdToObjectId.
+  assert.deepEqual(buildSceneEdit(state).addedParts, [{
+    importId: 'imp-1',
+    meshImportId: 'part-imp-1',
+    subtype: 'support_blocker',
+    name: 'Support blocker',
+    matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 2, 3]
+  }])
+})
+
+test('an added part ships a filament only when its subtype carries one', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const placed = instanceFromStagedImport(STAGED)
+  placed.source = { kind: 'object' }
+  placed.objectId = 4
+  state.plates[0]!.instances.push(placed)
+  const part = {
+    key: 'p1',
+    importId: 'part-imp-1',
+    subtype: 'normal_part' as const,
+    name: 'Boss',
+    filamentId: 2,
+    position: new THREE.Vector3(),
+    rotation: new THREE.Euler(),
+    scale: new THREE.Vector3(1, 1, 1),
+    soup: new Float32Array(9)
+  }
+  state.addedParts = { 4: [part] }
+  assert.equal(buildSceneEdit(state).addedParts?.[0]?.filamentId, 2)
+
+  // A support blocker has no meaningful material: a filament left over from an earlier type
+  // must not reach the bake, or the baked <part> would carry a stale extruder.
+  state.addedParts[4]![0]!.subtype = 'support_blocker'
+  assert.equal(buildSceneEdit(state).addedParts?.[0]?.filamentId, undefined)
+
+  // The clone carries it so undo/redo of a type change restores the material.
+  state.addedParts[4]![0]!.subtype = 'normal_part'
+  assert.equal(cloneEditorState(state).addedParts?.[4]?.[0]?.filamentId, 2)
+})
+
+test('replacing a model forgets its added parts rather than reattaching them to the new mesh', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const object = instanceFromStagedImport(STAGED)
+  object.source = { kind: 'object' }
+  object.objectId = 7
+  state.plates[0]!.instances.push(object)
+  state.addedParts = {
+    7: [{
+      key: 'p1',
+      importId: 'part-imp-1',
+      subtype: 'support_blocker',
+      name: 'Support blocker',
+      position: new THREE.Vector3(),
+      rotation: new THREE.Euler(),
+      scale: new THREE.Vector3(1, 1, 1),
+      soup: new Float32Array(9)
+    }]
+  }
+
+  // The replacement RETAINS object 7's identity, which is the same key addedParts uses — so
+  // without the explicit drop the old shape's blocker would silently ride onto the new mesh.
+  dropAddedPartsForReplacedHost(state, object)
+  const replacement = replaceInstanceGeometry(object, { ...STAGED, importId: 'imp-2' }, 7)
+  state.plates[0]!.instances = [replacement]
+  assert.equal(addedPartHostId(replacement), 7)
+  assert.equal(buildSceneEdit(state).addedParts, undefined)
+})
+
+test('the single-object export centres by the rendered footprint, not by the instance origin', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const object = instanceFromStagedImport(STAGED)
+  object.source = { kind: 'object' }
+  object.objectId = 5
+  // A Bambu object routinely carries plate coordinates in its MESH with a near-origin transform:
+  // the placement reads (10, 10) while the geometry actually sits around (40, 30).
+  object.position.set(10, 10, 0)
+  const plate = state.plates[0]!
+  plate.bed = { minX: 0, maxX: 200, minY: 0, maxY: 200, excludeAreas: [] }
+  plate.instances.push(object)
+
+  const exported = buildSingleObjectExportState(state, object.key, { x: 40, y: 30 })
+  const placed = exported?.plates[0]?.instances[0]
+  // Shifted by (bedCentre - footprintCentre) = (100-40, 100-30), so the GEOMETRY lands centred.
+  // Assigning the bed centre to `position` (the old behaviour) would have put it at (100, 100),
+  // leaving the mesh at (130, 120) — the half-off-the-bed export.
+  assert.equal(placed?.position.x, 70)
+  assert.equal(placed?.position.y, 80)
+
+  // With no rendered group the placement is left alone rather than guessed.
+  const unmeasured = buildSingleObjectExportState(state, object.key)
+  assert.equal(unmeasured?.plates[0]?.instances[0]?.position.x, 10)
+})
+
+test('a moved sub-part of an unsaved import emits importPartTransforms, not partTransforms', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const imported = instanceFromStagedImport({
+    ...STAGED,
+    parts: [
+      { name: 'Body', triangleCount: 12, bounds: BOUNDS, subtype: null },
+      { name: 'Boss', triangleCount: 8, bounds: BOUNDS, subtype: null }
+    ]
+  })
+  state.plates[0]!.instances.push(imported)
+  const hostId = addedPartHostId(imported)
+  assert.ok(hostId != null)
+
+  // The part gizmo writes through the SAME state map for both kinds; only the emit differs.
+  state.partTransforms = { [`${hostId}:1`]: [1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 4, 5] }
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.importPartTransforms, [
+    { importId: 'imp-1', partIndex: 1, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 4, 5] }
+  ])
+  // partTransforms addresses baked 3MF object ids, which an unsaved import does not have — the
+  // move would be silently dropped if it went out that way.
+  assert.equal(edit.partTransforms, undefined)
+})
+
+test('an independent copy gets its own identity and inherits the source session edits', () => {
+  const state: EditorState = seedEmptyEditorState()
+  const source = instanceFromStagedImport(STAGED)
+  source.source = { kind: 'object' }
+  source.objectId = 3
+  const copy = duplicateInstance(source)
+  state.plates[0]!.instances.push(source, copy)
+  // Session edits made on the source BEFORE the copy: the copy must start identical.
+  state.supportPaint = { '3:11': { 0: '8' } }
+  state.partTypeChanges = { '3:11': 'support_blocker' }
+
+  makeInstanceIndependent(state, copy)
+
+  // A linked copy shares objectId 3; an independent one gets a negative placeholder the bake
+  // resolves into a brand-new object.
+  assert.ok(copy.objectId < 0)
+  assert.notEqual(copy.objectId, source.objectId)
+  assert.equal(state.objectClones?.[copy.objectId], 3)
+  // The source keeps its edits and the copy has its own re-keyed set, so they diverge from here.
+  assert.deepEqual(state.supportPaint['3:11'], { 0: '8' })
+  assert.deepEqual(state.supportPaint[`${copy.objectId}:11`], { 0: '8' })
+  assert.equal(state.partTypeChanges[`${copy.objectId}:11`], 'support_blocker')
+
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.objectClones, [{ objectId: copy.objectId, sourceObjectId: 3 }])
+  // Component ids stay the SOURCE's — the bake's clone pre-pass remaps them onto the copy's parts.
+  assert.ok(edit.partTypeChanges?.some((entry) => entry.objectId === copy.objectId && entry.componentObjectId === 11))
+
+  // Deleting the copy must not ship a dangling clone (the bake rejects one).
+  state.plates[0]!.instances = [source]
+  assert.equal(buildSceneEdit(state).objectClones, undefined)
+})
+
+test('a SINGLE-solid import (an added cube) emits its paint as solid 0', () => {
+  const state: EditorState = seedEmptyEditorState()
+  // A primitive / plain STL stages as ONE solid, so `parts` is empty — the case that made painting
+  // an added cube silently do nothing.
+  const cube = instanceFromStagedImport(STAGED)
+  assert.equal(cube.parts.length, 0, 'a single-solid import carries no part rows')
+  state.plates[0]!.instances.push(cube)
+  const hostId = addedPartHostId(cube)
+  assert.ok(hostId != null)
+
+  state.supportPaint = { [`${hostId}:0`]: { 0: '8', 3: '4' } }
+  const edit = buildSceneEdit(state)
+  assert.deepEqual(edit.importPaint, [
+    { importId: 'imp-1', partIndex: 0, channel: 'support', triangles: { '0': '8', '3': '4' } }
+  ])
+  // It must NOT also emit as object paint — an unsaved import has no baked object to address.
+  assert.equal(edit.supportPaint, undefined)
 })
 
 test('buildSceneEdit emits repairedObjectIds for a marked, placed object', () => {
@@ -571,7 +765,9 @@ test('buildSingleObjectExportState isolates one object on a fresh single plate',
   })
   state.repairedObjectIds = [7, 8]
 
-  const out = buildSingleObjectExportState(state, exportedSource.key)
+  // Its geometry sits where its placement says (an origin-centred mesh), so centring is a plain
+  // shift of the placement onto the bed centre.
+  const out = buildSingleObjectExportState(state, exportedSource.key, { x: 30, y: 40 })
   assert.ok(out)
   assert.equal(out.plates.length, 1)
   const plate = out.plates[0]!
@@ -604,7 +800,7 @@ test('buildSingleObjectExportState recentres a shearing instance through its exa
   state.plates[0]!.bed = { minX: -100, maxX: 100, minY: -90, maxY: 90, excludeAreas: [] }
   state.plates[0]!.instances.push(sheared)
 
-  const out = buildSingleObjectExportState(state, sheared.key)
+  const out = buildSingleObjectExportState(state, sheared.key, { x: 7, y: 8 })
   assert.ok(out)
   const exported = out.plates[0]!.instances[0]!
   // Translation rewritten in place; the shear column survives.

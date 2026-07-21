@@ -21,7 +21,13 @@ export const slicingTargetDescriptorSchema = z.object({
   version: z.string().trim().min(1),
   slicerName: z.string().trim().min(1),
   supportsEstimateModeMachineSwitch: z.boolean().default(false),
-  isDefault: z.boolean().default(false)
+  isDefault: z.boolean().default(false),
+  /**
+   * Bundled from a Bambu PRE-release. Selectable so a project saved by a beta desktop build can be
+   * sliced at all, but never chosen automatically: the picker labels it and the default-selection
+   * fallback skips it. Defaults false so an older slicer service reads as stable.
+   */
+  prerelease: z.boolean().default(false)
 })
 export type SlicingTargetDescriptor = z.infer<typeof slicingTargetDescriptorSchema>
 
@@ -200,7 +206,11 @@ export const threeMfTransformSchema = z.array(z.number().finite().gt(-1e6).lt(1e
  * `plateIndex`.
  */
 export const sceneEditInstanceSchema = z.object({
-  objectId: z.number().int().positive().optional(),
+  /**
+   * An in-project object's Bambu id, or a NEGATIVE placeholder naming an independent copy declared
+   * in {@link sceneEditObjectCloneSchema} (resolved to a real id by the bake's clone pre-pass).
+   */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0').optional(),
   /** Staged import this instance places (see `stagedImportSchema`); baked into a new 3MF object. */
   importId: z.string().trim().min(1).optional(),
   /** 1-based plate this instance is placed on. */
@@ -253,7 +263,8 @@ export type SceneEditPlate = z.infer<typeof sceneEditPlateSchema>
  * rewriting the part's `extruder` metadata in `model_settings.config` at slice/save time.
  */
 export const sceneEditPartFilamentSchema = z.object({
-  objectId: z.number().int().positive(),
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
   componentObjectId: z.number().int().positive(),
   filamentId: z.number().int().positive()
 })
@@ -266,7 +277,8 @@ export type SceneEditPartFilament = z.infer<typeof sceneEditPartFilamentSchema>
  * Like {@link sceneEditPartFilamentSchema}, a part is shared by every instance of the object.
  */
 export const sceneEditPartProcessOverrideSchema = z.object({
-  objectId: z.number().int().positive(),
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
   componentObjectId: z.number().int().positive(),
   overrides: processSettingOverridesSchema
 })
@@ -280,7 +292,8 @@ export type SceneEditPartProcessOverride = z.infer<typeof sceneEditPartProcessOv
  * label only; it does not affect the sliced G-code.
  */
 export const sceneEditObjectNameSchema = z.object({
-  objectId: z.number().int().positive().optional(),
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0').optional(),
   importId: z.string().trim().min(1).optional(),
   name: z.string().trim().min(1).max(255)
 }).refine((value) => (value.objectId == null) !== (value.importId == null), {
@@ -309,7 +322,8 @@ export type SceneEditObjectName = z.infer<typeof sceneEditObjectNameSchema>
  */
 export const MAX_PAINT_CODE_LENGTH = 100_000
 export const sceneEditPartPaintSchema = z.object({
-  objectId: z.number().int().positive(),
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
   componentObjectId: z.number().int().positive(),
   triangles: z.record(
     z.string().regex(/^(0|[1-9]\d{0,8})$/),
@@ -381,7 +395,8 @@ export type SceneEditBrimEar = z.infer<typeof sceneEditBrimEarSchema>
  * effect when the process `brim_type` is `brim_ears`.
  */
 export const sceneEditObjectBrimEarsSchema = z.object({
-  objectId: z.number().int().positive(),
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
   points: z.array(sceneEditBrimEarSchema).max(512)
 })
 export type SceneEditObjectBrimEars = z.infer<typeof sceneEditObjectBrimEarsSchema>
@@ -433,18 +448,25 @@ export const sceneEditPlateThumbnailSchema = z.object({
 })
 export type SceneEditPlateThumbnail = z.infer<typeof sceneEditPlateThumbnailSchema>
 
-/** Bambu volume subtypes the editor can add to an object as a new part. */
-export const sceneEditAddedPartSubtypeSchema = z.enum([
+/**
+ * The Bambu volume subtypes that are HELPER volumes — present in the scene but never printed as
+ * geometry of their own. Deliberately not the set of subtypes the editor can add: a new part may
+ * also be a `normal_part` (BambuStudio's "Add part"), which is why {@link sceneEditAddedPartSchema}
+ * takes the full {@link sceneEditPartSubtypeSchema}. This enum names the volumes that get a
+ * subtype colour instead of a material — keep it in step with `HELPER_SUBTYPES` in
+ * `three-mf-part-subtype.ts`, which answers the same question for raw 3MF strings.
+ */
+export const sceneEditHelperVolumeSubtypeSchema = z.enum([
   'negative_part',
   'modifier_part',
   'support_blocker',
   'support_enforcer'
 ])
-export type SceneEditAddedPartSubtype = z.infer<typeof sceneEditAddedPartSubtypeSchema>
+export type SceneEditHelperVolumeSubtype = z.infer<typeof sceneEditHelperVolumeSubtypeSchema>
 
 /**
  * Every Bambu volume subtype a part can be CHANGED to (BambuStudio's right-click →
- * "Change type"): the addable helper subtypes plus `normal_part` (ordinary printed solid).
+ * "Change type"): the helper subtypes plus `normal_part` (ordinary printed solid).
  */
 export const sceneEditPartSubtypeSchema = z.enum([
   'normal_part',
@@ -463,7 +485,8 @@ export type SceneEditPartSubtype = z.infer<typeof sceneEditPartSubtypeSchema>
  * is a property of the object's part, shared by every placed instance.
  */
 export const sceneEditPartTypeChangeSchema = z.object({
-  objectId: z.number().int().positive(),
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
   componentObjectId: z.number().int().positive(),
   subtype: sceneEditPartSubtypeSchema
 })
@@ -479,7 +502,8 @@ export type SceneEditPartTypeChange = z.infer<typeof sceneEditPartTypeChangeSche
  * the placement is a property of the object's part, shared by every placed instance.
  */
 export const sceneEditPartTransformSchema = z.object({
-  objectId: z.number().int().positive(),
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
   componentObjectId: z.number().int().positive(),
   matrix: threeMfTransformSchema
 })
@@ -499,19 +523,77 @@ export const sceneEditImportPartTypeSchema = z.object({
 export type SceneEditImportPartType = z.infer<typeof sceneEditImportPartTypeSchema>
 
 /**
- * A new volume added INSIDE an existing object (BambuStudio's "Add negative part /
- * modifier / support blocker / enforcer"): the staged import's mesh becomes a new
- * object resource referenced as a `<component>` of the parent root object, and the
- * parent's `model_settings.config` entry gains a `<part>` with the given subtype.
- * `matrix` is the part's OBJECT-LOCAL placement (12 numbers, column-major 3x3 +
- * translation — the same convention as `sceneEditInstanceSchema.matrix`).
+ * An INDEPENDENT copy of an in-project object — BambuStudio's copy/paste, which does
+ * `Model::add_object(*src_object)` (a whole new `ModelObject`) rather than adding another
+ * `ModelInstance` to the existing one. Placing several instances against the same `objectId` is
+ * still how a LINKED copy is expressed; the two are different on purpose, and BambuStudio offers
+ * both (its toolbar "+" adds an instance, Ctrl+C/V adds an object).
+ *
+ * The bake deep-copies the source object's mesh/components AND its `model_settings` entry — parts
+ * with their subtypes, extruders, per-part config, and the object's own config — into fresh ids, so
+ * the copy starts identical to its source and then diverges.
+ *
+ * `objectId` here is a NEGATIVE placeholder the client mints. Instances and every per-part seam
+ * (paint, part transforms, part types, filaments, added parts, brim ears, per-object overrides)
+ * address the copy by that placeholder, using the SOURCE's `componentObjectId`s for its parts. A
+ * PRE-PASS resolves both — placeholder to real object id, source component id to the copy's new
+ * component id — before any other edit is applied, so the rest of the pipeline only ever sees real
+ * ids and needed no clone-specific variant of each seam.
+ */
+export const sceneEditObjectCloneSchema = z.object({
+  /** Negative placeholder this copy is addressed by throughout the edit. */
+  objectId: z.number().int().negative(),
+  /** The in-project object being copied. */
+  sourceObjectId: z.number().int().positive()
+})
+export type SceneEditObjectClone = z.infer<typeof sceneEditObjectCloneSchema>
+
+/**
+ * A placement change for one solid of a multi-solid import, keyed by import + 0-based solid index
+ * — an unsaved import has no baked 3MF part ids yet, so its parts can't use
+ * {@link sceneEditPartTransformSchema}. `matrix` is the solid's new OBJECT-LOCAL placement, applied
+ * as its `<component transform>` while the import's solids are baked into one object (they are
+ * otherwise emitted at identity, since an import's per-solid meshes already share assembly space).
+ */
+export const sceneEditImportPartTransformSchema = z.object({
+  importId: z.string().trim().min(1),
+  partIndex: z.number().int().nonnegative(),
+  matrix: threeMfTransformSchema
+})
+export type SceneEditImportPartTransform = z.infer<typeof sceneEditImportPartTransformSchema>
+
+/**
+ * A new volume added INSIDE an existing object (BambuStudio's "Add part / negative part /
+ * modifier / support blocker / enforcer"): `meshImportId`'s staged mesh becomes a new object
+ * resource referenced as a `<component>` of the host root object, and the host's
+ * `model_settings.config` entry gains a `<part>` with the given subtype. `matrix` is the part's
+ * OBJECT-LOCAL placement (12 numbers, column-major 3x3 + translation — the same convention as
+ * `sceneEditInstanceSchema.matrix`).
+ *
+ * TWO import ids are in play and they mean different things: `meshImportId` is the part's own
+ * geometry, while `importId` names the HOST when the part is added to a model that is itself still
+ * an unsaved import. Exactly one of `objectId` / `importId` identifies the host — an in-project
+ * object by its Bambu `object_id`, or a staged import by the id the builder baked it under
+ * (`importIdToObjectId`), which is what lets a part be added before the project is ever saved.
  */
 export const sceneEditAddedPartSchema = z.object({
-  objectId: z.number().int().positive(),
-  importId: z.string().trim().min(1),
-  subtype: sceneEditAddedPartSubtypeSchema,
+  /** Host: an in-project object's Bambu `object_id`. Mutually exclusive with `importId`. */
+  /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
+  objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0').optional(),
+  /** Host: a staged import, for a part added to a model that has not been saved yet. */
+  importId: z.string().trim().min(1).optional(),
+  /** The part's OWN geometry — always a staged import, whether a primitive or a loaded file. */
+  meshImportId: z.string().trim().min(1),
+  subtype: sceneEditPartSubtypeSchema,
   name: z.string().trim().min(1).max(200),
   matrix: threeMfTransformSchema,
+  /**
+   * Filament (1-based) for a part that carries one — normal parts and modifiers, per
+   * `threeMfPartSubtypeCarriesFilament`. Written as the part's `extruder` metadata. Omitted for
+   * support blockers/enforcers and negative volumes, which have no meaningful material;
+   * BambuStudio writes 0 there and so do we (by writing nothing).
+   */
+  filamentId: z.number().int().positive().optional(),
   /**
    * Per-volume process overrides (modifier parts): written as `<metadata key value/>`
    * entries inside the part's `model_settings.config` block, which is exactly how
@@ -519,7 +601,10 @@ export const sceneEditAddedPartSchema = z.object({
    * volume. Values are the serialized config strings.
    */
   settings: z.record(z.string().min(1).max(64), z.string().max(512)).optional()
-})
+}).refine(
+  (part) => (part.objectId == null) !== (part.importId == null),
+  { message: 'An added part must name exactly one host: objectId or importId' }
+)
 export type SceneEditAddedPart = z.infer<typeof sceneEditAddedPartSchema>
 
 /**
@@ -595,6 +680,46 @@ export const sceneEditSchema = z.object({
   importPartProcessOverrides: z.array(sceneEditImportPartProcessOverrideSchema).max(400).optional(),
   /** Optional part-type changes for multi-solid imports' solids, keyed by import + solid index. */
   importPartTypes: z.array(sceneEditImportPartTypeSchema).max(400).optional(),
+  /** Optional part-placement changes for multi-solid imports' solids, keyed by import + solid index. */
+  importPartTransforms: z.array(sceneEditImportPartTransformSchema).max(400).optional(),
+  /**
+   * Optional staged imports the user asked to mesh-repair. The import counterpart of
+   * `repairedObjectIds`: an unsaved import has no mesh in the document yet, so the repair is
+   * applied to its stored geometry before injection (`repairImportedMeshGeometry`). Same rules
+   * either way, so repairing before or after a save gives the same result.
+   */
+  repairedImportIds: z.array(z.string().trim().min(1)).max(200).optional(),
+  /**
+   * Optional manual brim ears on a not-yet-saved import, keyed by importId — the import
+   * counterpart of `brimEars`, which addresses an object by its baked id. Resolved through
+   * `importIdToObjectId` when the sidecar is written.
+   */
+  importBrimEars: z.array(z.object({
+    importId: z.string().trim().min(1),
+    points: z.array(sceneEditBrimEarSchema).max(512)
+  })).max(200).optional(),
+  /**
+   * Optional triangle paint on a not-yet-saved import, keyed by import + 0-based solid index
+   * (`partIndex` 0 is a single-solid import's only mesh). The import counterpart of
+   * `supportPaint`/`seamPaint`/`colorPaint`, which address a baked part by object + component id.
+   *
+   * Triangle indices are positions in the STAGED mesh's `indices` — the same order the editor
+   * renders (`meshToBinaryStl`) and the bake writes (`renderImportedMeshObjectXml`), a contract
+   * pinned by a test in `mesh-import.test.ts`. Breaking that order silently paints the wrong
+   * facets, so do not reorder either serializer.
+   */
+  importPaint: z.array(z.object({
+    importId: z.string().trim().min(1),
+    partIndex: z.number().int().nonnegative(),
+    channel: z.enum(['support', 'seam', 'color']),
+    triangles: z.record(z.string(), z.string().max(MAX_PAINT_CODE_LENGTH))
+  })).max(400).optional(),
+  /**
+   * Optional INDEPENDENT copies of in-project objects (BambuStudio's copy/paste semantics, as
+   * opposed to placing another instance against the same `objectId`, which stays linked). Resolved
+   * by a pre-pass before every other seam — see {@link sceneEditObjectCloneSchema}.
+   */
+  objectClones: z.array(sceneEditObjectCloneSchema).max(200).optional(),
   /** Optional per-part support-paint maps (parts painted with the support brush). */
   supportPaint: z.array(sceneEditPartPaintSchema).optional(),
   /** Optional per-part seam-paint maps (parts painted with the seam brush). */
@@ -639,7 +764,16 @@ export type StagedImportFormat = z.infer<typeof stagedImportFormatSchema>
 export const stagedImportPartSchema = z.object({
   name: z.string().min(1),
   triangleCount: z.number().int().nonnegative(),
-  bounds: z.object({ min: sceneEditVec3Schema, max: sceneEditVec3Schema })
+  bounds: z.object({ min: sceneEditVec3Schema, max: sceneEditVec3Schema }),
+  /**
+   * Raw 3MF `subtype` for a solid that came in as a HELPER volume (support blocker/enforcer,
+   * modifier, negative part); null for ordinary printed geometry, and always null for STL/STEP,
+   * which have no volume concept. Only a 3MF source sets it: BambuStudio's "Import Object"
+   * (`LoadStrategy::LoadModel`) loads a 3MF's ModelVolumes whole and its importer applies each
+   * volume's type unconditionally, so a blocker must survive an export/import round-trip rather
+   * than silently becoming printed geometry or vanishing.
+   */
+  subtype: z.string().nullable().default(null)
 })
 export type StagedImportPart = z.infer<typeof stagedImportPartSchema>
 
@@ -767,6 +901,17 @@ export const createSlicingJobSchema = z.object({
    */
   sourceVersionId: z.string().trim().min(1).optional(),
   slicerTargetId: z.string().trim().min(1).optional(),
+  /**
+   * The user has been warned that this project was saved by a NEWER Bambu Studio than the chosen
+   * engine, and chose to slice anyway. Passes BambuStudio's `--allow-newer-file`, which bypasses
+   * the refusal it would otherwise exit 232 on.
+   *
+   * Deliberately an explicit acknowledgement rather than an always-on flag: the version gate is
+   * the vendor's own, and an older engine can silently misinterpret settings a newer one wrote —
+   * so a slice that succeeds is not proof the G-code is right. Same shape as the AMS drying
+   * `acknowledgeRisks` contract: the UI warns, the user accepts, the server carries the choice.
+   */
+  allowNewerProjectFile: z.boolean().optional(),
   target: slicingTargetSchema,
   outputFileName: z.string().trim().min(1).max(255).optional(),
   outputFolderId: z.string().trim().min(1).nullable().optional(),

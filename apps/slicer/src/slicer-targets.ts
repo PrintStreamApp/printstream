@@ -18,7 +18,9 @@ const runtimeSlicerTargetSchema = slicingTargetDescriptorSchema.extend({
   cliPath: z.string().trim().min(1),
   appDir: z.string().trim().min(1).optional(),
   profileDir: z.string().trim().min(1),
-  cliArgsTemplate: z.string().trim().min(1).optional()
+  cliArgsTemplate: z.string().trim().min(1).optional(),
+  /** Bundled from a Bambu PRE-release; never selected by default. */
+  prerelease: z.boolean().optional()
 })
 
 const runtimeSlicerTargetsFileSchema = z.object({
@@ -45,14 +47,15 @@ export function getSlicerTargetRegistry(): Promise<RuntimeSlicerTargetRegistry> 
 }
 
 export function getPublicSlicerTargets(registry: RuntimeSlicerTargetRegistry): SlicingTargetDescriptor[] {
-  return registry.targets.map(({ id, label, family, version, slicerName, supportsEstimateModeMachineSwitch, isDefault }) => ({
+  return registry.targets.map(({ id, label, family, version, slicerName, supportsEstimateModeMachineSwitch, isDefault, prerelease }) => ({
     id,
     label,
     family,
     version,
     slicerName,
     supportsEstimateModeMachineSwitch,
-    isDefault
+    isDefault,
+    prerelease: prerelease === true
   }))
 }
 

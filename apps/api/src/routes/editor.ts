@@ -206,7 +206,7 @@ async function bakeArrangedThreeMf(
 
   const outputPath = path.join(workDir, 'arranged.3mf')
   const extraCleanupDirs: string[] = []
-  const { replacedObjectIds } = await buildEditedThreeMf(basePath, outputPath, sceneEdit, imports, {
+  const { replacedObjectIds, clonedObjectIds } = await buildEditedThreeMf(basePath, outputPath, sceneEdit, imports, {
     globalProcessOverrides: processSettingOverrides,
     objectExportMarker: objectExport === true
   })
@@ -215,7 +215,9 @@ async function bakeArrangedThreeMf(
   // editor identity; re-key onto the baked object_id, then inject as model_settings metadata.
   let workingPath = outputPath
   if (objectProcessOverrides && Object.keys(objectProcessOverrides).length > 0) {
-    const rekeyed = rekeyReplacedObjectOverrides(objectProcessOverrides, replacedObjectIds)
+    // Both a replaced object and an independent COPY are addressed by an editor-side id the baked
+    // file does not use; re-key through the same helper so neither needs a save first.
+    const rekeyed = rekeyReplacedObjectOverrides(objectProcessOverrides, [...replacedObjectIds, ...clonedObjectIds])
     const customizedPath = path.join(workDir, 'customized.3mf')
     await createObjectCustomizedThreeMf(workingPath, customizedPath, 0, { objectProcessOverrides: rekeyed })
     workingPath = customizedPath
@@ -317,7 +319,10 @@ editorRouter.post(
         action: 'upload',
         resource: 'library file',
         summary: `Saved edited 3MF ${created.name}.`,
-        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, bakedFromEditorStateOnly: parsed.ignoreBaseContent === true, importCount: baked.importCount, retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
+        // Counts only — never the edit's contents. `objectCopyCount` and `repairedMeshCount` are
+        // here because both MATERIALISE new or altered geometry in the saved file, so a support
+        // question about an unexpected object or a changed mesh can be answered from the trail.
+        metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, bakedFromEditorStateOnly: parsed.ignoreBaseContent === true, importCount: baked.importCount, objectCopyCount: parsed.sceneEdit?.objectClones?.length ?? 0, repairedMeshCount: (parsed.sceneEdit?.repairedObjectIds?.length ?? 0) + (parsed.sceneEdit?.repairedImportIds?.length ?? 0), retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
       })
       response.status(201).json({ file: { id: created.id, name: created.name } })
     } finally {

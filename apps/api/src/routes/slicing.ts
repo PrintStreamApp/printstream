@@ -283,7 +283,11 @@ slicingRouter.post('/jobs', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
       slicerTargetId: parsed.data.slicerTargetId ?? null,
       targetMode: parsed.data.target.mode,
       printerId: parsed.data.target.mode === 'realPrinter' ? parsed.data.target.printerId : null,
-      plate: parsed.data.plate
+      plate: parsed.data.plate,
+      // The user consciously bypassed BambuStudio's newer-project refusal for this slice. Worth
+      // recording: it is a deliberate override of a vendor safety gate, and it is the first thing
+      // to check if the resulting G-code turns out wrong.
+      allowNewerProjectFile: parsed.data.allowNewerProjectFile === true
     }
   })
   response.status(202).json({ job })

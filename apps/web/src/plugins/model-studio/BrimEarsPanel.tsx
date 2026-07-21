@@ -28,7 +28,7 @@ export function BrimEarsPanel({ paintTargetIsObject, brimEarDiameter, setBrimEar
       <Typography level="title-sm">Brim ears</Typography>
       {!paintTargetIsObject ? (
         <Typography level="body-xs" textColor="text.tertiary">
-          Brim ears aren't available for imported models yet.
+          Select a model to place brim ears.
         </Typography>
       ) : (
         <>

@@ -100,18 +100,28 @@ test('extracts a Bambu 3MF plate as one part per printed object, placements pres
   ], async (filePath) => {
     const mesh = await extractThreeMfImportMesh(filePath)
     assert.ok(mesh.parts, 'multi-object plate should carry parts')
-    assert.deepEqual(mesh.parts!.map((part) => part.name), ['Box', 'Lid'])
-    // Helper volumes never ride along (the support_blocker object is dropped).
+    // Helper volumes ride along, keeping their type — BambuStudio's Import Object loads a 3MF's
+    // ModelVolumes whole (only the config is dropped), so a blocker must survive the round-trip.
+    assert.deepEqual(mesh.parts!.map((part) => part.name), ['Box', 'Lid', 'Blocker'])
+    // Raw 3MF strings, carried verbatim (Bambu marks ordinary parts `normal_part`) — consumers
+    // classify through canonicalThreeMfPartSubtype rather than testing truthiness.
+    assert.deepEqual(mesh.parts!.map((part) => part.subtype ?? null), ['normal_part', 'normal_part', 'support_blocker'])
+    // ...but the MERGED mesh is printed geometry only: it feeds bounds, the triangle count, and
+    // the thumbnail, none of which may show or be inflated by an aid.
     assert.equal(mesh.indices.length / 3, 2)
     // Build transforms are baked into the vertices: the two triangles sit 80mm apart in x.
     const box = mesh.parts![0]!.mesh
     const lid = mesh.parts![1]!.mesh
     assert.equal(lid.bounds.min.x - box.bounds.min.x, 80)
-    // The merged bounds cover both parts, re-centred as a group on the XY origin at Z=0.
+    // The merged bounds cover both PRINTED parts, re-centred as a group on the XY origin at Z=0.
     assert.equal(mesh.bounds.max.x - mesh.bounds.min.x, 90)
     assert.equal(mesh.bounds.min.x, -45)
     assert.equal(mesh.bounds.min.x + mesh.bounds.max.x, 0)
     assert.equal(mesh.bounds.min.z, 0)
+    // The blocker sits at y=60 in the source; re-centring is measured on the printed parts alone,
+    // so it keeps its offset relative to them instead of dragging the model off-centre.
+    const blocker = mesh.parts![2]!.mesh
+    assert.equal(blocker.bounds.min.y - box.bounds.min.y, 60)
   })
 })
 

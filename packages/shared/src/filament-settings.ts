@@ -19,7 +19,7 @@
  * loaded filament profile at slice time (apps/slicer materializeProfileFile).
  */
 import { z } from 'zod'
-import { processConfigValuesEqual, type ProcessConfig, type ProcessSettingsCatalog } from './process-settings.js'
+import { diffProcessConfig, processConfigValuesEqual, type ProcessConfig, type ProcessSettingsCatalog } from './process-settings.js'
 import { filamentSettingsCatalog } from './generated/filament-settings.generated.js'
 
 export { filamentSettingsCatalog }
@@ -42,12 +42,21 @@ export type {
   ProcessSettingOverrides as FilamentSettingOverrides
 } from './process-settings.js'
 
-// The diff + value-equality + bool serialization are catalog-independent — reuse verbatim.
+// Value-equality and bool serialization are catalog-independent — reuse verbatim. Callers pass the
+// option (from `filamentSettingsCatalog.options[key]`) so percent/float values that differ only in
+// serialized form don't read as changed; see `processConfigValuesEqual`.
 export {
-  diffProcessConfig as diffFilamentConfig,
   processConfigValuesEqual as filamentConfigValuesEqual,
   serializeProcessBool as serializeFilamentBool
 } from './process-settings.js'
+
+/**
+ * {@link diffProcessConfig} bound to the FILAMENT catalog, so each key's value-equality uses the
+ * filament option's type. Same contract otherwise: the sparse map of keys whose value changed.
+ */
+export function diffFilamentConfig(base: ProcessConfig, edited: ProcessConfig): FilamentSettingOverridesMap {
+  return diffProcessConfig(base, edited, filamentSettingsCatalog)
+}
 
 /**
  * Every recognized filament-setting key (the catalog's options). Use as an ALLOWLIST when reading
@@ -165,13 +174,13 @@ export function resolvedFilamentModifiedKeys(state: ResolvedFilamentState, overr
   const keys = new Set<string>()
   for (const key of Object.keys(finalConfig)) {
     if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
-    if (!processConfigValuesEqual(state.baseline[key], finalConfig[key])) keys.add(key)
+    if (!processConfigValuesEqual(state.baseline[key], finalConfig[key], filamentSettingsCatalog.options[key])) keys.add(key)
   }
   // Record-marked keys stay flagged while untouched relative to the embedded config (parent
   // baseline unresolved), mirroring the dialog's bakedKeys condition.
   for (const key of state.bakedKeys) {
     if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
-    if (processConfigValuesEqual(finalConfig[key], state.effective[key])) keys.add(key)
+    if (processConfigValuesEqual(finalConfig[key], state.effective[key], filamentSettingsCatalog.options[key])) keys.add(key)
   }
   return [...keys]
 }

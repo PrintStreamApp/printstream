@@ -16,7 +16,7 @@
  */
 import { useState, type MutableRefObject } from 'react'
 import { ListDivider, ListItemDecorator, Menu, MenuItem } from '@mui/joy'
-import type { SceneEditAddedPartSubtype } from '@printstream/shared'
+import type { SceneEditPartSubtype } from '@printstream/shared'
 import AspectRatioRoundedIcon from '@mui/icons-material/AspectRatioRounded'
 import CallSplitRoundedIcon from '@mui/icons-material/CallSplitRounded'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
@@ -38,12 +38,24 @@ import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded'
 import ThreeSixtyRoundedIcon from '@mui/icons-material/ThreeSixtyRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import VerticalAlignBottomRoundedIcon from '@mui/icons-material/VerticalAlignBottomRounded'
-import { HELPER_VOLUME_SPECS, HELPER_VOLUME_SUBTYPES } from './lib/helperVolumes'
+import { ADDED_PART_SUBTYPES, addedPartLabel } from './lib/addedParts'
+import type { PrimitiveKind } from './lib/primitives'
 import { CONTEXT_MENU_POPPER_MODIFIERS, CONTEXT_MENU_SX } from './contextMenuChrome'
-import { ContextMenuBackItem, FilamentMenuItems } from './contextMenuItems'
+import { AddPartSourceMenuItems, ContextMenuBackItem, FilamentMenuItems } from './contextMenuItems'
 import type { FilamentOption } from './EditorView'
 
 type Axis = 'x' | 'y' | 'z'
+
+/**
+ * Which list the menu is showing. Submenus swap the content in place rather than cascading a
+ * nested popup, so the view carries whatever the submenu needs — the add-part list needs to know
+ * which volume type the user picked before choosing its geometry.
+ */
+type MenuView =
+  | { kind: 'root' }
+  | { kind: 'material' }
+  | { kind: 'export' }
+  | { kind: 'addPart'; subtype: SceneEditPartSubtype }
 
 export interface EditorContextMenuProps {
   /** Open position + the right-clicked object's instance key. */
@@ -56,7 +68,12 @@ export interface EditorContextMenuProps {
    * object is a member, else 1). Above 1 the menu shows the reduced bulk item set.
    */
   selectionCount: number
+  /** Linked copy (BambuStudio's "+"): another instance of the same object. */
   onDuplicate: (key: string) => void
+  /** Independent copy (BambuStudio's Ctrl+C/V): a new object that diverges from the source. */
+  onDuplicateIndependent: (key: string) => void
+  /** Unlink this copy from the others. Absent when the model has no other copies. */
+  onMakeIndependent?: (key: string) => void
   /** Rename the object (single selection only) — the object list rows have no rename shortcut. */
   onRename: (key: string) => void
   onSplitToObjects: (key: string) => void
@@ -83,13 +100,18 @@ export interface EditorContextMenuProps {
   onExportMergedToLibrary?: () => void
   onExportSeparateDownload?: () => void
   onExportSeparateToLibrary?: () => void
-  /** In-project object (not an imported mesh) — gates the add-part-volume + repair items. */
-  isObject: boolean
+  /** Whether "Repair mesh" applies: any model with an identity, including an unsaved import. */
+  canRepair: boolean
   /** Mark this object's mesh for repair on save (welds cracked vertices, drops junk facets). */
   onRepairMesh: (key: string) => void
   /** Already marked for repair this session — the item reports that instead of re-marking. */
   isRepairMarked: boolean
-  onAddPartVolume: (key: string, subtype: SceneEditAddedPartSubtype) => void
+  /** Add a part of `subtype` built from a generated primitive. */
+  onAddPartVolume: (key: string, subtype: SceneEditPartSubtype, shape: PrimitiveKind) => void
+  /** Add a part of `subtype` from a model file on the user's device (opens the file picker). */
+  onAddPartFromFile: (key: string, subtype: SceneEditPartSubtype) => void
+  /** Add a part of `subtype` from a library model (opens the library picker). */
+  onAddPartFromLibrary: (key: string, subtype: SceneEditPartSubtype) => void
   /** Project materials for the "Change material" submenu; hidden when empty. */
   filamentOptions: ReadonlyArray<FilamentOption>
   /** Assign one material to every part of every selected object. */
@@ -111,20 +133,20 @@ export interface EditorContextMenuProps {
 }
 
 export function EditorContextMenu({
-  contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onRename, onSplitToObjects, canAssemble,
+  contextMenu, listboxRef, onClose, selectionCount, onDuplicate, onDuplicateIndependent, onMakeIndependent, onRename, onSplitToObjects, canAssemble,
   assembleCount, onAssemble, onReplaceFromLibrary, onReplaceFromFile, onExportDownload, onExportToLibrary,
   onExportProjectDownload, onExportProjectToLibrary, onExportMergedDownload, onExportMergedToLibrary, onExportSeparateDownload,
-  onExportSeparateToLibrary, isObject, onRepairMesh,
-  isRepairMarked, onAddPartVolume,
+  onExportSeparateToLibrary, canRepair, onRepairMesh,
+  isRepairMarked, onAddPartVolume, onAddPartFromFile, onAddPartFromLibrary,
   filamentOptions, onChangeMaterial, onSetPrintable, onEditObjectSettings, onCenterOnPlate,
   onDropToBed, onResetRotation, onResetScale, onMirror, otherPlates, onMoveToPlate, onDelete
 }: EditorContextMenuProps) {
   const { key } = contextMenu
-  const [view, setView] = useState<'root' | 'material' | 'export'>('root')
+  const [view, setView] = useState<MenuView>({ kind: 'root' })
   const multi = selectionCount > 1
   const suffix = multi ? ` (${selectionCount} objects)` : ''
   const changeMaterialItem = filamentOptions.length > 0 && (
-    <MenuItem onClick={(event) => { event.stopPropagation(); setView('material') }}>
+    <MenuItem onClick={(event) => { event.stopPropagation(); setView({ kind: 'material' }) }}>
       <ListItemDecorator><PaletteRoundedIcon /></ListItemDecorator>
       Change material{suffix}…
     </MenuItem>
@@ -162,16 +184,26 @@ export function EditorContextMenu({
       modifiers={CONTEXT_MENU_POPPER_MODIFIERS}
       sx={CONTEXT_MENU_SX}
     >
-      {view === 'material' ? (
+      {view.kind === 'material' ? (
         <>
-          <ContextMenuBackItem label={`Change material${suffix}`} onBack={() => setView('root')} />
+          <ContextMenuBackItem label={`Change material${suffix}`} onBack={() => setView({ kind: 'root' })} />
           <ListDivider />
           <FilamentMenuItems options={filamentOptions} onPick={(filamentId) => { onChangeMaterial(filamentId); onClose() }} />
         </>
-      ) : view === 'export' ? (
+      ) : view.kind === 'addPart' ? (
+        <>
+          <ContextMenuBackItem label={`Add ${addedPartLabel(view.subtype).toLowerCase()}`} onBack={() => setView({ kind: 'root' })} />
+          <ListDivider />
+          <AddPartSourceMenuItems
+            onPickPrimitive={(shape) => { onAddPartVolume(key, view.subtype, shape); onClose() }}
+            onPickFile={() => { onClose(); onAddPartFromFile(key, view.subtype) }}
+            onPickLibrary={() => { onClose(); onAddPartFromLibrary(key, view.subtype) }}
+          />
+        </>
+      ) : view.kind === 'export' ? (
         multi ? (
           <>
-            <ContextMenuBackItem label={`Export as STL${suffix}`} onBack={() => setView('root')} />
+            <ContextMenuBackItem label={`Export as STL${suffix}`} onBack={() => setView({ kind: 'root' })} />
             <ListDivider />
             {onExportMergedDownload && (
               <MenuItem onClick={() => { onClose(); onExportMergedDownload() }}>
@@ -200,7 +232,7 @@ export function EditorContextMenu({
           </>
         ) : (
           <>
-            <ContextMenuBackItem label="Export" onBack={() => setView('root')} />
+            <ContextMenuBackItem label="Export" onBack={() => setView({ kind: 'root' })} />
             <ListDivider />
             {onExportDownload && (
               <MenuItem onClick={() => { onClose(); onExportDownload(key) }}>
@@ -234,7 +266,11 @@ export function EditorContextMenu({
         <>
           <MenuItem onClick={() => { onDuplicate(key); onClose() }}>
             <ListItemDecorator><ContentCopyRoundedIcon /></ListItemDecorator>
-            Duplicate{suffix}
+            Duplicate{suffix} (linked)
+          </MenuItem>
+          <MenuItem onClick={() => { onDuplicateIndependent(key); onClose() }}>
+            <ListItemDecorator><ContentCopyRoundedIcon /></ListItemDecorator>
+            Duplicate as independent copies{suffix}
           </MenuItem>
           {canAssemble && (
             <MenuItem onClick={() => { onAssemble(); onClose() }}>
@@ -243,7 +279,7 @@ export function EditorContextMenu({
             </MenuItem>
           )}
           {(onExportMergedDownload || onExportMergedToLibrary || onExportSeparateDownload || onExportSeparateToLibrary) && (
-            <MenuItem onClick={(event) => { event.stopPropagation(); setView('export') }}>
+            <MenuItem onClick={(event) => { event.stopPropagation(); setView({ kind: 'export' }) }}>
               <ListItemDecorator><IosShareRoundedIcon /></ListItemDecorator>
               Export as STL{suffix}…
             </MenuItem>
@@ -267,8 +303,18 @@ export function EditorContextMenu({
         <>
           <MenuItem onClick={() => { onDuplicate(key); onClose() }}>
             <ListItemDecorator><ContentCopyRoundedIcon /></ListItemDecorator>
-            Duplicate
+            Duplicate (linked)
           </MenuItem>
+          <MenuItem onClick={() => { onDuplicateIndependent(key); onClose() }}>
+            <ListItemDecorator><ContentCopyRoundedIcon /></ListItemDecorator>
+            Duplicate as independent copy
+          </MenuItem>
+          {onMakeIndependent && (
+            <MenuItem onClick={() => { onMakeIndependent(key); onClose() }}>
+              <ListItemDecorator><CallSplitRoundedIcon /></ListItemDecorator>
+              Make this copy independent
+            </MenuItem>
+          )}
           <MenuItem onClick={() => { onClose(); onRename(key) }}>
             <ListItemDecorator><DriveFileRenameOutlineRoundedIcon /></ListItemDecorator>
             Rename…
@@ -293,28 +339,24 @@ export function EditorContextMenu({
             Replace from file…
           </MenuItem>
           {(onExportDownload || onExportToLibrary || onExportProjectToLibrary) && (
-            <MenuItem onClick={(event) => { event.stopPropagation(); setView('export') }}>
+            <MenuItem onClick={(event) => { event.stopPropagation(); setView({ kind: 'export' }) }}>
               <ListItemDecorator><IosShareRoundedIcon /></ListItemDecorator>
               Export…
             </MenuItem>
           )}
-          {isObject && !multi && (
+          {canRepair && !multi && (
             <MenuItem disabled={isRepairMarked} onClick={() => { onClose(); onRepairMesh(key) }}>
               <ListItemDecorator><AutoFixHighRoundedIcon /></ListItemDecorator>
               {isRepairMarked ? 'Mesh repair runs on save' : 'Repair mesh'}
             </MenuItem>
           )}
-          {isObject && (
-            <>
-              <ListDivider />
-              {HELPER_VOLUME_SUBTYPES.map((subtype) => (
-                <MenuItem key={subtype} onClick={() => { onAddPartVolume(key, subtype); onClose() }}>
-                  <ListItemDecorator><CategoryRoundedIcon /></ListItemDecorator>
-                  Add {HELPER_VOLUME_SPECS[subtype].label.toLowerCase()}
-                </MenuItem>
-              ))}
-            </>
-          )}
+          <ListDivider />
+          {ADDED_PART_SUBTYPES.map((subtype) => (
+            <MenuItem key={subtype} onClick={(event) => { event.stopPropagation(); setView({ kind: 'addPart', subtype }) }}>
+              <ListItemDecorator><CategoryRoundedIcon /></ListItemDecorator>
+              Add {addedPartLabel(subtype).toLowerCase()}…
+            </MenuItem>
+          ))}
           {(changeMaterialItem || objectSettingsItem) && (
             <>
               <ListDivider />

@@ -28,6 +28,10 @@ export interface DerivedChips {
   geometryOnly?: boolean
   /** Editor single-object export (marker-stamped) — model-like default treatment. */
   objectExport?: boolean
+  /** Embedded settings contradict the project's machine topology; the user can repair it. */
+  needsSettingsRepair?: boolean
+  /** Bambu Studio version that saved the project, for the newer-than-the-engine check. */
+  projectVersion?: string | null
 }
 
 export function serializeDerivedChips(chips: DerivedChips): string {

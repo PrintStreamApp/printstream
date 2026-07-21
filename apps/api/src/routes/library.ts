@@ -6,7 +6,8 @@
  */
 import { createReadStream, mkdirSync } from 'node:fs'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { appendFile, copyFile, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import express, { Router } from 'express'
 import type { NextFunction, Request, Response } from 'express'
@@ -83,6 +84,7 @@ import { meshToBinaryStl, tessellateStepMesh } from '../lib/mesh-import.js'
 import { extractThreeMfImportMesh } from '../lib/three-mf-mesh-extract.js'
 import { libraryDir } from '../lib/library-paths.js'
 import { deleteLibraryFolderTree, ensureLibraryFolderPath, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
+import { repairProjectSettingsThreeMf } from '../lib/library-settings-repair.js'
 import { resolveRequestActorAttribution } from '../lib/actor-attribution.js'
 import { visibleLibraryFilesWhere } from '../lib/library-visibility.js'
 import { getFavoritedFileIds, resolveFavoriteOwnerKey } from '../lib/library-favorites.js'
@@ -1131,6 +1133,69 @@ libraryRouter.delete('/:id/current-version', requireRequestPermission(LIBRARY_MA
   response.json({ file: await toDto(updated) })
 })
 
+/**
+ * Repair a saved project whose embedded settings contradict its own machine topology (the
+ * `needsSettingsRepair` flag on the DTO — see `library-settings-repair.ts`).
+ *
+ * Explicitly user-invoked: the editor banner and the slice dialog offer it, and nothing repairs a
+ * stored file as a side effect of opening/listing/slicing it. The result lands as a NEW version so
+ * the pre-repair bytes stay restorable. Responds `repaired: false` (200, no write) when the
+ * project turned out to need nothing — the flag may be stale on a client that has not refreshed.
+ */
+libraryRouter.post('/:id/repair-settings', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
+  const fileId = requireRouteParam(request.params.id, 'File id')
+  const tenantId = requireRequestTenantId(request)
+  const current = await prisma.libraryFile.findFirst({
+    where: { id: fileId, tenantId },
+    select: { id: true, name: true, kind: true, ownerBridgeId: true, storedPath: true, folderId: true }
+  }) as LibraryFileRow | null
+  if (!current) throw notFound('File not found')
+  assertDemoLibraryFileMutationAllowed(request, current)
+  if (current.kind !== '3mf') throw badRequest('Only 3MF projects carry repairable project settings')
+
+  const sourcePath = await resolveLibraryFileToLocalPath(current)
+  const workDir = await mkdtemp(path.join(tmpdir(), 'printstream-settings-repair-'))
+  try {
+    const outputPath = path.join(workDir, 'repaired.3mf')
+    const result = await repairProjectSettingsThreeMf(sourcePath, outputPath)
+    if (!result.repaired) {
+      response.json({ repaired: false, file: await toDto(current) })
+      return
+    }
+
+    const { file: saved } = await persistLibraryFileFromLocalPath({
+      tenantId,
+      sourcePath: outputPath,
+      fileName: current.name,
+      sizeBytes: (await stat(outputPath)).size,
+      folderId: current.folderId,
+      bridgeId: current.ownerBridgeId ?? null,
+      hidden: false,
+      request,
+      auditAction: 'upload',
+      missingBridgeMessage: 'This file has no bridge to save the repaired project to'
+    })
+
+    annotateRequestAuditLog(request, {
+      action: 'repair-settings',
+      resource: 'library file',
+      summary: `Repaired project settings for ${current.name}.`,
+      metadata: {
+        fileId: current.id,
+        fileName: current.name,
+        flushMatrixBefore: result.matrix?.before ?? null,
+        flushMatrixAfter: result.matrix?.after ?? null,
+        filamentCount: result.matrix?.filaments ?? null,
+        extruderCount: result.matrix?.extruders ?? null
+      }
+    })
+    broadcastLibraryChanged()
+    response.json({ repaired: true, file: { id: saved.id, name: saved.name } })
+  } finally {
+    await rm(workDir, { recursive: true, force: true })
+  }
+})
+
 libraryRouter.get('/versions/:versionId/download', requireRequestPermission(LIBRARY_DOWNLOAD_PERMISSION), async (request, response) => {
   const versionId = requireRouteParam(request.params.versionId, 'Version id')
   const row = await prisma.libraryFileVersion.findUnique({ where: { id: versionId } }) as LibraryFileVersionRow | null
@@ -1960,6 +2025,8 @@ async function toDto(row: {
     plateCount,
     ...(chips.geometryOnly ? { geometryOnly: true } : {}),
     ...(chips.objectExport ? { objectExport: true } : {}),
+    ...(chips.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
+    ...(chips.projectVersion ? { projectVersion: chips.projectVersion } : {}),
     createdByName: row.createdByName ?? null,
     restoredFromVersionNumber: row.restoredFromVersionNumber ?? null,
     favorite: options.favorite ?? false,
@@ -2332,7 +2399,9 @@ function deriveChips(index: ParsedThreeMfIndex): DerivedChips {
     plateTypeChips: collectPlateTypeChips(index),
     nozzleSizeChips: collectNozzleSizeChips(index),
     projectFilamentChips: collectProjectFilamentChips(index),
-    ...(index.objectExport ? { objectExport: true } : {})
+    ...(index.objectExport ? { objectExport: true } : {}),
+    ...(index.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
+    ...(index.projectVersion ? { projectVersion: index.projectVersion } : {})
   }
 }
 

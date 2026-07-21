@@ -17,6 +17,7 @@ import {
   Button,
   buttonClasses,
   ButtonGroup,
+  Chip,
   CircularProgress,
   Dropdown,
   IconButton,
@@ -65,7 +66,7 @@ import FormatPaintRoundedIcon from '@mui/icons-material/FormatPaintRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
 import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
 import TouchAppRoundedIcon from '@mui/icons-material/TouchAppRounded'
-import type { LibraryFile, SceneEditAddedPartSubtype, SceneEditPartSubtype } from '@printstream/shared'
+import type { LibraryFile, SceneEditHelperVolumeSubtype, SceneEditPartSubtype } from '@printstream/shared'
 import { canonicalThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
@@ -1138,7 +1139,6 @@ function buildMixedSwatchGradient(colors: string[]): string {
 }
 
 /** The "Change type" options for session-ADDED part volumes (never normal parts). */
-const ADDED_PART_TYPE_OPTIONS = PART_SUBTYPE_OPTIONS.filter((option) => option.subtype !== 'normal_part')
 
 /**
  * Per-part "Change type" menu (BambuStudio's right-click → Change type): pick the part's
@@ -1154,7 +1154,7 @@ const ADDED_PART_TYPE_OPTIONS = PART_SUBTYPE_OPTIONS.filter((option) => option.s
  * Shared by the saved-part rows and the session-added-part rows below them so a blocker looks
  * identical before and after the save that turns it into a real `<component>`.
  */
-function HelperVolumeSwatch({ subtype }: { subtype: SceneEditAddedPartSubtype }) {
+function HelperVolumeSwatch({ subtype }: { subtype: SceneEditHelperVolumeSubtype }) {
   const spec = HELPER_VOLUME_SPECS[subtype]
   return (
     <Tooltip title={`${spec.label} — ${spec.hint}`}>
@@ -1231,6 +1231,7 @@ export function ModelList({
   selectedBakedPart,
   onSelect,
   onSelectPart,
+  linkedCopyCountFor,
   onObjectContextMenu,
   onPartContextMenu,
   filamentColors,
@@ -1243,6 +1244,7 @@ export function ModelList({
   selectedAddedPartKey,
   onSelectAddedPart,
   onChangeAddedPartType,
+  onChangeAddedPartFilament,
   onRemoveAddedPart,
   onEditAddedPartSettings,
   perObject
@@ -1261,6 +1263,11 @@ export function ModelList({
    * Ctrl-toggle / Shift-range build the bulk selection (BambuStudio volume-mode rules).
    */
   onSelectPart?: (objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
+  /**
+   * How many placed instances share this one's object. >1 shows the linked-copy badge, which is
+   * the only place the editor tells the user that editing this model also edits its copies.
+   */
+  linkedCopyCountFor?: (instanceKey: string) => number
   /** Right-click on an object row: open the object context menu at the pointer. */
   onObjectContextMenu?: (key: string, position: { x: number; y: number }) => void
   /** Right-click on a part row: open the part context menu at the pointer. */
@@ -1280,7 +1287,9 @@ export function ModelList({
   selectedAddedPartKey?: string | null
   /** Select an added part row: selects the instance and hands the part the gizmo. */
   onSelectAddedPart?: (instanceKey: string, partKey: string) => void
-  onChangeAddedPartType?: (partKey: string, subtype: SceneEditAddedPartSubtype) => void
+  onChangeAddedPartType?: (partKey: string, subtype: SceneEditPartSubtype) => void
+  /** Reassign an added part's material. Only offered for subtypes that carry one. */
+  onChangeAddedPartFilament?: (partKey: string, filamentId: number) => void
   onRemoveAddedPart?: (partKey: string) => void
   /** Open per-volume process settings for a modifier part (needs slice settings). */
   onEditAddedPartSettings?: (partKey: string) => void
@@ -1350,6 +1359,15 @@ export function ModelList({
                 >
                   {instance.name}
                 </Typography>
+                {linkedCopyCountFor && linkedCopyCountFor(instance.key) > 1 && (
+                  // Linkage is otherwise invisible: users discover it by editing one copy and
+                  // watching another change. BambuStudio has the same ambiguity; we name it.
+                  <Tooltip title={`Linked copy — ${linkedCopyCountFor(instance.key)} instances share this model's parts, materials, paint and settings. Right-click to make one independent.`}>
+                    <Chip size="sm" variant="soft" color="neutral" sx={{ flexShrink: 0 }}>
+                      x{linkedCopyCountFor(instance.key)}
+                    </Chip>
+                  </Tooltip>
+                )}
                 {perObjectId != null && onReassignFilament && materialParts.length > 0 ? (
                   <FilamentBadge
                     filamentId={partMaterial.uniformId}
@@ -1450,7 +1468,7 @@ export function ModelList({
                 sx={{ pl: 3, borderRadius: 'sm', bgcolor: part.key === selectedAddedPartKey ? 'neutral.softBg' : undefined }}
               >
                 <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: '100%', minWidth: 0, opacity: printing ? 0.85 : 0.4 }}>
-                  <HelperVolumeSwatch subtype={part.subtype} />
+                  {part.subtype !== 'normal_part' && <HelperVolumeSwatch subtype={part.subtype} />}
                   <Typography
                     level="body-xs"
                     noWrap
@@ -1459,13 +1477,20 @@ export function ModelList({
                   >
                     {part.name}
                   </Typography>
+                  {threeMfPartSubtypeCarriesFilament(part.subtype) && (
+                    <FilamentBadge
+                      filamentId={resolveId(part.filamentId ?? null)}
+                      color={liveColor(resolveId(part.filamentId ?? null), null)}
+                      options={filamentOptions}
+                      title={part.subtype === 'modifier_part' ? 'Material printed inside this modifier' : undefined}
+                      onReassign={onChangeAddedPartFilament ? (fid) => onChangeAddedPartFilament(part.key, fid) : undefined}
+                    />
+                  )}
                   {onChangeAddedPartType && (
                     <PartTypeMenu
                       subtype={part.subtype}
                       partName={part.name}
-                      options={ADDED_PART_TYPE_OPTIONS}
-                      // The reduced option list never yields 'normal_part', so the narrowing cast is safe.
-                      onChange={(subtype) => onChangeAddedPartType(part.key, subtype as SceneEditAddedPartSubtype)}
+                      onChange={(subtype) => onChangeAddedPartType(part.key, subtype)}
                     />
                   )}
                   {part.subtype === 'modifier_part' && onEditAddedPartSettings && (

@@ -18,7 +18,6 @@ import type {
   LibraryThreeMfScene,
   LibraryThreeMfSceneInstance,
   SceneEdit,
-  SceneEditAddedPartSubtype,
   SceneEditPartSubtype,
   StagedImport,
   ThreeMfIndex
@@ -195,12 +194,22 @@ export interface EditorState {
    */
   brimEars?: Record<number, EditorBrimEar[]>
   /**
-   * New part volumes added inside objects this session (negative parts, modifiers,
-   * support blockers/enforcers), keyed by objectId. Parts are object-level (shared by
-   * every instance). Cloned by {@link cloneEditorState}; emitted by
-   * {@link buildSceneEdit} as `SceneEdit.addedParts`.
+   * New part volumes added inside models this session (normal parts, negative parts, modifiers,
+   * support blockers/enforcers), keyed by {@link addedPartHostId} — an in-project object's Bambu
+   * id, or an unsaved import's synthetic object id, so a part can be added before the project has
+   * ever been saved. Parts are object-level (shared by every instance). Cloned by
+   * {@link cloneEditorState}; emitted by {@link buildSceneEdit} as `SceneEdit.addedParts`.
    */
   addedParts?: Record<number, EditorAddedPart[]>
+  /**
+   * Independent object COPIES made this session (BambuStudio's copy/paste, as opposed to placing
+   * another instance against the same objectId, which stays LINKED). Maps the copy's negative
+   * placeholder object id to the in-project object it was copied from; emitted as
+   * `SceneEdit.objectClones`, which the bake resolves to a real new object before applying
+   * anything else. Every other session map keys the copy by that same placeholder, so a copy's
+   * paint, part types, materials, added volumes and name diverge from its source for free.
+   */
+  objectClones?: Record<number, number>
   /**
    * In-project objects the user marked for mesh repair this session (right-click →
    * "Repair mesh"), by objectId. The repair itself runs SERVER-SIDE while baking the save
@@ -238,14 +247,20 @@ export interface EditorState {
   partTransforms?: Record<string, number[]>
 }
 
-/** A new volume added inside an object this session (Bambu "Add negative part/..."). */
+/** A new volume added inside a model this session (Bambu "Add part / negative part/..."). */
 export interface EditorAddedPart {
   /** Stable client key (viewport mesh tagging + list identity). */
   key: string
-  /** Staged import providing the mesh to the server at save/slice time. */
+  /** Staged import providing the PART's own mesh to the server at save/slice time. */
   importId: string
-  subtype: SceneEditAddedPartSubtype
+  subtype: SceneEditPartSubtype
   name: string
+  /**
+   * Filament for a part that carries one (normal parts and modifiers, per
+   * `threeMfPartSubtypeCarriesFilament`). Null means "not chosen" — the bake writes no
+   * `extruder`, which is also the only correct state for the subtypes that carry none.
+   */
+  filamentId?: number | null
   /** OBJECT-LOCAL placement (mesh/rotor space). */
   position: THREE.Vector3
   rotation: THREE.Euler
@@ -256,10 +271,23 @@ export interface EditorAddedPart {
   settings?: Record<string, string>
 }
 
-/** An instance's object's added parts (object-level, shared across instances). */
+/**
+ * The object identity that {@link EditorState.addedParts} keys a model's added parts under: the
+ * Bambu `object_id` for an in-project object, else the import's synthetic object id (see
+ * {@link EditorInstanceSource}). Null for an import with no identity yet, which cannot host parts.
+ *
+ * One key for both cases is what lets a part be added to a model the user has not saved — the
+ * emit step ({@link buildSceneEdit}) is where the two diverge again into `objectId` vs `importId`.
+ */
+export function addedPartHostId(instance: EditorInstance): number | null {
+  if (instance.source.kind === 'object') return instance.objectId
+  return instance.source.replacedObjectId ?? null
+}
+
+/** An instance's model's added parts (object-level, shared across instances). */
 export function effectiveAddedParts(state: EditorState | null, instance: EditorInstance): EditorAddedPart[] {
-  if (instance.source.kind !== 'object') return []
-  return state?.addedParts?.[instance.objectId] ?? []
+  const hostId = addedPartHostId(instance)
+  return hostId == null ? [] : state?.addedParts?.[hostId] ?? []
 }
 
 /** One manual brim ear in object-local coordinates. */
@@ -272,8 +300,11 @@ export interface EditorBrimEar {
 
 /** Effective ears for an instance's object: this session's override, else the seed. */
 export function effectiveBrimEars(state: EditorState | null, instance: EditorInstance): EditorBrimEar[] {
-  if (instance.source.kind !== 'object') return []
-  const override = state?.brimEars?.[instance.objectId]
+  // Keyed by the model's editor identity, so an unsaved import can carry ears too (they emit as
+  // `importBrimEars`). Only an in-project object has SEEDED ears — an import has none in the file.
+  const hostId = addedPartHostId(instance)
+  if (hostId == null) return []
+  const override = state?.brimEars?.[hostId]
   return override ?? instance.brimEars ?? []
 }
 
@@ -549,7 +580,10 @@ export function instanceFromStagedImport(staged: StagedImport): EditorInstance {
         filamentId: null,
         name: part.name,
         color: null,
-        subtype: null
+        // A 3MF source carries its volume types in (BambuStudio's Import Object keeps them), so an
+        // imported support blocker renders and lists as an aid rather than printed geometry. The
+        // BAKE reads the subtype from the staged record, not from here — this is the client's copy.
+        subtype: part.subtype ?? null
       }))
     : []
   return {
@@ -626,6 +660,22 @@ export function replaceInstanceGeometry(
   next.name = source.name
   next.nameOverridden = true
   return next
+}
+
+/**
+ * Forget the added part volumes of a model whose geometry is being replaced.
+ *
+ * A replacement RETAINS the object identity ({@link EditorInstanceSource.replacedObjectId}), which
+ * is the same key {@link EditorState.addedParts} uses — so without this the old shape's blockers
+ * and modifiers would silently reattach to an unrelated mesh at their old coordinates. Paint and
+ * brim ears fall away on their own (they key on parts the replacement doesn't have); this is the
+ * explicit counterpart for parts, and the reason {@link replaceInstanceGeometry}'s contract can
+ * say the old shape's attributes do not carry over.
+ */
+export function dropAddedPartsForReplacedHost(state: EditorState, instance: EditorInstance): void {
+  const hostId = addedPartHostId(instance)
+  if (hostId == null || !state.addedParts?.[hostId]) return
+  delete state.addedParts[hostId]
 }
 
 /** Deep-clone an instance (for duplicate), offsetting it slightly so it is visible. */
@@ -828,16 +878,21 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     importPartFilaments: collectImportPartFilaments(state),
     importPartProcessOverrides: collectImportPartProcessOverrides(state),
     importPartTypes: collectImportPartTypes(state),
+    importPartTransforms: collectImportPartTransforms(state),
     supportPaint: collectPartPaint(state, state.supportPaint),
     seamPaint: collectPartPaint(state, state.seamPaint),
     colorPaint: collectPartPaint(state, state.colorPaint),
+    importPaint: collectImportPaint(state),
     brimEars: collectBrimEars(state),
+    importBrimEars: collectImportBrimEars(state),
     filamentChanges: collectFilamentChanges(state),
     pauses: collectPauses(state),
     objectNames: collectObjectNames(state),
     addedParts: collectAddedParts(state),
     meshReplacements: collectMeshReplacements(state),
-    repairedObjectIds: collectRepairedObjectIds(state)
+    repairedObjectIds: collectRepairedObjectIds(state),
+    repairedImportIds: collectRepairedImportIds(state),
+    objectClones: collectObjectClones(state)
   }
 }
 
@@ -859,6 +914,95 @@ function collectRepairedObjectIds(state: EditorState): SceneEdit['repairedObject
   }
   const ids = state.repairedObjectIds.filter((id) => placedObjectIds.has(id) && !replacedObjectIds.has(id))
   return ids.length > 0 ? ids : undefined
+}
+
+/**
+ * Repair marks that landed on an IMPORT's synthetic identity, mapped back to its importId. The
+ * bake has no mesh XML to rewrite for an unsaved import, so it repairs the staged geometry instead
+ * (`repairImportedMeshGeometry`) — which is what lets "Repair mesh" work with no save first.
+ */
+function collectRepairedImportIds(state: EditorState): SceneEdit['repairedImportIds'] {
+  if (!state.repairedObjectIds || state.repairedObjectIds.length === 0) return undefined
+  const importByObjectId = new Map<number, string>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
+        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
+      }
+    }
+  }
+  const ids = state.repairedObjectIds.flatMap((id) => {
+    const importId = importByObjectId.get(id)
+    return importId ? [importId] : []
+  })
+  return ids.length > 0 ? [...new Set(ids)] : undefined
+}
+
+/**
+ * Brim ears authored on an IMPORT's synthetic identity, mapped back to its importId. The sidecar
+ * addresses objects by baked root-resource ordinal, which an unsaved import does not have yet, so
+ * the bake resolves these through `importIdToObjectId` instead.
+ */
+function collectImportBrimEars(state: EditorState): SceneEdit['importBrimEars'] {
+  if (!state.brimEars || Object.keys(state.brimEars).length === 0) return undefined
+  const importByObjectId = new Map<number, string>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
+        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
+      }
+    }
+  }
+  const out: NonNullable<SceneEdit['importBrimEars']> = []
+  for (const [objectIdRaw, ears] of Object.entries(state.brimEars)) {
+    const importId = importByObjectId.get(Number.parseInt(objectIdRaw, 10))
+    if (!importId || ears.length === 0) continue
+    out.push({ importId, points: ears.map((ear) => ({ ...ear })) })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
+ * Triangle paint authored on an IMPORT's synthetic identity, mapped to import + solid index.
+ *
+ * Indices are positions in the staged mesh's triangle order, which the editor rendered from and the
+ * bake writes back to — see the contract note on `SceneEdit.importPaint`. A single-solid import
+ * keys its only mesh as solid 0, matching `instanceFromStagedImport`'s part indexing.
+ */
+function collectImportPaint(state: EditorState): SceneEdit['importPaint'] {
+  const channels = [
+    { channel: 'support' as const, paint: state.supportPaint },
+    { channel: 'seam' as const, paint: state.seamPaint },
+    { channel: 'color' as const, paint: state.colorPaint }
+  ].filter((entry) => entry.paint && Object.keys(entry.paint).length > 0)
+  if (channels.length === 0) return undefined
+  const importByObjectId = new Map<number, string>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
+        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
+      }
+    }
+  }
+  if (importByObjectId.size === 0) return undefined
+  const out: NonNullable<SceneEdit['importPaint']> = []
+  for (const { channel, paint } of channels) {
+    for (const [key, triangles] of Object.entries(paint ?? {})) {
+      const [objectIdRaw, partRaw] = key.split(':')
+      const objectId = Number.parseInt(objectIdRaw ?? '', 10)
+      const partIndex = Number.parseInt(partRaw ?? '', 10)
+      if (!Number.isInteger(objectId) || !Number.isInteger(partIndex)) continue
+      const importId = importByObjectId.get(objectId)
+      if (!importId || Object.keys(triangles).length === 0) continue
+      out.push({
+        importId,
+        partIndex,
+        channel,
+        triangles: Object.fromEntries(Object.entries(triangles).map(([index, code]) => [String(index), code]))
+      })
+    }
+  }
+  return out.length > 0 ? out : undefined
 }
 
 /** Whether an object is already marked for mesh repair on save. */
@@ -885,21 +1029,31 @@ function collectMeshReplacements(state: EditorState): SceneEdit['meshReplacement
 }
 
 /**
- * Emit added part volumes for objects that still have at least one placed instance
- * (adding a part and then deleting the object must not ship a dangling part).
+ * Emit added part volumes for models that still have at least one placed instance (adding a part
+ * and then deleting the model must not ship a dangling part). The host is emitted as the
+ * `objectId` of an in-project object, or the `importId` of an import that has not been saved yet
+ * — the contract takes exactly one, and the builder resolves an import host through the same
+ * `importIdToObjectId` map it uses to place the import itself.
  */
 function collectAddedParts(state: EditorState): SceneEdit['addedParts'] {
   if (!state.addedParts) return undefined
-  const placedObjectIds = new Set<number>()
+  // Host key -> how to address it in the edit. An import wins only if no in-project object claims
+  // the same key, which cannot happen: an import's synthetic id is negative, and a REPLACEMENT
+  // import's (real, positive) id is only reachable once the object it replaced is gone.
+  const hostById = new Map<number, { objectId: number } | { importId: string }>()
   for (const plate of state.plates) {
     for (const instance of plate.instances) {
-      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
+      const hostId = addedPartHostId(instance)
+      if (hostId == null || hostById.has(hostId)) continue
+      hostById.set(hostId, instance.source.kind === 'object'
+        ? { objectId: instance.objectId }
+        : { importId: instance.source.importId })
     }
   }
   const out: NonNullable<SceneEdit['addedParts']> = []
-  for (const [objectIdRaw, parts] of Object.entries(state.addedParts)) {
-    const objectId = Number.parseInt(objectIdRaw, 10)
-    if (!Number.isInteger(objectId) || !placedObjectIds.has(objectId)) continue
+  for (const [hostIdRaw, parts] of Object.entries(state.addedParts)) {
+    const host = hostById.get(Number.parseInt(hostIdRaw, 10))
+    if (!host) continue
     for (const part of parts) {
       const matrix = new THREE.Matrix4().compose(
         part.position,
@@ -908,11 +1062,16 @@ function collectAddedParts(state: EditorState): SceneEdit['addedParts'] {
       )
       const e = matrix.elements
       out.push({
-        objectId,
-        importId: part.importId,
+        ...host,
+        meshImportId: part.importId,
         subtype: part.subtype,
         name: part.name,
         matrix: [e[0]!, e[1]!, e[2]!, e[4]!, e[5]!, e[6]!, e[8]!, e[9]!, e[10]!, e[12]!, e[13]!, e[14]!],
+        // Only a filament-carrying subtype ships one, so retyping a modifier to a support
+        // blocker cannot leave a stale extruder behind on the baked part.
+        ...(part.filamentId != null && threeMfPartSubtypeCarriesFilament(part.subtype)
+          ? { filamentId: part.filamentId }
+          : {}),
         ...(part.settings && Object.keys(part.settings).length > 0 ? { settings: { ...part.settings } } : {})
       })
     }
@@ -1085,6 +1244,36 @@ function collectImportPartTypes(state: EditorState): SceneEdit['importPartTypes'
   return out.length > 0 ? out : undefined
 }
 
+/**
+ * Placement changes for a multi-solid IMPORT's solids, keyed by import + 0-based solid index —
+ * the import counterpart of {@link collectPartTransforms}, which can only address parts that
+ * already have baked 3MF ids. Without this an import sub-part could be dragged with the gizmo and
+ * the move would be silently lost on save.
+ */
+function collectImportPartTransforms(state: EditorState): SceneEdit['importPartTransforms'] {
+  if (!state.partTransforms) return undefined
+  const importByObjectId = new Map<number, string>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
+        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
+      }
+    }
+  }
+  if (importByObjectId.size === 0) return undefined
+  const out: NonNullable<SceneEdit['importPartTransforms']> = []
+  for (const [key, matrix] of Object.entries(state.partTransforms)) {
+    const [objectIdRaw, partRaw] = key.split(':')
+    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
+    const partIndex = Number.parseInt(partRaw ?? '', 10)
+    if (!Number.isInteger(objectId) || !Number.isInteger(partIndex) || matrix.length !== 12) continue
+    const importId = importByObjectId.get(objectId)
+    if (!importId) continue
+    out.push({ importId, partIndex, matrix: [...matrix] })
+  }
+  return out.length > 0 ? out : undefined
+}
+
 /** Per-part process overrides for parts whose object is still placed (keyed objectId:componentId). */
 function collectPartProcessOverrides(state: EditorState): SceneEdit['partProcessOverrides'] {
   if (!state.partProcessOverrides) return undefined
@@ -1211,22 +1400,42 @@ function collectImportPartFilaments(state: EditorState): SceneEdit['importPartFi
  * pauses, prime tower) is deliberately NOT carried over: it belongs to the source plate's
  * composition, not the object. Returns null when `key` is not placed.
  */
-export function buildSingleObjectExportState(state: EditorState, key: string): EditorState | null {
+export function buildSingleObjectExportState(
+  state: EditorState,
+  key: string,
+  /**
+   * The object's rendered XY footprint centre in PLATE coordinates (helper volumes excluded, as
+   * `printableMeshBox` gives it). Required to centre the export correctly — see below. When the
+   * caller has no rendered group for the object, the placement is left untouched rather than
+   * guessed, because guessing is what produced the half-off-the-bed export.
+   */
+  footprintCenter?: { x: number; y: number }
+): EditorState | null {
   const sourcePlate = state.plates.find((plate) => plate.instances.some((instance) => instance.key === key))
   if (!sourcePlate) return null
   const cloned = cloneEditorState(state)
   const plate = cloned.plates.find((entry) => entry.index === sourcePlate.index)
   const instance = plate?.instances.find((entry) => entry.key === key)
   if (!plate || !instance) return null
-  const centerX = (plate.bed.minX + plate.bed.maxX) / 2
-  const centerY = (plate.bed.minY + plate.bed.maxY) / 2
-  instance.position.set(centerX, centerY, instance.position.z)
-  // A shearing instance saves its exact matrix VERBATIM (position is just the decomposed
-  // mirror), so re-centre by rewriting the matrix translation in place — dropping the
-  // matrix like a gizmo edit would deform the shear.
-  if (instance.exactMatrix) {
-    instance.exactMatrix[9] = centerX
-    instance.exactMatrix[10] = centerY
+  if (footprintCenter) {
+    const centerX = (plate.bed.minX + plate.bed.maxX) / 2
+    const centerY = (plate.bed.minY + plate.bed.maxY) / 2
+    // Centre by SHIFTING the placement, never by assigning the bed centre to `position`.
+    // `position` is the instance transform's translation — the object's local ORIGIN, not its
+    // bounding-box centre — and a Bambu object's mesh routinely carries plate coordinates with a
+    // near-identity transform. Assigning there moved the object by the whole origin-to-centroid
+    // offset, which is what exported models half off the bed. Same rule as placing an added
+    // model (`addInstanceToActivePlate` takes a mesh centroid for exactly this reason).
+    const dx = centerX - footprintCenter.x
+    const dy = centerY - footprintCenter.y
+    instance.position.set(instance.position.x + dx, instance.position.y + dy, instance.position.z)
+    // A shearing instance saves its exact matrix VERBATIM (position is just the decomposed
+    // mirror), so shift the matrix translation in place — dropping the matrix like a gizmo edit
+    // would deform the shear.
+    if (instance.exactMatrix) {
+      instance.exactMatrix[9] = (instance.exactMatrix[9] ?? 0) + dx
+      instance.exactMatrix[10] = (instance.exactMatrix[10] ?? 0) + dy
+    }
   }
   return {
     ...cloned,
@@ -1242,6 +1451,95 @@ export function buildSingleObjectExportState(state: EditorState, key: string): E
       pausesOverride: undefined
     }]
   }
+}
+
+/**
+ * Emit the independent copies that still have a placed instance — copying an object and then
+ * deleting the copy must not ship a dangling clone (which the bake would reject).
+ */
+function collectObjectClones(state: EditorState): SceneEdit['objectClones'] {
+  if (!state.objectClones) return undefined
+  const placed = new Set<number>()
+  for (const plate of state.plates) {
+    for (const instance of plate.instances) {
+      if (instance.source.kind === 'object') placed.add(instance.objectId)
+    }
+  }
+  const out: NonNullable<SceneEdit['objectClones']> = []
+  for (const [objectIdRaw, sourceObjectId] of Object.entries(state.objectClones)) {
+    const objectId = Number.parseInt(objectIdRaw, 10)
+    if (!Number.isInteger(objectId) || objectId >= 0 || !placed.has(objectId)) continue
+    out.push({ objectId, sourceObjectId })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
+ * The in-project object an id ultimately copies FROM. A copy of a copy still has to name a real
+ * object, because the bake duplicates the source's baked XML — chaining placeholders would name
+ * an object that does not exist in the base file.
+ */
+export function objectCloneSource(state: EditorState, objectId: number): number {
+  return state.objectClones?.[objectId] ?? objectId
+}
+
+/**
+ * Give `objectId`'s session edits to `cloneObjectId` as well, so an independent copy starts
+ * IDENTICAL to its source and then diverges. The copy inherits the source's BAKED state through
+ * the server-side object copy; this is the other half — everything edited in this session but not
+ * yet saved. Keys that address a part (`objectId:componentObjectId`) are re-keyed onto the copy;
+ * the component ids stay the SOURCE's, which is what the bake's clone pre-pass expects.
+ */
+function copySessionEditsOntoClone(state: EditorState, objectId: number, cloneObjectId: number): void {
+  const rekeyParts = (map: Record<string, unknown> | undefined): void => {
+    if (!map) return
+    for (const [key, value] of Object.entries(map)) {
+      const [ownerRaw, partRaw] = key.split(':')
+      if (Number.parseInt(ownerRaw ?? '', 10) !== objectId || partRaw == null) continue
+      const cloned = typeof value === 'object' && value !== null
+        ? JSON.parse(JSON.stringify(value)) as unknown
+        : value
+      ;(map as Record<string, unknown>)[supportPaintKey(cloneObjectId, Number.parseInt(partRaw, 10))] = cloned
+    }
+  }
+  rekeyParts(state.supportPaint)
+  rekeyParts(state.seamPaint)
+  rekeyParts(state.colorPaint)
+  rekeyParts(state.partProcessOverrides)
+  rekeyParts(state.partTypeChanges)
+  rekeyParts(state.partTransforms)
+  if (state.brimEars?.[objectId]) {
+    state.brimEars[cloneObjectId] = state.brimEars[objectId]!.map((ear) => ({ ...ear }))
+  }
+  if (state.addedParts?.[objectId]) {
+    // Fresh keys: the copy's volumes are its own, so removing one must not remove the source's.
+    state.addedParts[cloneObjectId] = state.addedParts[objectId]!.map((part) => ({
+      ...part,
+      key: nextInstanceKey(),
+      position: part.position.clone(),
+      rotation: part.rotation.clone(),
+      scale: part.scale.clone(),
+      ...(part.settings ? { settings: { ...part.settings } } : {})
+    }))
+  }
+}
+
+/**
+ * Turn an instance into an INDEPENDENT copy of the object it currently places: it stops sharing
+ * that object's parts, materials, paint and volumes, and gets its own. Registers the copy in
+ * {@link EditorState.objectClones} and snapshots the source's session edits onto it.
+ *
+ * Mutates `state` and `instance` in place (both are already session-mutable, and the caller records
+ * an undo checkpoint first). No-op for an import-backed instance, which is independent by nature.
+ */
+export function makeInstanceIndependent(state: EditorState, instance: EditorInstance): void {
+  if (instance.source.kind !== 'object') return
+  const sourceObjectId = objectCloneSource(state, instance.objectId)
+  const cloneObjectId = nextSyntheticObjectId()
+  copySessionEditsOntoClone(state, instance.objectId, cloneObjectId)
+  if (!state.objectClones) state.objectClones = {}
+  state.objectClones[cloneObjectId] = sourceObjectId
+  instance.objectId = cloneObjectId
 }
 
 /**
@@ -1340,6 +1638,7 @@ export function cloneEditorState(state: EditorState): EditorState {
       }
       : {}),
     ...(state.repairedObjectIds ? { repairedObjectIds: [...state.repairedObjectIds] } : {}),
+    ...(state.objectClones ? { objectClones: { ...state.objectClones } } : {}),
     ...(state.addedParts
       ? {
         addedParts: Object.fromEntries(
@@ -1348,6 +1647,7 @@ export function cloneEditorState(state: EditorState): EditorState {
             importId: part.importId,
             subtype: part.subtype,
             name: part.name,
+            ...(part.filamentId != null ? { filamentId: part.filamentId } : {}),
             position: part.position.clone(),
             rotation: part.rotation.clone(),
             scale: part.scale.clone(),

@@ -237,6 +237,12 @@ export interface SliceDisabledReasonInput {
   printerProfileIncompatible: boolean
   /** Set-but-incompatible process selection (id not in the target's compatible process list). */
   processProfileIncompatible: boolean
+  /**
+   * The project was saved by a newer Bambu Studio than the selected engine, and the user has not
+   * accepted the override. A genuine block: BambuStudio refuses to open the project at all, so no
+   * other setting can rescue the slice.
+   */
+  blockedByProjectVersion?: boolean
   nozzleDiameterCount: number
   missingFilamentProfile: boolean
   /**
@@ -264,6 +270,9 @@ export function resolveSliceDisabledReason(input: SliceDisabledReasonInput): str
   if (!input.configured) return 'The slicer service isn’t available right now.'
   if (input.selectedSlicerTargetId.length === 0) return 'Choose a slicer version.'
   if (input.profilesError) return input.profilesError
+  // Ahead of the per-field reasons: the engine refuses the file before it reads any setting, so
+  // pointing at a field would send the user hunting for something that was never the problem.
+  if (input.blockedByProjectVersion) return 'This project was saved by a newer Bambu Studio than the selected slicer.'
   if (!input.slicerDataReady) return 'Loading slicer data…'
   if (input.printerProfileId.length === 0) return 'No matching printer profile is installed for this printer and nozzle.'
   if (input.printerProfileIncompatible) return 'The selected printer profile doesn’t match the target printer.'

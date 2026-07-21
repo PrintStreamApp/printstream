@@ -8,6 +8,7 @@ import {
   diffProcessConfig,
   getProcessFieldState,
   isProcessOptionVisibleInMode,
+  processConfigValuesEqual,
   processSettingsCatalog,
   processSettingOverridesSchema,
   validateProcessConfig,
@@ -134,6 +135,57 @@ test('diffProcessConfig returns only changed keys including vectors', () => {
   const base: ProcessConfig = { layer_height: '0.2', wall_loops: '2', line_width: ['0.4', '0.4'] }
   const edited: ProcessConfig = { layer_height: '0.3', wall_loops: '2', line_width: ['0.45', '0.4'] }
   assert.deepEqual(diffProcessConfig(base, edited), { layer_height: '0.3', line_width: ['0.45', '0.4'] })
+})
+
+test('value equality is option-aware: serialized form does not make a change', () => {
+  const percent = processSettingsCatalog.options.monotonic_travel_into_wall
+  const floatOrPercent = processSettingsCatalog.options.sparse_infill_anchor
+  const float = processSettingsCatalog.options.layer_height
+  const enumOption = processSettingsCatalog.options.sparse_infill_pattern
+
+  // A preset JSON writes "45.0"; the same setting in a 3MF's project config is "45%". BambuStudio
+  // ignores the suffix on a percent option, so both are 45% and neither is a user change.
+  assert.equal(processConfigValuesEqual('45.0', '45%', percent), true)
+  assert.equal(processConfigValuesEqual('45', '45.0', percent), true)
+  assert.equal(processConfigValuesEqual('45%', '50%', percent), false)
+  // floatOrPercent keeps the suffix meaningful: 400 mm is not 400% of the line width.
+  assert.equal(processConfigValuesEqual('400', '400%', floatOrPercent), false)
+  assert.equal(processConfigValuesEqual('400%', '400.0%', floatOrPercent), true)
+  assert.equal(processConfigValuesEqual('0.2', '0.20', float), true)
+  // Non-numeric types stay exact — and an unparseable numeric value never compares equal.
+  assert.equal(processConfigValuesEqual('grid', 'Grid', enumOption), false)
+  assert.equal(processConfigValuesEqual('nil', 'nan', float), false)
+  // Without option metadata the comparison degrades to raw strings.
+  assert.equal(processConfigValuesEqual('45.0', '45%'), false)
+  // Vectors compare element-wise under the same rule.
+  assert.equal(processConfigValuesEqual(['45.0', '45%'], ['45%', '45'], percent), true)
+})
+
+test('an absent value equals an empty one, so a blank never reads as changed', () => {
+  // Builtin process presets never mention post_process, but BambuStudio's project config always
+  // serializes the full option set and writes `"post_process": []`.
+  const strings = processSettingsCatalog.options.post_process
+  const text = processSettingsCatalog.options.process_notes
+  assert.equal(processConfigValuesEqual(undefined, [], strings), true)
+  assert.equal(processConfigValuesEqual(undefined, '', text), true)
+  assert.equal(processConfigValuesEqual([''], [], strings), true)
+  // A real value on either side is still a change.
+  assert.equal(processConfigValuesEqual(undefined, ['/tmp/fix.py'], strings), false)
+  assert.equal(processConfigValuesEqual(['/tmp/fix.py'], [], strings), false)
+  assert.deepEqual(diffProcessConfig({ wall_loops: '2' }, { post_process: [], wall_loops: '2' }), {})
+})
+
+test('catalog defaults keep the percent flag on floatOrPercent options', () => {
+  // BambuStudio's `ConfigOptionFloatOrPercent(400, true)` means 400% of the line width; emitting a
+  // bare "400" made the dialog's reset target 400 mm.
+  assert.equal(processSettingsCatalog.options.sparse_infill_anchor?.default, '400%')
+  assert.equal(processSettingsCatalog.options.spiral_mode_max_xy_smoothing?.default, '200%')
+})
+
+test('diffProcessConfig ignores a percent value that only differs in serialized form', () => {
+  const base: ProcessConfig = { monotonic_travel_into_wall: '45.0', wall_loops: '2' }
+  const edited: ProcessConfig = { monotonic_travel_into_wall: '45%', wall_loops: '3' }
+  assert.deepEqual(diffProcessConfig(base, edited), { wall_loops: '3' })
 })
 
 test('override schema accepts scalars and string vectors only', () => {

@@ -19,6 +19,7 @@ import {
   storeBridgeLibraryFile
 } from './bridge-library-files.js'
 import { libraryDir } from './library-paths.js'
+import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
 import yazl from 'yazl'
 
 const originalReplicaFindUnique = prisma.libraryFileReplica.findUnique
@@ -194,6 +195,9 @@ test('inspectBridgeLibraryThreeMf requests normalized 3mf metadata from the owni
 
   mock.method(bridgeSessionManager, 'isConnected', () => true)
   const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async () => ({
+    // A CURRENT bridge: without this the API now (correctly) distrusts the index and
+    // re-parses locally, which is not what these tests exercise.
+    parserVersion: THREE_MF_INDEX_PARSER_VERSION,
     index: {
       plates: [{
         index: 1,
@@ -231,6 +235,9 @@ test('inspectBridgeLibraryThreeMf caches bridge metadata without downloading fil
 
   mock.method(bridgeSessionManager, 'isConnected', () => true)
   const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async () => ({
+    // A CURRENT bridge: without this the API now (correctly) distrusts the index and
+    // re-parses locally, which is not what these tests exercise.
+    parserVersion: THREE_MF_INDEX_PARSER_VERSION,
     index: {
       plates: [{
         index: 1,
@@ -280,6 +287,9 @@ test('inspectBridgeLibraryThreeMf prefers an existing local cache copy over brid
 
   mock.method(bridgeSessionManager, 'isConnected', () => true)
   const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async () => ({
+    // A CURRENT bridge: without this the API now (correctly) distrusts the index and
+    // re-parses locally, which is not what these tests exercise.
+    parserVersion: THREE_MF_INDEX_PARSER_VERSION,
     index: {
       plates: [{
         index: 1,
@@ -356,7 +366,10 @@ test('inspectBridgeLibraryThreeMf falls back to local parsing when the bridge in
   const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async (_bridgeId: string, method: string, params: unknown) => {
     if (method === 'library.inspect3mf') {
       return {
-        index: {
+        // A CURRENT bridge: without this the API now (correctly) distrusts the index and
+    // re-parses locally, which is not what these tests exercise.
+    parserVersion: THREE_MF_INDEX_PARSER_VERSION,
+    index: {
           plates: [{
             index: 1,
             name: 'Plate 1',
@@ -448,7 +461,10 @@ test('inspectBridgeLibraryThreeMf falls back to local parsing when bridge plate 
   const requestRpc = mock.method(bridgeSessionManager, 'requestRpc', async (_bridgeId: string, method: string, params: unknown) => {
     if (method === 'library.inspect3mf') {
       return {
-        index: {
+        // A CURRENT bridge: without this the API now (correctly) distrusts the index and
+    // re-parses locally, which is not what these tests exercise.
+    parserVersion: THREE_MF_INDEX_PARSER_VERSION,
+    index: {
           plates: [{
             index: 1,
             name: 'Front Plate',
@@ -697,4 +713,35 @@ test('ensureBridgeLibraryLocalCopy refreshes recency on a validated stale copy s
   } finally {
     await rm(path.join(libraryDir, '_bridge-cache', bridgeId), { recursive: true, force: true }).catch(() => undefined)
   }
+})
+
+test('an index from a bridge on an older parser version is re-parsed locally, not trusted', async () => {
+  // The bridge deploys separately from the API. After a parser bump, an un-upgraded bridge keeps
+  // returning indexes that silently lack the new fields (Zod fills their defaults), and those were
+  // cached and chip-stamped as CURRENT — which is how `needsSettingsRepair`/`projectVersion` never
+  // appeared for files indexed while the bridge lagged. The version clause makes the API pull the
+  // bytes and parse with its own (current) parser instead.
+  const { shouldFallbackToLocalThreeMfParse } = await import('./bridge-library-files.js')
+  const { THREE_MF_INDEX_PARSER_VERSION } = await import('@printstream/shared/three-mf')
+  const healthyIndex = {
+    plates: [{ index: 1, name: null, gcodeFile: null, pickFile: null, thumbnailFile: null, plateType: null, nozzleSizes: [], filaments: [{ id: 1, filamentType: 'PLA', filamentName: null, color: null, usedGrams: null, usedMeters: null, nozzleId: null, bedTemperature: null, chamberTemperature: null }], objects: [], prediction: null, weight: null }],
+    projectFilaments: [{ id: 1, filamentType: 'PLA', filamentName: null, color: null, nozzleId: null, isSupport: false, isSoluble: false }],
+    compatiblePrinterModels: [],
+    supportFilamentIds: [],
+    printerProfileName: 'Bambu Lab X2D 0.4 nozzle',
+    processProfileName: '0.20mm Standard @BBL X2D',
+    geometryOnly: false,
+    objectExport: false,
+    needsSettingsRepair: false,
+    projectVersion: null
+  }
+
+  // A structurally healthy index from a CURRENT bridge is trusted.
+  assert.equal(shouldFallbackToLocalThreeMfParse({ index: healthyIndex, parserVersion: THREE_MF_INDEX_PARSER_VERSION } as never), false)
+  // The same index from a LAGGING bridge is not — its fields may be silently defaulted.
+  assert.equal(shouldFallbackToLocalThreeMfParse({ index: healthyIndex, parserVersion: THREE_MF_INDEX_PARSER_VERSION - 1 } as never), true)
+  // A bridge that predates version reporting entirely parses as 0 and always re-parses.
+  assert.equal(shouldFallbackToLocalThreeMfParse({ index: healthyIndex, parserVersion: 0 } as never), true)
+  // A NEWER bridge is fine: the API strips fields it does not know.
+  assert.equal(shouldFallbackToLocalThreeMfParse({ index: healthyIndex, parserVersion: THREE_MF_INDEX_PARSER_VERSION + 1 } as never), false)
 })

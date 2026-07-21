@@ -36,6 +36,32 @@ export const BRIM_EAR_MARKER_COLOR = 0xeec25a
 /** Viewport meshes for added part volumes (negative parts, modifiers, blockers). */
 export const ADDED_PART_MESH_NAME = 'addedPartVolume'
 
+/**
+ * The part identity tag on a render group, whichever kind it is: `partRef` for a part baked into
+ * the project's 3MF, `importPartRef` for a solid of a still-unsaved import. The two are kept as
+ * DIFFERENT keys on purpose — they bake through different `SceneEdit` seams (real 3MF object ids
+ * vs import + solid index) — but every consumer that only needs "which part is this group?"
+ * (gizmo attach, drag write-back, selection outlines) must accept both, or a multi-solid import's
+ * parts silently become unselectable.
+ */
+/**
+ * Convert a PLATE-axis movement into the object-local delta that moves a part the same way.
+ *
+ * Arrow keys (and the manual position inputs) speak plate axes, but a part's stored position is
+ * object-local. Without this conversion a rotated object sends its part the opposite way — press
+ * right, the part goes left — and a scaled one moves it the wrong distance. Rotation AND scale are
+ * inverted (a 2x object needs half the local delta); translation is irrelevant for a direction.
+ */
+export function plateDeltaToPartLocal(rotorMatrixWorld: THREE.Matrix4, dx: number, dy: number, dz = 0): THREE.Vector3 {
+  return new THREE.Vector3(dx, dy, dz)
+    .applyMatrix4(new THREE.Matrix4().copy(rotorMatrixWorld).setPosition(0, 0, 0).invert())
+}
+
+export function partGroupRef(node: THREE.Object3D): { componentObjectId: number } | null {
+  const ref = (node.userData.partRef ?? node.userData.importPartRef) as { componentObjectId: number } | undefined
+  return ref ?? null
+}
+
 /** BambuStudio's "Change type" options, in its menu order, with its labels. */
 export const PART_SUBTYPE_OPTIONS: ReadonlyArray<{ subtype: SceneEditPartSubtype; label: string }> = [
   { subtype: 'normal_part', label: 'Normal part' },

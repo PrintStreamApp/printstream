@@ -1292,6 +1292,11 @@ async function streamThreeMfSceneParts(
           // Parts without an extruder render in the DEFAULT filament, like Bambu Studio.
           color: part.color ?? scene.projectFilaments?.[0]?.color ?? null,
           transform: createThreeMfMatrix(part.transform),
+          // Without the subtype a support blocker / modifier / negative volume renders as an
+          // ordinary opaque part in the default filament — it reads as printed geometry that
+          // isn't in the file. The editor has always passed this; the preview must match, or
+          // the same project looks different depending on which surface opened it.
+          subtype: part.subtype,
           colorPaintFilaments: scene.projectFilaments ?? null
         }))
         placed += 1

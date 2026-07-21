@@ -36,6 +36,12 @@ export interface EditorSaveParams {
   markSaved: () => void
   buildSceneEditOut: (current: EditorState, options?: { thumbnails?: PlateThumbnail[] }) => SceneEdit
   captureAllPlateThumbnails: (current: EditorState, options?: { force?: boolean; updateLive?: boolean }) => Promise<PlateThumbnail[]>
+  /**
+   * The rendered XY footprint centre (plate coordinates, helper volumes excluded) of an instance,
+   * or null when it has no group in the live scene. Only the scene owner can answer this, and the
+   * single-object export needs it to centre the exported object on its plate.
+   */
+  worldFootprintCenterFor: (key: string) => { x: number; y: number } | null
   seededProcessOverrideObjectIdsRef: MutableRefObject<Set<number>>
   baseFileId: string | null
   baseVersionId: string | null | undefined
@@ -88,6 +94,7 @@ export function useEditorSave({
   markSaved,
   buildSceneEditOut,
   captureAllPlateThumbnails,
+  worldFootprintCenterFor,
   seededProcessOverrideObjectIdsRef,
   baseFileId,
   baseVersionId,
@@ -294,7 +301,7 @@ export function useEditorSave({
   const handleExportObjectAs3mf = useCallback((key: string, name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
     if (!current) return
-    const exportState = buildSingleObjectExportState(current, key)
+    const exportState = buildSingleObjectExportState(current, key, worldFootprintCenterFor(key) ?? undefined)
     if (!exportState) return
     void (async () => {
       // Fresh thumbnail of the exported object alone; force (the synthetic plate has no
@@ -317,7 +324,7 @@ export function useEditorSave({
         { asProject: false }
       )
     })()
-  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
 
   /**
    * "Download 3MF project": the same single-object bake as {@link handleExportObjectAs3mf}
@@ -328,7 +335,7 @@ export function useEditorSave({
   const handleExportObjectAs3mfDownload = useCallback((key: string, fileName: string) => {
     const current = stateRef.current
     if (!current) return
-    const exportState = buildSingleObjectExportState(current, key)
+    const exportState = buildSingleObjectExportState(current, key, worldFootprintCenterFor(key) ?? undefined)
     if (!exportState) return
     // Same BambuStudio parity rule as saving: a project needs a material.
     if ((sliceConfigRef.current?.projectFilaments?.length ?? 0) === 0) {
@@ -370,7 +377,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+  }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
 
   return {
     savedFile,

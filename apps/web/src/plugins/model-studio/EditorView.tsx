@@ -30,8 +30,6 @@ import {
   Link,
   ModalClose,
   ModalDialog,
-  Option,
-  Select,
   Sheet,
   Stack,
   Tab,
@@ -57,7 +55,6 @@ import type {
   LibraryThreeMfScene,
   ProcessSettingOverrides,
   SceneEdit,
-  SceneEditAddedPartSubtype,
   SceneEditPartSubtype,
   StagedImport,
   ThreeMfIndex
@@ -80,6 +77,8 @@ import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
 import { DialogFileTitle } from '../../components/DialogFileTitle'
 import { EmptyState } from '../../components/EmptyState'
+import { RepairProjectSettingsAlert } from '../../components/library/RepairProjectSettingsAlert'
+import { ProjectVersionWarningAlert } from '../../components/library/ProjectVersionWarningAlert'
 import { LibraryFilePickerDialog } from '../../components/LibraryFilePickerDialog'
 import { LibraryDestinationDialog } from '../../components/LibraryDestinationDialog'
 import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
@@ -96,7 +95,14 @@ import {
   threeMfTransformFromMatrix
 } from './lib/threeMfScene'
 import { arrangePlateItems, FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
-import { PRIMITIVE_LABELS, primitivePartSoup, primitiveTriangleSoup, type PrimitiveKind } from './lib/primitives'
+import { PRIMITIVE_LABELS, primitiveTriangleSoup, type PrimitiveKind } from './lib/primitives'
+import {
+  addedPartDropPosition,
+  addedPartLabel,
+  soupSize,
+  stageAddedPartGeometry,
+  type AddedPartSource
+} from './lib/addedParts'
 import {
   buildTrianglePaintOverlay,
   decodeWholeTriangleColorState
@@ -115,6 +121,9 @@ import {
   instanceFromStagedImport,
   replaceInstanceGeometry,
   reindexPlates,
+  addedPartHostId,
+  dropAddedPartsForReplacedHost,
+  makeInstanceIndependent,
   effectiveAddedParts,
   effectiveBrimEars,
   effectiveFilamentChanges,
@@ -135,7 +144,9 @@ import {
   type PlateFootprintRect,
   isObjectMarkedForRepair
 } from './lib/editorModel'
-import { HELPER_VOLUME_SPECS, HELPER_VOLUME_SUBTYPES, helperVolumeCssColor } from './lib/helperVolumes'
+import { helperVolumeSpec } from './lib/helperVolumes'
+import { AddedPartPanel } from './AddedPartPanel'
+import { LazyDialogFallback } from '../../components/LazyDialogFallback'
 import { useShowBedModel } from './lib/useShowBedModel'
 import { useEffectiveSidebarSide } from '../../lib/editorViewportSettings'
 import { useSidebarResize } from './lib/useSidebarResize'
@@ -165,6 +176,8 @@ import {
 } from './lib/objectExport'
 import {
   ADDED_PART_MESH_NAME,
+  partGroupRef,
+  plateDeltaToPartLocal,
   applyLayerBandOverlays,
   bedsEqual,
   BRIM_EAR_MARKER_COLOR,
@@ -262,7 +275,7 @@ function supportFilamentRefs(overrides: Record<string, string | string[]> | unde
 const ProcessSettingsDialogImpl = lazy(() => import('../../components/ProcessSettingsDialog'))
 function ProcessSettingsDialog(props: ComponentProps<typeof ProcessSettingsDialogImpl>) {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<LazyDialogFallback label="Opening settings…" />}>
       <ProcessSettingsDialogImpl {...props} />
     </Suspense>
   )
@@ -331,6 +344,38 @@ type PlateEditKind = 'structure' | 'transform' | 'material' | 'visibility' | 'in
 
 /** Stable empty per-object overrides so the override editor doesn't re-fetch each render. */
 const EMPTY_OBJECT_OVERRIDES: ProcessSettingOverrides = {}
+
+/**
+ * Trailing delay before a filament-swatch edit is mirrored into the plate-strip thumbnail. The
+ * colour picker commits on every drag tick and a snapshot is a full offscreen render plus a
+ * synchronous `toDataURL` readback, so only the settled colour is worth rendering.
+ */
+const THUMBNAIL_RECOLOUR_DEBOUNCE_MS = 250
+
+/**
+ * What the next picked model file is for. The library picker and the hidden file input are shared
+ * by three flows (add a model to the plate, replace a model's geometry, add a part inside a model),
+ * so the pending request decides where the staged import lands. Absent = add to the plate.
+ */
+type ModelSourceRequest =
+  | { kind: 'replace'; key: string }
+  | { kind: 'addPart'; key: string; subtype: SceneEditPartSubtype }
+
+/** Library-picker copy per {@link ModelSourceRequest} kind ('import' = no pending request). */
+const LIBRARY_PICKER_COPY: Record<'import' | ModelSourceRequest['kind'], { title: string; description: string }> = {
+  import: {
+    title: 'Add from library',
+    description: 'Choose an STL, STEP, or 3MF file to add to this project.'
+  },
+  replace: {
+    title: 'Replace from library',
+    description: 'Choose an STL, STEP, or 3MF file to swap in for the selected object — its position and settings are kept.'
+  },
+  addPart: {
+    title: 'Add part from library',
+    description: 'Choose an STL, STEP, or 3MF file to add as a part inside the selected model.'
+  }
+}
 
 function EditorView({
   baseFileId,
@@ -406,6 +451,29 @@ function EditorView({
     const hex = filamentId != null ? filamentColorsRef.current?.[filamentId] : undefined
     return hex ? new THREE.Color(hex).getHex() : null
   }, [])
+
+  /**
+   * Attach this session's (or the source mesh's) paint overlays to a freshly built part mesh.
+   *
+   * Shared by the in-project and IMPORT render paths so an import's solids show paint exactly like
+   * a baked part's — they are painted through the same state map, keyed by the model's editor
+   * identity, and emitted as `importPaint` at bake time.
+   */
+  const seedPartPaintOverlays = useCallback((mesh: THREE.Mesh, objectId: number, componentObjectId: number) => {
+    for (const channel of ['supports', 'seam', 'color'] as const) {
+      const spec = PAINT_CHANNEL_SPECS[channel]
+      const sessionCodes = stateRef.current?.[spec.stateKey]?.[supportPaintKey(objectId, componentObjectId)]
+      const codes = sessionCodes ?? getGeometryTrianglePaint(mesh.geometry, channel)
+      if (!codes || Object.keys(codes).length === 0) continue
+      const overlay = buildTrianglePaintOverlay(mesh.geometry, codes, {
+        palette: spec.palette,
+        name: spec.overlayName,
+        offsetFactor: spec.offsetFactor,
+        ...(channel === 'color' ? { colorForState: colorPaintStateColor } : {})
+      })
+      if (overlay) mesh.add(overlay)
+    }
+  }, [colorPaintStateColor])
 
   // Material choices for the reassignment pickers (live colour + label per material).
   // The label tracks the user's CURRENT material selection (type/name) rather than the
@@ -626,9 +694,10 @@ function EditorView({
   const footprintCacheRef = useRef<Map<string, { shapeSig: string; cells: Set<number>; baseX: number; baseY: number }>>(new Map())
   const [importing, setImporting] = useState(false)
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
-  // When set, the next picked library file / uploaded local file replaces this instance's
-  // geometry in place (Replace flow) instead of adding a new model to the plate.
-  const [replaceTargetKey, setReplaceTargetKey] = useState<string | null>(null)
+  // What the next picked library file / uploaded local file is FOR. The library picker and the
+  // hidden file input are shared by three flows, so the pending request — not a boolean each —
+  // decides where the staged import lands. Null means "add it to the plate as a new model".
+  const [modelRequest, setModelRequest] = useState<ModelSourceRequest | null>(null)
   // Pending export-to-library request (destination dialog open). 'object'/'merged'/'parts'
   // save one named STL; 'separate' saves one STL per selected object (no name field —
   // each file is named after its object). Downloads never set this; they run immediately.
@@ -752,6 +821,14 @@ function EditorView({
   const saveAsBridgeId = bridgeId
   const saveAsInitialFolderId = bridgeId ? folderId : null
   const saveAsSuggestedName = baseFileQuery.data ? splitLibraryFileNameForRename(baseFileQuery.data.file.name).baseName : ''
+  // Non-null only while the OPENED project is the one flagged as needing repair — an editor
+  // opened on a new-project scaffold or an archived version has no repairable stored file.
+  const needsSettingsRepairFileId = baseFileId !== null
+    && !isNewProject
+    && baseVersionId == null
+    && baseFileQuery.data?.file.needsSettingsRepair === true
+    ? baseFileId
+    : null
   const editorFoldersQuery = useQuery({
     queryKey: ['library-folders', saveAsBridgeId ?? 'none'],
     enabled: saveAsBridgeId !== null,
@@ -1046,7 +1123,10 @@ function EditorView({
   const paintTargetIsObject = useMemo(() => {
     if (!selectedKey) return false
     const instance = activePlate?.instances.find((entry) => entry.key === selectedKey)
-    return instance?.source.kind === 'object'
+    // Any model with an editor identity, INCLUDING a not-yet-saved import: its paint emits as
+    // `importPaint` against the staged mesh's triangle order, which is the same order the viewport
+    // rendered. See the plugin guide's no-save-first rule.
+    return instance != null && addedPartHostId(instance) != null
   }, [activePlate, selectedKey])
   // The plate's filament count from the parsed index (authoritative for multi-color,
   // incl. single objects whose parts use different filaments).
@@ -1388,6 +1468,17 @@ function EditorView({
               if (partMesh) {
                 applyLayerBandOverlays(partMesh.material as THREE.Material, layerBandUniformsRef.current)
                 partMesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: part.color || instance.color }
+                // Paintable: an import's solids paint like any part. The key is the import's
+                // synthetic identity + its SOLID INDEX, which `collectImportPaint` maps back to
+                // (importId, partIndex) — the same indexing the bake writes paint at.
+                const paintHostId = addedPartHostId(instance)
+                if (paintHostId != null) {
+                  partMesh.userData.supportPaintPart = {
+                    objectId: paintHostId,
+                    componentObjectId: part.componentObjectId
+                  }
+                  seedPartPaintOverlays(partMesh, paintHostId, part.componentObjectId)
+                }
               }
             }
             rotor.add(partGroup)
@@ -1400,6 +1491,15 @@ function EditorView({
           if (importMesh) {
             applyLayerBandOverlays(importMesh.material as THREE.Material, layerBandUniformsRef.current)
             importMesh.userData.recolor = { filamentId: meshFilamentId, fallbackColor: instance.color }
+            // Paintable, exactly like a multi-solid import's parts. A single-solid import has an
+            // EMPTY `parts` array, so its one mesh is solid 0 — the index `collectImportPaint`
+            // emits and the bake reads back. Without this tag the brush finds no target and paint
+            // silently does nothing (an added cube in a new project is the common case).
+            const paintHostId = addedPartHostId(instance)
+            if (paintHostId != null) {
+              importMesh.userData.supportPaintPart = { objectId: paintHostId, componentObjectId: 0 }
+              seedPartPaintOverlays(importMesh, paintHostId, 0)
+            }
           }
           rotor.add(importGroup)
         }
@@ -1447,20 +1547,7 @@ function EditorView({
                 objectId: instance.objectId,
                 componentObjectId: part.componentObjectId
               }
-              for (const channel of ['supports', 'seam', 'color'] as const) {
-                const spec = PAINT_CHANNEL_SPECS[channel]
-                const sessionCodes = stateRef.current?.[spec.stateKey]?.[supportPaintKey(instance.objectId, part.componentObjectId)]
-                const codes = sessionCodes ?? getGeometryTrianglePaint(paintableMesh.geometry as THREE.BufferGeometry, channel)
-                if (codes && Object.keys(codes).length > 0) {
-                  const overlay = buildTrianglePaintOverlay(paintableMesh.geometry as THREE.BufferGeometry, codes, {
-                    palette: spec.palette,
-                    name: spec.overlayName,
-                    offsetFactor: spec.offsetFactor,
-                    ...(channel === 'color' ? { colorForState: colorPaintStateColor } : {})
-                  })
-                  if (overlay) paintableMesh.add(overlay)
-                }
-              }
+              seedPartPaintOverlays(paintableMesh, instance.objectId, part.componentObjectId)
             }
           }
           rotor.add(partGroup)
@@ -1483,16 +1570,19 @@ function EditorView({
         group.scale.copy(instance.scale)
         rotor.rotation.copy(instance.rotation)
       }
-      if (instance.source.kind === 'object') {
-        setGroupBrimEarMarkersRef.current?.(group, effectiveBrimEars(stateRef.current, instance))
-        if (instance.source.kind === 'object') setGroupAddedPartMeshesRef.current?.(group, instance)
-      }
+      // Both are keyed by the model's editor identity, so an unsaved import carries them too;
+      // `effectiveBrimEars` simply returns nothing for a model that has none.
+      setGroupBrimEarMarkersRef.current?.(group, effectiveBrimEars(stateRef.current, instance))
+      setGroupAddedPartMeshesRef.current?.(group, instance)
       return group
     },
     // resolveColorFilamentId is read via its ref (not a dep) so a late filament/slice-config
     // settle on open doesn't recreate this builder and trigger a redundant second plate rebuild
     // — colours are applied/refreshed by the dedicated recolor effect, not by rebuilding geometry.
-    [colorPaintStateColor, fetchGeometry, fetchImportGeometry]
+    // seedPartPaintOverlays is stable (its only dep, colorPaintStateColor, has empty deps), so
+    // listing it cannot retrigger a plate rebuild — it now owns the colour-paint tint lookup the
+    // builder used to reference directly.
+    [seedPartPaintOverlays, fetchGeometry, fetchImportGeometry]
   )
 
   // ---- Triangle painting (support + seam brushes) -------------------------------
@@ -1537,6 +1627,12 @@ function EditorView({
     return null
   }, [selectedAddedPartKey, state])
 
+  /** Live swatch colour for the selected added part; null for a type that carries no material. */
+  const selectedAddedPartColor = useMemo(() => {
+    if (!selectedAddedPart || !threeMfPartSubtypeCarriesFilament(selectedAddedPart.subtype)) return null
+    return filamentOptions.find((option) => option.id === selectedAddedPart.filamentId)?.color ?? null
+  }, [selectedAddedPart, filamentOptions])
+
   // ---- Added part volumes ----------------------------------------------------------
 
   /** Replace an instance group's added-part meshes (translucent volumes on the rotor). */
@@ -1550,36 +1646,56 @@ function EditorView({
       const geometry = new THREE.BufferGeometry()
       geometry.setAttribute('position', new THREE.BufferAttribute(part.soup.slice(), 3))
       geometry.computeVertexNormals()
+      // A normal part IS printed geometry: it renders opaque in its own filament colour and must
+      // count toward bed-rest, the selection box, footprints, thumbnails, and STL export. Only the
+      // helper volumes are the translucent aids that all of those deliberately skip.
+      const helper = helperVolumeSpec(part.subtype)
+      const partFilamentId = resolveColorFilamentIdRef.current(part.filamentId ?? instance.filamentId)
+      const liveColor = (partFilamentId != null && filamentColorsRef.current?.[partFilamentId]) || instance.color
       const mesh = new THREE.Mesh(
         geometry,
-        new THREE.MeshStandardMaterial({
-          color: HELPER_VOLUME_SPECS[part.subtype].color,
-          transparent: true,
-          opacity: 0.45,
-          roughness: 0.5,
-          metalness: 0,
-          depthWrite: false
-        })
+        helper
+          ? new THREE.MeshStandardMaterial({
+            color: helper.color,
+            transparent: true,
+            opacity: 0.45,
+            roughness: 0.5,
+            metalness: 0,
+            depthWrite: false
+          })
+          : new THREE.MeshStandardMaterial({ color: liveColor ?? '#D3DDE7', roughness: 0.55, metalness: 0 })
       )
       mesh.name = ADDED_PART_MESH_NAME
       mesh.position.copy(part.position)
       mesh.rotation.copy(part.rotation)
       mesh.scale.copy(part.scale)
       mesh.userData.addedPartKey = part.key
-      // Aids, not printed geometry: excluded from bed-rest, selection box, footprints.
-      mesh.userData.isHelperVolume = true
-      mesh.renderOrder = 3
+      if (helper) {
+        // Aids, not printed geometry: excluded from bed-rest, selection box, footprints.
+        mesh.userData.isHelperVolume = true
+        mesh.renderOrder = 3
+      } else {
+        // Follows live swatch edits like every other printed mesh. No part ref: the recolour
+        // effect finds none and falls back to the instance's filament, which is the right answer
+        // for a part that inherited it — and `refreshAddedPartMeshes` rebuilds on an explicit
+        // per-part reassignment anyway.
+        mesh.userData.recolor = { filamentId: partFilamentId, fallbackColor: instance.color ?? undefined }
+      }
       rotor.add(mesh)
     }
   }, [])
   const setGroupAddedPartMeshesRef = useRef(setGroupAddedPartMeshes)
   setGroupAddedPartMeshesRef.current = setGroupAddedPartMeshes
 
-  /** Re-derive every built group's added-part meshes from the current editor state. */
+  /**
+   * Re-derive every built group's added-part meshes from the current editor state. Covers
+   * import-backed instances too — `effectiveAddedParts` returns nothing for a model that has no
+   * parts, and an unsaved import can host them (see {@link addedPartHostId}).
+   */
   const refreshAddedPartMeshes = useCallback(() => {
     for (const [key, group] of groupByKeyRef.current) {
       const instance = activePlateRef.current?.instances.find((entry) => entry.key === key)
-      if (!instance || instance.source.kind !== 'object') continue
+      if (!instance) continue
       setGroupAddedPartMeshes(group, instance)
     }
   }, [setGroupAddedPartMeshes])
@@ -1612,7 +1728,7 @@ function EditorView({
   const writeBackBakedPart = useCallback((partGroup: THREE.Object3D) => {
     const selected = selectedBakedPartRef.current
     const state = stateRef.current
-    const ref = partGroup.userData.partRef as { componentObjectId: number } | undefined
+    const ref = partGroupRef(partGroup)
     if (!selected || !state || !ref || ref.componentObjectId !== selected.componentObjectId) return
     const mesh = partGroup.children.find((child) => (child as THREE.Mesh).isMesh === true)
     if (!mesh) return
@@ -1622,9 +1738,13 @@ function EditorView({
     const matrix = threeMfTransformFromMatrix(effective)
     if (!state.partTransforms) state.partTransforms = {}
     state.partTransforms[supportPaintKey(selected.objectId, selected.componentObjectId)] = matrix
+    // Match by the identity the part row keys on — an in-project object's Bambu id, or an
+    // import's synthetic one — so a multi-solid import's solids update every copy too.
+    const ownsSelectedPart = (instance: EditorInstance): boolean =>
+      (instance.source.kind === 'object' ? instance.objectId : instance.source.replacedObjectId) === selected.objectId
     for (const plate of state.plates) {
       for (const instance of plate.instances) {
-        if (instance.source.kind !== 'object' || instance.objectId !== selected.objectId) continue
+        if (!ownsSelectedPart(instance)) continue
         const part = instance.parts.find((entry) => entry.componentObjectId === selected.componentObjectId)
         if (part) part.transform = [...matrix]
       }
@@ -1632,12 +1752,12 @@ function EditorView({
     // Mirror the drag delta onto the other instances' matching part groups (their child
     // matrices equal the dragged one's, so the same delta lands on the same placement).
     for (const instance of activePlateRef.current?.instances ?? []) {
-      if (instance.source.kind !== 'object' || instance.objectId !== selected.objectId) continue
+      if (!ownsSelectedPart(instance)) continue
       const group = groupByKeyRef.current.get(instance.key)
       if (!group) continue
       group.traverse((node) => {
         if (node === partGroup) return
-        const nodeRef = node.userData.partRef as { componentObjectId: number } | undefined
+        const nodeRef = partGroupRef(node)
         if (nodeRef && nodeRef.componentObjectId === selected.componentObjectId) {
           node.position.copy(partGroup.position)
           node.quaternion.copy(partGroup.quaternion)
@@ -1650,7 +1770,7 @@ function EditorView({
   /** Gizmo write-back dispatch: session-added parts by key, baked parts by partRef. */
   const writeBackPartMesh = useCallback((mesh: THREE.Object3D) => {
     if (typeof mesh.userData.addedPartKey === 'string') writeBackAddedPart(mesh)
-    else if (mesh.userData.partRef != null) writeBackBakedPart(mesh)
+    else if (partGroupRef(mesh)) writeBackBakedPart(mesh)
   }, [writeBackAddedPart, writeBackBakedPart])
   const writeBackPartMeshRef = useRef(writeBackPartMesh)
   writeBackPartMeshRef.current = writeBackPartMesh
@@ -1693,7 +1813,7 @@ function EditorView({
   const refreshBrimEarMarkers = useCallback(() => {
     for (const [key, group] of groupByKeyRef.current) {
       const instance = activePlateRef.current?.instances.find((entry) => entry.key === key)
-      if (!instance || instance.source.kind !== 'object') continue
+      if (!instance) continue
       setGroupBrimEarMarkers(group, effectiveBrimEars(stateRef.current, instance))
     }
   }, [setGroupBrimEarMarkers])
@@ -1708,7 +1828,8 @@ function EditorView({
   ) => {
     const state = stateRef.current
     const instance = activePlateRef.current?.instances.find((entry) => entry.key === selectedKeyRef.current)
-    if (!state || !instance || instance.source.kind !== 'object') return
+    const hostId = instance ? addedPartHostId(instance) : null
+    if (!state || !instance || hostId == null) return
     recordHistoryRef.current?.()
     const current = effectiveBrimEars(state, instance)
     let next: EditorBrimEar[]
@@ -1728,7 +1849,7 @@ function EditorView({
       next = []
     }
     if (!state.brimEars) state.brimEars = {}
-    state.brimEars[instance.objectId] = next
+    state.brimEars[hostId] = next
     refreshBrimEarMarkers()
     regenerateActiveThumbnailRef.current?.()
   }, [refreshBrimEarMarkers, recordHistoryRef])
@@ -1869,8 +1990,8 @@ function EditorView({
       // Added part mesh: its local TRS IS the object-local placement.
       return fromTrs(object.position, object.rotation as THREE.Euler, object.scale)
     }
-    if (object.userData.partRef != null) {
-      // Baked part group: effective placement = drag delta x baked child matrix.
+    if (partGroupRef(object)) {
+      // Baked/import part group: effective placement = drag delta x baked child matrix.
       const mesh = object.children.find((child) => (child as THREE.Mesh).isMesh === true)
       if (!mesh) return null
       object.updateMatrix()
@@ -2213,7 +2334,7 @@ function EditorView({
       // with the child matrix into the part's new object-local placement.
       let partGroup: THREE.Object3D | null = null
       group.traverse((node) => {
-        const ref = node.userData.partRef as { componentObjectId: number } | undefined
+        const ref = partGroupRef(node)
         if (!partGroup && ref && ref.componentObjectId === selectedBakedPart.componentObjectId) partGroup = node
       })
       if (partGroup) {
@@ -2246,17 +2367,21 @@ function EditorView({
   // selected part belongs to the newly selected instance's object (the added-part list
   // row selects the instance and the part together; clearing here would undo it).
   useEffect(() => {
+    // Both checks resolve the host through `addedPartHostId` rather than testing for an in-project
+    // object: an unsaved import hosts added volumes and selectable sub-parts too, and gating on
+    // `source.kind` here would clear the selection the moment it was made.
     setSelectedAddedPartKey((current) => {
       if (!current) return current
       const instance = activePlateRef.current?.instances.find((entry) => entry.key === selectedKey)
-      const belongs = instance && instance.source.kind === 'object'
-        && (stateRef.current?.addedParts?.[instance.objectId] ?? []).some((part) => part.key === current)
+      const hostId = instance ? addedPartHostId(instance) : null
+      const belongs = hostId != null
+        && (stateRef.current?.addedParts?.[hostId] ?? []).some((part) => part.key === current)
       return belongs ? current : null
     })
     setSelectedBakedPart((current) => {
       if (!current) return current
       const instance = activePlateRef.current?.instances.find((entry) => entry.key === selectedKey)
-      return instance && instance.source.kind === 'object' && instance.objectId === current.objectId ? current : null
+      return instance && addedPartHostId(instance) === current.objectId ? current : null
     })
   }, [selectedKey])
 
@@ -2628,10 +2753,27 @@ function EditorView({
       })
     }
     refreshPaintOverlaysRef.current()
+    // A material-only edit deliberately skips the plate rebuild, which is the other place a
+    // snapshot is taken — so mirror the recolour into the plate strip here, as the transform sync
+    // does. Without this the strip keeps showing the pre-reassignment colours until the next
+    // structural edit or plate switch.
+    regenerateActiveThumbnailRef.current?.()
     // Keyed ONLY on materialSyncToken: colours are read via refs so a swatch-colour tick does NOT
     // re-run this full-scene traversal (that's the useEditorPaint recolour effect's job).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [materialSyncToken])
+
+  // A filament SWATCH edit recolours the live meshes through useEditorPaint's in-place effect
+  // (declared earlier, so it has already run when this fires) — no rebuild, hence no snapshot.
+  // Refresh the strip on the settled colour; see {@link THUMBNAIL_RECOLOUR_DEBOUNCE_MS}.
+  const thumbnailColourSettledRef = useRef(false)
+  useEffect(() => {
+    // Skip the mount pass: the plate build takes its own snapshot when it finishes, and firing here
+    // could otherwise snapshot a plate that is still streaming its models in.
+    if (!thumbnailColourSettledRef.current) { thumbnailColourSettledRef.current = true; return }
+    const timer = setTimeout(() => regenerateActiveThumbnailRef.current?.(), THUMBNAIL_RECOLOUR_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [filamentColors])
 
   const handleSelect = useCallback((key: string, modifiers?: { additive?: boolean; range?: boolean }) => {
     if (modifiers?.range) {
@@ -2662,7 +2804,11 @@ function EditorView({
     if (!modifiers.additive && !modifiers.range) {
       const instance = stateRef.current?.plates.flatMap((plate) => plate.instances)
         .find((entry) => entry.key === instanceKey)
-      if (instance && instance.source.kind === 'object') {
+      // A multi-solid import renders per-solid groups too (tagged `importPartRef`), so its parts
+      // take the gizmo like an in-project object's — the placement emits as
+      // `importPartTransforms` instead of `partTransforms`. Single-mesh instances have no part
+      // group to attach to, so they fall through to the bulk selection.
+      if (instance && (instance.source.kind === 'object' || instance.parts.length > 1)) {
         // Clicking the already-gizmo'd part steps back up to the whole object.
         const current = selectedBakedPartRef.current
         if (current && current.objectId === objectId && current.componentObjectId === componentObjectId
@@ -2677,7 +2823,7 @@ function EditorView({
         if (!['translate', 'rotate', 'scale'].includes(gizmoModeRef.current)) setGizmoMode('translate')
         return
       }
-      // Import-backed rows render no per-part meshes (no gizmo target); fall through to
+      // No per-part group to hand the gizmo to (a single-mesh import); fall through to
       // the bulk selection so the row still highlights and bulk actions work.
     }
     setSelectedKey(null)
@@ -3172,58 +3318,66 @@ function EditorView({
     const plate = state?.plates.find((entry) => entry.index === activePlateIndex)
     const instance = plate?.instances.find((entry) => entry.key === key)
     if (!state || !instance) return
-    if (instance.source.kind !== 'object') {
-      toast.error('Save the project first, then repair this imported model.')
-      return
-    }
-    if (isObjectMarkedForRepair(state, instance.objectId)) return
+    // Works on a not-yet-saved import too: it is marked by the import's synthetic object identity
+    // and emitted as `repairedImportIds`, which the bake applies to the staged geometry. Nothing in
+    // this editor may require a save first (see the plugin guide's no-save-first rule).
+    const markId = addedPartHostId(instance)
+    if (markId == null) return
+    if (isObjectMarkedForRepair(state, markId)) return
     recordHistoryRef.current?.()
-    state.repairedObjectIds = [...(state.repairedObjectIds ?? []), instance.objectId]
+    state.repairedObjectIds = [...(state.repairedObjectIds ?? []), markId]
     toast.success('Mesh repair will run for this object when you save.')
   }, [activePlateIndex, recordHistoryRef])
 
-  const handleAddPartVolume = useCallback(async (key: string, subtype: SceneEditAddedPartSubtype) => {
+  /**
+   * Add a new part volume inside a model — BambuStudio's "Add part / negative part / modifier /
+   * support blocker / enforcer", from a generated primitive or a loaded mesh.
+   *
+   * Works on an unsaved import as well as an in-project object: both address the part's host by
+   * {@link addedPartHostId}, and the bake resolves an import host through the same map that places
+   * the import itself. A NORMAL part inherits its host's material, which is what BambuStudio does
+   * (`load_generic_subobject` seeds the volume's extruder from the object's) — otherwise the new
+   * geometry would silently print in filament 1.
+   */
+  const handleAddPartVolume = useCallback(async (key: string, subtype: SceneEditPartSubtype, source: AddedPartSource) => {
     const state = stateRef.current
     const plate = state?.plates.find((entry) => entry.index === activePlateIndex)
     const instance = plate?.instances.find((entry) => entry.key === key)
     const group = groupByKeyRef.current.get(key)
     if (!state || !instance || !group) return
-    if (instance.source.kind !== 'object') {
-      toast.error('Save the project first, then add parts to this imported model.')
+    const hostId = addedPartHostId(instance)
+    if (hostId == null) {
+      toast.error('This model cannot take added parts yet.')
       return
     }
-    const spec = HELPER_VOLUME_SPECS[subtype]
+    const label = addedPartLabel(subtype)
     const box = printableMeshBox(group)
     const maxDim = box.isEmpty() ? 20 : Math.max(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z)
     const size = Math.min(20, Math.max(4, maxDim * 0.25))
     setImporting(true)
     try {
-      const soup = primitivePartSoup(size)
-      const stl = triangleSoupToBinaryStl(soup)
-      const staged = await stageImportFromFile(new File([stl], `${spec.label}.stl`, { type: 'application/octet-stream' }))
+      const staged = await stageAddedPartGeometry(source, size)
       recordHistoryRef.current?.()
       const rotor = rotorOf(group)
       rotor.updateWorldMatrix(true, false)
-      const centerLocal = box.isEmpty()
-        ? new THREE.Vector3()
-        : rotor.worldToLocal(box.getCenter(new THREE.Vector3()))
       const part: EditorAddedPart = {
         key: nextInstanceKey(),
         importId: staged.importId,
         subtype,
-        name: spec.label,
-        position: centerLocal,
+        name: source.kind === 'primitive' ? label : staged.name,
+        ...(threeMfPartSubtypeCarriesFilament(subtype) ? { filamentId: instance.filamentId } : {}),
+        position: addedPartDropPosition(subtype, box, soupSize(staged.soup), (point) => rotor.worldToLocal(point)),
         rotation: new THREE.Euler(),
         scale: new THREE.Vector3(1, 1, 1),
-        soup
+        soup: staged.soup
       }
       if (!state.addedParts) state.addedParts = {}
-      ;(state.addedParts[instance.objectId] ??= []).push(part)
+      ;(state.addedParts[hostId] ??= []).push(part)
       refreshAddedPartMeshes()
       setSelectedAddedPartKey(part.key)
       setGizmoMode('translate')
       regenerateActiveThumbnailRef.current?.()
-      toast.success(`Added a ${spec.label.toLowerCase()} — drag it into position.`)
+      toast.success(`Added a ${label.toLowerCase()} — drag it into position.`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to add the part.')
     } finally {
@@ -3237,12 +3391,27 @@ function EditorView({
    * the mutation the state identity is refreshed to re-render the panel, and the viewport
    * meshes are rebuilt to pick up the subtype's colour.
    */
-  const handleChangeAddedPartType = useCallback((key: string, subtype: SceneEditAddedPartSubtype) => {
+  const handleChangeAddedPartType = useCallback((key: string, subtype: SceneEditPartSubtype) => {
     const state = stateRef.current
     const part = Object.values(state?.addedParts ?? {}).flat().find((entry) => entry.key === key)
     if (!state || !part || part.subtype === subtype) return
     recordHistoryRef.current?.()
     part.subtype = subtype
+    // Retyping to a subtype that carries no material must drop the material, not hide it: a
+    // support blocker with a lingering filament would reappear the moment it was retyped back.
+    if (!threeMfPartSubtypeCarriesFilament(subtype)) part.filamentId = null
+    refreshAddedPartMeshes()
+    regenerateActiveThumbnailRef.current?.()
+    setState((current) => (current ? { ...current } : current))
+  }, [refreshAddedPartMeshes, recordHistoryRef])
+
+  /** Reassign an added part's material (normal parts and modifiers only — see the type Select). */
+  const handleChangeAddedPartFilament = useCallback((key: string, filamentId: number) => {
+    const state = stateRef.current
+    const part = Object.values(state?.addedParts ?? {}).flat().find((entry) => entry.key === key)
+    if (!state || !part || part.filamentId === filamentId) return
+    recordHistoryRef.current?.()
+    part.filamentId = filamentId
     refreshAddedPartMeshes()
     regenerateActiveThumbnailRef.current?.()
     setState((current) => (current ? { ...current } : current))
@@ -3375,6 +3544,11 @@ function EditorView({
         && instance.source.replacedObjectId == null
         && instance.source.importId === target.source.importId
     }
+    // The replacement RETAINS the object identity that added parts are keyed by, so the old
+    // shape's blockers/modifiers would silently reattach to an unrelated mesh. Drop them, matching
+    // how paint and brim ears fall away (see `dropAddedPartsForReplacedHost`).
+    const state = stateRef.current
+    if (state) dropAddedPartsForReplacedHost(state, target)
     let selectedReplacementKey: string | null = null
     updatePlates((plates) => plates.map((plate) => ({
       ...plate,
@@ -3409,7 +3583,7 @@ function EditorView({
   /** Replace `key`'s geometry with a model picked from the library. */
   const handleReplaceFromLibrary = useCallback(async (key: string, libraryFileId: string) => {
     setLibraryPickerOpen(false)
-    setReplaceTargetKey(null)
+    setModelRequest(null)
     setImporting(true)
     try {
       const staged = await stageImportFromLibrary(libraryFileId, undefined)
@@ -3447,7 +3621,28 @@ function EditorView({
     return selection.includes(key) ? selection : [key]
   }, [])
 
-  const handleDuplicate = useCallback((key: string) => {
+  /**
+   * Give a new independent copy the source object's per-object PROCESS overrides.
+   *
+   * These live on the borrowed slice controller rather than in `EditorState`, so
+   * `makeInstanceIndependent` cannot copy them itself — but leaving them behind would make a copy
+   * silently lose settings its source had, and re-adding them after a save is exactly the
+   * "save first" wart this editor does not have anywhere else.
+   */
+  const copyObjectProcessOverrides = useCallback((sourceObjectId: number, cloneObjectId: number) => {
+    const perObjectSettings = sliceConfigRef.current?.perObjectSettings
+    const existing = perObjectSettings?.value?.[String(sourceObjectId)]
+    if (!perObjectSettings || !existing || Object.keys(existing).length === 0) return
+    perObjectSettings.onChange({ ...perObjectSettings.value, [String(cloneObjectId)]: { ...existing } })
+  }, [])
+
+  /**
+   * Duplicate the selection. `independent` picks BambuStudio's two copy semantics: linked (the
+   * default, BS's toolbar "+" / `increase_instances` — another instance of the SAME object, so
+   * parts, materials, paint and per-object settings stay shared) or independent (BS's Ctrl+C/V /
+   * `Model::add_object` — a whole new object that diverges from here on).
+   */
+  const handleDuplicate = useCallback((key: string, independent = false) => {
     const keys = selectionFor(key)
     let cloneKey: string | null = null
     updatePlates((plates) =>
@@ -3458,6 +3653,13 @@ function EditorView({
           const source = next.instances.find((entry) => entry.key === target)
           if (!source) continue
           const clone = duplicateInstance(source)
+          // The copy is registered against the LIVE state (the plate map below is rebuilt from it),
+          // so the clone registry and the copied session edits land on the same object identity.
+          if (independent && stateRef.current) {
+            const sourceObjectId = clone.objectId
+            makeInstanceIndependent(stateRef.current, clone)
+            copyObjectProcessOverrides(sourceObjectId, clone.objectId)
+          }
           const spot = findFreePlatePosition(next)
           clone.position.set(spot.x, spot.y, clone.position.z)
           cloneKey = clone.key
@@ -3467,7 +3669,45 @@ function EditorView({
       })
     )
     if (cloneKey) selectExclusive(cloneKey)
-  }, [activePlateIndex, updatePlates, selectionFor, selectExclusive])
+  }, [activePlateIndex, updatePlates, selectionFor, selectExclusive, copyObjectProcessOverrides])
+
+  /**
+   * How many placed instances share this instance's object — i.e. how many LINKED copies it has.
+   * 1 means it is already independent. Drives both the "Make independent" item and the sidebar
+   * badge, so the linkage is visible rather than something users discover by editing one copy and
+   * watching another change.
+   */
+  const linkedCopyCountFor = useCallback((key: string): number => {
+    const instances = stateRef.current?.plates.flatMap((plate) => plate.instances) ?? []
+    const instance = instances.find((entry) => entry.key === key)
+    if (!instance || instance.source.kind !== 'object') return 1
+    return instances.filter((entry) => entry.source.kind === 'object' && entry.objectId === instance.objectId).length
+  }, [])
+
+  /**
+   * Unlink an already-placed copy: it stops sharing its object with the other instances and keeps
+   * whatever it looks like right now. The inverse is deliberately absent — re-linking would have to
+   * pick which copy's divergent edits survive, and BambuStudio offers no such operation either.
+   */
+  const handleMakeIndependent = useCallback((key: string) => {
+    const state = stateRef.current
+    const instance = state?.plates.flatMap((plate) => plate.instances).find((entry) => entry.key === key)
+    if (!state || !instance || instance.source.kind !== 'object') return
+    const shared = state.plates.flatMap((plate) => plate.instances)
+      .filter((entry) => entry.source.kind === 'object' && entry.objectId === instance.objectId)
+    if (shared.length < 2) {
+      toast.error('This model has no other copies, so it is already independent.')
+      return
+    }
+    recordHistoryRef.current?.()
+    const sourceObjectId = instance.objectId
+    makeInstanceIndependent(state, instance)
+    copyObjectProcessOverrides(sourceObjectId, instance.objectId)
+    refreshAddedPartMeshes()
+    regenerateActiveThumbnailRef.current?.()
+    setState((current) => (current ? { ...current } : current))
+    toast.success('This copy is now independent — edits to it no longer affect the others.')
+  }, [refreshAddedPartMeshes, recordHistoryRef, copyObjectProcessOverrides])
 
   const handleDelete = useCallback((key: string) => {
     // Deleting any member of a multi-selection deletes the whole selection.
@@ -3819,7 +4059,7 @@ function EditorView({
       if (addedKey) {
         if (node.userData.addedPartKey === addedKey) found = node
       } else if (baked) {
-        const ref = node.userData.partRef as { componentObjectId: number } | undefined
+        const ref = partGroupRef(node)
         if (ref && ref.componentObjectId === baked.componentObjectId) found = node
       }
     })
@@ -3920,7 +4160,19 @@ function EditorView({
       // With a part on the gizmo, arrows/rotate act on the PART (BambuStudio moves the
       // selected volume); otherwise on the object selection.
       const nudge = (dx: number, dy: number) => {
-        if (mutateSelectedPart(({ position }) => { position.x += dx; position.y += dy })) return
+        // Arrow keys move along the PLATE axes. A part's position is OBJECT-LOCAL, so the world
+        // delta has to be rotated (and unscaled) into the object's frame first — otherwise a
+        // rotated object sends its part the opposite way (press right, the part goes left) and a
+        // scaled one moves it by the wrong distance. Objects below take the delta as-is.
+        const part = selectedPartObject()
+        if (part) {
+          const rotor = part.parent
+          rotor?.updateWorldMatrix(true, false)
+          const local = rotor
+            ? plateDeltaToPartLocal(rotor.matrixWorld, dx, dy)
+            : new THREE.Vector3(dx, dy, 0)
+          if (mutateSelectedPart(({ position }) => { position.add(local) })) return
+        }
         nudgeSelection(dx, dy)
       }
       const rotateZ = (radians: number) => {
@@ -3954,7 +4206,7 @@ function EditorView({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [mutateSelectedGroup, mutateSelectedPart, handleDelete, nudgeSelection, undoRef, redoRef])
+  }, [mutateSelectedGroup, mutateSelectedPart, selectedPartObject, handleDelete, nudgeSelection, undoRef, redoRef])
 
   const handleAddPlate = useCallback(() => {
     // Compute the new (contiguous) index from current state, NOT inside the setState updater —
@@ -4036,6 +4288,21 @@ function EditorView({
     return thumbnails && thumbnails.length > 0 ? { ...withFilaments, plateThumbnails: thumbnails } : withFilaments
   }, [sliceConfig])
 
+  /**
+   * The rendered XY footprint centre of an instance in PLATE coordinates, helper volumes excluded
+   * (`printableMeshBox`'s rule, and BambuStudio's — `instance_bounding_box` is "without
+   * modifiers"). Null when the instance has no group in the live scene, e.g. it sits on a
+   * non-active plate. Only this component can answer it, so the save hook takes it as a callback.
+   */
+  const worldFootprintCenterFor = useCallback((key: string): { x: number; y: number } | null => {
+    const group = groupByKeyRef.current.get(key)
+    if (!group) return null
+    const box = printableMeshBox(group)
+    if (box.isEmpty()) return null
+    const center = box.getCenter(new THREE.Vector3())
+    return { x: center.x, y: center.y }
+  }, [])
+
   const {
     savedFile,
     saving,
@@ -4054,6 +4321,7 @@ function EditorView({
     markSaved,
     buildSceneEditOut,
     captureAllPlateThumbnails,
+    worldFootprintCenterFor,
     seededProcessOverrideObjectIdsRef,
     baseFileId,
     baseVersionId,
@@ -4128,6 +4396,22 @@ function EditorView({
             : (!isNewProject && baseFileQuery.data ? formatLibraryFileName(baseFileQuery.data.file.name) : null)}
           sx={{ mb: 1 }}
         />
+
+        {/*
+          The opened project's saved settings contradict its own machine topology, which kills a
+          library slice inside BambuStudio with an opaque exit 139. Surfaced here (rather than
+          repaired behind the user's back) so they can fix the stored file with one click; the
+          editor's own save/slice bake already rewrites the settings correctly either way.
+        */}
+        {needsSettingsRepairFileId && (
+          <RepairProjectSettingsAlert fileId={needsSettingsRepairFileId} sx={{ mb: 1 }} />
+        )}
+        {/* Same wide-banner spot: the settings sidebar is too narrow for the warning + its
+            "slice it anyway" acknowledgement, and the disabled Slice button's tooltip alone
+            gives the user no way forward. */}
+        {sliceConfig?.projectVersionWarning && (
+          <ProjectVersionWarningAlert {...sliceConfig.projectVersionWarning} sx={{ mb: 1 }} />
+        )}
 
         {loadError ? (
           <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}>
@@ -4445,48 +4729,17 @@ function EditorView({
                   />
                 )}
                 {selectedAddedPart && selectedKey && (gizmoMode === 'translate' || gizmoMode === 'rotate' || gizmoMode === 'scale') && (
-                  <Sheet
-                    variant="soft"
-                    sx={{
-                      position: 'absolute', ...TOOL_PANEL_ANCHOR, zIndex: (theme) => theme.zIndex.tooltip,
-                      p: 1.25, borderRadius: 'sm', boxShadow: 'sm',
-                      width: 'min(280px, calc(100% - 16px))',
-                      display: 'flex', flexDirection: 'column', gap: 0.75
-                    }}
-                  >
-                    <Stack direction="row" spacing={0.75} alignItems="center">
-                      <Box sx={{ width: 12, height: 12, borderRadius: '3px', flexShrink: 0, bgcolor: helperVolumeCssColor(HELPER_VOLUME_SPECS[selectedAddedPart.subtype].color) }} />
-                      <Typography level="title-sm" sx={{ flex: 1 }}>{HELPER_VOLUME_SPECS[selectedAddedPart.subtype].label}</Typography>
-                      <Select
-                        size="sm"
-                        variant="plain"
-                        value={selectedAddedPart.subtype}
-                        onChange={(_event, subtype) => { if (subtype) handleChangeAddedPartType(selectedAddedPart.key, subtype) }}
-                        slotProps={{ button: { 'aria-label': 'Change part type' } }}
-                      >
-                        {HELPER_VOLUME_SUBTYPES.map((subtype) => (
-                          <Option key={subtype} value={subtype}>{HELPER_VOLUME_SPECS[subtype].label}</Option>
-                        ))}
-                      </Select>
-                    </Stack>
-                    <Typography level="body-xs" textColor="text.tertiary">
-                      {HELPER_VOLUME_SPECS[selectedAddedPart.subtype].hint} Move, rotate, or scale it with
-                      the gizmo; click the model body to go back to the whole object.
-                    </Typography>
-                    <Stack direction="row" spacing={0.75} justifyContent="space-between">
-                      <Button size="sm" variant="plain" color="danger" onClick={() => handleRemoveAddedPart()}>
-                        Remove part
-                      </Button>
-                      <Stack direction="row" spacing={0.75}>
-                        {selectedAddedPart.subtype === 'modifier_part' && perObject && (
-                          <Button size="sm" variant="soft" onClick={() => setEditingPartKey(selectedAddedPart.key)}>
-                            Settings{Object.keys(selectedAddedPart.settings ?? {}).length > 0 ? ` (${Object.keys(selectedAddedPart.settings ?? {}).length})` : ''}
-                          </Button>
-                        )}
-                        <Button size="sm" onClick={() => setSelectedAddedPartKey(null)}>Done</Button>
-                      </Stack>
-                    </Stack>
-                  </Sheet>
+                  <AddedPartPanel
+                    part={selectedAddedPart}
+                    filamentColor={selectedAddedPartColor}
+                    filamentOptions={filamentOptions}
+                    onChangeType={handleChangeAddedPartType}
+                    onChangeFilament={handleChangeAddedPartFilament}
+                    onEditSettings={perObject ? setEditingPartKey : undefined}
+                    onRemove={() => handleRemoveAddedPart()}
+                    onDone={() => setSelectedAddedPartKey(null)}
+                    anchorSx={TOOL_PANEL_ANCHOR}
+                  />
                 )}
                 {rotationReadout !== null && (
                   <Chip
@@ -4593,8 +4846,8 @@ function EditorView({
                     importing={importing}
                     disabled={sliceConfig != null && !hasMaterials}
                     disabledReason="Add a material before adding objects."
-                    onAddFromLibrary={() => { setReplaceTargetKey(null); setLibraryPickerOpen(true) }}
-                    onImportFile={() => { setReplaceTargetKey(null); fileInputRef.current?.click() }}
+                    onAddFromLibrary={() => { setModelRequest(null); setLibraryPickerOpen(true) }}
+                    onImportFile={() => { setModelRequest(null); fileInputRef.current?.click() }}
                     onAddPrimitive={(kind) => void handleAddPrimitive(kind)}
                   />
                 </Stack>
@@ -4628,6 +4881,7 @@ function EditorView({
                       selectedBakedPart={selectedBakedPart}
                       onSelect={handleSelect}
                       onSelectPart={handleSelectPart}
+                      linkedCopyCountFor={linkedCopyCountFor}
                       onObjectContextMenu={handleObjectRowContextMenu}
                       onPartContextMenu={handlePartRowContextMenu}
                       filamentColors={filamentColors}
@@ -4641,6 +4895,7 @@ function EditorView({
                       selectedAddedPartKey={selectedAddedPartKey}
                       onSelectAddedPart={handleSelectAddedPartRow}
                       onChangeAddedPartType={handleChangeAddedPartType}
+                      onChangeAddedPartFilament={handleChangeAddedPartFilament}
                       onRemoveAddedPart={handleRemoveAddedPart}
                       onEditAddedPartSettings={perObject ? setEditingPartKey : undefined}
                       perObject={perObject ? {
@@ -4651,7 +4906,11 @@ function EditorView({
                           ...activePlate.instances.flatMap((instance) =>
                             instance.source.kind === 'import' && instance.source.replacedObjectId != null
                               ? [instance.source.replacedObjectId]
-                              : [])
+                              : []),
+                          // An independent COPY has no baked slice-index id yet either; its
+                          // placeholder is re-keyed onto the copy's real object at save/slice time
+                          // (`clonedObjectIds`), so its process settings need no save first.
+                          ...Object.keys(state?.objectClones ?? {}).map(Number)
                         ]),
                         overrideCountFor: (objectId) => Object.keys(perObject.value[String(objectId)] ?? {}).length,
                         onEditObject: (objectId, name) => setEditingObject({ ids: [objectId], name }),
@@ -4848,9 +5107,10 @@ function EditorView({
             const file = event.target.files?.[0]
             event.target.value = ''
             if (!file) return
-            const replaceKey = replaceTargetKey
-            setReplaceTargetKey(null)
-            if (replaceKey) void handleReplaceFromFile(replaceKey, file)
+            const request = modelRequest
+            setModelRequest(null)
+            if (request?.kind === 'replace') void handleReplaceFromFile(request.key, file)
+            else if (request?.kind === 'addPart') void handleAddPartVolume(request.key, request.subtype, { kind: 'file', file })
             else void handleImportFile(file)
           }}
         />
@@ -4861,13 +5121,15 @@ function EditorView({
             onClose={() => setContextMenu(null)}
             selectionCount={selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key) ? extraSelectedKeys.length + 1 : 1}
             onDuplicate={handleDuplicate}
+            onDuplicateIndependent={(key) => handleDuplicate(key, true)}
+            onMakeIndependent={linkedCopyCountFor(contextMenu.key) > 1 ? handleMakeIndependent : undefined}
             onRename={(key) => { void handleRenameObject(key) }}
             onSplitToObjects={(key) => { void handleSplitToObjects(key) }}
             canAssemble={extraSelectedKeys.length > 0 && (selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key))}
             assembleCount={extraSelectedKeys.length + 1}
             onAssemble={() => { void handleAssembleSelection() }}
-            onReplaceFromLibrary={(key) => { setReplaceTargetKey(key); setLibraryPickerOpen(true) }}
-            onReplaceFromFile={(key) => { setReplaceTargetKey(key); fileInputRef.current?.click() }}
+            onReplaceFromLibrary={(key) => { setModelRequest({ kind: 'replace', key }); setLibraryPickerOpen(true) }}
+            onReplaceFromFile={(key) => { setModelRequest({ kind: 'replace', key }); fileInputRef.current?.click() }}
             onExportDownload={canExportDownload ? (key) => handleExportMergedDownload([key]) : undefined}
             onExportToLibrary={canExportToLibrary ? (key) => setExportRequest({ kind: 'object', key }) : undefined}
             onExportProjectDownload={canExportDownload ? (key) => {
@@ -4880,14 +5142,20 @@ function EditorView({
             onExportMergedToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'merged', keys: selectionFor(contextMenu.key) }) : undefined}
             onExportSeparateDownload={canExportDownload ? () => handleExportSeparateDownload(selectionFor(contextMenu.key)) : undefined}
             onExportSeparateToLibrary={canExportToLibrary ? () => setExportRequest({ kind: 'separate', keys: selectionFor(contextMenu.key) }) : undefined}
-            isObject={activePlate?.instances.find((entry) => entry.key === contextMenu.key)?.source.kind === 'object'}
+            canRepair={(() => {
+              const instance = activePlate?.instances.find((entry) => entry.key === contextMenu.key)
+              return Boolean(instance && addedPartHostId(instance) != null)
+            })()}
             onRepairMesh={handleRepairMesh}
             isRepairMarked={(() => {
               const instance = activePlate?.instances.find((entry) => entry.key === contextMenu.key)
               const state = stateRef.current
-              return Boolean(state && instance && isObjectMarkedForRepair(state, instance.objectId))
+              const markId = instance ? addedPartHostId(instance) : null
+              return Boolean(state && markId != null && isObjectMarkedForRepair(state, markId))
             })()}
-            onAddPartVolume={(key, subtype) => { void handleAddPartVolume(key, subtype) }}
+            onAddPartVolume={(key, subtype, shape) => { void handleAddPartVolume(key, subtype, { kind: 'primitive', shape }) }}
+            onAddPartFromFile={(key, subtype) => { setModelRequest({ kind: 'addPart', key, subtype }); fileInputRef.current?.click() }}
+            onAddPartFromLibrary={(key, subtype) => { setModelRequest({ kind: 'addPart', key, subtype }); setLibraryPickerOpen(true) }}
             filamentOptions={filamentOptions}
             onChangeMaterial={(filamentId) => reassignSelectionFilament(contextMenu.key, filamentId)}
             onSetPrintable={(printable) => handleSetPrintableSelection(selectionFor(contextMenu.key), printable)}
@@ -4941,10 +5209,8 @@ function EditorView({
 
     {libraryPickerOpen && (
       <LibraryFilePickerDialog
-        title={replaceTargetKey ? 'Replace from library' : 'Add from library'}
-        description={replaceTargetKey
-          ? 'Choose an STL, STEP, or 3MF file to swap in for the selected object — its position and settings are kept.'
-          : 'Choose an STL, STEP, or 3MF file to add to this project.'}
+        title={LIBRARY_PICKER_COPY[modelRequest?.kind ?? 'import'].title}
+        description={LIBRARY_PICKER_COPY[modelRequest?.kind ?? 'import'].description}
         initialBridgeId={bridgeId}
         acceptFile={isImportableLibraryFile}
         emptyState={
@@ -4955,11 +5221,15 @@ function EditorView({
           />
         }
         onPick={(file) => {
-          const replaceKey = replaceTargetKey
-          if (replaceKey) void handleReplaceFromLibrary(replaceKey, file.id)
-          else void handleImportFromLibrary(file.id)
+          const request = modelRequest
+          if (request?.kind === 'replace') void handleReplaceFromLibrary(request.key, file.id)
+          else if (request?.kind === 'addPart') {
+            setLibraryPickerOpen(false)
+            setModelRequest(null)
+            void handleAddPartVolume(request.key, request.subtype, { kind: 'library', libraryFileId: file.id })
+          } else void handleImportFromLibrary(file.id)
         }}
-        onClose={() => { setLibraryPickerOpen(false); setReplaceTargetKey(null) }}
+        onClose={() => { setLibraryPickerOpen(false); setModelRequest(null) }}
       />
     )}
 

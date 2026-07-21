@@ -144,7 +144,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
   }
 
   const canReset = (key: string): boolean =>
-    baseConfig !== null && !filamentConfigValuesEqual(baseConfig[key], config[key])
+    baseConfig !== null && !filamentConfigValuesEqual(baseConfig[key], config[key], filamentSettingsCatalog.options[key])
 
   /**
    * True when a key differs from its preset baseline — either a resettable value diff, or a
@@ -153,8 +153,9 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
    */
   const isModified = (key: string): boolean => {
     if (baseConfig === null) return false
-    if (!filamentConfigValuesEqual(baseConfig[key], config[key])) return true
-    return bakedKeys.has(key) && filamentConfigValuesEqual(config[key], sliceBase[key])
+    const option = filamentSettingsCatalog.options[key]
+    if (!filamentConfigValuesEqual(baseConfig[key], config[key], option)) return true
+    return bakedKeys.has(key) && filamentConfigValuesEqual(config[key], sliceBase[key], option)
   }
 
   const modifiedKeyCount = useMemo(() => {

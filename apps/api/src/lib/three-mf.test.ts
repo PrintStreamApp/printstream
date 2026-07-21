@@ -2218,6 +2218,42 @@ test('writeArrangedThreeMf removes a filament: arrays shrink and parts reassign 
   }
 })
 
+test('writeArrangedThreeMf sizes the flush matrix per EXTRUDER on a dual-nozzle project', async () => {
+  // Regression (prod, 2026-07-21): `flush_volumes_matrix` is filaments^2 PER EXTRUDER, but the
+  // rebuild treated it as a single square. A 1-filament project retargeted onto a dual-nozzle
+  // machine kept a 1-entry matrix where 2 are required, and BambuStudio read the missing block
+  // out of bounds — a deterministic segfault at ~71% (CLI exit 139).
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-flushdual-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'dual.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(ARRANGE_MODEL_XML, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(FILAMENT_MODEL_SETTINGS_XML, 'utf8')],
+      ['Metadata/project_settings.config', Buffer.from(JSON.stringify({
+        filament_colour: ['#FF0000'],
+        filament_type: ['PLA'],
+        filament_settings_id: ['Bambu PLA Basic'],
+        nozzle_diameter: ['0.4', '0.4'],
+        flush_volumes_matrix: [0]
+      }), 'utf8')]
+    ])
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      filaments: [{ color: '#FF0000', type: 'PLA' }]
+    }
+    await writeArrangedThreeMf(sourcePath, outputPath, edit)
+
+    const settings = await readProjectSettings(outputPath)
+    assert.deepEqual(settings.flush_volumes_matrix, [0, 0])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('writeArrangedThreeMf persists a material profile change: filament_settings_id + type follow the desired list', async () => {
   // Regression: changing a material (e.g. PLA -> PETG) without adding/removing slots used to be
   // dropped — `filament_settings_id` was never written, so the saved project kept the old preset
@@ -3049,7 +3085,7 @@ test('buildEditedThreeMf bakes added part volumes as components with Bambu subty
       addedParts: [
         {
           objectId: 3,
-          importId: 'part-1',
+          meshImportId: 'part-1',
           subtype: 'negative_part',
           name: 'Hole punch',
           matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 6, 7],
@@ -3107,7 +3143,7 @@ test('buildEditedThreeMf wraps an inline-mesh object to add a part volume to it'
         { objectId: 1, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
       ],
       addedParts: [
-        { objectId: 1, importId: 'part-1', subtype: 'modifier_part', name: 'Modifier', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2] }
+        { objectId: 1, meshImportId: 'part-1', subtype: 'modifier_part', name: 'Modifier', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2] }
       ]
     }
     await buildEditedThreeMf(basePath, outputPath, edit, [
@@ -3130,6 +3166,254 @@ test('buildEditedThreeMf wraps an inline-mesh object to add a part volume to it'
     const instance = scene.instances.find((entry) => entry.objectId === 1)
     assert.ok(instance, 'wrapped object still parses')
     assert.equal(instance?.parts.length, 2)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('buildEditedThreeMf adds a part to an UNSAVED import host and writes a normal part\'s extruder', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-host-part-'))
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    const quad = {
+      positions: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } }
+    }
+    // No source project and no in-project object: the part's host is the import itself, which
+    // only exists as an objectId once the builder has baked it (importIdToObjectId).
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'host-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      addedParts: [
+        { importId: 'host-1', meshImportId: 'part-1', subtype: 'normal_part', name: 'Boss', filamentId: 2, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 4] },
+        { importId: 'host-1', meshImportId: 'part-2', subtype: 'support_blocker', name: 'Blocker', filamentId: 2, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 8] }
+      ]
+    }
+    await buildEditedThreeMf(null, outputPath, edit, [
+      { importId: 'host-1', name: 'Widget', mesh: quad },
+      { importId: 'part-1', name: 'Boss', mesh: quad },
+      { importId: 'part-2', name: 'Blocker', mesh: quad }
+    ])
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const normalPart = settingsXml.match(/<part id="\d+" subtype="normal_part">[\s\S]*?name" value="Boss"[\s\S]*?<\/part>/)?.[0] ?? ''
+    assert.ok(normalPart, 'the added normal part reached the host import\'s settings entry')
+    // A printed part must carry its material, or it silently prints in filament 1.
+    assert.match(normalPart, /<metadata key="extruder" value="2"\/>/)
+    const blocker = settingsXml.match(/<part id="\d+" subtype="support_blocker">[\s\S]*?<\/part>/)?.[0] ?? ''
+    assert.ok(blocker, 'the added support blocker reached the same host')
+    // A support blocker carries no material (BambuStudio writes 0); we write nothing.
+    assert.doesNotMatch(blocker, /key="extruder"/)
+
+    const scene = await readSceneManifest(outputPath, 1)
+    assert.equal(scene.instances.length, 1, 'the added parts are components of the host, not separate objects')
+    assert.equal(scene.instances[0]?.parts.length, 3, 'host mesh + the two added parts')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('an imported 3MF solid keeps its helper-volume type (and gets no extruder) through the bake', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-helper-'))
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    const quad = {
+      positions: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } }
+    }
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, filamentId: 2, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ]
+    }
+    // A 3MF import whose second solid came in as a support blocker (BambuStudio's Import Object
+    // keeps volume types), with no `importPartTypes` — the user changed nothing.
+    await buildEditedThreeMf(null, outputPath, edit, [{
+      importId: 'imp-1',
+      name: 'Cover',
+      mesh: quad,
+      parts: [
+        { name: 'Cover', mesh: quad },
+        { name: 'Blocker', mesh: quad, subtype: 'support_blocker' }
+      ]
+    }])
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const blocker = settingsXml.match(/<part id="\d+" subtype="support_blocker">[\s\S]*?<\/part>/)?.[0] ?? ''
+    assert.ok(blocker, 'the imported blocker bakes back as a blocker, not as printed geometry')
+    // A helper volume carries no material; inheriting the object's would put a swatch on it and
+    // write an extruder Bambu never writes.
+    assert.doesNotMatch(blocker, /key="extruder"/)
+    const printed = settingsXml.match(/<part id="\d+" subtype="normal_part">[\s\S]*?<\/part>/)?.[0] ?? ''
+    assert.match(printed, /<metadata key="extruder" value="2"\/>/)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('buildEditedThreeMf applies importPartTransforms to the moved solid only', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-part-transform-'))
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    const quad = {
+      positions: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } }
+    }
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      // The gizmo moved the SECOND solid of a still-unsaved multi-solid import.
+      importPartTransforms: [
+        { importId: 'imp-1', partIndex: 1, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 4, 5] }
+      ]
+    }
+    await buildEditedThreeMf(null, outputPath, edit, [{
+      importId: 'imp-1',
+      name: 'Assembly',
+      mesh: quad,
+      parts: [{ name: 'Body', mesh: quad }, { name: 'Boss', mesh: quad }]
+    }])
+
+    const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    const components = [...modelXml.matchAll(/<component[^>]*transform="([^"]+)"/g)].map((match) => match[1])
+    // An import's per-solid meshes already share assembly space, so an untouched solid stays at
+    // identity and only the dragged one carries a placement.
+    assert.equal(components.length, 2)
+    assert.equal(components[0], '1 0 0 0 1 0 0 0 1 0 0 0')
+    assert.equal(components[1], '1 0 0 0 1 0 0 0 1 3 4 5')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('an independent object copy gets its own object, settings entry and per-part edits', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-object-clone-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(ARRANGE_MODEL_XML, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(ARRANGE_MODEL_SETTINGS_XML, 'utf8')]
+    ])
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        // The source object, plus an INDEPENDENT copy addressed by a negative placeholder.
+        { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+        { objectId: -1, plateIndex: 1, position: { x: 40, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      objectClones: [{ objectId: -1, sourceObjectId: 3 }],
+      // A per-object override authored against the COPY must land on the copy alone.
+      objectNames: [{ objectId: -1, name: 'Independent copy' }]
+    }
+    await buildEditedThreeMf(sourcePath, outputPath, edit)
+
+    const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    const objectIds = [...modelXml.matchAll(/<object\b[^>]*\bid="(\d+)"/g)].map((match) => Number(match[1]))
+    // The copy is a NEW object resource, not another build item against object 3.
+    assert.ok(objectIds.includes(3), 'the source object survives')
+    const cloneId = objectIds.find((id) => id !== 3)
+    assert.ok(cloneId != null, 'a new object was allocated for the copy')
+
+    // Both are placed, and no build item still names the negative placeholder.
+    const items = [...modelXml.matchAll(/<item\b[^>]*\bobjectid="(-?\d+)"/g)].map((match) => Number(match[1]))
+    assert.deepEqual([...items].sort((a, b) => a - b), [3, cloneId].sort((a, b) => a - b))
+
+    const settingsXml = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    // The copy carries its own settings entry, so its materials/config can diverge from the source.
+    assert.match(settingsXml, new RegExp(`<object\\b[^>]*\\bid="${cloneId}"`))
+    // The name override addressed the placeholder and resolved onto the copy, not object 3.
+    const cloneEntry = settingsXml.match(new RegExp(`<object\\b[^>]*\\bid="${cloneId}"[\\s\\S]*?</object>`))?.[0] ?? ''
+    assert.match(cloneEntry, /Independent copy/)
+    const sourceEntry = settingsXml.match(/<object\b[^>]*\bid="3"[\s\S]*?<\/object>/)?.[0] ?? ''
+    assert.doesNotMatch(sourceEntry, /Independent copy/)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('paint, brim ears and repair all apply to a NOT-YET-SAVED import', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-nosave-'))
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    // Two coincident vertices (0,0,0) so the repair pass has a real weld to perform.
+    const mesh = {
+      positions: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 0, 0],
+      indices: [0, 1, 2, 3, 1, 2],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } }
+    }
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      // None of these has a baked object id to address — the whole point of the no-save-first rule.
+      importPaint: [{ importId: 'imp-1', partIndex: 0, channel: 'support', triangles: { '0': '8' } }],
+      importBrimEars: [{ importId: 'imp-1', points: [{ x: 1, y: 2, z: 0, radius: 3 }] }],
+      repairedImportIds: ['imp-1']
+    }
+    await buildEditedThreeMf(null, outputPath, edit, [{ importId: 'imp-1', name: 'Widget', mesh }])
+
+    const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    // Repair welded the duplicate vertex, so one of the two triangles collapsed and was dropped.
+    const triangles = [...modelXml.matchAll(/<triangle\b[^>]*\/>/g)].map((match) => match[0])
+    assert.equal(triangles.length, 1, 'the degenerate facet was pruned by the import repair pass')
+    // Paint rode the SAME triangle order the editor rendered (see the contract test in
+    // mesh-import.test.ts), so triangle 0 carries the blocker code.
+    assert.match(triangles[0]!, /paint_supports="8"/)
+
+    const ears = (await readEntry(outputPath, 'Metadata/brim_ear_points.txt')).toString('utf8')
+    assert.match(ears, /brim_points_format_version=0/)
+    assert.match(ears, /object_id=1\|1\.000000 2\.000000 0\.000000 3\.000000/)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('a from-scratch project keeps its materials, and colour paint keeps a filament to point at', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-new-project-materials-'))
+  const outputPath = path.join(tempDir, 'edited.3mf')
+  try {
+    const cube = {
+      positions: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 0 } }
+    }
+    // New project -> add cube -> colour-paint it with material 1 -> save. The base has NO filaments,
+    // so the editor must still emit the list; otherwise the file reopens with no materials and the
+    // paint's filament reference dangles (it then renders in the fallback palette, reading as blue).
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, filamentId: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      filaments: [{ color: '#FFFFFF', type: 'PLA', settingsId: 'Bambu PLA Basic @BBL X1C', sourceIndex: 0, nozzleId: null }],
+      importPaint: [{ importId: 'imp-1', partIndex: 0, channel: 'color', triangles: { '0': '1' } }]
+    }
+    await buildEditedThreeMf(null, outputPath, edit, [{ importId: 'imp-1', name: 'Cube', mesh: cube }])
+
+    const settings = JSON.parse((await readEntry(outputPath, 'Metadata/project_settings.config')).toString('utf8')) as Record<string, unknown>
+    assert.deepEqual(settings.filament_colour, ['#FFFFFF'], 'the new project persists its material')
+    assert.deepEqual(settings.filament_type, ['PLA'])
+    assert.deepEqual(settings.filament_settings_id, ['Bambu PLA Basic @BBL X1C'])
+
+    const modelXml = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    // The paint code is a 1-based filament id; material 1 above is what it resolves to on reopen.
+    assert.match(modelXml, /<triangle[^>]*paint_color="1"/)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

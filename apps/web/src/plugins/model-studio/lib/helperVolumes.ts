@@ -13,7 +13,7 @@
  * not: BambuStudio paints them yellow and near-black, which read as a warning and as a hole
  * against our dark viewport. Ours stay distinguishable instead.
  */
-import { canonicalThreeMfPartSubtype, type SceneEditAddedPartSubtype } from '@printstream/shared'
+import { canonicalThreeMfPartSubtype, type SceneEditHelperVolumeSubtype } from '@printstream/shared'
 
 export interface HelperVolumeSpec {
   label: string
@@ -22,14 +22,14 @@ export interface HelperVolumeSpec {
   hint: string
 }
 
-export const HELPER_VOLUME_SPECS: Record<SceneEditAddedPartSubtype, HelperVolumeSpec> = {
+export const HELPER_VOLUME_SPECS: Record<SceneEditHelperVolumeSubtype, HelperVolumeSpec> = {
   negative_part: { label: 'Negative part', color: 0xcfd4dc, hint: 'Its shape is cut out of the model when slicing.' },
   modifier_part: { label: 'Modifier', color: 0x9aa0b3, hint: 'Apply per-object process overrides inside its volume.' },
   support_blocker: { label: 'Support blocker', color: 0xff4d4d, hint: 'Supports are never generated inside its volume.' },
   support_enforcer: { label: 'Support enforcer', color: 0x4d4dff, hint: 'Supports are always generated inside its volume.' }
 }
 
-export const HELPER_VOLUME_SUBTYPES = Object.keys(HELPER_VOLUME_SPECS) as SceneEditAddedPartSubtype[]
+export const HELPER_VOLUME_SUBTYPES = Object.keys(HELPER_VOLUME_SPECS) as SceneEditHelperVolumeSubtype[]
 
 /**
  * The spec for a RAW 3MF subtype string, or null for a normal printed part. Callers must use this
@@ -38,7 +38,7 @@ export const HELPER_VOLUME_SUBTYPES = Object.keys(HELPER_VOLUME_SPECS) as SceneE
  */
 export function helperVolumeSpec(subtype: string | null | undefined): HelperVolumeSpec | null {
   const canonical = canonicalThreeMfPartSubtype(subtype)
-  return canonical === 'normal_part' ? null : HELPER_VOLUME_SPECS[canonical]
+  return canonical === 'normal_part' ? null : HELPER_VOLUME_SPECS[canonical] ?? null
 }
 
 /** `#rrggbb` for a spec colour, for CSS/Joy `bgcolor`. */

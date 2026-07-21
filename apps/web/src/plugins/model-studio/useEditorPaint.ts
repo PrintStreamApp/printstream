@@ -40,7 +40,7 @@ import {
   type GizmoMode,
   type PaintToolType
 } from './editorGeometry'
-import { supportPaintKey, type EditorPlate, type EditorState } from './lib/editorModel'
+import { addedPartHostId, supportPaintKey, type EditorPlate, type EditorState } from './lib/editorModel'
 
 /**
  * Every EditorView-local value the paint logic reads. Refs/callbacks stay declared in
@@ -432,14 +432,21 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     const state = stateRef.current
     const channel = activePaintChannelRef.current
     const instance = activePlateRef.current?.instances.find((entry) => entry.key === selectedKeyRef.current)
-    if (!state || !channel || !instance || instance.source.kind !== 'object') return
+    // Works on an unsaved import too: paint keys on the model's editor identity and emits as
+    // `importPaint` (see the plugin guide's no-save-first rule).
+    const hostId = instance ? addedPartHostId(instance) : null
+    if (!state || !channel || !instance || hostId == null) return
     recordHistoryRef.current?.()
     const stateKey = PAINT_CHANNEL_SPECS[channel].stateKey
     const channelPaint = state[stateKey] ?? (state[stateKey] = {})
-    for (const part of instance.parts) {
-      if (isNonRenderableThreeMfPartSubtype(part.subtype)) continue
+    // A single-solid import has an EMPTY `parts` array — its one mesh is solid 0 — so clearing has
+    // to fall back to that rather than iterating nothing and appearing to do nothing.
+    const partIds = instance.parts.length > 0
+      ? instance.parts.filter((part) => !isNonRenderableThreeMfPartSubtype(part.subtype)).map((part) => part.componentObjectId)
+      : [0]
+    for (const componentObjectId of partIds) {
       // An empty map means "no paint" — emitted so existing source paint is stripped.
-      channelPaint[supportPaintKey(instance.objectId, part.componentObjectId)] = {}
+      channelPaint[supportPaintKey(hostId, componentObjectId)] = {}
     }
     const group = selectedKeyRef.current ? groupByKeyRef.current.get(selectedKeyRef.current) : null
     if (group) refreshPaintOverlays(group)

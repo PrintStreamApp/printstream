@@ -46,7 +46,7 @@ function buildIndex(overrides: {
     printerProfileName: null,
     processProfileName: null,
     geometryOnly: false,
-    objectExport: false
+    objectExport: false, needsSettingsRepair: false, projectVersion: null
   }
 }
 

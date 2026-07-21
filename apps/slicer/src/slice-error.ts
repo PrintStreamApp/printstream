@@ -29,6 +29,43 @@ export function formatSliceEngineCrashError(output: string, exitCode: number | n
 }
 
 /**
+ * Turns BambuStudio's *project file version* refusal into a clear, user-facing message.
+ *
+ * BambuStudio refuses to open a 3MF saved by a NEWER version than itself, printing
+ *   `[error]   Version Check: File Version 2.8.0.50 not supported by current cli version 02.07.01.62`
+ * on **stdout** and exiting before it loads anything ("run found error, return -24" -> process exit
+ * code 232). Nothing about the project is wrong and no setting can work around it — the engine
+ * simply predates the file. Without this the user sees only "Slicer CLI exited with code 232",
+ * which reads as a broken model rather than "save it from an older Bambu Studio, or slice it with a
+ * newer engine".
+ *
+ * This is a routine occurrence, not an edge case: it fires for every project saved by a desktop
+ * Bambu Studio newer than the bundled engines, so the fix is usually to add that engine as a slicer
+ * target (`apps/slicer/docker/slicer-targets.mjs`) rather than to change anything about the file.
+ */
+export function formatSliceFileVersionError(output: string): string | null {
+  if (!output) return null
+  for (const rawLine of output.split(/\r?\n/)) {
+    const match = rawLine.match(/Version Check:\s*File Version\s+([\d.]+)\s+not supported by current cli version\s+([\d.]+)/i)
+    if (match) {
+      const fileVersion = normalizeBambuVersion(match[1]!)
+      const cliVersion = normalizeBambuVersion(match[2]!)
+      return (
+        `This project was saved by Bambu Studio ${fileVersion}, which is newer than the slicer engine (${cliVersion}). ` +
+        `Bambu Studio refuses to open a project from a newer version, so it can't be sliced as-is. ` +
+        `Pick a newer slicer version if one is available, or re-save the project from Bambu Studio ${cliVersion} or older and upload it again.`
+      )
+    }
+  }
+  return null
+}
+
+/** `02.07.01.62` -> `2.7.1.62`; BambuStudio prints the CLI version zero-padded and the file version not. */
+function normalizeBambuVersion(version: string): string {
+  return version.split('.').map((part) => String(Number(part))).join('.')
+}
+
+/**
  * Turns BambuStudio CLI slice-time *preset/printer incompatibility* output into a
  * clear, user-facing message.
  *

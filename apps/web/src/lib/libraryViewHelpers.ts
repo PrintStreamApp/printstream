@@ -466,6 +466,11 @@ export type SliceFileSubmitInput = {
   pauses?: SceneEditPlatePauses[]
   /** Edited multi-plate arrangement from the interactive 3D editor; authoritative when present. */
   sceneEdit?: SceneEdit
+  /**
+   * The user acknowledged the "saved by a newer Bambu Studio than this engine" warning and chose
+   * to slice anyway. Without it BambuStudio refuses to open the project at all (exit 232).
+   */
+  allowNewerProjectFile?: boolean
 }
 
 /**
@@ -499,6 +504,7 @@ export function buildCreateSlicingJobBody(
     sourceFileId: extras.sourceFileId,
     sourceVersionId: extras.sourceVersionId ?? undefined,
     slicerTargetId: input.slicerTargetId,
+    allowNewerProjectFile: input.allowNewerProjectFile,
     target: input.target.mode === 'realPrinter'
       ? {
           mode: 'realPrinter',

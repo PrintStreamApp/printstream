@@ -19,7 +19,7 @@ function makeInput(overrides: Record<string, unknown> = {}) {
   const object = instanceFromStagedImport({
     importId: 'imp-1', name: 'A.stl', format: 'stl', triangleCount: 1,
     bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } },
-    parts: [{ name: 'A.stl', triangleCount: 1, bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } } }]
+    parts: [{ name: 'A.stl', triangleCount: 1, bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } }, subtype: null }]
   })
   object.source = { kind: 'object' }
   object.objectId = 1

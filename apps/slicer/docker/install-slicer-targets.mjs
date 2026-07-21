@@ -16,7 +16,11 @@ await rm(outputRoot, { recursive: true, force: true })
 await mkdir(outputRoot, { recursive: true })
 
 const manifest = {
-  defaultTargetId: slicerTargets.find((target) => target.isDefault)?.id ?? slicerTargets[0]?.id ?? null,
+  // A beta must never become the default, including via the fallback: prefer the explicit
+  // isDefault, then the first STABLE target, and only then give up.
+  defaultTargetId: slicerTargets.find((target) => target.isDefault)?.id
+    ?? slicerTargets.find((target) => target.prerelease !== true)?.id
+    ?? null,
   targets: []
 }
 
@@ -41,6 +45,7 @@ for (const target of slicerTargets) {
     version: target.version,
     slicerName: target.slicerName,
     isDefault: target.id === manifest.defaultTargetId,
+    prerelease: target.prerelease === true,
     cliPath,
     appDir,
     profileDir

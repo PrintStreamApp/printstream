@@ -172,7 +172,7 @@ export async function inspectBridgeLibraryThreeMf(input: {
     { storedPath: input.storedPath },
     signal
   ))
-  if (shouldFallbackToLocalThreeMfParse(result.index)) {
+  if (shouldFallbackToLocalThreeMfParse(result)) {
     const localPath = await ensureBridgeLibraryLocalCopy({
       bridgeId,
       storedPath: input.storedPath
@@ -185,7 +185,24 @@ export async function inspectBridgeLibraryThreeMf(input: {
   return result.index
 }
 
-function shouldFallbackToLocalThreeMfParse(index: BridgeLibraryThreeMfIndex): boolean {
+/**
+ * Whether a bridge's inspect3mf result must be discarded in favour of pulling the bytes and
+ * parsing locally.
+ *
+ * The VERSION clause is the load-bearing one: the bridge deploys separately from the API, so after
+ * a shared-parser bump an un-upgraded bridge keeps producing indexes without the new fields — and
+ * because Zod fills their defaults, nothing downstream can tell. Those indexes would then be
+ * cached (and chip-stamped) as CURRENT, so the missing fields never appear until the file itself
+ * changes. Real incident: `needsSettingsRepair`/`projectVersion` stayed absent for files indexed
+ * while the bridge lagged one parser version behind, silently suppressing both warnings. A bridge
+ * NEWER than the API is fine (extra fields are stripped), so the check is strictly less-than.
+ *
+ * The remaining clauses are the older heuristic for structurally suspicious indexes from bridges
+ * that predate `parserVersion` reporting entirely.
+ */
+export function shouldFallbackToLocalThreeMfParse(result: { index: BridgeLibraryThreeMfIndex; parserVersion: number }): boolean {
+  if (result.parserVersion < THREE_MF_INDEX_PARSER_VERSION) return true
+  const index = result.index
   return index.projectFilaments.length > 0 && (
     index.processProfileName == null
     || index.printerProfileName == null

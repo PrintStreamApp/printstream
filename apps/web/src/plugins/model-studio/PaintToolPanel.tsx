@@ -17,6 +17,7 @@ import type { EditorPaint } from './useEditorPaint'
 export interface PaintToolPanelProps {
   paint: EditorPaint
   /** Painting is only supported on in-project objects (not imported meshes). */
+  /** Whether the selection can be painted at all — false only with nothing selected. */
   paintTargetIsObject: boolean
   filamentOptions: FilamentOption[]
   /** Leave the paint tool (returns to the move gizmo). */
@@ -47,7 +48,7 @@ export function PaintToolPanel({ paint, paintTargetIsObject, filamentOptions, on
       </Typography>
       {!paintTargetIsObject ? (
         <Typography level="body-xs" textColor="text.tertiary">
-          Painting isn't available for imported models yet.
+          Select a model to paint.
         </Typography>
       ) : (
         <>

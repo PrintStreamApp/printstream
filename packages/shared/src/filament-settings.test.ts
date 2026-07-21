@@ -81,6 +81,15 @@ test('diffFilamentConfig emits only changed keys; equality treats scalar == 1-ve
   assert.equal(filamentConfigValuesEqual('220', ['220']), true)
 })
 
+test('filament value equality is option-aware, so a percent written two ways is not a change', () => {
+  // Same class as the process dialog: a preset serializes shrinkage as "100" while the project's
+  // embedded config carries "100%". Both are 100% to BambuStudio.
+  const shrink = filamentSettingsCatalog.options.filament_shrink
+  assert.equal(filamentConfigValuesEqual(['100'], ['100%'], shrink), true)
+  assert.equal(filamentConfigValuesEqual(['100%'], ['98%'], shrink), false)
+  assert.deepEqual(diffFilamentConfig({ filament_shrink: ['100'] }, { filament_shrink: ['100%'] }), {})
+})
+
 test('scalarizeFilamentConfig collapses per-variant vectors to element 0 so a multi-variant baseline does not read as modified', () => {
   // Regression: a preset resolved for a 2-extruder-variant machine returns ["0","0"]/["10","10"]
   // while a project's per-slot config is a scalar. Length-sensitive equality flagged every such key

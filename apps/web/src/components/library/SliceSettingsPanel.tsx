@@ -85,6 +85,20 @@ export interface SliceSettingsController {
   slicerTargets: SlicingCapabilities['targets']
   selectedSlicerTargetId: string
   setSelectedSlicerTargetId: React.Dispatch<React.SetStateAction<string>>
+  /**
+   * Set when the project was saved by a NEWER Bambu Studio than the selected engine — which
+   * BambuStudio refuses to open outright (exit 232). NOT rendered by this panel: the sidebar is
+   * too narrow for the warning + "slice it anyway" acknowledgement, so each host places it wide —
+   * the plain slice dialog in its body, the editor as a banner under its title (the same spot as
+   * the settings-repair notice). It rides the controller so the editor can reach it at all;
+   * without that the editor showed only the disabled-reason tooltip, a dead end.
+   */
+  projectVersionWarning: {
+    projectVersion: string | null
+    engineVersion: string | null
+    acknowledged: boolean
+    onAcknowledgedChange: (next: boolean) => void
+  } | null
   /** Slicer availability/loading state, surfaced as notices in the settings panel. */
   slicerStatus: {
     capabilitiesLoading: boolean
