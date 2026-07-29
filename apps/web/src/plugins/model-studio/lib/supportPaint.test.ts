@@ -8,6 +8,7 @@ import {
   applySmartFill,
   applySupportPaintBrush,
   buildTriangleScanData,
+  collectColorPaintFilamentIds,
   decodeWholeTriangleColorState,
   encodeWholeTriangleColorState,
   getTriangleAdjacency,
@@ -318,4 +319,33 @@ test('a partially covered triangle splits so paint follows the brush', () => {
     mode: 'eraser'
   })
   assert.deepEqual(codes, {})
+})
+
+// A partially painted triangle's filament must still count as "in use". The whole-triangle decode
+// returns null for a split code, which let a painted second material read as unused — it stayed
+// removable and the prime tower never appeared (the plate genuinely prints two materials).
+test('collectColorPaintFilamentIds finds filaments in whole-triangle AND split codes', () => {
+  const whole = new Set<number>()
+  collectColorPaintFilamentIds(encodeWholeTriangleColorState(2)!, whole)
+  assert.deepEqual([...whole], [2], 'whole-triangle code')
+
+  // Paint a SUB-triangle with filament 3: a brush smaller than the triangle splits it, so the
+  // resulting code is a tree the whole-triangle decode cannot read.
+  const scan = buildTriangleScanData(POSITIONS)
+  const codes: Record<number, string> = {}
+  applySupportPaintBrush({
+    codes,
+    scan,
+    point: { x: 0.1, y: 0.1, z: 0 },
+    direction: { x: 0, y: 0, z: -1 },
+    radius: 0.15,
+    mode: 'enforcer',
+    state: 3
+  })
+  const painted = Object.values(codes)
+  assert.equal(painted.length, 1, 'the triangle was painted')
+  assert.equal(decodeWholeTriangleColorState(painted[0]!), null, 'a split code is not whole-triangle')
+  const split = new Set<number>()
+  collectColorPaintFilamentIds(painted[0]!, split)
+  assert.deepEqual([...split], [3], 'the split code still reports filament 3 as used')
 })

@@ -24,13 +24,13 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 
 | Concern | Layer | Key modules |
 | --- | --- | --- |
-| **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves staged as imports) |
+| **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/editorProjectSource.ts` (where the project is READ from — see below), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves staged as imports) |
 | **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (STL parse + STEP tessellation), `lib/three-mf-mesh-extract.ts` (3MF geometry import: first non-empty plate → one part per placed part, helper volumes CARRIED with their subtype but excluded from the merged mesh + re-centring, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
 | **Slicing** | web | the slice UI in `components/library/` — `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings, shares `components/settings/SettingValueField.tsx`) — plus `components/ProcessSettingsDialog.tsx` and `components/PerObjectSettingsDialog.tsx` |
-| **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-profiles.ts` |
+| **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-presets.ts` |
 | **Slicing** | slicer | `apps/slicer/**` — the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
 | **Shared 3MF model** | shared | `packages/shared/src/slicing.ts` (`SceneEdit`, slicing job contracts), the scene/index schemas in `printer.ts` |
-| **Shared 3MF model** | api/bridge/shared | the `apps/api/src/lib/three-mf-*.ts` modules (read + write, re-exported via the `three-mf.ts` barrel); the pure **index** parse lives in `@printstream/shared/three-mf` and is shared by `three-mf-reader.ts` and the bridge's `apps/bridge/src/library-3mf.ts` (no hand-kept mirror) |
+| **Shared 3MF model** | api/bridge/shared/web | the `apps/api/src/lib/three-mf-*.ts` modules own the Node ZIP I/O (read + write, re-exported via the `three-mf.ts` barrel); the pure transforms live in `@printstream/shared/three-mf` — the **index** and **scene** parses, and the whole bake (`bake-documents`, plus `object-clone`, `mesh-repair`, `xml-write`). Shared by `three-mf-reader.ts`, the bridge's `apps/bridge/src/library-3mf.ts`, and the web's client-side 3MF surfaces (no hand-kept mirror) |
 | **Printer retarget** | shared/api | "Save as a different printer" — rewrites a project's machine + process settings (no slicing). `packages/shared/src/machine-retarget.ts`, `apps/api/src/lib/save-retarget.ts`. See `docs/project-printer-retarget.md` |
 | **Calibration** | api/web plugin | Builds disposable calibration prints (PA towers, flow plates) and runs them through the slicing pipeline + dispatcher. `apps/api/src/plugins/calibration/**`, `apps/web/src/plugins/calibration/**`. See "Calibration (plugin surface)" below |
 
@@ -48,12 +48,60 @@ case — use one, do not invent a fourth:
 | Editor-side identity | Carried as | Resolved by |
 | --- | --- | --- |
 | Staged import | `importId` (+ 0-based solid index for its parts) | `importIdToObjectId` while injecting the import |
-| Independent copy | negative placeholder `objectId` | `objectClones` pre-pass (`three-mf-object-clone.ts`) |
+| Independent copy | negative placeholder `objectId` | `objectClones` pre-pass (shared `three-mf/object-clone.ts`) |
 | Data riding the save/slice REQUEST, not the edit | the same editor-side id | `replacedObjectIds` / `clonedObjectIds` + `rekeyReplacedObjectOverrides` |
 
 The failure has a quiet form worth watching for: a collector in `buildSceneEdit` whose
 `placedObjectIds` set is built only from `source.kind === 'object'` accepts the user's edit in the
 UI and then drops it at bake time, with no error anywhere.
+
+## The editor reads the whole archive, and nothing else
+
+Opening a project downloads the entire 3MF (`GET /api/library/:id/archive`, or the matching
+`/versions/:versionId/archive`) and parses it in the tab. `lib/editorProjectSource.ts` is the seam:
+`createArchiveProjectSource` for the library host, `createLocalProjectSource` for a host that
+already holds the file (the public editor). **Both serve every read — index, per-plate scene, mesh
+entries, plate thumbnails — from an inflated archive, through the same
+`@printstream/shared/three-mf` parsers.** The editor no longer calls `/plates`, `/scene`, or
+`/scene-entry`; those routes remain for the read-only preview and the slim slice/print dialogs,
+which want the parsed index and nothing more.
+
+Three things follow, and they are the reason for the design:
+
+- **One scene, not two.** While the library host read a server-parsed index and the public host
+  parsed its own, the same file could open differently in each, and did.
+- **The session is self-sufficient after open.** The project is in memory, so nothing mid-session
+  has to ask the server to re-read the file. This is the read half of "author anew": the bytes we
+  opened are the bytes we author the next save from.
+- **Permission posture.** `/archive` is gated on `library.view`, not `library.download`, so every
+  actor who can open the editor still can. The consequence is deliberate: a viewer's tab holds the
+  whole file, so `library.download` governs the download *affordances* (export, save-to-disk) and
+  is not a hard boundary on the bytes of an openable 3MF.
+
+What it did **not** buy is a faster open. Profiling a 145-object / 21MB project showed every scene
+request finishing at 3.7s against ~8s of main-thread work building the scene: the byte source was
+never the bottleneck, and blocking is unchanged. The wins are the three above plus a cheap reopen
+(the archive revalidates to 304).
+
+Three notes in place because they bit:
+
+- **Serve the archive through `sendModelBuffer`, never a bare `createReadStream().pipe()`.** A raw
+  pipe is fine for `/download` (the browser writes it to disk) but its body never completes when
+  read back through `fetch().arrayBuffer()` behind the Vite dev proxy — headers and most of the
+  body arrive, the tail never does, and the editor hangs on open with no error. Verified directly:
+  curl fetched the same URL in 37ms while the browser hung indefinitely.
+- The archive uses its own body-stall budget (`ARCHIVE_STALL_MS`) and does not retry: a
+  bridge-owned file is pulled, read, and compressed in full before a byte reaches the browser, so
+  time-to-first-byte scales with the whole project on a cold open.
+- **A short body must FAIL, not corrupt.** `sendModelBuffer` declares a `Content-Length`, so a body
+  that ends early is rejected by the browser instead of being handed to the unzip as a truncated
+  buffer — which surfaces as "this file could not be opened as a 3MF archive" and blames the file
+  rather than the transport. This matters most because the route is conditional and the ETag is
+  derived from METADATA, never from the bytes sent: a body that went out wrong still carries a
+  valid-looking tag, gets stored, and every later open revalidates into it. One project stayed
+  unopenable in one browser while the identical bytes opened everywhere else. When a bug could have
+  put a bad body in a cache, fixing the server is not enough — bump `ARCHIVE_ETAG_VARIANT` to
+  orphan those entries.
 
 ## Saves are delta-against-the-base — and what that constrains
 
@@ -166,7 +214,7 @@ volume never receives an `extruder`, so it cannot inherit the object's material.
 (`Model::add_object(*src_object)`), as opposed to placing another instance against the same
 `objectId`, which is its toolbar "+" (`increase_instances`) and stays fully linked. A copy is
 addressed throughout the edit by a NEGATIVE placeholder object id; a pre-pass
-(`three-mf-object-clone.ts`) deep-copies the source object's XML, its `model_settings` entry, and
+(shared `three-mf/object-clone.ts`) deep-copies the source object's XML, its `model_settings` entry, and
 its `/3D/Objects` mesh sub-model into fresh ids, then rewrites the whole edit so every placeholder
 and every SOURCE component id becomes the copy's real id. Running it first is what let every other
 seam stay clone-agnostic. The mesh sub-model must be copied, not shared: paint and mesh repair are
@@ -210,7 +258,7 @@ name also travels onto the replacement via `objectNames` (importId-keyed).
 object the user right-clicked → **Repair mesh** in the editor. Unlike `meshReplacements`, this is
 NOT a geometry swap — `buildEditedThreeMf` resolves each marked root object to the entries that
 actually carry its meshes (a Bambu project keeps each object's mesh in its own
-`3D/Objects/*.model`) and runs `three-mf-mesh-repair` **in place** on just those meshes: a
+`3D/Objects/*.model`) and runs the shared `three-mf/mesh-repair` **in place** on just those meshes: a
 nearby-vertex weld (closing sub-tolerance cracks) plus degenerate/duplicate facet pruning — the
 admesh pass BambuStudio applies to STL imports but skips for a 3MF's triangles. In place is the
 whole point: it preserves the object's per-triangle paint and its part volumes, which rebuilding
@@ -455,13 +503,15 @@ model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outpu
   so a tall narrow tower would print with **no brim and poor adhesion**. `outer_only` is a
   full automatic perimeter brim (BambuStudio's own tower recipe sets no brim at all; ours
   adds one deliberately). See `PA_TOWER_PROCESS_OVERRIDES` in `run-manager.ts`.
-- **Shared 3MF index parser.** The parsed *index* shape is produced by one shared module,
-  `@printstream/shared/three-mf`, consumed by both `apps/api/src/lib/three-mf-reader.ts` and
-  `apps/bridge/src/library-3mf.ts`. Changing the index shape means editing that parser once,
-  updating the shared schema, and bumping `THREE_MF_INDEX_PARSER_VERSION` — see
-  the API development notes and the bridge development notes. (The full scene parse —
-  `three-mf-reader.ts`'s `readSceneManifest` — and all 3MF *writing*
-  (`three-mf-scene-builder.ts`, `three-mf-output.ts`) live only in the api modules.)
+- **Shared 3MF index + scene parsers.** Both pure parses are produced by one shared module,
+  `@printstream/shared/three-mf` (`index-parser.ts`, `scene-parser.ts`). The index parse is
+  consumed by `apps/api/src/lib/three-mf-reader.ts` and `apps/bridge/src/library-3mf.ts`; the
+  scene parse by that same reader and by the web's public 3MF viewer, which unzips the user's
+  file in the browser and never uploads it. Changing the index shape means editing that parser
+  once, updating the shared schema, and bumping `THREE_MF_INDEX_PARSER_VERSION` — see
+  the API development notes and the bridge development notes. Keep both parsers Node-free; each app
+  owns its own ZIP I/O and caching. (All 3MF *writing* — `three-mf-scene-builder.ts`,
+  `three-mf-output.ts` — still lives only in the api modules.)
 - **Nozzle-id mapping** in the slicer's `output-metadata.ts` must stay byte-for-byte —
   see the slicer development notes.
 - **A `slice_info.config` record must describe the project's CURRENT filament set, or not exist.**
@@ -501,8 +551,8 @@ own verified change — do not big-bang):
 
 - **Done:** `apps/api/src/lib/three-mf.ts` (~3.7k lines) split into `three-mf-internal.ts`
   (shared ZIP I/O + abort/escape helpers + `rewriteModelSettingsThreeMf`), `three-mf-reader.ts`
-  (read/index/scene parse — the index half delegates to the shared `@printstream/shared/three-mf`
-  parser), `three-mf-scene-builder.ts` (editor:
+  (read/index/scene parse — both halves now delegate to the shared `@printstream/shared/three-mf`
+  parsers, leaving ZIP I/O + caching here), `three-mf-scene-builder.ts` (editor:
   `buildEditedThreeMf`/`writeArrangedThreeMf`), and `three-mf-output.ts` (slicing: single-plate/
   thumbnail output + sliced-gcode object previews). Dependencies flow one way
   (output/scene-builder → reader → internal); `three-mf.ts` is now a re-export barrel for the

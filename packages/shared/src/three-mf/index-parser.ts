@@ -19,6 +19,8 @@
  * caches re-derive instead of serving stale indexes.
  */
 import { inspectProjectFlushVolumesMatrix } from '../flush-volumes-matrix.js'
+import { inspectProjectFilamentSelfIndex } from '../filament-variant-index.js'
+import type { ThreeMfSettingsRepairReason } from '../printer-contracts.js'
 import type { PrinterModel } from '../printer.js'
 import type {
   BridgeLibraryThreeMfFilament,
@@ -27,6 +29,10 @@ import type {
   BridgeLibraryThreeMfPlate,
   BridgeLibraryThreeMfProjectFilament
 } from '../bridge-runtime.js'
+import { objectHeadOf, readObjectProcessOverridesFromHead } from './object-overrides.js'
+import { decodeXmlAttributeValue } from './xml-write.js'
+
+export { decodeXmlAttributeValue }
 
 /**
  * Version of the parsed-index logic. Both apps key their caches on this (the bridge's in-memory LRU
@@ -35,12 +41,18 @@ import type {
  * v14: per-filament `isSupport`/`isSoluble` from `filament_is_support`/`filament_soluble`.
  * v15: filament slot count also counts the support/soluble flag arrays (a project whose flags
  *      outran its colours/types/names used to lose its trailing filament slots).
+ * v20: `needsSettingsRepair` also covers a `filament_self_index` that does not match the
+ *      variant rows — Bambu Studio refuses to OPEN such a project (`filament-variant-index.ts`).
  * v16: `needsSettingsRepair` — flush matrix vs machine topology mismatch (see
  *      flush-volumes-matrix.ts).
  * v17: `projectVersion` — the Bambu Studio version that saved the project, for the
  *      newer-than-the-engine refusal check (see bambu-file-version.ts).
+ * v19: per-object `processOverrides` — so the prepare-print dialog (which never loads the scene)
+ *      can show and re-send them; a partial map is dropped by the authoritative slice transform.
+ * v21: per-slot `filamentPresetName` — the raw `filament_settings_id`, because the display name
+ *      beside it strips the machine suffix and cannot identify a preset (see the field's doc).
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 17
+export const THREE_MF_INDEX_PARSER_VERSION = 21
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -84,10 +96,11 @@ export function buildThreeMfIndex(
     : [...modelSettings.entries()].map(([index, name]) => ({ index, name, thumbnailFile: null, usedFilamentIds: [], objects: [] }))
   const projectFilaments = projectSettingsJson ? parseProjectFilaments(projectSettingsJson) : []
   const parsedPlates = sliceInfoXml ? parseSliceInfo(sliceInfoXml) : []
+  const knownFilamentIds = new Set(projectFilaments.map((filament) => filament.id))
   const plates = parsedPlates.length > 0
     ? parsedPlates
     : modelSettingsPlates.length > 0
-      ? buildModelSettingsOnlyPlates(modelSettingsPlates)
+      ? buildModelSettingsOnlyPlates(modelSettingsPlates, knownFilamentIds)
     : thumbnailPlateFiles.size > 0
       ? buildThumbnailOnlyPlates(thumbnailPlateFiles)
       : [defaultPlate()]
@@ -137,7 +150,8 @@ export function buildThreeMfIndex(
       plate.objects = metadata!.objects
     }
     if (plate.filaments.length === 0 && (metadata?.usedFilamentIds.length ?? 0) > 0) {
-      plate.filaments = metadata?.usedFilamentIds.map((id) => ({
+      // Stale-ref filter as in buildModelSettingsOnlyPlates — see filterUsedFilamentIds.
+      plate.filaments = filterUsedFilamentIds(metadata?.usedFilamentIds ?? [], knownFilamentIds).map((id) => ({
         id,
         filamentType: null,
         filamentName: null,
@@ -147,7 +161,7 @@ export function buildThreeMfIndex(
         nozzleId: null,
         nozzleDiameter: null,
         chamberTemperature: null
-      })) ?? []
+      }))
     }
     // Project-wide support: add the dedicated support material(s) to every unsliced plate so they
     // can be assigned/mapped, even though we can't tell pre-slice which plates actually use them.
@@ -207,13 +221,20 @@ export function buildThreeMfIndex(
   // read out of bounds and abort the slice (see flush-volumes-matrix.ts). Surfaced so the editor
   // and the slice dialog can offer a repair instead of letting the user hit an opaque CLI crash;
   // nothing repairs it automatically — the file is only rewritten when the user asks.
-  const needsSettingsRepair = inspectProjectFlushVolumesMatrix(projectSettingsJson)?.inconsistent === true
+  // Two independent invariants, reported SEPARATELY. One boolean was not enough: the repair banner
+  // has to tell the user what is actually wrong with THEIR file, and the two failures have nothing
+  // in common from where they sit — one makes slicing fail, the other stops Bambu Studio opening
+  // the project at all. `needsSettingsRepair` stays as the gate so existing callers are unaffected.
+  const settingsRepairReasons: ThreeMfSettingsRepairReason[] = []
+  if (inspectProjectFlushVolumesMatrix(projectSettingsJson)?.inconsistent === true) settingsRepairReasons.push('flushMatrix')
+  if (inspectProjectFilamentSelfIndex(projectSettingsJson)?.inconsistent === true) settingsRepairReasons.push('variantIndex')
+  const needsSettingsRepair = settingsRepairReasons.length > 0
   // The Bambu Studio build that saved this project. BambuStudio REFUSES to open a project from a
   // newer version than the engine slicing it (major.minor only — see bambu-file-version.ts), so
   // the slice dialog needs this to warn before the user burns a job on an exit-232 refusal.
   const projectVersion = extractProjectVersion(projectSettingsJson)
 
-  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, projectVersion, ...bakedProfiles }
+  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, settingsRepairReasons, projectVersion, ...bakedProfiles }
 }
 
 /**
@@ -268,7 +289,10 @@ export function buildThumbnailOnlyPlates(thumbnailPlateFiles: Map<number, string
   }))
 }
 
-export function buildModelSettingsOnlyPlates(plates: ModelSettingsPlateMetadata[]): BridgeLibraryThreeMfPlate[] {
+export function buildModelSettingsOnlyPlates(
+  plates: ModelSettingsPlateMetadata[],
+  projectFilamentIds: ReadonlySet<number> | null = null
+): BridgeLibraryThreeMfPlate[] {
   return plates.map((plate) => ({
     index: plate.index,
     name: plate.name,
@@ -277,7 +301,7 @@ export function buildModelSettingsOnlyPlates(plates: ModelSettingsPlateMetadata[
     thumbnailFile: plate.thumbnailFile ?? `Metadata/plate_${plate.index}.png`,
     plateType: null,
     nozzleSizes: [],
-    filaments: plate.usedFilamentIds.map((id) => ({
+    filaments: filterUsedFilamentIds(plate.usedFilamentIds, projectFilamentIds).map((id) => ({
       id,
       filamentType: null,
       filamentName: null,
@@ -290,6 +314,19 @@ export function buildModelSettingsOnlyPlates(plates: ModelSettingsPlateMetadata[
     })),
     objects: plate.objects
   }))
+}
+
+/**
+ * Drop object/part `extruder` references beyond the project's filament list. Such a ref is STALE
+ * data — a save that removed materials without rewriting every reference (seen in production: a
+ * 1-filament project whose part still said extruder 2). BambuStudio clamps them on load; surfacing
+ * them here fabricates a filament, which flips every "multi-material" consumer (the editor renders
+ * a prime tower on a single-filament plate). A file with no project filament list has nothing to
+ * validate against, so refs pass through unchanged.
+ */
+function filterUsedFilamentIds(usedFilamentIds: number[], projectFilamentIds: ReadonlySet<number> | null): number[] {
+  if (!projectFilamentIds || projectFilamentIds.size === 0) return usedFilamentIds
+  return usedFilamentIds.filter((id) => projectFilamentIds.has(id))
 }
 
 export function buildDefaultPickFilePath(plateIndex: number): string {
@@ -347,7 +384,10 @@ function parseSliceInfo(xml: string): BridgeLibraryThreeMfPlate[] {
         name,
         // slice_info lists one entry per instance keyed by identify_id, so when that
         // attribute is present the entry's firmware skip handle is the id itself.
-        identifyIds: Number.isFinite(identifyIdValue) ? [identifyIdValue] : []
+        identifyIds: Number.isFinite(identifyIdValue) ? [identifyIdValue] : [],
+        // slice_info records what a past slice DID; per-object overrides live only in
+        // model_settings, and its ids are a different space anyway (identify_id vs object_id).
+        processOverrides: {}
       })
     }
     const indexValue = parseInt(meta.get('index') ?? '0', 10)
@@ -406,6 +446,16 @@ export function parseProjectFilaments(json: string): BridgeLibraryThreeMfProject
       id: i + 1,
       filamentType: types[i] ?? null,
       filamentName: cleanFilamentName(names[i]) ?? null,
+      // The slot's `filament_settings_id` VERBATIM, machine suffix and all. `filamentName` above is
+      // a display value and is lossy in a way that destroys identity: it strips `@BBL...`, so a
+      // built-in ("Bambu PLA Basic @BBL H2D") and a workspace preset inheriting it ("… - 55 degree
+      // plate") both collapse to "Bambu PLA Basic". No installed preset is literally named that, so
+      // binding a slot by the display name can never match exactly and always falls through to
+      // ranked inference — where catalogue order decides between the two. This is the name
+      // BambuStudio itself looks up (`PresetCollection::load_external_preset` ->
+      // `find_preset_internal(original_name)`), so binding reads THIS field and display reads the
+      // other. Null only when the 3MF names no preset for the slot.
+      filamentPresetName: names[i]?.trim() || null,
       color: normalizeColor(colors[i]),
       nozzleId: null,
       chamberTemperature: chamberTemperatures[i] ?? null,
@@ -930,6 +980,7 @@ export function parseModelSettingsPlates(xml: string, projectSettingsJson: strin
   const supportConfig = parseProjectSupportConfig(projectSettingsJson)
   const objectExtrudersById = parseModelSettingsObjectFilamentIds(xml, supportConfig)
   const objectNamesById = parseModelSettingsObjectNames(xml)
+  const objectOverridesById = parseModelSettingsObjectProcessOverrides(xml)
   const out: ModelSettingsPlateMetadata[] = []
   const plateBlocks = xml.match(/<plate\b[^>]*>[\s\S]*?<\/plate>/g) ?? []
   for (const block of plateBlocks) {
@@ -957,7 +1008,12 @@ export function parseModelSettingsPlates(xml: string, projectSettingsJson: strin
       // object's entry so consumers can map object -> skip handles without re-reading the file.
       let object = objectsById.get(objectId)
       if (!object) {
-        object = { id: objectId, name: objectNamesById.get(objectId) ?? `Object ${objectId}`, identifyIds: [] }
+        object = {
+          id: objectId,
+          name: objectNamesById.get(objectId) ?? `Object ${objectId}`,
+          identifyIds: [],
+          processOverrides: objectOverridesById.get(objectId) ?? {}
+        }
         objectsById.set(objectId, object)
         objects.push(object)
       }
@@ -990,6 +1046,25 @@ function parseModelSettingsObjectNames(xml: string): Map<number, string> {
     if (name) names.set(objectId, name)
   }
   return names
+}
+
+/**
+ * Per-object PROCESS overrides by object id, for surfaces that never load the scene.
+ *
+ * The prepare-print dialog works off this index, so without it that dialog seeded an EMPTY
+ * override map: the object's baked settings were invisible there, and -- worse -- editing one
+ * setting sent a map saying the object had only that one, which the slice-time transform takes as
+ * authoritative and so dropped the rest from the slice.
+ */
+function parseModelSettingsObjectProcessOverrides(xml: string): Map<number, Record<string, string>> {
+  const overridesById = new Map<number, Record<string, string>>()
+  for (const block of xml.match(/<object\b[^>]*>[\s\S]*?<\/object>/g) ?? []) {
+    const objectId = Number.parseInt(parseAttrs(block.match(/^<object\b([^>]*)>/)?.[1] ?? '').id ?? '', 10)
+    if (!Number.isInteger(objectId) || objectId <= 0) continue
+    const overrides = readObjectProcessOverridesFromHead(objectHeadOf(block))
+    if (Object.keys(overrides).length > 0) overridesById.set(objectId, overrides)
+  }
+  return overridesById
 }
 
 function parseModelSettingsObjectFilamentIds(
@@ -1186,29 +1261,6 @@ export function parseAttrs(input: string): Record<string, string> {
     if (key != null && value != null) out[key] = decodeXmlAttributeValue(value)
   }
   return out
-}
-
-/** Decode XML/HTML entity escapes in an attribute value. Exported for the scene reader. */
-export function decodeXmlAttributeValue(value: string): string {
-  return value.replace(/&(#x[0-9a-fA-F]+|#\d+|apos|quot|amp|lt|gt);/g, (entity, body: string) => {
-    switch (body) {
-      case 'apos':
-        return '\''
-      case 'quot':
-        return '"'
-      case 'amp':
-        return '&'
-      case 'lt':
-        return '<'
-      case 'gt':
-        return '>'
-      default: {
-        const radix = body.startsWith('#x') ? 16 : 10
-        const codePoint = Number.parseInt(body.replace(/^#x?/i, ''), radix)
-        return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity
-      }
-    }
-  })
 }
 
 function numOrNull(value: string | undefined): number | null {

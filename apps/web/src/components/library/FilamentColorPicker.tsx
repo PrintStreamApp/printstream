@@ -15,7 +15,7 @@ import {
   resolveProjectFilamentColorName
 } from '../../lib/filamentColor'
 import { bambuMaterialFromPresetName, bambuMaterialFromType } from '../../data/bambuColors'
-import { normalizeSliceFilamentColor } from '../../lib/sliceProfileMatching'
+import { normalizeSliceFilamentColor } from '../../lib/slicingPresetMatching'
 
 export function FilamentColorPicker({
   color,

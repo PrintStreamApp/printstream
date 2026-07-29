@@ -14,6 +14,8 @@ import {
 } from '../lib/slicingJobPresentation'
 import { useSlicingJobs } from '../hooks/useSlicingJobs'
 import { useSuppressedJobToastIds } from '../lib/dialogToastSuppression'
+import { refreshSlicingJobs, seedSlicingJob } from '../lib/slicingJobsCache'
+import { readTabSessionId, reportTabLeaving } from '../lib/tabSession'
 import { StatusToast, StatusToastDismissButton } from './StatusToast'
 
 const RECENT_MS = 90_000
@@ -26,16 +28,32 @@ export function SlicingToasts() {
   const jobsQuery = useSlicingJobs({ suppressGlobalErrorToast: true })
   const cancelSlicing = useMutation({
     mutationFn: (job: SlicingJob) => apiFetch<SlicingJobResponse>(`/api/slicing/jobs/${job.id}/cancel`, { method: 'POST' }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
+    onSuccess: (response) => {
+      // The cancelled job comes back on the response, so the toast can flip to "Cancelled"
+      // without the button waiting on a list refetch (see slicingJobsCache).
+      seedSlicingJob(queryClient, response.job)
+      refreshSlicingJobs(queryClient)
     }
   })
+
+  // Mounted with the toasts on purpose: this is the surface that owns a slice's fate in this tab,
+  // so the "I'm leaving" signal lives beside it rather than in the app shell.
+  useEffect(() => {
+    const onPageHide = (event: PageTransitionEvent) => { if (!event.persisted) reportTabLeaving() }
+    window.addEventListener('pagehide', onPageHide)
+    return () => window.removeEventListener('pagehide', onPageHide)
+  }, [])
 
   const jobs = useMemo(() => jobsQuery.data?.jobs ?? [], [jobsQuery.data])
   const suppressedJobIds = useSuppressedJobToastIds('slicing')
   const visibleJobs = useMemo(() => {
     const now = Date.now()
     return jobs
+      // A slice belongs to the tab that started it: its progress is that tab's business, and
+      // toasting it in every other open tab (and in every teammate's) was noise about work they
+      // did not ask for and cannot act on. A job with NO owner is not a browser's — a script or
+      // an integration started it — so it stays visible to everyone rather than to nobody.
+      .filter((job) => job.ownerClientId == null || job.ownerClientId === readTabSessionId())
       .filter((job) => isActiveSlicingJob(job) || now - Date.parse(job.updatedAt) <= RECENT_MS)
       // Once dismissed, stay dismissed — even for an "active" job. A stale/stuck toast (client
       // missed the completion event) would otherwise be un-dismissable, leaving only Cancel.
@@ -75,7 +93,7 @@ export function SlicingToasts() {
       {visibleJobs.map((job) => {
         const active = isActiveSlicingJob(job)
         const progressFrame = getLatestSlicingProgressFrame(job)
-        const progressPercent = progressFrame?.displayPercent ?? progressFrame?.totalPercent ?? null
+        const progressPercent = progressFrame?.totalPercent ?? null
         return (
           <StatusToast
             key={job.id}

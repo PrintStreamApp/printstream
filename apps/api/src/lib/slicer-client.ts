@@ -7,7 +7,7 @@
  * slices go to the least-busy instance, progress polls follow the instance
  * that owns the job, and reads (health/profiles/resolve) fail over in order.
  */
-import { slicingMetadataSchema, slicingOutputLineSchema, slicingProfileSummarySchema, slicingTargetDescriptorSchema, type CreateSlicingJob, type SliceEnvelope, type SlicingMetadata, type SlicingOutputLine, type SlicingProfileSummary, type SlicingTargetDescriptor } from '@printstream/shared'
+import { slicingMetadataSchema, slicingOutputLineSchema, slicingPresetSummarySchema, slicingTargetDescriptorSchema, type CreateSlicingJob, type SliceEnvelope, type SlicingMetadata, type SlicingOutputLine, type SlicingPresetSummary, type SlicingTargetDescriptor } from '@printstream/shared'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rename, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -17,7 +17,7 @@ import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { Agent } from 'undici'
 import { env } from './env.js'
-import type { ResolvedSlicingProfileFile } from './slicing-profiles.js'
+import type { ResolvedSlicingPresetFile } from './slicing-presets.js'
 
 /**
  * Dispatcher for the long-running `/slice` POST only. The slicer sends no response headers until the
@@ -42,7 +42,7 @@ export interface SlicerRunInput {
   sourceFileName: string
   sourcePath: string
   request: CreateSlicingJob
-  profileFiles?: ResolvedSlicingProfileFile[]
+  profileFiles?: ResolvedSlicingPresetFile[]
   signal: AbortSignal
 }
 
@@ -52,6 +52,22 @@ export interface SlicerRunResult {
   metadata: SlicingMetadata
   artifactPath: string
 }
+
+/**
+ * One live-progress poll's outcome. Distinguishing these is the whole point — see
+ * {@link SlicerClient.progress} and the watchdog in `slicer-contact.ts`.
+ *
+ * - `output` — the instance answered; `lines` is its CLI output so far (possibly unchanged).
+ * - `unclaimed` — no instance is bound to this job yet (queued), or it has just been released.
+ *   Says nothing about health.
+ * - `unknown` — the bound instance answered 404: it is running, and this job is not on it.
+ * - `unreachable` — the instance could not be reached or returned an error status.
+ */
+export type SlicerProgressResult =
+  | { kind: 'output'; lines: SlicingOutputLine[] }
+  | { kind: 'unclaimed' }
+  | { kind: 'unknown' }
+  | { kind: 'unreachable'; reason: string }
 
 export class SlicerServiceError extends Error {
   readonly output: SlicingOutputLine[]
@@ -118,7 +134,7 @@ export class SlicerClient {
     return { configured: true, healthy: false, slicerName: null, defaultTargetId: null, targets: [] }
   }
 
-  async profiles(targetId?: string | null): Promise<SlicingProfileSummary[]> {
+  async profiles(targetId?: string | null): Promise<SlicingPresetSummary[]> {
     for (const baseUrl of this.baseUrls) {
       try {
         const params = new URLSearchParams()
@@ -341,26 +357,39 @@ export class SlicerClient {
     }
   }
 
-  async progress(jobId: string): Promise<SlicingOutputLine[] | null> {
+  /**
+   * Poll the instance running `jobId` for its live CLI output.
+   *
+   * The outcomes are reported SEPARATELY rather than collapsed into "no output": the caller uses
+   * them as a watchdog (`slicer-contact.ts`), and "the instance says it has never heard of this
+   * job" means something very different from "nothing new yet". Collapsing them is what let a
+   * slice whose service had restarted keep reporting its healthy "Slicing..." heartbeat until the
+   * 30-minute request ceiling.
+   */
+  async progress(jobId: string): Promise<SlicerProgressResult> {
     // Progress must be read from the instance running the job; before the job
     // is claimed (or after it finishes) there is nothing to poll.
     const baseUrl = this.jobInstances.get(jobId)
-    if (!baseUrl) return null
+    if (!baseUrl) return { kind: 'unclaimed' }
     try {
       const response = await fetch(`${baseUrl}/jobs/${encodeURIComponent(jobId)}`, {
         headers: this.headers(),
         signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
       })
-      if (response.status === 404) return null
+      // The instance we dispatched to is up and does not have this job: it restarted (losing its
+      // in-memory job table) or was replaced. The slice is gone, whatever the open POST looks like.
+      if (response.status === 404) return { kind: 'unknown' }
       if (!response.ok) {
-        console.warn('[slicer] progress failed', `slicer service returned ${response.status}`)
-        return null
+        const reason = `slicer service returned ${response.status}`
+        console.warn('[slicer] progress failed', reason)
+        return { kind: 'unreachable', reason }
       }
       const body = await response.json().catch(() => null) as { output?: unknown } | null
-      return parseOutputLines(body?.output)
+      return { kind: 'output', lines: parseOutputLines(body?.output) }
     } catch (error) {
-      console.warn('[slicer] progress failed', (error as Error).message)
-      return null
+      const reason = (error as Error).message
+      console.warn('[slicer] progress failed', reason)
+      return { kind: 'unreachable', reason }
     }
   }
 
@@ -513,7 +542,7 @@ function parseSlicerTargets(value: unknown): SlicingTargetDescriptor[] {
  * Parse the slicer's `/profiles` response through the SHARED summary schema.
  *
  * Deliberately not a hand-written field list: this used to rebuild each summary
- * field by field, so every field added to `slicingProfileSummarySchema` was
+ * field by field, so every field added to `slicingPresetSummarySchema` was
  * silently dropped here on its way to the browser — `filamentIsSupport` and
  * `layerHeight` both arrived at the API and never reached the slice dialog
  * (issue #66). Validating against the schema keeps this hop honest as the
@@ -522,10 +551,10 @@ function parseSlicerTargets(value: unknown): SlicingTargetDescriptor[] {
  * Non-conforming entries are skipped rather than failing the whole catalogue: a
  * single malformed preset must not blank the slice dialog.
  */
-function parseProfiles(value: unknown): SlicingProfileSummary[] {
+function parseProfiles(value: unknown): SlicingPresetSummary[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((entry) => {
-    const parsed = slicingProfileSummarySchema.safeParse(entry)
+    const parsed = slicingPresetSummarySchema.safeParse(entry)
     // Builtin presets are the only kind the slicer owns; a `custom` preset coming
     // back from it would shadow the tenant's own stored presets.
     if (!parsed.success || parsed.data.source !== 'builtin') return []

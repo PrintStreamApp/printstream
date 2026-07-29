@@ -18,7 +18,6 @@ import type {
   OrderTemplate,
   OrderTemplateList,
   Printer,
-  PrinterStatus,
   SlicingCapabilities,
   SlicingJobResponse
 } from '@printstream/shared'
@@ -33,7 +32,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
-import { prefetchSlicingProfiles } from '../../lib/slicingProfilesQuery'
+import { prefetchSlicingPresets } from '../../lib/slicingPresetsQuery'
+import { refreshSlicingJobs, seedSlicingJob } from '../../lib/slicingJobsCache'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { type DirectorySortDirection } from '../../components/DirectoryControls'
@@ -45,7 +45,6 @@ import { SliceThenPrintModal } from '../../components/library/SliceThenPrintModa
 import { PrintModal } from '../../components/library/PrintModal'
 import { isUnslicedThreeMfFile } from '../../lib/libraryFileTags'
 import { toast } from '../../lib/toast'
-import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
 import { buildTenantWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
 import {
   LIST_PAGE_SIZE_OPTIONS,
@@ -203,17 +202,8 @@ export function OrdersView() {
   // Warm the slicer profile catalogue before an order's start-print flow opens the slice dialog.
   const slicingCapabilitiesData = slicingCapabilitiesQuery.data
   useEffect(() => {
-    prefetchSlicingProfiles(queryClient, slicingCapabilitiesData)
+    prefetchSlicingPresets(queryClient, slicingCapabilitiesData)
   }, [queryClient, slicingCapabilitiesData])
-  const workspaceScopeKey = readCurrentWorkspaceScopeKey()
-  const printerStatusQuery = useQuery<Record<string, PrinterStatus>>({
-    queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey),
-    queryFn: () => Promise.resolve({}),
-    initialData: {},
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false
-  })
 
   const invalidateOrders = () => {
     void queryClient.invalidateQueries({ queryKey: ['orders'] })
@@ -257,10 +247,12 @@ export function OrdersView() {
       })
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
-    onSuccess: async (response, variables) => {
+    onSuccess: (response, variables) => {
       // Keep the slice dialog mounted beneath the print flow so its "Back" returns to
       // slice settings; abandoning the print tears both down together.
-      await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
+      // The list refresh is not awaited — see slicingJobsCache.
+      seedSlicingJob(queryClient, response.job)
+      refreshSlicingJobs(queryClient)
       setSliceThenPrintTarget({
         orderId: variables.orderTarget.orderId,
         printId: variables.orderTarget.printId,
@@ -639,7 +631,6 @@ export function OrdersView() {
           key={sliceTarget.file.id}
           file={sliceTarget.file}
           printers={printersQuery.data.printers}
-          printerStatuses={printerStatusQuery.data ?? {}}
           capabilities={slicingCapabilitiesQuery.data ?? null}
           capabilitiesLoading={slicingCapabilitiesQuery.isLoading && !slicingCapabilitiesQuery.data}
           capabilitiesError={slicingCapabilitiesQuery.error instanceof Error ? slicingCapabilitiesQuery.error.message : null}

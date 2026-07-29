@@ -948,7 +948,7 @@ function ActiveSlicingJobCard({
 }) {
   const [pending, setPending] = useState(false)
   const progressFrame = getLatestSlicingProgressFrame(job)
-  const progressPercent = progressFrame?.displayPercent ?? progressFrame?.totalPercent ?? null
+  const progressPercent = progressFrame?.totalPercent ?? null
   const displayName = formatLibraryFileName(job.outputFileName ?? job.sourceFileName)
   const metadataLabel = formatSlicingMetadataDisplay(job.metadata)
 

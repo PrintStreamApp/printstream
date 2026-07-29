@@ -152,8 +152,11 @@ export type ResolveProcessConfigRequest = z.infer<typeof resolveProcessConfigReq
  * settings baked into a 3MF as modified/resettable:
  * - `config`: the profile's **effective** config (for a project 3MF this is its embedded,
  *   already-overridden config — the base the slicer merges further overrides onto).
- * - `baseConfig`: the **preset baseline** to reset toward. Equal to `config` for installed
- *   presets; for a project 3MF it is the resolved system preset (when resolvable).
+ * - `baseConfig`: the **preset baseline** to reset toward, and the "changed HERE" diff source.
+ *   Equal to `config` for installed presets; for a project 3MF it is the resolved system preset
+ *   (when resolvable).
+ * - `parentConfig`: the baseline preset's OWN parent, when it derives from one. Differences
+ *   between it and `baseConfig` belong to the PRESET, not to the project.
  * - `overriddenKeys`: process keys the 3MF marks as changed from system
  *   (`different_settings_to_system`), used as an authoritative "modified" signal even when the
  *   baseline preset can't be resolved.
@@ -161,7 +164,16 @@ export type ResolveProcessConfigRequest = z.infer<typeof resolveProcessConfigReq
 export interface ResolveProcessConfigResponse {
   config: ProcessConfig
   baseConfig: ProcessConfig
+  parentConfig?: ProcessConfig
   overriddenKeys: string[]
+  /**
+   * Whether the 3MF carried a changed-from-system record at all, which makes `overriddenKeys`
+   * AUTHORITATIVE — including when empty. Mirrors BambuStudio, which applies the file's declared
+   * list rather than diffing configs (`update_non_diff_values_to_base_config`): a key that differs
+   * from the preset but is not declared is drift the vendor normalizes away, not a user change.
+   * Absent/false means the writer recorded nothing and the value diff is all we have.
+   */
+  declaresOverrides?: boolean
 }
 
 /** Machine-derived context that affects conditional visibility. */
@@ -698,6 +710,20 @@ export function diffProcessConfig(
  * An ABSENT value equals an EMPTY one (see {@link isUnsetProcessValue}): a preset that never
  * mentions `post_process` and a project that writes `"post_process": []` both mean "no scripts".
  */
+/**
+ * BambuStudio's marker for "this nullable option is not set" (`ConfigOptionVector::serialize`
+ * writes the literal `nil` for a NaN element). It is a real stored value, not a formatting quirk,
+ * so a UI that renders it verbatim shows the user the word "nil" in a numeric field.
+ *
+ * The filament "Setting Overrides" page is where these live: BambuStudio gives each override a
+ * checkbox, and unchecking it sets the value to nil (`Field::set_na_value`).
+ */
+export function isNilSettingValue(value: string | string[] | undefined): boolean {
+  if (value === undefined) return false
+  const values = Array.isArray(value) ? value : [value]
+  return values.length > 0 && values.every((entry) => entry.trim().toLowerCase() === 'nil')
+}
+
 export function processConfigValuesEqual(
   a: ProcessConfigValue | undefined,
   b: ProcessConfigValue | undefined,
@@ -706,10 +732,21 @@ export function processConfigValuesEqual(
   if (isUnsetProcessValue(a) && isUnsetProcessValue(b)) return true
   if (a === undefined || b === undefined) return false
   if (Array.isArray(a) || Array.isArray(b)) {
-    const aa = Array.isArray(a) ? a : [a]
-    const bb = Array.isArray(b) ? b : [b]
-    if (aa.length !== bb.length) return false
-    return aa.every((v, i) => processScalarsEqual(v, bb[i], option))
+    // A scalar is BambuStudio's shorthand for "the same value on every extruder", so it equals a
+    // per-extruder array whose every element matches it. BambuStudio serializes per-extruder
+    // settings (speeds, temps) as a scalar on a single-extruder machine and as an N-element array
+    // on a multi-extruder one (H2D/H2C/H2D Pro); the two forms are the same value. Comparing them
+    // by wrapping the scalar in a 1-element array — the previous behaviour — failed the length
+    // check, so a project authored scalar showed every such setting as "changed" against a
+    // dual-nozzle preset, and resetting was a no-op that only cleared the marker ("Initial layer
+    // 50 -> 50"). A genuinely non-uniform array (["50","60"]) still differs from the scalar.
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false
+      return a.every((v, i) => processScalarsEqual(v, b[i], option))
+    }
+    const scalar = (Array.isArray(a) ? b : a) as string
+    const vector = (Array.isArray(a) ? a : b) as string[]
+    return vector.length > 0 && vector.every((v) => processScalarsEqual(scalar, v, option))
   }
   return processScalarsEqual(a, b, option)
 }
@@ -784,6 +821,67 @@ export function serializeProcessBool(value: boolean): string {
  * fully reset profile reads 0 even though heal overrides ride the slice request). Counterpart of
  * `resolvedFilamentModifiedKeys` in `filament-settings.ts`.
  */
+/**
+ * {@link resolvedProcessModifiedKeys} narrowed to the keys a user can actually SEE — the count the
+ * settings dialog shows, so the pre-open badge and the dialog can never disagree (they used to:
+ * a modified setting whose controlling toggle is off is hidden by the dialog but was still counted
+ * by the badge, leaving a "2" beside a dialog listing one changed row).
+ *
+ * Applies exactly the dialog's row gates: the option exists in the catalog, it is visible in the
+ * current developer-mode tier, and the CONDITIONAL field-state engine says it is visible for the
+ * final config. `allowedKeys` mirrors the per-object dialog's restricted key set.
+ */
+export function resolvedVisibleProcessModifiedKeys(
+  response: { config: ProcessConfig; baseConfig?: ProcessConfig; overriddenKeys?: string[] },
+  overrides: ProcessConfig = {},
+  options: {
+    visibilityContext?: Partial<ProcessVisibilityContext>
+    /** Reveal `develop`-tier options, matching `useEffectiveSlicerDeveloperMode` in the dialog. */
+    developerMode?: boolean
+    allowedKeys?: readonly string[]
+  } = {}
+): string[] {
+  const modified = resolvedProcessModifiedKeys(response, overrides)
+  if (modified.length === 0) return modified
+  // The field-state engine judges visibility against the FINAL config (defaults applied, session
+  // overrides on top) — the same value the dialog feeds it.
+  const finalConfig = { ...applyProcessConfigDefaults(response.config), ...overrides }
+  const context: ProcessVisibilityContext = { ...defaultProcessVisibilityContext, ...options.visibilityContext }
+  const states = computeProcessFieldStates(finalConfig, context).states
+  const allowed = options.allowedKeys ? new Set(options.allowedKeys) : null
+  return modified.filter((key) => {
+    const option = processSettingsCatalog.options[key]
+    if (!option || !isProcessOptionVisibleInMode(option, options.developerMode === true)) return false
+    if (allowed && !allowed.has(key)) return false
+    return getProcessFieldState(states, key).visible
+  })
+}
+
+/**
+ * Keys the PRESET overrides relative to its own parent — emphasis only.
+ *
+ * Deliberately NOT part of {@link resolvedProcessModifiedKeys}: BambuStudio keeps the two as
+ * separate queries (`current_dirty_options` vs `current_different_from_parent_options`) and only
+ * the former drives its modified marker. `Tab::update_changed_ui` is a single base-class method —
+ * not virtual, no per-type override — so this is the same rule the FILAMENT tab follows, which is
+ * why this mirrors `resolvedFilamentPresetOverrideKeys` exactly rather than inventing a variant.
+ *
+ * Empty when no parent resolved, which collapses the distinction rather than inventing one.
+ */
+export function resolvedProcessPresetOverrideKeys(
+  response: { baseConfig?: ProcessConfig; config: ProcessConfig; parentConfig?: ProcessConfig }
+): string[] {
+  if (!response.parentConfig) return []
+  const baseline = applyProcessConfigDefaults(response.baseConfig ?? response.config)
+  const parent = { ...baseline, ...applyProcessConfigDefaults(response.parentConfig) }
+  const keys: string[] = []
+  for (const key of Object.keys(baseline)) {
+    if (!isProcessSettingKey(key)) continue
+    if (!processConfigValuesEqual(parent[key], baseline[key], processSettingsCatalog.options[key])) keys.push(key)
+  }
+  return keys
+}
+
 export function resolvedProcessModifiedKeys(
   response: { config: ProcessConfig; baseConfig?: ProcessConfig; overriddenKeys?: string[] },
   overrides: ProcessConfig = {}

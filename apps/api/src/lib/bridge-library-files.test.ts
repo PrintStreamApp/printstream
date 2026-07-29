@@ -3,6 +3,7 @@ import path from 'node:path'
 import { afterEach, mock, test } from 'node:test'
 import { createWriteStream } from 'node:fs'
 import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 import { bridgeSessionManager } from './bridge-session-manager.js'
 import { prisma } from './prisma.js'
 import {
@@ -21,6 +22,13 @@ import {
 import { libraryDir } from './library-paths.js'
 import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
 import yazl from 'yazl'
+
+/** Externally-resolvable promise, for pinning the interleaving of two concurrent transfers. */
+function deferred(): { promise: Promise<void>, resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((settle) => { resolve = settle })
+  return { promise, resolve }
+}
 
 const originalReplicaFindUnique = prisma.libraryFileReplica.findUnique
 const originalReplicaUpdate = prisma.libraryFileReplica.update
@@ -89,6 +97,71 @@ test('ensureBridgeLibraryLocalCopy rebuilds a partial local cache copy', async (
     { storedPath, offset: 6, maxBytes: 4 * 1024 * 1024 },
     { storedPath, offset: 0, maxBytes: 4 * 1024 * 1024 }
   ])
+})
+
+test('a second local cache fill cannot leave the first caller holding a partial file', async () => {
+  const bridgeId = 'bridge-cache-race-test'
+  const storedPath = 'bridge-cache-file.3mf'
+  const cachePath = path.join(libraryDir, '_bridge-cache', bridgeId, storedPath)
+
+  await rm(path.join(libraryDir, '_bridge-cache', bridgeId), { recursive: true, force: true }).catch(() => undefined)
+  await mkdir(path.dirname(cachePath), { recursive: true })
+  // A stale partial copy, so both callers start from a miss the way production does.
+  await writeFile(cachePath, 'stale')
+
+  const payload = Buffer.alloc(160 * 1024, 0x5a)
+
+  const firstReachedBody = deferred()
+  const releaseFirstBody = deferred()
+  const secondReachedBody = deferred()
+  const releaseSecondBody = deferred()
+
+  let call = 0
+  mock.method(bridgeSessionManager, 'isConnected', () => true)
+  mock.method(bridgeSessionManager, 'requestRpc', async (_bridgeId: string, _method: string, params: unknown) => {
+    const index = call++
+    const offset = typeof params === 'object' && params && 'offset' in params && typeof params.offset === 'number'
+      ? params.offset
+      : 0
+    // The whole file arrives in one chunk, so each caller makes exactly two calls: a completeness
+    // probe, then its body. That keeps these indices meaningful whichever way the fill is
+    // implemented — a coalescing one simply never reaches 2 and 3.
+    //
+    // Call 1 is the first caller's body. Holding it parks that fill mid-transfer, which is the only
+    // window in which a second fill can touch the same target.
+    if (index === 1) {
+      firstReachedBody.resolve()
+      await releaseFirstBody.promise
+    }
+    // Call 3 is the second caller's body, held until after the assertion, so that fill is still in
+    // flight when the first caller reads the file it was handed.
+    if (index === 3) {
+      secondReachedBody.resolve()
+      await releaseSecondBody.promise
+    }
+    return {
+      bufferBase64: payload.subarray(Math.min(offset, payload.byteLength)).toString('base64'),
+      eof: true,
+      sizeBytes: payload.byteLength
+    }
+  })
+
+  const first = ensureBridgeLibraryLocalCopy({ bridgeId, storedPath })
+  await firstReachedBody.promise
+  const second = ensureBridgeLibraryLocalCopy({ bridgeId, storedPath })
+  // A coalescing implementation never starts a second transfer, so this settles on the timer
+  // rather than the gate; either way the second caller has got as far as it is going to.
+  await Promise.race([secondReachedBody.promise, delay(50)])
+  releaseFirstBody.resolve()
+
+  const resolvedFirst = await first
+  assert.equal(resolvedFirst, cachePath)
+  // The contract callers depend on: the path handed back is readable in full the moment it is
+  // returned. Routes `readFile` it immediately, and a short read there surfaces as a corrupt 3MF.
+  assert.deepEqual(await readFile(resolvedFirst), payload)
+
+  releaseSecondBody.resolve()
+  assert.deepEqual(await readFile(await second), payload)
 })
 
 test('storeBridgeLibraryFile uploads local bytes through bridge RPC and deleteBridgeLibraryFile clears the cache', async () => {

@@ -12,7 +12,9 @@
  * the runtime maps that depend on BOTH the machine topology and the project's filaments
  * (`filament_nozzle_map`, extruder variants, …). See docs/project-printer-retarget.md.
  */
+import { processSettingsCatalog } from './process-settings.js'
 import { repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
+import { buildFilamentVariantRows } from './filament-variant-index.js'
 
 export type ProfileRecord = Record<string, unknown>
 
@@ -219,15 +221,42 @@ export function repairEstimateModeProjectSettings(settings: ProfileRecord, machi
     next.printer_extruder_id = buildPrinterExtruderIds(stringArray(next.extruder_variant_list))
   }
 
+  retargetProcessExtruderVariants(next, printerExtruderVariants, stringArray(next.printer_extruder_id))
+
   if (printerExtruderVariants.length > 0) {
-    next.filament_extruder_variant = buildFilamentExtruderVariants(
-      printerExtruderVariants,
-      stringArray(next.filament_type)
-    )
+    // Built TOGETHER: BambuStudio rejects the whole project ("Invalid configuration file") unless
+    // `filament_self_index` has exactly one entry per `filament_extruder_variant` row. Producing
+    // them from separate passes is what let them drift — see `buildFilamentVariantLayout`.
+    const layout = buildFilamentVariantRows(printerExtruderVariants, stringArray(next.filament_type))
+    next.filament_extruder_variant = layout.variants
+    next.filament_self_index = layout.selfIndex
   }
 
-  if (physicalExtruderMap.length > 0) {
-    next.filament_nozzle_map = physicalExtruderMap
+  // `filament_nozzle_map` is indexed by FILAMENT (one entry per project filament, valued with the
+  // runtime nozzle id), NOT by extruder — assigning `physical_extruder_map` (one entry per extruder)
+  // produced a map of the wrong LENGTH whenever the project's filament count differed from the new
+  // machine's extruder count. BambuStudio then reads a filament's extruder past the end of that
+  // vector, which is the documented "can not be printed on extruder <garbage>" abort / mid-slice
+  // SIGSEGV. Rebuild it per filament: keep a slot's existing nozzle when the NEW machine still has
+  // it, else fall back to the machine's primary — so a dual -> single-nozzle switch collapses every
+  // slot onto the one extruder instead of leaving a dangling left-nozzle reference.
+  const filamentCount = Math.max(
+    stringArray(next.filament_type).length,
+    stringArray(next.filament_settings_id).length,
+    stringArray(next.filament_colour).length
+  )
+  if (filamentCount > 0) {
+    const previousNozzleMap = stringArray(next.filament_nozzle_map)
+    // A machine with no `physical_extruder_map` is single-extruder: every filament prints on nozzle 0.
+    const validNozzleIds = new Set(physicalExtruderMap)
+    // Nozzle 0 exists on every machine, so an UNASSIGNED slot defaults there rather than to
+    // whichever id happens to head `physical_extruder_map` (the H2D's is `["1","0"]`, i.e. the LEFT
+    // nozzle — an arbitrary place to put a filament the project never assigned).
+    const fallbackNozzleId = validNozzleIds.has('0') ? '0' : physicalExtruderMap[0] ?? '0'
+    next.filament_nozzle_map = Array.from({ length: filamentCount }, (_unused, index) => {
+      const existing = previousNozzleMap[index]
+      return existing != null && validNozzleIds.has(existing) ? existing : fallbackNozzleId
+    })
   }
 
   if (volumeTypes.length > 0) {
@@ -273,6 +302,47 @@ function stringArray(value: unknown): string[] {
       : []
 }
 
+
+/**
+ * Re-shape the PROCESS side's per-extruder-variant columns to the target machine's variant list.
+ *
+ * BambuStudio 2.x stores many process values as one column per (extruder, variant) pair —
+ * `print_extruder_variant` names the columns and `print_extruder_id` says which extruder each
+ * belongs to, and every variant-aware process key (speeds, accelerations, flow ratios, …) carries
+ * the same width. A machine retarget rewrote the MACHINE's variant topology but left those process
+ * columns at the SOURCE machine's width, so an H2D project (5 columns) retargeted onto a
+ * single-variant A1 mini kept 5 — a process topology the new machine cannot index. That mismatch
+ * segfaults the engine mid-load (CLI exit 139), reproduced with the real CLI on a real project.
+ *
+ * The filament side has the identical rule (see `applyFilamentList`'s variant expansion); this is
+ * its process twin. Columns are matched BY VARIANT NAME so a shared variant keeps its own tuned
+ * values, falling back to the first column for a variant the source never had. Only keys the
+ * process catalog knows are touched — an unrelated array that merely shares the column count
+ * (`head_wrap_detect_zone`, `printable_area`) must never be re-indexed.
+ */
+function retargetProcessExtruderVariants(
+  next: Record<string, unknown>,
+  machineVariants: string[],
+  machineExtruderIds: string[]
+): void {
+  const sourceVariants = stringArray(next.print_extruder_variant)
+  if (sourceVariants.length === 0 || machineVariants.length === 0) return
+  const unchanged = sourceVariants.length === machineVariants.length
+    && sourceVariants.every((variant, index) => variant === machineVariants[index])
+  if (unchanged) return
+  const columnForVariant = machineVariants.map((variant) => {
+    const exact = sourceVariants.indexOf(variant)
+    return exact >= 0 ? exact : 0
+  })
+  for (const [key, value] of Object.entries(next)) {
+    if (!Array.isArray(value) || value.length !== sourceVariants.length) continue
+    if (processSettingsCatalog.options[key] === undefined) continue
+    next[key] = columnForVariant.map((column) => value[column])
+  }
+  next.print_extruder_variant = machineVariants
+  if (machineExtruderIds.length > 0) next.print_extruder_id = machineExtruderIds
+}
+
 function buildPrinterExtruderVariants(variantList: string[]): string[] {
   return variantList.flatMap((value) => value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0))
 }
@@ -281,17 +351,6 @@ function buildPrinterExtruderIds(variantList: string[]): string[] {
   return variantList.flatMap((value, index) => {
     const variants = value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
     return Array.from({ length: variants.length }, () => String(index + 1))
-  })
-}
-
-function buildFilamentExtruderVariants(printerExtruderVariants: string[], filamentTypes: string[]): string[] {
-  const sharedVariants = uniqueVariants(printerExtruderVariants.filter((variant) => !/\btpu\b/i.test(variant)))
-  const fallbackVariants = sharedVariants.length > 0 ? sharedVariants : uniqueVariants(printerExtruderVariants)
-  if (filamentTypes.length === 0) return fallbackVariants
-
-  return filamentTypes.flatMap((filamentType) => {
-    if (/\btpu\b/i.test(filamentType)) return uniqueVariants(printerExtruderVariants)
-    return fallbackVariants
   })
 }
 

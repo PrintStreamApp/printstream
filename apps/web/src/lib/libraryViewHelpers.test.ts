@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ThreeMfProjectFilament } from '@printstream/shared'
-import { buildCreateSlicingJobBody, filamentsForMapping, visibleMappingFilaments, type SliceFileSubmitInput } from './libraryViewHelpers'
+import { buildCreateSlicingJobBody, buildSlicedOutputFileName, buildSlicedPlateLabel, filamentsForMapping, visibleMappingFilaments, type SliceFileSubmitInput } from './libraryViewHelpers'
 
 const filament = (id: number, color: string): ThreeMfProjectFilament => ({
 	id,
@@ -107,4 +107,19 @@ test('getSelectedTrayWarningMessages: warns when the printer reports no storage 
     status: { sdCardPresent: null } as never
   })
   assert.deepEqual(unknownStorage, [])
+})
+
+test('a single-plate project does not get a "Plate 1" suffix it cannot be distinguished by', () => {
+  // Numbering one plate out of one distinguishes nothing; it just makes every sliced file noisier.
+  assert.equal(buildSlicedPlateLabel(null, 1, 1), null)
+  assert.equal(buildSlicedOutputFileName('Test.3mf', { plateNumber: 1, plateCount: 1 }), 'Test.gcode.3mf')
+  // A NAMED plate still shows even as the only one — the user named it, so it carries information
+  // a bare number does not.
+  assert.equal(buildSlicedPlateLabel('Left half', 1, 1), 'Left half')
+  assert.equal(buildSlicedOutputFileName('Test.3mf', { plateName: 'Left half', plateNumber: 1, plateCount: 1 }), 'Test - Left half.gcode.3mf')
+  // Multi-plate projects are unchanged, and an unknown count stays conservative (keeps the number).
+  assert.equal(buildSlicedPlateLabel(null, 1, 3), 'Plate 1')
+  assert.equal(buildSlicedOutputFileName('Test.3mf', { plateNumber: 2, plateCount: 4 }), 'Test - Plate 2.gcode.3mf')
+  assert.equal(buildSlicedPlateLabel(null, 1), 'Plate 1')
+  assert.equal(buildSlicedPlateLabel(null, 1, null), 'Plate 1')
 })

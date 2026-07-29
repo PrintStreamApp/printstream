@@ -23,11 +23,11 @@ import {
   isProjectSlicingPresetId,
   sliceEnvelopeSchema,
   stringValue,
-  type SliceProfileFile,
+  type SlicingPresetFile,
   type SlicingMaterialUsage,
   type SlicingMetadata,
   type SlicingOutputLine,
-  type SlicingProfileKind
+  type SlicingPresetKind
 } from '@printstream/shared'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
@@ -37,7 +37,11 @@ import { outputSignalsSliceComplete } from './slice-progress.js'
 import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
 import { openZip, readZipEntryBuffer, readZipEntryText } from './zip-io.js'
 import { backfillPlateThumbnails, mergeAllPlateOutputs, readPlateIdsFromModelSettings, shouldUseAllPlateMergeFallback } from './all-plate-fallback.js'
-import { buildPerMaterialFilamentOverrides, selectCliProfileFiles } from './cli-profile-selection.js'
+import {
+  buildPerMaterialFilamentOverrides,
+  selectCliProfileFiles,
+  selectSettingsExportProfileFiles
+} from './cli-profile-selection.js'
 import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } from './machine-switch-guard.js'
 import { readBedModel } from './bed-model.js'
 import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
@@ -48,6 +52,7 @@ import { formatSliceCliExitError } from './cli-exit-codes.js'
 import { formatSliceEngineCrashError, formatSliceFileVersionError, formatSlicePresetIncompatibilityError } from './slice-error.js'
 import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
 import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from './machine-switch-repair.js'
+import { sliceInfoCarriesNozzleGroupIds, stripSliceInfoNozzleGroupIds } from './stale-slice-info.js'
 import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
 import { resolveCustomProfileConfig } from './custom-profile-resolve.js'
 import { sanitizeProfileFileName } from './profile-file-name.js'
@@ -238,7 +243,7 @@ app.post('/slice', async (request, response) => {
     cleanupWorkDir()
   })
   try {
-    appendStructuredOutput(outputLines, 'system', 'Receiving slicing input')
+    appendStructuredOutput(outputLines, 'system', 'Receiving the project')
     await Promise.all([
       mkdir(workDir, { recursive: true }),
       mkdir(bambuConfigDir, { recursive: true }),
@@ -252,7 +257,7 @@ app.post('/slice', async (request, response) => {
       bambuDataDir
     })
     await pipeline(request, createWriteStream(inputPath))
-    appendStructuredOutput(outputLines, 'system', 'Preparing slicing project')
+    appendStructuredOutput(outputLines, 'system', 'Preparing the project')
     const preparedInput = await prepareInputThreeMf({
       slicerTarget,
       inputPath,
@@ -264,7 +269,7 @@ app.post('/slice', async (request, response) => {
       outputLines
     })
     const slicedArtifactMetadata = buildSlicedArtifactMetadata(parsed.data.request, parsed.data.profileFiles ?? [])
-    appendStructuredOutput(outputLines, 'system', 'Launching slicer CLI')
+    appendStructuredOutput(outputLines, 'system', 'Starting the slicer')
     await runCli({
       slicerTarget,
       inputPath: preparedInput.inputPath,
@@ -288,7 +293,7 @@ app.post('/slice', async (request, response) => {
       bambuDataDir,
       signal: cliAbort.signal
     })
-    appendStructuredOutput(outputLines, 'system', 'Collecting sliced artifact')
+    appendStructuredOutput(outputLines, 'system', 'Collecting the sliced file')
     await normalizeCliOutput({
       outputPath,
       outputDir: workDir,
@@ -367,7 +372,7 @@ async function runCli(input: {
   outputFileName: string
   outputLines: SlicingOutputLine[]
   plate: number
-  profileFiles: SliceProfileFile[]
+  profileFiles: SlicingPresetFile[]
   processSettingOverrides: Record<string, string | string[]>
   filamentSettingOverrides: Record<string, string | string[]>
   /** Per-material "tune" overrides keyed by 1-based project filament SLOT (from the material dialog). */
@@ -408,11 +413,29 @@ async function runCli(input: {
   // BBL-project loader. Synthesize/complete it from the slice's own profiles so it loads; a no-op
   // for real projects that already embed a complete one. Runs before the all-plate branch so a
   // multi-plate scaffold's per-plate slices load too.
+  //
+  // The export gets its OWN arg set: it loads no 3MF, so unlike the slice it needs the machine
+  // profile handed to it explicitly (see `selectSettingsExportProfileFiles`). Only re-materialized
+  // when the slice's selection actually dropped something, and silently — the caller already
+  // logged whatever `prepareProfileArgs` had to say about this same file set.
+  const exportProfileFiles = selectSettingsExportProfileFiles(input.profileFiles)
+  const exportProfileArgs = exportProfileFiles.length === cliProfileFiles.length
+    ? profileArgs
+    : await prepareProfileArgs({
+      profileFiles: exportProfileFiles,
+      workDir: path.dirname(input.outputPath),
+      profileDir: input.slicerTarget.profileDir,
+      inputPath: input.inputPath,
+      filamentSlots: input.filamentSlots,
+      processSettingOverrides: input.processSettingOverrides,
+      filamentSettingOverrides: input.filamentSettingOverrides,
+      perMaterialFilamentOverrides: input.perMaterialFilamentOverrides
+    })
   const preparedInputPath = await ensureEmbeddedProjectSettings({
     inputPath: input.inputPath,
     cliPath: input.slicerTarget.cliPath,
     appDir: input.slicerTarget.appDir ?? null,
-    profileArgs,
+    profileArgs: exportProfileArgs,
     profileDir: input.slicerTarget.profileDir,
     workDir: path.dirname(input.outputPath),
     env: {
@@ -508,7 +531,7 @@ async function runMergedAllPlateFallback(input: {
   outputLines: SlicingOutputLine[]
   plate: number
   plateIds: number[]
-  profileFiles: SliceProfileFile[]
+  profileFiles: SlicingPresetFile[]
   profileArgs: string[]
   metadata: SlicedArtifactMetadata | null
   supportedFlags: ReadonlySet<string>
@@ -981,7 +1004,7 @@ async function mkfifo(pipePath: string): Promise<void> {
 interface BuiltinProfileSummary {
   id: string
   source: 'builtin'
-  kind: SlicingProfileKind
+  kind: SlicingPresetKind
   name: string
   filamentType?: string
   filamentVendor?: string
@@ -989,6 +1012,8 @@ interface BuiltinProfileSummary {
   compatiblePrinters?: string[]
   compatiblePrints?: string[]
   nozzleDiameters?: number[]
+  minLayerHeight?: number
+  maxLayerHeight?: number
   plateTypes?: string[]
   compatiblePrintersCondition?: string
   compatiblePrintsCondition?: string
@@ -1025,7 +1050,7 @@ async function listBuiltinProfiles(profileDir: string): Promise<BuiltinProfileSu
     // A populated slicer image always has these dirs; a readdir failure here means the target's
     // preset dirs aren't ready yet (restart / mid-extraction) and we'd otherwise silently return a
     // partial, builtin-less catalogue. Log it so the condition is observable — the API/web treat a
-    // builtin-less response as transient and retry (see `slicingProfilesResponseIsUsable`), but the
+    // builtin-less response as transient and retry (see `slicingPresetsResponseIsUsable`), but the
     // swallowed error left no trace of why the editor briefly saw a custom-only profile list.
     const entries = await readdir(directory, { withFileTypes: true }).catch((error) => {
       console.warn(`listBuiltinProfiles: cannot read ${kind} presets at ${directory} — returning none for this kind:`, error instanceof Error ? error.message : error)
@@ -1044,7 +1069,7 @@ async function listBuiltinProfiles(profileDir: string): Promise<BuiltinProfileSu
   return profiles
 }
 
-async function readDisplayProfile(filePath: string, kind: SlicingProfileKind, profileDir: string) {
+async function readDisplayProfile(filePath: string, kind: SlicingPresetKind, profileDir: string) {
   try {
     const content = await readFile(filePath, 'utf8')
     const parsed = JSON.parse(content) as Record<string, unknown>
@@ -1064,7 +1089,7 @@ async function readDisplayProfile(filePath: string, kind: SlicingProfileKind, pr
 }
 
 async function prepareProfileArgs(input: {
-  profileFiles: SliceProfileFile[]
+  profileFiles: SlicingPresetFile[]
   workDir: string
   profileDir: string
   /**
@@ -1090,7 +1115,7 @@ async function prepareProfileArgs(input: {
 
   // Non-filament presets materialize once each; filaments materialize PER SLOT below,
   // because two slots may share a preset yet carry different per-material tunes.
-  const filamentFilesById = new Map<string, SliceProfileFile>()
+  const filamentFilesById = new Map<string, SlicingPresetFile>()
   for (const profile of input.profileFiles) {
     if (profile.kind === 'filament') {
       filamentFilesById.set(profile.id, profile)
@@ -1129,8 +1154,8 @@ async function prepareProfileArgs(input: {
     // Slot-scoped overrides on a slot-unique output path: materializing by profile id
     // let two slots sharing a preset clobber each other's tune.
     const overrides = { ...filamentSettingOverrides, ...(perMaterialFilamentOverrides[slotNumber] ?? {}) }
-    const profile: SliceProfileFile = source.origin === 'requested'
-      ? { ...(filamentFilesById.get(source.profileId) as SliceProfileFile), id: `filament-slot-${slotNumber}` }
+    const profile: SlicingPresetFile = source.origin === 'requested'
+      ? { ...(filamentFilesById.get(source.profileId) as SlicingPresetFile), id: `filament-slot-${slotNumber}` }
       : { id: `filament-slot-${slotNumber}`, source: 'builtin', kind: 'filament', name: source.name }
     filamentPaths.push(await materializeProfileFile(profile, customDir, input.profileDir, overrides))
   }
@@ -1153,7 +1178,7 @@ async function builtinFilamentPresetExists(profileDir: string, name: string): Pr
 }
 
 async function materializeProfileFile(
-  profile: SliceProfileFile,
+  profile: SlicingPresetFile,
   outputDir: string,
   profileDir: string,
   overrides?: Record<string, string | string[]>
@@ -1207,7 +1232,7 @@ async function prepareInputThreeMf(input: {
   inputPath: string
   outputPath: string
   request: z.infer<typeof createSlicingJobSchema>
-  profileFiles: SliceProfileFile[]
+  profileFiles: SlicingPresetFile[]
   stripEmbeddedProfileRefs: boolean
   processSettingOverrides: Record<string, string | string[]>
   outputLines: SlicingOutputLine[]
@@ -1250,7 +1275,21 @@ async function prepareInputThreeMf(input: {
 
   const metadata = buildSlicedArtifactMetadata(input.request, input.profileFiles)
 
-  if (!metadata && !machineSwitchProfile && !input.stripEmbeddedProfileRefs && !applyEmbeddedProcessOverrides) {
+  // A previous slice's nozzle groups crash the CLI at load on every printer — see
+  // `stale-slice-info.ts`. Worth a rewrite on its own, so it joins the gate below rather than
+  // riding along only when something else already needed one.
+  const sliceInfoXml = await readZipEntryText(input.inputPath, 'Metadata/slice_info.config').catch(() => '')
+  const hasStaleNozzleGroups = sliceInfoCarriesNozzleGroupIds(sliceInfoXml)
+
+  // Whether the project SETTINGS are being rewritten, which is a different question from whether a
+  // new file is being written: a slice_info-only sanitize produces a copy whose settings are
+  // untouched. The distinction is load-bearing — `rewroteProjectSettings` drops the machine profile
+  // from `--load-settings` (`cli-profile-selection.ts`), correct only when the copy carries a
+  // retargeted/identity-stamped machine of its own.
+  const rewritesProjectSettings = Boolean(metadata) || Boolean(machineSwitchProfile)
+    || input.stripEmbeddedProfileRefs || applyEmbeddedProcessOverrides
+
+  if (!rewritesProjectSettings && !hasStaleNozzleGroups) {
     return {
       inputPath: input.inputPath,
       rewroteProjectSettings: false,
@@ -1285,12 +1324,17 @@ async function prepareInputThreeMf(input: {
     if (input.stripEmbeddedProfileRefs) rewrittenSettings = stripEmbeddedProfileRefs(rewrittenSettings)
     if (applyEmbeddedProcessOverrides) rewrittenSettings = mergeProcessOverridesIntoProjectSettings(rewrittenSettings, input.processSettingOverrides)
     return rewrittenSettings
-  }, modelSettingsTransform)
+  }, modelSettingsTransform, undefined, hasStaleNozzleGroups ? stripSliceInfoNozzleGroupIds : undefined)
+  if (hasStaleNozzleGroups) {
+    appendStructuredOutput(input.outputLines, 'system', 'Dropped a previous slice\'s nozzle groups from slice_info.config')
+  }
   if (!hasEmbeddedProjectSettings) {
-    // The rewritten copy is discarded, so the Manual mode this assignment depends on was never
-    // written — passing the map on the CLI would pin an assignment the plate never asked for.
+    // No embedded settings means the Manual mode this assignment depends on was never written —
+    // passing the map on the CLI would pin an assignment the plate never asked for. Keep the
+    // rewritten copy anyway when it carries the stale-nozzle-group fix, which is what stands
+    // between this file and a SIGSEGV at load.
     return {
-      inputPath: input.inputPath,
+      inputPath: hasStaleNozzleGroups ? input.outputPath : input.inputPath,
       rewroteProjectSettings: false,
       manualFilamentMap: null
     }
@@ -1307,7 +1351,7 @@ async function prepareInputThreeMf(input: {
   }
   return {
     inputPath: input.outputPath,
-    rewroteProjectSettings: true,
+    rewroteProjectSettings: rewritesProjectSettings,
     manualFilamentMap: manualNozzle?.filament_map ?? null
   }
 }
@@ -1360,7 +1404,8 @@ async function rewriteThreeMfProjectSettings(
   outputPath: string,
   transform: (settings: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>,
   modelSettingsTransform?: (modelSettingsXml: string) => string,
-  model3dTransform?: (modelXml: string) => string
+  model3dTransform?: (modelXml: string) => string,
+  sliceInfoTransform?: (sliceInfoXml: string) => string
 ): Promise<boolean> {
   const sourceZip = await openZip(inputPath)
   const outputZip = new yazl.ZipFile()
@@ -1399,6 +1444,20 @@ async function rewriteThreeMfProjectSettings(
           async (buffer) => {
             outputZip.addBuffer(
               Buffer.from(JSON.stringify(await transform(parseProjectSettings(buffer)), null, 2), 'utf8'),
+              entry.fileName,
+              { mtime: entry.getLastModDate() }
+            )
+            sourceZip.readEntry()
+          },
+          (error) => finish(error as Error)
+        )
+        return
+      }
+      if (sliceInfoTransform && entry.fileName === 'Metadata/slice_info.config') {
+        readZipEntryBuffer(sourceZip, entry).then(
+          (buffer) => {
+            outputZip.addBuffer(
+              Buffer.from(sliceInfoTransform(buffer.toString('utf8')), 'utf8'),
               entry.fileName,
               { mtime: entry.getLastModDate() }
             )

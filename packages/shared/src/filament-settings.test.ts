@@ -162,3 +162,101 @@ test('a real tuning difference still counts alongside identity keys', async () =
   } as never)
   assert.deepEqual(resolvedFilamentModifiedKeys(state), ['nozzle_temperature'])
 })
+
+test("a preset's own overrides are attributed to the preset, not to the project", async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys, resolvedFilamentPresetOverrideKeys } =
+    await import('./filament-settings.js')
+  // A workspace custom preset in use by a project, untouched: its values ARE the baseline, and the
+  // raised bed temp it carries belongs to the preset (its parent says 40). Reported as a project
+  // change, it came with a reset button that would have discarded the user's own preset value.
+  const state = prepareResolvedFilamentState({
+    config: { hot_plate_temp: '55', nozzle_temperature: '255' },
+    baseConfig: { hot_plate_temp: '55', nozzle_temperature: '255' },
+    parentConfig: { hot_plate_temp: '40', nozzle_temperature: '255' },
+    overriddenKeys: []
+  })
+
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), [], 'nothing has been changed HERE')
+  assert.deepEqual(resolvedFilamentPresetOverrideKeys(state), ['hot_plate_temp'], 'the preset carries it')
+
+  // Changing it in the project is a project change, and stays distinct from the preset's override.
+  assert.deepEqual(resolvedFilamentModifiedKeys(state, { hot_plate_temp: '60' }), ['hot_plate_temp'])
+})
+
+test('an installed preset with no parent attributes nothing to the preset', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys, resolvedFilamentPresetOverrideKeys } =
+    await import('./filament-settings.js')
+  // A builtin: no parent resolves, so the distinction collapses rather than being invented.
+  const state = prepareResolvedFilamentState({
+    config: { nozzle_temperature: '255' },
+    baseConfig: { nozzle_temperature: '255' },
+    overriddenKeys: []
+  })
+
+  assert.deepEqual(resolvedFilamentPresetOverrideKeys(state), [])
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), [], 'a preset cannot differ from itself')
+  // ...and a heal override that restores the preset value must not read as a change (the badge's
+  // old fallback counted override KEYS here, so a fully reset material still showed a count).
+  assert.deepEqual(resolvedFilamentModifiedKeys(state, { nozzle_temperature: '255' }), [])
+})
+
+// Regression (2026-07-28, observed on "Best Shot Golf (PETG)" slot 1 against a dual-nozzle target):
+// a filament value is stored PER EXTRUDER VARIANT, and every comparison here collapsed to element 0.
+// The project carried max volumetric speed ["25","25"] under a preset saying ["25","40"] — equal on
+// element 0, so no badge, no yellow, no reset button, while the second extruder sliced at 25.
+test('per-variant drift past element 0 is a change; a scalar still means "same for every variant"', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys, filamentVariantValuesEqual } =
+    await import('./filament-settings.js')
+  const speed = filamentSettingsCatalog.options.filament_max_volumetric_speed
+
+  // The observed case: same first variant, different second.
+  assert.equal(filamentVariantValuesEqual(['25', '25'], ['25', '40'], speed), false)
+  // A scalar broadcasts, so it equals a vector only when it equals EVERY element.
+  assert.equal(filamentVariantValuesEqual('25', ['25', '25'], speed), true)
+  assert.equal(filamentVariantValuesEqual('25', ['25', '40'], speed), false)
+  // Value-equality stays option-aware per element, not string-exact.
+  assert.equal(filamentVariantValuesEqual(['100', '100'], ['100%', '100%'], filamentSettingsCatalog.options.filament_shrink), true)
+
+  const state = prepareResolvedFilamentState({
+    config: { filament_max_volumetric_speed: ['25', '25'], nozzle_temperature: '245' },
+    baseConfig: { filament_max_volumetric_speed: ['25', '40'], nozzle_temperature: ['245', '245'] },
+    overriddenKeys: []
+  })
+  // The second variant's drift reports; the scalar temperature matching both variants does not.
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), ['filament_max_volumetric_speed'])
+})
+
+test('resetting a per-variant drift emits an override, so the reset button is not a no-op', async () => {
+  const { diffFilamentVariantConfig } = await import('./filament-settings.js')
+  // What the dialog does on reset: write the PRESET's per-variant value over the project's, then
+  // diff against the effective base. The element-0 diff saw "25" both sides and emitted nothing,
+  // which would have left a flagged setting whose reset visibly did nothing.
+  const effective = { filament_max_volumetric_speed: ['25', '25'] }
+  const reset = { filament_max_volumetric_speed: ['25', '40'] }
+  assert.deepEqual(diffFilamentVariantConfig(effective, reset), { filament_max_volumetric_speed: ['25', '40'] })
+  // An untouched key emits nothing, whichever shape it is stored in.
+  assert.deepEqual(diffFilamentVariantConfig({ nozzle_temperature: ['245', '245'] }, { nozzle_temperature: '245' }), {})
+})
+
+// Ryan, 2026-07-28: "If I replace my PETG-HF with PLA Basic I get settings carried over - I
+// absolutely should not. Nothing should carry between preset changes when changing materials."
+// Confirmed against BambuStudio: Tab::select_preset sets `no_transfer = true` when the selected
+// filament preset's `filament_type` differs from the edited one's (and always for the printer tab),
+// while the transfer option is only offered on the PRINT tab.
+test('a project slot\'s values carry to a same-type preset only, per BambuStudio select_preset', async () => {
+  const { filamentSlotValuesCarryTo } = await import('./filament-settings.js')
+  const petgSlot = { filament_type: 'PETG', nozzle_temperature: ['245', '245'] }
+
+  assert.equal(filamentSlotValuesCarryTo(petgSlot, { filament_type: ['PLA'] }), false, 'PETG -> PLA carries nothing')
+  assert.equal(filamentSlotValuesCarryTo(petgSlot, { filament_type: ['PETG'] }), true, 'PETG -> PETG keeps the slot')
+  // Types are compared DERIVED, so a support filament is its own material (PLA-S is not PLA).
+  const supportSlot = { filament_type: 'PLA', filament_is_support: '1', filament_ids: 'GFS00' }
+  assert.equal(filamentSlotValuesCarryTo(supportSlot, { filament_type: ['PLA'] }), false, 'PLA-S -> PLA carries nothing')
+  assert.equal(
+    filamentSlotValuesCarryTo(supportSlot, { filament_type: ['PLA'], filament_is_support: ['1'], filament_ids: ['GFS00'] }),
+    true,
+    'PLA-S -> PLA-S keeps the slot'
+  )
+  // With no type to compare, keep the slot rather than silently discarding a project's real values.
+  assert.equal(filamentSlotValuesCarryTo({ nozzle_temperature: '245' }, { filament_type: ['PLA'] }), true)
+})

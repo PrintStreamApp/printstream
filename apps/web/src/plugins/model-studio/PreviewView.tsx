@@ -17,6 +17,9 @@ import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded'
 import OpenInFullRoundedIcon from '@mui/icons-material/OpenInFullRounded'
 import CloseFullscreenRoundedIcon from '@mui/icons-material/CloseFullscreenRounded'
+import FullscreenRoundedIcon from '@mui/icons-material/FullscreenRounded'
+import FullscreenExitRoundedIcon from '@mui/icons-material/FullscreenExitRounded'
+import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
 import { useQuery } from '@tanstack/react-query'
 import type { LibraryFile, LibraryThreeMfScene, ThreeMfIndex } from '@printstream/shared'
 import * as THREE from 'three'
@@ -24,6 +27,7 @@ import { OrbitControls } from 'three-stdlib'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
+import { fitPerspectiveDepthRange } from './lib/previewDepthRange'
 import { buildLayeredGcodePreview, GCODE_FEATURE_COLORS, GCODE_FEATURE_NAMES, parseGcodeLayers, type GcodeStats, type LayeredGcodePreview } from './lib/gcodePreview'
 import { formatSecondsDuration } from '../../lib/time'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
@@ -35,17 +39,17 @@ import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
 import { useShowBedModel } from './lib/useShowBedModel'
 import {
   createPreviewPlateSurface,
-  createThreeMfMatrix,
-  createThreeMfPartObject,
   disposeObject3D
 } from './lib/threeMfScene'
 import { fetchModelBytes, fetchModelText } from './lib/modelFetch'
 import { acquireOverlayViewerHold } from './lib/overlayViewerHold'
 import { MESH_PREVIEW_COLOR } from './lib/meshThumbnail'
-import { parseStlGeometryAsync, parseThreeMfModelEntryAsync } from './lib/meshParseClient'
+import { parseStlGeometryAsync } from './lib/meshParseClient'
+import { createLibraryThreeMfEntryBytesLoader, streamThreeMfSceneParts } from './lib/threeMfSceneStream'
 import {
   BAMBU_THREE_MF_ISO_UP,
   EDITOR_HOME_VIEW_DIRECTION,
+  VIEW_CUBE_EDGE_INSET,
   VIEW_CUBE_SIZE,
   VIEW_PRESET_CONFIG,
   computePlatedOrthoFrameRadius,
@@ -81,6 +85,11 @@ interface PreviewRig {
   platedFrameRadius: number
   /** Bounds of the framed plated content; null until a plated scene has loaded. */
   platedContentSize: THREE.Vector3 | null
+  /**
+   * Radius of the loaded content's bounding sphere, which the loader re-centres on the origin.
+   * Feeds the per-frame depth-range fit (see `lib/previewDepthRange.ts`); 0 until content loads.
+   */
+  contentRadius: number
   applyViewPreset: (preset: ViewPreset) => void
   syncViewCubeOrientation: () => void
   /**
@@ -125,7 +134,18 @@ export function PreviewView(props: Record<string, unknown>) {
   const [rig, setRig] = useState<PreviewRig | null>(null)
   // Bumped by the "Reload 3D view" action after a lost WebGL context to rebuild the rig.
   const [rigGeneration, setRigGeneration] = useState(0)
-  const [contextLost, setContextLost] = useState(false)
+  /**
+   * Why the 3D view is dead, when it is.
+   *
+   * 'lost' — the context was reclaimed (GPU pressure, driver reset). Rebuilding the rig usually
+   * works, so offer it.
+   * 'refused' — the browser would not GRANT a new context. Chrome blocks a page that has caused
+   * repeated context loss ("Web page caused context loss and was blocked"), and no amount of
+   * rebuilding gets one back: only a fresh document does. Retrying from here re-entered the same
+   * overlay with the same button, so the recovery affordance looked broken at exactly the moment
+   * it mattered.
+   */
+  const [viewerContextFailure, setViewerContextFailure] = useState<'lost' | 'refused' | null>(null)
   // Layered G-code preview (sliced-file navigation): the built preview is held in a ref
   // so the layer slider adjusts draw ranges without re-running the heavy viewer effect.
   const gcodePreviewRef = useRef<LayeredGcodePreview | null>(null)
@@ -153,6 +173,26 @@ export function PreviewView(props: Record<string, unknown>) {
   )
   // Expanded mode sizes the dialog like the full editor (96vw/96dvh) and lets the
   // viewer fill the freed height instead of keeping its fixed dvh band.
+  // Full view: the 3D area and nothing else, matching the editor's toggle. Deliberately NOT
+  // persisted — a mode that hides the plate picker (and, in the editor, Save) must not be what
+  // greets you on open. It IMPLIES maximized, being the same intent taken all the way.
+  const [viewportOnly, setViewportOnly] = useState(false)
+  const [previewBodyNode, setPreviewBodyNode] = useState<HTMLDivElement | null>(null)
+  const [previewBodySize, setPreviewBodySize] = useState({ width: 0, height: 0 })
+  useEffect(() => {
+    if (!previewBodyNode) return
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry?.contentRect
+      if (!box) return
+      setPreviewBodySize((current) => (
+        Math.abs(current.width - box.width) < 1 && Math.abs(current.height - box.height) < 1
+          ? current
+          : { width: box.width, height: box.height }
+      ))
+    })
+    observer.observe(previewBodyNode)
+    return () => observer.disconnect()
+  }, [previewBodyNode])
   const [maximized, setMaximized] = useLocalStorageState(
     'bambu.preview.maximized',
     false,
@@ -281,10 +321,9 @@ export function PreviewView(props: Record<string, unknown>) {
     try {
       renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: isThreeMfScene })
     } catch {
-      // The browser refused a context (GPU process still recovering from a crash, or the
-      // device is out of contexts). Land on the same overlay as a mid-session loss so the
-      // user can retry, instead of throwing into the route error boundary.
-      setContextLost(true)
+      // The browser refused a context (blocked after repeated loss, GPU process still recovering,
+      // or out of contexts). Distinct from a mid-session loss: retrying cannot help.
+      setViewerContextFailure('refused')
       return
     }
     // Cap DPR at 2 (matching the editor / view cube) to bound GPU/battery cost
@@ -299,6 +338,12 @@ export function PreviewView(props: Record<string, unknown>) {
     controls.enableDamping = true
     controls.dampingFactor = 0.28
     controls.enablePan = true
+    // Zoom toward the POINTER, not the orbit target. OrbitControls dollies by a MULTIPLICATIVE
+    // factor toward `target`, so each step covers less ground as you approach and the approach
+    // asymptotes — reported as "the more I zoom in, the slower zooming becomes, to the point I
+    // can't get as close as I'd like". `zoomToCursor` also walks the target toward the cursor, so
+    // rotation stops swinging around the plate centre once you have zoomed into a detail.
+    controls.zoomToCursor = true
 
     let needsRender = true
     const rigState: PreviewRig = {
@@ -309,6 +354,7 @@ export function PreviewView(props: Record<string, unknown>) {
       viewDistance: 200,
       platedFrameRadius: 1,
       platedContentSize: null,
+      contentRadius: 0,
       applyViewPreset: () => undefined,
       syncViewCubeOrientation: () => undefined,
       invalidate: () => {
@@ -406,6 +452,19 @@ export function PreviewView(props: Record<string, unknown>) {
       controls.update()
       if (needsRender) {
         needsRender = false
+        // Refit the depth range to the content before every draw. The G-code preview renders with
+        // a LINEAR depth buffer (log depth is off here on purpose — it costs early-Z on a
+        // million-triangle toolpath mesh), so a fixed 0.1-to-10000 range resolves depth to about a
+        // tenth of a millimetre at the framed distance: coarser than a layer, and far coarser than
+        // the 0.01mm the grid and nozzle-only zones sit above the plate. Everything z-fought.
+        if (camera instanceof THREE.PerspectiveCamera && rigState.contentRadius > 0) {
+          const { near, far } = fitPerspectiveDepthRange(camera.position.distanceTo(controls.target), rigState.contentRadius)
+          if (camera.near !== near || camera.far !== far) {
+            camera.near = near
+            camera.far = far
+            camera.updateProjectionMatrix()
+          }
+        }
         viewCube.sync(camera)
         renderer.render(scene, camera)
       }
@@ -422,7 +481,7 @@ export function PreviewView(props: Record<string, unknown>) {
     const onContextLost = (event: Event) => {
       event.preventDefault()
       cancelAnimationFrame(frame)
-      setContextLost(true)
+      setViewerContextFailure('lost')
     }
     renderer.domElement.addEventListener('webglcontextlost', onContextLost)
 
@@ -544,7 +603,10 @@ export function PreviewView(props: Record<string, unknown>) {
         // Rest the floor grid under the now-centred model.
         rig.stlGrid.position.z = -size.z / 2
       }
+      // The object was just re-centred on the origin, so the box's bounding sphere is the
+      // scene sphere the depth fit brackets each frame.
       const sphere = box.getBoundingSphere(new THREE.Sphere())
+      rig.contentRadius = sphere.radius
       const maxDimension = Math.max(size.x, size.y, size.z, 20)
       const distance = isPlatedPreview
         ? Math.max(sphere.radius * 3, maxDimension * 2, 120)
@@ -554,11 +616,10 @@ export function PreviewView(props: Record<string, unknown>) {
         rig.platedContentSize = size.clone()
         camera.near = Math.max(distance / 20, 0.8)
         camera.far = Math.max(distance * 6, 1200)
-      } else {
-        camera.near = 0.1
-        camera.far = Math.max(distance * 20, 5000)
-        camera.updateProjectionMatrix()
       }
+      // The perspective camera's planes are NOT set here: the render loop refits them to
+      // `contentRadius` every frame, which is what keeps the toolpath layers and the bed overlays
+      // out of one another's depth bucket at any zoom (see lib/previewDepthRange.ts).
       if (previewMode === 'plate-gcode') {
         // Open the G-code preview from the editor's home angle (shared direction) so it matches
         // the full editor's view rather than the iso corner. Orbit/view-cube still work after.
@@ -641,7 +702,7 @@ export function PreviewView(props: Record<string, unknown>) {
       // on one big synchronous DOM parse and popping in at once.
       const plateGroup = buildPlatePreviewBed(sceneData, bedModel)
       attachObject(plateGroup)
-      void streamThreeMfSceneParts(resourceBase, sceneData, plateGroup, loadAbortController.signal, (done, total) => {
+      void streamThreeMfSceneParts(createLibraryThreeMfEntryBytesLoader(resourceBase), sceneData, plateGroup, loadAbortController.signal, (done, total) => {
         if (cancelled) return
         setSceneProgress(done >= total ? null : { done, total })
         // Parts land in the scene without any camera move; redraw to show them.
@@ -713,9 +774,11 @@ export function PreviewView(props: Record<string, unknown>) {
     rig?.invalidate()
   }, [gcodeTopLayer, gcodeSingleLayer, gcodeMoveEnd, gcodeLayerCount, rig])
 
-  // A stale context-lost overlay must not survive a close/reopen of the modal.
+  // A stale failure overlay must not survive a close/reopen of the modal. Reopening genuinely is
+  // a fresh attempt even for 'refused' — the block is per document, and the browser may have
+  // recovered by then; if it has not, the next construction sets 'refused' again immediately.
   useEffect(() => {
-    if (!open) setContextLost(false)
+    if (!open) setViewerContextFailure(null)
   }, [open])
 
   // Keyboard scrubbing (Bambu-style): Up/Down step the visible top layer, Left/Right scrub
@@ -761,39 +824,98 @@ export function PreviewView(props: Record<string, unknown>) {
   // Expanded mode pins the dialog to the full editor's footprint (96vw/96dvh) and
   // switches the body from a scrolling column to a flex column so the viewer fills
   // the freed height (no scrolling needed at a fixed dialog height).
-  const BodyContainer = maximized ? DialogContent : ScrollableDialogBody
+  const expanded = maximized || viewportOnly
+  /**
+   * Vertical space the header icons need INSIDE the 3D area. Normally they sit in the dialog's
+   * header, above the viewport; full view removes that padding, so they overlap it — and the layer
+   * scrubber runs the full right edge, exactly where they land. Anything anchored top-right in the
+   * viewport must start below this.
+   */
+  const viewportTopReserve = viewportOnly ? 52 : 0
+  const showPreviewChrome = !viewportOnly
+  // Same rule the editor uses: the strip runs along whichever axis leaves the 3D area best
+  // proportioned. There is no sidebar here, so the whole body width is the viewport's to spend.
+  const plateStripOrientation = choosePlateStripOrientation({
+    bodyWidth: previewBodySize.width,
+    bodyHeight: previewBodySize.height,
+    sidebarWidth: 0,
+    gap: EDITOR_GRID_GAP_PX
+  })
+  /**
+   * Only adapt the axis while EXPANDED, where the body is `flex: 1 1 0` and its box is set by the
+   * dialog. Un-expanded the body is content-sized over a fixed-height 3D band, so its height
+   * DEPENDS on whether the strip is a row — feeding that back into the chooser is a loop whose two
+   * states can map to each other and flip-flop forever. It is also the right answer on the merits:
+   * a fixed 62dvh band has no height for a rail to reclaim.
+   */
+  const platesVertical = showPlatePicker && expanded && plateStripOrientation === 'vertical'
+  const BodyContainer = expanded ? DialogContent : ScrollableDialogBody
 
   return (
     <Modal open onClose={onClose}>
       <ScrollableModalDialog
         variant="outlined"
-        sx={maximized
-          // minHeight, not height: inside ModalOverflow, Joy pins a centered dialog to
-          // `height: max-content` (higher specificity than sx), which would collapse the
-          // flex body; min-height wins over that at computed-value time.
-          ? { width: '96vw', maxWidth: '100%', minHeight: '96dvh' }
-          : { width: { xs: '100%', md: 1120 }, maxWidth: '100%' }}
+        sx={viewportOnly
+          // Full view takes the lot, padding included — with no chrome left to inset, that padding
+          // is a border of nothing around the model.
+          ? { width: '100vw', maxWidth: '100%', minHeight: '100dvh', p: 0, borderRadius: 0 }
+          : maximized
+            // minHeight, not height: inside ModalOverflow, Joy pins a centered dialog to
+            // `height: max-content` (higher specificity than sx), which would collapse the
+            // flex body; min-height wins over that at computed-value time.
+            ? { width: '96vw', maxWidth: '100%', minHeight: '96dvh' }
+            : { width: { xs: '100%', md: 1120 }, maxWidth: '100%' }}
       >
-        <Tooltip title={maximized ? 'Shrink preview' : 'Expand preview'}>
+        {showPreviewChrome && (
+          <Tooltip title={maximized ? 'Shrink preview' : 'Expand preview'}>
+            <IconButton
+              aria-label={maximized ? 'Shrink preview' : 'Expand preview'}
+              variant="plain"
+              color="neutral"
+              size="sm"
+              onClick={() => setMaximized(!maximized)}
+              sx={{ position: 'absolute', top: 12, right: 92, zIndex: 2 }}
+            >
+              {maximized ? <CloseFullscreenRoundedIcon fontSize="small" /> : <OpenInFullRoundedIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        )}
+        <Tooltip title={viewportOnly ? 'Exit full view' : 'Full view (3D only)'}>
           <IconButton
-            aria-label={maximized ? 'Shrink preview' : 'Expand preview'}
+            aria-label={viewportOnly ? 'Exit full view' : 'Full view, 3D only'}
             variant="plain"
             color="neutral"
             size="sm"
-            onClick={() => setMaximized(!maximized)}
+            aria-pressed={viewportOnly}
+            onClick={() => setViewportOnly(!viewportOnly)}
             sx={{ position: 'absolute', top: 12, right: 52, zIndex: 2 }}
           >
-            {maximized ? <CloseFullscreenRoundedIcon fontSize="small" /> : <OpenInFullRoundedIcon fontSize="small" />}
+            {viewportOnly ? <FullscreenExitRoundedIcon fontSize="small" /> : <FullscreenRoundedIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
-        <ModalClose onClick={onClose} sx={{ top: 12, right: 12 }} />
-        {/* Extra right padding clears both header icons (expand/shrink + close). */}
-        <DialogFileTitle title={heading} fileName={file ? formatLibraryFileName(file.name) : null} sx={{ pr: 12 }} />
-        <BodyContainer sx={{ pt: 1.5, ...(maximized ? { flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column' } : null) }}>
-          <Stack spacing={1.5} sx={{ minWidth: 0, ...(maximized ? { flex: 1, minHeight: 0 } : null) }}>
-            {showPlatePicker && fileId && (
-              <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
-                <Box sx={{ width: '100%', minWidth: 0 }}>
+        {/* Kept in full view: unlike the editor there is no toolbar under it, so this is the
+            mode's always-visible exit. */}
+        <ModalClose onClick={onClose} sx={{ top: 12, right: 12, zIndex: 2 }} />
+        {/* Extra right padding clears the header icons (full view + expand/shrink + close). */}
+        {showPreviewChrome && (
+          <DialogFileTitle title={heading} fileName={file ? formatLibraryFileName(file.name) : null} sx={{ pr: 18 }} />
+        )}
+        <BodyContainer
+          ref={setPreviewBodyNode}
+          sx={{ pt: viewportOnly ? 0 : 1.5, ...(expanded ? { flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column' } : null) }}
+        >
+          <Stack
+            spacing={viewportOnly ? 0 : 1.5}
+            // The rail is a COLUMN beside the 3D area; a band stacks above it as before.
+            direction={platesVertical ? 'row' : 'column'}
+            sx={{ minWidth: 0, ...(expanded ? { flex: 1, minHeight: 0 } : null) }}
+          >
+            {showPlatePicker && fileId && showPreviewChrome && (
+              <Sheet
+                variant="outlined"
+                sx={{ p: 1, borderRadius: 'sm', ...(platesVertical ? { width: 172, flexShrink: 0, display: 'flex', minHeight: 0 } : null) }}
+              >
+                <Box sx={{ width: '100%', minWidth: 0, ...(platesVertical ? { display: 'flex', minHeight: 0 } : null) }}>
                   <LibraryPlateCardPicker
                     fileId={fileId}
                     resourceBasePath={resourceBase}
@@ -804,6 +926,7 @@ export function PreviewView(props: Record<string, unknown>) {
                     label={null}
                     collapsed={plateStripCollapsed}
                     onToggleCollapsed={() => setPlateStripCollapsed(!plateStripCollapsed)}
+                    orientation={platesVertical ? 'vertical' : 'horizontal'}
                   />
                 </Box>
               </Sheet>
@@ -812,12 +935,15 @@ export function PreviewView(props: Record<string, unknown>) {
               variant="soft"
               sx={{
                 // Expanded: fill whatever height the plate strip leaves; normal: fixed band.
-                height: maximized ? 'auto' : { xs: '50dvh', sm: '62dvh' },
-                flex: maximized ? 1 : 'initial',
-                minHeight: { xs: 300, sm: 360 },
+                height: expanded ? 'auto' : { xs: '50dvh', sm: '62dvh' },
+                flex: expanded ? 1 : 'initial',
+                minWidth: 0,
+                // Full view has no chrome to leave room for, so the floor would only stop the
+                // canvas shrinking with the window.
+                minHeight: viewportOnly ? 0 : { xs: 300, sm: 360 },
+                borderRadius: viewportOnly ? 0 : 'md',
                 position: 'relative',
                 overflow: 'hidden',
-                borderRadius: 'md',
                 bgcolor: '#0d1322'
               }}
             >
@@ -841,7 +967,8 @@ export function PreviewView(props: Record<string, unknown>) {
                     position: 'absolute',
                     top: 12,
                     left: 12,
-                    right: 12,
+                    // Clears the header icons, which sit inside the viewport in full view.
+                    right: viewportOnly ? 96 : 12,
                     zIndex: 2,
                     px: 1.5,
                     py: 0.75,
@@ -869,7 +996,7 @@ export function PreviewView(props: Record<string, unknown>) {
                   {viewerState.error}
                 </Alert>
               )}
-              {contextLost && (
+              {viewerContextFailure && (
                 // The WebGL context was reclaimed (GPU pressure, driver reset). The canvas
                 // is permanently blank until rebuilt, so offer an explicit reload instead
                 // of leaving a dead view.
@@ -879,19 +1006,27 @@ export function PreviewView(props: Record<string, unknown>) {
                   justifyContent="center"
                   sx={{ position: 'absolute', inset: 0, zIndex: 2, bgcolor: 'rgba(8, 11, 20, 0.6)', backdropFilter: 'blur(2px)' }}
                 >
-                  <Typography level="body-sm" textColor="neutral.200">
-                    The 3D view was interrupted by the browser.
+                  <Typography level="body-sm" textColor="neutral.200" sx={{ textAlign: 'center', px: 2 }}>
+                    {viewerContextFailure === 'refused'
+                      ? 'The browser has blocked new 3D views on this page. Reloading the page restores it.'
+                      : 'The 3D view was interrupted by the browser.'}
                   </Typography>
-                  <Button
-                    size="sm"
-                    variant="soft"
-                    onClick={() => {
-                      setContextLost(false)
-                      setRigGeneration((generation) => generation + 1)
-                    }}
-                  >
-                    Reload 3D view
-                  </Button>
+                  {viewerContextFailure === 'refused' ? (
+                    <Button size="sm" variant="soft" onClick={() => { window.location.reload() }}>
+                      Reload page
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      onClick={() => {
+                        setViewerContextFailure(null)
+                        setRigGeneration((generation) => generation + 1)
+                      }}
+                    >
+                      Reload 3D view
+                    </Button>
+                  )}
                 </Stack>
               )}
               {previewMode === 'plate-gcode' && gcodeLayerCount > 1 && !viewerState.loading && !viewerState.error && (
@@ -899,7 +1034,7 @@ export function PreviewView(props: Record<string, unknown>) {
                   variant="soft"
                   sx={{
                     position: 'absolute',
-                    top: 12,
+                    top: 12 + viewportTopReserve,
                     right: 12,
                     bottom: 12,
                     zIndex: 1,
@@ -993,8 +1128,8 @@ export function PreviewView(props: Record<string, unknown>) {
               <Box
                 sx={{
                   position: 'absolute',
-                  left: { xs: -18, sm: 0 },
-                  bottom: { xs: -18, sm: 0 },
+                  left: VIEW_CUBE_EDGE_INSET,
+                  bottom: VIEW_CUBE_EDGE_INSET,
                   zIndex: (theme) => theme.zIndex.tooltip,
                   display: 'flex',
                   flexDirection: 'column',
@@ -1253,63 +1388,6 @@ function buildPreviewPlateSurface(
  * incrementally with progress. Parts share the group's transform, so they land relative to the bed
  * exactly as a one-shot build would. Throws if no part yields previewable geometry.
  */
-async function streamThreeMfSceneParts(
-  resourceBase: string,
-  scene: LibraryThreeMfScene,
-  plateGroup: THREE.Object3D,
-  signal: AbortSignal,
-  onProgress: (done: number, total: number) => void
-): Promise<void> {
-  const partsByEntry = new Map<string, LibraryThreeMfScene['parts']>()
-  for (const part of scene.parts) {
-    const list = partsByEntry.get(part.entryPath)
-    if (list) list.push(part)
-    else partsByEntry.set(part.entryPath, [part])
-  }
-
-  const total = scene.parts.length
-  let done = 0
-  let placed = 0
-  onProgress(0, total)
-
-  await Promise.all([...partsByEntry.entries()].map(async ([entryPath, parts]) => {
-    const bytes = await fetchModelBytes(
-      buildApiUrl(`${resourceBase}/scene-entry?path=${encodeURIComponent(entryPath)}`),
-      { credentials: 'include', signal }
-    )
-    const modelMap = await parseThreeMfModelEntryAsync(bytes)
-    if (signal.aborted) {
-      // The viewer moved on (plate/file switch) — drop the freshly parsed geometry rather than
-      // attaching it to a group that's about to be disposed.
-      for (const geometry of modelMap.values()) geometry.dispose()
-      return
-    }
-    for (const part of parts) {
-      const geometry = modelMap.get(part.objectId)
-      done += 1
-      if (geometry) {
-        plateGroup.add(createThreeMfPartObject(geometry, {
-          // Parts without an extruder render in the DEFAULT filament, like Bambu Studio.
-          color: part.color ?? scene.projectFilaments?.[0]?.color ?? null,
-          transform: createThreeMfMatrix(part.transform),
-          // Without the subtype a support blocker / modifier / negative volume renders as an
-          // ordinary opaque part in the default filament — it reads as printed geometry that
-          // isn't in the file. The editor has always passed this; the preview must match, or
-          // the same project looks different depending on which surface opened it.
-          subtype: part.subtype,
-          colorPaintFilaments: scene.projectFilaments ?? null
-        }))
-        placed += 1
-      }
-      onProgress(done, total)
-    }
-  }))
-
-  if (placed === 0) {
-    throw new Error('This plate does not include previewable mesh geometry.')
-  }
-}
-
 function buildPlateGcodePreviewObject(
   object: THREE.Object3D,
   bed: LibraryThreeMfScene['bed'] | null,

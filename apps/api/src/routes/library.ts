@@ -42,6 +42,7 @@ import {
   type PrinterStatus,
   type ThreeMfIndex as LibraryThreeMfIndexDto
 } from '@printstream/shared'
+import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import {
   copyBridgeLibraryFile,
@@ -1145,9 +1146,11 @@ libraryRouter.delete('/:id/current-version', requireRequestPermission(LIBRARY_MA
 libraryRouter.post('/:id/repair-settings', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
   const fileId = requireRouteParam(request.params.id, 'File id')
   const tenantId = requireRequestTenantId(request)
+  // Full row, not a narrow select: the "nothing to repair" branch below answers with `toDto`,
+  // which reads sizeBytes/uploadedAt/thumbnailPath. The `as LibraryFileRow` cast hid that from the
+  // compiler, so an under-selected row surfaced as a 500 the moment that branch became reachable.
   const current = await prisma.libraryFile.findFirst({
-    where: { id: fileId, tenantId },
-    select: { id: true, name: true, kind: true, ownerBridgeId: true, storedPath: true, folderId: true }
+    where: { id: fileId, tenantId }
   }) as LibraryFileRow | null
   if (!current) throw notFound('File not found')
   assertDemoLibraryFileMutationAllowed(request, current)
@@ -1186,7 +1189,12 @@ libraryRouter.post('/:id/repair-settings', requireRequestPermission(LIBRARY_UPLO
         flushMatrixBefore: result.matrix?.before ?? null,
         flushMatrixAfter: result.matrix?.after ?? null,
         filamentCount: result.matrix?.filaments ?? null,
-        extruderCount: result.matrix?.extruders ?? null
+        extruderCount: result.matrix?.extruders ?? null,
+        // Which invariant actually needed fixing — the trail should distinguish "the slice was
+        // broken" from "Bambu Studio could not open it", since one repair action covers both.
+        variantIndexBefore: result.variantIndex?.before ?? null,
+        variantIndexAfter: result.variantIndex?.after ?? null,
+        variantRows: result.variantIndex?.variantRows ?? null
       }
     })
     broadcastLibraryChanged()
@@ -1267,6 +1275,14 @@ libraryRouter.post('/versions/:versionId/print', requireRequestPermission(PRINTS
   })
   broadcastPrintDispatchChanged(version.tenantId)
   response.status(202).json({ job })
+})
+
+/** The whole 3MF of an archived version, for a client that parses it itself (the editor). */
+libraryRouter.get('/versions/:versionId/archive', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const versionId = requireRouteParam(request.params.versionId, 'Version id')
+  const row = await prisma.libraryFileVersion.findUnique({ where: { id: versionId } }) as LibraryFileVersionRow | null
+  if (!row) throw notFound('Version not found')
+  await sendLibraryFileArchive(request, response, row)
 })
 
 /** Plate-specific mesh scene metadata for previewing an archived version. */
@@ -1417,6 +1433,14 @@ libraryRouter.get('/:id/preview-asset', requireRequestPermission(LIBRARY_VIEW_PE
   const asset = await resolveLibraryFilePreviewAsset(request, response, row)
   if (!asset) return
   response.json(asset satisfies LibraryThreeMfPreviewAssetDto)
+})
+
+/** The whole 3MF, for a client that parses it itself (the editor). See `sendLibraryFileArchive`. */
+libraryRouter.get('/:id/archive', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const fileId = requireRouteParam(request.params.id, 'File id')
+  const row = await prisma.libraryFile.findUnique({ where: { id: fileId } }) as LibraryFileRow | null
+  if (!row) throw notFound('File not found')
+  await sendLibraryFileArchive(request, response, row)
 })
 
 /** Plate-specific mesh scene metadata for non-G-code 3MF previews. */
@@ -1923,11 +1947,25 @@ function resolveRequestedPlateName(fileName: string, index: ParsedThreeMfIndex |
   return index?.plates.find((entry) => entry.index === plate)?.name?.trim() || null
 }
 
+/**
+ * Local path for a library file's bytes, pulling a bridge-owned file into the local cache first.
+ *
+ * Logs before rethrowing because every caller converts the failure to a bare `404 File missing on
+ * disk`, which erases the only server-side trace of WHY a file the database knows about could not
+ * be served — for a bridge-owned file that is a transfer failure (bridge offline, RPC error, disk
+ * full), and the 404 alone sends you looking at the file instead of the transport. `storedPath` is
+ * a filename the user already sees; nothing secret goes to the log.
+ */
 async function resolveLibraryFilePath(row: {
   ownerBridgeId?: string | null
   storedPath: string
 }): Promise<string> {
-  return await resolveLibraryFileToLocalPath(row)
+  try {
+    return await resolveLibraryFileToLocalPath(row)
+  } catch (error) {
+    console.warn(`[library] could not resolve bytes for ${row.storedPath}: ${(error as Error).message}`)
+    throw error
+  }
 }
 
 async function copyLibraryEntryBytes(
@@ -1977,6 +2015,7 @@ async function toDto(row: {
   thumbnailPath: string | null
   folderId: string | null
   createdByName?: string | null
+  currentVersionNumber?: number | null
   restoredFromVersionNumber?: number | null
   derivedChipsJson?: string | null
   derivedChipsVersion?: number | null
@@ -2026,7 +2065,9 @@ async function toDto(row: {
     ...(chips.geometryOnly ? { geometryOnly: true } : {}),
     ...(chips.objectExport ? { objectExport: true } : {}),
     ...(chips.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
+    ...(chips.settingsRepairReasons?.length ? { settingsRepairReasons: chips.settingsRepairReasons } : {}),
     ...(chips.projectVersion ? { projectVersion: chips.projectVersion } : {}),
+    ...(row.currentVersionNumber ? { currentVersionNumber: row.currentVersionNumber } : {}),
     createdByName: row.createdByName ?? null,
     restoredFromVersionNumber: row.restoredFromVersionNumber ?? null,
     favorite: options.favorite ?? false,
@@ -2118,6 +2159,80 @@ function toLibraryFileVersionCreateInput(row: LibraryFileRow) {
   }
 }
 
+/**
+ * Refuse to serve an archive larger than the browser could open anyway. Mirrors
+ * `MAX_CLIENT_THREE_MF_BYTES` in the web app's `threeMfArchive.ts`: past this the tab runs out of
+ * heap and dies with no recoverable error, so failing here with a message is strictly better than
+ * buffering it server-side first.
+ */
+const MAX_ARCHIVE_RESPONSE_BYTES = 256 * 1024 * 1024
+
+/**
+ * ETag variant for the archive. Bump it whenever a bug could have left TRUNCATED bodies in browser
+ * caches — the ETag is keyed on the file's bytes, so an unchanged file keeps its old ETag, the
+ * server answers 304, and the browser happily re-serves the broken copy forever. Fixing the server
+ * is not enough on its own; the tag has to change to orphan those entries.
+ *
+ * Note the tag is derived from METADATA (see {@link buildLibraryFileEtag}), never from the bytes
+ * actually sent — so a body that went out wrong still carries a perfectly valid-looking tag. That
+ * is why this constant exists at all, and why each incident needs its own bump.
+ *
+ * v2: the first cut served the archive with a bare `createReadStream().pipe()`, whose body never
+ * completes when read through `fetch()` behind the Vite dev proxy. Chrome cached the empty result
+ * and kept revalidating into it, so affected projects failed to open ("could not be opened as a
+ * 3MF archive") even after the route was fixed.
+ *
+ * v3: a concurrent fill of the API's local copy of a bridge-owned file could hand this route a
+ * partially-written file (fixed in `bridge-library-files.ts` by filling a temp file and renaming
+ * it into place). The short body that produced went out as a 200, was stored, and every later open
+ * revalidated into it — one project stayed unopenable in one browser while the same bytes opened
+ * everywhere else. `sendModelBuffer` now declares a `Content-Length`, so a short body can no longer
+ * be stored as a complete one; this bump clears the entries written before it did.
+ */
+const ARCHIVE_ETAG_VARIANT = 'archive-v3'
+
+/**
+ * Serve a library file's whole 3MF to a client that will parse it in the browser — the editor's
+ * read path (`createArchiveProjectSource` in the web app's model-studio plugin).
+ *
+ * Deliberately separate from {@link sendLibraryFileDownload}, and deliberately gated on
+ * `library.view` rather than `library.download`, because this is not a download: it serves the same
+ * bytes the `/scene`, `/scene-entry`, and `/plates` routes already expose piecewise, to the same
+ * audience, so that one parser produces the scene instead of two. It carries no
+ * `Content-Disposition`, is not audited as a download, and is conditional — reopening an unchanged
+ * project revalidates to 304 rather than re-sending the archive.
+ *
+ * Consequence worth naming: a viewer's tab now holds the complete file, so `library.download`
+ * governs the download AFFORDANCES (the editor's export/save-to-disk items) and is no longer a hard
+ * boundary on the bytes of an openable 3MF. That was a deliberate call when this route was added.
+ */
+async function sendLibraryFileArchive(
+  request: Request,
+  response: Response,
+  row: { ownerBridgeId?: string | null; storedPath: string; sizeBytes: number; uploadedAt: Date }
+): Promise<void> {
+  if (sendNotModifiedIfLibraryFileFresh(request, response, row, ARCHIVE_ETAG_VARIANT)) return
+  let onDisk: string
+  try {
+    onDisk = await resolveLibraryFilePath(row)
+  } catch {
+    throw notFound('File missing on disk')
+  }
+
+  const stats = await stat(onDisk).catch(() => null)
+  if (stats && stats.size > MAX_ARCHIVE_RESPONSE_BYTES) {
+    throw badRequest('This project is too large to open in the editor.')
+  }
+
+  // Through `sendModelBuffer`, NOT a bare `createReadStream().pipe()`. A raw pipe is what
+  // `/download` does, and it works there because a download is consumed by the browser writing to
+  // disk — but read back through `fetch().arrayBuffer()` (which is how the editor consumes this)
+  // the body never completes behind the Vite dev proxy: headers and most of the body arrive, then
+  // the tail never does. Verified directly: curl fetched the same URL in 37ms while the browser
+  // hung indefinitely, and the same file served through this helper is fine.
+  await sendModelBuffer(request, response, await readFile(onDisk), 'model/3mf')
+}
+
 async function sendLibraryFileDownload(
   response: Response,
   row: { name: string; ownerBridgeId?: string | null; storedPath: string }
@@ -2192,26 +2307,9 @@ async function sendLibraryFilePlates(
   const signal = requestAbortSignal(request, response)
   try {
     const index = await readLibraryThreeMfIndex(row, signal)
-    response.json({
-      plates: index.plates.map((plate) => ({
-        index: plate.index,
-        name: plate.name,
-        hasThumbnail: plate.thumbnailFile != null,
-        plateType: plate.plateType,
-        nozzleSizes: plate.nozzleSizes,
-        filaments: plate.filaments,
-        objects: plate.objects,
-        prediction: plate.prediction ?? null,
-        weight: plate.weight ?? null,
-        filamentChanges: plate.filamentChanges,
-        pauses: plate.pauses
-      })),
-      projectFilaments: index.projectFilaments,
-      compatiblePrinterModels: index.compatiblePrinterModels,
-      supportFilamentIds: index.supportFilamentIds,
-      printerProfileName: index.printerProfileName,
-      processProfileName: index.processProfileName
-    } satisfies LibraryThreeMfIndexDto)
+    // Shared with the browser's local-file path, so a plate cannot read as thumbnail-less on one
+    // surface and not the other.
+    response.json(toThreeMfIndexDto(index) satisfies LibraryThreeMfIndexDto)
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
     response.json({ plates: [], projectFilaments: [], compatiblePrinterModels: [], supportFilamentIds: [], printerProfileName: null, processProfileName: null } satisfies LibraryThreeMfIndexDto)
@@ -2401,6 +2499,7 @@ function deriveChips(index: ParsedThreeMfIndex): DerivedChips {
     projectFilamentChips: collectProjectFilamentChips(index),
     ...(index.objectExport ? { objectExport: true } : {}),
     ...(index.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
+    ...(index.settingsRepairReasons?.length ? { settingsRepairReasons: index.settingsRepairReasons } : {}),
     ...(index.projectVersion ? { projectVersion: index.projectVersion } : {})
   }
 }

@@ -953,6 +953,8 @@ export const printJobSchema = z.object({
 })
 export type PrintJob = z.infer<typeof printJobSchema>
 
+export type ThreeMfSettingsRepairReason = 'flushMatrix' | 'variantIndex'
+
 export const libraryFileSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -989,11 +991,30 @@ export const libraryFileSchema = z.object({
    */
   needsSettingsRepair: z.boolean().optional(),
   /**
+   * WHICH invariants the project breaks, so a repair prompt can describe the user's actual problem
+   * rather than the first cause we happened to implement:
+   * - `flushMatrix`: `flush_volumes_matrix` is sized for a different machine topology; BambuStudio
+   *   reads it out of bounds and the SLICE dies (exit 139).
+   * - `variantIndex`: `filament_self_index` does not match the variant rows; Bambu Studio refuses
+   *   to OPEN the project ("Invalid configuration file"), while our own slices work fine.
+   * Absent/empty on a healthy project. `needsSettingsRepair` stays the gate.
+   */
+  settingsRepairReasons: z.array(z.enum(['flushMatrix', 'variantIndex'])).optional(),
+  /**
    * The Bambu Studio version that saved this project (e.g. `"02.08.00.50"`). Absent for non-3MFs
    * and for projects that carry no version. BambuStudio REFUSES a project newer than the engine
    * slicing it (major.minor only), so the slice dialog warns before the job is queued.
    */
   projectVersion: z.string().nullable().optional(),
+  /**
+   * How many times this file's content has been replaced (1 for a file never overwritten).
+   *
+   * Exposed so a long-lived editor session can tell whether the file moved under it: the editor
+   * records this at open and re-reads it at save, and warns when they differ. Saving anyway is
+   * allowed and is the documented behaviour — the session authors from the bytes it opened, so
+   * the other save stays in history but is not an ancestor of ours.
+   */
+  currentVersionNumber: z.number().int().positive().optional(),
   /** Display name of whoever added/replaced/restored the current content. */
   createdByName: z.string().nullable().optional(),
   /** Set when the content was produced by restoring this older version number. */
@@ -1159,7 +1180,13 @@ export const libraryThreeMfPrimeTowerSizingSchema = z.object({
   /** Printer nozzle count; 2 (dual-nozzle) changes the purge-volume formula. */
   extruderCount: z.number().int(),
   /** A wipe tower is forced even for a single filament (timelapse / wrapping). */
-  needWipeTower: z.boolean()
+  needWipeTower: z.boolean(),
+  /**
+   * Vase mode, which suppresses the tower against the filament-count term (never against the
+   * forcing conditions above — BambuStudio returns early for those). Defaulted so a scene produced
+   * before this field existed still parses as "not vase mode", which is the common case.
+   */
+  spiralMode: z.boolean().default(false)
 })
 export type LibraryThreeMfPrimeTowerSizing = z.infer<typeof libraryThreeMfPrimeTowerSizingSchema>
 
@@ -1418,7 +1445,14 @@ export const threeMfPlateObjectSchema = z.object({
    * slice_info entry's own identify_id). Empty when the file carries none. Defaulted so
    * payloads produced before this field existed still parse.
    */
-  identifyIds: z.array(z.number().int()).default([])
+  identifyIds: z.array(z.number().int()).default([]),
+  /**
+   * This object's per-object PROCESS overrides from `model_settings.config`. Carried to the browser
+   * so the prepare-print dialog — which never loads the scene — can show them and re-send them
+   * WHOLE: the slice-time transform is authoritative per object, so a partial map drops whatever it
+   * omits. Defaulted so payloads produced before this field existed still parse.
+   */
+  processOverrides: z.record(z.string().min(1), z.string()).default({})
 })
 export type ThreeMfPlateObject = z.infer<typeof threeMfPlateObjectSchema>
 
@@ -1465,6 +1499,13 @@ export const threeMfProjectFilamentSchema = z.object({
   id: z.number().int().positive(),
   filamentType: z.string().nullable(),
   filamentName: z.string().nullable(),
+  /**
+   * The slot's raw `filament_settings_id`, for BINDING the slot to a preset; `filamentName` above
+   * is the display form and is lossy (it strips the `@BBL…` machine suffix, which is what
+   * distinguishes a built-in from a workspace preset that inherits it). Optional: absent from an
+   * older server or bridge.
+   */
+  filamentPresetName: z.string().nullable().optional(),
   color: z.string().nullable(),
   nozzleId: z.number().int().min(0).nullable(),
   chamberTemperature: z.number().nullable(),

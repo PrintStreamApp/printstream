@@ -22,12 +22,22 @@ import { persistLibraryFileFromLocalPath } from './library-files.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { authorProjectMachineFromProfile } from './save-retarget.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
+import {
+  INITIAL_SLICER_CONTACT,
+  UNKNOWN_JOB_GRACE_MS,
+  UNREACHABLE_GRACE_MS,
+  nextSlicerContact,
+  slicerContactGiveUpMessage,
+  slicerContactHeartbeat,
+  type SlicerContactState
+} from './slicer-contact.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from './three-mf.js'
 import { healUnweldedThreeMfMeshes } from './three-mf-mesh-weld.js'
 import { resolveSceneEditImports } from './import-store.js'
-import type { ResolvedSlicingProfileFile } from './slicing-profiles.js'
+import type { ResolvedSlicingPresetFile } from './slicing-presets.js'
 import { withTenantRequestContext, type RequestTenantSummary } from './tenant-context.js'
 import { broadcastSlicingChanged } from './ws-resource-events.js'
+import { clientSessions } from './client-sessions.js'
 import { recordSliceJob } from './metrics.js'
 import { prisma } from './prisma.js'
 import { resolveLibraryFileToLocalPath } from './bridge-library-files.js'
@@ -35,7 +45,7 @@ import { resolveLibraryFileToLocalPath } from './bridge-library-files.js'
 const DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS = 750
 const DEFAULT_SLICING_PROGRESS_HEARTBEAT_INTERVAL_MS = 10_000
 const DEFAULT_SLICING_STATE_FILE = path.resolve(path.dirname(env.LIBRARY_DIR), 'slicing-jobs-state.json')
-const INTERRUPTED_SLICING_MESSAGE = 'Slicing job was interrupted by an API restart. Requeue to try again.'
+const INTERRUPTED_SLICING_MESSAGE = 'Slicing was interrupted by a server restart. Slice again to retry.'
 
 interface SlicingJobState {
   id: string
@@ -49,7 +59,7 @@ interface SlicingJobState {
   outputFileName: string | null
   thumbnailPath: string | null
   request: CreateSlicingJob
-  profileFiles: ResolvedSlicingProfileFile[]
+  profileFiles: ResolvedSlicingPresetFile[]
   status: SlicingJobStatus
   queuePosition: number | null
   slicerName: string | null
@@ -63,6 +73,12 @@ interface SlicingJobState {
   cancelRequested: boolean
   controller: AbortController | null
   activeSlicerJobId: string | null
+  /**
+   * Set by the live-progress watchdog when it aborts the slice because the slicer stopped
+   * acknowledging the job. Distinguishes that abort from a user Cancel, which shares the
+   * controller. In-memory only — a lost slice is never resumed, so it need not survive a restart.
+   */
+  lostReason: string | null
 }
 
 interface PersistedSlicingJobsState {
@@ -81,7 +97,7 @@ interface PersistedSlicingJobState {
   outputFileName: string | null
   thumbnailPath: string | null
   request: CreateSlicingJob
-  profileFiles: ResolvedSlicingProfileFile[]
+  profileFiles: ResolvedSlicingPresetFile[]
   status: SlicingJobStatus
   slicerName: string | null
   metadata: SlicingMetadata
@@ -130,6 +146,9 @@ export class SlicingJobs {
   private readonly jobs = new Map<string, SlicingJobState>()
   private readonly progressPollIntervalMs: number
   private readonly progressHeartbeatIntervalMs: number
+  /** Watchdog graces; see `slicer-contact.ts`. Overridable so tests need not wait out the real ones. */
+  private readonly lostUnknownGraceMs: number
+  private readonly lostUnreachableGraceMs: number
   private readonly persistencePath: string | null
   private readonly persistArtifact: PersistSlicedArtifact
   private readonly persistThumbnail: PersistSlicingHistoryThumbnail
@@ -140,6 +159,8 @@ export class SlicingJobs {
   constructor(options?: {
     progressPollIntervalMs?: number
     progressHeartbeatIntervalMs?: number
+    lostUnknownGraceMs?: number
+    lostUnreachableGraceMs?: number
     persistState?: boolean
     stateFilePath?: string
     persistArtifact?: PersistSlicedArtifact
@@ -148,6 +169,8 @@ export class SlicingJobs {
   }) {
     this.progressPollIntervalMs = options?.progressPollIntervalMs ?? DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS
     this.progressHeartbeatIntervalMs = options?.progressHeartbeatIntervalMs ?? DEFAULT_SLICING_PROGRESS_HEARTBEAT_INTERVAL_MS
+    this.lostUnknownGraceMs = options?.lostUnknownGraceMs ?? UNKNOWN_JOB_GRACE_MS
+    this.lostUnreachableGraceMs = options?.lostUnreachableGraceMs ?? UNREACHABLE_GRACE_MS
     this.persistArtifact = options?.persistArtifact ?? persistLibraryFileFromLocalPath
     this.persistThumbnail = options?.persistThumbnail ?? persistHistoryThumbnailFromLibrary
     this.resolveSource = options?.resolveSource ?? resolveSlicingSourcePath
@@ -159,12 +182,22 @@ export class SlicingJobs {
     this.pumpQueue()
   }
 
+  /**
+   * The workspace's jobs, newest first.
+   *
+   * A FINISHED job comes back without the engine's raw stdout/stderr — only the `system` lines
+   * that are its user-facing status. This response is polled by every open tab and grows with
+   * history, and the engine log dwarfs everything else on a job: 185 jobs made it 1.3 MB, 1.07 MB
+   * of which was log no surface renders (the web reads a finished job's outcome from its last
+   * system line). The complete log stays on `GET /jobs/:id`. Active jobs keep everything — their
+   * progress frames ARE stdout.
+   */
   list(tenantId: string): SlicingJob[] {
     this.recomputeQueuePositions()
     return Array.from(this.jobs.values())
       .filter((job) => job.tenantId === tenantId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .map(toDto)
+      .map((job) => (isActiveSlicingJobState(job) ? toDto(job) : toFinishedListDto(job)))
   }
 
   get(tenantId: string, jobId: string): SlicingJob {
@@ -195,7 +228,7 @@ export class SlicingJobs {
     sourcePath: string
     targetBridgeId: string | null
     request: CreateSlicingJob
-    profileFiles?: ResolvedSlicingProfileFile[]
+    profileFiles?: ResolvedSlicingPresetFile[]
   }): SlicingJob {
     if (!slicerClient.isConfigured()) {
       throw new HttpError(503, 'Slicer service is not configured')
@@ -231,7 +264,8 @@ export class SlicingJobs {
       finishedAt: null,
       cancelRequested: false,
       controller: null,
-      activeSlicerJobId: null
+      activeSlicerJobId: null,
+      lostReason: null
     }
     this.jobs.set(job.id, job)
     this.logJobEvent(job, 'info', `Queued slicing job for ${job.sourceFileName}`, {
@@ -257,12 +291,30 @@ export class SlicingJobs {
       this.logJobEvent(job, 'warn', 'Cancelled queued slicing job before start')
       this.pumpQueue()
     } else {
-      this.touch(job, 'Cancellation requested')
+      this.touch(job, 'Cancelling...')
       this.logJobEvent(job, 'warn', 'Cancellation requested for active slicing job')
     }
     this.schedulePersist()
     broadcastSlicingChanged(job.tenantId)
     return toDto(job)
+  }
+
+  /**
+   * Cancel every still-running job started by a browser tab that has closed for good.
+   *
+   * Called by the `client-sessions.ts` departure signal, which is already grace-delayed — a reload
+   * or a flaky socket never reaches here. Deliberately NOT tenant-scoped: the caller is a socket
+   * lifecycle, not a request, and the owner id was minted by the tab that also created the job, so
+   * it selects exactly that tab's own work and nothing else. Terminal jobs are left alone: the
+   * output of a finished slice belongs to the user, not to the tab that happened to start it.
+   */
+  cancelForOwner(ownerClientId: string): void {
+    for (const job of this.jobs.values()) {
+      if (job.request.ownerClientId !== ownerClientId) continue
+      if (job.status === 'ready' || job.status === 'failed' || job.status === 'cancelled') continue
+      this.logJobEvent(job, 'warn', 'Cancelling slicing job: the tab that started it closed')
+      this.cancel(job.tenantId, job.id)
+    }
   }
 
   async delete(tenantId: string, jobId: string): Promise<SlicingJob> {
@@ -333,12 +385,21 @@ export class SlicingJobs {
       job.controller = controller
       job.startedAt = new Date()
       this.logJobEvent(job, 'info', 'Starting slicing job execution')
-      const progressTracker = this.trackLiveOutput(job, progressController.signal).then((count) => {
+      // The watchdog half: when the slicer stops acknowledging this job, abort the slice with the
+      // reason rather than letting a half-open POST run to the 30-minute ceiling. `lostReason` is
+      // what tells the catch below this was a loss, not the user pressing Cancel.
+      const progressTracker = this.trackLiveOutput(job, progressController.signal, (reason) => {
+        job.lostReason = reason
+        controller.abort(new Error(reason))
+      }).then((count) => {
         observedOutputCount = count
         return count
       })
-      this.setStatus(job, 'preparing', 'Preparing slicer job')
-      this.setStatus(job, 'slicing', 'Submitted to slicer service')
+      // `slicing` is NOT set here: everything runSlicerJob does before it hands the file over
+      // (baking the editor's scene, authoring the machine, welding meshes) is preparation, and on
+      // a big project it is the slow part. Announcing "slicing" over it reported the wrong phase
+      // for the whole prep — runSlicerJob flips the status itself once the engine has the file.
+      this.setStatus(job, 'preparing', 'Preparing the project')
       // Declared outside the try so the artifact temp dir is cleaned on EVERY exit path
       // (persist failure, cancel during saving, ...), not only on success.
       let result: Awaited<ReturnType<typeof this.runSlicerJob>> | null = null
@@ -399,7 +460,12 @@ export class SlicingJobs {
         this.finish(job, 'ready', slicedArtifactReadyMessage(job.request))
       } catch (error) {
         await this.ensureHistoryThumbnail(job)
-        if (job.cancelRequested || controller.signal.aborted) {
+        // Checked BEFORE the cancel branch: the watchdog aborts the same controller the user's
+        // Cancel does, and reporting a lost slice as "Slicing cancelled" would blame the user for
+        // the slicer going away.
+        if (job.lostReason && !job.cancelRequested) {
+          this.finish(job, 'failed', job.lostReason)
+        } else if (job.cancelRequested || controller.signal.aborted) {
           this.finish(job, 'cancelled', 'Slicing cancelled')
         } else {
           if (error instanceof SlicerServiceError) {
@@ -434,7 +500,7 @@ export class SlicingJobs {
     // demand and fails with a clear message if the source is truly gone.
     let sourcePath = await this.resolveSource({ sourceFileId: job.sourceFileId, sourcePath: job.sourcePath })
     const rewrittenSourcePaths: string[] = []
-    const rewrittenKinds = new Set<ResolvedSlicingProfileFile['kind']>()
+    const rewrittenKinds = new Set<ResolvedSlicingPresetFile['kind']>()
     let retryAttempt = 0
 
     try {
@@ -549,6 +615,10 @@ export class SlicingJobs {
         }
       }
 
+      // Preparation is done and the project is about to reach the engine: this is the first
+      // moment "slicing" is true (see the deliberately absent transition in run()).
+      this.setStatus(job, 'slicing', 'Starting the slice')
+
       let crashRetryUsed = false
       while (true) {
         const slicerJobId = buildSlicerAttemptJobId(job.id, retryAttempt)
@@ -569,7 +639,7 @@ export class SlicingJobs {
           if (!crashRetryUsed && isTransientSlicerCrashExit(error)) {
             crashRetryUsed = true
             retryAttempt += 1
-            const retryMessage = 'Retrying slice after the slicer engine crashed mid-run'
+            const retryMessage = 'The slicer crashed mid-run; retrying'
             this.touch(job, retryMessage)
             this.logJobEvent(job, 'warn', retryMessage)
             broadcastSlicingChanged(job.tenantId)
@@ -600,7 +670,7 @@ export class SlicingJobs {
           retryAttempt += 1
           const retryKinds = Array.from(fallbackKinds.values())
           const retryLabel = retryKinds.length === 1 ? retryKinds[0] : retryKinds.join(', ')
-          const retryMessage = `Retrying slicer without incompatible built-in ${retryLabel} profile${retryKinds.length === 1 ? '' : 's'}`
+          const retryMessage = `Retrying without the incompatible built-in ${retryLabel} profile${retryKinds.length === 1 ? '' : 's'}`
           this.touch(job, retryMessage)
           this.logJobEvent(job, 'warn', retryMessage)
           broadcastSlicingChanged(job.tenantId)
@@ -616,10 +686,25 @@ export class SlicingJobs {
     }
   }
 
-  private async trackLiveOutput(job: SlicingJobState, signal: AbortSignal): Promise<number> {
+  /**
+   * Poll the slicer for live CLI output AND watch for the slice going missing.
+   *
+   * The second job is why the poll outcome is classified rather than ignored: this loop is the only
+   * channel that notices a slicer restart promptly, because the slice's own POST can sit half-open
+   * until the 30-minute request ceiling. `onLost` aborts the slice with a real reason (see
+   * `slicer-contact.ts`); this loop keeps running afterwards so the abort's own teardown is still
+   * reported.
+   */
+  private async trackLiveOutput(
+    job: SlicingJobState,
+    signal: AbortSignal,
+    onLost?: (reason: string) => void
+  ): Promise<number> {
     let observedOutputCount = 0
     let lastProgressUpdateAt = Date.now()
     let observedProgressJobId = job.activeSlicerJobId ?? job.id
+    let contact = INITIAL_SLICER_CONTACT
+    let gaveUp = false
 
     while (!signal.aborted) {
       try {
@@ -627,11 +712,15 @@ export class SlicingJobs {
         if (progressJobId !== observedProgressJobId) {
           observedProgressJobId = progressJobId
           observedOutputCount = 0
+          // A retry moved the slice to a fresh job id; the previous id's silence says nothing
+          // about this one.
+          contact = INITIAL_SLICER_CONTACT
         }
-        const output = await slicerClient.progress(progressJobId)
-        if (output && output.length > observedOutputCount) {
-          this.appendCliOutput(job, output.slice(observedOutputCount))
-          observedOutputCount = output.length
+        const poll = await slicerClient.progress(progressJobId)
+        contact = nextSlicerContact(contact, poll, Date.now())
+        if (poll.kind === 'output' && poll.lines.length > observedOutputCount) {
+          this.appendCliOutput(job, poll.lines.slice(observedOutputCount))
+          observedOutputCount = poll.lines.length
           job.updatedAt = new Date()
           lastProgressUpdateAt = Date.now()
           broadcastSlicingChanged(job.tenantId)
@@ -643,8 +732,23 @@ export class SlicingJobs {
       }
 
       if (!signal.aborted && Date.now() - lastProgressUpdateAt >= this.progressHeartbeatIntervalMs) {
-        this.appendProgressHeartbeat(job)
+        this.appendProgressHeartbeat(job, contact)
         lastProgressUpdateAt = Date.now()
+      }
+
+      // Give up only once: the abort below unwinds the slice, and re-firing would overwrite the
+      // recorded reason with a later, less specific one.
+      if (!gaveUp && !signal.aborted && onLost) {
+        const lostMessage = slicerContactGiveUpMessage(contact, Date.now(), {
+          unknownMs: this.lostUnknownGraceMs,
+          unreachableMs: this.lostUnreachableGraceMs
+        })
+        if (lostMessage) {
+          gaveUp = true
+          this.logJobEvent(job, 'warn', lostMessage)
+          this.appendProgressHeartbeat(job, contact)
+          onLost(lostMessage)
+        }
       }
 
       if (signal.aborted) break
@@ -654,8 +758,8 @@ export class SlicingJobs {
     return observedOutputCount
   }
 
-  private appendProgressHeartbeat(job: SlicingJobState): void {
-    const message = `Slicer is still processing... ${formatElapsedDuration(job.startedAt ?? job.createdAt)} elapsed`
+  private appendProgressHeartbeat(job: SlicingJobState, contact: SlicerContactState = INITIAL_SLICER_CONTACT): void {
+    const message = slicerContactHeartbeat(contact, Date.now(), formatElapsedDuration(job.startedAt ?? job.createdAt))
     job.updatedAt = new Date()
     job.output.push({ stream: 'system', text: message, createdAt: job.updatedAt.toISOString() })
     this.schedulePersist()
@@ -805,16 +909,19 @@ function shouldHideSlicedArtifact(request: CreateSlicingJob): boolean {
   return request.hiddenOutput === true
 }
 
+// These strings are the job's user-facing status line, not a log: the web renders the newest
+// `system` output line verbatim (`formatSlicingProgress`). Keep them plain — no "artifact",
+// no "slicer service", nothing about how the pipeline is wired.
 function slicedArtifactSavingMessage(request: CreateSlicingJob): string {
   return shouldHideSlicedArtifact(request)
-    ? 'Saving sliced artifact for print'
-    : 'Saving sliced artifact to the library'
+    ? 'Preparing the sliced file for printing'
+    : 'Saving the sliced file to the library'
 }
 
 function slicedArtifactReadyMessage(request: CreateSlicingJob): string {
   return shouldHideSlicedArtifact(request)
-    ? 'Prepared sliced artifact for printing'
-    : 'Sliced artifact saved to the library'
+    ? 'Ready to print'
+    : 'Sliced file saved to the library'
 }
 
 function serializeSlicingJobState(job: SlicingJobState): PersistedSlicingJobState {
@@ -897,7 +1004,8 @@ function hydratePersistedJob(persisted: PersistedSlicingJobState): SlicingJobSta
     finishedAt: completedAt,
     cancelRequested: status === 'queued' ? Boolean(persisted.cancelRequested) : false,
     controller: null,
-    activeSlicerJobId: null
+    activeSlicerJobId: null,
+    lostReason: null
   }
 }
 
@@ -910,13 +1018,13 @@ function parseTimestamp(value: string | null | undefined): Date | null {
 
 async function applyBuiltinProfileCompatibilityFallbacks(input: {
   request: CreateSlicingJob
-  profileFiles: ResolvedSlicingProfileFile[]
+  profileFiles: ResolvedSlicingPresetFile[]
   sourcePath: string
-  fallbackKinds: Set<ResolvedSlicingProfileFile['kind']>
-  rewrittenKinds: Set<ResolvedSlicingProfileFile['kind']>
+  fallbackKinds: Set<ResolvedSlicingPresetFile['kind']>
+  rewrittenKinds: Set<ResolvedSlicingPresetFile['kind']>
 }): Promise<{
   request: CreateSlicingJob
-  profileFiles: ResolvedSlicingProfileFile[]
+  profileFiles: ResolvedSlicingPresetFile[]
   sourcePath: string
   rewrittenSourcePaths: string[]
   changed: boolean
@@ -957,6 +1065,7 @@ function toDto(job: SlicingJobState): SlicingJob {
     outputFileName: job.outputFileName,
     target: job.request.target,
     plate: job.request.plate,
+    ownerClientId: job.request.ownerClientId ?? null,
     status: job.status,
     queuePosition: job.queuePosition,
     slicerName: job.slicerName,
@@ -969,6 +1078,27 @@ function toDto(job: SlicingJobState): SlicingJob {
     finishedAt: job.finishedAt?.toISOString() ?? null,
     cancelRequested: job.cancelRequested
   }
+}
+
+/** Still running, so its stdout progress frames are live. Mirrors the web's `isActiveSlicingJob`. */
+function isActiveSlicingJobState(job: SlicingJobState): boolean {
+  return job.status === 'queued' || job.status === 'preparing' || job.status === 'slicing' || job.status === 'saving'
+}
+
+/** A finished job as the LIST returns it: status lines only, no engine log. See `list()`. */
+/**
+ * A terminal job as the LIST carries it: its last system line and nothing else.
+ *
+ * The list is every job this workspace has ever sliced, and `output` was its single largest field
+ * (208 KB of 471 KB, measured over 194 jobs). A finished job's own progress frames are dead weight
+ * there — the web renders a terminal job from `getLatestSystemOutputLine`, its outcome, never from
+ * the frames (rendering those is what left a ready slice reading "Exporting 3mf (97%)"). The full
+ * record, CLI output included, is still one `GET /jobs/:id` away.
+ */
+function toFinishedListDto(job: SlicingJobState): SlicingJob {
+  const systemLines = job.output.filter((line) => line.stream === 'system')
+  const lastMeaningful = [...systemLines].reverse().find((line) => line.text.trim() !== '')
+  return { ...toDto(job), output: lastMeaningful ? [lastMeaningful] : [] }
 }
 
 function buildDefaultOutputFileName(sourceFileName: string): string {
@@ -995,10 +1125,10 @@ function buildSlicerAttemptJobId(jobId: string, retryAttempt: number): string {
 }
 
 function collectSourceRewriteKinds(
-  fallbackKinds: Set<ResolvedSlicingProfileFile['kind']>,
-  rewrittenKinds: Set<ResolvedSlicingProfileFile['kind']>
-): Set<ResolvedSlicingProfileFile['kind']> {
-  const kinds = new Set<ResolvedSlicingProfileFile['kind']>()
+  fallbackKinds: Set<ResolvedSlicingPresetFile['kind']>,
+  rewrittenKinds: Set<ResolvedSlicingPresetFile['kind']>
+): Set<ResolvedSlicingPresetFile['kind']> {
+  const kinds = new Set<ResolvedSlicingPresetFile['kind']>()
   if (fallbackKinds.has('process') && !rewrittenKinds.has('process')) {
     kinds.add('process')
   }
@@ -1013,7 +1143,7 @@ function collectSourceRewriteKinds(
 
 async function rewriteSlicingSourceForFallback(
   sourcePath: string,
-  kinds: Set<ResolvedSlicingProfileFile['kind']>
+  kinds: Set<ResolvedSlicingPresetFile['kind']>
 ): Promise<string | null> {
   if (kinds.size === 0) return null
   const rewritten = await rewriteThreeMfProjectSettings(sourcePath, kinds).catch(() => null)
@@ -1022,7 +1152,7 @@ async function rewriteSlicingSourceForFallback(
 
 async function rewriteThreeMfProjectSettings(
   sourcePath: string,
-  kinds: Set<ResolvedSlicingProfileFile['kind']>
+  kinds: Set<ResolvedSlicingPresetFile['kind']>
 ): Promise<string | null> {
   const outputDir = await mkdtemp(path.join(tmpdir(), 'printstream-slicing-source-'))
   const outputPath = path.join(outputDir, 'input.3mf')
@@ -1111,7 +1241,7 @@ function blankEachEntry(value: unknown): unknown {
 
 function sanitizeProjectSettingsConfig(
   json: string,
-  kinds: Set<ResolvedSlicingProfileFile['kind']>
+  kinds: Set<ResolvedSlicingPresetFile['kind']>
 ): string {
   let parsed: unknown
   try {
@@ -1203,9 +1333,9 @@ function formatElapsedDuration(startedAt: Date): string {
   return `${minutes}m ${seconds}s`
 }
 
-function collectUnsupportedBuiltinProfileKinds(error: unknown): Set<ResolvedSlicingProfileFile['kind']> {
+function collectUnsupportedBuiltinProfileKinds(error: unknown): Set<ResolvedSlicingPresetFile['kind']> {
   if (!(error instanceof SlicerServiceError)) return new Set()
-  const kinds = new Set<ResolvedSlicingProfileFile['kind']>()
+  const kinds = new Set<ResolvedSlicingPresetFile['kind']>()
   for (const line of error.output) {
     if (line.stream !== 'stderr') continue
     const match =
@@ -1243,3 +1373,7 @@ export function isTransientSlicerCrashExit(error: unknown): boolean {
 }
 
 export const slicingJobs = new SlicingJobs()
+
+// Only the process-wide instance follows tab lifecycles; a SlicingJobs built by a test owns no
+// sockets and must not react to another instance's tabs.
+clientSessions.onGone((clientId) => slicingJobs.cancelForOwner(clientId))

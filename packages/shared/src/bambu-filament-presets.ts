@@ -103,6 +103,19 @@ export const BAMBU_FILAMENT_PRESET_NAMES: Record<string, string> = {
 export const DEFAULT_FILAMENT_PRESET_NAME = 'Generic PLA'
 export const DEFAULT_FILAMENT_COLOR = '#FFFFFF'
 
+/**
+ * The DISPLAY spelling of a filament vendor.
+ *
+ * BambuStudio writes `filament_vendor: "Bambu Lab"`, while every name-derived path yields "Bambu"
+ * (preset names read "Bambu PLA Basic", never "Bambu Lab PLA Basic"). Presets that carry no vendor
+ * field — a 3MF's own project presets — can only take the name-derived form, so without one rule
+ * the same vendor appears both ways in a single picker, which reads as two different brands.
+ */
+export function normalizeFilamentVendorLabel(vendor: string | null | undefined): string {
+  const trimmed = vendor?.trim() ?? ''
+  return trimmed === 'Bambu Lab' ? 'Bambu' : trimmed
+}
+
 export function brandFromPresetName(name: string): string {
   const first = name.split(' ')[0]
   return first || 'Other'

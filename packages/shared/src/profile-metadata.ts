@@ -82,6 +82,18 @@ export function omitEmptyMetadata<T extends Record<string, string | string[] | n
  * BambuStudio falls back to when the current preset is incompatible with the
  * selected printer (used to mirror that fallback on a cross-model switch).
  */
+/** The LARGEST of a per-extruder minimum list — the tightest lower bound the machine supports. */
+function maxNumber(value: unknown): number | undefined {
+  const values = numberList(value)
+  return values && values.length > 0 ? Math.max(...values) : undefined
+}
+
+/** The SMALLEST of a per-extruder maximum list — the tightest upper bound the machine supports. */
+function minNumber(value: unknown): number | undefined {
+  const values = numberList(value)
+  return values && values.length > 0 ? Math.min(...values) : undefined
+}
+
 export function extractProfileMetadata(record: Record<string, unknown>) {
   return omitEmptyMetadata({
     filamentIds: stringList(record.filament_id),
@@ -89,6 +101,12 @@ export function extractProfileMetadata(record: Record<string, unknown>) {
     filamentIsSupport: booleanValue(record.filament_is_support),
     filamentVendor: firstString(record.filament_vendor),
     layerHeight: firstNumber(record.layer_height),
+    // Machine-only: the layer-height envelope the machine's extruders support. Carried so a
+    // machine switch can tell the user their process's layer height no longer fits (BambuStudio
+    // clamps silently, which hides a real print-quality change). Per-extruder arrays in the
+    // profile; the tightest bound across extruders is the useful one.
+    minLayerHeight: maxNumber(record.min_layer_height),
+    maxLayerHeight: minNumber(record.max_layer_height),
     printerModels: stringList(record.printer_model),
     compatiblePrinters: stringList(record.compatible_printers),
     compatiblePrints: stringList(record.compatible_prints),

@@ -4,13 +4,14 @@
  * calls back on success — no shared page state flows through them. `MoveFolderModal`
  * owns `flattenFoldersForSelect`, the parent-folder option builder it alone uses.
  */
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Box, Button, FormControl, FormLabel, Input, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
 import CreateNewFolderRoundedIcon from '@mui/icons-material/CreateNewFolderRounded'
 import DriveFileMoveRoundedIcon from '@mui/icons-material/DriveFileMoveRounded'
 import type { LibraryFolder } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { BackAwareModal as Modal } from '../BackAwareModal'
+import { useNameInputProps } from '../../hooks/useNameInputProps'
 
 /**
  * Flatten the folder tree into an indented option list for a parent-folder
@@ -56,6 +57,7 @@ export function CreateFolderModal({
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const canSubmit = name.trim().length > 0
+  const nameInputProps = useNameInputProps({ onAccept: () => void submit(), canAccept: canSubmit && !submitting })
   const submit = async () => {
     setSubmitting(true)
     setError(null)
@@ -80,7 +82,7 @@ export function CreateFolderModal({
           <Typography level="h4">New folder</Typography>
           <FormControl>
             <FormLabel>Name</FormLabel>
-            <Input value={name} autoFocus onChange={(event) => setName(event.target.value)} />
+            <Input {...nameInputProps} value={name} onChange={(event) => setName(event.target.value)} />
           </FormControl>
           {error && <Typography color="danger" level="body-sm">{error}</Typography>}
           <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 1 }}>
@@ -103,17 +105,11 @@ export function RenameFolderModal({
   onSaved: () => void
 }) {
   const [name, setName] = useState(folder.name)
-  const hasSelectedNameRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const canSubmit = name.trim().length > 0 && name !== folder.name
-  // Select the whole name on first focus (folders have no extension to protect),
-  // matching the rename-file dialog's ready-to-overtype behavior.
-  const handleNameFocus = (event: React.FocusEvent<HTMLInputElement>) => {
-    if (hasSelectedNameRef.current) return
-    hasSelectedNameRef.current = true
-    event.target.select()
-  }
+  // Whole name selected on open — folders have no extension to protect.
+  const nameInputProps = useNameInputProps({ onAccept: () => void submit(), canAccept: canSubmit && !submitting })
   const submit = async () => {
     setSubmitting(true)
     setError(null)
@@ -138,7 +134,7 @@ export function RenameFolderModal({
           <Typography level="h4">Rename folder</Typography>
           <FormControl>
             <FormLabel>Name</FormLabel>
-            <Input value={name} autoFocus onFocus={handleNameFocus} onChange={(event) => setName(event.target.value)} />
+            <Input {...nameInputProps} value={name} onChange={(event) => setName(event.target.value)} />
           </FormControl>
           {error && <Typography color="danger" level="body-sm">{error}</Typography>}
           <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 1 }}>

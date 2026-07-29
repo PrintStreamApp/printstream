@@ -9,7 +9,7 @@
  */
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { PrintObjectsSection } from './library/PrintObjectsSection'
-import { plateHasSliceData } from '../lib/sliceProfileMatching'
+import { plateHasSliceData } from '../lib/slicingPresetMatching'
 import {
   Alert, Box, Button, Checkbox, DialogActions, FormControl, FormLabel, Option, Select, Stack, Tooltip, Typography
 } from '@mui/joy'

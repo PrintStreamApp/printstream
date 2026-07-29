@@ -14,27 +14,16 @@
  * The menu assigns through the caller's controller, so the 3D editor's dirty flag and undo see
  * the edit without the `materialEditListenerRef` detour the removed Modal needed.
  */
-import { Box, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Typography } from '@mui/joy'
+import { Box, Dropdown, Menu, MenuButton, Typography } from '@mui/joy'
 import type { SxProps } from '@mui/joy/styles/types'
-import { Fragment } from 'react'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
-import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
-import { LoadedMaterialOptionLabel } from './LoadedMaterialOptionLabel'
+import { LoadedMaterialMenuItems, type LoadedMaterialMenuSource } from './LoadedMaterialMenuItems'
 import { filamentTextColor } from '../../lib/filamentColor'
-import type { PrinterTrayOption } from '../../lib/libraryViewHelpers'
-import type { SliceMaterialOption } from '../../lib/sliceProfileMatching'
-
-/** The printer's loaded materials for ONE material slot, already prioritized and grouped. */
-export interface SwatchLoadedMaterials {
-  groups: Array<{ label: string; options: SliceMaterialOption[] }>
-  /** Live trays by mapping value, for the remaining-quantity badge on each row. */
-  trayMap: Map<number, PrinterTrayOption>
-  onSelect: (option: SliceMaterialOption) => void
-}
 
 export function MaterialSwatchButton({
   filamentIndex,
   presetName,
+  fullPresetName,
   colorName,
   color,
   presetUnmatched,
@@ -45,6 +34,12 @@ export function MaterialSwatchButton({
   filamentIndex: number
   /** Preset (or project filament) name shown on the row. */
   presetName: string
+  /**
+   * The resolved preset's FULL name including the `@<printer>` variant portion, for the tooltip —
+   * the row label strips it for space, and nothing else in the app surfaced it (BambuStudio shows
+   * it in its preset combo). Null falls back to the display name.
+   */
+  fullPresetName?: string | null
   colorName: string
   /** Normalized hex the row is painted with. */
   color: string
@@ -53,13 +48,13 @@ export function MaterialSwatchButton({
   /** Currently-assigned material option, so the menu can mark it. */
   selectedMaterialOptionId: string | null
   /** Null (or empty) when no printer material is on offer — the click then opens the dialog. */
-  loadedMaterials: SwatchLoadedMaterials | null
+  loadedMaterials: LoadedMaterialMenuSource | null
   onOpenMaterialDialog: () => void
 }) {
   const menuMaterials = loadedMaterials && loadedMaterials.groups.length > 0 ? loadedMaterials : null
   const title = presetUnmatched
     ? 'No preset matches this filament — click to pick one'
-    : `${presetName} · ${colorName} — ${menuMaterials ? 'change material' : 'edit material'}`
+    : `${fullPresetName ?? presetName} · ${colorName} — ${menuMaterials ? 'change material' : 'edit material'}`
   const label = `${menuMaterials ? 'Change' : 'Edit'} material ${filamentIndex + 1}: ${presetName}, ${colorName}`
   const rowSx: SxProps = {
     appearance: 'none',
@@ -128,34 +123,12 @@ export function MaterialSwatchButton({
         // layer is the only built-in one that beats `modal`.
         sx={{ zIndex: (theme) => theme.zIndex.tooltip, minWidth: 280, maxWidth: 'calc(100vw - 32px)', maxHeight: '60vh', overflowY: 'auto' }}
       >
-        <MenuItem onClick={onOpenMaterialDialog}>
-          <TuneRoundedIcon fontSize="small" />
-          Choose manually…
-        </MenuItem>
-        {loadedMaterials!.groups.map((group) => (
-          <Fragment key={group.label}>
-            <ListDivider />
-            <Typography
-              level="body-xs"
-              textColor="text.tertiary"
-              sx={{ px: 1, pt: 0.5, pb: 0.25, fontWeight: 'lg', textTransform: 'uppercase', letterSpacing: '0.05em' }}
-            >
-              {group.label}
-            </Typography>
-            {group.options.map((option) => (
-              <MenuItem
-                key={option.id}
-                selected={option.id === selectedMaterialOptionId}
-                onClick={() => loadedMaterials!.onSelect(option)}
-              >
-                <LoadedMaterialOptionLabel
-                  option={option}
-                  tray={option.trayId != null ? loadedMaterials!.trayMap.get(option.trayId) : undefined}
-                />
-              </MenuItem>
-            ))}
-          </Fragment>
-        ))}
+        <LoadedMaterialMenuItems
+          loaded={loadedMaterials!}
+          manualLabel="Choose manually…"
+          onChooseManually={onOpenMaterialDialog}
+          selectedMaterialOptionId={selectedMaterialOptionId}
+        />
       </Menu>
     </Dropdown>
   )

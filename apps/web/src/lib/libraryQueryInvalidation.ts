@@ -19,10 +19,29 @@ export async function invalidateLibraryListQueries(queryClient: QueryInvalidator
 
 export async function invalidateLibraryQueries(queryClient: QueryInvalidator): Promise<void> {
   await invalidateLibraryListQueries(queryClient)
-  // The 3D editor caches a file's parsed scene + plates under separate keys; refresh those too
-  // so the editor reflects its OWN save/restore/retarget without a manual page reload. Only
-  // call this for a deliberate local mutation — not for background broadcasts (see above).
-  await queryClient.invalidateQueries({ queryKey: ['library-editor-plates'] })
-  await queryClient.invalidateQueries({ queryKey: ['library-editor-scene-initial'] })
-  await queryClient.invalidateQueries({ queryKey: ['library-editor-scenes-rest'] })
+  // Deliberately does NOT refresh the editor's own scene/plate caches any more.
+  //
+  // It used to, "so the editor reflects its OWN save without a manual page reload". That stopped
+  // being merely unnecessary and became WRONG once the editor started reading the project from an
+  // archive it downloads once per session: the refetch re-reads that in-memory PRE-save archive
+  // and stores the result as fresh, so the cache ends up holding stale data with a new timestamp,
+  // and the next editor session inherits it. Measured directly — toggling printability, saving,
+  // then reopening in the same page showed the pre-save value while the file, the API and the
+  // reopen's own download were all correct.
+  //
+  // The session does not need the refresh: it authored the save and its state is authoritative
+  // (see the "in-memory after open" contract). `EditorView` drops these keys when it unmounts so
+  // no LATER session can inherit this one's view of the file.
+  // The slice panel's pre-open "changed vs preset" badges resolve a project preset's embedded
+  // config keyed by FILE ID — which a save does not change (it mints a new version under the same
+  // id). Without an explicit bust, a save that rewrites project_settings (material change, the
+  // stale-array heal) keeps serving the pre-save count until staleTime, while the tune dialog
+  // (which fetches on every open) already shows the truth — a badge-vs-dialog mismatch.
+  await queryClient.invalidateQueries({ queryKey: ['process-baked-changes'] })
+  await queryClient.invalidateQueries({ queryKey: ['filament-baked-changes'] })
+  // Same class, and the one with teeth: the project preset's resolved config (the baked deltas the
+  // slice dialog carries onto a new preset when the machine changes) is keyed by file id and held
+  // at `staleTime: Infinity`, so a save that rewrote project_settings left it wrong for the rest of
+  // the page session — and those deltas reach a SLICE, unlike a badge count.
+  await queryClient.invalidateQueries({ queryKey: ['slice-project-process-carry'] })
 }

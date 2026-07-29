@@ -55,10 +55,15 @@ export async function loadBedModelGeometry(input: {
   printerModel: string
   slicerTargetId: string | null
   signal?: AbortSignal
+  /**
+   * Endpoint to fetch the bed mesh from. Defaults to the tenant route; the public 3MF editor passes
+   * the anonymous catalogue route (`/api/public/slicing/bed-model`), which needs no workspace.
+   */
+  basePath?: string
 }): Promise<THREE.BufferGeometry | null> {
   const params = new URLSearchParams({ printerModel: input.printerModel })
   if (input.slicerTargetId) params.set('targetId', input.slicerTargetId)
-  const bytes = await fetchModelBytes(buildApiUrl(`/api/slicing/bed-model?${params.toString()}`), { signal: input.signal })
+  const bytes = await fetchModelBytes(buildApiUrl(`${input.basePath ?? '/api/slicing/bed-model'}?${params.toString()}`), { signal: input.signal })
     .catch(() => null)
   if (!bytes || bytes.byteLength === 0) return null
   try {

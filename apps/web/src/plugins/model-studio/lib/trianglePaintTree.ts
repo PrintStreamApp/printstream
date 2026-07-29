@@ -418,3 +418,57 @@ export function isPaintTreeEmpty(node: PaintTreeNode): boolean {
   if (node.kind === 'leaf') return node.state === 0
   return node.children.every(isPaintTreeEmpty)
 }
+
+/**
+ * Rewrite every COLOUR-paint leaf through a filament-id remap, returning the re-encoded code.
+ *
+ * Colour paint is the one channel whose leaf `state` IS a filament id (supports/seam use fixed
+ * enforcer/blocker constants), so a save that renumbers filaments has to rewrite these codes or the
+ * paint silently repoints at whatever material now sits at the old number. That is worse than
+ * losing it: the model keeps its painted regions and quietly prints them in the wrong colour.
+ *
+ * A state the remap cannot translate — its material was removed by this save — becomes 0
+ * (unpainted), mirroring how every other seam drops a reference to a deleted material rather than
+ * inventing a substitute. State 0 is already unpainted and is never remapped.
+ *
+ * Returns the input unchanged when the code is malformed or nothing moved, so callers can assign
+ * unconditionally without churning identities.
+ */
+export function remapColorPaintCode(code: string, remap: ReadonlyMap<number, number>): string {
+  const root = decodePaintTree(code)
+  if (!root) return code
+  let changed = false
+  const rewrite = (node: PaintTreeNode): PaintTreeNode => {
+    if (node.kind === 'leaf') {
+      if (node.state === 0) return node
+      const moved = remap.get(node.state) ?? 0
+      if (moved === node.state) return node
+      changed = true
+      return { kind: 'leaf', state: moved }
+    }
+    return { ...node, children: node.children.map(rewrite) }
+  }
+  const next = rewrite(root)
+  if (!changed) return code
+  return isPaintTreeEmpty(next) ? '' : encodePaintTree(next)
+}
+
+/**
+ * Apply {@link remapColorPaintCode} across a whole `colorPaint` map (part key -> triangle -> code),
+ * dropping triangles whose paint became empty and parts left with none.
+ */
+export function remapColorPaintMap(
+  paint: Record<string, Record<number, string>>,
+  remap: ReadonlyMap<number, number>
+): Record<string, Record<number, string>> {
+  const out: Record<string, Record<number, string>> = {}
+  for (const [partKey, triangles] of Object.entries(paint)) {
+    const nextTriangles: Record<number, string> = {}
+    for (const [triangleKey, code] of Object.entries(triangles)) {
+      const next = remapColorPaintCode(code, remap)
+      if (next) nextTriangles[Number(triangleKey)] = next
+    }
+    if (Object.keys(nextTriangles).length > 0) out[partKey] = nextTriangles
+  }
+  return out
+}

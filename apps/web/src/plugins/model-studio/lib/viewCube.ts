@@ -23,7 +23,15 @@ export const BAMBU_THREE_MF_ISO_UP = { x: 0, y: 0, z: 1 } as const
  */
 export const EDITOR_HOME_VIEW_DIRECTION = { x: 0, y: -0.55, z: 1 } as const
 export const BAMBU_THREE_MF_ORTHO_MARGIN = 1.04
-export const VIEW_CUBE_SIZE = 136
+export const VIEW_CUBE_SIZE = 92
+
+/**
+ * Distance from the viewport's left and bottom edges, in px — the SAME on both, so the cube sits
+ * squarely in the corner. It used to be nudged out of frame at xs (-18) to hide the transparent
+ * margin the old wide frustum baked into the canvas; the canvas now hugs the cube, so this is a
+ * real inset and matches the 8px the toolbar keeps from the top-right.
+ */
+export const VIEW_CUBE_EDGE_INSET = 8
 
 export type ViewPreset = 'iso' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'
 
@@ -170,7 +178,11 @@ export function createViewCube(
   container.replaceChildren(renderer.domElement)
 
   const scene = new THREE.Scene()
-  const camera = new THREE.OrthographicCamera(-1.45, 1.45, 1.45, -1.45, 0.1, 20)
+  // Frames the unit cube tightly: its furthest corner is at sqrt(3)/2 ~= 0.866 from centre, so
+  // 0.95 never clips at ANY orientation while leaving almost no transparent margin. The old 1.45
+  // wasted ~27% of the canvas on each side, which read as the cube floating away from the corner
+  // however the container was positioned.
+  const camera = new THREE.OrthographicCamera(-0.95, 0.95, 0.95, -0.95, 0.1, 20)
   camera.position.set(0, 0, 6)
   camera.lookAt(0, 0, 0)
   camera.updateProjectionMatrix()

@@ -2,9 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { libraryThreeMfSceneSchema, threeMfIndexSchema, type StagedImport } from '@printstream/shared'
 import * as THREE from 'three'
+import { decodePaintTree, encodePaintTree } from './trianglePaintTree'
 import {
   addedPartHostId,
   buildSceneEdit,
+  buildSessionFilamentIdRemap,
+  rebaseEditorStateFilamentIds,
+  rebaseSceneEditFilamentIds,
   makeInstanceIndependent,
   buildSingleObjectExportState,
   cloneEditorState,
@@ -949,6 +953,62 @@ test('seeding never gives a support blocker the object material, and never bakes
   )
 })
 
+// SESSION -> SAVED filament renumbering: a save that removed/reordered materials bakes the desired
+// list as slots 1..N, so every filament id the editor emits — and then holds live — must follow.
+// The production repro: 5 slots reduced to 1 (kept session id 2); an untranslated emit wrote a part
+// `extruder="2"` into a 1-filament file, and the untranslated live state made the mesh colour
+// lookup miss, reverting the viewport to the originally-seeded colour after Save.
+test('buildSessionFilamentIdRemap is null for identity and maps session ids to positions otherwise', () => {
+  assert.equal(buildSessionFilamentIdRemap([1, 2, 3]), null)
+  const remap = buildSessionFilamentIdRemap([2])
+  assert.deepEqual([...remap!.entries()], [[2, 1]])
+  const reorder = buildSessionFilamentIdRemap([3, 1])
+  assert.deepEqual([...reorder!.entries()], [[3, 1], [1, 2]])
+})
+
+test('rebaseSceneEditFilamentIds translates every id-carrying field and drops unmappable ids', () => {
+  const remap = buildSessionFilamentIdRemap([2])!
+  const edit = {
+    plates: [{ index: 1 }],
+    instances: [
+      { objectId: 2, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 2 },
+      { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 5 }
+    ],
+    partFilaments: [
+      { objectId: 2, componentObjectId: 1, filamentId: 2 },
+      { objectId: 2, componentObjectId: 4, filamentId: 5 }
+    ],
+    importPartFilaments: [{ importId: 'imp-1', partIndex: 0, filamentId: 2 }],
+    addedParts: [{ objectId: 2, meshImportId: 'imp-2', subtype: 'normal_part', name: 'Cube', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: 2 }],
+    filamentChanges: [{ plateIndex: 1, changes: [{ z: 3, filamentId: 2 }, { z: 6, filamentId: 5 }] }]
+  } as unknown as Parameters<typeof rebaseSceneEditFilamentIds>[0]
+  const next = rebaseSceneEditFilamentIds(edit, remap)
+  assert.equal(next.instances[0]!.filamentId, 1, 'kept slot follows to its saved id')
+  assert.equal(next.instances[1]!.filamentId, null, 'a removed material becomes inherit, never a guess')
+  assert.deepEqual(next.partFilaments, [{ objectId: 2, componentObjectId: 1, filamentId: 1 }], 'unmappable part assignment dropped')
+  assert.deepEqual(next.importPartFilaments, [{ importId: 'imp-1', partIndex: 0, filamentId: 1 }])
+  assert.equal(next.addedParts![0]!.filamentId, 1)
+  assert.deepEqual(next.filamentChanges![0]!.changes, [{ z: 3, filamentId: 1 }], 'a change to a removed material is dropped')
+})
+
+test('rebaseEditorStateFilamentIds moves live instances, parts, and added parts onto the saved ids', () => {
+  const state = seedEmptyEditorState()
+  // Multi-part import: it carries the synthetic negative object identity added parts key on.
+  const instance = instanceFromStagedImport(MULTI)
+  instance.filamentId = 2
+  instance.parts = instance.parts.map((part) => ({ ...part, filamentId: 2 }))
+  state.plates[0]!.instances.push(instance)
+  const hostId = addedPartHostId(instance)!
+  state.addedParts = { [hostId]: [{ key: 'ap-1', meshImportId: 'imp-2', subtype: 'normal_part', name: 'Cube', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: 2 }] as never }
+  const remap = buildSessionFilamentIdRemap([2])!
+  const next = rebaseEditorStateFilamentIds(state, remap)
+  assert.equal(next.plates[0]!.instances[0]!.filamentId, 1)
+  assert.equal(next.plates[0]!.instances[0]!.parts[0]!.filamentId, 1)
+  assert.equal(next.addedParts![hostId]![0]!.filamentId, 1)
+  // The original state is untouched (the rebase replaces, never mutates).
+  assert.equal(state.plates[0]!.instances[0]!.filamentId, 2)
+})
+
 test('summarizeInstanceMaterial and printedParts ignore helper volumes', () => {
   const state = seedEditorState(
     threeMfIndexSchema.parse({
@@ -965,4 +1025,41 @@ test('summarizeInstanceMaterial and printedParts ignore helper volumes', () => {
   const summary = summarizeInstanceMaterial(instance, (id) => id, (_id, fallback) => fallback)
   assert.equal(summary.uniformId, 2)
   assert.equal(summary.mixedColors, undefined)
+})
+
+test('both rebase halves carry COLOUR PAINT onto the saved filament ids', () => {
+  // The pure remap is covered in trianglePaintTree.test.ts; this pins that the two rebase paths
+  // actually REACH it. Without the wiring the codes survive the renumber addressing the old
+  // number, so painted regions print in whatever material moved into that slot.
+  const remap = buildSessionFilamentIdRemap([2])!   // slot 2 kept, everything else removed
+  const kept = encodePaintTree({ kind: 'leaf', state: 2 })
+  const doomed = encodePaintTree({ kind: 'leaf', state: 5 })
+
+  const edit = {
+    plates: [{ index: 1 }],
+    instances: [],
+    colorPaint: [
+      { objectId: 2, componentObjectId: 1, triangles: { 0: kept, 1: doomed } },
+      { objectId: 2, componentObjectId: 9, triangles: { 0: doomed } }
+    ],
+    importPaint: [
+      { importId: 'imp-1', partIndex: 0, channel: 'color', triangles: { 0: kept } },
+      { importId: 'imp-1', partIndex: 0, channel: 'support', triangles: { 0: kept } }
+    ]
+  } as unknown as Parameters<typeof rebaseSceneEditFilamentIds>[0]
+  const nextEdit = rebaseSceneEditFilamentIds(edit, remap)
+  assert.equal(nextEdit.colorPaint!.length, 1, 'a part left with no paint is dropped')
+  assert.deepEqual(Object.keys(nextEdit.colorPaint![0]!.triangles), ['0'], 'the removed material’s triangle goes')
+  assert.equal(decodePaintTree(nextEdit.colorPaint![0]!.triangles[0]!)!.kind === 'leaf'
+    && (decodePaintTree(nextEdit.colorPaint![0]!.triangles[0]!) as { state: number }).state, 1)
+  // Supports/seam encode enforcer/blocker constants, NOT filament ids — remapping them would
+  // corrupt the channel, so they must pass through untouched.
+  const supports = nextEdit.importPaint!.find((entry) => entry.channel === 'support')!
+  assert.equal(supports.triangles[0], kept, 'a non-colour channel is left alone')
+
+  const state = seedEmptyEditorState()
+  state.colorPaint = { '2:1': { 0: kept, 1: doomed } }
+  const nextState = rebaseEditorStateFilamentIds(state, remap)
+  assert.deepEqual(Object.keys(nextState.colorPaint!['2:1']!), ['0'])
+  assert.equal((decodePaintTree(nextState.colorPaint!['2:1']![0]!) as { state: number }).state, 1)
 })

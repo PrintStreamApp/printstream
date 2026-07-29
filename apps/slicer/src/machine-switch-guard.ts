@@ -13,16 +13,16 @@
  * crashes on it. `assertSupportedEmbeddedMachineSwitch` hard-fails only when
  * that heal is impossible (no machine preset in the request to author from).
  */
-import { canonicalBambuModelKey, H2_DUAL_NOZZLE_MODEL_KEYS, hasDualNozzleMachineShape, type CreateSlicingJob, type SlicingProfileKind } from '@printstream/shared'
+import { canonicalBambuModelKey, H2_DUAL_NOZZLE_MODEL_KEYS, hasDualNozzleMachineShape, type CreateSlicingJob, type SlicingPresetKind } from '@printstream/shared'
 
-type SliceProfileFile = {
-  kind: SlicingProfileKind
+type SlicingPresetFile = {
+  kind: SlicingPresetKind
   name: string
 }
 
 type EmbeddedMachineSwitchInput = {
   request: CreateSlicingJob
-  profileFiles: readonly SliceProfileFile[]
+  profileFiles: readonly SlicingPresetFile[]
   projectSettings: Record<string, unknown> | null
 }
 
@@ -79,7 +79,7 @@ export function assertSupportedEmbeddedMachineSwitch(input: EmbeddedMachineSwitc
   )
 }
 
-function resolveTargetPrinterModel(request: CreateSlicingJob, profileFiles: readonly SliceProfileFile[]): string | null {
+function resolveTargetPrinterModel(request: CreateSlicingJob, profileFiles: readonly SlicingPresetFile[]): string | null {
   if (request.target.mode === 'manualProfile') {
     const normalized = canonicalBambuModelKey(request.target.printerModel)
     if (normalized) return normalized

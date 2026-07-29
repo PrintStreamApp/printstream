@@ -66,3 +66,50 @@ test('formatSliceFileVersionError ignores unrelated output', () => {
   assert.equal(formatSliceFileVersionError(''), null)
   assert.equal(formatSliceFileVersionError('[error] some other failure\nrun found error, return -5, exit...'), null)
 })
+
+/**
+ * The generic exit codes (-100 especially) say only "slicing failed"; BambuStudio prints the actual
+ * reason a line or two earlier. Surfacing it is the difference between a user knowing what is wrong
+ * and someone reading 48 lines of progress JSON out of the job log — which is how Ryan's
+ * "Flush volumes matrix do not match to the correct size!" was found.
+ */
+test('a generic engine failure carries the engine\'s own last words', async () => {
+  const { formatSliceCliExitError } = await import('./cli-exit-codes.js')
+  const output = [
+    '{"message":"Generating G-code","plate_index":1,"total_percent":75}',
+    '[2026-07-27 03:59:02.6] [0x0000f90f] [warning] tree support default to organic support',
+    '[2026-07-27 03:59:03.3] [0x0000f90f] [error]   found slicing or export error for partplate 1',
+    'Flush volumes matrix do not match to the correct size!',
+    'run found error, return -100, exit...'
+  ].join('\n')
+
+  const message = formatSliceCliExitError(output, 156)
+  assert.match(message, /^Slicer CLI exited with code 156/, 'the API retry classifier matches this prefix')
+  assert.match(message, /engine failed on this model/, 'keeps our explanation of -100')
+  assert.match(message, /Flush volumes matrix do not match to the correct size!/, 'and the real reason')
+})
+
+test('prefers the engine\'s own words even when they land on the other stream', async () => {
+  const { formatSliceCliExitError } = await import('./cli-exit-codes.js')
+  // stdout and stderr arrive CONCATENATED, so the specific complaint can sit after the vague
+  // tagged one and after `run found error`. Scanning must not stop at either.
+  const output = [
+    '[2026-07-27 04:17:29.1] [0x0000fb04] [error]   found slicing or export error for partplate 1',
+    'run found error, return -100, exit...',
+    'Flush volumes matrix do not match to the correct size!'
+  ].join('\n')
+  const message = formatSliceCliExitError(output, 156)
+  assert.match(message, /Flush volumes matrix do not match to the correct size!/)
+  assert.doesNotMatch(message, /found slicing or export error/, 'the vague line loses to the specific one')
+})
+
+test('engine detail is omitted when the log carries only noise', async () => {
+  const { formatSliceCliExitError } = await import('./cli-exit-codes.js')
+  const output = [
+    '{"message":"Slicing begins","plate_index":1}',
+    '[2026-07-27 03:59:02.6] [0x0000f90f] [warning] tree support default to organic support',
+    'run found error, return -100, exit...'
+  ].join('\n')
+  const message = formatSliceCliExitError(output, 156)
+  assert.doesNotMatch(message, /\(engine:/, 'no invented detail from progress or warnings')
+})

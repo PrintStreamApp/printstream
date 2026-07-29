@@ -8,6 +8,7 @@ import { memo, useMemo, useState } from 'react'
 import { Alert, Button, FormControl, FormLabel, Modal, ModalClose, Option, Select, Stack, Typography } from '@mui/joy'
 import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { PrinterPickerDialog } from '../../components/PrinterPickerDialog'
 import {
   DEFAULT_PA_TOWER,
   FLOW_PASS_1_OFFSETS,
@@ -18,7 +19,7 @@ import {
   type Printer,
   type PrinterStatus,
   type SlicingCapabilities,
-  type SlicingProfilesResponse
+  type SlicingPresetsResponse
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
@@ -28,8 +29,8 @@ import {
   isFilamentProfileCompatible,
   isMachineProfileCompatible,
   isProcessProfileCompatible,
-  slicingProfilesResponseIsUsable
-} from '../../lib/sliceProfileMatching'
+  slicingPresetsResponseIsUsable
+} from '../../lib/slicingPresetMatching'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { DialogSection } from '../../components/DialogSection'
 import { NumberField } from './NumberField'
@@ -72,6 +73,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
   const [startedRun, setStartedRun] = useState<CalibrationRun | null>(null)
   const [printerId, setPrinterId] = useState<string>(() => lockedTarget?.printerId ?? printers[0]?.id ?? '')
   const [slotKey, setSlotKey] = useState<string>(() => (lockedTarget ? `${lockedTarget.amsId}:${lockedTarget.slotId}` : ''))
+  const [printerPickerOpen, setPrinterPickerOpen] = useState(false)
   const [test, setTest] = useState<TestKind>(lockedTest ?? 'pressureAdvance')
   const [startK, setStartK] = useState<number>(DEFAULT_PA_TOWER.startK)
   const [endK, setEndK] = useState<number>(DEFAULT_PA_TOWER.endK)
@@ -124,14 +126,14 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
     staleTime: 5 * 60_000
   })
   const targetId = capabilitiesQuery.data?.defaultTargetId ?? capabilitiesQuery.data?.targets[0]?.id ?? ''
-  const profilesQuery = useQuery<SlicingProfilesResponse>({
+  const profilesQuery = useQuery<SlicingPresetsResponse>({
     queryKey: ['slicing-profiles', targetId],
-    queryFn: async ({ signal }) => apiFetch<SlicingProfilesResponse>(`/api/slicing/profiles?targetId=${encodeURIComponent(targetId)}`, { signal }),
+    queryFn: async ({ signal }) => apiFetch<SlicingPresetsResponse>(`/api/slicing/profiles?targetId=${encodeURIComponent(targetId)}`, { signal }),
     enabled: Boolean(targetId),
     staleTime: 5 * 60_000
   })
   const profiles = useMemo(() => profilesQuery.data?.profiles ?? [], [profilesQuery.data])
-  const profilesUsable = slicingProfilesResponseIsUsable(profiles)
+  const profilesUsable = slicingPresetsResponseIsUsable(profiles)
 
   // Scope the huge catalogue (2000+ filaments, 700+ processes, 400+ machines) down to what is
   // compatible with the chosen printer BEFORE rendering it — otherwise the dropdowns mount
@@ -192,7 +194,6 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
   // Memoize the <Option> element arrays so editing a number field (start K, flow ratio, …) does not
   // re-render hundreds of dropdown options — Joy renders every Select's options into the DOM, so
   // stable element references let React skip that subtree when unrelated state changes.
-  const printerOptions = useMemo(() => printers.map((printer) => <Option key={printer.id} value={printer.id}>{printer.name}</Option>), [printers])
   const slotOptions = useMemo(() => slots.map((slot) => <Option key={`${slot.amsId}:${slot.slotId}`} value={`${slot.amsId}:${slot.slotId}`}>{slot.label}</Option>), [slots])
   const machineOptions = useMemo(() => machineProfiles.map((profile) => <Option key={profile.id} value={profile.id}>{profile.name}</Option>), [machineProfiles])
   const processOptions = useMemo(() => processProfiles.map((profile) => <Option key={profile.id} value={profile.id}>{profile.name}</Option>), [processProfiles])
@@ -201,7 +202,7 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
   const start = useMutation({
     mutationFn: () => {
       if (!selectedPrinter || !selectedSlot) throw new Error('Pick a printer and the AMS slot with your test filament')
-      if (!resolvedMachine || !resolvedProcess || !resolvedFilament) throw new Error('Slicer profiles are still loading')
+      if (!resolvedMachine || !resolvedProcess || !resolvedFilament) throw new Error('Slicing presets are still loading')
       const parameters: CreateCalibrationRun['parameters'] = test === 'pressureAdvance'
         ? { kind: 'pressureAdvance', startK, endK, step }
         : { kind: 'flowRatio', pass: test === 'flowPass1' ? 1 : 2, currentFlowRatio, offsets: [...(test === 'flowPass1' ? FLOW_PASS_1_OFFSETS : FLOW_PASS_2_OFFSETS)] }
@@ -250,10 +251,31 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
                 <Stack spacing={1.5}>
                   <FormControl>
                     <FormLabel>Printer</FormLabel>
-                    <Select value={printerId} onChange={(_event, value) => { setPrinterId(value ?? ''); setSlotKey('') }}>
-                      {printerOptions}
-                    </Select>
+                    {/* The shared picker, so a farm is searched and filtered here exactly as it is
+                        in the slice settings and the queue. */}
+                    <Button
+                      type="button"
+                      variant="outlined"
+                      color="neutral"
+                      onClick={() => setPrinterPickerOpen(true)}
+                      sx={{ justifyContent: 'flex-start', fontWeight: 'normal' }}
+                    >
+                      {selectedPrinter?.name ?? 'Choose a printer'}
+                    </Button>
                   </FormControl>
+                  {printerPickerOpen && (
+                    <PrinterPickerDialog
+                      open
+                      entries={printers.map((printer) => ({ printer }))}
+                      selectedPrinterId={printerId || null}
+                      onSelect={(printer) => {
+                        // Slots belong to the previous machine, so a printer change clears the pick.
+                        setPrinterId(printer?.id ?? '')
+                        setSlotKey('')
+                      }}
+                      onClose={() => setPrinterPickerOpen(false)}
+                    />
+                  )}
                   <FormControl>
                     <FormLabel>AMS slot</FormLabel>
                     <Select value={slotKey} placeholder={slots.length ? 'Select a slot' : 'No AMS slots reported'} onChange={(_event, value) => setSlotKey(value ?? '')}>
@@ -281,32 +303,32 @@ export const NewCalibrationDialog = memo(function NewCalibrationDialog({ printer
                     <NumberField label="Step" value={step} step={0.001} min={0.001} max={2} onChange={setStep} />
                   </Stack>
                 ) : (
-                  <NumberField label="Current flow ratio" value={currentFlowRatio} step={0.01} min={0.5} max={1.5} onChange={setCurrentFlowRatio} helperText="From the filament profile you are tuning; each patch prints relative to this." />
+                  <NumberField label="Current flow ratio" value={currentFlowRatio} step={0.01} min={0.5} max={1.5} onChange={setCurrentFlowRatio} helperText="From the material preset you are tuning; each patch prints relative to this." />
                 )}
               </Stack>
             </DialogSection>
 
-            <DialogSection title="Slicer profiles" description="Auto-picked for this printer.">
+            <DialogSection title="Slicing presets" description="Auto-picked for this printer.">
               {!profilesUsable ? (
-                <Alert color="warning" size="sm">Loading slicer profiles…</Alert>
+                <Alert color="warning" size="sm">Loading slicing presets…</Alert>
               ) : showProfiles ? (
                 // Rendered only on demand: each Joy Select mounts its full option list into the DOM,
                 // so keeping them out of the default flow keeps the dialog snappy while typing.
                 <Stack spacing={1.5}>
                   <FormControl>
-                    <FormLabel>Printer profile</FormLabel>
+                    <FormLabel>Printer preset</FormLabel>
                     <Select value={resolvedMachine ?? ''} onChange={(_event, value) => setMachineId(value ?? undefined)}>
                       {machineOptions}
                     </Select>
                   </FormControl>
                   <FormControl>
-                    <FormLabel>Process profile</FormLabel>
+                    <FormLabel>Process preset</FormLabel>
                     <Select value={resolvedProcess ?? ''} onChange={(_event, value) => setProcessId(value ?? undefined)}>
                       {processOptions}
                     </Select>
                   </FormControl>
                   <FormControl>
-                    <FormLabel>Filament profile</FormLabel>
+                    <FormLabel>Material preset</FormLabel>
                     <Select value={resolvedFilament ?? ''} onChange={(_event, value) => setFilamentId(value ?? undefined)}>
                       {filamentOptions}
                     </Select>

@@ -12,10 +12,10 @@
  *    files exist on disk. A missing `instantiation` key means visible.
  */
 
-import type { SlicingProfileKind } from '@printstream/shared'
+import type { SlicingPresetKind } from '@printstream/shared'
 
 export function isVisibleBambuStudioProfile(
-  kind: SlicingProfileKind,
+  kind: SlicingPresetKind,
   name: string | undefined,
   record: Record<string, unknown>
 ): name is string {

@@ -89,3 +89,28 @@ test('once history is trimmed past the saved point, undo cannot reach clean agai
   assert.equal(m.canUndo, false) // stacks exhausted
   assert.equal(m.isDirty, true) // but the saved (v0) state is unreachable, so still dirty
 })
+
+test('mapFrames rewrites both stacks without touching dirtiness or reachability', () => {
+  // The id-space migration a renumbering save forces on the retained frames (audit F7). It must be
+  // invisible to the version bookkeeping: a clean project stays clean, and undo still reaches the
+  // saved point.
+  const tagged = (tag: string): EditorHistoryEntry =>
+    ({ state: { tag } as unknown as EditorHistoryEntry['state'], sliceConfig: null })
+  const m = new EditorHistoryModel()
+  m.record(tagged('a'))
+  m.record(tagged('b'))
+  m.undo(apply) // one frame now sits on the redo stack
+
+  m.mapFrames((e) => tagged(`${(e.state as unknown as { tag: string }).tag}!`))
+
+  assert.equal(m.isDirty, true)
+  assert.equal(m.canUndo, true)
+  assert.equal(m.canRedo, true)
+  const seen: string[] = []
+  const collect: ApplyAndInvert = (e) => { seen.push((e.state as unknown as { tag: string }).tag); return e }
+  m.undo(collect)
+  assert.equal(m.isDirty, false, 'undoing to the saved version still reads clean after a migration')
+  m.redo(collect)
+  assert.equal(m.isDirty, true, 'and redoing away from it is dirty again')
+  assert.deepEqual(seen, ['a!', 'a!'], 'both stacks were rewritten, and both still restore')
+})

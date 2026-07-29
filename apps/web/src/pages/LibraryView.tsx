@@ -8,12 +8,11 @@
  */
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import {
-  Alert, Box, Button, ButtonGroup, CircularProgress, Dropdown, IconButton,
+  Alert, Box, Button, CircularProgress, Dropdown, IconButton,
   Menu, MenuButton, MenuItem, Sheet, Stack, Tooltip, Typography
 } from '@mui/joy'
 import CreateNewFolderRoundedIcon from '@mui/icons-material/CreateNewFolderRounded'
 import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import DriveFolderUploadRoundedIcon from '@mui/icons-material/DriveFolderUploadRounded'
 import FileUploadRoundedIcon from '@mui/icons-material/FileUploadRounded'
 import DriveFileMoveRoundedIcon from '@mui/icons-material/DriveFileMoveRounded'
@@ -41,7 +40,6 @@ import type {
   SlicingJobResponse,
   Permission,
   Printer,
-  PrinterStatus
 } from '@printstream/shared'
 import {
   LIBRARY_DOWNLOAD_PERMISSION,
@@ -54,14 +52,15 @@ import {
 } from '@printstream/shared'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../lib/apiClient'
-import { prefetchSlicingProfiles } from '../lib/slicingProfilesQuery'
+import { prefetchSlicingPresets } from '../lib/slicingPresetsQuery'
+import { refreshSlicingJobs, seedSlicingJob } from '../lib/slicingJobsCache'
 import { buildApiUrl } from '../lib/apiUrl'
 import { invalidateLibraryQueries } from '../lib/libraryQueryInvalidation'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
-import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { useMobileViewport } from '../components/useMobileViewport'
 import { EmptyState } from '../components/EmptyState'
+import { SplitButton } from '../components/SplitButton'
 import { LibraryBreadcrumb } from '../components/LibraryBreadcrumb'
 import { LibraryRecycleBinModal } from '../components/LibraryRecycleBinModal'
 import { CreateFolderModal, MoveFolderModal, RenameFolderModal } from '../components/library/LibraryFolderDialogs'
@@ -156,15 +155,6 @@ export function LibraryView() {
   const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const authBootstrapQuery = useAuthBootstrapQuery()
-  const workspaceScopeKey = readCurrentWorkspaceScopeKey()
-  const printerStatusQuery = useQuery<Record<string, PrinterStatus>>({
-    queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey),
-    queryFn: () => Promise.resolve({}),
-    initialData: {},
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false
-  })
   const inputRef = useRef<HTMLInputElement | null>(null)
   const folderInputRef = useRef<HTMLInputElement | null>(null)
   const externalDragDepthRef = useRef(0)
@@ -294,7 +284,7 @@ export function LibraryView() {
   // healthy, so opening the slice dialog / editor doesn't sit on "Loading slicer data…".
   const slicingCapabilitiesData = slicingCapabilitiesQuery.data
   useEffect(() => {
-    prefetchSlicingProfiles(queryClient, slicingCapabilitiesData)
+    prefetchSlicingPresets(queryClient, slicingCapabilitiesData)
   }, [queryClient, slicingCapabilitiesData])
 
   const allFolders = useMemo(() => foldersQuery.data?.folders ?? [], [foldersQuery.data])
@@ -490,14 +480,18 @@ export function LibraryView() {
       })
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
-    onSuccess: async (response, variables) => {
+    onSuccess: (response, variables) => {
       // Keep the slice dialog mounted underneath the print flow so its "Back" returns
       // to slice settings: the editor flow already keeps the editor open (keepDialogOpen),
       // and the slim "prepare for print" flow now stays mounted too. Other actions close
       // the dialog as before.
       const keepSliceDialogOpen = variables.keepDialogOpen || variables.action === 'print'
       if (!keepSliceDialogOpen) closeSliceDialog()
-      await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
+      // Hand the job to the dialogs below from the POST response and refresh the list
+      // afterwards, without awaiting it — see slicingJobsCache for why awaiting here left the
+      // Slice button spinning over a slice that had already finished.
+      seedSlicingJob(queryClient, response.job)
+      refreshSlicingJobs(queryClient)
       if (variables.action === 'print') {
         setSliceThenPrintTarget({
           sourceFile: variables.file,
@@ -680,18 +674,19 @@ export function LibraryView() {
   // Shared by the page toolbar and the empty-folder state so both offer the
   // same upload paths.
   const uploadSplitButton = (
-    <Dropdown>
-      <ButtonGroup size="sm" variant="solid" color="primary" disabled={bridgeResourceUnavailable} aria-label="upload">
-        <Button startDecorator={<FileUploadRoundedIcon />} onClick={() => inputRef.current?.click()}>Upload</Button>
-        <MenuButton slots={{ root: IconButton }} aria-label="More upload options">
-          <ArrowDropDownIcon />
-        </MenuButton>
-      </ButtonGroup>
-      <Menu placement="bottom-end" sx={{ minWidth: 200 }}>
-        <MenuItem onClick={() => inputRef.current?.click()}><FileUploadRoundedIcon /> Upload files…</MenuItem>
-        <MenuItem onClick={() => folderInputRef.current?.click()}><DriveFolderUploadRoundedIcon /> Upload folder…</MenuItem>
-      </Menu>
-    </Dropdown>
+    <SplitButton
+      ariaLabel="upload"
+      menuAriaLabel="More upload options"
+      size="sm"
+      label="Upload"
+      startDecorator={<FileUploadRoundedIcon />}
+      // Both halves gate together: every upload path needs the same bridge storage.
+      disabled={bridgeResourceUnavailable}
+      onClick={() => inputRef.current?.click()}
+    >
+      <MenuItem onClick={() => inputRef.current?.click()}><FileUploadRoundedIcon /> Upload files…</MenuItem>
+      <MenuItem onClick={() => folderInputRef.current?.click()}><DriveFolderUploadRoundedIcon /> Upload folder…</MenuItem>
+    </SplitButton>
   )
 
   const libraryEmptyState = deferredSearch.trim()
@@ -1471,8 +1466,9 @@ export function LibraryView() {
       {canUploadLibrary && sliceTarget && (
         <SliceFileModal
           // Re-mount on a different file/version: the dialog holds per-file state (material
-          // colors/nozzles, one-shot baked-defaults guards) that must never survive a target
-          // swap — a reused instance shows the PREVIOUS project's materials. Mirrors EditorView.
+          // colors/nozzles, the one-shot material-defaults latch, the user's target picks) that
+          // must never survive a target swap — a reused instance shows the PREVIOUS project's
+          // materials. Mirrors EditorView.
           key={`${sliceTarget.id}:${sliceVersionId ?? 'current'}`}
           file={sliceTarget}
           flow={sliceFlow}
@@ -1484,7 +1480,6 @@ export function LibraryView() {
           bridgeName={activeBridgeName}
           showRoot={showGlobalRootBreadcrumb}
           printers={printersQuery.data?.printers ?? []}
-          printerStatuses={printerStatusQuery.data ?? {}}
           capabilities={slicingCapabilitiesQuery.data ?? null}
           capabilitiesLoading={slicingCapabilitiesQuery.isLoading && !slicingCapabilitiesQuery.data}
           capabilitiesError={slicingCapabilitiesQuery.error instanceof Error ? slicingCapabilitiesQuery.error.message : null}

@@ -11,7 +11,8 @@ const BAMBU_DEFAULTS: LibraryThreeMfPrimeTowerSizing = {
   ribWidth: 8,
   extraRibLength: 0,
   extruderCount: 1,
-  needWipeTower: false
+  needWipeTower: false,
+  spiralMode: false
 }
 
 test('wipeTowerMinDepth clamps below the first and above the last table entry', () => {

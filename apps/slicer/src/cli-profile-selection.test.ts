@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildPerMaterialFilamentOverrides, selectCliProfileFiles } from './cli-profile-selection.js'
+import {
+  buildPerMaterialFilamentOverrides,
+  selectCliProfileFiles,
+  selectSettingsExportProfileFiles
+} from './cli-profile-selection.js'
 
 test('drops machine presets when slicing a rewritten 3MF directly', () => {
   const selected = selectCliProfileFiles([
@@ -58,4 +62,16 @@ test('buildPerMaterialFilamentOverrides keeps two slots sharing a preset indepen
   ])
   assert.deepEqual(map[1], { nozzle_temperature: ['210'], filament_flow_ratio: ['0.98'] })
   assert.deepEqual(map[2], { nozzle_temperature: ['215'] })
+})
+
+test('the settings export keeps the machine preset the slice drops', () => {
+  // The export loads no 3MF, so without a machine BambuStudio has no printer to test the
+  // process's `compatible_printers` against and fails every process as incompatible (exit 239).
+  const profiles = [{ kind: 'machine' as const }, { kind: 'process' as const }, { kind: 'filament' as const }]
+  assert.deepEqual(selectSettingsExportProfileFiles(profiles), profiles)
+  assert.deepEqual(
+    selectSettingsExportProfileFiles(selectCliProfileFiles(profiles, { rewroteProjectSettings: true })),
+    [{ kind: 'process' }, { kind: 'filament' }],
+    'it does not re-add a machine that was never requested'
+  )
 })

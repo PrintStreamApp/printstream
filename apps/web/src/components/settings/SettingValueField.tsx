@@ -5,8 +5,9 @@
  * serialized-string value, emitting the new scalar. It knows nothing about which catalog the option
  * came from, so both dialogs render identical controls.
  */
-import { Box, Input, Option, Select, Stack, Switch, Textarea, Typography } from '@mui/joy'
-import { FILAMENT_INDEX_PROCESS_KEYS, serializeProcessBool, type ProcessSettingOption } from '@printstream/shared'
+import type React from 'react'
+import { Box, Input, Option, Select, Stack, Switch, Textarea, Tooltip, Typography } from '@mui/joy'
+import { FILAMENT_INDEX_PROCESS_KEYS, serializeProcessBool, type ProcessSettingOption, isNilSettingValue } from '@printstream/shared'
 
 /**
  * One fixed width for every scalar value control (numeric inputs, percent fields, and enum
@@ -43,13 +44,27 @@ export interface SettingValueFieldProps {
   /** Whether to render the option's own label beside a bool switch (multi-control lines). */
   showOwnLabel: boolean
   isCode?: boolean
+  /** Differs from the preset's PARENT — i.e. an override this preset carries. Bold, plain colour. */
   modified?: boolean
+  /**
+   * Differs from what is currently SAVED — an edit made in this session. Takes precedence over
+   * `modified` and colours the label, mirroring BambuStudio: it paints a value that differs from
+   * the last saved one with `m_modified_label_clr` and leaves a saved override in the default text
+   * colour (Tab.cpp `update_changed_ui`).
+   */
+  unsaved?: boolean
   /**
    * The project's materials, for filament-index settings (BambuStudio's `i_enum_open` int
    * options: support/raft base+interface, walls/infill filament). When provided those render
    * as a material picker — 0 is "Default" — instead of a bare number input.
    */
   filamentChoices?: SettingFilamentChoice[]
+  /**
+   * The value this one replaced, shown on hover — the preset's value for a project change, the
+   * parent preset's for an override the preset carries. Without it a bold row says something
+   * changed but not what it changed FROM, which is the question it prompts.
+   */
+  original?: { value: string; label: string } | null
   onScalarChange: (key: string, value: string) => void
 }
 
@@ -70,8 +85,17 @@ function FilamentSwatch({ color }: { color: string | null }) {
   )
 }
 
-export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
-  const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, isCode, modified, filamentChoices, onScalarChange } = props
+function SettingControl(props: SettingValueFieldProps): JSX.Element {
+  const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, isCode, modified, unsaved, filamentChoices, onScalarChange } = props
+  // A nil is BambuStudio's "not overridden", not a value: show an empty field, never the word.
+  const value = isNilSettingValue(scalar) ? '' : scalar
+  // Two channels per state, because weight alone at this size was unreadable. Colour is reserved
+  // for the PROJECT change — the one the user acted on and can reset. A preset's own override gets
+  // italic+bold instead: noticeable, but it does not read as an alert about something wrong, which
+  // a second colour did (nothing on screen explains why it would be highlighted).
+  const changeSx = unsaved
+    ? { color: 'warning.plainColor', fontWeight: 700 }
+    : modified ? { fontWeight: 700, fontStyle: 'italic' as const } : undefined
 
   // Filament-index settings pick a project material by its 1-based index; render them as a
   // material select when the host supplied the material list. "0" is BambuStudio's "Default"
@@ -79,7 +103,7 @@ export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
   // `i_enum_open` gui type — BambuStudio shares that widget with numeric settings that ship
   // preset choices, so matching on it turned "Top interface layers" into a material picker.
   if (option.type === 'int' && FILAMENT_INDEX_PROCESS_KEYS.includes(settingKey) && filamentChoices && filamentChoices.length > 0) {
-    const current = Number.parseInt(scalar, 10)
+    const current = Number.parseInt(value, 10)
     const normalized = Number.isFinite(current) && current > 0 ? String(current) : '0'
     // A value pointing past the current material list (stale baked config) still needs a
     // visible row, or the select would render blank.
@@ -105,16 +129,48 @@ export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
     )
   }
 
+  // BambuStudio renders this one as a colour button (`ConfigOptionDef::GUIType::color`), and the
+  // generator already captured that — we were just dropping it on the floor and rendering the hex
+  // as an anonymous text box. Empty is a real value here (the default is ""), meaning "no default
+  // colour", so the swatch falls back to black for the native control while the text stays the
+  // source of truth and can still be cleared.
+  if (option.guiType === 'color') {
+    return (
+      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ width: SCALAR_CONTROL_WIDTH }}>
+        <Box
+          component="input"
+          type="color"
+          aria-label={`${option.label} swatch`}
+          value={/^#[0-9a-f]{6}$/i.test(value) ? value : '#000000'}
+          disabled={!enabled}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) => onScalarChange(settingKey, event.target.value)}
+          sx={{
+            width: 34, height: 30, p: 0, flexShrink: 0, cursor: enabled ? 'pointer' : 'default',
+            bgcolor: 'transparent', border: '1px solid', borderColor: 'neutral.outlinedBorder',
+            borderRadius: 'sm'
+          }}
+        />
+        <Input
+          value={value}
+          disabled={!enabled}
+          placeholder="Not set"
+          onChange={(event) => onScalarChange(settingKey, event.target.value)}
+          sx={{ flex: 1, minWidth: 0 }}
+        />
+      </Stack>
+    )
+  }
+
   if (option.type === 'bool') {
     return (
       <Stack direction="row" spacing={0.75} alignItems="center">
         <Switch
-          checked={scalar === '1' || scalar === 'true'}
+          checked={value === '1' || value === 'true'}
           disabled={!enabled}
           onChange={(event) => onScalarChange(settingKey, serializeProcessBool(event.target.checked))}
         />
         {showOwnLabel && (
-          <Typography level="body-sm" sx={modified ? { color: 'warning.plainColor', fontWeight: 'lg' } : undefined}>
+          <Typography level="body-sm" sx={changeSx}>
             {option.label}
           </Typography>
         )}
@@ -127,7 +183,7 @@ export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
     const labels = option.enumValues ?? []
     return (
       <Select
-        value={scalar}
+        value={value}
         disabled={!enabled}
         onChange={(_event, value) => { if (typeof value === 'string') onScalarChange(settingKey, value) }}
         sx={{ width: SCALAR_CONTROL_WIDTH }}
@@ -141,14 +197,22 @@ export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
     )
   }
 
-  if (option.type === 'string' && (isCode || option.isCode)) {
+  // MULTILINE and MONOSPACE are different things. BambuStudio's Notes fields are full-width
+  // multiline editors (`fullWidth` + a group `height` in the catalog) but ordinary prose, while
+  // G-code fields are both. Keying the textarea off `isCode` alone left Notes as a 200px
+  // single-line input with a 25-row height it never used.
+  const monospace = Boolean(isCode || option.isCode)
+  if (option.type === 'string' && (monospace || option.fullWidth || option.height != null)) {
     return (
       <Textarea
-        minRows={3}
-        value={scalar}
+        // BambuStudio sizes each G-code box per group (its `new_optgroup(..., height)`), which the
+        // catalog carries as `height`. Clamped: the source asks for 25 rows on some, which would
+        // push the rest of the page out of reach inside a dialog.
+        minRows={Math.min(Math.max(option.height ?? 3, 3), 12)}
+        value={value}
         disabled={!enabled}
         onChange={(event) => onScalarChange(settingKey, event.target.value)}
-        sx={{ flex: 1, fontFamily: 'code', minWidth: 280 }}
+        sx={{ flex: 1, fontFamily: monospace ? 'code' : undefined, minWidth: 280 }}
       />
     )
   }
@@ -164,12 +228,12 @@ export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
   const isNumeric = isInteger || isFloat || isPercentish
   // A vector setting packs several values into one string (e.g. "0.4,0.4"); keep it free-text.
   const useNumberInput = (isInteger || isFloat || isPurePercent) && !option.vector
-  const fixedNumericWidth = isNumeric && !option.vector
+
 
   return (
     <Input
       type={useNumberInput ? 'number' : 'text'}
-      value={isPurePercent ? scalar.replace(/%/g, '').trim() : scalar}
+      value={isPurePercent ? value.replace(/%/g, '').trim() : value}
       disabled={!enabled}
       onChange={(event) => {
         const raw = event.target.value
@@ -188,9 +252,51 @@ export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
           ...(option.max != null ? { max: option.max } : {})
         }
       } : undefined}
-      sx={fixedNumericWidth
-        ? { width: SCALAR_CONTROL_WIDTH }
-        : { minWidth: 140, maxWidth: option.type === 'string' || option.type === 'point' ? 280 : 180 }}
+      // ONE width for every single-line control, which is what SCALAR_CONTROL_WIDTH is for: text
+      // and point fields used to stretch to 280 and vectors were capped at 180, so a row's controls
+      // were three different lengths depending on the option's type. A row with several controls
+      // (per-extruder variants) wraps rather than shrinking them out of alignment.
+      sx={{ width: SCALAR_CONTROL_WIDTH }}
     />
+  )
+}
+
+/**
+ * A line carrying more than one setting needs to say which value is which — BambuStudio labels each
+ * field with the option's own name beside the line's ("Nozzle" -> "Initial layer" / "Other layers",
+ * "Ramming volumetric speed" -> "Extruder change" / "Hotend change"; see `TabFilament::build()`,
+ * where each `line.append_option` carries a `ConfigOptionDef::label`). We passed `showOwnLabel`
+ * down but only bool switches honoured it, so every multi-value row rendered as two unexplained
+ * boxes.
+ *
+ * Single-setting lines are unchanged: the line's own label already names the value, and repeating
+ * it beside the field would be noise.
+ */
+export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
+  const control = <SettingControl {...props} />
+  // A bool renders its own label inline with the switch, so it is already handled.
+  if (!props.showOwnLabel || !props.option.label || props.option.type === 'bool') return control
+  // The state is per KEY, so the per-field label is where it belongs: on a two-value line the row
+  // label alone cannot say WHICH value changed.
+  const changed = props.unsaved
+    ? { color: 'warning.plainColor', fontWeight: 700 }
+    : props.modified ? { fontWeight: 700, fontStyle: 'italic' as const } : undefined
+  const label = (
+    <Typography
+      level="body-xs"
+      textColor={changed ? undefined : 'text.tertiary'}
+      noWrap
+      sx={{ flexShrink: 0, textAlign: 'right', minWidth: 88, ...changed }}
+    >
+      {props.option.label}
+    </Typography>
+  )
+  return (
+    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+      {props.original
+        ? <Tooltip title={`${props.original.label}: ${props.original.value}`} variant="soft" disableInteractive>{label}</Tooltip>
+        : label}
+      {control}
+    </Stack>
   )
 }

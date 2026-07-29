@@ -11,7 +11,7 @@
 import type { LibraryThreeMfScene } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
 import { createPlateThumbnailRenderer } from './plateThumbnail'
-import { buildThreeMfMeshGroup, disposeObject3D } from './threeMfScene'
+import { buildThreeMfMeshGroup, createLibraryThreeMfEntryLoader, disposeObject3D } from './threeMfScene'
 
 // One shared offscreen renderer for all library thumbnails. Model-mesh thumbnails now render
 // eagerly for every gcode file in a list, so creating/disposing a WebGL context per thumbnail
@@ -46,7 +46,7 @@ function getSharedThumbnailRenderer() {
 export async function renderLibraryFileThumbnail(fileId: string, plate: number, signal?: AbortSignal): Promise<string | null> {
   try {
     const scene = await apiFetch<LibraryThreeMfScene>(`/api/library/${fileId}/scene?plate=${plate}`, { signal })
-    const group = await buildThreeMfMeshGroup(fileId, scene, signal)
+    const group = await buildThreeMfMeshGroup(createLibraryThreeMfEntryLoader(fileId), scene, signal)
     try {
       return getSharedThumbnailRenderer().render(group, scene.bed)
     } finally {

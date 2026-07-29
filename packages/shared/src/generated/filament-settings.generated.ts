@@ -1204,22 +1204,24 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
       "mode": "advanced"
     },
     "filament_scarf_height": {
-      "type": "string",
+      "type": "floatOrPercent",
       "vector": true,
       "label": "Scarf start height",
       "tooltip": "This amount can be specified in millimeters or as a percentage of the current layer height.",
       "sidetext": "mm/%",
       "mode": "advanced",
-      "min": 0
+      "min": 0,
+      "default": "10%"
     },
     "filament_scarf_gap": {
-      "type": "string",
+      "type": "floatOrPercent",
       "vector": true,
       "label": "Scarf slope gap",
       "tooltip": "In order to reduce the visiblity of the seam in closed loop, the inner wall and outer wall are shortened by a specified amount.",
       "sidetext": "mm/%",
       "mode": "advanced",
-      "min": 0
+      "min": 0,
+      "default": "0"
     },
     "filament_scarf_length": {
       "type": "float",

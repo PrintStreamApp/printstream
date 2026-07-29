@@ -3,8 +3,8 @@
  */
 import { createReadStream } from 'node:fs'
 import path from 'node:path'
-import { mkdir, open, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { mkdir, open, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   bridgeLibraryReadChunkResultSchema,
   bridgeLibraryStatResultSchema,
@@ -342,16 +342,54 @@ export async function pruneBridgeLibraryLocalCache(maxAgeMs = BRIDGE_LIBRARY_LOC
   return await pruneDerivedCacheDirectory(bridgeLibraryCacheDir, maxAgeMs)
 }
 
+/**
+ * Coalesce concurrent local-copy fills for the same cache path. The sibling rationale on
+ * {@link inflightReplicaBuilds} applies here too — several routes (`/archive`, `/thumbnail`,
+ * `/mesh`, `/scene-entry`, `/preview-asset`, `/download`) resolve the same bridge file, so two of
+ * them landing on a cold cache together is ordinary rather than exotic. Deduping onto one transfer
+ * also spares the bridge a duplicate multi-megabyte upload.
+ */
+const inflightLocalCopies = new Map<string, Promise<string>>()
+
+/**
+ * Local path for a bridge-owned file, fetching it into the `_bridge-cache` if it is not already
+ * there.
+ *
+ * Contract callers rely on: the returned path is readable IN FULL the moment it is returned. Routes
+ * `readFile` it immediately, and a short read there surfaces to the user as a corrupt 3MF rather
+ * than as a transfer error — so a fill must never be observable through this path while it is still
+ * in progress. That is what {@link inflightLocalCopies} and the rename in
+ * {@link copyBridgeLibraryFileToLocalCache} together guarantee.
+ */
 export async function ensureBridgeLibraryLocalCopy(input: {
   bridgeId: string
   storedPath: string
 }): Promise<string> {
+  // Keyed on the cache path, not the stored path: two stored paths sharing a basename resolve to
+  // one cache file, so the path is the resource being written.
   const targetPath = resolveBridgeLibraryCachePath(input.bridgeId, input.storedPath)
+  const inflight = inflightLocalCopies.get(targetPath)
+  if (inflight) return await inflight
+  const build = fillBridgeLibraryLocalCopy(input, targetPath)
+  inflightLocalCopies.set(targetPath, build)
+  try {
+    return await build
+  } finally {
+    inflightLocalCopies.delete(targetPath)
+  }
+}
+
+async function fillBridgeLibraryLocalCopy(
+  input: { bridgeId: string, storedPath: string },
+  targetPath: string
+): Promise<string> {
   if (await isBridgeLibraryLocalCopyComplete(input.bridgeId, input.storedPath, targetPath)) {
     await refreshLocalCopyRecency(targetPath)
     return targetPath
   }
-  await rm(targetPath, { force: true }).catch(() => undefined)
+  // Deliberately no `rm` of the target first: the fill below renames its result into place, so the
+  // previous copy stays readable until the new one is complete. Deleting up front would open a
+  // window in which the path exists in neither state.
   await copyBridgeLibraryFileToLocalCache(input.bridgeId, input.storedPath, targetPath)
   return targetPath
 }
@@ -669,35 +707,49 @@ async function requestBridgeLibraryChunk(bridgeId: string, storedPath: string, o
   ))
 }
 
+/**
+ * Pull a bridge-owned file into the local cache.
+ *
+ * Fills a private temp file and renames it into place — NEVER the target path itself. `rename` is
+ * atomic within a directory, so any reader sees either the previous copy or the finished one. An
+ * in-place fill is what made this dangerous: it truncates first, so a caller already holding this
+ * path (see {@link ensureBridgeLibraryLocalCopy}) could read a half-written file and report the
+ * 3MF as corrupt, with nothing anywhere reporting a transfer error.
+ */
 async function copyBridgeLibraryFileToLocalCache(bridgeId: string, storedPath: string, targetPath: string): Promise<void> {
   await mkdir(path.dirname(targetPath), { recursive: true })
-  const handle = await open(targetPath, 'w')
+  const tempPath = `${targetPath}.${randomUUID()}.partial`
   let offset = 0
 
   try {
-    for (;;) {
-      const result = await requestBridgeLibraryChunk(bridgeId, storedPath, offset)
-      if (result.bufferBase64 == null) {
-        throw new Error('ENOENT')
-      }
+    const handle = await open(tempPath, 'w')
+    try {
+      for (;;) {
+        const result = await requestBridgeLibraryChunk(bridgeId, storedPath, offset)
+        if (result.bufferBase64 == null) {
+          throw new Error('ENOENT')
+        }
 
-      const chunk = Buffer.from(result.bufferBase64, 'base64')
-      if (chunk.byteLength > 0) {
-        await handle.write(chunk)
-        offset += chunk.byteLength
+        const chunk = Buffer.from(result.bufferBase64, 'base64')
+        if (chunk.byteLength > 0) {
+          await handle.write(chunk)
+          offset += chunk.byteLength
+        }
+        if (result.eof) {
+          break
+        }
+        if (chunk.byteLength === 0) {
+          throw new Error('Bridge library read returned an empty chunk before EOF')
+        }
       }
-      if (result.eof) {
-        return
-      }
-      if (chunk.byteLength === 0) {
-        throw new Error('Bridge library read returned an empty chunk before EOF')
-      }
+    } finally {
+      // Closed before the rename so the bytes are flushed, and so the rename is legal on Windows.
+      await handle.close().catch(() => undefined)
     }
+    await rename(tempPath, targetPath)
   } catch (error) {
-    await rm(targetPath, { force: true }).catch(() => undefined)
+    await rm(tempPath, { force: true }).catch(() => undefined)
     throw error
-  } finally {
-    await handle.close().catch(() => undefined)
   }
 }
 

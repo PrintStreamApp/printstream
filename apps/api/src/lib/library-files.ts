@@ -51,7 +51,7 @@ export async function persistLibraryFileFromLocalPath(input: {
   missingBridgeMessage?: string
   onBridgeProgress?: (transferredBytes: number) => Promise<void> | void
   onBridgeComplete?: () => Promise<void> | void
-}): Promise<{ file: PersistedLibraryFileRow; unchanged: boolean }> {
+}): Promise<{ file: PersistedLibraryFileRow; unchanged: boolean; archivedVersionId: string | null }> {
   const attribution = await resolveRequestActorAttribution(input.request)
   // Lifecycle origin drives cleanup windows (unsaved sliced outputs age out
   // faster than transient uploads).
@@ -83,7 +83,7 @@ export async function persistLibraryFileFromLocalPath(input: {
   if (overwriteTarget) {
     const unchangedFile = await resolveUnchangedOverwrite(ownerBridgeId, overwriteTarget, input.sourcePath)
     if (unchangedFile) {
-      return { file: unchangedFile, unchanged: true }
+      return { file: unchangedFile, unchanged: true, archivedVersionId: null }
     }
   }
 
@@ -92,13 +92,19 @@ export async function persistLibraryFileFromLocalPath(input: {
   await input.onBridgeComplete?.()
 
   let created: PersistedLibraryFileRow
+  // Id of the version row this write archived, i.e. the content that was current a moment ago.
+  // Returned because the editor pins it as its content base: after its FIRST save, "the bytes we
+  // opened" no longer live at the file's head — they live here. Without it the editor would have
+  // to go hunting through version history to author its next save from the same original.
+  let archivedVersionId: string | null = null
   const uploadedAt = new Date()
   try {
     if (overwriteTarget) {
       created = await prisma.$transaction(async (tx) => {
-        await tx.libraryFileVersion.create({
+        const archived = await tx.libraryFileVersion.create({
           data: toLibraryFileVersionCreateInput(overwriteTarget)
         })
+        archivedVersionId = archived.id
         return await tx.libraryFile.update({
           where: { id: overwriteTarget.id },
           data: {
@@ -163,7 +169,7 @@ export async function persistLibraryFileFromLocalPath(input: {
     })
   }
   if (!input.hidden) broadcastLibraryChanged()
-  return { file: created, unchanged: false }
+  return { file: created, unchanged: false, archivedVersionId }
 }
 
 /**

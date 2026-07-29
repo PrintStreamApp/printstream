@@ -15,7 +15,18 @@ export const MODE_MAP = { comSimple: 'simple', comAdvanced: 'advanced', comDevel
 /** Map a BambuStudio ConfigOption C++ type to a UI field type + vector flag. */
 export function mapType(coType) {
   const vector = /s$|sNullable$/.test(coType) && coType !== 'coFloatOrPercent'
-  const base = coType.replace(/Nullable$/, '').replace(/s$/, '')
+  // BambuStudio pluralizes EVERY component of a vector type, so `coFloatsOrPercents` needs both
+  // its plurals removed — stripping only the trailing one leaves `coFloatsOrPercent`, which matches
+  // no case below and silently fell through to `string`. That mistyping is expensive twice over:
+  // the key gets no `default` (so `applyProcessConfigDefaults` cannot fill it, and a preset that
+  // omits it reads as "changed" against a project that sets it), and the value comparator comes out
+  // exact rather than percent-aware (so "50" and "50%" compare unequal). It hit
+  // small_perimeter_speed, vertical_shell_speed, sparse_infill_acceleration, and the filament
+  // catalog's scarf keys.
+  const base = coType
+    .replace(/Nullable$/, '')
+    .replace(/s$/, '')
+    .replace(/^coFloatsOr/, 'coFloatOr')
   let fieldType
   switch (base) {
     case 'coBool': fieldType = 'bool'; break

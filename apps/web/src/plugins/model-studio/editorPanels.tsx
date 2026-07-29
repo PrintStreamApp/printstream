@@ -11,7 +11,7 @@
  * ./editorGeometry; the filament-option shape is a type-only import from
  * ./EditorView (erased, no runtime cycle).
  */
-import { Fragment, useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { Fragment, useEffect, useState, type MutableRefObject } from 'react'
 import {
   Box,
   Button,
@@ -38,7 +38,6 @@ import {
 } from '@mui/joy'
 import { listItemDecoratorClasses } from '@mui/joy/ListItemDecorator'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import CategoryRoundedIcon from '@mui/icons-material/CategoryRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import MoreVertRoundedIcon from '@mui/icons-material/MoreVertRounded'
@@ -71,11 +70,13 @@ import { canonicalThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { SettingsTuneButton } from '../../components/SettingsTuneButton'
+import { SplitButton } from '../../components/SplitButton'
 import { PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform } from './editorGeometry'
 import { HELPER_VOLUME_SPECS, helperVolumeCssColor } from './lib/helperVolumes'
 import { printedParts, summarizeInstanceMaterial } from './lib/editorModel'
 import type { EditorAddedPart, EditorInstance, EditorPlate } from './lib/editorModel'
 import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
+import { plateDisplayName } from './lib/plateName'
 import type { FilamentOption } from './EditorView'
 
 /**
@@ -136,7 +137,8 @@ export function PlateThumbnailStrip({
   onAddPlate,
   onRemovePlate,
   onRenamePlate,
-  onReorderPlate
+  onReorderPlate,
+  orientation = 'horizontal'
 }: {
   plates: EditorPlate[]
   activeIndex: number
@@ -148,10 +150,21 @@ export function PlateThumbnailStrip({
   onRemovePlate: (index: number) => void
   onRenamePlate: (index: number) => void
   onReorderPlate: (fromIndex: number, toIndex: number) => void
+  /**
+   * Which way the strip runs. Vertical is a rail beside the viewport, chosen by
+   * `choosePlateStripOrientation` when a horizontal band would letterbox the 3D area. Only the
+   * axis changes — tiles, collapse, drag-reorder and the options menu are identical.
+   */
+  orientation?: 'horizontal' | 'vertical'
 }) {
+  const vertical = orientation === 'vertical'
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   // Tile currently hovered during a reorder drag, for the drop-target highlight.
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+  // Which tile's options menu is open. Held here (rather than letting each Dropdown own its
+  // state) so a right-click anywhere on a tile can open that tile's menu — the same menu the
+  // kebab opens, so the two entry points can never drift apart.
+  const [menuPlateIndex, setMenuPlateIndex] = useState<number | null>(null)
   // Collapsed mode trades the thumbnails for name-only chips so the 3D viewport gets the
   // vertical space back; the preference sticks across sessions.
   const [collapsed, setCollapsed] = useLocalStorageState(
@@ -161,8 +174,26 @@ export function PlateThumbnailStrip({
     String
   )
   return (
-    <Sheet variant="outlined" sx={{ p: 0.75, borderRadius: 'sm', bgcolor: 'background.level1', width: '100%', minWidth: 0 }}>
-    <Stack direction="row" spacing={0.75} sx={{ overflowX: 'auto', alignItems: 'stretch' }}>
+    <Sheet
+      variant="outlined"
+      sx={{
+        p: 0.75,
+        borderRadius: 'sm',
+        bgcolor: 'background.level1',
+        width: '100%',
+        minWidth: 0,
+        // The rail owns its column's full height and scrolls inside it, so a long plate list
+        // never stretches the grid row.
+        ...(vertical ? { height: '100%', minHeight: 0, display: 'flex' } : {})
+      }}
+    >
+    <Stack
+      direction={vertical ? 'column' : 'row'}
+      spacing={0.75}
+      sx={vertical
+        ? { overflowY: 'auto', overflowX: 'hidden', alignItems: 'stretch', flex: 1, minHeight: 0, width: '100%' }
+        : { overflowX: 'auto', alignItems: 'stretch' }}
+    >
       {plates.map((plate) => {
         const active = plate.index === activeIndex
         // Prefer a live client-rendered thumbnail (the active plate + any plate the user has
@@ -174,7 +205,7 @@ export function PlateThumbnailStrip({
         // No live render and no embedded PNG means the plate is genuinely still loading
         // (e.g. a freshly added empty plate before it's opened) — show a spinner.
         const loading = !thumbnail
-        const label = plate.name?.trim() || `Plate ${plate.index}`
+        const label = plateDisplayName(plate.name, plate.index)
         return (
           <Sheet
             key={plate.index}
@@ -189,6 +220,10 @@ export function PlateThumbnailStrip({
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(plate.index) }
             }}
+            // Right-click opens this tile's options menu WITHOUT selecting the plate, matching the
+            // kebab (which stops propagation for the same reason): switching the active plate
+            // rebuilds the scene, and renaming or deleting a plate does not require opening it.
+            onContextMenu={(event) => { event.preventDefault(); setMenuPlateIndex(plate.index) }}
             draggable
             onDragStart={(event) => { setDragIndex(plate.index); event.dataTransfer.effectAllowed = 'move' }}
             onDragEnd={() => { setDragIndex(null); setDragOverIndex(null) }}
@@ -210,10 +245,13 @@ export function PlateThumbnailStrip({
               // Expanded: fixed-width tile sized to the (square) thumbnail; the label must not
               // stretch it, so cap the width and let the label truncate within it. Collapsed:
               // a name-only chip with the options menu inline.
-              flex: collapsed ? '0 0 auto' : '0 0 92px',
-              width: collapsed ? 'auto' : 92,
-              minWidth: collapsed ? 0 : 92,
-              maxWidth: collapsed ? 160 : 92,
+              // In a rail the tile fills the column's width and its HEIGHT is what must not
+              // stretch; in a band it is the reverse. `flex` names the axis being fixed, so it
+              // has to flip with the orientation or the tiles grow to fill the scroller.
+              flex: '0 0 auto',
+              width: vertical ? '100%' : (collapsed ? 'auto' : 92),
+              minWidth: vertical ? 0 : (collapsed ? 0 : 92),
+              maxWidth: vertical ? '100%' : (collapsed ? 160 : 92),
               p: 0.5,
               border: active ? undefined : '1px solid',
               borderColor: active ? undefined : 'neutral.outlinedBorder',
@@ -271,7 +309,10 @@ export function PlateThumbnailStrip({
                 {label}
               </Typography>
             </Tooltip>
-            <Dropdown>
+            <Dropdown
+              open={menuPlateIndex === plate.index}
+              onOpenChange={(_event, isOpen) => setMenuPlateIndex(isOpen ? plate.index : null)}
+            >
               <MenuButton
                 slots={{ root: IconButton }}
                 slotProps={{ root: { size: 'sm', variant: 'plain', color: 'neutral', onClick: (event: React.MouseEvent) => event.stopPropagation(), 'aria-label': `Plate ${plate.index} options` } }}
@@ -318,7 +359,13 @@ export function PlateThumbnailStrip({
           color="neutral"
           onClick={() => setCollapsed(!collapsed)}
           aria-label={collapsed ? 'Show plate previews' : 'Hide plate previews'}
-          sx={{ flex: '0 0 auto', alignSelf: 'center', ml: 'auto !important' }}
+          // Push to the far END of the strip, which is a different axis per orientation: `ml` in a
+          // row, `mt` in the rail's column. Using `ml` in both left the rail's button pinned to the
+          // right edge, out of line with tiles that stretch the full width. `!important` beats the
+          // margin Stack injects between children on whichever axis it is spacing.
+          sx={vertical
+            ? { flex: '0 0 auto', alignSelf: 'center', mt: 'auto !important' }
+            : { flex: '0 0 auto', alignSelf: 'center', ml: 'auto !important' }}
         >
           {collapsed ? <UnfoldMoreRoundedIcon fontSize="small" /> : <UnfoldLessRoundedIcon fontSize="small" />}
         </IconButton>
@@ -455,7 +502,7 @@ export function GizmoToolbar({
   disabled: boolean
   /** Disables even selection-independent tools (measure) while the viewport is busy. */
   busy: boolean
-  /** Auto-arrange is plate-scoped: enabled whenever the plate has models, selection or not. */
+  /** Auto-arrange is plate-scoped: enabled whenever the plate has objects, selection or not. */
   arrangeDisabled: boolean
   onChange: (mode: GizmoMode) => void
   onDropToBed: () => void
@@ -500,7 +547,7 @@ export function GizmoToolbar({
   // Utilities that work without a selection: plate-wide arrange and measure
   // (still a mode — it highlights while active — but it never edits the scene).
   const utilities: ToolbarEntry[] = [
-    { key: 'arrange', label: 'Auto-arrange all models on this plate', short: 'Arrange', icon: <GridViewRoundedIcon />, disabled: arrangeDisabled, onClick: onArrangeAll },
+    { key: 'arrange', label: 'Auto-arrange all objects on this plate', short: 'Arrange', icon: <GridViewRoundedIcon />, disabled: arrangeDisabled, onClick: onArrangeAll },
     { key: 'measure', label: 'Measure', icon: <StraightenRoundedIcon />, active: mode === 'measure', disabled: busy, onClick: () => onChange('measure') }
   ]
   // The two groups are returned as siblings (no wrapper) so the toolbar's
@@ -840,11 +887,9 @@ function roundForDisplay(value: number): string {
 
 /**
  * "Add" split button: the default click opens the library file picker (the common
- * case); the dropdown offers uploading a local file or cloning an in-project object.
- * Mirrors the Print split button on the printer cards — a `ButtonGroup` with a main
- * `Button` plus an `IconButton` driving an anchored `Menu`.
+ * case); the dropdown offers uploading a local file or a primitive solid.
  */
-export function AddModelMenu({
+export function AddObjectMenu({
   importing,
   disabled = false,
   disabledReason,
@@ -860,73 +905,53 @@ export function AddModelMenu({
   onImportFile: () => void
   onAddPrimitive: (kind: PrimitiveKind) => void
 }) {
-  const anchorRef = useRef<HTMLDivElement | null>(null)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const blocked = importing || disabled
   return (
-    <>
-      {/* Soft variant so the caret matches the main button (outlined fills the
-          Button but leaves the IconButton transparent in this theme). */}
-      <Tooltip title={disabled && disabledReason ? disabledReason : ''} variant="soft">
-      <ButtonGroup ref={anchorRef} size="sm" variant="soft" color="primary" aria-label="add model">
-        <Button
-          onClick={onAddFromLibrary}
-          disabled={blocked}
-          startDecorator={importing ? <CircularProgress size="sm" /> : <AddRoundedIcon />}
-        >
-          Add
-        </Button>
-        <IconButton
-          disabled={blocked}
-          aria-controls={menuOpen ? 'add-model-menu' : undefined}
-          aria-expanded={menuOpen ? 'true' : undefined}
-          aria-haspopup="menu"
-          aria-label="More add options"
-          onClick={() => setMenuOpen((value) => !value)}
-        >
-          <ArrowDropDownIcon />
-        </IconButton>
-      </ButtonGroup>
-      </Tooltip>
-      <Menu
-        id="add-model-menu"
-        open={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        anchorEl={anchorRef.current}
-        placement="bottom-end"
-        // The editor is a Modal (zIndex 1300); the menu popper defaults to the
-        // lower `popup` layer, so lift it above the dialog or it renders behind it.
-        // In a vertical menu Joy's ListItemDecorator only reserves height, not width,
-        // so icons of differing glyph widths leave the labels ragged. Pin a fixed icon
-        // column and a uniform icon size so every label starts at the same x.
-        sx={{
-          minWidth: 220,
-          zIndex: (theme) => theme.zIndex.tooltip,
-          [`& .${listItemDecoratorClasses.root}`]: { minInlineSize: '1.75rem' },
-          '& svg': { fontSize: '1.25rem' }
-        }}
-      >
-        <MenuItem onClick={() => { setMenuOpen(false); onAddFromLibrary() }}>
-          <ListItemDecorator><InventoryRoundedIcon /></ListItemDecorator>
-          From library…
+    // Soft: the panel's Add is not the editor's primary action. Both halves gate together —
+    // every add path needs the same import machinery.
+    <SplitButton
+      ariaLabel="add object"
+      menuAriaLabel="More add options"
+      size="sm"
+      variant="soft"
+      label="Add"
+      // Keep the label visible while importing (Joy's `loading` centres the spinner over it),
+      // so the button still says what it is mid-import.
+      startDecorator={importing ? <CircularProgress size="sm" /> : <AddRoundedIcon />}
+      disabled={importing || disabled}
+      disabledReason={disabled ? disabledReason : undefined}
+      onClick={onAddFromLibrary}
+      // The editor is a Modal (zIndex 1300); the menu popper defaults to the lower `popup`
+      // layer, so lift it above the dialog or it renders behind it.
+      // In a vertical menu Joy's ListItemDecorator only reserves height, not width, so icons of
+      // differing glyph widths leave the labels ragged. Pin a fixed icon column and a uniform
+      // icon size so every label starts at the same x.
+      menuSx={{
+        minWidth: 220,
+        zIndex: (theme) => theme.zIndex.tooltip,
+        [`& .${listItemDecoratorClasses.root}`]: { minInlineSize: '1.75rem' },
+        '& svg': { fontSize: '1.25rem' }
+      }}
+    >
+      <MenuItem onClick={onAddFromLibrary}>
+        <ListItemDecorator><InventoryRoundedIcon /></ListItemDecorator>
+        From library…
+      </MenuItem>
+      <MenuItem onClick={onImportFile}>
+        <ListItemDecorator><UploadFileRoundedIcon /></ListItemDecorator>
+        Upload local file…
+      </MenuItem>
+      <ListDivider />
+      {(Object.keys(PRIMITIVE_LABELS) as PrimitiveKind[]).map((kind) => (
+        <MenuItem key={kind} onClick={() => onAddPrimitive(kind)}>
+          <ListItemDecorator><CategoryRoundedIcon /></ListItemDecorator>
+          Add {PRIMITIVE_LABELS[kind].toLowerCase()}
         </MenuItem>
-        <MenuItem onClick={() => { setMenuOpen(false); onImportFile() }}>
-          <ListItemDecorator><UploadFileRoundedIcon /></ListItemDecorator>
-          Upload local file…
-        </MenuItem>
-        <ListDivider />
-        {(Object.keys(PRIMITIVE_LABELS) as PrimitiveKind[]).map((kind) => (
-          <MenuItem key={kind} onClick={() => { setMenuOpen(false); onAddPrimitive(kind) }}>
-            <ListItemDecorator><CategoryRoundedIcon /></ListItemDecorator>
-            Add {PRIMITIVE_LABELS[kind].toLowerCase()}
-          </MenuItem>
-        ))}
-      </Menu>
-    </>
+      ))}
+    </SplitButton>
   )
 }
 
-/** Split "Save" button: primary action saves, the caret opens Save-as. Mirrors AddModelMenu. */
+/** Split "Save" button: primary action saves, the caret opens Save-as. */
 export function SaveSplitButton({
   saving,
   disabled,
@@ -943,33 +968,30 @@ export function SaveSplitButton({
   onSaveVersion: () => void
   onSaveAs: () => void
 }) {
-  // Dropdown drives open/close (incl. click-away + Escape, which a bare anchored Menu
-  // lacks); ButtonGroup keeps the split radii and the MenuButton renders as an
-  // IconButton so it inherits the group's variant (no transparent/disconnected caret).
   // Solid primary: Save is the footer's primary action (Slice sits soft to its left).
   // "Save (version)" overwrites the open file, so it greys out until there are unsaved
   // edits (matching Bambu Studio's Ctrl+S). "Save as new…" always stays available — both
   // as the new-project path (no version to save) and as a safety valve if a change ever
-  // slips past dirty tracking. The caret stays enabled so Save-as is always reachable.
+  // slips past dirty tracking. That is the one split-button state where the caret outlives
+  // its primary half, so the group de-emphasises with it (see `SplitButton`).
   const saveVersionDisabled = disabled || saving || !dirty
+  const nothingToSave = canSaveVersion && !dirty
   return (
-    <Dropdown>
-      <ButtonGroup variant="solid" color="primary" aria-label="save">
-        <Button
-          loading={saving}
-          disabled={canSaveVersion ? saveVersionDisabled : disabled || saving}
-          startDecorator={<SaveRoundedIcon />}
-          onClick={() => (canSaveVersion ? onSaveVersion() : onSaveAs())}
-        >Save</Button>
-        <MenuButton slots={{ root: IconButton }} disabled={disabled || saving} aria-label="More save options">
-          <ArrowDropDownIcon />
-        </MenuButton>
-      </ButtonGroup>
-      <Menu placement="bottom-end" sx={{ minWidth: 200, zIndex: (theme) => theme.zIndex.tooltip }}>
-        {canSaveVersion && <MenuItem disabled={saveVersionDisabled} onClick={onSaveVersion}>Save</MenuItem>}
-        <MenuItem onClick={onSaveAs}>Save as new…</MenuItem>
-      </Menu>
-    </Dropdown>
+    <SplitButton
+      ariaLabel="save"
+      menuAriaLabel="More save options"
+      label="Save"
+      startDecorator={<SaveRoundedIcon />}
+      loading={saving}
+      disabled={disabled || saving}
+      primaryDisabled={nothingToSave}
+      disabledReason={nothingToSave ? 'No unsaved changes' : undefined}
+      onClick={() => (canSaveVersion ? onSaveVersion() : onSaveAs())}
+      menuSx={{ zIndex: (theme) => theme.zIndex.tooltip }}
+    >
+      {canSaveVersion && <MenuItem disabled={saveVersionDisabled} onClick={onSaveVersion}>Save</MenuItem>}
+      <MenuItem onClick={onSaveAs}>Save as new…</MenuItem>
+    </SplitButton>
   )
 }
 
@@ -991,33 +1013,26 @@ export function SliceSplitButton({
 }) {
   // Phones are tight on footer width; "Slice plate" wraps to two lines there.
   const isMobile = useMobileViewport()
-  const group = (
-    <Dropdown>
-      {/* Soft: Save (solid, rightmost) is the footer's primary action. */}
-      <ButtonGroup variant="soft" color="primary" disabled={disabled} aria-label="slice">
-        <Button startDecorator={<LayersRoundedIcon />} loading={slicing} onClick={onSlicePlate}>
-          {isMobile ? 'Slice' : 'Slice plate'}
-        </Button>
-        <MenuButton slots={{ root: IconButton }} aria-label="More slice options">
-          <ArrowDropDownIcon />
-        </MenuButton>
-      </ButtonGroup>
-      <Menu placement="top-end" sx={{ minWidth: 200, zIndex: (theme) => theme.zIndex.tooltip }}>
-        <MenuItem onClick={onSlicePlate}>Slice plate {activePlateIndex}</MenuItem>
-        <MenuItem onClick={onSliceAll}>Slice all plates</MenuItem>
-      </Menu>
-    </Dropdown>
+  return (
+    // Soft: Save (solid, rightmost) is the footer's primary action. Both halves gate together —
+    // slicing one plate and slicing all of them are unavailable for the same reasons.
+    <SplitButton
+      ariaLabel="slice"
+      menuAriaLabel="More slice options"
+      variant="soft"
+      label={isMobile ? 'Slice' : 'Slice plate'}
+      startDecorator={<LayersRoundedIcon />}
+      loading={slicing}
+      disabled={disabled}
+      disabledReason={disabledReason}
+      onClick={onSlicePlate}
+      menuPlacement="top-end"
+      menuSx={{ zIndex: (theme) => theme.zIndex.tooltip }}
+    >
+      <MenuItem onClick={onSlicePlate}>Slice plate {activePlateIndex}</MenuItem>
+      <MenuItem onClick={onSliceAll}>Slice all plates</MenuItem>
+    </SplitButton>
   )
-  // A disabled native button swallows hover events, so wrap the group in an element that still
-  // receives them; this lets the tooltip explain *why* the Slice button is unavailable.
-  if (disabled && disabledReason) {
-    return (
-      <Tooltip title={disabledReason} variant="soft" sx={{ maxWidth: 280 }}>
-        <Box sx={{ display: 'inline-flex' }}>{group}</Box>
-      </Tooltip>
-    )
-  }
-  return group
 }
 
 /** STL, STEP, and 3MF library files can be imported as parts (STEP is tessellated server-side). */
@@ -1218,12 +1233,12 @@ function PartTypeMenu({
 }
 
 /**
- * The Objects sidebar list. Each row selects/duplicates/deletes the model. When
+ * The Objects sidebar list. Each row selects/duplicates/deletes the object. When
  * `perObject` is supplied (slice settings present), the row also carries the
  * per-object controls that used to live in a separate dialog: a print on/off
  * toggle and an override editor (with a badge for the override count).
  */
-export function ModelList({
+export function ObjectList({
   instances,
   selectedKey,
   extraSelectedKeys,
@@ -1265,7 +1280,7 @@ export function ModelList({
   onSelectPart?: (objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
   /**
    * How many placed instances share this one's object. >1 shows the linked-copy badge, which is
-   * the only place the editor tells the user that editing this model also edits its copies.
+   * the only place the editor tells the user that editing this object also edits its copies.
    */
   linkedCopyCountFor?: (instanceKey: string) => number
   /** Right-click on an object row: open the object context menu at the pointer. */
@@ -1362,7 +1377,7 @@ export function ModelList({
                 {linkedCopyCountFor && linkedCopyCountFor(instance.key) > 1 && (
                   // Linkage is otherwise invisible: users discover it by editing one copy and
                   // watching another change. BambuStudio has the same ambiguity; we name it.
-                  <Tooltip title={`Linked copy — ${linkedCopyCountFor(instance.key)} instances share this model's parts, materials, paint and settings. Right-click to make one independent.`}>
+                  <Tooltip title={`Linked copy — ${linkedCopyCountFor(instance.key)} instances share this object's parts, materials, paint and settings. Right-click to make one independent.`}>
                     <Chip size="sm" variant="soft" color="neutral" sx={{ flexShrink: 0 }}>
                       x{linkedCopyCountFor(instance.key)}
                     </Chip>

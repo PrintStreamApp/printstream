@@ -6,6 +6,8 @@ import {
   createSphereCursor,
   decodePaintTree,
   encodePaintTree,
+  remapColorPaintCode,
+  remapColorPaintMap,
   isPaintTreeEmpty,
   paintTreeWithBrush,
   splitChildTriangles,
@@ -136,4 +138,68 @@ test('height-range cursor paints a crisp z band', () => {
     if (state === 2) assert.ok(zMax > 1.8 && zMin < 3.2, `painted leaf outside band z=[${zMin},${zMax}]`)
   })
   assert.ok(outsideArea > 0)
+})
+
+// --- Colour-paint filament remap ---
+// Colour is the one channel whose leaf state IS a filament id, so a save that renumbers filaments
+// must rewrite these codes; otherwise painted regions survive pointing at whatever material now
+// holds the old number.
+
+const leafStates = (code: string): number[] => {
+  const out: number[] = []
+  const walk = (n: ReturnType<typeof decodePaintTree>): void => {
+    if (!n) return
+    if (n.kind === 'leaf') { out.push(n.state); return }
+    n.children.forEach(walk)
+  }
+  walk(decodePaintTree(code))
+  return out
+}
+
+test('colour paint leaves move with the renumber', () => {
+  const code = encodePaintTree({ kind: 'split', splits: 1, special: 0, children: [
+    { kind: 'leaf', state: 3 }, { kind: 'leaf', state: 1 }
+  ] })
+  assert.deepEqual(leafStates(code), [3, 1])
+  const moved = remapColorPaintCode(code, new Map([[3, 2], [1, 1]]))
+  assert.deepEqual(leafStates(moved), [2, 1], 'filament 3 must become 2')
+})
+
+test('a removed material becomes unpainted, never a substitute', () => {
+  // Repointing at whatever now holds the old number is worse than losing the paint: the region
+  // survives and quietly prints in the wrong colour.
+  const code = encodePaintTree({ kind: 'split', splits: 1, special: 0, children: [
+    { kind: 'leaf', state: 2 }, { kind: 'leaf', state: 1 }
+  ] })
+  const moved = remapColorPaintCode(code, new Map([[1, 1]]))
+  assert.deepEqual(leafStates(moved), [0, 1], 'the dropped material becomes unpainted (0)')
+})
+
+test('unpainted stays unpainted and an identity remap is a no-op on the exact string', () => {
+  const code = encodePaintTree({ kind: 'split', splits: 1, special: 0, children: [
+    { kind: 'leaf', state: 0 }, { kind: 'leaf', state: 2 }
+  ] })
+  assert.equal(remapColorPaintCode(code, new Map([[2, 2]])), code)
+  assert.deepEqual(leafStates(remapColorPaintCode(code, new Map([[2, 2]]))), [0, 2])
+})
+
+test('paint that becomes entirely unpainted collapses to empty, and malformed codes pass through', () => {
+  const code = encodePaintTree({ kind: 'split', splits: 1, special: 0, children: [
+    { kind: 'leaf', state: 2 }, { kind: 'leaf', state: 2 }
+  ] })
+  assert.equal(remapColorPaintCode(code, new Map()), '', 'all leaves dropped -> no code at all')
+  assert.equal(remapColorPaintCode('zzz', new Map([[1, 2]])), 'zzz')
+})
+
+test('the map form drops emptied triangles and then emptied parts', () => {
+  const painted = encodePaintTree({ kind: 'split', splits: 1, special: 0, children: [
+    { kind: 'leaf', state: 3 }, { kind: 'leaf', state: 0 }
+  ] })
+  const doomed = encodePaintTree({ kind: 'split', splits: 1, special: 0, children: [
+    { kind: 'leaf', state: 2 }, { kind: 'leaf', state: 2 }
+  ] })
+  const out = remapColorPaintMap({ '7:1': { 0: painted, 1: doomed }, '7:2': { 0: doomed } }, new Map([[3, 2]]))
+  assert.deepEqual(Object.keys(out), ['7:1'], 'a part with nothing left is dropped entirely')
+  assert.deepEqual(Object.keys(out['7:1']!), ['0'])
+  assert.deepEqual(leafStates(out['7:1']![0]!), [2, 0])
 })

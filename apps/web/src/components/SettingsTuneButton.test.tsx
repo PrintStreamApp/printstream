@@ -35,6 +35,18 @@ test('shows the changed count in the badge, hides it at zero, and fires onClick'
   assert.equal(screen.queryByText('0'), null)
 })
 
+// Regression: the badge sits ON the button, so a click landing on the count hit the badge and the
+// button did nothing — reported as "clicking the badge doesn't open the settings".
+test('the badge does not swallow clicks aimed at the button', () => {
+  render(
+    <CssVarsProvider>
+      <SettingsTuneButton changedCount={4} title="Material settings" ariaLabel="Material settings for PETG" onClick={() => {}} />
+    </CssVarsProvider>
+  )
+  const badge = screen.getByText('4')
+  assert.equal(dom.window.getComputedStyle(badge).pointerEvents, 'none')
+})
+
 test('disabled button does not fire onClick', () => {
   let clicks = 0
   render(

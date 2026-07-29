@@ -10,7 +10,7 @@
  * (skipping the strict material match).
  */
 import { useMemo, useState } from 'react'
-import { Alert, Button, DialogActions, DialogContent, DialogTitle, FormControl, FormLabel, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Button, DialogActions, DialogContent, DialogTitle, FormControl, FormLabel, ModalDialog, Stack, Typography } from '@mui/joy'
 import {
   evaluateQueueMatch,
   loadedSlotsFromStatus,
@@ -22,21 +22,28 @@ import {
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
 import { PrinterMapping } from '../../components/library/PrinterMapping'
+import { PrinterPickerDialog } from '../../components/PrinterPickerDialog'
 import { matchPrinterAspects, type PrinterAspectMatch } from './printerAspectMatch'
 import { MatchChip } from './MatchChip'
 
 /** Printer name + its per-aspect match chips — rendered both inside each dropdown option and as the
  *  selected value, so the chosen printer (and how ready it is) is always visible on the closed picker. */
+function PrinterMatchChips({ match }: { match: PrinterAspectMatch }) {
+  return (
+    <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ justifyContent: 'flex-end' }}>
+      <MatchChip label={match.modelLabel} state={match.model} />
+      <MatchChip label={match.nozzleLabel} state={match.nozzle} />
+      <MatchChip label={match.plateLabel} state={match.plate} />
+      <MatchChip label={match.materialLabel} state={match.material} icon={<FilamentSpoolIcon />} />
+    </Stack>
+  )
+}
+
 function PrinterOptionRow({ name, match }: { name: string; match: PrinterAspectMatch }) {
   return (
     <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ width: '100%', minWidth: 0 }}>
       <Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>{name}</Typography>
-      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ justifyContent: 'flex-end' }}>
-        <MatchChip label={match.modelLabel} state={match.model} />
-        <MatchChip label={match.nozzleLabel} state={match.nozzle} />
-        <MatchChip label={match.plateLabel} state={match.plate} />
-        <MatchChip label={match.materialLabel} state={match.material} icon={<FilamentSpoolIcon />} />
-      </Stack>
+      <PrinterMatchChips match={match} />
     </Stack>
   )
 }
@@ -118,11 +125,13 @@ export function QueueStartDialog({
   const defaultPrinterId = ranked[0]?.printer.id ?? null
   const [picked, setPicked] = useState<string | null>(null)
   const [edits, setEdits] = useState<Record<string, number[]>>({})
+  const [printerPickerOpen, setPrinterPickerOpen] = useState(false)
   const selectedPrinterId = picked && ranked.some((entry) => entry.printer.id === picked) ? picked : defaultPrinterId
 
   const autoMapping = selectedPrinterId ? autoMappingFor(selectedPrinterId) : baseMapping(item)
   const mapping = (selectedPrinterId && edits[selectedPrinterId]) || autoMapping
   const selectedPrinter = printers.find((printer) => printer.id === selectedPrinterId) ?? null
+  const selectedEntry = ranked.find((entry) => entry.printer.id === selectedPrinterId) ?? null
   const allMapped = item.requiredFilaments.every((filament) => (mapping[filament.id - 1] ?? -1) >= 0)
 
   const handleMappingChange = (filamentId: number, tray: number) => {
@@ -161,22 +170,35 @@ export function QueueStartDialog({
 
                 <FormControl size="sm">
                   <FormLabel>Printer — most ready first</FormLabel>
-                  <Select
-                    value={selectedPrinterId}
-                    onChange={(_event, value) => { if (value) setPicked(value) }}
-                    slotProps={{ button: { sx: { minHeight: 36, py: 0.5 } }, listbox: { sx: { maxWidth: 'min(92vw, 480px)' } } }}
-                    renderValue={(option) => {
-                      const entry = ranked.find((candidate) => candidate.printer.id === option?.value)
-                      return entry ? <PrinterOptionRow name={entry.printer.name} match={entry.match} /> : null
-                    }}
+                  {/* The shared picker rather than a local dropdown: a farm needs search, a model
+                      filter and paging, and this is the same control the slice settings use. The
+                      readiness chips ride its per-row `meta`, and the ranking its `rank`. */}
+                  <Button
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    onClick={() => setPrinterPickerOpen(true)}
+                    sx={{ justifyContent: 'flex-start', minHeight: 36, py: 0.5, fontWeight: 'normal' }}
                   >
-                    {ranked.map(({ printer, match }) => (
-                      <Option key={printer.id} value={printer.id} label={printer.name} sx={{ alignItems: 'stretch' }}>
-                        <PrinterOptionRow name={printer.name} match={match} />
-                      </Option>
-                    ))}
-                  </Select>
+                    {selectedEntry
+                      ? <PrinterOptionRow name={selectedEntry.printer.name} match={selectedEntry.match} />
+                      : 'Choose a printer'}
+                  </Button>
                 </FormControl>
+                {printerPickerOpen && (
+                  <PrinterPickerDialog
+                    open
+                    title="Choose a printer — most ready first"
+                    entries={ranked.map(({ printer, match }, index) => ({
+                      printer,
+                      rank: index,
+                      meta: <PrinterMatchChips match={match} />
+                    }))}
+                    selectedPrinterId={selectedPrinterId}
+                    onSelect={(printer) => { if (printer) setPicked(printer.id) }}
+                    onClose={() => setPrinterPickerOpen(false)}
+                  />
+                )}
 
                 {filaments.length > 0 && selectedPrinter ? (
                   <>

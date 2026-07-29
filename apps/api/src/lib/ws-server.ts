@@ -31,6 +31,7 @@ import { supportsChamberCamera } from './camera.js'
 import { CameraRelay } from './camera-relay.js'
 import { CameraSnapshotHub } from './camera-snapshot-hub.js'
 import { broadcastJobsChanged } from './ws-resource-events.js'
+import { clientSessions } from './client-sessions.js'
 import { AUTHENTICATION_REQUIRED_MESSAGE, PERMISSION_REQUIRED_MESSAGE } from './authorization.js'
 import { resolveEffectiveTenantForAuth, withResolvedTenantRequestContext, withTenantRequestContext, getCurrentTenant, type RequestTenantSummary } from './tenant-context.js'
 
@@ -211,6 +212,10 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
     }
     const desiredCameraSubscriptions = new Set<string>()
     const desiredSnapshotWatches = new Set<string>()
+    // The socket doubles as the "is that browser tab still open?" signal for work a tab owns
+    // (today: its slicing jobs). Untrusted and non-authorizing — see client-sessions.ts.
+    const clientId = readClientSessionId(request)
+    if (clientId) clientSessions.connected(clientId)
     wsBroadcaster.add(socket, context)
     // Heartbeat liveness: a pong (or any inbound frame) marks the socket alive;
     // the sweep below terminates any that miss a round-trip.
@@ -271,6 +276,7 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
       desiredSnapshotWatches.clear()
       cameraRelay.removeClient(socket)
       cameraSnapshotHub.removeClient(socket)
+      if (clientId) clientSessions.disconnected(clientId)
     })
   })
 
@@ -479,6 +485,16 @@ async function broadcastStatus(status: PrinterStatus): Promise<void> {
     }
   }
   wsBroadcaster.broadcast({ type: 'printer.status', status }, tenantId)
+}
+
+/**
+ * The browser tab's id from the `/ws` query string, or null when the caller sent none (the bridge,
+ * a script, an older client). Bounded because it is untrusted input used as a map key.
+ */
+function readClientSessionId(request: IncomingMessage): string | null {
+  if (!request.url) return null
+  const value = new URL(request.url, 'http://printstream.local').searchParams.get('client')?.trim()
+  return value && value.length <= 128 ? value : null
 }
 
 function sendWsError(socket: WebSocket, message: string): void {

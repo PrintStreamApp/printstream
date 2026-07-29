@@ -18,6 +18,8 @@ import type {
   LibraryThreeMfScene,
   LibraryThreeMfSceneInstance,
   SceneEdit,
+  SceneEditImportPartFilament,
+  SceneEditPartFilament,
   SceneEditPartSubtype,
   StagedImport,
   ThreeMfIndex
@@ -26,6 +28,16 @@ import { isNonRenderableThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } 
 import { randomUUID } from '../../../lib/randomId'
 import { createThreeMfMatrix } from './threeMfScene'
 import { importMeshUrl } from './editorImports'
+import { remapColorPaintCode, remapColorPaintMap } from './trianglePaintTree'
+import { importIdByReplacedObjectId, parsePartPaintKey, placedObjectIds } from './sceneEditIdentity'
+
+/**
+ * How an import's mesh URL is resolved. Defaults to the api's staged-mesh endpoint; a host that
+ * stages locally (the public editor) injects its own, which hands back an object URL. Kept as an
+ * injected resolver rather than a plain string so a caller cannot forget one of the two places an
+ * import's source is built.
+ */
+export type ImportMeshUrlResolver = (importId: string) => string
 
 /**
  * Geometry source for an editor instance. `object`-backed instances reference
@@ -86,6 +98,13 @@ export interface EditorInstance {
    * for everything else (the common case), which behaves exactly as before.
    */
   exactMatrix?: number[]
+  /**
+   * The object-level filament: what a part with no assignment of its own inherits, and what the
+   * material swatch shows. A CACHE over {@link parts} — invalidated by every edit that changes a
+   * part's filament, which must recompute it through {@link deriveObjectFilamentId} in the same
+   * updater (see the retarget in `EditorView`). Never assign it from one part: consensus is the
+   * whole point, and `parts[0]` is the "everything became material 1" regression.
+   */
   filamentId: number | null
   /**
    * Whether this instance prints (BambuStudio's per-object "Printable" toggle). A
@@ -110,6 +129,16 @@ export interface EditorInstance {
   color: string | null
 }
 
+/**
+ * One geometry volume inside an instance.
+ *
+ * Two of these fields are MIRRORS of the session maps on {@link EditorState}, not independent
+ * state: `transform` mirrors `partTransforms` and `subtype` mirrors `partTypeChanges`. The map is
+ * what the save emits; the mirror is what the viewport and the sidebar render from, so both are
+ * written in the SAME updater — a change that touches only the map renders stale, and one that
+ * touches only the mirror is silently dropped at bake time. `filamentId` is not a mirror: it has no
+ * session map and is read straight off the instances by `collectPartFilaments`.
+ */
 export interface EditorInstancePart {
   entryPath: string
   componentObjectId: number
@@ -213,7 +242,7 @@ export interface EditorState {
   /**
    * In-project objects the user marked for mesh repair this session (right-click →
    * "Repair mesh"), by objectId. The repair itself runs SERVER-SIDE while baking the save
-   * (`SceneEdit.repairedObjectIds` → `three-mf-mesh-repair`), so there is nothing to apply
+   * (`SceneEdit.repairedObjectIds` → the shared `three-mf/mesh-repair`), so there is nothing to apply
    * to the local scene: repair only merges coincident vertices and drops degenerate/duplicate
    * facets, which is visually a no-op. Marking is therefore the whole client-side edit — it
    * participates in undo/redo via {@link cloneEditorState} and is emitted by
@@ -567,7 +596,10 @@ export function collectPartProcessOverridesFromScenes(
  * carries one part per solid (rendered from a per-solid STL, listed nested, and baked
  * as one object with many parts). On apply it emits an `importId`.
  */
-export function instanceFromStagedImport(staged: StagedImport): EditorInstance {
+export function instanceFromStagedImport(
+  staged: StagedImport,
+  meshUrl: ImportMeshUrlResolver = importMeshUrl
+): EditorInstance {
   // `staged.parts` always lists ≥1 solid; only treat it as multi-part when there is
   // more than one (a single-solid import keeps the simpler one-mesh render path).
   const parts: EditorInstancePart[] = staged.parts.length > 1
@@ -590,7 +622,7 @@ export function instanceFromStagedImport(staged: StagedImport): EditorInstance {
     key: nextInstanceKey(),
     // A synthetic object identity so the import's per-object process + per-part filament are
     // editable immediately, before any save (see {@link EditorInstanceSource}).
-    source: { kind: 'import', importId: staged.importId, meshUrl: importMeshUrl(staged.importId), replacedObjectId: nextSyntheticObjectId() },
+    source: { kind: 'import', importId: staged.importId, meshUrl: meshUrl(staged.importId), replacedObjectId: nextSyntheticObjectId() },
     objectId: 0,
     instanceId: 0,
     name: staged.name,
@@ -639,13 +671,14 @@ const IDENTITY_PART_TRANSFORM = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
 export function replaceInstanceGeometry(
   source: EditorInstance,
   staged: StagedImport,
-  replacedObjectId?: number
+  replacedObjectId?: number,
+  meshUrl: ImportMeshUrlResolver = importMeshUrl
 ): EditorInstance {
-  const next = instanceFromStagedImport(staged)
+  const next = instanceFromStagedImport(staged, meshUrl)
   next.source = {
     kind: 'import',
     importId: staged.importId,
-    meshUrl: importMeshUrl(staged.importId),
+    meshUrl: meshUrl(staged.importId),
     // Keep the replaced object's identity; for an import without one, keep a fresh synthetic id
     // so the replacement is still per-object editable before a save.
     replacedObjectId: replacedObjectId ?? (next.source.kind === 'import' ? next.source.replacedObjectId : undefined)
@@ -897,6 +930,127 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
 }
 
 /**
+ * SESSION -> SAVED filament-id renumbering. A save bakes the controller's desired filament list as
+ * slots 1..N, so a save that REMOVED or REORDERED materials renumbers every filament id — but the
+ * editor state (and the SceneEdit it emits) speaks the SESSION id space. The map is positional:
+ * session id `sessionIds[i]` becomes saved id `i + 1` (the desired list is built from the
+ * controller's `projectFilaments` in order). Null when the mapping is identity, so callers can
+ * skip the rewrite entirely — the overwhelmingly common case.
+ *
+ * Both halves of the invariant hang off this map:
+ * - {@link rebaseSceneEditFilamentIds} translates the EMITTED edit, so the bake never writes a
+ *   session id into the file (a part `extruder="2"` in a 1-filament project — stale data that
+ *   fabricates phantom plate filaments downstream).
+ * - {@link rebaseEditorStateFilamentIds} moves the LIVE session onto the saved ids after the save
+ *   succeeds, so mesh colours keep resolving (the post-save "model reverted to its original
+ *   colour" report) and a SECOND save doesn't re-translate already-translated ids.
+ */
+export function buildSessionFilamentIdRemap(sessionIds: number[]): Map<number, number> | null {
+  const map = new Map<number, number>()
+  let identity = true
+  sessionIds.forEach((sessionId, index) => {
+    map.set(sessionId, index + 1)
+    if (sessionId !== index + 1) identity = false
+  })
+  return identity ? null : map
+}
+
+/**
+ * Translate every filament id the SceneEdit carries from session space to the saved (1..N) space.
+ * An id the map cannot translate references a REMOVED material: the assignment is dropped rather
+ * than guessed (the bake then inherits the object/base value, which `remapPartExtruders` keeps
+ * correct). Colour paint is included — its codes are filament ids encoded inside the triangle
+ * strings, so they go through `remapPaintTriangles`; the support/seam channels encode
+ * enforcer/blocker CONSTANTS instead and must never be remapped.
+ */
+export function rebaseSceneEditFilamentIds(edit: SceneEdit, remap: Map<number, number>): SceneEdit {
+  const translate = (id: number | null | undefined): number | null =>
+    id == null ? null : remap.get(id) ?? null
+  return {
+    ...edit,
+    instances: edit.instances.map((instance) => ({ ...instance, filamentId: translate(instance.filamentId) })),
+    partFilaments: edit.partFilaments
+      ?.map((part) => ({ ...part, filamentId: translate(part.filamentId) }))
+      .filter((part): part is SceneEditPartFilament => part.filamentId != null),
+    importPartFilaments: edit.importPartFilaments
+      ?.map((part) => ({ ...part, filamentId: translate(part.filamentId) }))
+      .filter((part): part is SceneEditImportPartFilament => part.filamentId != null),
+    addedParts: edit.addedParts?.map((part) => {
+      const filamentId = translate(part.filamentId)
+      const { filamentId: _dropped, ...rest } = part
+      return filamentId != null ? { ...rest, filamentId } : rest
+    }),
+    filamentChanges: edit.filamentChanges?.map((plate) => ({
+      ...plate,
+      changes: plate.changes
+        .map((change) => ({ ...change, filamentId: translate(change.filamentId) }))
+        .filter((change): change is typeof plate.changes[number] => change.filamentId != null)
+    })),
+    // Colour paint carries filament ids inside its triangle codes (see remapColorPaintCode), so the
+    // bake must receive them in the SAVED id space like every other seam here.
+    colorPaint: edit.colorPaint
+      ?.map((part) => ({ ...part, triangles: remapPaintTriangles(part.triangles, remap) }))
+      .filter((part) => Object.keys(part.triangles).length > 0),
+    importPaint: edit.importPaint?.map((entry) => (entry.channel === 'color'
+      ? { ...entry, triangles: remapPaintTriangles(entry.triangles, remap) }
+      : entry))
+  }
+}
+
+/** Remap the colour codes of one part's triangle map, dropping triangles left unpainted. */
+function remapPaintTriangles(
+  triangles: Record<string, string> | Record<number, string>,
+  remap: Map<number, number>
+): Record<number, string> {
+  const out: Record<number, string> = {}
+  for (const [key, code] of Object.entries(triangles)) {
+    const next = remapColorPaintCode(code, remap)
+    if (next) out[Number(key)] = next
+  }
+  return out
+}
+
+/**
+ * Move the live editor session onto the saved filament ids — the state-side half of
+ * {@link buildSessionFilamentIdRemap}'s invariant, applied once a project save succeeds. Ids the
+ * map cannot translate (removed materials) become null (inherit), mirroring the emit-side drop.
+ */
+export function rebaseEditorStateFilamentIds(state: EditorState, remap: Map<number, number>): EditorState {
+  const translate = (id: number | null | undefined): number | null =>
+    id == null ? null : remap.get(id) ?? null
+  const addedParts = state.addedParts
+    ? Object.fromEntries(
+        Object.entries(state.addedParts).map(([hostId, parts]) => [
+          hostId,
+          parts.map((part) => ({ ...part, filamentId: translate(part.filamentId) }))
+        ])
+      )
+    : undefined
+  return {
+    ...state,
+    plates: state.plates.map((plate) => ({
+      ...plate,
+      instances: plate.instances.map((instance) => ({
+        ...instance,
+        filamentId: translate(instance.filamentId),
+        parts: instance.parts.map((part) => ({ ...part, filamentId: translate(part.filamentId) }))
+      })),
+      ...(plate.filamentChanges
+        ? { filamentChanges: plate.filamentChanges.map((change) => ({ ...change, filamentId: translate(change.filamentId) ?? change.filamentId })) }
+        : {}),
+      ...(plate.filamentChangesOverride
+        ? { filamentChangesOverride: plate.filamentChangesOverride.map((change) => ({ ...change, filamentId: translate(change.filamentId) ?? change.filamentId })) }
+        : {})
+    })),
+    ...(addedParts ? { addedParts } : {}),
+    // Colour paint stores the filament id IN the triangle code, so it has to move with everything
+    // else — otherwise the painted regions survive the renumber pointing at whatever material now
+    // holds the old number, and the model prints those areas in the wrong colour.
+    ...(state.colorPaint ? { colorPaint: remapColorPaintMap(state.colorPaint, remap) } : {})
+  }
+}
+
+/**
  * Emit the objects marked for mesh repair, dropped to those that still have a placed instance —
  * marking an object and then deleting it must not ship a dangling repair. An object replaced this
  * session is skipped too: its geometry is now import-backed, so the original mesh the mark referred
@@ -904,15 +1058,11 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
  */
 function collectRepairedObjectIds(state: EditorState): SceneEdit['repairedObjectIds'] {
   if (!state.repairedObjectIds || state.repairedObjectIds.length === 0) return undefined
-  const placedObjectIds = new Set<number>()
-  const replacedObjectIds = new Set<number>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
-      else if (instance.source.replacedObjectId != null) replacedObjectIds.add(instance.source.replacedObjectId)
-    }
-  }
-  const ids = state.repairedObjectIds.filter((id) => placedObjectIds.has(id) && !replacedObjectIds.has(id))
+  const placed = placedObjectIds(state)
+  // A REPLACED object keeps its identity but its geometry is now an import, so repairing it here
+  // would mark a mesh the save is about to swap out; `repairedImportIds` covers that case instead.
+  const replaced = new Set(importIdByReplacedObjectId(state).keys())
+  const ids = state.repairedObjectIds.filter((id) => placed.has(id) && !replaced.has(id))
   return ids.length > 0 ? ids : undefined
 }
 
@@ -923,14 +1073,7 @@ function collectRepairedObjectIds(state: EditorState): SceneEdit['repairedObject
  */
 function collectRepairedImportIds(state: EditorState): SceneEdit['repairedImportIds'] {
   if (!state.repairedObjectIds || state.repairedObjectIds.length === 0) return undefined
-  const importByObjectId = new Map<number, string>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
-        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
-      }
-    }
-  }
+  const importByObjectId = importIdByReplacedObjectId(state)
   const ids = state.repairedObjectIds.flatMap((id) => {
     const importId = importByObjectId.get(id)
     return importId ? [importId] : []
@@ -945,14 +1088,7 @@ function collectRepairedImportIds(state: EditorState): SceneEdit['repairedImport
  */
 function collectImportBrimEars(state: EditorState): SceneEdit['importBrimEars'] {
   if (!state.brimEars || Object.keys(state.brimEars).length === 0) return undefined
-  const importByObjectId = new Map<number, string>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
-        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
-      }
-    }
-  }
+  const importByObjectId = importIdByReplacedObjectId(state)
   const out: NonNullable<SceneEdit['importBrimEars']> = []
   for (const [objectIdRaw, ears] of Object.entries(state.brimEars)) {
     const importId = importByObjectId.get(Number.parseInt(objectIdRaw, 10))
@@ -976,14 +1112,7 @@ function collectImportPaint(state: EditorState): SceneEdit['importPaint'] {
     { channel: 'color' as const, paint: state.colorPaint }
   ].filter((entry) => entry.paint && Object.keys(entry.paint).length > 0)
   if (channels.length === 0) return undefined
-  const importByObjectId = new Map<number, string>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
-        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
-      }
-    }
-  }
+  const importByObjectId = importIdByReplacedObjectId(state)
   if (importByObjectId.size === 0) return undefined
   const out: NonNullable<SceneEdit['importPaint']> = []
   for (const { channel, paint } of channels) {
@@ -1150,19 +1279,13 @@ function collectPartPaint(
   paint: Record<string, Record<number, string>> | undefined
 ): SceneEdit['supportPaint'] {
   if (!paint) return undefined
-  const placedObjectIds = new Set<number>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
-    }
-  }
+  const placed = placedObjectIds(state)
   const out: NonNullable<SceneEdit['supportPaint']> = []
   for (const [key, triangles] of Object.entries(paint)) {
-    const [objectIdRaw, componentRaw] = key.split(':')
-    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
-    const componentObjectId = Number.parseInt(componentRaw ?? '', 10)
-    if (!Number.isInteger(objectId) || !Number.isInteger(componentObjectId)) continue
-    if (!placedObjectIds.has(objectId)) continue
+    const parsedKey = parsePartPaintKey(key)
+    if (!parsedKey) continue
+    const { objectId, componentObjectId } = parsedKey
+    if (!placed.has(objectId)) continue
     out.push({
       objectId,
       componentObjectId,
@@ -1175,19 +1298,13 @@ function collectPartPaint(
 /** Part-type changes for parts whose in-project object is still placed (keyed objectId:componentId). */
 function collectPartTypeChanges(state: EditorState): SceneEdit['partTypeChanges'] {
   if (!state.partTypeChanges) return undefined
-  const placedObjectIds = new Set<number>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
-    }
-  }
+  const placed = placedObjectIds(state)
   const out: NonNullable<SceneEdit['partTypeChanges']> = []
   for (const [key, subtype] of Object.entries(state.partTypeChanges)) {
-    const [objectIdRaw, componentRaw] = key.split(':')
-    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
-    const componentObjectId = Number.parseInt(componentRaw ?? '', 10)
-    if (!Number.isInteger(objectId) || !Number.isInteger(componentObjectId)) continue
-    if (!placedObjectIds.has(objectId)) continue
+    const parsedKey = parsePartPaintKey(key)
+    if (!parsedKey) continue
+    const { objectId, componentObjectId } = parsedKey
+    if (!placed.has(objectId)) continue
     out.push({ objectId, componentObjectId, subtype })
   }
   return out.length > 0 ? out : undefined
@@ -1196,19 +1313,13 @@ function collectPartTypeChanges(state: EditorState): SceneEdit['partTypeChanges'
 /** Part-placement changes for parts whose in-project object is still placed (keyed objectId:componentId). */
 function collectPartTransforms(state: EditorState): SceneEdit['partTransforms'] {
   if (!state.partTransforms) return undefined
-  const placedObjectIds = new Set<number>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
-    }
-  }
+  const placed = placedObjectIds(state)
   const out: NonNullable<SceneEdit['partTransforms']> = []
   for (const [key, matrix] of Object.entries(state.partTransforms)) {
-    const [objectIdRaw, componentRaw] = key.split(':')
-    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
-    const componentObjectId = Number.parseInt(componentRaw ?? '', 10)
-    if (!Number.isInteger(objectId) || !Number.isInteger(componentObjectId)) continue
-    if (!placedObjectIds.has(objectId) || matrix.length !== 12) continue
+    const parsedKey = parsePartPaintKey(key)
+    if (!parsedKey) continue
+    const { objectId, componentObjectId } = parsedKey
+    if (!placed.has(objectId) || matrix.length !== 12) continue
     out.push({ objectId, componentObjectId, matrix: [...matrix] })
   }
   return out.length > 0 ? out : undefined
@@ -1222,14 +1333,7 @@ function collectPartTransforms(state: EditorState): SceneEdit['partTransforms'] 
  */
 function collectImportPartTypes(state: EditorState): SceneEdit['importPartTypes'] {
   if (!state.partTypeChanges) return undefined
-  const importByObjectId = new Map<number, string>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
-        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
-      }
-    }
-  }
+  const importByObjectId = importIdByReplacedObjectId(state)
   if (importByObjectId.size === 0) return undefined
   const out: NonNullable<SceneEdit['importPartTypes']> = []
   for (const [key, subtype] of Object.entries(state.partTypeChanges)) {
@@ -1252,14 +1356,7 @@ function collectImportPartTypes(state: EditorState): SceneEdit['importPartTypes'
  */
 function collectImportPartTransforms(state: EditorState): SceneEdit['importPartTransforms'] {
   if (!state.partTransforms) return undefined
-  const importByObjectId = new Map<number, string>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
-        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
-      }
-    }
-  }
+  const importByObjectId = importIdByReplacedObjectId(state)
   if (importByObjectId.size === 0) return undefined
   const out: NonNullable<SceneEdit['importPartTransforms']> = []
   for (const [key, matrix] of Object.entries(state.partTransforms)) {
@@ -1277,19 +1374,13 @@ function collectImportPartTransforms(state: EditorState): SceneEdit['importPartT
 /** Per-part process overrides for parts whose object is still placed (keyed objectId:componentId). */
 function collectPartProcessOverrides(state: EditorState): SceneEdit['partProcessOverrides'] {
   if (!state.partProcessOverrides) return undefined
-  const placedObjectIds = new Set<number>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'object') placedObjectIds.add(instance.objectId)
-    }
-  }
+  const placed = placedObjectIds(state)
   const out: NonNullable<SceneEdit['partProcessOverrides']> = []
   for (const [key, overrides] of Object.entries(state.partProcessOverrides)) {
-    const [objectIdRaw, componentRaw] = key.split(':')
-    const objectId = Number.parseInt(objectIdRaw ?? '', 10)
-    const componentObjectId = Number.parseInt(componentRaw ?? '', 10)
-    if (!Number.isInteger(objectId) || !Number.isInteger(componentObjectId)) continue
-    if (!placedObjectIds.has(objectId) || Object.keys(overrides).length === 0) continue
+    const parsedKey = parsePartPaintKey(key)
+    if (!parsedKey) continue
+    const { objectId, componentObjectId } = parsedKey
+    if (!placed.has(objectId) || Object.keys(overrides).length === 0) continue
     out.push({ objectId, componentObjectId, overrides })
   }
   return out.length > 0 ? out : undefined
@@ -1353,14 +1444,7 @@ function collectPartFilaments(state: EditorState): SceneEdit['partFilaments'] {
  */
 function collectImportPartProcessOverrides(state: EditorState): SceneEdit['importPartProcessOverrides'] {
   if (!state.partProcessOverrides) return undefined
-  const importByObjectId = new Map<number, string>()
-  for (const plate of state.plates) {
-    for (const instance of plate.instances) {
-      if (instance.source.kind === 'import' && instance.source.replacedObjectId != null) {
-        importByObjectId.set(instance.source.replacedObjectId, instance.source.importId)
-      }
-    }
-  }
+  const importByObjectId = importIdByReplacedObjectId(state)
   if (importByObjectId.size === 0) return undefined
   const out: NonNullable<SceneEdit['importPartProcessOverrides']> = []
   for (const [key, overrides] of Object.entries(state.partProcessOverrides)) {

@@ -3,12 +3,19 @@
  *
  * Owns `SliceFileModal`: the slim slicing/print-prep dialog (and, for the
  * library flow on 3MF projects, the direct hand-off to the model studio's full
- * 3D editor via the `slicing.editor` plugin slot). It owns the entire slice
- * form state — slicer target, printer/process/filament selection, plate scope,
- * per-object overrides, add/remove materials — and feeds it to the shared
- * `SliceSettingsPanel` through a `SliceSettingsController`. Output naming, save
- * destination, and the loaded-printer material picker live here too. The submit
- * payload shape is the shared `SliceFileSubmitInput`.
+ * 3D editor via the `slicing.editor` plugin slot). It composes the slice form —
+ * engine target, plate scope, per-object overrides, output naming, save
+ * destination, the loaded-printer material picker — and feeds it to the shared
+ * `SliceSettingsPanel` through a `SliceSettingsController`. The submit payload
+ * shape is the shared `SliceFileSubmitInput`.
+ *
+ * What it does NOT own, and must not take back: the printer/machine/nozzle/plate
+ * target (`useMachineTarget`, a derivation over the user's picks), the material
+ * slots (`useMaterialSlots`), and the process preset (`useProcessProfileSelection`).
+ * Those are the cores the public editor host shares, and a write to any of their
+ * values from here would re-create the multi-writer problem they exist to remove:
+ * every one of those facts had several writers and no owner, which is what made
+ * "who set this value?" unanswerable.
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LazyDialogFallback } from '../LazyDialogFallback'
@@ -22,75 +29,41 @@ import { useQuery } from '@tanstack/react-query'
 import type {
   LibraryFile,
   LibraryFolder,
-  PrinterNozzleFlow,
   Printer,
-  PrinterStatus,
   SceneEdit,
-  SceneEditFilament,
   SceneEditPlateFilamentChanges,
   SceneEditPlatePauses,
   SlicingCapabilities,
   SlicingManualProfileTarget,
   ThreeMfIndex
 } from '@printstream/shared'
-import { DEFAULT_FILAMENT_COLOR, PER_OBJECT_PROCESS_KEYS,
-  isProjectNewerThanSlicer
+import { PER_OBJECT_PROCESS_KEYS,
+  isProjectNewerThanSlicer,
+  isProjectSlicingPresetId,
+  type ResolveProcessConfigResponse
 } from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
+import { deriveProjectCarryOverrides } from '../../lib/processCarryOverrides'
 import { remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
+import { resolveSliceDisabledReason } from '../../lib/slicingPresetSelection'
 import {
-  extractLayerHeightToken,
-  isSelectableOrProjectFallbackSlicingProfile,
-  isSelectableSlicingProfile,
-  pickMostSimilarSlicingProfileByName,
-  pickProjectFallbackSlicingProfileByName,
-  pickSelectableSlicingProfileByName,
-  pickSlicingProfileByBakedName,
-  pickStandardProcessProfile,
-  resolveDefaultFilamentProfile,
-  resolveProfileLayerHeight,
-  resolveSliceDisabledReason
-} from '../../lib/slicingProfileSelection'
-import {
-  buildFilamentMappings,
-  buildInitialFilamentColorSelection,
-  buildInitialFilamentMaterialOptionSelection,
-  buildInitialFilamentToolheadSelection,
   buildLoadedPrinterMaterialOptions,
-  buildProjectSlicingProfiles,
-  buildProfileMaterialOptionId,
+  buildProjectSlicingPresets,
+  buildRedundantProjectPresetCandidates,
   buildSliceDialogProjectFilaments,
   buildSliceDialogToolheads,
   buildSliceMaterialOptions,
-  dedupeVisibleProcessProfiles,
-  ensurePrinterModelOptions,
   isFilamentProfileCompatible,
-  isMachineProfileCompatible,
-  isProcessProfileCompatible,
-  isProjectSlicingProfile,
+  isProjectSlicingPreset,
   isVisibleFilamentProfile,
   isVisibleProcessProfile,
-  matchesPrinterModel,
-  mergeProjectSlicingProfiles,
+  mergeProjectSlicingPresets,
   normalizeSliceFilamentColor,
-  parseSliceToolheadNozzleId,
-  pickMachineProfileByName,
-  matchPlateTypeByLabel,
-  pickMachineProfileForPrinter,
-  resolveCompatiblePlateTypes,
-  resolveInitialManualPrinterModel,
-  resolveInitialNozzleDiameter,
-  resolveInitialPlateType,
-  resolvePreferredPlateType,
-  resolveProjectPlateType,
-  resolveSliceDialogNozzleDiameterOptions,
-  resolveSliceDialogTargetPrinterModel,
-  type LoadedMaterialSource,
-  type SliceMaterialOption
-} from '../../lib/sliceProfileMatching'
+  type LoadedMaterialSource
+} from '../../lib/slicingPresetMatching'
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
-import { slicingProfilesQueryOptions } from '../../lib/slicingProfilesQuery'
+import { slicingPresetsQueryOptions } from '../../lib/slicingPresetsQuery'
 import { useMobileViewport } from '../useMobileViewport'
 import { LibraryDestinationDialog } from '../LibraryDestinationDialog'
 import { BackAwareModal as Modal } from '../BackAwareModal'
@@ -100,15 +73,21 @@ import { ProjectVersionWarningAlert } from './ProjectVersionWarningAlert'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { formatLibraryFileName } from '../../lib/libraryDisplay'
 import { useDeepStableValue } from '../../hooks/useDeepStableValue'
+import { usePrinterStatuses } from '../../hooks/usePrinterStatuses'
 import {
   buildLibraryResourceBasePath,
   buildPrinterTrayMap,
   buildSlicedOutputFileName,
   EMPTY_SLICER_TARGETS,
-  EMPTY_SLICING_PROFILES,
+  EMPTY_SLICING_PRESETS,
   type SliceFileSubmitAction,
   type SliceFileSubmitInput
 } from '../../lib/libraryViewHelpers'
+import { resolveSlicerTargetId } from '../../lib/machineTargetResolution'
+import { useUnchangedProjectFilamentPresetIds } from './useBakedPresetChanges'
+import { useMachineTarget } from './useMachineTarget'
+import { useMaterialSlots } from './useMaterialSlots'
+import { useProcessProfileSelection } from './useProcessProfileSelection'
 import { SliceSettingsPanel, type SliceSettingsController, type SliceConfigSnapshot } from './SliceSettingsPanel'
 import type { FilamentOption } from './PlateGcodeSections'
 
@@ -117,6 +96,38 @@ const FilamentSettingsDialog = lazy(() => import('./FilamentSettingsDialog'))
 
 /** Stable empty-overrides reference so the per-object dialog's resolve effect doesn't re-fire. */
 const EMPTY_OBJECT_OVERRIDES: Record<string, string | string[]> = {}
+
+/**
+ * Holds `value` at the first render where it is READY, and keeps serving that until `token` changes.
+ *
+ * This is the editor's snapshot-at-open rule made concrete for the slicer catalogue. The editor
+ * borrows this controller, and the catalogue can refetch underneath it for reasons the user never
+ * asked for — staleness, window focus, or a `slicing.profiles` WS invalidation raised by somebody
+ * else's edit. A catalogue that changes shape mid-session re-runs the process re-pick, which is how
+ * a project's own preset silently became a built-in.
+ *
+ * Only holds once READY, never before: freezing a half-loaded catalogue is the very failure this is
+ * meant to prevent (see `projectPresetsReady` in useProcessProfileSelection). `hold: false` opts a
+ * host out entirely, which is what the slim print dialog wants — it has no editor to protect and
+ * should track the catalogue live.
+ */
+function useHeldSnapshot<T>(value: T, { hold, ready, token }: { hold: boolean; ready: boolean; token: number }): T {
+  const heldRef = useRef<T | null>(null)
+  const tokenRef = useRef(token)
+  if (!hold) {
+    heldRef.current = null
+    return value
+  }
+  // An explicit refresh (the user edited presets in the manager) drops the snapshot so the next
+  // ready value is adopted. Compared during render so the fresh value is served on the same frame.
+  if (token !== tokenRef.current) {
+    tokenRef.current = token
+    heldRef.current = null
+  }
+  if (heldRef.current === null && ready) heldRef.current = value
+  return heldRef.current ?? value
+}
+
 
 export function SliceFileModal({
   file,
@@ -128,7 +139,6 @@ export function SliceFileModal({
   bridgeName = null,
   showRoot = false,
   printers,
-  printerStatuses,
   capabilities,
   capabilitiesLoading,
   capabilitiesError,
@@ -155,7 +165,6 @@ export function SliceFileModal({
   bridgeName?: string | null
   showRoot?: boolean
   printers: Printer[]
-  printerStatuses: Record<string, PrinterStatus>
   capabilities: SlicingCapabilities | null
   capabilitiesLoading: boolean
   capabilitiesError: string | null
@@ -199,18 +208,12 @@ export function SliceFileModal({
       : null,
     [flow, preferredPrinterId, printers]
   )
-  const [targetMode, setTargetMode] = useState<'realPrinter' | 'manualProfile'>(() => (lockedPreferredPrinter ? 'realPrinter' : 'manualProfile'))
-  const [printerId, setPrinterId] = useState(() => lockedPreferredPrinter?.id ?? '')
-  const appliedBakedDefaultsRef = useRef(false)
-  // Mirrors appliedBakedDefaultsRef as state so the form can wait for the 3MF defaults to be
-  // seeded before becoming interactive (avoids showing values that change once the slicer data
-  // loads).
-  const [bakedDefaultsApplied, setBakedDefaultsApplied] = useState(false)
-  const manualPrinterModelTouchedRef = useRef(false)
-  const processProfileSelectionTouchedRef = useRef(false)
-  // Tracks whether the user has explicitly chosen a plate type, so the printer-default and
-  // options-reset effects below never overwrite a deliberate choice.
-  const plateTypeTouchedRef = useRef(false)
+  const appliedMaterialDefaultsRef = useRef(false)
+  // Mirrors appliedMaterialDefaultsRef as state so the form can wait for the 3MF's material
+  // defaults before becoming interactive (avoids showing values that change once the slicer data
+  // loads). The machine target needs no such latch — it DERIVES (see useMachineTarget) — but
+  // materials are path-dependent, so they still seed exactly once.
+  const [materialDefaultsApplied, setMaterialDefaultsApplied] = useState(false)
   const [previewFileId, setPreviewFileId] = useState<string | null>(null)
   // Edited multi-plate arrangement from the interactive 3D editor. When set, it is
   // authoritative: the slice runs across every plate the edit defines (plate: 0).
@@ -221,9 +224,18 @@ export function SliceFileModal({
   const [editorPlatePreference, setEditorPlatePreference] = useState<number | null>(null)
   const slicerTargets = capabilities?.targets ?? EMPTY_SLICER_TARGETS
   const configured = Boolean(capabilities?.configured && capabilities?.healthy && slicerTargets.length > 0)
-  const [selectedSlicerTargetId, setSelectedSlicerTargetId] = useState(
-    () => capabilities?.defaultTargetId ?? capabilities?.targets.find((target) => !target.prerelease)?.id ?? capabilities?.targets[0]?.id ?? ''
-  )
+  // The engine target: the user's pick while that target still exists, else the shared fallback
+  // ladder (which never lands on a prerelease). Derived rather than reconciled by an effect —
+  // the same shape as the machine target below, and it retires the third copy of this ladder.
+  const [slicerTargetIntent, setSlicerTargetIntent] = useState<string | undefined>(undefined)
+  const selectedSlicerTargetId = resolveSlicerTargetId(slicerTargets, capabilities?.defaultTargetId, slicerTargetIntent)
+  // An updater form has to see the RESOLVED id, not the sparse intent (which is undefined until
+  // the user picks) — same rule as the machine target's setters.
+  const selectedSlicerTargetIdRef = useRef(selectedSlicerTargetId)
+  selectedSlicerTargetIdRef.current = selectedSlicerTargetId
+  const setSelectedSlicerTargetId = useCallback((value: React.SetStateAction<string>) => {
+    setSlicerTargetIntent(typeof value === 'function' ? value(selectedSlicerTargetIdRef.current) : value)
+  }, [])
   // Reset whenever the chosen engine changes: an acknowledgement is about ONE project/engine pair.
   const [allowNewerProjectFile, setAllowNewerProjectFile] = useState(false)
   useEffect(() => {
@@ -231,14 +243,25 @@ export function SliceFileModal({
     // a 2.7 engine would silently carry over to a different one.
     setAllowNewerProjectFile(false)
   }, [selectedSlicerTargetId, file.id])
-  const shouldLoadSlicingProfiles = configured && selectedSlicerTargetId.length > 0
+  const shouldLoadSlicingPresets = configured && selectedSlicerTargetId.length > 0
   // Shared definition (key, usability check, retry/staleness) so views can PREFETCH the
-  // same cache entry before this dialog opens — see `lib/slicingProfilesQuery.ts`.
-  const slicingProfilesQuery = useQuery({
-    ...slicingProfilesQueryOptions(selectedSlicerTargetId),
-    enabled: shouldLoadSlicingProfiles
+  // same cache entry before this dialog opens — see `lib/slicingPresetsQuery.ts`.
+  const slicingPresetsQuery = useQuery({
+    ...slicingPresetsQueryOptions(selectedSlicerTargetId),
+    enabled: shouldLoadSlicingPresets
   })
-  const profiles = slicingProfilesQuery.data?.profiles ?? EMPTY_SLICING_PROFILES
+  const liveProfiles = slicingPresetsQuery.data?.profiles ?? EMPTY_SLICING_PRESETS
+  // The editor owns the whole surface in the library flow, so it — not the slim dialog — is what
+  // the snapshot protects. `flow`/`file.kind` are fixed for a mounted dialog (it is keyed per file).
+  const editorOwnsSurface = flow === 'library' && file.kind === '3mf'
+  const [profilesSnapshotToken, setProfilesSnapshotToken] = useState(0)
+  /** Re-take the catalogue snapshot. The editor calls this after the user edits presets. */
+  const refreshSlicingPresets = useCallback(() => { setProfilesSnapshotToken((token) => token + 1) }, [])
+  const profiles = useHeldSnapshot(liveProfiles, {
+    hold: editorOwnsSurface,
+    ready: liveProfiles.length > 0,
+    token: profilesSnapshotToken
+  })
   // "Should have profiles but don't yet" — not merely "the query is actively fetching". The slicer
   // can briefly return an empty list while restarting, so the query throws and retries with backoff;
   // between retries `isLoading` flickers false while `profiles` is still empty. Gating only on
@@ -247,7 +270,7 @@ export function SliceFileModal({
   // matched nothing and fell back to the generic machine default ("Bambu PLA Basic") until the dialog
   // was reopened after the profiles query had cached. Treat the whole load+retry window as waiting;
   // excluding the terminal error state preserves the existing error / empty-defaults handling.
-  const waitingForSlicingProfiles = shouldLoadSlicingProfiles && profiles.length === 0 && !slicingProfilesQuery.isError
+  const waitingForSlicingPresets = shouldLoadSlicingPresets && liveProfiles.length === 0 && !slicingPresetsQuery.isError
   // Self-heal the profiles catalogue when the slicer recovers. The profiles query throws + retries
   // (×5) on an empty/restarting response, then settles into an error; previously a slice-progress WS
   // tick (`slicing`) would re-invalidate it and recover once the slicer came back, but that path now
@@ -257,9 +280,9 @@ export function SliceFileModal({
   // with profiles already loaded triggers nothing.
   const slicerHealthy = Boolean(capabilities?.healthy)
   const prevSlicerHealthyRef = useRef(slicerHealthy)
-  const profilesRefetch = slicingProfilesQuery.refetch
-  const profilesIsError = slicingProfilesQuery.isError
-  const profilesEmpty = profiles.length === 0
+  const profilesRefetch = slicingPresetsQuery.refetch
+  const profilesIsError = slicingPresetsQuery.isError
+  const profilesEmpty = liveProfiles.length === 0
   useEffect(() => {
     const wasHealthy = prevSlicerHealthyRef.current
     prevSlicerHealthyRef.current = slicerHealthy
@@ -273,42 +296,89 @@ export function SliceFileModal({
     // The 3MF index doesn't depend on slicer profiles, so fetch it in PARALLEL with the (slow)
     // profile catalogue instead of after it — the plate/object list and per-object UI become
     // available sooner. Applying baked slice defaults still waits for both (see the
-    // `appliedBakedDefaultsRef` effect, which gates on `waitingForSlicingProfiles`).
+    // `appliedBakedDefaultsRef` effect, which gates on `waitingForSlicingPresets`).
     staleTime: 60_000
   })
-  const bakedIndex = platesQuery.data ?? null
+  // Same snapshot rule as the catalogue above. The index is invalidated by `invalidateLibraryQueries`,
+  // which the editor's OWN save calls — and re-reading the file after our own save is precisely what
+  // the in-memory-after-open rule forbids (session state is authoritative until the next open).
+  // Version restores and library-wide operations invalidate it too, and those are somebody else's
+  // activity, which must not reshape a mounted editor either.
+  const liveBakedIndex = platesQuery.data ?? null
+  const [indexSnapshotToken, setIndexSnapshotToken] = useState(0)
+  /**
+   * Re-take the index snapshot. The one caller is Repair, which the user runs from the editor's own
+   * alert and which rewrites the project's settings — so its result has to come back, while every
+   * ambient invalidation above still gets nothing.
+   */
+  const refreshProjectIndex = useCallback(() => { setIndexSnapshotToken((token) => token + 1) }, [])
+  const bakedIndex = useHeldSnapshot(liveBakedIndex, {
+    hold: editorOwnsSurface,
+    ready: liveBakedIndex != null,
+    token: indexSnapshotToken
+  })
   const slicePlateOptions = useMemo(() => bakedIndex?.plates ?? [], [bakedIndex])
   const canOpenThreeDimensionalPreview = file.kind === '3mf' && slicePlateOptions.length > 0
   const machineProfiles = useMemo(
-    () => mergeProjectSlicingProfiles(profiles.filter((profile) => profile.kind === 'machine'), buildProjectSlicingProfiles(bakedIndex, 'machine')),
+    () => mergeProjectSlicingPresets(profiles.filter((profile) => profile.kind === 'machine'), buildProjectSlicingPresets(bakedIndex, 'machine')),
     [bakedIndex, profiles]
   )
   const processProfiles = useMemo(
-    () => mergeProjectSlicingProfiles(profiles.filter((profile) => profile.kind === 'process' && isVisibleProcessProfile(profile)), buildProjectSlicingProfiles(bakedIndex, 'process')),
+    () => mergeProjectSlicingPresets(profiles.filter((profile) => profile.kind === 'process' && isVisibleProcessProfile(profile)), buildProjectSlicingPresets(bakedIndex, 'process')),
     [bakedIndex, profiles]
   )
+  const installedFilamentProfiles = useMemo(
+    () => profiles.filter((profile) => profile.kind === 'filament' && isVisibleFilamentProfile(profile)),
+    [profiles]
+  )
+  const projectFilamentProfiles = useMemo(() => buildProjectSlicingPresets(bakedIndex, 'filament'), [bakedIndex])
+  // Only worth asking about a project preset that HAS an installed twin to fall back to; one naming
+  // a preset this catalogue does not carry must stay, unchanged or not.
+  const redundantProjectPresetCandidates = useMemo(
+    () => buildRedundantProjectPresetCandidates(projectFilamentProfiles, installedFilamentProfiles, bakedIndex),
+    [bakedIndex, installedFilamentProfiles, projectFilamentProfiles]
+  )
+  const unchangedProjectFilamentPresetIds = useUnchangedProjectFilamentPresetIds({
+    slicerTargetId: selectedSlicerTargetId,
+    sourceFileId: file.id,
+    presets: redundantProjectPresetCandidates
+  })
   const filamentProfiles = useMemo(
-    () => mergeProjectSlicingProfiles(profiles.filter((profile) => profile.kind === 'filament' && isVisibleFilamentProfile(profile)), buildProjectSlicingProfiles(bakedIndex, 'filament')),
-    [bakedIndex, profiles]
+    () => mergeProjectSlicingPresets(
+      installedFilamentProfiles,
+      projectFilamentProfiles.filter((profile) => !unchangedProjectFilamentPresetIds.has(profile.id))
+    ),
+    [installedFilamentProfiles, projectFilamentProfiles, unchangedProjectFilamentPresetIds]
   )
-  const selectedPrinter = printers.find((printer) => printer.id === printerId) ?? null
-  // Seed from the PROJECT (its compatible models / baked machine profile) or from a
-  // printer the caller explicitly locked — never from `printers[0]`. These initializers
-  // run on the first render, before the 3MF index resolves, so an arbitrary "first
-  // printer in the workspace" here is a guess that sticks: it sent slices as
-  // `manualProfile` with a wrong model and no printer id (issue #66). With no such
-  // signal the fields stay empty and the baked-defaults effect fills them in once the
-  // index and profile catalogue land.
-  const [manualPrinterModel, setManualPrinterModel] = useState<string>(() => resolveInitialManualPrinterModel(file, machineProfiles, lockedPreferredPrinter?.model))
-  const [printerProfileId, setPrinterProfileId] = useState(() => pickMachineProfileForPrinter(machineProfiles, lockedPreferredPrinter)?.id ?? machineProfiles[0]?.id ?? '')
-  // Default a fresh selection to the 0.20mm Standard preset rather than whatever is first
-  // in the list; an existing file's baked profile still overrides this via the effects below.
-  const [processProfileId, setProcessProfileId] = useState(() => pickStandardProcessProfile(processProfiles)?.id ?? processProfiles[0]?.id ?? '')
-  const [processSettingOverrides, setProcessSettingOverrides] = useState<Record<string, string | string[]>>({})
+  // The whole printer/machine/nozzle/plate target lives in the shared core, as a DERIVATION over
+  // the user's picks (never `printers[0]`, which was a guess that stuck; issue #66). This host only
+  // supplies the real-printer context and the two readiness flags: every reconciliation effect that
+  // used to live here writes nothing now, because there is nothing to reconcile.
+  const machineTarget = useMachineTarget({
+    file,
+    bakedIndex,
+    machineProfiles,
+    processProfiles,
+    printers,
+    lockedPreferredPrinter,
+    // Settled, NOT "data arrived": a project whose index fails to load must still reach a usable
+    // target rather than waiting on a request that will never succeed.
+    projectResolved: platesQuery.isSuccess || platesQuery.isError,
+    catalogueResolved: !waitingForSlicingPresets,
+    resetToken: selectedSlicerTargetId
+  })
+  const {
+    targetMode, printerId, selectedPrinter, selectPrinter,
+    selectedPrinterModel, manualPrinterModel, selectPrinterModel,
+    printerModelOptions, printerProfileId, selectedMachineProfile, targetPrinterModel,
+    nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, selectedNozzleDiameters,
+    nozzleFlow, setNozzleFlow,
+    plateType, handlePlateTypeChange, plateTypeOptions,
+    compatibleMachineProfiles, printerCompatibleProcessProfiles,
+    conflicts: targetConflicts,
+    machineSnapshot, restoreMachineSnapshot
+  } = machineTarget
   const [processSettingsDialogOpen, setProcessSettingsDialogOpen] = useState(false)
-  // Per-material filament setting overrides from the material "tune" dialog, keyed by
-  // projectFilamentId; each rides its slot's mapping into the slice request. Slice-dialog-local.
-  const [filamentSettingOverridesById, setFilamentSettingOverridesById] = useState<Record<number, Record<string, string | string[]>>>({})
   const [filamentSettingsFilamentId, setFilamentSettingsFilamentId] = useState<number | null>(null)
   const [objectProcessOverrides, setObjectProcessOverrides] = useState<Record<string, Record<string, string | string[]>>>({})
   // The plate object whose restricted per-object settings dialog is open (the inline
@@ -316,101 +386,67 @@ export function SliceFileModal({
   const [editingSliceObject, setEditingSliceObject] = useState<{ id: number; name: string } | null>(null)
   const [plateMode, setPlateMode] = useState<'all' | 'single'>(() => requiresSinglePlate || defaultPlateNumber != null ? 'single' : 'all')
   const [plateNumber, setPlateNumber] = useState(() => String(defaultPlateNumber ?? 1))
-  const [plateType, setPlateType] = useState(resolveInitialPlateType(file, null))
-  // The plate-type setter the UI is given: a user pick marks the choice as touched so the
-  // defaulting effects stop steering it. Programmatic defaults call the raw `setPlateType`.
-  const handlePlateTypeChange = useCallback((value: React.SetStateAction<string>) => {
-    plateTypeTouchedRef.current = true
-    setPlateType(value)
-  }, [])
-  // Picking a printer sets the id AND the target mode; picking a model sets the value AND the
-  // touched flag. Exposed as single actions (rather than the raw setters) so the settings panel
-  // makes ONE call per gesture — the editor wraps these for undo, and two calls would cost two
-  // Ctrl+Z to reverse one user action. See `selectPrinter`/`selectPrinterModel` on the controller.
-  const selectPrinter = useCallback((printer: Printer | null) => {
-    setPrinterId(printer?.id ?? '')
-    setTargetMode(printer ? 'realPrinter' : 'manualProfile')
-  }, [])
-  const selectPrinterModel = useCallback((model: string) => {
-    manualPrinterModelTouchedRef.current = true
-    setManualPrinterModel(model)
-  }, [])
-  const [nozzleDiameter, setNozzleDiameter] = useState(() => resolveInitialNozzleDiameter(file, lockedPreferredPrinter, null, null))
-  const [nozzleFlow, setNozzleFlow] = useState<PrinterNozzleFlow>('standard')
-  const [filamentMaterialOptionIds, setFilamentMaterialOptionIds] = useState<Record<number, string>>(() => buildInitialFilamentMaterialOptionSelection(file, null, filamentProfiles))
-  const [filamentMaterialTypeFilters, setFilamentMaterialTypeFilters] = useState<Record<number, string>>({})
-  const [filamentColors, setFilamentColors] = useState<Record<number, string>>(() => buildInitialFilamentColorSelection(file, null))
-  const [filamentToolheadIds, setFilamentToolheadIds] = useState<Record<number, string>>(() => buildInitialFilamentToolheadSelection(file, null))
-  // The full editor renders this controller's own material dialogs behind itself (the host slice
-  // dialog stays mounted), so an edit made there — the filament-settings dialog's overrides — calls
-  // THIS controller directly, not the markDirty-wrapped copy the editor hands to the settings panel.
-  // The editor registers `markDirty` here so those edits still light its Save button. Null in the
-  // simple slice path.
-  const materialEditListenerRef = useRef<(() => void) | null>(null)
-  // Sibling of materialEditListenerRef for global process-setting edits (profile switch + the
+  // Sibling of useMaterialSlots' materialEditListenerRef for global process-setting edits (profile switch + the
   // process-settings dialog's overrides). The editor registers a snapshot-then-dirty handler so
   // those edits light Save and land in undo history. Null in the simple slice path.
   const processEditListenerRef = useRef<(() => void) | null>(null)
   const [saveDestinationOpen, setSaveDestinationOpen] = useState(false)
   // Slice-time object selection (single-plate only). Tracks the kept objects; defaults to all.
   const [selectedSliceObjectIds, setSelectedSliceObjectIds] = useState<Set<number>>(new Set())
-  const selectedPrinterModel = targetMode === 'realPrinter' ? selectedPrinter?.model ?? 'unknown' : manualPrinterModel
+  // Subscribed HERE rather than passed in: statuses arrive several times a second and every
+  // observer re-renders on each frame, so the hosts that merely forwarded them were paying a
+  // full page render for a dialog that is usually closed. See usePrinterStatuses.
+  const printerStatuses = usePrinterStatuses({ ignoreTelemetry: true })
+  // Ambient telemetry must not redraw the editor, which borrows this controller. The status object
+  // is REPLACED on every MQTT frame — measured at ~1.4/s while an editor sat idle — and three
+  // things derive from it (loaded materials, toolheads, the tray map), so a fresh reference here
+  // re-rendered the whole 3D editor for a temperature tick. Held stable on the projection this
+  // dialog actually reads; a real change (tray swapped, nozzle changed) still flows through.
   const selectedPrinterStatus = printerId ? printerStatuses[printerId] : undefined
-  const selectedMachineProfile = machineProfiles.find((profile) => profile.id === printerProfileId) ?? null
-  const targetPrinterModel = useMemo(
-    () => resolveSliceDialogTargetPrinterModel(selectedPrinterModel, selectedMachineProfile),
-    [selectedMachineProfile, selectedPrinterModel]
+  // Resolve the project's OWN process preset against no target, so its system baseline is matched by
+  // name regardless of the machine currently selected, and derive the project's genuine deltas. This
+  // is what the machine-switch fallback carries onto a builtin so a baked customization (e.g. wall
+  // loops) isn't lost when the new preset overwrites every process key. Stable per file, so it does
+  // not churn as the target changes.
+  const projectProcessProfileId = useMemo(
+    () => processProfiles.find((profile) => isProjectSlicingPresetId(profile.id))?.id ?? null,
+    [processProfiles]
   )
-  const selectedNozzleDiameters = useMemo(() => {
-    const diameter = Number.parseFloat(nozzleDiameter)
-    return Number.isFinite(diameter) && diameter > 0 ? [diameter] : []
-  }, [nozzleDiameter])
-  const modelCompatibleMachineProfiles = useMemo(
-    () => machineProfiles.filter((profile) => matchesPrinterModel(profile, selectedPrinterModel)),
-    [machineProfiles, selectedPrinterModel]
+  const projectProcessResolveQuery = useQuery({
+    queryKey: ['slice-project-process-carry', projectProcessProfileId, file.id],
+    queryFn: ({ signal }) => apiFetch<ResolveProcessConfigResponse>('/api/slicing/profiles/resolve-process', {
+      method: 'POST',
+      body: { processProfileId: projectProcessProfileId, targetId: null, sourceFileId: file.id },
+      signal
+    }),
+    enabled: Boolean(projectProcessProfileId && file.id),
+    staleTime: Infinity
+  })
+  const carryOverridesOnRepick = useDeepStableValue(
+    useMemo(() => deriveProjectCarryOverrides(projectProcessResolveQuery.data), [projectProcessResolveQuery.data])
   )
-  const nozzleDiameterOptions = useMemo(
-    () => resolveSliceDialogNozzleDiameterOptions(file, selectedPrinter, modelCompatibleMachineProfiles, bakedIndex),
-    [bakedIndex, file, modelCompatibleMachineProfiles, selectedPrinter]
-  )
-  const compatibleMachineProfiles = useMemo(
-    () => machineProfiles.filter((profile) => isMachineProfileCompatible(profile, selectedPrinterModel, selectedNozzleDiameters)),
-    [machineProfiles, selectedNozzleDiameters, selectedPrinterModel]
-  )
-  const selectableMachineProfiles = useMemo(
-    () => compatibleMachineProfiles.filter(isSelectableSlicingProfile),
-    [compatibleMachineProfiles]
-  )
-  const printerCompatibleProcessProfiles = useMemo(
-    // The project's OWN presets are never filtered by the chosen target: the 3MF is the basis for
-    // the slice, and picking a printer is a convenience (it pre-fills settings and offers AMS
-    // materials), not a re-selection of presets. A model change is a rewrite WE author
-    // (`retargetProjectSettingsToMachine`), so the CLI always receives a project that natively
-    // targets the chosen machine — it never has to reconcile a mismatch. Excluding the project's
-    // presets here instead substituted builtins for the target model, which on a project naming a
-    // workspace-only process ("0.24mm Standard @BBL H2D - Ryan") sent an incompatible preset and
-    // failed the slice ("process not compatible with printer", then a loader segfault).
-    // `isProcessProfileCompatible` already exempts project presets, so this needs no gate.
-    () => processProfiles.filter((profile) => isSelectableOrProjectFallbackSlicingProfile(profile, processProfiles, bakedIndex?.processProfileName ?? null) && isProcessProfileCompatible(profile, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters, '')),
-    [bakedIndex?.processProfileName, processProfiles, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel]
-  )
-  const plateTypeOptions = useMemo(
-    () => resolveCompatiblePlateTypes(file, bakedIndex, selectedMachineProfile, printerCompatibleProcessProfiles),
-    [bakedIndex, file, printerCompatibleProcessProfiles, selectedMachineProfile]
-  )
-  const compatibleProcessProfiles = useMemo(
-    () => dedupeVisibleProcessProfiles(
-      printerCompatibleProcessProfiles.filter((profile) => isProcessProfileCompatible(profile, selectedMachineProfile, selectedPrinterModel, selectedNozzleDiameters, plateType)),
-      selectedMachineProfile,
-      selectedPrinterModel
-    ),
-    [plateType, printerCompatibleProcessProfiles, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel]
-  )
-  const selectedAnyProcessProfile = processProfiles.find((profile) => profile.id === processProfileId) ?? null
-  // Narrowed to a primitive so the machine-switch effect below can depend on the layer
-  // height itself rather than on the profile object's identity.
-  const selectedProcessLayerHeight = selectedAnyProcessProfile ? resolveProfileLayerHeight(selectedAnyProcessProfile) : null
-  const selectedProcessProfile = compatibleProcessProfiles.find((profile) => profile.id === processProfileId) ?? null
+
+  // Process-preset selection + the machine-switch fallback live in their own hook so the public
+  // editor gets the identical behaviour without this component's printers and dispatch.
+  const {
+    compatibleProcessProfiles, selectedProcessProfile,
+    processProfileId, setProcessProfileId,
+    processSettingOverrides, setProcessSettingOverrides,
+    processProfileSelectionTouchedRef
+  } = useProcessProfileSelection({
+    processProfiles,
+    printerCompatibleProcessProfiles,
+    selectedMachineProfile,
+    selectedPrinterModel,
+    selectedNozzleDiameters,
+    plateType,
+    bakedProcessProfileName: bakedIndex?.processProfileName,
+    carryOverridesOnRepick,
+    // The 3MF index arrives on its own query; until it does the project's own preset is missing
+    // from the list, and a re-pick would latch a built-in permanently (see the hook's docs).
+    projectPresetsReady: bakedIndex != null || platesQuery.isError,
+    resetToken: selectedSlicerTargetId
+  })
   const compatibleFilamentProfiles = useMemo(
     // Project filament presets stay available for every target, for the same reason as the
     // process list above.
@@ -445,173 +481,81 @@ export function SliceFileModal({
     () => buildSliceMaterialOptions(compatibleFilamentProfiles, loadedMaterialOptions),
     [compatibleFilamentProfiles, loadedMaterialOptions]
   )
+  const selectedPlate = !requiresSinglePlate && plateMode === 'all' ? 0 : Number.parseInt(plateNumber, 10)
+  const baseProjectFilaments = useMemo(
+    () => buildSliceDialogProjectFilaments(file, bakedIndex, selectedPlate),
+    [bakedIndex, file, selectedPlate]
+  )
+  // The print/slice dialog targets one plate, so it lists, validates, and maps only the materials
+  // that plate actually uses — a project can carry materials for other plates, and surfacing them
+  // all there just invites mis-mapping. `desiredFilaments` still rewrites the full ordered set so
+  // other plates are never dropped.
+  //
+  // The full 3D EDITOR is different: like BambuStudio it must show EVERY project material at all
+  // times (you assign materials to parts across plates, and the 3D preview colours objects by
+  // their own filament regardless of the active plate). Filtering to the active plate's used set
+  // there hides materials and, worse, drops an object's filament from the colour set so it
+  // renders black. So only narrow to the plate in the print/slim flow.
+  const isFullProjectEditor = flow === 'library' && file.kind === '3mf'
+  const visibleFilamentsFilter = useCallback(
+    (filament: { usedOnSelectedPlate: boolean }) => filament.usedOnSelectedPlate,
+    []
+  )
+  // Removing a slot must remap the filament-INDEX references living with the process state —
+  // see useMaterialSlots.onFilamentRemoved (positions above the removed one shift down).
+  const handleFilamentIndexRemap = useCallback((removedPosition: number) => {
+    setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition))
+    setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition))
+  }, [setProcessSettingOverrides])
+  // Declared BEFORE the material core: it feeds the core's nozzle-validity clamp (a stale
+  // dual-nozzle assignment on a single-nozzle machine segfaults the slicer).
+  const sliceToolheads = buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, targetMode === 'realPrinter' ? selectedPrinterStatus : undefined, selectedPrinterModel)
+  const materialSlots = useMaterialSlots({
+    file,
+    bakedIndex,
+    baseProjectFilaments,
+    filamentProfiles,
+    compatibleFilamentProfiles,
+    materialOptions,
+    selectedMachineProfile,
+    toolheadOptions: sliceToolheads,
+    visibleFilamentsFilter: isFullProjectEditor ? undefined : visibleFilamentsFilter,
+    onFilamentRemoved: handleFilamentIndexRemap
+  })
+  const {
+    projectFilaments, visibleProjectFilaments,
+    filamentMaterialOptionIds,
+    filamentColors, setFilamentColors,
+    filamentToolheadIds, setFilamentToolheadIds,
+    filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
+    filamentSettingOverridesById, setFilamentSettingOverridesById,
+    handleAddFilament, handleRemoveFilament, handleMaterialOptionChange,
+    materialEditListenerRef,
+    desiredFilaments, filamentMappingResult,
+    onProjectSaved: handleProjectSaved,
+    applyBakedMaterialDefaults,
+    materialSnapshot, restoreMaterialSnapshot
+  } = materialSlots
+  // The editor's bed override. `targetPrinterModel` normalises an unresolved model to null, so an
+  // unknown target simply passes nothing and the editor's scene falls back to the project's own
+  // embedded settings — the accurate bed by definition. Previously this had to ask "has the guess
+  // been replaced yet?" across three flags; with nothing guessing, null already means "not known".
+  const editorTargetPrinterModel = targetPrinterModel ?? undefined
+  // Materials still seed ONCE per engine target. Unlike the machine target they are
+  // path-dependent — a user's option pick has to survive a catalogue refetch, and the add/remove
+  // overlay has no derivation — so this stays a latch rather than becoming a derivation.
   useEffect(() => {
-    if (!lockedPreferredPrinter) return
-    if (targetMode !== 'realPrinter') setTargetMode('realPrinter')
-    if (printerId !== lockedPreferredPrinter.id) setPrinterId(lockedPreferredPrinter.id)
-  }, [lockedPreferredPrinter, printerId, targetMode])
-  useEffect(() => {
-    // Never fall back onto a BETA engine: betas are opt-in only (they exist so a project saved
-    // by a beta desktop build can be sliced), so prefer the declared default, then the first
-    // stable target, and only then anything at all.
-    const fallbackTargetId = capabilities?.defaultTargetId
-      ?? slicerTargets.find((target) => !target.prerelease)?.id
-      ?? slicerTargets[0]?.id
-      ?? ''
-    if (!fallbackTargetId) {
-      if (selectedSlicerTargetId) setSelectedSlicerTargetId('')
-      return
-    }
-    if (slicerTargets.some((target) => target.id === selectedSlicerTargetId)) return
-    setSelectedSlicerTargetId(fallbackTargetId)
-  }, [capabilities?.defaultTargetId, selectedSlicerTargetId, slicerTargets])
-  useEffect(() => {
-    appliedBakedDefaultsRef.current = false
-    setBakedDefaultsApplied(false)
-    manualPrinterModelTouchedRef.current = false
-    processProfileSelectionTouchedRef.current = false
+    appliedMaterialDefaultsRef.current = false
+    setMaterialDefaultsApplied(false)
   }, [selectedSlicerTargetId])
   useEffect(() => {
-    if (targetMode !== 'realPrinter') return
-    const matchedProfile = pickMachineProfileForPrinter(selectableMachineProfiles, selectedPrinter)
-    if (matchedProfile) setPrinterProfileId(matchedProfile.id)
-  }, [selectableMachineProfiles, selectedPrinter, targetMode])
-  useEffect(() => {
-    const firstProfile = selectableMachineProfiles[0]
-    if (printerProfileId && selectableMachineProfiles.some((profile) => profile.id === printerProfileId)) return
-    if (!firstProfile) return
-    setPrinterProfileId(firstProfile.id)
-  }, [printerProfileId, selectableMachineProfiles])
-  useEffect(() => {
-    const firstProfile = compatibleProcessProfiles[0]
-    if (processProfileId && compatibleProcessProfiles.some((profile) => profile.id === processProfileId)) return
-    if (!processProfileId && processProfileSelectionTouchedRef.current) return
-    const previousName = selectedAnyProcessProfile?.name ?? bakedIndex?.processProfileName ?? null
-    // Mirror BambuStudio's machine-switch fallback: prefer the target machine's
-    // default_print_profile when it shares the previous profile's layer height,
-    // otherwise keep the closest layer-height match by name.
-    const machineDefaultProfile = pickSlicingProfileByBakedName(compatibleProcessProfiles, selectedMachineProfile?.defaultProcessProfile)
-    // Read the previous profile's real layer height when we still hold its summary;
-    // only a bare baked NAME has to fall back to the name token.
-    const previousLayerHeight = selectedProcessLayerHeight ?? extractLayerHeightToken(previousName)
-    if (machineDefaultProfile && (!previousLayerHeight || resolveProfileLayerHeight(machineDefaultProfile) === previousLayerHeight)) {
-      setProcessProfileId(machineDefaultProfile.id)
-      return
-    }
-    // Only match a "nearest" preset when there's an actual prior profile to match; for a
-    // fresh selection (new project, no baked/previous profile) skip it so we don't latch
-    // onto an arbitrary preset.
-    const nearestProfile = previousName ? pickMostSimilarSlicingProfileByName(compatibleProcessProfiles, previousName) : null
-    if (nearestProfile) {
-      setProcessProfileId(nearestProfile.id)
-      return
-    }
-    if (machineDefaultProfile) {
-      setProcessProfileId(machineDefaultProfile.id)
-      return
-    }
-    // Prefer the 0.20mm Standard preset over whatever happens to be first in the list.
-    const standardProfile = pickStandardProcessProfile(compatibleProcessProfiles)
-    if (standardProfile) {
-      setProcessProfileId(standardProfile.id)
-      return
-    }
-    if (!firstProfile) return
-    setProcessProfileId(firstProfile.id)
-  }, [bakedIndex?.processProfileName, compatibleProcessProfiles, processProfileId, selectedAnyProcessProfile?.name, selectedProcessLayerHeight, selectedMachineProfile?.defaultProcessProfile])
-  // Default the plate type from the SELECTED PRINTER's loaded plate (e.g. High Temp) when the
-  // project carries none of its own — a new project inherits the printer's current plate rather
-  // than always landing on Textured PEI. Only while the user hasn't picked a plate themselves and
-  // the project has no baked plate type (an existing project's own plate wins).
-  useEffect(() => {
-    if (targetMode !== 'realPrinter' || plateTypeTouchedRef.current) return
-    if (resolveProjectPlateType(file, bakedIndex)) return
-    const printerPlate = matchPlateTypeByLabel(plateTypeOptions, selectedPrinter?.currentPlateType)
-    if (printerPlate && printerPlate !== plateType) setPlateType(printerPlate)
-  }, [bakedIndex, file, plateType, plateTypeOptions, selectedPrinter?.currentPlateType, targetMode])
-  useEffect(() => {
-    if (plateTypeOptions.length === 0 || plateTypeOptions.includes(plateType)) return
-    // The selected plate fell out of the options — usually because a profiles recompute changed
-    // its value-form (code `high_temp_plate` vs a profile's `High Temp Plate`). Re-resolve by
-    // LABEL so the user's choice survives instead of snapping to BambuStudio's rank-0 Cool Plate.
-    const next = resolvePreferredPlateType(plateTypeOptions, {
-      current: plateType,
-      printerPlateType: targetMode === 'realPrinter' ? selectedPrinter?.currentPlateType : null
-    })
-    if (next !== plateType) setPlateType(next)
-  }, [plateType, plateTypeOptions, selectedPrinter?.currentPlateType, targetMode])
-  useEffect(() => {
-    if (nozzleDiameterOptions.includes(nozzleDiameter)) return
-    setNozzleDiameter(nozzleDiameterOptions[0] ?? '')
-  }, [nozzleDiameter, nozzleDiameterOptions])
-  useEffect(() => {
-    if (manualPrinterModel !== 'unknown' || targetMode !== 'manualProfile') return
-    const firstModel = ensurePrinterModelOptions(file.compatiblePrinterModels, selectedPrinter?.model, machineProfiles)[0]
-    if (firstModel) setManualPrinterModel(firstModel)
-  }, [file.compatiblePrinterModels, machineProfiles, manualPrinterModel, selectedPrinter?.model, targetMode])
-  // Seed the target printer model from the project's own index the moment it loads — NOT
-  // gated on the (slow) profile catalogue like the full baked-defaults effect below. On a
-  // fresh upload `file.compatiblePrinterModels` can still be empty, so the initial model
-  // falls back to the user's first printer; that guess must be replaced by accurate project
-  // data as soon as it exists, not once profiles finish resolving.
-  const [bakedTargetModelSeeded, setBakedTargetModelSeeded] = useState(false)
-  useEffect(() => {
-    if (!bakedIndex || bakedTargetModelSeeded) return
-    if (!manualPrinterModelTouchedRef.current && bakedIndex.compatiblePrinterModels[0]) {
-      setManualPrinterModel(bakedIndex.compatiblePrinterModels[0])
-    }
-    setBakedTargetModelSeeded(true)
-  }, [bakedIndex, bakedTargetModelSeeded])
-  // The full editor's bed override. The editor must never render a bed from the pre-index
-  // fallback guess: until the project's own model has been seeded (or the user explicitly
-  // chose a target — a real printer, or a touched model select), pass no override so the
-  // editor's scene falls back to the project's embedded settings, which is the accurate
-  // bed by definition.
-  const editorTargetPrinterModel = targetMode === 'realPrinter' || manualPrinterModelTouchedRef.current || bakedTargetModelSeeded
-    ? targetPrinterModel
-    : undefined
-  useEffect(() => {
-    if (!bakedIndex || appliedBakedDefaultsRef.current || waitingForSlicingProfiles) return
-    const preserveManualPrinterSelection = targetMode === 'manualProfile' && manualPrinterModelTouchedRef.current
-    if (!preserveManualPrinterSelection && bakedIndex.compatiblePrinterModels[0]) setManualPrinterModel(bakedIndex.compatiblePrinterModels[0])
-    const bakedPrinterProfile = pickSelectableSlicingProfileByName(machineProfiles, bakedIndex.printerProfileName)
-      ?? pickMachineProfileByName(machineProfiles.filter(isSelectableSlicingProfile), bakedIndex.printerProfileName, bakedIndex.compatiblePrinterModels[0] ?? 'unknown')
-    if (!preserveManualPrinterSelection && bakedPrinterProfile) setPrinterProfileId(bakedPrinterProfile.id)
-    // Prefer the 3MF-embedded process profile over an identically-named installed
-    // preset so the project's saved overrides (e.g. wall_loops) survive instead of
-    // collapsing to the preset's defaults. Falls back to the installed preset when
-    // the project carries no embedded process profile.
-    const bakedProcessProfile = pickProjectFallbackSlicingProfileByName(processProfiles, bakedIndex.processProfileName)
-      ?? pickSelectableSlicingProfileByName(processProfiles, bakedIndex.processProfileName)
-    if (!preserveManualPrinterSelection && bakedProcessProfile) setProcessProfileId(bakedProcessProfile.id)
-    // A deliberate plate choice wins over the project default; the printer-default effect above
-    // supplies the selected printer's plate when the project carries none.
-    if (!plateTypeTouchedRef.current) setPlateType(resolveInitialPlateType(file, bakedIndex))
-    setNozzleDiameter(resolveInitialNozzleDiameter(file, selectedPrinter, bakedPrinterProfile, bakedIndex))
-    setFilamentMaterialOptionIds(buildInitialFilamentMaterialOptionSelection(file, bakedIndex, filamentProfiles, selectedMachineProfile))
-    setFilamentColors(buildInitialFilamentColorSelection(file, bakedIndex))
-    appliedBakedDefaultsRef.current = true
-    setBakedDefaultsApplied(true)
-  }, [bakedIndex, file, filamentProfiles, machineProfiles, processProfiles, selectedMachineProfile, selectedPrinter, targetMode, waitingForSlicingProfiles])
-  useEffect(() => {
-    setFilamentMaterialOptionIds((current) => {
-      const defaults = buildInitialFilamentMaterialOptionSelection(file, bakedIndex, compatibleFilamentProfiles, selectedMachineProfile)
-      const next: Record<number, string> = { ...defaults }
-      // Preserve the user's current selection only while it still resolves to a
-      // compatible material option; otherwise keep the default so a cross-model
-      // machine switch lands on the target machine's default filament.
-      for (const [filamentId, optionId] of Object.entries(current)) {
-        if (optionId && materialOptions.some((option) => option.id === optionId)) next[Number(filamentId)] = optionId
-      }
-      return next
-    })
-  }, [bakedIndex, compatibleFilamentProfiles, file, materialOptions, selectedMachineProfile])
-  useEffect(() => {
-    setFilamentColors((current) => ({ ...buildInitialFilamentColorSelection(file, bakedIndex), ...current }))
-  }, [bakedIndex, file])
-  useEffect(() => {
-    setFilamentToolheadIds((current) => ({ ...buildInitialFilamentToolheadSelection(file, bakedIndex), ...current }))
-  }, [bakedIndex, file])
+    if (!bakedIndex || appliedMaterialDefaultsRef.current || !machineTarget.resolved) return
+    // The callback composes the baked seed with the compat reconciliation in one updater, so effect
+    // order across the module boundary is not load-bearing (see useMaterialSlots).
+    applyBakedMaterialDefaults()
+    appliedMaterialDefaultsRef.current = true
+    setMaterialDefaultsApplied(true)
+  }, [applyBakedMaterialDefaults, bakedIndex, machineTarget.resolved])
   useEffect(() => {
     if (!requiresSinglePlate || plateMode === 'single') return
     setPlateMode('single')
@@ -622,7 +566,6 @@ export function SliceFileModal({
     const firstPlate = slicePlateOptions[0]
     if (firstPlate) setPlateNumber(String(firstPlate.index))
   }, [plateMode, plateNumber, slicePlateOptions])
-  const selectedPlate = !requiresSinglePlate && plateMode === 'all' ? 0 : Number.parseInt(plateNumber, 10)
   const selectedPlateOption = useMemo(
     () => slicePlateOptions.find((plate) => plate.index === selectedPlate) ?? null,
     [selectedPlate, slicePlateOptions]
@@ -634,6 +577,30 @@ export function SliceFileModal({
   useEffect(() => {
     setSelectedSliceObjectIds(new Set(plateObjectIdsKey ? plateObjectIdsKey.split(',').map(Number) : []))
   }, [plateObjectIdsKey])
+  // The per-object overrides the FILE already carries, from the parsed index (this dialog never
+  // loads the scene). Seeding from them is not cosmetic: the slice-time transform is authoritative
+  // per object, so editing one setting against an empty seed used to tell the server the object had
+  // only that setting -- silently dropping its other baked values from the slice.
+  const bakedObjectOverrides = useMemo(() => {
+    const out: Record<string, Record<string, string | string[]>> = {}
+    for (const object of plateObjects) {
+      if (object.processOverrides && Object.keys(object.processOverrides).length > 0) {
+        out[String(object.id)] = { ...object.processOverrides }
+      }
+    }
+    return out
+  }, [plateObjects])
+  const bakedObjectOverridesKey = useMemo(() => JSON.stringify(bakedObjectOverrides), [bakedObjectOverrides])
+  // Keyed on the CONTENT, so a refetch that returns the same overrides does not wipe an edit in
+  // progress (the array identity changes on every refetch).
+  useEffect(() => {
+    const baked = JSON.parse(bakedObjectOverridesKey) as Record<string, Record<string, string | string[]>>
+    // MERGE UNDER, never replace. `bakedObjectOverrides` covers the SELECTED PLATE only, so
+    // replacing dropped every other plate's entry on each plate switch — and the editor host, which
+    // seeds all plates from the scene, then had them silently erased. Existing entries win so a
+    // refetch (or a session edit) is never clobbered.
+    setObjectProcessOverrides((current) => ({ ...baked, ...current }))
+  }, [bakedObjectOverridesKey])
   // Per-object print selection + overrides are managed in the per-object dialog (a single plate's
   // objects). Available whenever the targeted plate has objects.
   const hasPlateObjects = selectedPlate > 0 && plateObjects.length > 0
@@ -647,52 +614,17 @@ export function SliceFileModal({
   const submitSelectedObjectIds = hasPlateObjects && selectedSliceObjectIds.size < plateObjects.length
     ? plateObjects.filter((object) => selectedSliceObjectIds.has(object.id)).map((object) => object.id)
     : undefined
+  // Send only the objects whose overrides DIFFER from what the file already carries. An object left
+  // alone is omitted, so the slice-time transform never touches it (it rewrites only the objects it
+  // is given) -- which keeps an ordinary slice byte-for-byte the same as before this seeding. An
+  // object the user CLEARED must still be sent, as an empty map, or the clear would not apply;
+  // that is why this compares against the baked set rather than filtering out empties.
   const submitObjectProcessOverrides = useMemo(() => {
-    const entries = Object.entries(objectProcessOverrides).filter(([, overrides]) => Object.keys(overrides).length > 0)
+    const baked = JSON.parse(bakedObjectOverridesKey) as Record<string, Record<string, string | string[]>>
+    const entries = Object.entries(objectProcessOverrides)
+      .filter(([objectId, overrides]) => JSON.stringify(overrides) !== JSON.stringify(baked[objectId] ?? {}))
     return entries.length > 0 ? Object.fromEntries(entries) : undefined
-  }, [objectProcessOverrides])
-  const baseProjectFilaments = useMemo(
-    () => buildSliceDialogProjectFilaments(file, bakedIndex, selectedPlate),
-    [bakedIndex, file, selectedPlate]
-  )
-  // Add/remove materials overlay (Bambu-style, editor only). `removedFilamentIds`
-  // drops base filaments; `addedFilaments` appends new slots (each seeded — see
-  // handleAddFilament — from the first material so it has a valid profile). The
-  // resulting list bakes into the saved/sliced 3MF via `desiredFilaments`.
-  const [removedFilamentIds, setRemovedFilamentIds] = useState<Set<number>>(() => new Set())
-  // Slots whose material PROFILE the user explicitly changed (via the dropdown or the loaded-material
-  // picker). A profile change writes a new `filament_settings_id`, but unlike a recolor it isn't
-  // detectable by comparing values (the baked short name "Bambu PLA Basic" never equals the resolved
-  // full preset "Bambu PLA Basic @BBL H2D 0.4 nozzle"), so we track the explicit edits instead. Drives
-  // `desiredFilaments` so the choice persists into the saved 3MF. (Programmatic default application
-  // sets the option ids directly, not through `handleMaterialOptionChange`, so it never flags here.)
-  const [profileEditedFilamentIds, setProfileEditedFilamentIds] = useState<Set<number>>(() => new Set())
-  const [addedFilaments, setAddedFilaments] = useState<Array<{ projectFilamentId: number; label: string; color: string | null; nozzleId: number | null; usedOnSelectedPlate: boolean }>>([])
-  // 0-based source filament each added slot clones its slicer settings from.
-  const [addedFilamentSourceIndex, setAddedFilamentSourceIndex] = useState<Record<number, number>>({})
-  const addedFilamentIds = useMemo(() => new Set(addedFilaments.map((entry) => entry.projectFilamentId)), [addedFilaments])
-  const projectFilaments = useMemo(
-    () => [
-      ...baseProjectFilaments.filter((filament) => !removedFilamentIds.has(filament.projectFilamentId)),
-      ...addedFilaments
-    ],
-    [baseProjectFilaments, removedFilamentIds, addedFilaments]
-  )
-  // The print/slice dialog targets one plate, so it lists, validates, and maps only
-  // the materials that plate actually uses — a project can carry materials for other
-  // plates, and surfacing them all there just invites mis-mapping. `desiredFilaments`
-  // still rewrites the full ordered set so other plates are never dropped.
-  //
-  // The full 3D EDITOR is different: like BambuStudio it must show EVERY project material
-  // at all times (you assign materials to parts across plates, and the 3D preview colours
-  // objects by their own filament regardless of the active plate). Filtering to the active
-  // plate's used set there hides materials and, worse, drops an object's filament from the
-  // colour set so it renders black. So only narrow to the plate in the print/slim flow.
-  const isFullProjectEditor = flow === 'library' && file.kind === '3mf'
-  const visibleProjectFilaments = useMemo(
-    () => isFullProjectEditor ? projectFilaments : projectFilaments.filter((filament) => filament.usedOnSelectedPlate),
-    [projectFilaments, isFullProjectEditor]
-  )
+  }, [objectProcessOverrides, bakedObjectOverridesKey])
   // Material choices for filament-index process settings ("Support/raft base" etc.).
   // Ids are the 1-based POSITION in the full ordered list — the index the slicer reads —
   // not projectFilamentId, which can diverge from position after a removal.
@@ -750,240 +682,52 @@ export function SliceFileModal({
     const entries = Object.entries(platePauseEdits).map(([plateIndex, pauses]) => ({ plateIndex: Number(plateIndex), pauses }))
     return entries.length > 0 ? entries : undefined
   }, [platePauseEdits])
-  const sliceToolheads = buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, targetMode === 'realPrinter' ? selectedPrinterStatus : undefined, selectedPrinterModel)
   const materialToolheadOptions = sliceToolheads.length > 1 ? sliceToolheads : []
-  // Built once and reused by every submit path so the gate below and the request
-  // that goes out can never disagree about which slots resolved.
-  const filamentMappingResult = useMemo(
-    () => buildFilamentMappings(visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById),
-    [visibleProjectFilaments, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, materialOptions, filamentSettingOverridesById]
-  )
   // Covers BOTH "nothing chosen" and "the chosen option no longer exists" — the
   // latter (e.g. after a printer change rebuilt the AMS options) used to drop the
   // slot from the request silently while this gate still read as satisfied.
   const missingFilamentProfile = filamentMappingResult.unresolved.length > 0
   const missingFilamentToolhead = materialToolheadOptions.length > 0 && visibleProjectFilaments.some((filament) => !filamentToolheadIds[filament.projectFilamentId])
-  /**
-   * The full ordered filament list baked into the saved/sliced 3MF. `sourceIndex` tells the writer
-   * which original filament to clone slicer settings from for each slot; `nozzleId` carries the
-   * per-slot nozzle assignment.
-   *
-   * ALWAYS emitted (materials are a domain the editor owns, so the save carries their complete
-   * state — see the delta-save rule in `docs/slicer-architecture.md`). This used to be gated on
-   * "did the user change the count / a colour / a profile / a nozzle", to spare an unchanged
-   * project a project_settings rewrite. That gate lost data twice: nothing can "change" relative to
-   * an editor-born project's scaffold, and an editor-born save passes `ignoreBaseContent`, so the
-   * base contributes nothing either — a new project saved with its default material reopened with
-   * NO materials at all, which in turn stranded colour paint (its codes are filament ids, so they
-   * rendered in the fallback palette). For an unchanged project the rewrite is an identity no-op:
-   * each slot clones itself, and a slot with no explicit type/settingsId keeps the source's.
-   */
-  const desiredFilaments = useMemo<SceneEditFilament[] | null>(() => {
-    // Only genuinely-absent materials emit nothing (the writer ignores an empty list anyway).
-    if (projectFilaments.length === 0) return null
-    return projectFilaments.map((filament) => {
-      const isAdded = addedFilamentIds.has(filament.projectFilamentId)
-      const sourceIndex = isAdded
-        ? (addedFilamentSourceIndex[filament.projectFilamentId] ?? 0)
-        : baseProjectFilaments.findIndex((base) => base.projectFilamentId === filament.projectFilamentId)
-      const selectedOption = materialOptions.find((option) => option.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
-      return {
-        color: normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF'),
-        type: selectedOption?.materialType ?? (isAdded ? 'PLA' : null),
-        // The selected preset name (e.g. "Bambu PETG HF @BBL H2D 0.4 nozzle") so the material
-        // choice persists as `filament_settings_id`. Null keeps the slot's existing preset.
-        // Only a RESOLVED preset's name may persist: a loaded AMS option with no matched
-        // profile carries the tray's display identity ("Bambu PETG Basic") in `material`,
-        // and writing that into filament_settings_id poisons the saved project — the name
-        // matches no catalog preset, so slice-time physics re-derivation silently falls
-        // back to Generic PLA.
-        settingsId: selectedOption?.profileId ? selectedOption.material : null,
-        sourceIndex: sourceIndex >= 0 ? sourceIndex : 0,
-        // The chosen toolhead's runtime nozzle id (0 = right, 1 = left), falling back to the slot's
-        // baked nozzle so unchanged slots keep their assignment. Null on single-nozzle projects.
-        nozzleId: parseSliceToolheadNozzleId(filamentToolheadIds[filament.projectFilamentId]) ?? filament.nozzleId ?? null
-      }
-    })
-  }, [projectFilaments, addedFilamentIds, addedFilamentSourceIndex, baseProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, filamentToolheadIds])
-  // A guaranteed-present filament option to seed an added slot (or a project with no materials)
-  // with, so a new slot is always sliceable instead of an undefined one. The machine's own default
-  // filament (Bambu PLA Basic) when resolvable, else Generic PLA — see resolveDefaultFilamentProfile.
-  const defaultFilamentOptionId = useMemo(() => {
-    const profile = resolveDefaultFilamentProfile(compatibleFilamentProfiles, selectedMachineProfile)
-    return profile ? buildProfileMaterialOptionId(profile.id) : ''
-  }, [compatibleFilamentProfiles, selectedMachineProfile])
-  const handleAddFilament = useCallback(() => {
-    const template = projectFilaments[0] ?? null
-    const templateId = template?.projectFilamentId ?? null
-    setAddedFilaments((current) => {
-      const maxId = Math.max(0, ...baseProjectFilaments.map((entry) => entry.projectFilamentId), ...current.map((entry) => entry.projectFilamentId))
-      const newId = maxId + 1
-      // Seed the new slot's profile/color/toolhead. Prefer cloning the first material; fall back to
-      // a guaranteed default when there is no template OR the template itself has no resolved
-      // profile (an empty option id) — otherwise the slot bakes with a null filament_settings_id and
-      // the slicer silently substitutes Generic PLA, which is the "not properly defined" bug.
-      setFilamentMaterialOptionIds((prev) => ({ ...prev, [newId]: (templateId != null && prev[templateId]) || defaultFilamentOptionId }))
-      setFilamentColors((prev) => ({ ...prev, [newId]: (templateId != null && prev[templateId]) || normalizeSliceFilamentColor(template?.color ?? DEFAULT_FILAMENT_COLOR) }))
-      setFilamentToolheadIds((prev) => ({ ...prev, [newId]: (templateId != null ? prev[templateId] : undefined) ?? '' }))
-      setAddedFilamentSourceIndex((prev) => ({ ...prev, [newId]: 0 }))
-      return [...current, {
-        projectFilamentId: newId,
-        label: template?.label ?? 'PLA',
-        color: template?.color ?? DEFAULT_FILAMENT_COLOR,
-        nozzleId: template?.nozzleId ?? null,
-        usedOnSelectedPlate: true
-      }]
-    })
-  }, [projectFilaments, baseProjectFilaments, defaultFilamentOptionId])
-  const handleRemoveFilament = useCallback((projectFilamentId: number) => {
-    // BambuStudio parity: a material can be removed even while a process setting references it —
-    // the setting falls back to "Default" rather than the delete being refused. Those settings
-    // store the material's POSITION in the ordered list, so every reference above the removed
-    // one also shifts down; see lib/filamentIndexOverrides.ts. Done BEFORE the removal so the
-    // position still resolves against the pre-removal list.
-    const removedPosition = projectFilaments.findIndex((filament) => filament.projectFilamentId === projectFilamentId) + 1
-    if (removedPosition > 0) {
-      setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition))
-      setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition))
-    }
-    setAddedFilaments((current) => current.filter((entry) => entry.projectFilamentId !== projectFilamentId))
-    setAddedFilamentSourceIndex((current) => {
-      if (!(projectFilamentId in current)) return current
-      const next = { ...current }
-      delete next[projectFilamentId]
-      return next
-    })
-    setRemovedFilamentIds((current) => {
-      if (!baseProjectFilaments.some((base) => base.projectFilamentId === projectFilamentId)) return current
-      const next = new Set(current)
-      next.add(projectFilamentId)
-      return next
-    })
-    // `projectFilaments` is a dependency, not incidental: `removedPosition` must resolve against
-    // the CURRENT ordered list. Captured stale (deps of `[baseProjectFilaments]` alone), a removal
-    // that follows an add computes the position from the pre-add list and remaps the wrong
-    // filament-index override.
-  }, [projectFilaments, baseProjectFilaments])
-  // Identity of the BASE material list (ids/labels/colors/nozzles — not the plate-usage flag,
-  // which changes on plate switches). Used to detect the post-save refetch below.
-  const baseFilamentSignature = useMemo(
-    () => JSON.stringify(baseProjectFilaments.map((filament) => [filament.projectFilamentId, filament.label, filament.color, filament.nozzleId])),
-    [baseProjectFilaments]
-  )
-  // Pending rebase armed by a successful editor save: the saved file bakes the CURRENT
-  // projectFilaments as slots 1..N, so once the refetched base reflects that, the session
-  // add/remove overlay must be folded into it — otherwise an added material shows up twice
-  // (base + overlay) and a removed one comes back. `savedIds` records each slot's session id
-  // in save order so the per-slot keyed state can follow the renumbering.
-  const pendingMaterialRebaseRef = useRef<{ savedIds: number[]; baseSignature: string } | null>(null)
-  const handleProjectSaved = useCallback(() => {
-    // Without add/remove the base ids stay stable, so the keyed state needs no rebase.
-    if (removedFilamentIds.size === 0 && addedFilaments.length === 0) return
-    pendingMaterialRebaseRef.current = {
-      savedIds: projectFilaments.map((filament) => filament.projectFilamentId),
-      baseSignature: baseFilamentSignature
-    }
-  }, [removedFilamentIds, addedFilaments, projectFilaments, baseFilamentSignature])
-  useEffect(() => {
-    const pending = pendingMaterialRebaseRef.current
-    if (!pending || pending.baseSignature === baseFilamentSignature) return
-    pendingMaterialRebaseRef.current = null
-    // Saved slot i (0-based) is now base filament i+1; move keyed state across and drop
-    // entries for slots that no longer exist. Runs after the seeding effects above (declared
-    // later), so freshly seeded defaults for the new base are remapped consistently too.
-    const idByOldId = new Map(pending.savedIds.map((oldId, index) => [oldId, index + 1] as const))
-    const remap = <T,>(record: Record<number, T>): Record<number, T> => {
-      const next: Record<number, T> = {}
-      for (const [key, value] of Object.entries(record)) {
-        const newId = idByOldId.get(Number(key))
-        if (newId != null) next[newId] = value
-      }
-      return next
-    }
-    setFilamentMaterialOptionIds(remap)
-    setFilamentColors(remap)
-    setFilamentToolheadIds(remap)
-    setFilamentMaterialTypeFilters(remap)
-    setFilamentSettingOverridesById(remap)
-    setAddedFilaments([])
-    setAddedFilamentSourceIndex({})
-    setRemovedFilamentIds(new Set())
-    // Profile picks are baked into the saved file's slots, so the explicit-edit flags reset too.
-    setProfileEditedFilamentIds(new Set())
-  }, [baseFilamentSignature])
   // Slice-config state is immutably updated, so capturing references gives a valid snapshot
-  // the editor's undo/redo can restore (the Sets are copied to arrays + rebuilt). The touched
-  // refs ride along so a restore also puts the defaulting effects back in the mode they were in.
+  // the editor's undo/redo can restore (the Sets are copied to arrays + rebuilt). The printer
+  // target contributes only the user's PICKS — the rest of it re-derives from them, so a restore
+  // cannot land on an inconsistent combination the way it could when values and their "touched"
+  // flags were restored separately.
   const configSnapshot = useMemo<SliceConfigSnapshot>(() => ({
     selectedSlicerTargetId,
-    targetMode,
-    printerId,
-    printerProfileId,
-    manualPrinterModel,
-    manualPrinterModelTouched: manualPrinterModelTouchedRef.current,
-    nozzleDiameter,
-    nozzleFlow,
-    plateType,
-    plateTypeTouched: plateTypeTouchedRef.current,
-    removedFilamentIds: [...removedFilamentIds],
-    profileEditedFilamentIds: [...profileEditedFilamentIds],
-    addedFilaments,
-    addedFilamentSourceIndex,
-    filamentColors,
-    filamentMaterialOptionIds,
-    filamentToolheadIds,
-    filamentMaterialTypeFilters,
-    filamentSettingOverridesById,
+    ...machineSnapshot,
+    ...materialSnapshot,
     objectProcessOverrides,
     processProfileId,
     processProfileSelectionTouched: processProfileSelectionTouchedRef.current,
     processSettingOverrides
-  }), [selectedSlicerTargetId, targetMode, printerId, printerProfileId, manualPrinterModel, nozzleDiameter, nozzleFlow, plateType, removedFilamentIds, profileEditedFilamentIds, addedFilaments, addedFilamentSourceIndex, filamentColors, filamentMaterialOptionIds, filamentToolheadIds, filamentMaterialTypeFilters, filamentSettingOverridesById, objectProcessOverrides, processProfileId, processSettingOverrides])
+  }), [selectedSlicerTargetId, machineSnapshot, materialSnapshot, objectProcessOverrides, processProfileId, processSettingOverrides, processProfileSelectionTouchedRef])
   const restoreConfig = useCallback((snapshot: SliceConfigSnapshot) => {
-    // Restore the printer target FIRST and as a complete set. These values gate each other
-    // (model → machine profile → nozzle options), and the reconciliation effects below only
-    // fire on an invalid combination — so putting back a combination that was valid when
-    // captured leaves them idle instead of re-defaulting a field mid-restore.
     setSelectedSlicerTargetId(snapshot.selectedSlicerTargetId)
-    setTargetMode(snapshot.targetMode)
-    setPrinterId(snapshot.printerId)
-    setPrinterProfileId(snapshot.printerProfileId)
-    setManualPrinterModel(snapshot.manualPrinterModel)
-    manualPrinterModelTouchedRef.current = snapshot.manualPrinterModelTouched
-    setNozzleDiameter(snapshot.nozzleDiameter)
-    setNozzleFlow(snapshot.nozzleFlow)
-    setPlateType(snapshot.plateType)
-    plateTypeTouchedRef.current = snapshot.plateTypeTouched
-    setRemovedFilamentIds(new Set(snapshot.removedFilamentIds))
-    setProfileEditedFilamentIds(new Set(snapshot.profileEditedFilamentIds ?? []))
-    setAddedFilaments(snapshot.addedFilaments)
-    setAddedFilamentSourceIndex(snapshot.addedFilamentSourceIndex)
-    setFilamentColors(snapshot.filamentColors)
-    setFilamentMaterialOptionIds(snapshot.filamentMaterialOptionIds)
-    setFilamentToolheadIds(snapshot.filamentToolheadIds)
-    setFilamentMaterialTypeFilters(snapshot.filamentMaterialTypeFilters)
-    setFilamentSettingOverridesById(snapshot.filamentSettingOverridesById ?? {})
+    restoreMachineSnapshot(snapshot)
+    restoreMaterialSnapshot(snapshot)
     setObjectProcessOverrides(snapshot.objectProcessOverrides ?? {})
     // Session-only snapshots always carry these; guard for forward-compat.
     if (snapshot.processProfileId != null) setProcessProfileId(snapshot.processProfileId)
     processProfileSelectionTouchedRef.current = snapshot.processProfileSelectionTouched
     setProcessSettingOverrides(snapshot.processSettingOverrides ?? {})
-  }, [])
+  }, [processProfileSelectionTouchedRef, restoreMachineSnapshot, restoreMaterialSnapshot, setProcessProfileId, setProcessSettingOverrides, setSelectedSlicerTargetId])
   const suggestedOutputFileName = useMemo(() => {
     if (!requiresSinglePlate && plateMode !== 'single') return buildSlicedOutputFileName(file.name)
     return buildSlicedOutputFileName(file.name, {
       plateName: selectedPlateOption?.name ?? null,
-      plateNumber: Number.isInteger(selectedPlate) && selectedPlate > 0 ? selectedPlate : null
+      plateNumber: Number.isInteger(selectedPlate) && selectedPlate > 0 ? selectedPlate : null,
+      plateCount: slicePlateOptions.length
     })
-  }, [file.name, plateMode, requiresSinglePlate, selectedPlate, selectedPlateOption?.name])
+  }, [file.name, plateMode, requiresSinglePlate, selectedPlate, selectedPlateOption?.name, slicePlateOptions.length])
   // The configuration form should not become interactive until the slicer capabilities, profiles,
   // and 3MF plate data have loaded and the embedded defaults are seeded — otherwise the user sees
   // values populate and change underneath them.
   const slicerDataReady = configured
-    && !waitingForSlicingProfiles
-    && !slicingProfilesQuery.isLoading
+    && !waitingForSlicingPresets
+    && !slicingPresetsQuery.isLoading
     && !platesQuery.isLoading
-    && (!platesQuery.data || bakedDefaultsApplied)
+    && (!platesQuery.data || materialDefaultsApplied)
 
   // A SET-but-incompatible profile id must block submission: the reconciliation effects re-pick
   // selections when the target changes, but a submit racing them (or any state they miss) would
@@ -1035,7 +779,7 @@ export function SliceFileModal({
   // Show the Bambu "*" marker when the process diverges from its preset: explicit session
   // overrides, or a project profile that carries the 3MF's (typically modified) embedded config.
   const processProfileModified = Object.keys(processSettingOverrides).length > 0
-    || (selectedProcessProfile != null && isProjectSlicingProfile(selectedProcessProfile))
+    || (selectedProcessProfile != null && isProjectSlicingPreset(selectedProcessProfile))
 
   const buildSubmitInput = (options?: { outputFileName?: string; outputFolderId?: string | null }): SliceFileSubmitInput => ({
     slicerTargetId: selectedSlicerTargetId,
@@ -1092,25 +836,9 @@ export function SliceFileModal({
     }
   }
 
-  const printerModelOptions = ensurePrinterModelOptions(file.compatiblePrinterModels, selectedPrinter?.model, machineProfiles)
   // Maps a loaded option's trayId back to its tray so the settings panel's material menu can show
   // how much that tray has left (only for RFID/Bambu spools that report it).
   const printerTrayMap = useMemo(() => buildPrinterTrayMap(selectedPrinterStatus), [selectedPrinterStatus])
-  const handleMaterialOptionChange = (projectFilamentId: number, option: SliceMaterialOption | null) => {
-    setFilamentMaterialOptionIds((current) => ({ ...current, [projectFilamentId]: option?.id ?? '' }))
-    setProfileEditedFilamentIds((current) => current.has(projectFilamentId) ? current : new Set(current).add(projectFilamentId))
-    if (option) {
-      setFilamentMaterialTypeFilters((current) => ({ ...current, [projectFilamentId]: option.materialType }))
-    }
-    if (option?.color) {
-      setFilamentColors((current) => ({ ...current, [projectFilamentId]: option.color ?? current[projectFilamentId] ?? '' }))
-    }
-    if (option?.toolheadId) {
-      setFilamentToolheadIds((current) => ({ ...current, [projectFilamentId]: option.toolheadId ?? current[projectFilamentId] ?? '' }))
-    }
-    // Notify the editor (if any) so a pick from its picker Modal flips the unsaved-changes flag.
-    materialEditListenerRef.current?.()
-  }
 
   // The machine a save should leave the project defined for. Sent whenever a printer + process are
   // selected — NOT only when the model differs from the project's source. "Same printer" does not
@@ -1161,12 +889,18 @@ export function SliceFileModal({
       configured,
       slicerRestarting: Boolean(capabilities?.configured && !capabilities.healthy),
       slicerDataReady,
-      profilesError: slicingProfilesQuery.isError
-        ? (slicingProfilesQuery.error instanceof Error ? slicingProfilesQuery.error.message : 'Failed to load slicer profiles for this version.')
+      profilesError: slicingPresetsQuery.isError
+        ? (slicingPresetsQuery.error instanceof Error ? slicingPresetsQuery.error.message : 'Failed to load slicing presets for this version.')
         : null
     },
+    // The editor's carve-outs from its snapshot: a preset the user edits in the manager, and a
+    // Repair the user runs from the editor's own alert, must both reach the open editor. Explicit,
+    // so ambient refetches stay excluded while these still get through.
+    refreshSlicingPresets,
+    refreshProjectIndex,
     printers, selectedPrinter, lockedPreferredPrinter, targetMode, selectPrinter,
-    selectedPrinterModel, selectPrinterModel, printerModelOptions,
+    selectedPrinterModel, selectPrinterModel, printerModelOptions, targetConflicts,
+    selectedMachineProfile,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
     plateType, setPlateType: handlePlateTypeChange, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
@@ -1195,7 +929,6 @@ export function SliceFileModal({
       printSelection: selectedSliceObjectIds,
       onTogglePrint: toggleSliceObject
     } : null,
-    usedFilamentIdsForPlate: (plateIndex: number) => new Set(bakedIndex?.plates.find((plate) => plate.index === plateIndex)?.filaments.map((filament) => filament.id) ?? []),
     projectFilaments: visibleProjectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
@@ -1227,8 +960,8 @@ export function SliceFileModal({
     canSlice: canSliceFromEditor,
     configured: Boolean(configured),
     selectedSlicerTargetId,
-    profilesError: slicingProfilesQuery.isError
-      ? (slicingProfilesQuery.error instanceof Error ? slicingProfilesQuery.error.message : 'Slicer profiles failed to load.')
+    profilesError: slicingPresetsQuery.isError
+      ? (slicingPresetsQuery.error instanceof Error ? slicingPresetsQuery.error.message : 'Slicing presets failed to load.')
       : null,
     slicerDataReady,
     printerProfileId,
@@ -1257,7 +990,9 @@ export function SliceFileModal({
     const slicedPlate = opts.plate > 0 ? opts.sceneEdit.plates.find((plate) => plate.index === opts.plate) : null
     const outputFileName = buildSlicedOutputFileName(
       file.name,
-      opts.plate > 0 ? { plateName: slicedPlate?.name ?? null, plateNumber: opts.plate } : undefined
+      opts.plate > 0
+        ? { plateName: slicedPlate?.name ?? null, plateNumber: opts.plate, plateCount: opts.sceneEdit.plates.length }
+        : undefined
     )
     const input: SliceFileSubmitInput = {
       ...buildSubmitInput({ outputFileName }),
@@ -1315,7 +1050,7 @@ export function SliceFileModal({
                   </Typography>
                 )}
               {/* Above the slice settings because it describes the project itself, not a setting. */}
-              {needsSettingsRepair && <RepairProjectSettingsAlert fileId={file.id} onRepaired={onClose} />}
+              {needsSettingsRepair && <RepairProjectSettingsAlert fileId={file.id} reasons={file.settingsRepairReasons} onRepaired={onClose} />}
               {sliceController.projectVersionWarning && <ProjectVersionWarningAlert {...sliceController.projectVersionWarning} />}
               {/* The panel renders its own slicer availability/loading notices. */}
               <SliceSettingsPanel controller={sliceController} mode="simple" />
@@ -1413,6 +1148,9 @@ export function SliceFileModal({
             profileOptions={compatibleProcessProfiles}
             filamentChoices={processFilamentChoices}
             applyScope={editorOnly ? 'project' : 'slice'}
+            // Same rule the material dialog next door uses: the workspace's own preset can be
+            // updated in place, a built-in or a project-embedded one can only be saved as new.
+            canEditOriginal={!selectedProcessProfile.id.startsWith('builtin:') && !selectedProcessProfile.id.startsWith('project:')}
             onProfileChange={(profileId, carryOverrides) => {
               // Snapshot pre-edit state for the editor's undo/dirty (no-op in the simple slice path).
               processEditListenerRef.current?.()
@@ -1443,10 +1181,12 @@ export function SliceFileModal({
               slicerTargetId={selectedSlicerTargetId}
               filamentProfileId={profileId}
               filamentProfileName={option?.presetLabel ?? option?.material ?? option?.label ?? `Material ${filamentSettingsFilamentId}`}
+              filamentPresetFullName={option?.profileId ? option.material : null}
               sourceFileId={file.id}
               projectFilamentId={filamentSettingsFilamentId}
               initialOverrides={filamentSettingOverridesById[filamentSettingsFilamentId] ?? {}}
               canEditOriginal={canEditOriginal}
+              applyScope={editorOnly ? 'project' : 'slice'}
               onApply={(overrides) => {
                 materialEditListenerRef.current?.()
                 setFilamentSettingOverridesById((prev) => {

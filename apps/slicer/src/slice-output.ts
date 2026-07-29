@@ -24,6 +24,12 @@ export function appendOutput(outputLines: SlicingOutputLine[], stream: 'stdout' 
   }
 }
 
+/**
+ * A `'system'` line is NOT a log line: the web renders the newest one verbatim as the job's
+ * status (`formatSlicingProgress` in `apps/web/src/lib/slicingJobPresentation.ts`). Write those
+ * as user-facing copy — no internal nouns, no pipeline mechanics. `stdout`/`stderr` lines are the
+ * engine's own and are only mined for its JSON progress frames.
+ */
 export function appendStructuredOutput(outputLines: SlicingOutputLine[], stream: SlicingOutputLine['stream'], text: string): void {
   outputLines.push({ stream, text, createdAt: new Date().toISOString() })
   // Drop the oldest lines in batches once the cap is exceeded (amortized O(1));

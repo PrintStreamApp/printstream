@@ -14,7 +14,7 @@
  */
 import * as THREE from 'three'
 import type { SceneEditPartSubtype } from '@printstream/shared'
-import { fetchImportMesh, stageImportFromFile, stageImportFromLibrary } from './editorImports'
+import type { EditorImportStore } from './editorImportStore'
 import { HELPER_VOLUME_SPECS } from './helperVolumes'
 import { parseStlGeometryAsync } from './meshParseClient'
 import { primitivePartSoup, type PrimitiveKind } from './primitives'
@@ -75,8 +75,8 @@ function centerSoup(soup: Float32Array): void {
 }
 
 /** Read a staged import's mesh back as an origin-centred triangle soup for local rendering. */
-async function soupFromStagedImport(importId: string, signal?: AbortSignal): Promise<Float32Array> {
-  const buffer = await fetchImportMesh(importId, undefined, signal)
+async function soupFromStagedImport(store: EditorImportStore, importId: string, signal?: AbortSignal): Promise<Float32Array> {
+  const buffer = await store.fetchMesh(importId, undefined, signal)
   const geometry = await parseStlGeometryAsync(new Uint8Array(buffer))
   const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry
   const positions = nonIndexed.getAttribute('position')
@@ -96,6 +96,7 @@ async function soupFromStagedImport(importId: string, signal?: AbortSignal): Pro
  * change the dimensions they modelled, and the gizmo is right there if they want it smaller.
  */
 export async function stageAddedPartGeometry(
+  store: EditorImportStore,
   source: AddedPartSource,
   size: number,
   signal?: AbortSignal
@@ -103,16 +104,16 @@ export async function stageAddedPartGeometry(
   if (source.kind === 'primitive') {
     const soup = primitivePartSoup(source.shape, size)
     const stl = triangleSoupToBinaryStl(soup)
-    const staged = await stageImportFromFile(
+    const staged = await store.stageFile(
       new File([stl], `${source.shape}.stl`, { type: 'application/octet-stream' }),
       signal
     )
     return { importId: staged.importId, soup, name: staged.name }
   }
   const staged = source.kind === 'file'
-    ? await stageImportFromFile(source.file, signal)
-    : await stageImportFromLibrary(source.libraryFileId, undefined, signal)
-  return { importId: staged.importId, soup: await soupFromStagedImport(staged.importId, signal), name: staged.name }
+    ? await store.stageFile(source.file, signal)
+    : await store.stageFromLibrary(source.libraryFileId, undefined, signal)
+  return { importId: staged.importId, soup: await soupFromStagedImport(store, staged.importId, signal), name: staged.name }
 }
 
 /**

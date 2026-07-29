@@ -100,4 +100,21 @@ export class EditorHistoryModel {
     this.savedVersion = this.currentVersion
     this.nonUndoableDirty = false
   }
+
+  /**
+   * Rewrite every retained frame through `transform`, keeping the stacks and versions intact.
+   *
+   * For an id-space migration, NOT for editing history. A save that adds/removes materials
+   * renumbers the session filament ids, and the frames on these stacks are frozen copies taken
+   * BEFORE that happened — so undoing past such a save would restore ids that no longer mean what
+   * they say (audit F7's last un-owned crossing). The renumber owns every holder of the space
+   * (invariant I4) and the stacks are holders; this is how they move.
+   *
+   * Version ids are deliberately untouched: the migration is a change of representation, not an
+   * edit, so it must not make a clean project read dirty.
+   */
+  mapFrames(transform: (entry: EditorHistoryEntry) => EditorHistoryEntry): void {
+    this.past = this.past.map((frame) => ({ ...frame, entry: transform(frame.entry) }))
+    this.future = this.future.map((frame) => ({ ...frame, entry: transform(frame.entry) }))
+  }
 }

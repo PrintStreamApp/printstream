@@ -29,7 +29,7 @@ import type { AnyPrismaClient } from '../../lib/prisma.js'
 import type { RequestTenantSummary } from '../../lib/tenant-context.js'
 import { persistLibraryFileFromLocalPath } from '../../lib/library-files.js'
 import { resolveLibraryFileToLocalPath } from '../../lib/bridge-library-files.js'
-import { resolveSlicingProfileFiles } from '../../lib/slicing-profiles.js'
+import { resolveSlicingPresetFiles } from '../../lib/slicing-presets.js'
 import { slicingJobs } from '../../lib/slicing-jobs.js'
 import { enqueueLibraryPrint } from '../../lib/library-printing.js'
 import { buildFlowRatioThreeMf, buildPressureAdvanceThreeMf } from './build-3mf.js'
@@ -245,7 +245,7 @@ export async function startRun(
       // a recognizable per-kind cover as the plate thumbnail (jobs/history/printer card read it).
       plateThumbnails: [{ plateIndex: 1, png: renderCalibrationCover(kind).toString('base64') }]
     }
-    const profileFiles = await resolveSlicingProfileFiles(tenantId, [
+    const profileFiles = await resolveSlicingPresetFiles(tenantId, [
       { id: input.printerProfileId, kind: 'machine' },
       { id: input.processProfileId, kind: 'process' },
       { id: input.filamentProfileId, kind: 'filament' }

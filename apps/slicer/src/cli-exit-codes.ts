@@ -110,5 +110,47 @@ export function formatSliceCliExitError(output: string, exitCode: number | null)
   const prefix = `Slicer CLI exited with code ${exitCode ?? 'unknown'}`
   const returnCode = resolveCliReturnCode(output, exitCode)
   const detail = returnCode === null ? null : CLI_RETURN_CODE_MESSAGES[returnCode]
-  return detail ? `${prefix}: ${detail}` : prefix
+  const engine = extractEngineErrorLine(output)
+  const explained = detail ? `${prefix}: ${detail}` : prefix
+  return engine ? `${explained} (engine: ${engine})` : explained
+}
+
+/**
+ * The engine's OWN last words before it gave up — e.g. `Flush volumes matrix do not match to the
+ * correct size!`.
+ *
+ * The generic codes (-100 above all) say "slicing failed" and nothing else, while BambuStudio
+ * usually prints the actual reason a line or two earlier. Without this that reason exists only in
+ * the job's output log, which means the difference between a user knowing what is wrong and a
+ * maintainer going and reading 48 lines of progress JSON. Ryan hit exactly that.
+ *
+ * Deliberately conservative about what counts: progress JSON, `[warning]` chatter and the
+ * `run found error` line itself are noise, and an unbounded tail would paste a wall of log into a
+ * toast. Takes the LAST qualifying line, since the engine prints its specific complaint
+ * immediately before bailing out.
+ */
+function extractEngineErrorLine(output: string): string | null {
+  // Scans the WHOLE output, both streams. It must NOT stop at `run found error`: that line is on
+  // stdout while the specific complaint often lands on stderr, and the two arrive concatenated —
+  // stopping there picked the vague `found slicing or export error for partplate 1` over the
+  // useful `Flush volumes matrix do not match to the correct size!` sitting in the other stream.
+  let tagged: string | null = null
+  let bare: string | null = null
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith('{')) continue
+    if (/\[warning\]/i.test(line)) continue
+    if (/run found error/i.test(line)) continue
+    if (/^Slicer CLI exited with code/i.test(line)) continue
+    if (/\[error\]/i.test(line)) {
+      // Strip the boost log prefix (`[timestamp] [thread] [error]  `) so the sentence reads plainly.
+      const cleaned = line.replace(/^\[[^\]]*\]\s*\[[^\]]*\]\s*\[[^\]]*\]\s*/, '').trim()
+      if (cleaned.length > 0 && cleaned.length <= 200) tagged = cleaned
+      continue
+    }
+    // A bare line (no log prefix at all) is the engine complaining in its own words, which is
+    // consistently more specific than its tagged "something failed on plate N" counterpart.
+    if (!line.startsWith('[') && line.length <= 200) bare = line
+  }
+  return bare ?? tagged
 }

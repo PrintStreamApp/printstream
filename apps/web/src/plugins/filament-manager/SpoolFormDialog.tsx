@@ -23,8 +23,8 @@ import { ColorSwatchPicker } from '../../components/ColorSwatchPicker'
 import { DeferredKeyboardAutocomplete } from '../../components/DeferredKeyboardAutocomplete'
 import { apiFetch } from '../../lib/apiClient'
 import { COMMON_FILAMENT_COLOR_SWATCHES, commonFilamentColorName, resolveFilamentColorSwatches } from '../../lib/filamentColor'
-import { slicingProfilesQueryOptions } from '../../lib/slicingProfilesQuery'
-import { formatSlicingProfileDisplayName } from '../../lib/slicingProfileSelection'
+import { slicingPresetsQueryOptions } from '../../lib/slicingPresetsQuery'
+import { formatSlicingPresetDisplayName } from '../../lib/slicingPresetSelection'
 import { bambuColorName, bambuMaterialFromPresetName, bambuMaterialFromType } from '../../data/bambuColors'
 import { useSpoolMutations, useSpoolsQuery } from './api'
 import { FILAMENT_BRAND_SUGGESTIONS, FILAMENT_MATERIAL_SUGGESTIONS, FILAMENT_VARIANT_SUGGESTIONS } from './constants'
@@ -150,7 +150,7 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
     ? capabilitiesQuery.data.defaultTargetId ?? capabilitiesQuery.data.targets[0]?.id ?? null
     : null
   const profilesQuery = useQuery({
-    ...slicingProfilesQueryOptions(profilesTargetId ?? 'none'),
+    ...slicingPresetsQueryOptions(profilesTargetId ?? 'none'),
     enabled: open && profilesTargetId != null
   })
   const presetOptions = useMemo(() => {
@@ -159,7 +159,7 @@ export function SpoolFormDialog({ open, spool, onClose }: { open: boolean; spool
     for (const profile of profilesQuery.data?.profiles ?? []) {
       if (profile.kind !== 'filament') continue
       if (family && normalizeFilamentFamily(profile.filamentType ?? null) !== family) continue
-      const display = formatSlicingProfileDisplayName(profile)
+      const display = formatSlicingPresetDisplayName(profile)
       if (!names.has(display.toLowerCase())) names.set(display.toLowerCase(), display)
     }
     return [...names.values()]

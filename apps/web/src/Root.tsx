@@ -15,10 +15,12 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { isMarketingPath, marketingRoutePaths } from './lib/marketingManifest'
+import { isPublicToolPath } from './lib/publicToolManifest'
 import { showSplashScreen } from './lib/splashScreen'
 
 const App = lazy(() => import('./App').then((module) => ({ default: module.App })))
 const MarketingApp = lazy(() => import('./MarketingApp'))
+const PublicToolApp = lazy(() => import('./PublicToolApp'))
 
 /**
  * Suspense fallback for the app branch: re-show the boot splash while the heavy app chunk loads. This
@@ -36,18 +38,22 @@ function AppLoadingSplash() {
 export function Root() {
   const location = useLocation()
   // Read the real initial URL synchronously (before any client navigation) for the cold-load decision.
-  const startsInMarketing = marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname)
-  const [enteredApp, setEnteredApp] = useState(!startsInMarketing)
+  // Public TOOL paths are core (they exist in the open-source build too), so unlike the marketing
+  // fast-path this decision does not depend on a private module being present.
+  const startsOutsideApp = isPublicToolPath(window.location.pathname)
+    || (marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname))
+  const [enteredApp, setEnteredApp] = useState(!startsOutsideApp)
+  const onPublicTool = isPublicToolPath(location.pathname)
 
   useEffect(() => {
-    if (!isMarketingPath(location.pathname)) setEnteredApp(true)
+    if (!isMarketingPath(location.pathname) && !isPublicToolPath(location.pathname)) setEnteredApp(true)
   }, [location.pathname])
 
   // App branch: show the boot splash while its heavy chunk loads. Marketing branch: no splash (main.tsx
   // dismissed it for the cold load), so the tiny marketing chunk loads against the dark background.
   return (
     <Suspense fallback={enteredApp ? <AppLoadingSplash /> : null}>
-      {enteredApp ? <App /> : <MarketingApp />}
+      {enteredApp ? <App /> : onPublicTool ? <PublicToolApp /> : <MarketingApp />}
     </Suspense>
   )
 }

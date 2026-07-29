@@ -676,7 +676,14 @@ export const bridgeLibraryThreeMfObjectSchema = z.object({
    * `identify_id` when slice_info supplied the objects. Empty when the file carries none.
    * Defaulted so payloads from older bridges still parse.
    */
-  identifyIds: z.array(z.number().int()).default([])
+  identifyIds: z.array(z.number().int()).default([]),
+  /**
+   * This object's per-object PROCESS overrides from `model_settings.config`, so a surface that
+   * never loads the scene (the prepare-print dialog) can both SHOW them and re-send them intact.
+   * Sending a partial set is not a display bug: the slice-time transform is authoritative per
+   * object and drops whatever the map omits. Defaulted so payloads from older bridges still parse.
+   */
+  processOverrides: z.record(z.string().min(1), z.string()).default({})
 })
 
 export type BridgeLibraryThreeMfObject = z.infer<typeof bridgeLibraryThreeMfObjectSchema>
@@ -699,6 +706,12 @@ export const bridgeLibraryThreeMfProjectFilamentSchema = z.object({
   id: z.number().int().positive(),
   filamentType: z.string().nullable(),
   filamentName: z.string().nullable(),
+  /**
+   * The slot's raw `filament_settings_id` — the name BambuStudio looks a preset up by. Optional
+   * because a bridge on an older parser sends none; treat absent as "identity unknown" and fall
+   * back to `filamentName`, which is a DISPLAY value and cannot identify a preset on its own.
+   */
+  filamentPresetName: z.string().nullable().optional(),
   color: z.string().nullable(),
   nozzleId: z.number().int().nonnegative().nullable(),
   chamberTemperature: z.number().nullable(),
@@ -768,6 +781,8 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
    * not-yet-updated bridge keeps the pre-existing behavior.
    */
   needsSettingsRepair: z.boolean().default(false),
+  /** Which invariants failed, so the repair prompt can name the user's actual problem. */
+  settingsRepairReasons: z.array(z.enum(['flushMatrix', 'variantIndex'])).default([]),
   /**
    * The Bambu Studio version that saved the project (zero-padded, e.g. `"02.08.00.50"`), or null
    * when unknown. BambuStudio refuses to open a project saved by a newer version than the engine

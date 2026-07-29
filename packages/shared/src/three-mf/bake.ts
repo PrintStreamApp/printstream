@@ -1,0 +1,418 @@
+/**
+ * The bake, one step up from the document transforms: what to read, and what to write.
+ *
+ * {@link planEditedThreeMf} turns a `SceneEdit` plus the source entries into a PLAN -- either a set
+ * of entry transforms to apply while copying the base archive, or the complete entry list for a
+ * project built from scratch. It performs no I/O, so the api can apply the plan with yauzl/yazl
+ * over a path on disk and the browser can apply it with fflate over bytes the user picked, without
+ * either side reimplementing the 195 lines of decisions in here.
+ *
+ * {@link readThreeMfBakeSource} owns the other half of that contract: WHICH entries a bake needs and
+ * how big each is allowed to be. Callers supply only a reader, so the size caps and the
+ * absent-entry fallbacks cannot drift between surfaces.
+ *
+ * Transforms are FUNCTIONS, not precomputed strings, on purpose: a project's `/3D/Objects/*.model`
+ * mesh bodies are the bulk of the file, and they are rewritten as they stream past. Materialising
+ * them all to save one file would turn a large assembly into an out-of-memory failure.
+ */
+import type { SceneEdit, SceneEditObjectBrimEars } from '../slicing.js'
+import {
+  NEW_PROJECT_MODEL_SETTINGS_XML,
+  NEW_PROJECT_MODEL_XML,
+  THREE_MF_CONTENT_TYPES_XML,
+  THREE_MF_RELS_XML,
+  appendImportPartRelationships,
+  applyGlobalProcessOverrides,
+  applyModelKindMarker,
+  applyTrianglePaintToModelEntry,
+  buildEditedThreeMfDocuments,
+  buildProjectSettingsTransforms,
+  mergeCustomGcodePerLayer,
+  resolvePartPaintByEntry,
+  resolveRepairMeshesByEntry,
+  rewriteSliceInfoNozzleGroups,
+  serializeBrimEarPoints,
+  subModelPathsForObjects,
+  type ImportedObjectInput,
+  type TrianglePaintAttribute
+} from './bake-documents.js'
+import {
+  THREE_MF_MODEL_ENTRY,
+  THREE_MF_MODEL_RELS_ENTRY,
+  THREE_MF_MODEL_SETTINGS_ENTRY,
+  THREE_MF_PROJECT_SETTINGS_ENTRY,
+  THREE_MF_SLICE_INFO_ENTRY as SLICE_INFO_ENTRY
+} from './entries.js'
+import { CUSTOM_GCODE_PER_LAYER_ENTRY, sliceRecordFilamentIds, stringArray } from './index-parser.js'
+import { repairObjectMeshesInModelEntry } from './mesh-repair.js'
+import { applyObjectProcessOverridesXml, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from './object-overrides.js'
+import { BRIM_EAR_POINTS_ENTRY } from './scene-parser.js'
+
+/** Outcome of a bake the slicer needs afterwards. */
+export interface ThreeMfBakeResult {
+  /**
+   * For each object replaced via "Replace with…" (`edit.meshReplacements`), the baked `object_id`
+   * its staged-import geometry was written as, so the slicer can carry the original object's
+   * per-object PROCESS overrides onto the replacement.
+   */
+  replacedObjectIds: Array<{ originalObjectId: number; bakedObjectId: number }>
+  /** For each staged import baked in, the `object_id` its geometry was written as. */
+  importObjectIds: Array<{ importId: string; objectId: number }>
+  /**
+   * For each INDEPENDENT object copy, the placeholder id it was addressed by and the real
+   * `object_id` it baked as. Overrides ride the save/slice REQUEST keyed by the placeholder, so
+   * they must be re-keyed through this.
+   */
+  clonedObjectIds: Array<{ originalObjectId: number; bakedObjectId: number }>
+}
+
+/** The source entries a bake reads, already decoded to text. */
+export interface ThreeMfBakeSource {
+  modelXml: string
+  modelSettingsXml: string
+  projectSettingsJson: string | null
+  customGcodeXml: string | null
+  /** Record of a previous slice; null for an unsliced project. */
+  sliceInfoXml: string | null
+  /** Sub-model relationships (Production-Extension projects); null when the source has none. */
+  modelRelsXml: string | null
+  /** `/3D/Objects/*.model` bodies, needed only to copy an object independently. */
+  subModelEntries: ReadonlyMap<string, string>
+  /**
+   * False when building from scratch. The caller then writes {@link ThreeMfBakePlan.freshEntries}
+   * as a whole new archive instead of copying a base.
+   */
+  hasBase: boolean
+}
+
+/**
+ * What to write. Exactly one of `copy` / `freshEntries` is set: `copy` when there is a base archive
+ * to stream through, `freshEntries` when the project is built from nothing.
+ */
+export interface ThreeMfBakePlan {
+  result: ThreeMfBakeResult
+  copy: {
+    /** Entry name → rewrite, or `null` from the transform to DROP that entry from the output. */
+    transforms: Map<string, (xml: string) => string | null>
+    /** Entries to add that the source did not already contain. */
+    appendEntries: Array<{ name: string; content: string }>
+  } | null
+  freshEntries: Array<{ name: string; content: string }> | null
+}
+
+export interface ThreeMfBakeOptions {
+  /** Extra archive entries written verbatim; on a base build these replace a same-named source entry. */
+  extraEntries?: Array<{ name: string; content: string }>
+  /** Project-wide process-setting overrides merged into `project_settings.config`. */
+  globalProcessOverrides?: Record<string, string | string[]>
+  /** Stamp the output as a single-object model export (`printstream_model_kind`). */
+  objectExportMarker?: boolean
+  /**
+   * Per-object PROCESS overrides to write into `model_settings.config`, keyed by baked `object_id`.
+   *
+   * These ride the save REQUEST rather than the `SceneEdit`, so a caller that has them must pass
+   * them here or they are lost. The api instead applies them in its own later pass while preparing
+   * a slice; a caller that bakes once (the browser) supplies them and gets them in that one pass.
+   */
+  objectProcessOverrides?: ObjectProcessOverrides
+}
+
+/** Reads one entry as UTF-8 text, or resolves null when it is absent or over `maxBytes`. */
+export type ThreeMfEntryTextReader = (entryPath: string, maxBytes: number) => Promise<string | null>
+
+const MODEL_ENTRY_MAX_BYTES = 256 * 1024 * 1024
+const RELS_MAX_BYTES = 4 * 1024 * 1024
+const SETTINGS_MAX_BYTES = 8 * 1024 * 1024
+
+/**
+ * Read everything a bake needs through `read`, applying the same caps and absent-entry fallbacks on
+ * every surface. Sub-models are fetched only when the edit copies an object independently, since a
+ * copy needs its own mesh entry (sharing the source's would make painting the copy repaint its
+ * source).
+ */
+export async function readThreeMfBakeSource(read: ThreeMfEntryTextReader, edit: SceneEdit): Promise<ThreeMfBakeSource> {
+  // The root model is the one entry with no sane fallback: defaulting it to the new-project
+  // scaffold would silently replace the user's geometry with an empty plate on a damaged archive.
+  const modelXml = await read(THREE_MF_MODEL_ENTRY, MODEL_ENTRY_MAX_BYTES)
+  if (modelXml == null) throw new Error(`3MF is missing its root model entry (${THREE_MF_MODEL_ENTRY})`)
+  const subModelEntries = new Map<string, string>()
+  if ((edit.objectClones?.length ?? 0) > 0) {
+    const clonedSourceIds = new Set((edit.objectClones ?? []).map((clone) => clone.sourceObjectId))
+    for (const entryPath of subModelPathsForObjects(modelXml, clonedSourceIds)) {
+      const body = await read(entryPath, MODEL_ENTRY_MAX_BYTES)
+      if (body) subModelEntries.set(entryPath, body)
+    }
+  }
+  return {
+    modelXml,
+    modelSettingsXml: (await read(THREE_MF_MODEL_SETTINGS_ENTRY, SETTINGS_MAX_BYTES)) ?? NEW_PROJECT_MODEL_SETTINGS_XML,
+    projectSettingsJson: await read(THREE_MF_PROJECT_SETTINGS_ENTRY, SETTINGS_MAX_BYTES),
+    customGcodeXml: await read(CUSTOM_GCODE_PER_LAYER_ENTRY, RELS_MAX_BYTES),
+    sliceInfoXml: await read(SLICE_INFO_ENTRY, SETTINGS_MAX_BYTES),
+    modelRelsXml: await read(THREE_MF_MODEL_RELS_ENTRY, RELS_MAX_BYTES),
+    subModelEntries,
+    hasBase: true
+  }
+}
+
+/** The source for a project built from nothing (the new-project scaffold). */
+export function emptyThreeMfBakeSource(): ThreeMfBakeSource {
+  return {
+    modelXml: NEW_PROJECT_MODEL_XML,
+    modelSettingsXml: NEW_PROJECT_MODEL_SETTINGS_XML,
+    projectSettingsJson: null,
+    customGcodeXml: null,
+    sliceInfoXml: null,
+    modelRelsXml: null,
+    subModelEntries: new Map(),
+    hasBase: false
+  }
+}
+
+/**
+ * Decide every rewrite a `SceneEdit` implies. Pure: the caller performs the I/O described by the
+ * returned {@link ThreeMfBakePlan}.
+ */
+export function planEditedThreeMf(
+  source: ThreeMfBakeSource,
+  edit: SceneEdit,
+  imports: ImportedObjectInput[] = [],
+  options: ThreeMfBakeOptions = {}
+): ThreeMfBakePlan {
+  const {
+    modelXml: baseModelXml,
+    modelSettingsXml: baseModelSettingsXml,
+    projectSettingsJson,
+    customGcodeXml: baseCustomGcodeXml,
+    sliceInfoXml: baseSliceInfoXml,
+    modelRelsXml: baseModelRelsXml,
+    subModelEntries
+  } = source
+
+  const documents = buildEditedThreeMfDocuments(
+    baseModelXml,
+    baseModelSettingsXml,
+    projectSettingsJson,
+    edit,
+    imports,
+    subModelEntries
+  )
+  let modelXml = documents.modelXml
+  const modelSettingsXml = documents.modelSettingsXml
+
+  // Map each replaced object to the baked object_id its import landed on, so the slicer can
+  // re-key the original object's per-object process overrides onto the replacement.
+  const replacedObjectIds = (edit.meshReplacements ?? []).flatMap((replacement) => {
+    const bakedObjectId = documents.importIdToObjectId.get(replacement.importId)
+    return bakedObjectId != null ? [{ originalObjectId: replacement.objectId, bakedObjectId }] : []
+  })
+  const importObjectIds = imports.flatMap((imported) => {
+    const objectId = documents.importIdToObjectId.get(imported.importId)
+    return objectId != null ? [{ importId: imported.importId, objectId }] : []
+  })
+  const result: ThreeMfBakeResult = { replacedObjectIds, importObjectIds, clonedObjectIds: documents.clonedObjectIds }
+
+  // Per-object overrides arrive keyed by the identity the REQUEST used, which for a replaced object
+  // or an independent copy is not the id this bake wrote. Re-key them here, where that map is
+  // known, rather than leaving it to each caller: the API did it in a later pass and the browser's
+  // local save did not, so saving to disk silently dropped the settings on any replaced or copied
+  // object. Callers that still re-key afterwards are unaffected — this is idempotent.
+  const objectProcessOverrides = options.objectProcessOverrides
+    ? rekeyObjectProcessOverrides(options.objectProcessOverrides, [...replacedObjectIds, ...documents.clonedObjectIds])
+    : undefined
+
+  // Triangle paint (support + seam brushes): rewrite painted parts' triangle attributes.
+  // Root-entry meshes are rewritten on the already-built model XML; meshes in per-object
+  // sub-entries get a transform in the copy pass below.
+  const paintChannels: Array<{ attribute: TrianglePaintAttribute; byEntry: Map<string, Map<number, Record<string, string>>> }> = []
+  if (source.hasBase) {
+    if (edit.supportPaint && edit.supportPaint.length > 0) {
+      paintChannels.push({ attribute: 'paint_supports', byEntry: resolvePartPaintByEntry(baseModelXml, edit.supportPaint) })
+    }
+    if (edit.seamPaint && edit.seamPaint.length > 0) {
+      paintChannels.push({ attribute: 'paint_seam', byEntry: resolvePartPaintByEntry(baseModelXml, edit.seamPaint) })
+    }
+    if (edit.colorPaint && edit.colorPaint.length > 0) {
+      paintChannels.push({ attribute: 'paint_color', byEntry: resolvePartPaintByEntry(baseModelXml, edit.colorPaint) })
+    }
+  }
+  for (const channel of paintChannels) {
+    const rootEntryPaint = channel.byEntry.get('3D/3dmodel.model')
+    if (rootEntryPaint) {
+      modelXml = applyTrianglePaintToModelEntry(modelXml, channel.attribute, rootEntryPaint)
+    }
+  }
+
+  // Manual brim ears: when the edit carries the set, the sidecar file is rewritten
+  // wholesale (or emptied, clearing the source's ears); absent keeps the source file.
+  // Ears authored on a not-yet-saved import are keyed by importId; resolve them onto the object id
+  // the import baked as, so they serialize by root-resource ordinal like any other object's.
+  const importEars: SceneEditObjectBrimEars[] = (edit.importBrimEars ?? []).flatMap((entry) => {
+    const objectId = documents.importIdToObjectId.get(entry.importId)
+    return objectId != null ? [{ objectId, points: entry.points }] : []
+  })
+  const brimEarPointsContent = edit.brimEars !== undefined || importEars.length > 0
+    ? serializeBrimEarPoints([...(edit.brimEars ?? []), ...importEars], modelXml)
+    : null
+  // Layer-based filament changes + layer pauses: merged with the source sidecar
+  // (preserving unedited entry types and plates); both absent keeps the source file untouched.
+  const customGcodeContent = edit.filamentChanges !== undefined || edit.pauses !== undefined
+    ? mergeCustomGcodePerLayer(baseCustomGcodeXml, edit.filamentChanges, edit.pauses)
+    : null
+  // Compose project_settings.config rewrites: filament set first (add/remove materials), then the
+  // per-slot dual-nozzle assignment, the plate type, and per-plate prime-tower corners. When the
+  // base carries no project_settings.config (a new-project scaffold), the composed result is
+  // synthesized from an empty settings object instead — otherwise the material / plate-type /
+  // prime-tower choices would silently vanish on save (transforms only fire on existing entries).
+  const projectSettingsTransforms = buildProjectSettingsTransforms(edit)
+  // Global process overrides ride in via options (not the SceneEdit) so only the save route
+  // bakes them; append last so they win over any preset-derived process values.
+  if (options.globalProcessOverrides && Object.keys(options.globalProcessOverrides).length > 0) {
+    const overrides = options.globalProcessOverrides
+    projectSettingsTransforms.push((json) => applyGlobalProcessOverrides(json, overrides))
+  }
+  if (options.objectExportMarker) {
+    projectSettingsTransforms.push(applyModelKindMarker)
+  }
+  const applyProjectSettings = (json: string) => projectSettingsTransforms.reduce((acc, transform) => transform(acc), json)
+
+  if (source.hasBase) {
+    // Copy the base archive, replacing the two edited entries (and adding model_settings if absent).
+    // `baseModelSettingsXml` is the placeholder only when the source had no model_settings.config
+    // (the read above fell back). Reuse that instead of a 1-byte existence probe, which threw
+    // "Entry too large" for every real config and made us append a DUPLICATE entry.
+    const hasModelSettings = baseModelSettingsXml !== NEW_PROJECT_MODEL_SETTINGS_XML
+    const extraEntries = hasModelSettings
+      ? []
+      : [{ name: 'Metadata/model_settings.config', content: withObjectOverrides(modelSettingsXml, objectProcessOverrides) }]
+    if (brimEarPointsContent !== null) {
+      // Replace the entry when the source has one; append it when it doesn't.
+      extraEntries.push({ name: BRIM_EAR_POINTS_ENTRY, content: brimEarPointsContent })
+    }
+    if (customGcodeContent !== null) {
+      extraEntries.push({ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent })
+    }
+    // A transform may return null to DROP the entry from the saved 3MF (see rewriteThreeMfEntries).
+    const transforms = new Map<string, (xml: string) => string | null>([
+      ['3D/3dmodel.model', () => modelXml],
+      ['Metadata/model_settings.config', () => withObjectOverrides(modelSettingsXml, objectProcessOverrides)]
+    ])
+    if (brimEarPointsContent !== null) {
+      transforms.set(BRIM_EAR_POINTS_ENTRY, () => brimEarPointsContent)
+    }
+    if (customGcodeContent !== null) {
+      transforms.set(CUSTOM_GCODE_PER_LAYER_ENTRY, () => customGcodeContent)
+    }
+    // Caller-supplied sidecars replace a same-named source entry (transform) and are added
+    // when the source lacks them (extraEntries), mirroring the brim/custom-gcode handling.
+    for (const entry of options.extraEntries ?? []) {
+      transforms.set(entry.name, () => entry.content)
+      extraEntries.push(entry)
+    }
+    // Objects the user marked for mesh repair (editor right-click → "Repair mesh"), resolved to the
+    // entries that actually carry their meshes. Repair rewrites in place, so paint and part volumes
+    // survive it — which is why repair is a marked edit rather than a geometry replacement.
+    const repairMeshesByEntry = resolveRepairMeshesByEntry(baseModelXml, edit.repairedObjectIds ?? [])
+    // An inline-mesh object lives in the root entry, whose transform closes over `modelXml`; repair
+    // it directly (the closure reads the variable when the copy pass runs).
+    const rootRepairIds = repairMeshesByEntry.get('3D/3dmodel.model')
+    if (rootRepairIds) {
+      const repairedRoot = repairObjectMeshesInModelEntry(modelXml, rootRepairIds)
+      if (repairedRoot) modelXml = repairedRoot.xml
+    }
+    // Parts whose meshes live in per-object sub-entries (Bambu's 3D/Objects/*.model): painted,
+    // repaired, or both. One transform per entry composes everything that touches it. Paint MUST be
+    // applied before repair — repair preserves each triangle's attributes while welding/dropping, so
+    // painting first rides through it, whereas painting after would index triangles repair removed.
+    const touchedEntryPaths = new Set([
+      ...paintChannels.flatMap((channel) => [...channel.byEntry.keys()]),
+      ...repairMeshesByEntry.keys()
+    ])
+    touchedEntryPaths.delete('3D/3dmodel.model')
+    for (const entryPath of touchedEntryPaths) {
+      transforms.set(entryPath, (xml) => {
+        const painted = paintChannels.reduce((acc, channel) => {
+          const paints = channel.byEntry.get(entryPath)
+          return paints ? applyTrianglePaintToModelEntry(acc, channel.attribute, paints) : acc
+        }, xml)
+        const repairIds = repairMeshesByEntry.get(entryPath)
+        if (!repairIds) return painted
+        return repairObjectMeshesInModelEntry(painted, repairIds)?.xml ?? painted
+      })
+    }
+    // The project's slicer->runtime nozzle map, needed to move slice_info group ids onto the
+    // chosen nozzles. Empty for single-nozzle projects or a from-scratch project with no settings.
+    let physicalExtruderMap: string[] = []
+    if (projectSettingsJson) {
+      try {
+        const parsed: unknown = JSON.parse(projectSettingsJson)
+        if (parsed && typeof parsed === 'object') physicalExtruderMap = stringArray((parsed as Record<string, unknown>).physical_extruder_map)
+      } catch { /* not JSON we can read; leave the nozzle map empty */ }
+    }
+    if (projectSettingsTransforms.length > 0) {
+      if (projectSettingsJson !== null) {
+        transforms.set('Metadata/project_settings.config', applyProjectSettings)
+      } else {
+        // No entry in the base to transform in the copy pass — synthesize one. (If the source
+        // somehow does carry the entry despite the failed read above, the copy pass writes the
+        // source entry and this extra is skipped by the duplicate-name guard.)
+        extraEntries.push({ name: 'Metadata/project_settings.config', content: applyProjectSettings('{}') })
+      }
+    }
+    // slice_info.config: move each reassigned filament's group_id onto the chosen nozzle so a
+    // reopened sliced project reflects the new assignment (group ids outrank filament_nozzle_map
+    // once the project carries concrete slice usage). Only when the source shipped slice_info.
+    //
+    // A record that covers a DIFFERENT filament set than the one being saved is dropped instead.
+    // It describes a slice of a project that no longer exists — this save changed the materials —
+    // and carrying it forward is not survivable: BambuStudio builds its per-plate nozzle grouping
+    // from these entries, so a record listing fewer filaments than the project has makes the
+    // engine derive a SHORT filament map and read it out of bounds, aborting the next slice on a
+    // garbage extruder id (issue #63). Only the entries can be rewritten here — the per-filament
+    // usage a slice produced cannot be invented for a material that was never sliced — so the
+    // honest result is no record until the project is sliced again.
+    if (edit.filaments && edit.filaments.length > 0 && baseSliceInfoXml !== null) {
+      const filaments = edit.filaments
+      const recordedIds = sliceRecordFilamentIds(baseSliceInfoXml)
+      const describesSavedFilaments = recordedIds.length === filaments.length
+        && recordedIds.every((id) => id >= 1 && id <= filaments.length)
+      if (recordedIds.length > 0 && !describesSavedFilaments) {
+        transforms.set(SLICE_INFO_ENTRY, () => null)
+      } else if (physicalExtruderMap.length >= 2) {
+        transforms.set(SLICE_INFO_ENTRY, (xml) => rewriteSliceInfoNozzleGroups(xml, filaments, physicalExtruderMap))
+      }
+    }
+    // Split-out imported sub-models: write each part file and declare it in the sub-model rels so
+    // BambuStudio loads them (transform the existing rels, or add a fresh one if the source had none).
+    if (documents.partFileEntries.length > 0) {
+      for (const partFile of documents.partFileEntries) extraEntries.push(partFile)
+      const updatedModelRels = appendImportPartRelationships(baseModelRelsXml, documents.partFileEntries)
+      if (baseModelRelsXml !== null) {
+        transforms.set(THREE_MF_MODEL_RELS_ENTRY, () => updatedModelRels)
+      } else {
+        extraEntries.push({ name: THREE_MF_MODEL_RELS_ENTRY, content: updatedModelRels })
+      }
+    }
+    return { result, copy: { transforms, appendEntries: extraEntries }, freshEntries: null }
+  }
+  return {
+    result,
+    copy: null,
+    freshEntries: [
+    { name: '[Content_Types].xml', content: THREE_MF_CONTENT_TYPES_XML },
+    { name: '_rels/.rels', content: THREE_MF_RELS_XML },
+    { name: '3D/3dmodel.model', content: modelXml },
+    { name: 'Metadata/model_settings.config', content: withObjectOverrides(modelSettingsXml, objectProcessOverrides) },
+    ...(projectSettingsTransforms.length > 0 ? [{ name: 'Metadata/project_settings.config', content: applyProjectSettings('{}') }] : []),
+    ...(brimEarPointsContent ? [{ name: BRIM_EAR_POINTS_ENTRY, content: brimEarPointsContent }] : []),
+    ...(customGcodeContent ? [{ name: CUSTOM_GCODE_PER_LAYER_ENTRY, content: customGcodeContent }] : []),
+    ...(options.extraEntries ?? [])
+    ]
+  }
+}
+
+/** Apply per-object overrides to a settings document, or pass it through when there are none. */
+function withObjectOverrides(modelSettingsXml: string, overrides: ObjectProcessOverrides | undefined): string {
+  if (!overrides || Object.keys(overrides).length === 0) return modelSettingsXml
+  return applyObjectProcessOverridesXml(modelSettingsXml, overrides)
+}

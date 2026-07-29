@@ -41,6 +41,10 @@ function mockResponse() {
     /** The body delivered via the streamed (chunked) path, if any. */
     get streamed() {
       return streamedChunks.length ? Buffer.concat(streamedChunks) : undefined
+    },
+    /** How many writes the body arrived in — the proxy-survival property, not just the bytes. */
+    get chunkCount() {
+      return streamedChunks.length
     }
   }
 }
@@ -70,7 +74,7 @@ test('sendModelBuffer sends raw bytes when the client does not accept gzip', asy
   await sendModelBuffer(mockRequest(undefined), ctx.res, payload, 'application/xml; charset=utf-8')
 
   assert.equal(ctx.headers['content-encoding'], undefined)
-  assert.deepEqual(ctx.sent, payload)
+  assert.deepEqual(ctx.streamed, payload)
 })
 
 test('sendModelBuffer skips compression for tiny payloads even when gzip is accepted', async () => {
@@ -80,5 +84,30 @@ test('sendModelBuffer skips compression for tiny payloads even when gzip is acce
   await sendModelBuffer(mockRequest('gzip'), ctx.res, payload, 'model/stl')
 
   assert.equal(ctx.headers['content-encoding'], undefined)
-  assert.deepEqual(ctx.sent, payload)
+  assert.deepEqual(ctx.streamed, payload)
+})
+
+// The declared length is the only thing that makes a short body fail loudly instead of reaching
+// the client as a silently truncated file. Assert it on BOTH paths and against the bytes actually
+// written, not against the caller's buffer — on the gzip path those differ.
+test('sendModelBuffer declares a Content-Length matching the bytes it writes', async () => {
+  for (const acceptEncoding of ['gzip, deflate, br', undefined]) {
+    const payload = Buffer.from('<model>'.repeat(2000), 'utf8')
+    const ctx = mockResponse()
+
+    await sendModelBuffer(mockRequest(acceptEncoding), ctx.res, payload, 'model/3mf')
+
+    assert.equal(ctx.headers['content-length'], String(ctx.streamed!.length))
+  }
+})
+
+test('sendModelBuffer writes the body in more than one chunk', async () => {
+  // Small chunks are what survive a size-limited proxy; a single large write is what got truncated.
+  const payload = Buffer.alloc(512 * 1024, 0x41)
+  const ctx = mockResponse()
+
+  await sendModelBuffer(mockRequest(undefined), ctx.res, payload, 'model/3mf')
+
+  assert.ok(ctx.chunkCount > 1, `expected several writes, got ${ctx.chunkCount}`)
+  assert.deepEqual(ctx.streamed, payload)
 })

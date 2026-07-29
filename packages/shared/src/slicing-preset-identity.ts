@@ -4,8 +4,8 @@
  * Owns the preset id codec and the derived-display-type rule that every layer
  * (web slice dialog, API job resolution, slicer worker) must agree on. Before
  * this module the same three id shapes were minted and parsed in five places —
- * `buildBuiltinProfileId` in the slicer, `parseBuiltinSlicingProfileId` in the
- * API, `buildProjectSlicingProfileId` in the web app, and three independent
+ * `buildBuiltinProfileId` in the slicer, `parseBuiltinSlicingPresetId` in the
+ * API, `buildProjectSlicingPresetId` in the web app, and three independent
  * `'project:'` literals — so "the same preset" had several spellings and no
  * authoritative comparison (issue #66).
  *
@@ -25,7 +25,7 @@
  * `Buffer`) because the web app imports this module in the browser. The output
  * is byte-identical to the slicer's previous `Buffer.from(name).toString('base64url')`.
  */
-import type { SlicingProfileKind } from './slicing.js'
+import type { SlicingPresetKind } from './slicing.js'
 
 /**
  * Where a preset came from, which decides how much authority it carries.
@@ -45,7 +45,7 @@ export const PROJECT_SLICING_PRESET_ID_PREFIX = 'project:'
 export interface ParsedSlicingPresetId {
   provenance: SlicingPresetProvenance
   /** Absent for `custom:` ids, whose kind lives in tenant storage rather than the id. */
-  kind: SlicingProfileKind | null
+  kind: SlicingPresetKind | null
   /** The preset name encoded in the id. Null for `custom:` ids, which are opaque UUIDs. */
   name: string | null
 }
@@ -80,13 +80,13 @@ export function slicingPresetProvenance(id: string | null | undefined): SlicingP
  * Whether an id names a 3MF-embedded preset. Project presets are the slice's
  * basis, so they are never filtered out by printer-compatibility gates and are
  * never resolved to a preset FILE — the project's own settings already describe
- * them (see `resolveSlicingProfileFiles`).
+ * them (see `resolveSlicingPresetFiles`).
  */
 export function isProjectSlicingPresetId(id: string | null | undefined): boolean {
   return Boolean(id?.startsWith(PROJECT_SLICING_PRESET_ID_PREFIX))
 }
 
-export function buildBuiltinSlicingPresetId(kind: SlicingProfileKind, name: string): string {
+export function buildBuiltinSlicingPresetId(kind: SlicingPresetKind, name: string): string {
   return `${BUILTIN_SLICING_PRESET_ID_PREFIX}${kind}:${encodeBase64Url(name)}`
 }
 
@@ -95,10 +95,10 @@ export function buildBuiltinSlicingPresetId(kind: SlicingProfileKind, name: stri
  * shape, an unknown kind, or an undecodable/empty name — never a partial result,
  * because a half-parsed builtin id downstream becomes a preset file path.
  */
-export function parseBuiltinSlicingPresetId(id: string): { kind: SlicingProfileKind; name: string } | null {
+export function parseBuiltinSlicingPresetId(id: string): { kind: SlicingPresetKind; name: string } | null {
   const match = /^builtin:([^:]+):(.+)$/.exec(id)
   if (!match) return null
-  const kind = asSlicingProfileKind(match[1])
+  const kind = asSlicingPresetKind(match[1])
   if (!kind) return null
   try {
     const name = decodeBase64Url(match[2] as string).trim()
@@ -108,15 +108,15 @@ export function parseBuiltinSlicingPresetId(id: string): { kind: SlicingProfileK
   }
 }
 
-export function buildProjectSlicingPresetId(kind: SlicingProfileKind, name: string): string {
+export function buildProjectSlicingPresetId(kind: SlicingPresetKind, name: string): string {
   return `${PROJECT_SLICING_PRESET_ID_PREFIX}${kind}:${encodeURIComponent(name)}`
 }
 
 /** Decode a `project:<kind>:<uriComponent(name)>` id, or `null` for any other shape. */
-export function parseProjectSlicingPresetId(id: string): { kind: SlicingProfileKind; name: string } | null {
+export function parseProjectSlicingPresetId(id: string): { kind: SlicingPresetKind; name: string } | null {
   const match = /^project:([^:]+):(.+)$/.exec(id)
   if (!match) return null
-  const kind = asSlicingProfileKind(match[1])
+  const kind = asSlicingPresetKind(match[1])
   if (!kind) return null
   try {
     const name = decodeURIComponent(match[2] as string).trim()
@@ -126,7 +126,7 @@ export function parseProjectSlicingPresetId(id: string): { kind: SlicingProfileK
   }
 }
 
-function asSlicingProfileKind(value: string | undefined): SlicingProfileKind | null {
+function asSlicingPresetKind(value: string | undefined): SlicingPresetKind | null {
   return value === 'machine' || value === 'process' || value === 'filament' ? value : null
 }
 

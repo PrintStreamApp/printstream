@@ -34,6 +34,7 @@ import { z } from 'zod'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { resolveLibraryFileToLocalPath } from '../lib/bridge-library-files.js'
+import { persistFilamentSettingOverrides } from '../lib/save-filament-overrides.js'
 import { healSavedProjectMachineTopology, projectHasCompleteMachine, retargetSavedProjectMachine } from '../lib/save-retarget.js'
 import { badRequest, HttpError, notFound } from '../lib/http-error.js'
 import { getStagedImport, resolveSceneEditImports, stageImport } from '../lib/import-store.js'
@@ -144,7 +145,9 @@ editorRouter.get(
       if (!Number.isInteger(index) || index < 0 || index >= parts.length) throw badRequest('Invalid import part')
       mesh = parts[index]!.mesh
     }
-    const stl = meshToBinaryStl(mesh)
+    // `meshToBinaryStl` is shared code and returns a Uint8Array; the response helper takes a
+    // Buffer. Buffer.from over the same memory, no copy.
+    const stl = Buffer.from(meshToBinaryStl(mesh).buffer)
     response.setHeader('Cache-Control', 'private, max-age=300')
     await sendModelBuffer(request, response, stl, 'model/stl')
   }
@@ -163,6 +166,36 @@ function parseArrangedBody<T>(schema: { safeParse: (body: unknown) => z.SafePars
 }
 
 /**
+ * Resolve an explicit content base — the bytes the editor pinned at open — to something
+ * `resolveLibraryFileToLocalPath` can read.
+ *
+ * Tenant-scoped like every other lookup here, but deliberately NOT scoped to the save target: the
+ * whole point of the field is that the two can diverge (see `contentBase` in the shared schema).
+ * A pinned base that no longer exists is a hard error rather than a silent fall back to the
+ * target's current bytes, because falling back would quietly resume the save-onto-last-save
+ * chaining this exists to stop.
+ */
+async function resolvePinnedContentBase(
+  tenantId: string,
+  contentBase: { fileId: string; versionId?: string | null }
+): Promise<{ ownerBridgeId: string | null; storedPath: string }> {
+  if (contentBase.versionId) {
+    const version = await prisma.libraryFileVersion.findFirst({
+      where: { id: contentBase.versionId, tenantId, libraryFileId: contentBase.fileId },
+      select: { ownerBridgeId: true, storedPath: true }
+    })
+    if (!version) throw notFound('The version this project was opened from is no longer available')
+    return version
+  }
+  const file = await prisma.libraryFile.findFirst({
+    where: { id: contentBase.fileId, tenantId },
+    select: { ownerBridgeId: true, storedPath: true }
+  })
+  if (!file) throw notFound('The file this project was opened from is no longer available')
+  return file
+}
+
+/**
  * Bake an edited arrangement into a ready-to-persist/stream 3MF inside `workDir`:
  * base bytes + staged imports + per-object/global process overrides + plate thumbnails,
  * then an optional cross-machine retarget. Shared by `/save` (persists the result) and
@@ -175,7 +208,7 @@ async function bakeArrangedThreeMf(
   workDir: string,
   fileName: string
 ): Promise<{ bakedPath: string; importCount: number; extraCleanupDirs: string[]; baseFile: { id: string; name: string; ownerBridgeId: string | null; folderId: string | null } | null; machineTopologyHealed: boolean }> {
-  const { baseFileId, baseVersionId, sceneEdit, retarget, slicerTargetId, objectProcessOverrides, processSettingOverrides, objectExport } = input
+  const { baseFileId, baseVersionId, sceneEdit, retarget, slicerTargetId, objectProcessOverrides, processSettingOverrides, filamentSettingOverrides, objectExport } = input
 
   const baseFile = baseFileId
     ? await prisma.libraryFile.findFirst({
@@ -196,11 +229,25 @@ async function bakeArrangedThreeMf(
     : null
   if (baseVersionId && !baseVersion) throw notFound('Base version not found')
 
+  // An explicit content base (the editor pinning the version it OPENED) is resolved WITHOUT
+  // reference to the save target — see the schema doc. A saveAs continues the session against a
+  // new file while still authoring from the original's bytes, so scoping this lookup to
+  // `baseFileId` would reject exactly the case the field exists for.
+  //
+  // Skipped entirely under `ignoreBaseContent`, and that guard is load-bearing rather than an
+  // optimisation: an editor-born session pins its new-project SCAFFOLD, which is a hidden row that
+  // gets discarded on abandon and swept by `pruneHiddenLibraryFiles`. Resolving a pin whose bytes
+  // are then thrown away turned "the scaffold is gone" into a hard 404 on every subsequent save —
+  // a save that had no need of those bytes in the first place.
+  const pinnedBase = input.contentBase && !input.ignoreBaseContent
+    ? await resolvePinnedContentBase(tenantId, input.contentBase)
+    : null
+
   // `ignoreBaseContent` keeps the base file as the save TARGET (name/folder/bridge, resolved
   // above) but bakes from the editor state alone — see the schema doc: re-reading the previous
   // save's bytes strands one orphaned mesh object per solid per save for an import-backed
   // project, which is what forced the editor to re-mount on the saved file after every save.
-  const baseSource = input.ignoreBaseContent ? null : (baseVersion ?? baseFile)
+  const baseSource = input.ignoreBaseContent ? null : (pinnedBase ?? baseVersion ?? baseFile)
   const basePath = baseSource ? await resolveLibraryFileToLocalPath(baseSource) : null
   const imports = resolveSceneEditImports(tenantId, sceneEdit)
 
@@ -221,6 +268,24 @@ async function bakeArrangedThreeMf(
     const customizedPath = path.join(workDir, 'customized.3mf')
     await createObjectCustomizedThreeMf(workingPath, customizedPath, 0, { objectProcessOverrides: rekeyed })
     workingPath = customizedPath
+  }
+  // Persist per-MATERIAL tune-dialog overrides ("Save in this 3MF") into project_settings —
+  // values AND their different_settings_to_system record, which is what makes the retarget
+  // below preserve them instead of rebinding them away as fossils. Must run BEFORE the retarget
+  // for exactly that reason. Best-effort: null means nothing to write / could not write, and the
+  // overrides still ride slice requests either way.
+  if (filamentSettingOverrides && Object.keys(filamentSettingOverrides).length > 0) {
+    const overriddenPath = await persistFilamentSettingOverrides({
+      tenantId,
+      arrangedPath: workingPath,
+      fileName,
+      slicerTargetId,
+      overrides: filamentSettingOverrides
+    })
+    if (overriddenPath) {
+      workingPath = overriddenPath
+      extraCleanupDirs.push(path.dirname(overriddenPath))
+    }
   }
   // Embed the editor's freshly-rendered plate previews so the saved 3MF's thumbnail
   // reflects the current arrangement. buildEditedThreeMf otherwise preserves the base
@@ -302,7 +367,7 @@ editorRouter.post(
         }
       const sizeBytes = (await stat(baked.bakedPath)).size
 
-      const { file: created } = await persistLibraryFileFromLocalPath({
+      const { file: created, archivedVersionId } = await persistLibraryFileFromLocalPath({
         tenantId,
         sourcePath: baked.bakedPath,
         fileName: target.name,
@@ -324,7 +389,12 @@ editorRouter.post(
         // question about an unexpected object or a changed mesh can be answered from the trail.
         metadata: { fileId: created.id, mode, baseFileId: baseFileId ?? null, bakedFromEditorStateOnly: parsed.ignoreBaseContent === true, importCount: baked.importCount, objectCopyCount: parsed.sceneEdit?.objectClones?.length ?? 0, repairedMeshCount: (parsed.sceneEdit?.repairedObjectIds?.length ?? 0) + (parsed.sceneEdit?.repairedImportIds?.length ?? 0), retargetedTo: parsed.retarget?.printerModel ?? null, machineTopologyHealed: baked.machineTopologyHealed, globalProcessOverridesPersisted: parsed.processSettingOverrides != null && Object.keys(parsed.processSettingOverrides).length > 0 }
       })
-      response.status(201).json({ file: { id: created.id, name: created.name } })
+      // `archivedVersionId` is the content that was current until this save — i.e. the bytes this
+      // save authored FROM. The editor pins it so its next save authors from the same original
+      // instead of from this save's output (see `contentBase` in the shared schema). Null when the
+      // save created a new file rather than a version, in which case the caller keeps its
+      // existing pin: a saveAs must not re-base onto the file it just created.
+      response.status(201).json({ file: { id: created.id, name: created.name }, archivedVersionId })
     } finally {
       await rm(workDir, { recursive: true, force: true })
       await Promise.all(extraCleanupDirs.map((dir) => rm(dir, { recursive: true, force: true })))

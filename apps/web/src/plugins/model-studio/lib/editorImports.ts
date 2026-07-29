@@ -13,6 +13,7 @@
  * shipped as JSON.
  */
 import { extractErrorMessage, type StagedImport } from '@printstream/shared'
+import type { EditorImportStore } from './editorImportStore'
 import { buildApiUrl } from '../../../lib/apiUrl'
 import { readWorkspaceContextHeader } from '../../../lib/workspaceContext'
 import { fetchModelBytes } from './modelFetch'
@@ -92,4 +93,24 @@ export async function fetchImportMesh(importId: string, partIndex?: number, sign
   })
   // `fetchModelBytes` returns a tightly-sized Uint8Array backed by a fresh ArrayBuffer.
   return bytes.buffer as ArrayBuffer
+}
+
+/**
+ * The api-backed {@link EditorImportStore}: geometry is uploaded, parsed server-side, and held in a
+ * tenant-keyed LRU that the bake resolves `importId`s from — which is why `importsForBake` is empty
+ * and `dispose` has nothing to release. Stateless, so one shared instance is fine.
+ */
+export const apiImportStore: EditorImportStore = {
+  supportsLibrarySource: true,
+  stageFile: stageImportFromFile,
+  stageFromLibrary: stageImportFromLibrary,
+  meshUrl: importMeshUrl,
+  fetchMesh: fetchImportMesh,
+  importsForBake: () => [],
+  dispose: () => {}
+}
+
+/** @returns the shared api-backed store. A function so call sites read like the local counterpart. */
+export function createApiImportStore(): EditorImportStore {
+  return apiImportStore
 }

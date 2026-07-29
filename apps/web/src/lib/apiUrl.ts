@@ -4,6 +4,7 @@
  * stay interchangeable.
  */
 import { getBrowserEnv } from './browserEnv'
+import { readTabSessionId } from './tabSession'
 import { readWorkspaceContextHeader } from './workspaceContext'
 
 export function buildApiUrl(path: string): string {
@@ -26,18 +27,27 @@ export function buildApiUrlWithContext(path: string, apiBaseUrl: string, workspa
   return `${url.pathname}${url.search}${url.hash}`
 }
 
+/**
+ * The socket also carries this tab's id as `client`. It is how the API knows the tab is still
+ * open: an owned slicing job is cancelled once its tab's last socket has stayed gone (see
+ * `apps/api/src/lib/client-sessions.ts`). Not an auth signal — anyone can send any value; it only
+ * ever narrows what a tab is shown or reaps work that tab itself started.
+ */
 export function buildWebSocketUrl(path = '/ws'): string {
   const workspaceContext = readWorkspaceContextHeader()
   const base = getBrowserEnv().apiBaseUrl
+  const clientId = readTabSessionId()
   if (!base) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = new URL(`${protocol}//${window.location.host}${path}`)
     if (workspaceContext) url.searchParams.set('tenant', workspaceContext)
+    url.searchParams.set('client', clientId)
     return url.toString()
   }
   const url = new URL(base)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.pathname = path
   if (workspaceContext) url.searchParams.set('tenant', workspaceContext)
+  url.searchParams.set('client', clientId)
   return url.toString()
 }

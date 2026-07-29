@@ -11,7 +11,7 @@ import { FilamentOptionLabel } from './FilamentOptionLabel'
 import { resolveFilamentDisplay } from '../../lib/filamentColor'
 import { estimateRemainGrams } from '../../lib/slotRemaining'
 import type { PrinterTrayOption } from '../../lib/libraryViewHelpers'
-import type { SliceMaterialOption } from '../../lib/sliceProfileMatching'
+import type { SliceMaterialOption } from '../../lib/slicingPresetMatching'
 
 export function LoadedMaterialOptionLabel({ option, tray }: {
   option: SliceMaterialOption

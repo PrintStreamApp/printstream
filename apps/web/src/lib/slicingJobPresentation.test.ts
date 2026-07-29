@@ -35,19 +35,19 @@ function buildJob(overrides: Partial<SlicingJob> = {}): SlicingJob {
 test('formatSlicingProgress prefers the latest system line over noisy raw slicer output', () => {
   const job = buildJob({
     output: [
-      { stream: 'system', text: 'Submitted to slicer service', createdAt: '2026-05-24T00:00:01.000Z' },
+      { stream: 'system', text: 'Starting the slice', createdAt: '2026-05-24T00:00:01.000Z' },
       { stream: 'stderr', text: '[2026-05-24 01:37:56.001056] [0x00007f98e49b13c0] [warning] cli mode, Current OrcaSlicer Version 2.4.0-dev', createdAt: '2026-05-24T00:00:02.000Z' },
       { stream: 'stderr', text: 'Segmentation fault (core dumped)', createdAt: '2026-05-24T00:00:03.000Z' }
     ]
   })
 
-  assert.equal(formatSlicingProgress(job, getLatestSlicingProgressFrame(job)), 'Submitted to slicer service')
+  assert.equal(formatSlicingProgress(job, getLatestSlicingProgressFrame(job)), 'Starting the slice')
 })
 
 test('formatSlicingProgress still shows structured progress frames when present', () => {
   const job = buildJob({
     output: [
-      { stream: 'system', text: 'Submitted to slicer service', createdAt: '2026-05-24T00:00:01.000Z' },
+      { stream: 'system', text: 'Starting the slice', createdAt: '2026-05-24T00:00:01.000Z' },
       { stream: 'stdout', text: '{"message":"Generating supports","total_percent":42.4}', createdAt: '2026-05-24T00:00:02.000Z' }
     ]
   })
@@ -55,57 +55,51 @@ test('formatSlicingProgress still shows structured progress frames when present'
   assert.equal(formatSlicingProgress(job, getLatestSlicingProgressFrame(job)), 'Generating supports (42%)')
 })
 
-test('formatSlicingProgress falls back to a generic active message when no structured or system output exists', () => {
-  const job = buildJob({
-    output: [
-      { stream: 'stderr', text: '[2026-05-24 01:37:56.001056] [0x00007f98e49b13c0] [warning] noisy cli banner', createdAt: '2026-05-24T00:00:02.000Z' }
-    ]
-  })
+test('formatSlicingProgress names the phase when no structured or system output exists', () => {
+  const noisyOutput = [
+    { stream: 'stderr' as const, text: '[2026-05-24 01:37:56.001056] [0x00007f98e49b13c0] [warning] noisy cli banner', createdAt: '2026-05-24T00:00:02.000Z' }
+  ]
 
-  assert.equal(formatSlicingProgress(job, getLatestSlicingProgressFrame(job)), 'Slicer is still processing...')
+  // Preparation (baking the project, authoring the machine) is its own phase and is the slow
+  // part of a large project, so it must not claim the slicer is already running.
+  const preparing = buildJob({ status: 'preparing', output: noisyOutput })
+  assert.equal(formatSlicingProgress(preparing, getLatestSlicingProgressFrame(preparing)), 'Preparing the project...')
+
+  const slicing = buildJob({ status: 'slicing', output: noisyOutput })
+  assert.equal(formatSlicingProgress(slicing, getLatestSlicingProgressFrame(slicing)), 'Slicing...')
 })
 
-test('getLatestSlicingProgressFrame uses explicit machine-switch stage markers for two-pass slicing', () => {
-  const job = buildJob({
-    output: [
-      { stream: 'system', text: 'Normalizing project with upstream machine-switch export', createdAt: '2026-05-24T00:00:01.000Z' },
-      { stream: 'stdout', text: '{"message":"Preparing plate","total_percent":100}', createdAt: '2026-05-24T00:00:02.000Z' },
-      { stream: 'system', text: 'Slicing normalized project', createdAt: '2026-05-24T00:00:03.000Z' },
-      { stream: 'stdout', text: '{"message":"Generating supports","total_percent":4}', createdAt: '2026-05-24T00:00:04.000Z' }
-    ]
-  })
+test('a finished job reports its outcome, not the progress frame it stopped on', () => {
+  // The engine's last frame stays in the output after the job ends; showing it left a completed
+  // slice reading "Exporting 3mf (97%)" beside a "Ready" chip.
+  const output = [
+    { stream: 'stdout' as const, text: '{"message":"Exporting 3mf","total_percent":97}', createdAt: '2026-05-24T00:00:02.000Z' },
+    { stream: 'system' as const, text: 'Ready to print', createdAt: '2026-05-24T00:00:03.000Z' }
+  ]
 
-  const frame = getLatestSlicingProgressFrame(job)
+  const ready = buildJob({ status: 'ready', outputFileName: 'widget.gcode.3mf', output })
+  assert.equal(formatSlicingProgress(ready, getLatestSlicingProgressFrame(ready)), 'Ready to print')
 
-  assert.equal(frame?.stageIndex, 2)
-  assert.equal(frame?.totalStages, 2)
-  assert.equal(Math.round(frame?.displayPercent ?? 0), 52)
-  assert.equal(formatSlicingProgress(job, frame), 'Stage 2 of 2: Generating supports (4%)')
+  // With no status line to fall back on (a finished job the list trimmed), the outcome still wins.
+  const cancelled = buildJob({ status: 'cancelled', output: output.slice(0, 1) })
+  assert.equal(formatSlicingProgress(cancelled, getLatestSlicingProgressFrame(cancelled)), 'Slicing cancelled')
+
+  const failed = buildJob({ status: 'failed', error: 'Slicer CLI exited with code 139', output: output.slice(0, 1) })
+  assert.equal(formatSlicingProgress(failed, getLatestSlicingProgressFrame(failed)), 'Slicer CLI exited with code 139')
 })
 
-test('getLatestSlicingProgressFrame leaves single-stage progress unchanged', () => {
+test('getLatestSlicingProgressFrame reports the newest engine frame', () => {
   const job = buildJob({
     output: [
+      { stream: 'stdout', text: '{"message":"Preparing plate","total_percent":10}', createdAt: '2026-05-24T00:00:02.000Z' },
       { stream: 'stdout', text: '{"message":"Finalizing","total_percent":100}', createdAt: '2026-05-24T00:00:03.000Z' }
     ]
   })
 
   const frame = getLatestSlicingProgressFrame(job)
 
-  assert.equal(frame?.stageIndex, 1)
-  assert.equal(frame?.totalStages, 1)
-  assert.equal(frame?.displayPercent, 100)
+  assert.equal(frame?.totalPercent, 100)
   assert.equal(formatSlicingProgress(job, frame), 'Finalizing (100%)')
-})
-
-test('formatSlicingProgress surfaces explicit machine-switch stage messages even before pipe progress arrives', () => {
-  const job = buildJob({
-    output: [
-      { stream: 'system', text: 'Normalizing project with upstream machine-switch export', createdAt: '2026-05-24T00:00:01.000Z' }
-    ]
-  })
-
-  assert.equal(formatSlicingProgress(job, getLatestSlicingProgressFrame(job)), 'Stage 1 of 2: Normalizing project')
 })
 
 test('formatSlicingMetadataDisplay rolls multi-day print estimates into days', () => {

@@ -7,12 +7,12 @@
  * through `physical_extruder_map` (see the slicer development notes nozzle-mapping invariant).
  * `slice_info.config` carries the Bambu `model_id` code, not the friendly name.
  */
-import type { CreateSlicingJob, SlicingProfileKind } from '@printstream/shared'
+import type { CreateSlicingJob, SlicingPresetKind } from '@printstream/shared'
 import { stringArray } from '@printstream/shared/three-mf'
 
-type SliceProfileFile = {
+type SlicingPresetFile = {
   id: string
-  kind: SlicingProfileKind
+  kind: SlicingPresetKind
   name: string
 }
 
@@ -32,7 +32,7 @@ export type SlicedArtifactMetadata = {
 
 export function buildSlicedArtifactMetadata(
   request: CreateSlicingJob,
-  profileFiles: SliceProfileFile[]
+  profileFiles: SlicingPresetFile[]
 ): SlicedArtifactMetadata | null {
   const profileNamesById = new Map(profileFiles.map((profile) => [profile.id, profile.name]))
   const printerProfileName = request.target.printerProfileId ? profileNamesById.get(request.target.printerProfileId) ?? null : null

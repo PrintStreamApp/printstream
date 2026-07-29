@@ -7,6 +7,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 const pwaIconVersion = '20260519a'
 const workspaceRoot = fileURLToPath(new URL('../..', import.meta.url))
 const sharedSourceEntry = fileURLToPath(new URL('../../packages/shared/src/index.ts', import.meta.url))
+const sharedThreeMfSourceEntry = fileURLToPath(new URL('../../packages/shared/src/three-mf/index.ts', import.meta.url))
 const sharedPrivateSourceEntry = fileURLToPath(new URL('../../packages/shared/src/private/index.ts', import.meta.url))
 const sharedPrivateExists = existsSync(sharedPrivateSourceEntry)
 
@@ -25,12 +26,13 @@ export default defineConfig(({ command, mode }) => {
     },
     resolve: command === 'serve'
       ? {
-          // Entries are prefix-matched in order, so the `/private` subpath
-          // must come first or it resolves to `.../index.ts/private`. The
-          // private alias only exists on private checkouts (the public
+          // Entries are prefix-matched in order, so every subpath must come
+          // BEFORE the bare package or it resolves to `.../index.ts/<subpath>`.
+          // The private alias only exists on private checkouts (the public
           // export deletes packages/shared/src/private).
           alias: {
             ...(sharedPrivateExists ? { '@printstream/shared/private': sharedPrivateSourceEntry } : {}),
+            '@printstream/shared/three-mf': sharedThreeMfSourceEntry,
             '@printstream/shared': sharedSourceEntry
           }
         }

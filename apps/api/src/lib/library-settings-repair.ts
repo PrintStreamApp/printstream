@@ -19,7 +19,7 @@
  * untouched by another.
  */
 import { readEntry, rewriteThreeMfEntries } from './three-mf-internal.js'
-import { inspectProjectFlushVolumesMatrix, repairFlushVolumesMatrix } from '@printstream/shared'
+import { inspectProjectFilamentSelfIndex, inspectProjectFlushVolumesMatrix, repairFilamentSelfIndex, repairFlushVolumesMatrix } from '@printstream/shared'
 
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
 
@@ -28,6 +28,8 @@ export interface ProjectSettingsRepairResult {
   repaired: boolean
   /** Entry count before and after, for the audit trail. Null when nothing was inspected. */
   matrix: { before: number; after: number; filaments: number; extruders: number } | null
+  /** Variant-index entry count before and after. Null when that invariant was already satisfied. */
+  variantIndex: { before: number; after: number; variantRows: number } | null
 }
 
 /**
@@ -43,46 +45,64 @@ export async function repairProjectSettingsThreeMf(
   outputPath: string
 ): Promise<ProjectSettingsRepairResult> {
   const raw = await readEntry(sourcePath, PROJECT_SETTINGS_ENTRY).catch(() => null)
-  if (!raw || raw.length === 0) return { repaired: false, matrix: null }
+  if (!raw || raw.length === 0) return { repaired: false, matrix: null, variantIndex: null }
   const json = raw.toString('utf8')
 
-  const inspection = inspectProjectFlushVolumesMatrix(json)
-  if (!inspection || !inspection.inconsistent) return { repaired: false, matrix: null }
-
+  // NO early return on the flush matrix alone. It used to gate the whole function, which silently
+  // made this a no-op for a project whose ONLY defect is the variant index — the banner offered a
+  // repair that reported "nothing to do". Each invariant is decided on its own below.
   let record: Record<string, unknown>
   try {
     record = JSON.parse(json) as Record<string, unknown>
   } catch (error) {
-    // Contradiction: the inspection above parsed the same JSON to decide it was inconsistent, so a
-    // failure here means the two disagree. Report "nothing to repair" rather than fail the user's
-    // action, but make the inconsistency visible instead of losing it.
+    // Unparseable settings are "nothing to repair", not a failed user action — but say so rather
+    // than lose it, since the caller only got here because something flagged this file.
     console.warn(`[library-settings-repair] settings parsed for inspection but not for repair (${sourcePath}): ${(error as Error).message}`)
-    return { repaired: false, matrix: null }
+    return { repaired: false, matrix: null, variantIndex: null }
   }
-  const repairedMatrix = repairFlushVolumesMatrix(
-    Array.isArray(record.flush_volumes_matrix) ? record.flush_volumes_matrix : null,
-    inspection.filamentCount,
-    inspection.extruderCount
-  )
-  // The inspection said inconsistent, so a null here would mean the two disagree — bail rather
-  // than write an unchanged file and report it as repaired.
-  if (!repairedMatrix) {
-    console.warn(
-      `[library-settings-repair] inspection flagged ${sourcePath} (matrix ${inspection.actualLength}, expected ${inspection.expectedLength}) but the repair produced no change`
+  // Two independent invariants share this one user action, so repair whichever actually apply and
+  // write the file ONCE. Either alone is enough to make the project unusable — a bad matrix kills
+  // the slice, a bad variant index stops Bambu Studio opening it at all.
+  const matrixInspection = inspectProjectFlushVolumesMatrix(json)
+  const repairedMatrix = matrixInspection?.inconsistent
+    ? repairFlushVolumesMatrix(
+      Array.isArray(record.flush_volumes_matrix) ? record.flush_volumes_matrix : null,
+      matrixInspection.filamentCount,
+      matrixInspection.extruderCount
     )
-    return { repaired: false, matrix: null }
+    : null
+  if (repairedMatrix) record.flush_volumes_matrix = repairedMatrix
+
+  const indexInspection = inspectProjectFilamentSelfIndex(json)
+  const repairedIndex = indexInspection?.inconsistent ? repairFilamentSelfIndex(record) : null
+  if (repairedIndex) record.filament_self_index = repairedIndex
+
+  // The caller only got here because something was flagged, so producing NO change means the
+  // detection and the repair disagree. Say so rather than write an unchanged file and call it
+  // repaired — that is how a defect becomes undiagnosable.
+  if (!repairedMatrix && !repairedIndex) {
+    console.warn(
+      `[library-settings-repair] inspection flagged ${sourcePath} but neither repair produced a change ` +
+      `(matrix ${matrixInspection?.actualLength ?? 'n/a'}/${matrixInspection?.expectedLength ?? 'n/a'}, ` +
+      `variant index ${indexInspection?.actualLength ?? 'n/a'}/${indexInspection?.variantRows ?? 'n/a'})`
+    )
+    return { repaired: false, matrix: null, variantIndex: null }
   }
-  record.flush_volumes_matrix = repairedMatrix
 
   const nextJson = JSON.stringify(record)
   await rewriteThreeMfEntries(sourcePath, outputPath, { [PROJECT_SETTINGS_ENTRY]: () => nextJson })
   return {
     repaired: true,
-    matrix: {
-      before: inspection.actualLength,
-      after: repairedMatrix.length,
-      filaments: inspection.filamentCount,
-      extruders: inspection.extruderCount
-    }
+    matrix: repairedMatrix && matrixInspection
+      ? {
+        before: matrixInspection.actualLength,
+        after: repairedMatrix.length,
+        filaments: matrixInspection.filamentCount,
+        extruders: matrixInspection.extruderCount
+      }
+      : null,
+    variantIndex: repairedIndex && indexInspection
+      ? { before: indexInspection.actualLength, after: repairedIndex.length, variantRows: indexInspection.variantRows }
+      : null
   }
 }

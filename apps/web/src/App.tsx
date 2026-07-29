@@ -139,17 +139,6 @@ registerBuiltinPlugins()
 
 const webRuntimeStartedAt = new Date().toISOString()
 
-interface DevHealthResponse {
-  ok: true
-  time: string
-  runtime?: {
-    nodeEnv: string
-    bootId: string
-    startedAt: string
-    uptimeSeconds: number
-  }
-}
-
 export function App() {
   const queryClient = useQueryClient()
   const browserEnv = getBrowserEnv()
@@ -195,14 +184,6 @@ export function App() {
     previousWorkspaceScopeKey.current = authBootstrapScopeKey
     void invalidateWorkspaceShellQueries()
   }, [authBootstrapScopeKey, invalidateWorkspaceShellQueries])
-  const devHealthQuery = useQuery({
-    queryKey: ['dev-health'],
-    queryFn: ({ signal }) => apiFetch<DevHealthResponse>('/api/health', { signal }),
-    enabled: browserEnv.devMode,
-    refetchInterval: 5_000,
-    refetchOnWindowFocus: true,
-    meta: { suppressGlobalErrorToast: true }
-  })
   const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
   const authBootstrapReady = authBootstrapQuery.isSuccess
   const authSetupRequired = authBootstrapQuery.data?.setupRequired ?? false
@@ -787,13 +768,9 @@ export function App() {
   const shellWorkspaceLabel = usesPublicChrome ? undefined : (inPlatformMode ? 'Platform' : undefined)
   const shellWorkspaceChooserLabel = usesPublicChrome ? undefined : currentWorkspaceChooserLabel
   const shellWorkspaceChooserAvailable = !usesPublicChrome && canUseWorkspaceChooser
+  // The badge owns its own 5s poll: hoisting it here re-rendered the whole tree every tick.
   const devRuntimeIndicator = browserEnv.devMode ? (
-    <DevRuntimeStatus
-      webStartedAt={webRuntimeStartedAt}
-      apiRuntime={devHealthQuery.data?.runtime ?? null}
-      apiRuntimeLoading={devHealthQuery.isLoading}
-      apiRuntimeError={devHealthQuery.isError}
-    />
+    <DevRuntimeStatus webStartedAt={webRuntimeStartedAt} />
   ) : null
   // App-shell footer: the feedback entry point (plus any plugin-contributed
   // footer actions, e.g. the cloud suggestion box), dev runtime chips (dev

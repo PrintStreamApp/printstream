@@ -12,19 +12,19 @@
  * component because the slice flow shares them; they are passed in here. Marking the project
  * clean after a successful save goes through `markSaved` (from useEditorHistory).
  */
-import { useCallback, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useCallback, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ExportArrangedThreeMf, type SaveArrangedThreeMf, type SceneEdit } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
-import { buildApiUrl } from '../../lib/apiUrl'
 import { downloadBlob } from '../../lib/downloadBlob'
 import { toast } from '../../lib/toast'
 import { invalidateLibraryQueries } from '../../lib/libraryQueryInvalidation'
-import { readWorkspaceContextHeader } from '../../lib/workspaceContext'
 import { type ConfirmDialogOptions } from '../../components/PromptDialogProvider'
 import { type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
-import { buildSingleObjectExportState, type EditorState } from './lib/editorModel'
-import { fetchModelBytes } from './lib/modelFetch'
+import { buildSessionFilamentIdRemap, buildSingleObjectExportState, type EditorState } from './lib/editorModel'
+import { objectIdsAcceptingOverrides, selectObjectProcessOverridesForSave } from './lib/sceneEditIdentity'
+import { createApiSaveTarget, type EditorSaveTarget } from './lib/editorSaveTarget'
+import { initialContentBasePin, nextContentBasePin, type EditorContentBasePin } from './lib/contentBasePin'
 
 type PlateThumbnail = { plateIndex: number; png: string }
 
@@ -42,9 +42,14 @@ export interface EditorSaveParams {
    * single-object export needs it to centre the exported object on its plate.
    */
   worldFootprintCenterFor: (key: string) => { x: number; y: number } | null
-  seededProcessOverrideObjectIdsRef: MutableRefObject<Set<number>>
   baseFileId: string | null
   baseVersionId: string | null | undefined
+  /**
+   * The base file's version counter when this session opened it, once known. Establishes the
+   * baseline for the concurrent-save warning; null disables the check, which is right for a
+   * session editing an ARCHIVED version (its head has moved by definition, so warning is noise).
+   */
+  openedVersionNumber?: number | null
   saveAsBridgeId: string | null | undefined
   /**
    * This project was CREATED in the editor (a new-project scaffold or a fileless start) rather
@@ -59,6 +64,29 @@ export interface EditorSaveParams {
   onSavedAs: ((file: { id: string; name: string }) => void) | undefined
   onClose: () => void
   confirm: (options: ConfirmDialogOptions) => Promise<boolean>
+  /** Where a save goes. Defaults to the library-backed api target. */
+  saveTarget?: EditorSaveTarget
+  /**
+   * Whether the project has a material yet — BambuStudio parity, a project must have one before it
+   * can be saved. Defaults to reading the slice controller; a host without one (the public editor)
+   * answers from its own materials, or the gate would reject every save.
+   */
+  hasMaterials?: () => boolean
+  /**
+   * A project save baked the session's filament ids renumbered by this SESSION->SAVED map (the
+   * emit-side translation in `buildSceneEditOut`) — the live editor state must follow, or its
+   * instances keep pointing at ids the saved project no longer has (mesh colours fall back to the
+   * originally-seeded scene colours, and the NEXT save re-translates already-stale ids). Called
+   * only for project-adopting saves (never the single-object export) and only when the map is not
+   * identity. See `rebaseEditorStateFilamentIds`.
+   */
+  onFilamentsRenumbered?: (remap: Map<number, number>) => void
+  /**
+   * The save rewrote the file's slot order, so anything still holding pre-save `sourceIndex`
+   * values (the undo frames) must re-point at the new base. Distinct from the id renumbering
+   * above: ids move the LIVE session forward, this moves what history refers OUT to.
+   */
+  onFilamentSourcesRemapped?: (sourceRemap: Map<number, number>) => void
 }
 
 export interface EditorSave {
@@ -95,16 +123,20 @@ export function useEditorSave({
   buildSceneEditOut,
   captureAllPlateThumbnails,
   worldFootprintCenterFor,
-  seededProcessOverrideObjectIdsRef,
   baseFileId,
   baseVersionId,
+  openedVersionNumber,
   saveAsBridgeId,
   editorBorn,
   onApply,
   onSaved,
   onSavedAs,
   onClose,
-  confirm
+  confirm,
+  saveTarget = createApiSaveTarget(),
+  hasMaterials,
+  onFilamentsRenumbered,
+  onFilamentSourcesRemapped
 }: EditorSaveParams): EditorSave {
   const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
@@ -114,6 +146,65 @@ export function useEditorSave({
   // the editor state — never from the bytes of the save before them (see `ignoreBaseContent`).
   const effectiveBaseFileId = savedFile?.id ?? baseFileId
   const effectiveBaseVersionId = savedFile ? null : baseVersionId
+
+  // The bytes every save in this session authors FROM: what we opened, never what we last wrote.
+  // The move-exactly-once rule lives in `contentBasePin.ts`; this only holds the state.
+  const [pinnedContentBase, setPinnedContentBase] = useState<EditorContentBasePin | null>(
+    () => initialContentBasePin(baseFileId, baseVersionId)
+  )
+  const contentBase = pinnedContentBase ?? undefined
+  const adoptArchivedVersion = useCallback((savedFileId: string, archivedVersionId: string | null | undefined) => {
+    setPinnedContentBase((current) => nextContentBasePin(current, savedFileId, archivedVersionId))
+  }, [])
+
+  /**
+   * The file's version counter as this session last knew it: at open, then one higher after each
+   * of our own saves. Tracking OUR saves is what makes the check meaningful — comparing against a
+   * fixed open-time value would flag our second save as somebody else's work.
+   */
+  const expectedVersionNumberRef = useRef<number | null>(null)
+  // Seeded once, when the base file's DTO lands (it arrives after mount). Guarded so our own
+  // saves, which move the counter deliberately, never reset the baseline back to open time.
+  if (expectedVersionNumberRef.current === null && openedVersionNumber != null) {
+    expectedVersionNumberRef.current = openedVersionNumber
+  }
+
+  /**
+   * Ask before superseding a save someone else made while this session was open.
+   *
+   * We author from the bytes we opened (see the content-base pin), so their version stays in
+   * history but is NOT an ancestor of ours — that is the decision, and it is exactly the thing a
+   * user should get to see rather than discover later in the version list. Read fresh, never
+   * through the query cache, or the check answers from whatever this session last saw.
+   *
+   * Best-effort: a failed read must not block a save. Being unable to check is not evidence of a
+   * conflict, and turning a transient GET failure into a blocked save would be worse than the
+   * race it guards.
+   */
+  const confirmOverwritingConcurrentSave = useCallback(async (fileId: string | null): Promise<boolean> => {
+    if (!saveTarget.isLibraryBacked || !fileId) return true
+    let current: number | null = null
+    try {
+      const { file } = await apiFetch<{ file: { currentVersionNumber?: number } }>(`/api/library/${fileId}`)
+      current = file.currentVersionNumber ?? null
+    } catch {
+      return true
+    }
+    if (current === null) return true
+
+    const expected = expectedVersionNumberRef.current
+    // Our save adds one, whatever we found — so the baseline is right even if we let a conflict through.
+    expectedVersionNumberRef.current = current + 1
+    if (expected === null || current === expected) return true
+
+    return await confirm({
+      title: 'This project changed since you opened it',
+      description: `Someone saved version ${current} while you had this open. Saving adds version ${current + 1} with your work; their changes stay in the version history but are not carried into yours.`,
+      confirmLabel: 'Save anyway',
+      cancelLabel: 'Cancel',
+      color: 'warning'
+    })
+  }, [confirm, saveTarget])
 
   const handleApply = useCallback(() => {
     const current = stateRef.current
@@ -137,32 +228,47 @@ export function useEditorSave({
       options?: { asProject?: boolean }
     ): Promise<{ id: string; name: string } | null> => {
       // BambuStudio parity: a project must have a material before it can be saved.
-      if ((sliceConfigRef.current?.projectFilaments?.length ?? 0) === 0) {
+      const materialsPresent = hasMaterials
+        ? hasMaterials()
+        : (sliceConfigRef.current?.projectFilaments?.length ?? 0) > 0
+      if (!materialsPresent) {
         toast.error('Add a material to the project before saving.')
         return null
       }
       const asProject = options?.asProject !== false
       setSaving(true)
       try {
-        const { file } = await apiFetch<{ file: { id: string; name: string } }>('/api/editor/save', {
-          method: 'POST',
-          body: payload
-        })
+        const file = await saveTarget.persist(payload)
+        // Null means the user backed out (a dismissed destination picker), not a failure: leave the
+        // project dirty and say nothing, rather than reporting a save that did not happen.
+        if (!file) return null
+        // Before anything else: the bytes we authored from now live at an archived id. Pinning is
+        // not conditional on `asProject` — a single-object export writes a real version too, and
+        // leaving the pin on a head that has moved would silently re-chain the next save.
+        adoptArchivedVersion(file.id, file.archivedVersionId)
         if (asProject) {
           markSaved()
-          // The saved 3MF bakes the session's material add/removes as its filament list;
-          // tell the controller so it rebases its overlay once the refetched index lands
-          // (otherwise an added material renders twice until the editor is reopened).
-          //
-          // MUST be armed BEFORE the invalidation below. The controller detects the refetch by
-          // watching its base material list change, so arming after `invalidateLibraryQueries`
-          // resolves loses the race whenever the refetch lands inside that await: the change it
-          // was waiting for has already happened, the overlay is never folded in, and the added
-          // material renders twice — then bakes into the NEXT save as a real duplicate slot,
-          // taking its per-slot colour/preset/nozzle state (keyed by the pre-save id) with it.
-          sliceConfigRef.current?.onProjectSaved()
+          // The save renumbered the session's filament ids to the desired list's 1..N (the
+          // emit-side translation in buildSceneEditOut); the live editor state must follow — see
+          // onFilamentsRenumbered. Computed HERE, from the same controller list the bake used,
+          // so the two sides of the invariant can never disagree about the map.
+          if (onFilamentsRenumbered) {
+            const sessionIds = sliceConfigRef.current?.projectFilaments.map((filament) => filament.projectFilamentId)
+            const remap = sessionIds && sessionIds.length > 0 ? buildSessionFilamentIdRemap(sessionIds) : null
+            if (remap) onFilamentsRenumbered(remap)
+          }
+          // The saved 3MF bakes the session's material list as its filament list; tell the
+          // controller so it renumbers to match. It does that IN MEMORY and immediately — it wrote
+          // the list, so it does not need the refetched index to tell it what it just saved — which
+          // is why there is no ordering constraint here any more. This call used to have to happen
+          // BEFORE the invalidation below, because the controller detected the save by watching its
+          // base material list change; arming late lost the race and an added material rendered
+          // twice, then baked into the NEXT save as a real duplicate slot.
+          const sourceRemap = sliceConfigRef.current?.onProjectSaved() ?? null
+          if (sourceRemap) onFilamentSourcesRemapped?.(sourceRemap)
         }
-        await invalidateLibraryQueries(queryClient)
+        // Library bookkeeping only: a local target has no cached listings to refresh.
+        if (saveTarget.isLibraryBacked) await invalidateLibraryQueries(queryClient)
         toast.success(successMessage)
         if (asProject) onSaved?.(file)
         // Keep the editor open after saving so the user can keep arranging/printing.
@@ -174,7 +280,7 @@ export function useEditorSave({
         setSaving(false)
       }
     },
-    [onSaved, queryClient, markSaved, sliceConfigRef]
+    [onSaved, queryClient, markSaved, sliceConfigRef, saveTarget, hasMaterials, onFilamentsRenumbered, onFilamentSourcesRemapped]
   )
 
   // Closing the editor warns first if there are unsaved edits (drags, imports, etc.).
@@ -200,26 +306,15 @@ export function useEditorSave({
   const collectObjectProcessOverrides = useCallback((scope?: EditorState): Record<string, Record<string, string | string[]>> | undefined => {
     const value = sliceConfigRef.current?.perObjectSettings?.value
     if (!value) return undefined
-    // Object identities currently placed: a real objectId, or an import's synthetic id.
-    // `scope` narrows "placed" to a synthetic state (the single-object export), so only
-    // that object's overrides ride along.
-    const placed = new Set<number>()
-    for (const plate of (scope ?? stateRef.current)?.plates ?? []) {
-      for (const instance of plate.instances) {
-        if (instance.source.kind === 'object') placed.add(instance.objectId)
-        else if (instance.source.replacedObjectId != null) placed.add(instance.source.replacedObjectId)
-      }
-    }
-    const out: Record<string, Record<string, string | string[]>> = {}
-    for (const [key, overrides] of Object.entries(value)) {
-      if (placed.has(Number(key)) && Object.keys(overrides).length > 0) out[key] = overrides
-    }
-    for (const id of seededProcessOverrideObjectIdsRef.current) {
-      const key = String(id)
-      if (placed.has(id) && !out[key]) out[key] = {} // re-hydrated then cleared → strip on save
-    }
-    return Object.keys(out).length > 0 ? out : undefined
-  }, [sliceConfigRef, stateRef, seededProcessOverrideObjectIdsRef])
+    // Identities that can carry per-object settings — placed objects PLUS the retained identity of
+    // every replaced object (see objectIdsAcceptingOverrides). `scope` narrows that to a synthetic
+    // state (the single-object export), so only that object's overrides ride along.
+    const source = scope ?? stateRef.current
+    const placed = source ? objectIdsAcceptingOverrides(source) : new Set<number>()
+    // The selection rule (and the reason absence must not read as a delete) lives in
+    // `selectObjectProcessOverridesForSave`, where it is tested.
+    return selectObjectProcessOverridesForSave(value, placed)
+  }, [sliceConfigRef, stateRef])
 
   // Global (project-wide) process overrides authored in the editor. Sent with every save so they
   // persist into the saved 3MF's project_settings.config (not just a one-off slice). Empty ⇒ omit,
@@ -229,26 +324,45 @@ export function useEditorSave({
     return overrides && Object.keys(overrides).length > 0 ? overrides : undefined
   }, [sliceConfigRef])
 
+  // Per-MATERIAL tune overrides ("Save in this 3MF"), keyed by the material's 1-based SAVED slot
+  // position — the position in the desired list the save bakes as slots 1..N — never its session
+  // id, which a material add/remove renumbers (audit invariant I4). Empty ⇒ omit.
+  const collectFilamentSettingOverrides = useCallback((): Record<string, Record<string, string | string[]>> | undefined => {
+    const config = sliceConfigRef.current
+    if (!config) return undefined
+    const out: Record<string, Record<string, string | string[]>> = {}
+    config.projectFilaments.forEach((filament, index) => {
+      const overrides = config.filamentSettingOverridesById[filament.projectFilamentId]
+      if (overrides && Object.keys(overrides).length > 0) out[String(index + 1)] = overrides
+    })
+    return Object.keys(out).length > 0 ? out : undefined
+  }, [sliceConfigRef])
+
   const handleSaveVersion = useCallback(() => {
     const current = stateRef.current
-    if (!current || effectiveBaseFileId === null) return
+    if (!current) return
+    // A library save needs a file to version. A local one does not have (or need) an id at all —
+    // requiring one here made Save a no-op for a project opened from disk.
+    if (saveTarget.isLibraryBacked && effectiveBaseFileId === null) return
     void (async () => {
+      if (!await confirmOverwritingConcurrentSave(effectiveBaseFileId)) return
       const thumbnails = await captureAllPlateThumbnails(current)
       const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
       await runSave(
         {
-          baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId,
+          baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
           mode: 'newVersion', ignoreBaseContent: editorBorn,
           sceneEdit: buildSceneEditOut(current, { thumbnails }),
           objectProcessOverrides: collectObjectProcessOverrides(),
           processSettingOverrides: collectProcessSettingOverrides(),
+          filamentSettingOverrides: collectFilamentSettingOverrides(),
           retarget,
           slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
         },
         retarget ? `Saved a new version for ${retarget.printerModel}` : 'Saved a new version'
       )
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
 
   const handleSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
@@ -264,12 +378,13 @@ export function useEditorSave({
       const firstSaveOfEditorBornProject = editorBorn && savedFile === null
       const saved = await runSave(
         {
-          baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId,
+          baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
           mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
           ignoreBaseContent: firstSaveOfEditorBornProject,
           sceneEdit: buildSceneEditOut(current, { thumbnails }),
           objectProcessOverrides: collectObjectProcessOverrides(),
           processSettingOverrides: collectProcessSettingOverrides(),
+          filamentSettingOverrides: collectFilamentSettingOverrides(),
           retarget,
           slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
         },
@@ -289,7 +404,7 @@ export function useEditorSave({
       // in-project objects, which an adopted project deliberately skips.
       onSavedAs?.(saved)
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
 
   /**
    * "Export object as 3MF": bake ONLY the given object into a new single-plate 3MF library
@@ -314,6 +429,7 @@ export function useEditorSave({
           sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
           objectProcessOverrides: collectObjectProcessOverrides(exportState),
           processSettingOverrides: collectProcessSettingOverrides(),
+          filamentSettingOverrides: collectFilamentSettingOverrides(),
           retarget,
           slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
           // Marker: the library treats the export as a reusable model (preview on click),
@@ -324,7 +440,7 @@ export function useEditorSave({
         { asProject: false }
       )
     })()
-  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+  }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef])
 
   /**
    * "Download 3MF project": the same single-object bake as {@link handleExportObjectAs3mf}
@@ -354,21 +470,13 @@ export function useEditorSave({
           sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
           objectProcessOverrides: collectObjectProcessOverrides(exportState),
           processSettingOverrides: collectProcessSettingOverrides(),
+          filamentSettingOverrides: collectFilamentSettingOverrides(),
           retarget,
           slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
           // Marker: re-uploaded downloads classify as reusable models, not projects.
           objectExport: true
         }
-        const workspaceContext = readWorkspaceContextHeader()
-        const bytes = await fetchModelBytes(buildApiUrl('/api/editor/export-3mf'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(workspaceContext ? { 'X-PrintStream-Tenant': workspaceContext } : {})
-          },
-          body: JSON.stringify(payload)
-        })
+        const bytes = await saveTarget.exportBytes(payload)
         downloadBlob(new Blob([bytes as BlobPart], { type: 'model/3mf' }), fileName)
         toast.success(`Exported ${fileName}.`)
       } catch (error) {
@@ -377,7 +485,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, stateRef, sliceConfigRef])
+  }, [baseFileId, baseVersionId, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
 
   return {
     savedFile,

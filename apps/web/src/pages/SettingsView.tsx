@@ -124,7 +124,7 @@ export function SettingsView({
   const showsTenantNotifications = hasTenantContext && canManageSettings
   const showsTenantLogs = hasTenantContext && canManageSettings
   const showsTenantBridges = hasTenantContext && canManageSettings && !managedBridge
-  const showsTenantSlicingProfiles = hasTenantContext && canManageSettings
+  const showsTenantSlicingPresets = hasTenantContext && canManageSettings
   const workspacePath = parseWorkspacePathname(location.pathname)
   const currentSubview = resolveSettingsSubview(workspacePath.appPathname)
   const settingsPath = (path = '/settings') => workspacePath.tenantSlug
@@ -136,7 +136,7 @@ export function SettingsView({
     showsTenantNotifications,
     showsTenantLogs,
     showsTenantBridges,
-    showsTenantSlicingProfiles,
+    showsTenantSlicingPresets,
     canViewAuth
   })
   const authManagementStatusQuery = useQuery({
@@ -212,7 +212,7 @@ export function SettingsView({
             />
           )}
 
-          {showsTenantSlicingProfiles && (
+          {showsTenantSlicingPresets && (
             <SettingsOverviewCard
               title="Slicing"
               description="Slicing behaviour for this workspace; manage custom presets from the editor."
@@ -560,7 +560,7 @@ function resolveVisibleTenantSettingsSubview(
     showsTenantNotifications: boolean
     showsTenantLogs: boolean
     showsTenantBridges: boolean
-    showsTenantSlicingProfiles: boolean
+    showsTenantSlicingPresets: boolean
     canViewAuth: boolean
   }
 ) {
@@ -571,7 +571,7 @@ function resolveVisibleTenantSettingsSubview(
   if (subview === 'notifications' && !options.showsTenantNotifications) return 'root'
   if (subview === 'logs' && !options.showsTenantLogs) return 'root'
   if (subview === 'bridges' && !options.showsTenantBridges) return 'root'
-  if (subview === 'slicing' && !options.showsTenantSlicingProfiles) return 'root'
+  if (subview === 'slicing' && !options.showsTenantSlicingPresets) return 'root'
   return subview
 }
 

@@ -1,7 +1,8 @@
 /**
  * Shared request-derived helpers for routes and plugins.
  */
-import { createGzip } from 'node:zlib'
+import { gzip } from 'node:zlib'
+import { promisify } from 'node:util'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import type { NextFunction, Request, Response } from 'express'
@@ -9,17 +10,34 @@ import type { Multer } from 'multer'
 import { MulterError } from 'multer'
 import { badRequest } from './http-error.js'
 
+const gzipAsync = promisify(gzip)
+
+/** Bytes per write when handing the body to the socket. See {@link sendModelBuffer}. */
+const MODEL_BODY_CHUNK_BYTES = 64 * 1024
+
 /**
  * Send a model/mesh buffer, gzip-compressing it when the client advertises gzip support.
  *
- * Library model entries are multi-megabyte XML (and import/preview meshes can be large binary
- * STL). The gzip body is **streamed in chunks** (chunked transfer-encoding) rather than buffered
- * into a single `res.send()`: a large single-buffer response is truncated mid-stream by the Vite
- * dev proxy (and other size-limited proxies) — the browser receives most of the body, waits for a
- * tail that never arrives, and the editor's geometry load hangs ("model download stalled"). Many
- * small chunks pass through cleanly, and streaming also keeps peak memory flat for a 50MB+ entry.
- * Tiny payloads skip compression (the gzip framing isn't worth it), and clients that don't
- * advertise gzip still receive the raw bytes.
+ * Library model entries are multi-megabyte XML, import/preview meshes are large binary STL, and
+ * `/archive` serves a whole 3MF. Two properties matter, and the body is compressed up front rather
+ * than through a `createGzip()` stream so it can have both:
+ *
+ * - **Written in many small chunks.** A large single-buffer `res.send()` is truncated mid-stream by
+ *   the Vite dev proxy (and other size-limited proxies) — the browser receives most of the body,
+ *   waits for a tail that never arrives, and the editor's geometry load hangs. Small chunks pass
+ *   through cleanly.
+ * - **Sent with a `Content-Length`.** This is what makes a short body FAIL rather than corrupt. A
+ *   streamed gzip has no declared length, so a body that ends early is indistinguishable from one
+ *   that ended: the browser accepts it, may cache it, and the caller gets a truncated buffer with
+ *   no error. Downstream that surfaces as "this file could not be opened as a 3MF archive", which
+ *   points at the file rather than at the transport. With a length declared, the browser rejects
+ *   the response and `fetchModelBytes` throws — and it will not store a partial response either,
+ *   which matters because these routes are conditional (see `ARCHIVE_ETAG_VARIANT` in
+ *   `routes/library.ts`, where a cached broken body once outlived the bug that produced it).
+ *
+ * Peak memory is therefore the raw buffer plus its compressed copy; the caller has already
+ * materialized the former, so this adds the latter. Tiny payloads skip compression (the gzip
+ * framing isn't worth it), and clients that don't advertise gzip receive the raw bytes.
  */
 export async function sendModelBuffer(
   request: Request,
@@ -30,18 +48,25 @@ export async function sendModelBuffer(
   response.setHeader('Content-Type', contentType)
   response.vary('Accept-Encoding')
   const acceptsGzip = /\bgzip\b/i.test(request.headers['accept-encoding'] ?? '')
+  let body = buffer
   if (acceptsGzip && buffer.length >= 4096) {
+    body = await gzipAsync(buffer)
     response.setHeader('Content-Encoding', 'gzip')
-    try {
-      await pipeline(Readable.from([buffer]), createGzip(), response)
-    } catch (error) {
-      // A client disconnect mid-stream (the editor superseded the load or navigated away) is
-      // expected once we've started writing; only surface a genuine error if nothing was sent.
-      if (!response.headersSent && !response.writableEnded) throw error
-    }
-    return
   }
-  response.send(buffer)
+  response.setHeader('Content-Length', String(body.length))
+  try {
+    await pipeline(Readable.from(chunkBody(body), { objectMode: false }), response)
+  } catch (error) {
+    // A client disconnect mid-stream (the editor superseded the load or navigated away) is
+    // expected once we've started writing; only surface a genuine error if nothing was sent.
+    if (!response.headersSent && !response.writableEnded) throw error
+  }
+}
+
+function* chunkBody(body: Buffer): Generator<Buffer> {
+  for (let offset = 0; offset < body.length; offset += MODEL_BODY_CHUNK_BYTES) {
+    yield body.subarray(offset, offset + MODEL_BODY_CHUNK_BYTES)
+  }
 }
 
 export function requireRouteParam(value: string | string[] | undefined, name: string): string {

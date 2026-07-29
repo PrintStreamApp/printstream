@@ -498,6 +498,28 @@ export function decodeWholeTriangleColorState(code: string): number | null {
   return null
 }
 
+/**
+ * Every 1-based filament id a colour-paint code references, whole-triangle OR sub-triangle.
+ *
+ * {@link decodeWholeTriangleColorState} answers only "is this triangle entirely one filament?"
+ * (it returns null for a split code, which the overlay renders as mixed). Anything asking "which
+ * materials does this print USE" must walk the whole tree instead: a brush dab splits triangles,
+ * so a partially-painted model's second filament is invisible to the whole-triangle decode — which
+ * is what let a painted material still read as unused (removable, and no prime tower).
+ */
+export function collectColorPaintFilamentIds(code: string, into: Set<number>): void {
+  const tree = decodePaintTree(code)
+  if (!tree) return
+  const visit = (node: PaintTreeNode): void => {
+    if (node.kind === 'leaf') {
+      if (node.state > 0) into.add(node.state)
+      return
+    }
+    for (const child of node.children) visit(child)
+  }
+  visit(tree)
+}
+
 /** Inverse of {@link decodeWholeTriangleColorState}: whole-triangle code for a filament. */
 export function encodeWholeTriangleColorState(filamentId: number): string | null {
   if (!Number.isInteger(filamentId) || filamentId < 1 || filamentId > 15) return null

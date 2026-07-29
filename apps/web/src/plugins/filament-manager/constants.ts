@@ -29,8 +29,12 @@ export const FILAMENT_MATERIAL_SUGGESTIONS = [
   'PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PC', 'PVA', 'PA', 'PLA-CF', 'PETG-CF', 'Nylon', 'HIPS'
 ] as const
 
+// "Bambu", not "Bambu Lab": every derived path spells it that way (preset names read "Bambu PLA
+// Basic", and `resolveFilamentIdentity` yields "Bambu" for a genuine tray), so offering the legal
+// name here split one manufacturer across two brands in the inventory filter.
+// `normalizeFilamentVendorLabel` is the rule; the API canonicalises on write.
 export const FILAMENT_BRAND_SUGGESTIONS = [
-  'Bambu Lab', 'Polymaker', 'eSUN', 'Overture', 'Prusament', 'Hatchbox',
+  'Bambu', 'Polymaker', 'eSUN', 'Overture', 'Prusament', 'Hatchbox',
   'SUNLU', 'Inland', 'Elegoo', 'ColorFabb', 'Fillamentum', 'Atomic Filament'
 ] as const
 

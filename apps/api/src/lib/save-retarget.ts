@@ -6,10 +6,12 @@
  *
  * Flow: resolve the target machine profile (full, via the slicer's profile resolver — a data
  * lookup, not slicing), overwrite the machine field set in `project_settings.config` and
- * re-derive the topology-dependent maps ({@link retargetProjectSettingsToMachine}), then write
- * the result back into the 3MF. The layout (`model_settings.config`) and the user's filament
- * selection are untouched. Works for any Bambu machine the slicer has a profile for. See
- * docs/project-printer-retarget.md.
+ * re-derive the topology-dependent maps ({@link retargetProjectSettingsToMachine}), then REBIND
+ * each filament slot's physics to its preset on the new machine (BambuStudio's machine-switch
+ * alias re-selection — see {@link resolveFilamentSlotRebinds}; the user's material CHOICES —
+ * family, colours, nozzle assignment — survive, and recorded overrides keep their values), then
+ * write the result back into the 3MF. The layout (`model_settings.config`) is untouched. Works
+ * for any Bambu machine the slicer has a profile for. See docs/project-printer-retarget.md.
  */
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -17,20 +19,25 @@ import path from 'node:path'
 import {
   applyProcessProfileToProjectSettings,
   canonicalBambuModelKey,
+  filamentPresetFamilyName,
   H2_DUAL_NOZZLE_MODEL_KEYS,
   hasDualNozzleMachineShape,
+  rebindProjectFilamentPhysics,
   retargetProjectSettingsToMachine,
+  slicingPresetProvenance,
+  type FilamentSlotRebind,
   type SceneEditFilament,
-  type SlicingManualProfileTarget
+  type SlicingManualProfileTarget,
+  type SlicingPresetSummary
 } from '@printstream/shared'
+import { THREE_MF_SLICE_INFO_ENTRY as SLICE_INFO_ENTRY } from '@printstream/shared/three-mf'
 import { conflict } from './http-error.js'
 import { slicerClient } from './slicer-client.js'
-import { resolveSlicingProfileFiles } from './slicing-profiles.js'
+import { listCustomSlicingPresets, resolveSlicingPresetFiles } from './slicing-presets.js'
 import { readEntry, rewriteModelSettingsThreeMf, rewriteThreeMfEntries } from './three-mf-internal.js'
-import { applyNozzleAssignmentToProjectSettings } from './three-mf-scene-builder.js'
+import { applyNozzleAssignmentToProjectSettings } from '@printstream/shared/three-mf'
 
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
-const SLICE_INFO_ENTRY = 'Metadata/slice_info.config'
 
 /**
  * Drops the stale `printer_model_id` metadata from a retargeted project's `slice_info.config`.
@@ -145,7 +152,7 @@ export interface RetargetSavedProjectInput {
  * settings are unreadable. A project with NO embedded settings retargets from scratch.
  */
 export async function retargetSavedProjectMachine(input: RetargetSavedProjectInput): Promise<string> {
-  const [machineFile] = await resolveSlicingProfileFiles(input.tenantId, [
+  const [machineFile] = await resolveSlicingPresetFiles(input.tenantId, [
     { id: input.retarget.printerProfileId, kind: 'machine' }
   ])
   if (!machineFile) {
@@ -188,6 +195,21 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   if (processConfig) {
     retargeted = applyProcessProfileToProjectSettings(retargeted, processConfig, input.retarget.processSettingOverrides ?? {})
   }
+
+  // Rebind each filament slot's PHYSICS to its preset on the NEW machine — BambuStudio's
+  // machine-switch semantics (`PresetBundle::update_compatible` re-selects filament presets by
+  // ALIAS, so values become the new variant's; only recorded user overrides survive). Without
+  // this the old machine's numeric columns ride along as fossils that read as phantom "changed
+  // vs preset" markers forever (X1C's `pre_start_fan_time` 0 vs H2D's stock 2). Best-effort per
+  // slot: an unresolvable slot keeps its current values rather than blocking the save.
+  const rebinds = await resolveFilamentSlotRebinds({
+    tenantId: input.tenantId,
+    slicerTargetId: input.slicerTargetId,
+    record: retargeted,
+    targetModel: firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(machineFile.name),
+    nozzleHint: machineFile.name
+  })
+  if (rebinds) retargeted = rebindProjectFilamentPhysics(retargeted, rebinds)
 
   const outDir = await mkdtemp(path.join(tmpdir(), 'printstream-retarget-'))
   const stagePath = path.join(outDir, 'stage-project-settings.3mf')
@@ -278,12 +300,93 @@ export async function healSavedProjectMachineTopology(input: {
 }
 
 /** Resolve the target process profile's full config, or null when there's none / it can't be resolved. */
+/**
+ * Resolve where each filament slot rebinds on the target machine, mirroring BambuStudio's
+ * alias re-selection: the slot's exact preset when it is compatible with the new machine,
+ * else the same FAMILY's variant for that machine (preferring the retargeted machine's nozzle),
+ * else no rebind (the slot keeps its values). Custom presets outrank builtins of the same name,
+ * matching the profile list. Returns null when nothing would change, or on any catalogue
+ * failure — the rebind is an improvement pass and must never block the save.
+ *
+ * Also reused (with the project's OWN machine as the "target") by the tune-override persistence
+ * pass in `save-filament-overrides.ts`, which needs the same per-slot resolved preset configs to
+ * fill non-overridden slots' columns.
+ */
+export async function resolveFilamentSlotRebinds(input: {
+  tenantId: string
+  slicerTargetId: string | null | undefined
+  record: Record<string, unknown>
+  targetModel: string
+  /** The retargeted machine preset name; its nozzle token breaks family-variant ties. */
+  nozzleHint: string
+}): Promise<FilamentSlotRebind[] | null> {
+  const names = Array.isArray(input.record.filament_settings_id)
+    ? input.record.filament_settings_id.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+    : []
+  if (names.length === 0 || names.length !== (input.record.filament_settings_id as unknown[]).length) return null
+  const targetKey = canonicalBambuModelKey(input.targetModel)
+  if (!targetKey) return null
+  let candidates: SlicingPresetSummary[]
+  try {
+    const builtins = await slicerClient.profiles(input.slicerTargetId)
+    const customs = await listCustomSlicingPresets(input.tenantId, builtins)
+    candidates = [...customs, ...builtins].filter((profile) => profile.kind === 'filament')
+  } catch {
+    return null
+  }
+  if (candidates.length === 0) return null
+
+  const compatibleWithTarget = (profile: SlicingPresetSummary): boolean => {
+    if (profile.printerModels && profile.printerModels.length > 0) {
+      return profile.printerModels.some((model) => canonicalBambuModelKey(model) === targetKey)
+    }
+    // No declared models: judge by the name's own `@<printer>` suffix; a suffix-less preset
+    // ("Generic PLA") is machine-agnostic and always eligible.
+    const at = profile.name.indexOf(' @')
+    if (at < 0) return true
+    return canonicalBambuModelKey(profile.name.slice(at + 2).replace(/^BBL\s+/i, '').replace(/\s+\d+(?:\.\d+)?\s*nozzle.*$/i, '')) === targetKey
+  }
+  const nozzleToken = input.nozzleHint.match(/\d+(?:\.\d+)?\s*nozzle/i)?.[0]?.toLowerCase() ?? null
+
+  const rebinds: FilamentSlotRebind[] = []
+  for (const name of names) {
+    const exact = candidates.find((profile) => profile.name === name)
+    let target: SlicingPresetSummary | null = exact && compatibleWithTarget(exact) ? exact : null
+    if (!target) {
+      const family = filamentPresetFamilyName(name)
+      const familyCandidates = candidates.filter((profile) => filamentPresetFamilyName(profile.name) === family && compatibleWithTarget(profile))
+      target = (nozzleToken ? familyCandidates.find((profile) => profile.name.toLowerCase().includes(nozzleToken)) : undefined)
+        ?? familyCandidates[0]
+        ?? null
+    }
+    if (!target) {
+      rebinds.push({ config: null })
+      continue
+    }
+    let config: Record<string, string | string[]> | null = null
+    try {
+      // Workspace custom presets resolve through their stored file (a diff over a system base);
+      // builtins resolve by name from the slicer's own catalogue.
+      if (slicingPresetProvenance(target.id) === 'workspace') {
+        const [file] = await resolveSlicingPresetFiles(input.tenantId, [{ id: target.id, kind: 'filament' }])
+        config = file ? await slicerClient.resolveFilamentConfig(input.slicerTargetId, { source: file.source, name: file.name, content: file.content }) : null
+      } else {
+        config = await slicerClient.resolveFilamentConfig(input.slicerTargetId, { source: 'builtin', name: target.name })
+      }
+    } catch {
+      config = null
+    }
+    rebinds.push({ config, settingsId: config && target.name !== name ? target.name : null })
+  }
+  return rebinds.some((rebind) => rebind.config != null || rebind.settingsId != null) ? rebinds : null
+}
+
 async function resolveTargetProcessConfig(input: RetargetSavedProjectInput): Promise<Record<string, string | string[]> | null> {
   if (!input.retarget.processProfileId) return null
-  // resolveSlicingProfileFiles skips project-embedded ("project:") presets, so those fall through
+  // resolveSlicingPresetFiles skips project-embedded ("project:") presets, so those fall through
   // to null and the project keeps its embedded process — intended (a project preset has no separate
   // file to resolve, and cross-family targets hide project presets anyway).
-  const [processFile] = await resolveSlicingProfileFiles(input.tenantId, [
+  const [processFile] = await resolveSlicingPresetFiles(input.tenantId, [
     { id: input.retarget.processProfileId, kind: 'process' }
   ])
   if (!processFile) return null

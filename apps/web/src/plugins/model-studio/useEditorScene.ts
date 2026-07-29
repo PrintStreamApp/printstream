@@ -105,6 +105,14 @@ export interface EditorSceneParams {
   viewDistanceRef: MutableRefObject<number>
   bedCenterRef: MutableRefObject<{ x: number; y: number }>
   interactionActiveRef: MutableRefObject<boolean>
+  /**
+   * The browser would not grant a WebGL context. Reported rather than thrown: an unguarded
+   * constructor here takes the whole editor route down through the error boundary, losing the
+   * user's unsaved session for what is a recoverable browser state. See the counterpart overlay
+   * in `PreviewView` — Chrome blocks a page that has caused repeated context loss, and only a
+   * fresh document lifts that, so the message says so instead of offering a retry that cannot work.
+   */
+  onContextRefused?: (message: string) => void
   // Selection.
   selectedKeyRef: MutableRefObject<string | null>
   extraSelectedKeysRef: MutableRefObject<ReadonlyArray<string>>
@@ -161,6 +169,12 @@ export interface EditorSceneParams {
   addMeasurePointRef: MutableRefObject<((point: { x: number; y: number; z: number }) => void) | null>
   recordHistoryRef: MutableRefObject<() => void>
   regenerateActiveThumbnailRef: MutableRefObject<(() => void) | null>
+  /**
+   * Fired once when a paint STROKE ends. Paint mutates the editor state in place (a clone per
+   * pointer-move would be brutal), so nothing keyed on state identity — the used-materials set
+   * above all — would otherwise see it. See EditorView's paint revision.
+   */
+  paintCommittedRef: MutableRefObject<(() => void) | null>
   /** Rebuild the place-on-face hull after a lay-flat re-orients the part (the hull bakes orientation). */
   rebuildFaceHullRef: MutableRefObject<() => void>
   openContextMenuRef: MutableRefObject<(menu: { x: number; y: number; key: string } | null) => void>
@@ -183,6 +197,9 @@ export function useEditorScene(params: EditorSceneParams): void {
   // re-seed the plate when sceneReady cycles). Rate-capped in the loss handler.
   const [contextGeneration, setContextGeneration] = useState(0)
   const lastContextRebuildRef = useRef(0)
+  // Lets code outside the render loop ask for a repaint (see the on-demand rendering note on the
+  // loop). Wired up by the setup effect; null before the viewport mounts / after teardown.
+  const requestRenderRef = useRef<(() => void) | null>(null)
   const {
     viewerContainer,
     viewCubeContainer,
@@ -203,6 +220,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     viewDistanceRef,
     bedCenterRef,
     interactionActiveRef,
+    onContextRefused,
     selectedKeyRef,
     extraSelectedKeysRef,
     partSelectionRef,
@@ -239,6 +257,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     addMeasurePointRef,
     recordHistoryRef,
     regenerateActiveThumbnailRef,
+    paintCommittedRef,
     rebuildFaceHullRef,
     openContextMenuRef,
     suppressEditorEscapeRef,
@@ -246,6 +265,15 @@ export function useEditorScene(params: EditorSceneParams): void {
     setSelectedAddedPartKey,
     writeBackGroupTransform
   } = params
+
+  // A React commit to the editor almost always means a visible change (selection, material,
+  // added/removed object, tool, paint, plate rebuild). Request one repaint per commit so the
+  // on-demand loop reflects it immediately rather than waiting for its safety tick. This is cheap:
+  // EditorView is deliberately kept from re-rendering during drags (LiveTransformPanel owns the
+  // high-frequency transform values), so this fires only on genuine state changes.
+  useEffect(() => {
+    requestRenderRef.current?.()
+  })
 
   // Initialize renderer/camera/controls once a container exists.
   useEffect(() => {
@@ -274,7 +302,13 @@ export function useEditorScene(params: EditorSceneParams): void {
     // coplanar surfaces — e.g. SVG/text parts resting flush on a backdrop, or stacked
     // duplicate parts — don't z-fight into a flickering, semi-transparent mess across the
     // wide 0.1..5000 depth range the bed + gizmos need.
-    const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
+    let renderer: THREE.WebGLRenderer
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
+    } catch {
+      onContextRefused?.('The browser has blocked new 3D views on this page. Reload the page to restore the editor view.')
+      return
+    }
     // Cap DPR at 2 (like the view cube): on a 3x-DPR phone or 4K display the
     // editor's AA + log-depth + 2048² shadow + always-on loop would otherwise
     // render ~9x the fragments — a large mobile GPU/battery/thermal cost.
@@ -300,6 +334,10 @@ export function useEditorScene(params: EditorSceneParams): void {
     const orbit = new OrbitControls(camera, renderer.domElement)
     orbit.enableDamping = true
     orbit.dampingFactor = 0.28
+    // See the same line in PreviewView: dollying toward `target` decelerates as you approach and
+    // never quite arrives, and rotation orbits the plate centre rather than the detail under the
+    // cursor. Zooming to the pointer fixes both, and matches what every CAD viewer does.
+    orbit.zoomToCursor = true
     orbit.target.set(0, 0, 20)
     orbit.update()
     orbitRef.current = orbit
@@ -1221,6 +1259,9 @@ export function useEditorScene(params: EditorSceneParams): void {
           renderer.domElement.releasePointerCapture(event.pointerId)
         }
         regenerateActiveThumbnailRef.current?.()
+        // One bump per stroke: paint mutated state in place, so consumers keyed on state identity
+        // (the used-materials set -> remove guard + prime tower) need an explicit signal.
+        paintCommittedRef.current?.()
         return
       }
       // Empty-space click (negligible movement) clears the selection; a drag (orbiting) keeps it.
@@ -1283,6 +1324,27 @@ export function useEditorScene(params: EditorSceneParams): void {
     let frame = 0
     let validationFrame = 0
     let wasInteracting = false
+    // On-demand rendering. The viewport used to `renderer.render()` every frame at 60fps even when
+    // nothing changed, pinning the GPU at 60-70% while the editor just sat open. Now a frame is
+    // painted only when something actually needs it: `needsRender` (set on a camera move, a React
+    // commit via requestRenderRef, or pointer motion over the canvas), an in-progress interaction
+    // (smooth drags), the drag-end edge, or a low-rate safety tick that repaints anything an
+    // un-instrumented mutation might have missed. 250ms is imperceptible on a static scene but drops
+    // idle cost from 60fps to ~4fps. The rAF loop itself keeps running so orbit damping still
+    // advances and the safety net stays alive.
+    const IDLE_RENDER_INTERVAL_MS = 250
+    let needsRender = true
+    let lastRenderStamp = Number.NEGATIVE_INFINITY
+    const requestRender = () => { needsRender = true }
+    requestRenderRef.current = requestRender
+    // Camera moves (drag, wheel, and every damping-settle frame) fire this; that is what keeps a
+    // released orbit smooth without a full-time render loop.
+    orbit.addEventListener('change', requestRender)
+    // Pointer motion over the canvas drives visuals React never sees: the paint brush cursor, hover
+    // highlight, the measure-tool preview. Painting is not an "interaction" in the drag sense, so
+    // without this those would only refresh on the safety tick.
+    const onPointerMoveRender = () => requestRender()
+    renderer.domElement.addEventListener('pointermove', onPointerMoveRender)
     // Last-applied inputs to applyPaintOverlayVisibility, so it only re-traverses on a real change.
     let lastPaintChannel: TrianglePaintChannel | null | undefined
     let lastPaintSelectedKey: string | null | undefined
@@ -1360,7 +1422,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       }
     }
     recomputeWarningsRef.current = runPlacementWarningRecompute
-    const animate = () => {
+    const animate = (now = 0) => {
       // While a heavy overlay viewer (the 3D preview modal) is open above the editor, skip
       // all per-frame work: the modal covers this viewport, and rendering two full scenes
       // at once doubles the GPU load for nothing. The canvas keeps its last frame and the
@@ -1369,6 +1431,7 @@ export function useEditorScene(params: EditorSceneParams): void {
         frame = requestAnimationFrame(animate)
         return
       }
+      // Advances orbit damping and fires 'change' (-> requestRender) on any camera movement.
       orbit.update()
       // Any active drag (gizmo, object body, or purge tower). Drives both the cheaper
       // selection-box bounds below and the deferred placement-warning recompute further down.
@@ -1376,39 +1439,46 @@ export function useEditorScene(params: EditorSceneParams): void {
       const dragJustEnded = wasInteracting && !interacting
       const interactingChanged = interacting !== wasInteracting
       wasInteracting = interacting
-      // Re-apply paint-overlay visibility (see helper above) whenever the active tool, the selection,
-      // or the manipulation state changes — not every frame.
-      const activePaintChannel = activePaintChannelRef.current
-      const paintSelectedKey = selectedKeyRef.current
-      if (interactingChanged || activePaintChannel !== lastPaintChannel || paintSelectedKey !== lastPaintSelectedKey) {
-        applyPaintOverlayVisibility(interacting)
-        lastPaintChannel = activePaintChannel
-        lastPaintSelectedKey = paintSelectedKey
-      }
-      // Track the selected object's mesh bounds (Box3Helper fits itself to the box value in its
-      // own updateMatrixWorld during render). The PRECISE walk (per-vertex) is the priciest
-      // per-frame work for high-poly models, so: only recompute when the object actually moved
-      // (idle selections / camera orbits skip it), and while dragging use the cheap transformed-
-      // AABB path so high-poly drags stay smooth — then restore the precise box on the drop frame.
-      if (selectionBox && selectionTarget) {
-        const sig = selectionBoxSignature(selectionTarget)
-        if (sig !== selectionBoxSig || dragJustEnded) {
-          selectionBoxSig = sig
-          // Precise (per-vertex) is only needed to hug a REORIENTED object. Mid-drag stays cheap; a
-          // move-drop stays cheap too (translation keeps the box exact); only a rotate/scale drop —
-          // or a non-drag change (undo, manual rotate) — pays the precise walk.
-          const precise = interacting ? false : (dragJustEnded ? lastDragChangedOrientation : true)
-          selectionBoxValue.copy(printableMeshBox(selectionTarget, precise))
+      // Paint them only when needed (see the on-demand note above): a pending request, a live drag,
+      // its end edge, or the safety tick. Everything below feeds the frame, so it is gated too.
+      const shouldRender = needsRender || interacting || dragJustEnded || (now - lastRenderStamp) >= IDLE_RENDER_INTERVAL_MS
+      if (shouldRender) {
+        // Re-apply paint-overlay visibility (see helper above) whenever the active tool, the selection,
+        // or the manipulation state changes — not every frame.
+        const activePaintChannel = activePaintChannelRef.current
+        const paintSelectedKey = selectedKeyRef.current
+        if (interactingChanged || activePaintChannel !== lastPaintChannel || paintSelectedKey !== lastPaintSelectedKey) {
+          applyPaintOverlayVisibility(interacting)
+          lastPaintChannel = activePaintChannel
+          lastPaintSelectedKey = paintSelectedKey
         }
+        // Track the selected object's mesh bounds (Box3Helper fits itself to the box value in its
+        // own updateMatrixWorld during render). The PRECISE walk (per-vertex) is the priciest
+        // per-frame work for high-poly models, so: only recompute when the object actually moved
+        // (idle selections / camera orbits skip it), and while dragging use the cheap transformed-
+        // AABB path so high-poly drags stay smooth — then restore the precise box on the drop frame.
+        if (selectionBox && selectionTarget) {
+          const sig = selectionBoxSignature(selectionTarget)
+          if (sig !== selectionBoxSig || dragJustEnded) {
+            selectionBoxSig = sig
+            // Precise (per-vertex) is only needed to hug a REORIENTED object. Mid-drag stays cheap; a
+            // move-drop stays cheap too (translation keeps the box exact); only a rotate/scale drop —
+            // or a non-drag change (undo, manual rotate) — pays the precise walk.
+            const precise = interacting ? false : (dragJustEnded ? lastDragChangedOrientation : true)
+            selectionBoxValue.copy(printableMeshBox(selectionTarget, precise))
+          }
+        }
+        // Keep ear markers flat on the bed through rotations/scales (their matrices bake
+        // the world transform, so they must re-bake whenever the instance moves). Only
+        // the few groups that actually carry markers pay anything here.
+        for (const group of groupByKeyRef.current.values()) syncBrimEarMarkerMatrices(group)
+        syncExtraSelectionBoxes()
+        syncPartSelectionBoxes()
+        renderer.render(scene, camera)
+        viewCube.sync(camera)
+        needsRender = false
+        lastRenderStamp = now
       }
-      // Keep ear markers flat on the bed through rotations/scales (their matrices bake
-      // the world transform, so they must re-bake whenever the instance moves). Only
-      // the few groups that actually carry markers pay anything here.
-      for (const group of groupByKeyRef.current.values()) syncBrimEarMarkerMatrices(group)
-      syncExtraSelectionBoxes()
-      syncPartSelectionBoxes()
-      renderer.render(scene, camera)
-      viewCube.sync(camera)
       // Re-check placement (~4x/sec) so collision/off-plate/floating/unprintable/tower
       // warnings stay current without wiring every mutation path. The recompute (footprint
       // rasterization + per-object Box3 builds) is skipped WHILE actively dragging an object,
@@ -1437,6 +1507,9 @@ export function useEditorScene(params: EditorSceneParams): void {
       if (!userAdjustedViewRef.current && container.clientWidth > 1) {
         frameDefaultViewRef.current?.()
       }
+      // A resize with a still camera would otherwise wait for the safety tick to repaint at the
+      // new size (a visible stretch/gap for up to a frame-interval).
+      requestRender()
     }
     window.addEventListener('resize', onResize)
     const resizeObserver = new ResizeObserver(onResize)
@@ -1466,6 +1539,9 @@ export function useEditorScene(params: EditorSceneParams): void {
       window.removeEventListener('resize', onResize)
       window.removeEventListener('contextmenu', onGlobalContextMenu, true)
       resizeObserver.disconnect()
+      requestRenderRef.current = null
+      orbit.removeEventListener('change', requestRender)
+      renderer.domElement.removeEventListener('pointermove', onPointerMoveRender)
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerup', endBodyDrag)

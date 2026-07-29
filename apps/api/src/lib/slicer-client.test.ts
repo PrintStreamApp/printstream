@@ -145,8 +145,8 @@ test('slicer client spreads concurrent slices across instances and routes progre
     // Progress for each job must be read from the instance running it.
     const progressA = await client.progress('job-a')
     const progressB = await client.progress('job-b')
-    assert.equal(progressA?.[0]?.text, 'instance-a')
-    assert.equal(progressB?.[0]?.text, 'instance-b')
+    assert.equal(progressA.kind === 'output' ? progressA.lines[0]?.text : null, 'instance-a')
+    assert.equal(progressB.kind === 'output' ? progressB.lines[0]?.text : null, 'instance-b')
 
     stubA.releaseSlices()
     stubB.releaseSlices()
@@ -154,8 +154,9 @@ test('slicer client spreads concurrent slices across instances and routes progre
     cleanupPaths.add(path.dirname(resultA.artifactPath))
     cleanupPaths.add(path.dirname(resultB.artifactPath))
 
-    // Once a job completes, its instance binding is dropped and progress is a no-op.
-    assert.equal(await client.progress('job-a'), null)
+    // Once a job completes, its instance binding is dropped. That reports as `unclaimed`, NOT as a
+    // lost slice — the watchdog must never fail a job for finishing normally.
+    assert.deepEqual(await client.progress('job-a'), { kind: 'unclaimed' })
   } finally {
     await stubA.close()
     await stubB.close()
@@ -201,6 +202,66 @@ test('slicer client reuses the free instance for sequential slices', async () =>
  * tests can observe in-flight assignment) and serves GET /jobs/:id progress
  * that names the instance, letting tests assert progress routing.
  */
+// The one link no other test covers: every watchdog test above and in slicing-jobs.test.ts stubs
+// `progress` and hands the watchdog a ready-made verdict, so nothing pins the mapping from an
+// actual HTTP response to that verdict. If `/jobs/:id` were ever changed to answer 200-with-nothing
+// for an unknown job -- a plausible tidy-up -- the classification would silently degrade to "no
+// output yet", the watchdog would never fire again, and every existing test would still pass.
+test('progress classifies a real 404 as a disowned job, not as silence', async () => {
+  const sourceDir = await mkdtemp(path.join(tmpdir(), 'printstream-slicer-progress-test-'))
+  cleanupPaths.add(sourceDir)
+  const sourcePath = path.join(sourceDir, 'input.3mf')
+  await writeFile(sourcePath, Buffer.from('input-bytes'))
+
+  // Flipped between assertions instead of tearing the server down: killing the socket would also
+  // fail the in-flight slice, and `run`'s finally would unbind the job, racing the assertion into
+  // `unclaimed`.
+  let jobsStatus = 404
+  let sawSlice = false
+  const server = createServer((request, response) => {
+    if (request.method === 'GET' && request.url?.startsWith('/jobs/')) {
+      response.statusCode = jobsStatus
+      response.end()
+      return
+    }
+    // Never answered: the slice stays in flight, so the job stays bound to this instance.
+    request.resume()
+    request.on('end', () => { sawSlice = true })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  const address = server.address()
+  if (!address || typeof address !== 'object') throw new Error('stub server has no address')
+
+  const controller = new AbortController()
+  try {
+    const client = new SlicerClient(`http://127.0.0.1:${address.port}`)
+    const running = client.run({
+      jobId: 'job-lost',
+      sourceFileName: 'input.3mf',
+      sourcePath,
+      request: makeRequest(),
+      profileFiles: [],
+      signal: controller.signal
+    }).catch(() => null)
+    await waitFor(() => sawSlice)
+
+    // The instance is up and does not have this job: a restarted slicer. Conclusively lost.
+    assert.deepEqual(await client.progress('job-lost'), { kind: 'unknown' })
+
+    // A server error is NOT conclusive -- it gets the long grace, so it must not be reported as a
+    // disowned job. A dead socket takes this same catch-and-classify path.
+    jobsStatus = 503
+    const sick = await client.progress('job-lost')
+    assert.equal(sick.kind, 'unreachable')
+
+    controller.abort()
+    await running
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
 async function createSlicerStub(name: string) {
   const sliceJobIds: string[] = []
   const pendingSlices: Array<() => void> = []

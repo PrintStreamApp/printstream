@@ -159,6 +159,17 @@ test('value equality is option-aware: serialized form does not make a change', (
   assert.equal(processConfigValuesEqual('45.0', '45%'), false)
   // Vectors compare element-wise under the same rule.
   assert.equal(processConfigValuesEqual(['45.0', '45%'], ['45%', '45'], percent), true)
+  // A scalar is BambuStudio's shorthand for "the same on every extruder", so it equals a uniform
+  // per-extruder array. A single-extruder project ("50") vs a dual-nozzle preset (["50","50"])
+  // is the same value and must not read as changed (the "Initial layer 50 -> 50" phantom on H2D).
+  assert.equal(processConfigValuesEqual('50', ['50', '50'], float), true)
+  assert.equal(processConfigValuesEqual(['50', '50'], '50', float), true)
+  assert.equal(processConfigValuesEqual('50', ['50'], float), true)
+  // A genuinely non-uniform array still differs from the scalar.
+  assert.equal(processConfigValuesEqual('50', ['50', '60'], float), false)
+  assert.equal(processConfigValuesEqual(['50', '60'], '50', float), false)
+  // A scalar against an empty array is a real difference, not a uniform match.
+  assert.equal(processConfigValuesEqual('50', [], float), false)
 })
 
 test('an absent value equals an empty one, so a blank never reads as changed', () => {
@@ -245,4 +256,71 @@ test('the filament-index process keys are filament indices, not numeric settings
   for (const key of ['support_interface_top_layers', 'support_interface_bottom_layers']) {
     assert.ok(!FILAMENT_INDEX_PROCESS_KEYS.includes(key), `${key} is a layer count, not a filament index`)
   }
+})
+
+// I8 (badge == dialog): the pre-open badge must count only the rows the dialog will show. A
+// setting whose controlling toggle is OFF is hidden by the conditional field-state engine, and
+// counting it left a "2" beside a dialog listing one changed row.
+test('resolvedVisibleProcessModifiedKeys drops modified-but-hidden keys', async () => {
+  const { resolvedProcessModifiedKeys, resolvedVisibleProcessModifiedKeys } = await import('./process-settings.js')
+  // wall_loops is always visible; prime_tower_width is visible ONLY while enable_prime_tower is on.
+  const response = {
+    config: { wall_loops: '4', enable_prime_tower: '0', prime_tower_width: '60' },
+    baseConfig: { wall_loops: '2', enable_prime_tower: '0', prime_tower_width: '35' },
+    overriddenKeys: []
+  }
+  assert.deepEqual(
+    resolvedProcessModifiedKeys(response).sort(),
+    ['prime_tower_width', 'wall_loops'],
+    'both keys really differ from the preset'
+  )
+  assert.deepEqual(
+    resolvedVisibleProcessModifiedKeys(response).sort(),
+    ['wall_loops'],
+    'the tower width is hidden while the tower is off, so it must not inflate the badge'
+  )
+  // Turn the toggle on and the same key becomes countable again.
+  const towerOn = { ...response, config: { ...response.config, enable_prime_tower: '1' } }
+  assert.ok(resolvedVisibleProcessModifiedKeys(towerOn).includes('prime_tower_width'))
+})
+
+test('resolvedVisibleProcessModifiedKeys honours the per-object allowed-key subset', async () => {
+  const { resolvedVisibleProcessModifiedKeys } = await import('./process-settings.js')
+  const response = {
+    config: { wall_loops: '4', sparse_infill_density: '25%' },
+    baseConfig: { wall_loops: '2', sparse_infill_density: '15%' },
+    overriddenKeys: []
+  }
+  assert.deepEqual(
+    resolvedVisibleProcessModifiedKeys(response, {}, { allowedKeys: ['wall_loops'] }),
+    ['wall_loops'],
+    'a per-object badge counts only keys that dialog can edit'
+  )
+})
+
+// Mirrors the filament side, because BambuStudio does: `Tab::update_changed_ui` is one non-virtual
+// base-class method computing `current_dirty_options` (vs saved) and
+// `current_different_from_parent_options` (vs parent) for EVERY preset type, with `deep_compare`
+// true for both PRINT and FILAMENT. Only the former drives its modified marker.
+test("a process preset's own overrides are attributed to the preset, not to the project", async () => {
+  const { resolvedProcessModifiedKeys, resolvedProcessPresetOverrideKeys } = await import('./process-settings.js')
+  // A workspace custom process preset in use, untouched: its values ARE the baseline, and the extra
+  // wall loop it carries belongs to the preset (its parent says 2).
+  const response = {
+    config: { wall_loops: '3', layer_height: '0.2' },
+    baseConfig: { wall_loops: '3', layer_height: '0.2' },
+    parentConfig: { wall_loops: '2', layer_height: '0.2' },
+    overriddenKeys: []
+  }
+  assert.deepEqual(resolvedProcessModifiedKeys(response), [], 'nothing has been changed HERE')
+  assert.deepEqual(resolvedProcessPresetOverrideKeys(response), ['wall_loops'], 'the preset carries it')
+  // Changing it in the project is a project change, and stays distinct from the preset's override.
+  assert.deepEqual(resolvedProcessModifiedKeys(response, { wall_loops: '4' }), ['wall_loops'])
+})
+
+test('a process preset with no parent attributes nothing to the preset', async () => {
+  const { resolvedProcessModifiedKeys, resolvedProcessPresetOverrideKeys } = await import('./process-settings.js')
+  const response = { config: { wall_loops: '3' }, baseConfig: { wall_loops: '3' }, overriddenKeys: [] }
+  assert.deepEqual(resolvedProcessPresetOverrideKeys(response), [])
+  assert.deepEqual(resolvedProcessModifiedKeys(response), [], 'a preset cannot differ from itself')
 })

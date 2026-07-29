@@ -13,13 +13,13 @@
  */
 import { createWriteStream } from 'node:fs'
 import { rename } from 'node:fs/promises'
-import { isProcessSettingKey, type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBounds, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
+import { type PrinterActivePrintObject, type PrinterActivePrintObjectPreviewBounds, type SceneEditPlateFilamentChanges, type SceneEditPlatePauses } from '@printstream/shared'
 import { PNG } from 'pngjs'
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
-import { escapeXmlAttribute, readEntry, readZipEntryBuffer, rewriteThreeMfEntries } from './three-mf-internal.js'
+import { readEntry, readZipEntryBuffer, rewriteThreeMfEntries } from './three-mf-internal.js'
 import { CUSTOM_GCODE_PER_LAYER_ENTRY, buildDefaultPickFilePath, readPlateIndex, type ThreeMfIndex, type ThreeMfPlateObject } from './three-mf-reader.js'
-import { mergeCustomGcodePerLayer } from './three-mf-scene-builder.js'
+import { applyObjectProcessOverridesXml, mergeCustomGcodePerLayer, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from '@printstream/shared/three-mf'
 
 const ACTIVE_PRINT_PREVIEW_MAX_GCODE_BYTES = 128 * 1024 * 1024
 const MINIMAL_THREE_MF_MODEL_XML = [
@@ -266,7 +266,10 @@ export function createObjectFilteredThreeMf(
 }
 
 /** Per-object process overrides keyed by Bambu `object_id` (string), each a sparse key→value map. */
-export type ObjectProcessOverrides = Record<string, Record<string, string | string[]>>
+// Applied here while preparing a slice; the transform itself is shared so the browser's save path
+// runs the identical rewrite. Re-exported for the api barrel's existing consumers.
+export { applyObjectProcessOverridesXml } from '@printstream/shared/three-mf'
+export type { ObjectProcessOverrides } from '@printstream/shared/three-mf'
 
 /**
  * Create a 3MF copy customized for slicing: optionally drops unselected objects from the target
@@ -350,46 +353,11 @@ export function rekeyReplacedObjectOverrides(
   overrides: ObjectProcessOverrides,
   replacedObjectIds: ReadonlyArray<{ originalObjectId: number; bakedObjectId: number }>
 ): ObjectProcessOverrides {
-  if (replacedObjectIds.length === 0) return overrides
-  const next: ObjectProcessOverrides = { ...overrides }
-  for (const { originalObjectId, bakedObjectId } of replacedObjectIds) {
-    const originalKey = String(originalObjectId)
-    const original = next[originalKey]
-    if (!original) continue
-    const bakedKey = String(bakedObjectId)
-    next[bakedKey] = { ...next[bakedKey], ...original }
-    if (bakedKey !== originalKey) delete next[originalKey]
-  }
-  return next
+  // Delegates to the shared implementation the BAKE also uses, so the API's post-pass and the
+  // browser's in-bake pass cannot disagree about what re-keying means.
+  return rekeyObjectProcessOverrides(overrides, replacedObjectIds)
 }
 
-/**
- * Sets each object's per-object process overrides in `model_settings.config`. For every object in
- * `overridesByObjectId`, the object's HEAD metadata (before its first `<part>`) has its existing
- * NON-structural metadata removed and the desired override set injected. Scoping to the head means
- * a part's per-volume `<metadata>` of the same key is never clobbered; replacing the whole override
- * set (rather than only the supplied keys) means an override the user CLEARED is actually removed,
- * not left behind. An empty override map for an object therefore clears all its object-level
- * overrides. Objects not listed (and all non-object blocks) are left untouched.
- */
-export function applyObjectProcessOverridesXml(xml: string, overridesByObjectId: ObjectProcessOverrides): string {
-  return xml.replace(/<object\b([^>]*)>([\s\S]*?)<\/object>/g, (full, attrs: string, body: string) => {
-    const objectId = Number.parseInt(/(?:^|\s)id="(\d+)"/.exec(attrs)?.[1] ?? '', 10)
-    const overrides = overridesByObjectId[String(objectId)]
-    if (!Number.isInteger(objectId) || !overrides) return full
-    const firstPart = body.search(/<part\b/)
-    const head = firstPart >= 0 ? body.slice(0, firstPart) : body
-    const tail = firstPart >= 0 ? body.slice(firstPart) : ''
-    // Drop existing object-level PROCESS overrides only; keep all other object-head metadata.
-    const strippedHead = head.replace(/[ \t]*<metadata\s+key="([^"]+)"\s+value="[^"]*"\s*\/>\n?/g, (line, key: string) =>
-      isProcessSettingKey(key) ? '' : line)
-    const injected = Object.entries(overrides).map(([key, value]) => {
-      const serialized = Array.isArray(value) ? value.join(';') : value
-      return `\n    <metadata key="${escapeXmlAttribute(key)}" value="${escapeXmlAttribute(serialized)}"/>`
-    }).join('')
-    return `<object${attrs}>${injected}${strippedHead}${tail}</object>`
-  })
-}
 
 /**
  * Collect the Bambu `object_id`s placed on `plate` from a `model_settings.config` XML string (one

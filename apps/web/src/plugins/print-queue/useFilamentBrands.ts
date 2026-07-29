@@ -6,12 +6,12 @@
  * vendor, so it adds no noise; a custom preset with a genuinely new vendor still shows up).
  */
 import { useQuery } from '@tanstack/react-query'
-import type { SlicingProfileSummary, SlicingProfilesResponse } from '@printstream/shared'
+import type { SlicingPresetSummary, SlicingPresetsResponse } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
-import { isVisibleFilamentProfile } from '../../lib/sliceProfileMatching'
+import { isVisibleFilamentProfile } from '../../lib/slicingPresetMatching'
 
 /** Unique, sorted filament vendors from the visible filament profiles. Pure for testing. */
-export function buildFilamentBrands(profiles: SlicingProfileSummary[]): string[] {
+export function buildFilamentBrands(profiles: SlicingPresetSummary[]): string[] {
   const brands = new Set<string>()
   for (const profile of profiles) {
     if (profile.kind !== 'filament' || !isVisibleFilamentProfile(profile)) continue
@@ -31,7 +31,7 @@ export function useFilamentBrands(enabled = true): string[] {
   const query = useQuery({
     queryKey: FILAMENT_BRANDS_QUERY_KEY,
     queryFn: async ({ signal }) =>
-      buildFilamentBrands((await apiFetch<SlicingProfilesResponse>('/api/slicing/profiles', { signal })).profiles),
+      buildFilamentBrands((await apiFetch<SlicingPresetsResponse>('/api/slicing/profiles', { signal })).profiles),
     enabled,
     retry: false,
     staleTime: 5 * 60_000

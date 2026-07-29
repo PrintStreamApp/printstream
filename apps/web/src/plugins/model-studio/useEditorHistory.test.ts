@@ -24,6 +24,20 @@ interface FakeConfig {
   targetMode: 'realPrinter' | 'manualProfile'
   manualPrinterModel: string
   nozzleDiameter: string
+  sessionSlots?: SessionFilamentSlot[] | null
+}
+
+type SessionFilamentSlot = import('../../components/library/useMaterialSlots').SessionFilamentSlot
+
+/** A session slot: the id it is keyed by, and the base slot its slicer settings clone from. */
+const slot = (projectFilamentId: number, sourceIndex: number | null, pickedColor?: string): SessionFilamentSlot =>
+  ({ projectFilamentId, sourceIndex, label: `M${projectFilamentId}`, color: null, nozzleId: null, pickedColor })
+
+/** Colours as the panel reads them: derived from the slots, exactly like the real controller. */
+const coloursOf = (slots: SessionFilamentSlot[] | null | undefined): Record<number, string> => {
+  const out: Record<number, string> = {}
+  for (const entry of slots ?? []) if (entry.pickedColor !== undefined) out[entry.projectFilamentId] = entry.pickedColor
+  return out
 }
 
 /**
@@ -33,28 +47,27 @@ interface FakeConfig {
  */
 function makeController(initial: FakeConfig) {
   let config: FakeConfig = { ...initial }
+  // The controller's derived retarget payload; tests set it to simulate the seeds resolving or
+  // a target change. Only the signature-relevant essentials are populated.
+  let retargetTarget: unknown = null
+  const setRetargetTarget = (value: { printerProfileId: string; printerModel: string } | null) => {
+    retargetTarget = value
+      ? { mode: 'manualProfile', plateType: 'textured_plate', nozzleDiameters: [0.4], processProfileId: 'process-1', ...value }
+      : null
+  }
   const restores: SliceConfigSnapshot[] = []
   const build = (): SliceSettingsController => ({
     configSnapshot: {
       selectedSlicerTargetId: 'slicer-1',
-      targetMode: config.targetMode,
-      printerId: config.printerId,
-      printerProfileId: 'machine-1',
-      manualPrinterModel: config.manualPrinterModel,
-      manualPrinterModelTouched: false,
-      nozzleDiameter: config.nozzleDiameter,
-      nozzleFlow: 'standard',
-      plateType: 'textured_plate',
-      plateTypeTouched: false,
-      removedFilamentIds: [],
-      profileEditedFilamentIds: [],
-      addedFilaments: [],
-      addedFilamentSourceIndex: {},
-      filamentColors: {},
-      filamentMaterialOptionIds: {},
-      filamentToolheadIds: {},
-      filamentMaterialTypeFilters: {},
-      filamentSettingOverridesById: {},
+      // Post-S2 the target contributes only the user's PICKS; the machine profile, option lists,
+      // and compatibility all re-derive from them on restore.
+      machineTargetIntent: {
+        printerId: config.printerId,
+        printerModel: config.manualPrinterModel,
+        nozzleDiameter: config.nozzleDiameter
+      },
+      // The slots ARE the material half of the snapshot now.
+      sessionSlots: config.sessionSlots ?? null,
       objectProcessOverrides: {},
       processProfileId: 'process-1',
       processProfileSelectionTouched: false,
@@ -63,10 +76,11 @@ function makeController(initial: FakeConfig) {
     restoreConfig: (snapshot: SliceConfigSnapshot) => {
       restores.push(snapshot)
       config = {
-        printerId: snapshot.printerId,
-        targetMode: snapshot.targetMode,
-        manualPrinterModel: snapshot.manualPrinterModel,
-        nozzleDiameter: snapshot.nozzleDiameter
+        printerId: snapshot.machineTargetIntent.printerId ?? '',
+        targetMode: snapshot.machineTargetIntent.printerId ? 'realPrinter' : 'manualProfile',
+        manualPrinterModel: snapshot.machineTargetIntent.printerModel ?? '',
+        nozzleDiameter: snapshot.machineTargetIntent.nozzleDiameter ?? '',
+        sessionSlots: snapshot.sessionSlots
       }
     },
     selectPrinter: (printer: { id: string } | null) => {
@@ -74,14 +88,20 @@ function makeController(initial: FakeConfig) {
     },
     selectPrinterModel: (model: string) => { config = { ...config, manualPrinterModel: model } },
     setNozzleDiameter: (value: string) => { config = { ...config, nozzleDiameter: value } },
-    retargetTarget: null,
+    setFilamentColors: (value: Record<number, string>) => {
+      // Write-through onto the slots, as the real core does now.
+      const next = typeof value === 'function' ? (value as (p: Record<number, string>) => Record<number, string>)(coloursOf(config.sessionSlots)) : value
+      config = { ...config, sessionSlots: (config.sessionSlots ?? []).map((entry) => ({ ...entry, pickedColor: next[entry.projectFilamentId] })) }
+    },
+    retargetTarget,
     materialEditListenerRef: { current: null },
     processEditListenerRef: { current: null }
   } as unknown as SliceSettingsController)
-  return { build, restores, read: () => config }
+  const setSessionSlots = (slots: SessionFilamentSlot[] | null) => { config = { ...config, sessionSlots: slots } }
+  return { build, restores, read: () => config, setRetargetTarget, setSessionSlots }
 }
 
-function renderHistory(controller: ReturnType<typeof makeController>) {
+function renderHistory(controller: ReturnType<typeof makeController>, options?: { editorBorn?: boolean }) {
   const noop = () => {}
   const view = renderHook(
     (props: { sliceConfig: SliceSettingsController }) => useEditorHistory({
@@ -92,7 +112,8 @@ function renderHistory(controller: ReturnType<typeof makeController>) {
       setRebuildToken: noop,
       sliceConfig: props.sliceConfig,
       usedFilamentIds: new Set<number>(),
-      supportOnlyFilamentIds: new Set<number>()
+      supportOnlyFilamentIds: new Set<number>(),
+      editorBorn: options?.editorBorn
     }),
     { initialProps: { sliceConfig: controller.build() } }
   )
@@ -183,4 +204,159 @@ test('a saved project is clean, and undoing a saved settings edit is dirty again
 
   act(() => { result.current.undo() })
   assert.equal(result.current.hasUnsavedChanges, true, 'reverting a saved edit is unsaved work')
+})
+
+// The retarget term of hasUnsavedChanges: a resolved target is unsaved work ONLY when it differs
+// from the baseline (the seeds that mirror the opened file, or the last save). Before this,
+// `retargetTarget != null` alone kept Save lit permanently — the controller materializes the
+// target whenever machine + process resolve, i.e. always.
+test('a seeded target on an OPENED project baselines silently and does not light Save', () => {
+  const controller = makeController(START)
+  const { result, refresh } = renderHistory(controller)
+  assert.equal(result.current.hasUnsavedChanges, false, 'no target resolved yet')
+
+  // The catalogue resolves and the controller materializes the seeded target (mirrors the file).
+  act(() => { controller.setRetargetTarget({ printerProfileId: 'machine-1', printerModel: 'X1C' }) })
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, false, 'the seed is what the file carries — not unsaved work')
+
+  // A genuine target change arrives THROUGH a recorded gesture (the wrapped setters record
+  // before mutating), which freezes the baseline — the new signature then reads as unsaved.
+  act(() => { result.current.sliceConfigForPanel!.selectPrinterModel('H2D') })
+  refresh()
+  act(() => { controller.setRetargetTarget({ printerProfileId: 'machine-2', printerModel: 'H2D' }) })
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, true, 'a changed target is unsaved work')
+})
+
+test('a pristine session re-baselines as the seed SEQUENCE lands — Save stays grey at open', () => {
+  // Seeding is multi-step (machine fallback before the catalogue, baked defaults after it): a
+  // baseline captured at the FIRST resolve drifts as later seeds land, which lit Save on a
+  // freshly-opened untouched project. While nothing is recorded/dirty, every signature change is
+  // still "what the file carries" and must re-baseline.
+  const controller = makeController(START)
+  const { result, refresh } = renderHistory(controller)
+  act(() => { controller.setRetargetTarget({ printerProfileId: 'machine-early-fallback', printerModel: 'unknown' }) })
+  refresh()
+  act(() => { controller.setRetargetTarget({ printerProfileId: 'machine-1', printerModel: 'X1C' }) })
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, false, 'late seeds re-baseline instead of lighting Save')
+
+  // The first user gesture freezes the baseline on the pre-gesture value.
+  act(() => { result.current.sliceConfigForPanel!.selectPrinterModel('H2D') })
+  refresh()
+  act(() => { controller.setRetargetTarget({ printerProfileId: 'machine-2', printerModel: 'H2D' }) })
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, true, 'post-gesture target changes are unsaved work')
+})
+
+test('saving re-baselines the target so Save greys and stays grey', () => {
+  const controller = makeController(START)
+  const { result, refresh } = renderHistory(controller)
+  act(() => { controller.setRetargetTarget({ printerProfileId: 'machine-1', printerModel: 'X1C' }) })
+  refresh()
+  // A user gesture freezes the baseline; the resulting target change is unsaved work.
+  act(() => { result.current.sliceConfigForPanel!.selectPrinterModel('H2D') })
+  refresh()
+  act(() => { controller.setRetargetTarget({ printerProfileId: 'machine-2', printerModel: 'H2D' }) })
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, true)
+
+  act(() => { result.current.markSaved() })
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, false, 'the save baked exactly this target')
+
+  // The post-save world keeps producing the SAME signature (refetch reconciliation) — no re-light.
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, false, 'no post-save re-lighting')
+})
+
+test('an editor-born project counts its seeded target as unsaved work until the first save', () => {
+  const controller = makeController(START)
+  const { result, refresh } = renderHistory(controller, { editorBorn: true })
+  act(() => { controller.setRetargetTarget({ printerProfileId: 'machine-1', printerModel: 'X1C' }) })
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, true, 'a scaffold has no machine — the seed must be saved')
+
+  act(() => { result.current.markSaved() })
+  refresh()
+  assert.equal(result.current.hasUnsavedChanges, false, 'saved: the target is now what the file carries')
+})
+
+test('a material colour change is undoable, and a drag collapses into one step', () => {
+  // Reported as "I changed a material color and it did not create a history record for me to
+  // undo": these edits marked the project dirty but snapshotted nothing, so Ctrl+Z skipped past
+  // them to whatever scene edit came before.
+  const controller = makeController({ ...START, sessionSlots: [slot(1, 0, '#ff0000')] })
+  const { result, refresh } = renderHistory(controller)
+  assert.equal(result.current.canUndo, false)
+
+  act(() => { result.current.sliceConfigForPanel!.setFilamentColors({ 1: '#00ff00' }) })
+  refresh()
+  assert.equal(result.current.canUndo, true, 'a colour change must record a checkpoint')
+  assert.deepEqual(coloursOf(controller.read().sessionSlots), { 1: '#00ff00' })
+
+  // A colour picker fires continuously while dragged; those must extend the same step rather than
+  // burying earlier history under one entry per frame.
+  act(() => { result.current.sliceConfigForPanel!.setFilamentColors({ 1: '#00fe00' }) })
+  refresh()
+  act(() => { result.current.sliceConfigForPanel!.setFilamentColors({ 1: '#00fd00' }) })
+  refresh()
+
+  act(() => { result.current.undo() })
+  assert.deepEqual(coloursOf(controller.read().sessionSlots), { 1: '#ff0000' }, 'one undo returns to the colour before the drag')
+  assert.equal(result.current.canUndo, false, 'the whole drag was a single step')
+})
+
+test('undo past a save that removed a material puts the material back', () => {
+  // The point of holding the session's material LIST rather than a delta over the file. Before,
+  // the frame only said "remove slot 2", which against the post-save file meant "remove whatever
+  // slot 2 has become" — so the overlay had to be discarded and the material stayed gone.
+  const controller = makeController(START)
+  const { result, refresh } = renderHistory(controller)
+
+  // Three materials, then an edit recorded while all three are present.
+  controller.setSessionSlots([slot(1, 0, '#aaaaaa'), slot(2, 1, '#bbbbbb'), slot(3, 2, '#cccccc')])
+  refresh()
+  act(() => { result.current.sliceConfigForPanel!.selectPrinterModel('H2D') })
+  refresh()
+
+  // The save drops the middle slot, so the file is now [1, 3] and the session follows it again.
+  controller.setSessionSlots(null)
+  refresh()
+  act(() => { result.current.rebaseFilamentSources(new Map([[0, 0], [2, 1]])) })
+
+  act(() => { result.current.undo() })
+  assert.deepEqual(
+    controller.read().sessionSlots?.map((entry) => entry.projectFilamentId),
+    [1, 2, 3],
+    'the removed material is back, in its original position'
+  )
+  assert.deepEqual(
+    coloursOf(controller.read().sessionSlots),
+    { 1: '#aaaaaa', 2: '#bbbbbb', 3: '#cccccc' },
+    "and it keeps its own colour — the frame's per-slot state was never remapped away"
+  )
+})
+
+test('a restored frame re-points its sourceIndex at the base the save left behind', () => {
+  // `sourceIndex` is the one field in a frame that refers OUTSIDE it, into the file's slot order,
+  // so it is the one thing a save has to migrate. A source the save dropped becomes null, which
+  // authors that slot from its preset instead of cloning a block that is no longer there.
+  const controller = makeController(START)
+  const { result, refresh } = renderHistory(controller)
+  controller.setSessionSlots([slot(1, 0), slot(2, 1), slot(3, 2)])
+  refresh()
+  act(() => { result.current.sliceConfigForPanel!.selectPrinterModel('H2D') })
+  refresh()
+
+  // Saved as [slot 1, slot 3]: old base index 0 -> 0, old index 2 -> 1, old index 1 dropped.
+  act(() => { result.current.rebaseFilamentSources(new Map([[0, 0], [2, 1]])) })
+  act(() => { result.current.undo() })
+
+  assert.deepEqual(
+    controller.read().sessionSlots?.map((entry) => entry.sourceIndex),
+    [0, null, 1],
+    'survivors follow the file, and the re-added slot has nothing left to clone'
+  )
 })

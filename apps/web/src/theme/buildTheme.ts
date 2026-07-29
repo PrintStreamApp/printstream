@@ -219,6 +219,38 @@ const ROW_HOVER_STYLES = {
   }
 }
 
+/**
+ * Root styling for the button-family controls, so a Button, an IconButton and a MenuButton with the
+ * same `variant`/`color` render as the same control. Registered against each component below
+ * because Joy has no shared "button" slot: a MenuButton's root class is `MuiMenuButton-root`, NOT
+ * `MuiButton-root`, so a JoyButton-only override silently skipped it and a soft MenuButton beside a
+ * soft Button showed Joy's stock fill next to ours.
+ */
+const buttonRootStyleOverride = ({ ownerState }: { ownerState: { color?: string; variant?: string } }) => {
+  const color = ownerState.color ?? 'neutral'
+  if (ownerState.variant === 'soft') {
+    return buildSoftControlStyles(color)
+  }
+  if (ownerState.variant !== 'outlined') {
+    return {}
+  }
+  return {
+    backgroundColor: `var(--joy-palette-${color}-800, var(--joy-palette-neutral-800))`,
+    borderColor: `var(--joy-palette-${color}-600, var(--joy-palette-neutral-600))`,
+    boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.04)',
+    '&:hover': {
+      backgroundColor: `var(--joy-palette-${color}-700, var(--joy-palette-neutral-700))`
+    },
+    '&:active': {
+      backgroundColor: `var(--joy-palette-${color}-600, var(--joy-palette-neutral-600))`
+    },
+    '&.Mui-disabled': {
+      backgroundColor: 'var(--joy-palette-neutral-800)',
+      borderColor: 'var(--joy-palette-neutral-700)'
+    }
+  }
+}
+
 export function createAppTheme(palette: PrintStreamThemePalette) {
   const usesGlassSurfacePanels = palette.chrome.surfacePanelStyle === 'glass'
 
@@ -236,32 +268,10 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
     },
     components: ({
       JoyButton: {
-        styleOverrides: {
-          root: ({ ownerState }: { ownerState: { color?: string; variant?: string } }) => {
-            const color = ownerState.color ?? 'neutral'
-            if (ownerState.variant === 'soft') {
-              return buildSoftControlStyles(color)
-            }
-            if (ownerState.variant !== 'outlined') {
-              return {}
-            }
-            return {
-              backgroundColor: `var(--joy-palette-${color}-800, var(--joy-palette-neutral-800))`,
-              borderColor: `var(--joy-palette-${color}-600, var(--joy-palette-neutral-600))`,
-              boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.04)',
-              '&:hover': {
-                backgroundColor: `var(--joy-palette-${color}-700, var(--joy-palette-neutral-700))`
-              },
-              '&:active': {
-                backgroundColor: `var(--joy-palette-${color}-600, var(--joy-palette-neutral-600))`
-              },
-              '&.Mui-disabled': {
-                backgroundColor: 'var(--joy-palette-neutral-800)',
-                borderColor: 'var(--joy-palette-neutral-700)'
-              }
-            }
-          }
-        }
+        styleOverrides: { root: buttonRootStyleOverride }
+      },
+      JoyMenuButton: {
+        styleOverrides: { root: buttonRootStyleOverride }
       },
       JoyIconButton: {
         styleOverrides: {

@@ -15,10 +15,11 @@
 import type React from 'react'
 import { useState } from 'react'
 import {
-  Alert, AutocompleteOption, Box, Button, ButtonGroup, Chip, CircularProgress, FormControl, FormLabel, IconButton, Input,
-  List, ListItem, ListItemContent, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
+  Alert, Box, Button, ButtonGroup, Chip, CircularProgress, Dropdown, FormControl, FormLabel, IconButton, Input,
+  List, ListItem, Menu, MenuButton, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
 } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
+import { Printer3dRoundedIcon } from '../Printer3dRoundedIcon'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
@@ -33,12 +34,11 @@ import type {
   SceneEditFilament,
   SlicingCapabilities,
   SlicingManualProfileTarget,
-  SlicingProfileSummary,
+  SlicingPresetSummary,
   ThreeMfIndex
 } from '@printstream/shared'
 import { formatNozzleDiameterLabel } from '@printstream/shared'
 import { useNavigate } from 'react-router-dom'
-import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { prioritizeLoadedMaterialOptionsForFilament } from '../../lib/sliceLoadedMaterialOptions'
 import type { PrinterTrayOption } from '../../lib/libraryViewHelpers'
 import { resolveProjectFilamentColorName } from '../../lib/filamentColor'
@@ -52,14 +52,24 @@ import {
   normalizeSliceFilamentColor,
   resolveMaterialTypeOptions,
   type SliceMaterialOption
-} from '../../lib/sliceProfileMatching'
+} from '../../lib/slicingPresetMatching'
+import type { MachineTargetConflict, MachineTargetIntent } from '../../lib/machineTargetResolution'
+import { AddMaterialDialog } from './AddMaterialDialog'
+import { PrinterPickerDialog } from '../PrinterPickerDialog'
+import type { AddedMaterialChoice, SessionFilamentSlot } from './useMaterialSlots'
+import { machineTargetConflictWarnings } from '../../lib/machineSwitchWarnings'
 import { MaterialEditDialog } from './MaterialEditDialog'
 import { MaterialSwatchButton } from './MaterialSwatchButton'
-import { SlicingProfileAutocomplete } from './SlicingProfileAutocomplete'
+import { LoadedMaterialMenuItems } from './LoadedMaterialMenuItems'
+import { SlicingPresetAutocomplete } from './SlicingPresetAutocomplete'
 import { SettingsTuneButton } from '../SettingsTuneButton'
 import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from './PlateGcodeSections'
+import { StickySectionHeader } from './StickySectionHeader'
 import { useFilamentChangedCount, useProcessChangedCount } from './useBakedPresetChanges'
+import type { ProcessConfigResolver } from '../ProcessSettingsDialog'
+import type { FilamentConfigResolver } from './FilamentSettingsDialog'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
+import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 
 /**
  * Stateful bridge from `SliceFileModal` to the shared `SliceSettingsPanel`.
@@ -124,12 +134,24 @@ export interface SliceSettingsController {
   selectPrinter: (printer: Printer | null) => void
   selectedPrinterModel: string
   /**
-   * Pick the manual printer model. Also marks the choice as user-made, which stops the
-   * baked-defaults effects from steering it — that flag is part of the same gesture, so it
-   * must not be a separate call the editor's undo wrapper cannot see.
+   * Pick the manual printer model. Records it as the user's INTENT, which is what stops the
+   * derived target from steering it back — part of the same gesture, so it must not be a
+   * separate call the editor's undo wrapper cannot see.
    */
   selectPrinterModel: (model: string) => void
   printerModelOptions: string[]
+  /**
+   * Picks the current target cannot represent (e.g. a plate this machine does not offer). Rendered
+   * as a notice rather than applied silently: the pick is still recorded, so it comes back if the
+   * user switches to a machine that offers it. See `lib/machineTargetResolution.ts`.
+   */
+  targetConflicts?: MachineTargetConflict[]
+  /**
+   * The resolved machine preset behind the current target. Exposed so consumers can read its
+   * declared limits (e.g. the layer-height envelope a machine switch warns against) rather than
+   * re-resolving the catalogue themselves.
+   */
+  selectedMachineProfile: SlicingPresetSummary | null
   nozzleDiameter: string
   setNozzleDiameter: React.Dispatch<React.SetStateAction<string>>
   nozzleDiameterOptions: string[]
@@ -148,8 +170,19 @@ export interface SliceSettingsController {
   slicePlateOptions: ThreeMfIndex['plates']
   setPreviewFileId: React.Dispatch<React.SetStateAction<string | null>>
   // Process
-  compatibleProcessProfiles: SlicingProfileSummary[]
-  selectedProcessProfile: SlicingProfileSummary | null
+  /**
+   * Re-take the host's snapshot of the slicer catalogue. The editor renders from a snapshot taken
+   * at open (ambient refetches must not redraw it), so a preset the user edits in the manager only
+   * reaches it because the editor calls this afterwards.
+   */
+  refreshSlicingPresets?: () => void
+  /**
+   * Re-take the host's snapshot of the parsed 3MF index. Called after a Repair, which rewrites the
+   * project's settings from inside the editor; ordinary library invalidations must NOT call it.
+   */
+  refreshProjectIndex?: () => void
+  compatibleProcessProfiles: SlicingPresetSummary[]
+  selectedProcessProfile: SlicingPresetSummary | null
   processProfileModified: boolean
   setProcessProfileId: React.Dispatch<React.SetStateAction<string>>
   setProcessSettingOverrides: React.Dispatch<React.SetStateAction<Record<string, string | string[]>>>
@@ -194,8 +227,6 @@ export interface SliceSettingsController {
   } | null
   // Materials
   projectFilaments: ReturnType<typeof buildSliceDialogProjectFilaments>
-  /** Project-filament ids used by a given plate (for the "not on this plate" hint). */
-  usedFilamentIdsForPlate: (plateIndex: number) => Set<number>
   materialOptions: SliceMaterialOption[]
   loadedMaterialOptions: SliceMaterialOption[]
   /**
@@ -220,8 +251,9 @@ export interface SliceSettingsController {
    * Add/remove materials (Bambu-style). `desiredFilaments` is the full ordered filament
    * list to bake into the saved/sliced 3MF, or null when the user has not changed the
    * count (so unchanged projects don't rewrite project_settings.config). `onAddFilament`
-   * appends a slot cloned from the first material; `onRemoveFilament` drops one (the UI
-   * disables removing the last). Only surfaced in the editor ('editor' mode).
+   * appends a slot from a material the user confirmed in the add dialog — nothing is created
+   * until then; `onRemoveFilament` drops one (the UI disables removing the last). Only
+   * surfaced in the editor ('editor' mode).
    */
   desiredFilaments: SceneEditFilament[] | null
   /**
@@ -230,7 +262,7 @@ export interface SliceSettingsController {
    * Null when the selection matches the source model (no machine switch needed on save).
    */
   retargetTarget: SlicingManualProfileTarget | null
-  onAddFilament: () => void
+  onAddFilament: (choice: AddedMaterialChoice) => void
   onRemoveFilament: (projectFilamentId: number) => void
   /**
    * Whether a material is assigned to any object/part (the 3D editor supplies live usage).
@@ -264,7 +296,11 @@ export interface SliceSettingsController {
    * an added material appears twice after Save (once from the refetched base, once from the
    * still-pending overlay) until the editor is reopened.
    */
-  onProjectSaved: () => void
+  /**
+   * Returns the OLD→NEW base-index map for anything still holding pre-save `sourceIndex` values
+   * (the editor's undo frames); null when the session never diverged from the file.
+   */
+  onProjectSaved: () => Map<number, number> | null
   /**
    * Sibling of {@link materialEditListenerRef} for GLOBAL process-setting edits (the process
    * profile selection and the overrides applied by the process-settings dialog). The full editor
@@ -273,6 +309,18 @@ export interface SliceSettingsController {
    * the editor. Global process edits otherwise bypass the editor's dirty/undo like material picks do.
    */
   processEditListenerRef: React.MutableRefObject<(() => void) | null>
+  /**
+   * Anonymous process-config resolver (public 3MF editor only). When set, the process tune dialog
+   * and the "changed vs preset" badge resolve baselines through it instead of the tenant route, so
+   * they work with no workspace. Absent for the library host, which uses the tenant route.
+   */
+  resolveConfig?: ProcessConfigResolver
+  /**
+   * Anonymous filament-config resolver (public 3MF editor only) — the filament counterpart of
+   * `resolveConfig`. When set, each material's "changed vs preset" badge (and its tune dialog)
+   * resolves baselines through it instead of the tenant route. Absent for the library host.
+   */
+  resolveFilamentConfig?: FilamentConfigResolver
 }
 
 /**
@@ -289,30 +337,19 @@ export interface SliceSettingsController {
  * captured leaves every one of those effects a no-op.
  */
 export interface SliceConfigSnapshot {
-  // Printer target. Includes the "user touched this" flags because they steer the
-  // baked-defaults effects — restoring values without them would leave those effects
-  // steering differently than they did at capture time.
+  // Printer target. Just the user's PICKS: printer, model, nozzle, flow, plate. Everything else
+  // about the target (machine profile, option lists, compatibility) re-derives from them, so it
+  // cannot be restored into an inconsistent combination — which is why the pre-S2 snapshot had to
+  // carry "touched" flags alongside the values to put the defaulting effects back in the right mode.
   selectedSlicerTargetId: string
-  targetMode: 'realPrinter' | 'manualProfile'
-  printerId: string
-  printerProfileId: string
-  manualPrinterModel: string
-  manualPrinterModelTouched: boolean
-  nozzleDiameter: string
-  nozzleFlow: PrinterNozzleFlow
-  plateType: string
-  plateTypeTouched: boolean
+  machineTargetIntent: MachineTargetIntent
   // Materials
-  removedFilamentIds: number[]
-  profileEditedFilamentIds: number[]
-  addedFilaments: Array<{ projectFilamentId: number; label: string; color: string | null; nozzleId: number | null; usedOnSelectedPlate: boolean }>
-  addedFilamentSourceIndex: Record<number, number>
-  filamentColors: Record<number, string>
-  filamentMaterialOptionIds: Record<number, string>
-  filamentToolheadIds: Record<number, string>
-  filamentMaterialTypeFilters: Record<number, string>
-  /** Per-material "tune" overrides, so undo reverts a material-settings edit too. */
-  filamentSettingOverridesById: Record<number, Record<string, string | string[]>>
+  /**
+   * The session's own material list, or null while it still follows the file. Captured as a LIST
+   * (not a delta over the file) so restoring it is exact even after a save rewrote the file's
+   * slots — that is what lets undo put a removed material back. See `SessionFilamentSlot`.
+   */
+  sessionSlots: SessionFilamentSlot[] | null
   // Process
   /** Per-object process overrides, so the editor's undo/redo can revert a gear edit. */
   objectProcessOverrides: Record<string, Record<string, string | string[]>>
@@ -332,21 +369,27 @@ export interface SliceConfigSnapshot {
  * its own object list and G-code sections after this panel. Both modes share one
  * `controller` instance, so edits in either surface update the same state.
  */
-export function SliceSettingsPanel({ controller, mode }: {
+export function SliceSettingsPanel({ controller, mode, onManagePresets }: {
   controller: SliceSettingsController
   mode: 'simple' | 'editor'
   activePlateIndex?: number
+  /**
+   * Open the host's slicing-preset manager. Optional because only a host that HAS one passes it:
+   * the workspace editor opens `SlicingPresetsDialog`, while the public editor (no workspace, no
+   * stored presets) and the slim prepare-print dialog render no button at all.
+   */
+  onManagePresets?: () => void
 }) {
   const {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview,
     slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId, slicerStatus,
     printers, selectedPrinter, lockedPreferredPrinter, targetMode, selectPrinter,
-    selectedPrinterModel, selectPrinterModel, printerModelOptions,
+    selectedPrinterModel, selectPrinterModel, printerModelOptions, targetConflicts,
     nozzleDiameter, setNozzleDiameter, nozzleDiameterOptions, nozzleFlow, setNozzleFlow,
     plateType, setPlateType, plateTypeOptions,
     plateMode, setPlateMode, sceneEdit, setSceneEdit, plateNumber, setPlateNumber, slicePlateOptions, setPreviewFileId,
     compatibleProcessProfiles, selectedProcessProfile, processProfileModified, setProcessProfileId, setProcessSettingOverrides,
-    processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, processEditListenerRef,
+    processProfileSelectionTouchedRef, selectedSlicerTargetIdForGuards, processSettingOverrides, setProcessSettingsDialogOpen, processEditListenerRef, resolveConfig, resolveFilamentConfig,
     hasPlateObjects, selectedSliceObjectIds, plateObjects, onToggleSliceObject, openSliceObjectSettings, plateGcode, perObjectSettings,
     projectFilaments, materialOptions, loadedMaterialOptions, printerTrayMap, materialToolheadOptions,
     filamentMaterialOptionIds, filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
@@ -361,16 +404,51 @@ export function SliceSettingsPanel({ controller, mode }: {
   const showInlineObjects = mode === 'simple'
   // Add/remove materials is an editing affordance (Bambu-style) — only in the editor.
   const showMaterialEditing = mode === 'editor'
+  // What the printer has loaded, for the Add button's menu. Unlike a material ROW there is no slot
+  // to prioritize by nozzle yet, so the list is the plain grouped one; empty for a manual-profile
+  // target, which is exactly when Add falls back to opening the dialog directly.
+  const loadedMaterialsForAdd = targetMode === 'realPrinter' ? loadedMaterialOptions : []
+  /**
+   * A loaded material as a new slot's identity. Same three fields the add dialog produces (see
+   * `AddMaterialDialog`), so both paths create identical slots, plus the tray's toolhead — picking
+   * from the printer says which nozzle the material is on, which a manual pick does not.
+   */
+  const addedChoiceFromOption = (option: SliceMaterialOption): AddedMaterialChoice => ({
+    optionId: option.id,
+    // A tray always reports a colour; `normalizeSliceFilamentColor` covers the malformed case, and
+    // `handleAddFilament` normalizes again on the way into the slot.
+    color: normalizeSliceFilamentColor(option.color),
+    label: option.materialType || option.material || 'PLA',
+    ...(option.toolheadId ? { toolheadId: option.toolheadId } : {})
+  })
+  // No printers means nothing to pick: an empty "Printer" autocomplete is noise in a workspace that
+  // has not added one yet, and on a host that cannot have them at all (the public editor, where a
+  // browser cannot reach a printer) it would be a control that can never do anything. Targeting a
+  // printer MODEL is separate and stays — it is what decides process compatibility.
+  const showPrinterPicker = printers.length > 0
+  // The target model is unresolved until the project's index says what it is (or, for a project
+  // that names none, until the catalogue arrives and a default is chosen). Nothing guesses in the
+  // meantime, so the control waits instead of offering a value nobody picked.
+  const modelResolved = selectedPrinterModel !== 'unknown'
   // Which material's expanded type/preset/color dialog is open (opened by clicking the
   // compact swatch row). Panel-local: both surfaces render their own panel instance.
   const [materialDialogFilamentId, setMaterialDialogFilamentId] = useState<number | null>(null)
+  const [addingMaterial, setAddingMaterial] = useState(false)
+  const [printerPickerOpen, setPrinterPickerOpen] = useState(false)
   // Pre-open "changed values" badge for the process row: how far the FINAL sliced values
   // (embedded project config + session overrides) differ from the external preset.
+  // Same source as the dialog's own tiering, so both agree on which options exist at all.
+  const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
+  // The visibility inputs mirror what this panel hands the dialog, so the badge counts exactly the
+  // rows the dialog will show (a conditionally-hidden modified setting inflated the badge before).
   const processChangedCount = useProcessChangedCount({
     slicerTargetId: selectedSlicerTargetIdForGuards,
     processProfileId: selectedProcessProfile?.id ?? null,
     sourceFileId: file.id,
-    overrides: processSettingOverrides
+    overrides: processSettingOverrides,
+    resolveConfig,
+    visibilityContext: { printerModel: selectedPrinterModel },
+    developerMode: showDeveloperOptions
   })
   return (
     <>
@@ -408,7 +486,10 @@ export function SliceSettingsPanel({ controller, mode }: {
         <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>{slicerStatus.profilesError}</Alert>
       )}
       {slicerStatus.slicerDataReady && (<>
-      <Typography level="title-sm">Slicer</Typography>
+      {/* Every section header below is a DIRECT child of the scrolling column and its body the
+          next sibling: that is what lets each pinned header be covered by the next rather than
+          shoved off the top. Do not wrap a section in its own <Stack>. See StickySectionHeader. */}
+      <StickySectionHeader><Typography level="title-sm">Slicer</Typography></StickySectionHeader>
       <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
         <Stack spacing={1}>
           <FormControl>
@@ -426,7 +507,27 @@ export function SliceSettingsPanel({ controller, mode }: {
           </FormControl>
         </Stack>
       </Sheet>
-      <Typography level="title-sm">Printer</Typography>
+      <StickySectionHeader spacing={1}>
+        <Typography level="title-sm">Printer</Typography>
+        {/* The selection moved out of the card below: a narrow sidebar gave a fleet one cramped
+            line with no way to scan by model. The button reads as the section's action, matching
+            the Materials header. Hidden exactly when the inline picker was. */}
+        {showPrinterPicker && (
+          <Button
+            type="button"
+            size="sm"
+            variant="soft"
+            startDecorator={<Printer3dRoundedIcon />}
+            sx={{ ml: 'auto', maxWidth: '60%' }}
+            disabled={Boolean(lockedPreferredPrinter)}
+            onClick={() => setPrinterPickerOpen(true)}
+          >
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selectedPrinter ? selectedPrinter.name : 'Choose printer'}
+            </Box>
+          </Button>
+        )}
+      </StickySectionHeader>
       <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
         <Box
           sx={{
@@ -435,33 +536,17 @@ export function SliceSettingsPanel({ controller, mode }: {
             display: 'grid',
             gap: 1,
             gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-            gridTemplateAreas: '"printer printer" "model plateType" "nozzleDiameter nozzleFlow"'
+            gridTemplateAreas: '"model plateType" "nozzleDiameter nozzleFlow"'
           }}
         >
-            <FormControl sx={{ gridArea: 'printer', minWidth: 0 }}>
-              <FormLabel>Printer</FormLabel>
-              <DeferredKeyboardAutocomplete
-                options={printers}
-                value={selectedPrinter}
-                placeholder={lockedPreferredPrinter ? undefined : 'Optional'}
-                clearOnEscape
-                disableClearable={Boolean(lockedPreferredPrinter)}
-                disabled={Boolean(lockedPreferredPrinter)}
-                getOptionLabel={(printer) => printer.name}
-                isOptionEqualToValue={(option, selected) => option.id === selected.id}
-                onChange={(_event, value) => selectPrinter(value)}
-                renderOption={(props, printer) => (
-                  <AutocompleteOption {...props} key={printer.id}>
-                    <ListItemContent>{printer.name}</ListItemContent>
-                  </AutocompleteOption>
-                )}
-              />
-            </FormControl>
             <FormControl sx={{ gridArea: 'model', minWidth: 0 }}>
               <FormLabel>Model</FormLabel>
               <Select<string>
-                value={selectedPrinterModel}
-                disabled={targetMode === 'realPrinter' || Boolean(lockedPreferredPrinter)}
+                // 'unknown' means the project has not said yet and nothing is guessing. Show that
+                // as waiting rather than rendering the literal word, which reads like a real answer.
+                value={modelResolved ? selectedPrinterModel : null}
+                placeholder="Loading…"
+                disabled={!modelResolved || targetMode === 'realPrinter' || Boolean(lockedPreferredPrinter)}
                 onChange={(_event, value) => {
                   if (targetMode === 'realPrinter') return
                   selectPrinterModel(value ?? printerModelOptions[0] ?? 'unknown')
@@ -497,9 +582,21 @@ export function SliceSettingsPanel({ controller, mode }: {
               </Select>
             </FormControl>
         </Box>
+        {/* A pick this target cannot represent. Sits with the controls it is about, and stays
+            visible while the conflict lasts — a toast would vanish while the wrong value remains
+            on screen. The pick itself is kept, so switching back restores it. */}
+        {targetConflicts && targetConflicts.length > 0 && (
+          <Stack spacing={0.5} sx={{ mt: 1 }}>
+            {machineTargetConflictWarnings(targetConflicts).map((warning) => (
+              <Alert key={warning.key} size="sm" color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
+                {warning.message}
+              </Alert>
+            ))}
+          </Stack>
+        )}
       </Sheet>
       {showPlateSection && (<>
-      <Typography level="title-sm">Plate</Typography>
+      <StickySectionHeader><Typography level="title-sm">Plate</Typography></StickySectionHeader>
       <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
         <Stack spacing={1}>
           {!requiresSinglePlate && (
@@ -586,17 +683,25 @@ export function SliceSettingsPanel({ controller, mode }: {
         </Stack>
       </Sheet>
       </>)}
-      <Typography level="title-sm">Process</Typography>
+      <StickySectionHeader spacing={1}>
+        <Typography level="title-sm">Process</Typography>
+        {/* Mirrors the Materials header's action so the two sections read the same way. */}
+        {onManagePresets && (
+          <Button type="button" size="sm" variant="soft" startDecorator={<TuneRoundedIcon />} sx={{ ml: 'auto' }} onClick={onManagePresets}>
+            Manage
+          </Button>
+        )}
+      </StickySectionHeader>
       <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
         <Stack spacing={1}>
           <FormControl sx={{ flex: 1 }}>
             <FormLabel>Global</FormLabel>
             <Stack direction="row" spacing={1} alignItems="center">
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <SlicingProfileAutocomplete
+                <SlicingPresetAutocomplete
                   profiles={compatibleProcessProfiles}
                   value={selectedProcessProfile}
-                  placeholder="Choose a quality profile"
+                  placeholder="Choose a process preset"
                   ariaLabel="Preset"
                   modified={processProfileModified || processChangedCount > 0}
                   onChange={(profile) => {
@@ -632,16 +737,40 @@ export function SliceSettingsPanel({ controller, mode }: {
           </FormControl>
         </Stack>
       </Sheet>
-      {(projectFilaments.length > 0 || showMaterialEditing) && (
-        <Stack spacing={1}>
-          <Stack direction="row" alignItems="center" spacing={1}>
+      {(projectFilaments.length > 0 || showMaterialEditing) && (<>
+          <StickySectionHeader spacing={1}>
             <Typography level="title-sm">Materials</Typography>
-            {showMaterialEditing && (
-              <Button type="button" size="sm" variant="soft" startDecorator={<AddRoundedIcon />} sx={{ ml: 'auto' }} onClick={onAddFilament}>
+            {/* Opens the picker; the slot is created only once a material is confirmed. */}
+            {showMaterialEditing && (loadedMaterialsForAdd.length > 0 ? (
+              // Same two choices the row swatch offers, for the same reason: a material the printer
+              // is already holding should not have to be named by hand.
+              <Dropdown>
+                {/* `color` is explicit: Joy's Button defaults to primary but MenuButton to neutral,
+                    so without it the same button changed tone the moment a printer was selected. */}
+                <MenuButton size="sm" variant="soft" color="primary" startDecorator={<AddRoundedIcon />} sx={{ ml: 'auto' }}>
+                  Add material
+                </MenuButton>
+                <Menu
+                  placement="bottom-end"
+                  sx={{ zIndex: (theme) => theme.zIndex.tooltip, minWidth: 280, maxWidth: 'calc(100vw - 32px)', maxHeight: '60vh', overflowY: 'auto' }}
+                >
+                  <LoadedMaterialMenuItems
+                    loaded={{
+                      groups: groupSliceMaterialOptionsByGroup(loadedMaterialsForAdd),
+                      trayMap: printerTrayMap,
+                      onSelect: (option) => onAddFilament(addedChoiceFromOption(option))
+                    }}
+                    manualLabel="Choose manually…"
+                    onChooseManually={() => setAddingMaterial(true)}
+                  />
+                </Menu>
+              </Dropdown>
+            ) : (
+              <Button type="button" size="sm" variant="soft" startDecorator={<AddRoundedIcon />} sx={{ ml: 'auto' }} onClick={() => setAddingMaterial(true)}>
                 Add material
               </Button>
-            )}
-          </Stack>
+            ))}
+          </StickySectionHeader>
           <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
             <Stack spacing={0.75}>
               {projectFilaments.length === 0 && showMaterialEditing && (
@@ -673,6 +802,7 @@ export function SliceSettingsPanel({ controller, mode }: {
                     <MaterialSwatchButton
                       filamentIndex={filamentIndex}
                       presetName={presetName}
+                      fullPresetName={selectedOption?.profileId ? selectedOption.material : null}
                       colorName={colorName}
                       color={normalizedColor}
                       presetUnmatched={presetUnmatched}
@@ -691,13 +821,19 @@ export function SliceSettingsPanel({ controller, mode }: {
                     {materialToolheadOptions.length > 0 && (useToolheadButtonSet ? (
                       <ButtonGroup
                         size="sm"
-                        // Soft group with a solid selected button (the GizmoToolbar pattern):
-                        // soft and solid are both borderless, so toggling the selection never
-                        // changes the buttons' dimensions — outlined buttons carry a 1px border
-                        // that solid drops, which made unselected groups 2px wider.
+                        // Soft group with a solid selected button (the GizmoToolbar pattern).
                         variant="soft"
                         aria-label={`Nozzle for material ${filamentIndex + 1}`}
-                        sx={{ '--ButtonGroup-radius': 'var(--joy-radius-sm)', flexShrink: 0, '& > *': { minWidth: 0, px: 1 } }}
+                        sx={{
+                          '--ButtonGroup-radius': 'var(--joy-radius-sm)',
+                          flexShrink: 0,
+                          // Padding is pinned on the BUTTONS, not through `& > *`: at that
+                          // specificity Joy's own per-variant padding still won for the soft
+                          // children (12px) while the solid one took the 8px, so choosing a nozzle
+                          // shrank the group by ~9px and the row jumped. Measured, not guessed —
+                          // the earlier note here blamed borders, which account for under 1.5px.
+                          '& .MuiButton-root': { minWidth: 0, paddingInline: '8px' }
+                        }}
                       >
                         {[...materialToolheadOptions].sort((left, right) => {
                           const rank = (position: 'left' | 'right' | 'single' | null | undefined) => position === 'left' ? 0 : position === 'right' ? 1 : 2
@@ -746,6 +882,7 @@ export function SliceSettingsPanel({ controller, mode }: {
                       selectedOption={selectedOption}
                       slicerTargetId={selectedSlicerTargetIdForGuards}
                       sourceFileId={file.id}
+                      resolveConfig={resolveFilamentConfig}
                       overrides={filamentSettingOverridesById[filament.projectFilamentId] ?? {}}
                       onOpen={() => openFilamentSettings(filament.projectFilamentId)}
                     />
@@ -785,11 +922,9 @@ export function SliceSettingsPanel({ controller, mode }: {
               })}
             </Stack>
           </Sheet>
-        </Stack>
-      )}
-      {showInlineObjects && hasPlateObjects && (
-        <Stack spacing={1}>
-          <Typography level="title-sm">Objects</Typography>
+      </>)}
+      {showInlineObjects && hasPlateObjects && (<>
+          <StickySectionHeader><Typography level="title-sm">Objects</Typography></StickySectionHeader>
           <Sheet variant="outlined" sx={{ p: 0.5, borderRadius: 'sm' }}>
             <List size="sm" sx={{ '--ListItem-minHeight': '2.25rem' }}>
               {plateObjects.map((object) => {
@@ -830,8 +965,7 @@ export function SliceSettingsPanel({ controller, mode }: {
                 : `${selectedSliceObjectIds.size} of ${plateObjects.length} objects will ${flow === 'print' ? 'print' : 'be sliced'}.`}
             </Typography>
           )}
-        </Stack>
-      )}
+      </>)}
       {showInlineObjects && plateGcode && (
         <>
           {/* A single material has nothing to change to; pauses apply regardless. */}
@@ -870,6 +1004,24 @@ export function SliceSettingsPanel({ controller, mode }: {
           />
         )
       })()}
+      {printerPickerOpen && (
+        <PrinterPickerDialog
+          open
+          entries={printers.map((printer) => ({ printer }))}
+          selectedPrinterId={selectedPrinter?.id ?? null}
+          onSelect={selectPrinter}
+          onClose={() => setPrinterPickerOpen(false)}
+          anyOption={{ label: 'Any printer', description: 'Slice for the selected model instead' }}
+        />
+      )}
+      {addingMaterial && (
+        <AddMaterialDialog
+          filamentIndex={projectFilaments.length}
+          materialOptions={materialOptions}
+          onAdd={(choice) => { onAddFilament(choice); setAddingMaterial(false) }}
+          onCancel={() => setAddingMaterial(false)}
+        />
+      )}
       </>)}
     </>
   )
@@ -887,17 +1039,19 @@ function FilamentTuneButton(props: {
   selectedOption: SliceMaterialOption | null
   slicerTargetId: string
   sourceFileId: string
+  /** Anonymous resolver (public editor); when set the badge resolves without a workspace/server file. */
+  resolveConfig?: FilamentConfigResolver
   overrides: Record<string, string | string[]>
   onOpen: () => void
 }): JSX.Element {
-  const { filamentIndex, projectFilamentId, selectedOption, slicerTargetId, sourceFileId, overrides, onOpen } = props
+  const { filamentIndex, projectFilamentId, selectedOption, slicerTargetId, sourceFileId, resolveConfig, overrides, onOpen } = props
   // The tune dialog needs a resolvable filament profile id: the option's own profileId
   // (builtin/custom), or the underlying id for a project-embedded profile (option id =
   // `profile:<profileId>`). A loaded material with no matched preset has neither, so editing is
   // disabled until one is picked.
   const filamentProfileId = selectedOption?.profileId
     ?? (selectedOption?.id.startsWith('profile:') ? selectedOption.id.slice('profile:'.length) : null)
-  const changedCount = useFilamentChangedCount({ slicerTargetId, filamentProfileId, sourceFileId, projectFilamentId, overrides })
+  const changedCount = useFilamentChangedCount({ slicerTargetId, filamentProfileId, sourceFileId, projectFilamentId, overrides, resolveConfig })
   return (
     <SettingsTuneButton
       changedCount={changedCount}

@@ -4,12 +4,13 @@
  * Self-contained and props-only — performs its own `apiFetch` PATCH and reports
  * success via `onSaved`.
  */
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { Box, Button, FormControl, FormLabel, Input, ModalDialog, Stack, Typography } from '@mui/joy'
 import type { LibraryFile } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { splitLibraryFileNameForRename } from '../../lib/libraryDisplay'
 import { BackAwareModal as Modal } from '../BackAwareModal'
+import { useNameInputProps } from '../../hooks/useNameInputProps'
 
 export function RenameFileModal({
   file,
@@ -25,7 +26,6 @@ export function RenameFileModal({
   // editable — the extension renders read-only after the input, like the save dialogs.
   const { baseName: initialBaseName, extension } = splitLibraryFileNameForRename(file.name)
   const [baseName, setBaseName] = useState(initialBaseName)
-  const hasSelectedEditableNameRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const nextName = `${baseName.trim()}${extension}`
@@ -47,11 +47,8 @@ export function RenameFileModal({
     if (!canSubmit || submitting) return
     void submit()
   }
-  const handleNameFocus = (event: React.FocusEvent<HTMLInputElement>) => {
-    if (hasSelectedEditableNameRef.current) return
-    hasSelectedEditableNameRef.current = true
-    event.target.select()
-  }
+  // Focused, selected, and Enter-committed — the base name is the only thing this dialog asks for.
+  const nameInputProps = useNameInputProps({ onAccept: () => void submit(), canAccept: canSubmit && !submitting })
   return (
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 480, width: '100%' }}>
@@ -60,9 +57,8 @@ export function RenameFileModal({
           <FormControl>
             <FormLabel>Name</FormLabel>
             <Input
+              {...nameInputProps}
               value={baseName}
-              autoFocus
-              onFocus={handleNameFocus}
               onChange={(event) => setBaseName(event.target.value)}
               endDecorator={extension ? (
                 <Typography level="body-sm" textColor="text.tertiary" sx={{ userSelect: 'none' }}>

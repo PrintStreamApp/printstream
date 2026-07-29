@@ -13,7 +13,7 @@ function recordInvalidations(): { calls: Array<unknown[] | undefined>; invalidat
   }
 }
 
-test('invalidateLibraryQueries refreshes all library query slices together', async () => {
+test('invalidateLibraryQueries refreshes the library slices but never the editor scene caches', async () => {
   const { calls, invalidateQueries } = recordInvalidations()
   await invalidateLibraryQueries({ invalidateQueries })
   assert.deepEqual(calls, [
@@ -22,10 +22,19 @@ test('invalidateLibraryQueries refreshes all library query slices together', asy
     ['library-folders'],
     ['library-plates'],
     ['library-recycle-bin'],
-    ['library-editor-plates'],
-    ['library-editor-scene-initial'],
-    ['library-editor-scenes-rest']
+    // The "changed vs preset" badges are keyed by file ID, which a save keeps — without this
+    // bust a save that rewrote project_settings serves the pre-save count until staleTime.
+    ['process-baked-changes'],
+    ['filament-baked-changes'],
+    // Held at staleTime Infinity and keyed by file id, so only an explicit bust refreshes it —
+    // and its value reaches a slice request, not just a badge.
+    ['slice-project-process-carry']
   ])
+  // Load-bearing absence. The editor reads its project from an archive downloaded ONCE per
+  // session, so refetching these after a save re-reads the PRE-save bytes and stores them as
+  // fresh — poisoning the cache for the next editor session rather than refreshing anything.
+  // `EditorView` removes these keys on unmount instead.
+  assert.ok(!calls.some((key) => key?.some((part) => String(part).startsWith('library-editor'))))
 })
 
 test('invalidateLibraryListQueries refreshes the list slices but NOT the editor scene caches', async () => {

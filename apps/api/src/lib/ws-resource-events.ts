@@ -94,7 +94,7 @@ export function broadcastSlicingChanged(tenantId?: string | null): void {
  * {@link broadcastSlicingChanged} so a slice's sub-second progress stream does not invalidate the
  * (slow) profiles query — only profile mutations do.
  */
-export function broadcastSlicingProfilesChanged(tenantId?: string | null): void {
+export function broadcastSlicingPresetsChanged(tenantId?: string | null): void {
   broadcastResourceChange({ resource: 'slicing.profiles', tenantId })
 }
 

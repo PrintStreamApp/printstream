@@ -16,8 +16,9 @@ import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { LibraryFile, LibraryFolder, Printer, StartOrderPrintInput } from '@printstream/shared'
+import type { LibraryFile, LibraryFolder, Printer, SlicingJobResponse, StartOrderPrintInput } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
+import { refreshSlicingJobs, seedSlicingJob } from '../../lib/slicingJobsCache'
 import { invalidateLibraryListQueries } from '../../lib/libraryQueryInvalidation'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
@@ -232,7 +233,7 @@ export function SliceThenPrintModal({
   }
 
   const progressFrame = job ? getLatestSlicingProgressFrame(job) : null
-  const progressPercent = progressFrame?.displayPercent ?? progressFrame?.totalPercent ?? null
+  const progressPercent = progressFrame?.totalPercent ?? null
   const displayName = formatLibraryFileName(job?.outputFileName ?? sourceFile.name)
   const loadingOutputFile = job?.status === 'ready' && outputFileQuery.isLoading
   const jobError = outputFileQuery.error instanceof Error
@@ -387,8 +388,9 @@ export function SliceResultModal({
     [job?.target]
   )
   const cancelSlicing = useMutation({
-    mutationFn: async () => { await apiFetch(`/api/slicing/jobs/${jobId}/cancel`, { method: 'POST' }) },
-    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] }) }
+    mutationFn: () => apiFetch<SlicingJobResponse>(`/api/slicing/jobs/${jobId}/cancel`, { method: 'POST' }),
+    // Seeded, not awaited — see slicingJobsCache.
+    onSuccess: (response) => { seedSlicingJob(queryClient, response.job); refreshSlicingJobs(queryClient) }
   })
   const [saveDestinationOpen, setSaveDestinationOpen] = useState(false)
   const saveToLibrary = useMutation({
@@ -432,7 +434,7 @@ export function SliceResultModal({
 
   const ready = job?.status === 'ready'
   const progressFrame = job ? getLatestSlicingProgressFrame(job) : null
-  const progressPercent = progressFrame?.displayPercent ?? progressFrame?.totalPercent ?? null
+  const progressPercent = progressFrame?.totalPercent ?? null
   const displayName = formatLibraryFileName(job?.outputFileName ?? sourceFile.name)
   const jobError = job?.error ?? null
   const outputNameParts = splitLibraryFileNameForRename(job?.outputFileName ?? sourceFile.name)

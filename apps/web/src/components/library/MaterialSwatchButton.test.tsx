@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
 import { installJsdomGlobals } from '../../test-utils/jsdom'
-import type { SliceMaterialOption } from '../../lib/sliceProfileMatching'
+import type { SliceMaterialOption } from '../../lib/slicingPresetMatching'
 
 const dom = installJsdomGlobals()
 

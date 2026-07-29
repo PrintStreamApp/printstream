@@ -6,7 +6,7 @@ import Typography from '@mui/joy/Typography'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import type { SxProps } from '@mui/joy/styles/types'
 import { apiFetch } from '../../lib/apiClient'
-import { extractErrorMessage } from '@printstream/shared'
+import { extractErrorMessage, type ThreeMfSettingsRepairReason } from '@printstream/shared'
 import { invalidateLibraryQueries } from '../../lib/libraryQueryInvalidation'
 
 /**
@@ -26,8 +26,37 @@ import { invalidateLibraryQueries } from '../../lib/libraryQueryInvalidation'
  * `repaired: false` response means the file turned out not to need it — treated as success here,
  * since the flag can be stale on a client that hasn't refreshed.
  */
-export function RepairProjectSettingsAlert({ fileId, onRepaired, sx }: {
+/**
+ * What to SAY, per defect. The two failures have nothing in common from the user's side — one makes
+ * slicing die, the other stops Bambu Studio opening the project — so a single sentence covering
+ * both was simply wrong for whichever file was in front of them. Ryan opened a project whose
+ * variant index was broken and read "it was saved for a different printer", which it was not.
+ */
+const REPAIR_COPY: Record<ThreeMfSettingsRepairReason, { title: string; body: string }> = {
+  flushMatrix: {
+    title: 'This project’s saved settings don’t match its printer',
+    body: 'It was saved for a different printer and its settings weren’t fully updated, which can make slicing fail.'
+  },
+  variantIndex: {
+    title: 'This project won’t open in Bambu Studio',
+    body: 'Its filament settings are missing a value Bambu Studio needs, so Bambu Studio reports an invalid configuration and refuses to open it. Slicing here is unaffected.'
+  }
+}
+
+/** Both at once: name the worse consequence (unopenable) without hiding the other. */
+const REPAIR_COPY_BOTH = {
+  title: 'This project’s saved settings need repairing',
+  body: 'Its filament settings are missing a value Bambu Studio needs, and its purge settings don’t match its printer — so Bambu Studio won’t open it and slicing can fail.'
+}
+
+export function RepairProjectSettingsAlert({ fileId, reasons, onRepaired, sx }: {
   fileId: string
+  /**
+   * Which invariants the project breaks (`settingsRepairReasons` on the library DTO / 3MF index).
+   * Empty or omitted falls back to the flush-matrix wording — the only cause that existed before
+   * this was surfaced, so an older cached DTO still reads sensibly.
+   */
+  reasons?: readonly ThreeMfSettingsRepairReason[]
   /** Called after a successful repair, once library caches have been invalidated. */
   onRepaired?: () => void
   sx?: SxProps
@@ -35,6 +64,9 @@ export function RepairProjectSettingsAlert({ fileId, onRepaired, sx }: {
   const queryClient = useQueryClient()
   const [repairing, setRepairing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const copy = reasons && reasons.length > 1
+    ? REPAIR_COPY_BOTH
+    : REPAIR_COPY[reasons?.[0] ?? 'flushMatrix']
 
   const repair = async (): Promise<void> => {
     setRepairing(true)
@@ -63,9 +95,9 @@ export function RepairProjectSettingsAlert({ fileId, onRepaired, sx }: {
       sx={[{ alignItems: 'flex-start' }, ...(Array.isArray(sx) ? sx : [sx])]}
     >
       <div>
-        <Typography level="title-sm">This project’s saved settings don’t match its printer</Typography>
+        <Typography level="title-sm">{copy.title}</Typography>
         <Typography level="body-sm">
-          {error ?? 'It was saved for a different printer and its settings weren’t fully updated, which can make slicing fail. Repairing saves a corrected copy as a new version; the current one stays in the file’s history.'}
+          {error ?? `${copy.body} Repairing saves a corrected copy as a new version; the current one stays in the file’s history.`}
         </Typography>
       </div>
     </Alert>

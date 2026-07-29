@@ -15,6 +15,12 @@ import { createAbortError, throwIfAborted } from '@printstream/shared'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
 import yazl from 'yazl'
 
+// The XML-write primitives moved to `@printstream/shared/three-mf` when the bake became
+// dual-surface (api ZIP I/O + browser ZIP I/O over one implementation). Re-exported here so api
+// call sites keep importing them from the three-mf family, exactly as the reader re-exports the
+// shared parsers.
+export { escapeRegExp, escapeXmlAttribute } from '@printstream/shared/three-mf'
+
 /**
  * Read one entry from the archive into a `Buffer`. Throws if the entry
  * is missing or larger than `maxBytes` (default 8 MiB — enough for any
@@ -165,14 +171,6 @@ export function rewriteModelSettingsThreeMf(
   entryName = 'Metadata/model_settings.config'
 ): Promise<void> {
   return rewriteThreeMfEntries(sourcePath, outputPath, { [entryName]: transform })
-}
-
-export function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-export function escapeXmlAttribute(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 /**

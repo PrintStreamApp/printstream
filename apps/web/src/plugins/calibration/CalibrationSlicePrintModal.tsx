@@ -90,7 +90,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
   })
 
   const progressFrame = job ? getLatestSlicingProgressFrame(job) : null
-  const progressPercent = progressFrame?.displayPercent ?? progressFrame?.totalPercent ?? null
+  const progressPercent = progressFrame?.totalPercent ?? null
   const badge = STATUS_LABELS[run.status]
   const isSlicing = run.status === 'slicing'
   const isReady = run.status === 'readyToPrint'

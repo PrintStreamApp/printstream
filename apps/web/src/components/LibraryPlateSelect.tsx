@@ -77,6 +77,7 @@ export function LibraryPlateCardPicker({
   label = 'Plate',
   onPreview,
   collapsed = false,
+  orientation = 'horizontal',
   onToggleCollapsed
 }: {
   fileId: string
@@ -90,6 +91,12 @@ export function LibraryPlateCardPicker({
   onPreview?: (() => void) | undefined
   /** Collapsed mode trades thumbnails for name-only chips (e.g. to give a viewer more room). */
   collapsed?: boolean
+  /**
+   * Which way the strip runs. Vertical is a rail beside the 3D area, chosen by
+   * `choosePlateStripOrientation` when a horizontal band would letterbox it. Only the axis changes:
+   * tiles, collapse and selection are identical.
+   */
+  orientation?: 'horizontal' | 'vertical'
   /** When provided, renders a fold/unfold toggle at the end of the strip. */
   onToggleCollapsed?: (() => void) | undefined
 }) {
@@ -122,10 +129,13 @@ export function LibraryPlateCardPicker({
           width: '100%',
           minWidth: 0,
           display: 'flex',
+          flexDirection: orientation === 'vertical' ? 'column' : 'row',
           flexWrap: 'nowrap',
           gap: 1,
-          overflowX: 'auto',
-          overflowY: 'hidden',
+          // A rail owns its column's height and scrolls inside it; a band scrolls sideways.
+          ...(orientation === 'vertical'
+            ? { overflowY: 'auto', overflowX: 'hidden', flex: 1, minHeight: 0 }
+            : { overflowX: 'auto', overflowY: 'hidden' }),
           pb: 0.5,
           WebkitOverflowScrolling: 'touch',
           overscrollBehaviorX: 'contain',
@@ -135,7 +145,7 @@ export function LibraryPlateCardPicker({
           // when a drag started on the thumbnails, leaving mobile users unable to
           // scroll the print dialog.
           touchAction: 'pan-x pan-y',
-          scrollSnapType: 'x proximity',
+          scrollSnapType: orientation === 'vertical' ? 'y proximity' : 'x proximity',
           scrollbarWidth: 'thin'
         }}
       >
@@ -150,8 +160,11 @@ export function LibraryPlateCardPicker({
               color={selected ? 'primary' : 'neutral'}
               onClick={() => onChange(plate.index)}
               sx={{
-                flex: collapsed ? '0 0 auto' : '0 0 140px',
-                maxWidth: collapsed ? 200 : undefined,
+                // `flex` fixes the MAIN axis, which flips with the orientation — in a rail the
+                // tile fills the width and its height is what must not stretch.
+                flex: '0 0 auto',
+                width: orientation === 'vertical' ? '100%' : (collapsed ? 'auto' : 140),
+                maxWidth: orientation === 'vertical' ? '100%' : (collapsed ? 200 : undefined),
                 p: 0.75,
                 border: 0,
                 appearance: 'none',

@@ -5,8 +5,7 @@ import {
   MODAL_DIALOG_VIEWPORT_MAX_HEIGHT_FALLBACK,
   modalDialogStructuredLayoutStyles
 } from '../lib/modalDialogLayout'
-
-const SCROLL_OVERFLOW_TOLERANCE_PX = 1
+import { useScrollbarGutter } from '../hooks/useScrollbarGutter'
 
 function sxArray<T>(value: T | readonly T[] | undefined): T[] {
   if (Array.isArray(value)) return [...value]
@@ -79,43 +78,13 @@ function assignRef<T>(ref: React.ForwardedRef<T>, value: T | null) {
  * chat-thread look.
  */
 export const ScrollableDialogBody = React.forwardRef<HTMLDivElement, DialogContentProps & { pinToBottom?: boolean }>(function ScrollableDialogBody({ sx, children, pinToBottom = false, ...props }, ref) {
-  const bodyRef = React.useRef<HTMLDivElement | null>(null)
-  const [hasVerticalOverflow, setHasVerticalOverflow] = React.useState(true)
-
-  React.useEffect(() => {
-    const element = bodyRef.current
-    if (!element) return undefined
-
-    let frame = 0
-    const updateOverflow = () => {
-      window.cancelAnimationFrame(frame)
-      frame = window.requestAnimationFrame(() => {
-        const overflow = element.scrollHeight - element.clientHeight
-        setHasVerticalOverflow(overflow > SCROLL_OVERFLOW_TOLERANCE_PX)
-      })
-    }
-
-    updateOverflow()
-    window.addEventListener('resize', updateOverflow)
-
-    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateOverflow) : null
-    resizeObserver?.observe(element)
-    for (const child of Array.from(element.children)) {
-      resizeObserver?.observe(child)
-    }
-
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.removeEventListener('resize', updateOverflow)
-      resizeObserver?.disconnect()
-    }
-  }, [children])
+  const { scrollRef, scrollAreaSx, contentSx } = useScrollbarGutter(children)
 
   return (
     <DialogContent
       {...props}
       ref={(node) => {
-        bodyRef.current = node
+        scrollRef(node)
         assignRef(ref, node)
       }}
       sx={[
@@ -124,14 +93,13 @@ export const ScrollableDialogBody = React.forwardRef<HTMLDivElement, DialogConte
           minHeight: 0,
           minWidth: 0,
           overflowX: 'hidden',
-          overflowY: hasVerticalOverflow ? 'auto' : 'hidden',
-          scrollbarGutter: hasVerticalOverflow ? 'stable' : 'auto',
+          ...scrollAreaSx,
           ...(pinToBottom ? { display: 'flex', flexDirection: 'column-reverse' } : {}),
         },
         ...sxArray(sx)
       ]}
     >
-      <Box sx={{ minWidth: 0, pr: hasVerticalOverflow ? 0.75 : 0 }}>
+      <Box sx={contentSx}>
         {children}
       </Box>
     </DialogContent>

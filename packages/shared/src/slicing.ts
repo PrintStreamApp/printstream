@@ -5,11 +5,11 @@
 import { z } from 'zod'
 import { processSettingOverridesSchema } from './process-settings.js'
 
-export const slicingProfileKindSchema = z.enum(['machine', 'process', 'filament'])
-export type SlicingProfileKind = z.infer<typeof slicingProfileKindSchema>
+export const slicingPresetKindSchema = z.enum(['machine', 'process', 'filament'])
+export type SlicingPresetKind = z.infer<typeof slicingPresetKindSchema>
 
-export const slicingProfileSourceSchema = z.enum(['builtin', 'custom'])
-export type SlicingProfileSource = z.infer<typeof slicingProfileSourceSchema>
+export const slicingPresetSourceSchema = z.enum(['builtin', 'custom'])
+export type SlicingPresetSource = z.infer<typeof slicingPresetSourceSchema>
 
 export const slicerFamilySchema = z.enum(['bambustudio', 'orcaslicer'])
 export type SlicerFamily = z.infer<typeof slicerFamilySchema>
@@ -31,11 +31,24 @@ export const slicingTargetDescriptorSchema = z.object({
 })
 export type SlicingTargetDescriptor = z.infer<typeof slicingTargetDescriptorSchema>
 
-export const slicingProfileSummarySchema = z.object({
+export const slicingPresetSummarySchema = z.object({
   id: z.string().trim().min(1),
-  source: slicingProfileSourceSchema,
-  kind: slicingProfileKindSchema,
+  source: slicingPresetSourceSchema,
+  kind: slicingPresetKindSchema,
   name: z.string().trim().min(1),
+  /**
+   * The preset this one `inherits` from, when it is a DERIVATIVE rather than a base preset.
+   *
+   * An IDENTITY fact about the preset itself, which is why it sits with the identity keys and is
+   * never merged down from a parent (see `pickProfileMetadata`) — a child of a child still names
+   * its own immediate parent. Absent means the preset is its own base.
+   *
+   * Carried because a derivative inherits its parent's `filament_id`, so it cannot be told apart
+   * from the preset it was derived from by identity alone. BambuStudio resolves an AMS tray to a
+   * preset with `AMSMaterialsSetting::get_filament_by_id`, which skips any preset that is not its
+   * own base (`filaments.get_preset_base(preset) != &preset`) before comparing `filament_id`.
+   */
+  derivedFromPresetName: z.string().trim().min(1).optional(),
   /** BambuStudio filament profile ids from `filament_id`; used to match printer AMS/tray ids exactly. */
   filamentIds: z.array(z.string().trim().min(1)).optional(),
   /**
@@ -56,6 +69,13 @@ export const slicingProfileSummarySchema = z.object({
   filamentVendor: z.string().trim().min(1).optional(),
   /** Process-only: `layer_height` in mm; preferred over scraping a `0.20mm` token out of the profile name. */
   layerHeight: z.number().positive().optional(),
+  /**
+   * Machine-only: the layer-height envelope the machine's extruders support (`min_layer_height` /
+   * `max_layer_height`, reduced to the tightest bound across extruders). Lets a machine switch warn
+   * that the project's layer height no longer fits, instead of letting BambuStudio clamp it silently.
+   */
+  minLayerHeight: z.number().positive().optional(),
+  maxLayerHeight: z.number().positive().optional(),
   printerModels: z.array(z.string().trim().min(1)).optional(),
   compatiblePrinters: z.array(z.string().trim().min(1)).optional(),
   compatiblePrints: z.array(z.string().trim().min(1)).optional(),
@@ -69,30 +89,30 @@ export const slicingProfileSummarySchema = z.object({
   defaultFilamentProfiles: z.array(z.string().trim().min(1)).optional(),
   updatedAt: z.string().nullable().optional()
 })
-export type SlicingProfileSummary = z.infer<typeof slicingProfileSummarySchema>
+export type SlicingPresetSummary = z.infer<typeof slicingPresetSummarySchema>
 
-export const slicingProfilesResponseSchema = z.object({
-  profiles: z.array(slicingProfileSummarySchema)
+export const slicingPresetsResponseSchema = z.object({
+  profiles: z.array(slicingPresetSummarySchema)
 })
-export type SlicingProfilesResponse = z.infer<typeof slicingProfilesResponseSchema>
+export type SlicingPresetsResponse = z.infer<typeof slicingPresetsResponseSchema>
 
-export const uploadSlicingProfileSchema = z.object({
+export const uploadSlicingPresetSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
-  kind: slicingProfileKindSchema.optional(),
+  kind: slicingPresetKindSchema.optional(),
   fileName: z.string().trim().min(1).max(255).optional(),
   encoding: z.enum(['utf8', 'base64']).default('utf8'),
   content: z.string().trim().min(1).max(2 * 1024 * 1024),
   /** When true, overwrite existing same-name presets instead of reporting them as conflicts. */
   overwrite: z.boolean().optional()
 })
-export type UploadSlicingProfile = z.infer<typeof uploadSlicingProfileSchema>
+export type UploadSlicingPreset = z.infer<typeof uploadSlicingPresetSchema>
 
-export const slicingProfileResponseSchema = z.object({
-  profile: slicingProfileSummarySchema,
+export const slicingPresetResponseSchema = z.object({
+  profile: slicingPresetSummarySchema,
   /** Names of existing same-kind presets overwritten by this upload (for warning the user). */
   replaced: z.array(z.string()).default([])
 })
-export type SlicingProfileResponse = z.infer<typeof slicingProfileResponseSchema>
+export type SlicingPresetResponse = z.infer<typeof slicingPresetResponseSchema>
 
 export const slicingTargetModeSchema = z.enum(['realPrinter', 'manualProfile'])
 export type SlicingTargetMode = z.infer<typeof slicingTargetModeSchema>
@@ -810,6 +830,28 @@ const arrangedThreeMfBakeSchema = z.object({
    */
   baseVersionId: z.string().trim().min(1).nullable().optional(),
   /**
+   * Which BYTES to author from, when that is not the save target's current content.
+   *
+   * `baseFileId`/`baseVersionId` conflate two questions — "whose bytes do I bake from" and "which
+   * file am I writing a version of" — and answering both with the target makes every save patch
+   * the PREVIOUS save's output. That chaining is what strands one dead mesh object per solid per
+   * save on an import-backed project, and what forced the editor to re-read its own file
+   * afterwards to learn the ids the bake assigned. This field separates the two: the editor pins
+   * the version it OPENED and keeps sending it, so save N is authored exactly like save 1.
+   *
+   * `fileId` is deliberately independent of `baseFileId` — after a saveAs the session continues
+   * against a NEW file while the content base must stay the ORIGINAL file's version, which a
+   * target-scoped version lookup would reject.
+   *
+   * Absent ⇒ the legacy behaviour (bake from `baseVersionId ?? baseFileId`'s current content).
+   * Ignored when `ignoreBaseContent` is set, which means "carry no base bytes at all".
+   */
+  contentBase: z.object({
+    fileId: z.string().trim().min(1),
+    /** Null/absent ⇒ that file's CURRENT content (the first save of a session). */
+    versionId: z.string().trim().min(1).nullable().optional()
+  }).optional(),
+  /**
    * Bake purely from `sceneEdit` + its staged imports, ignoring the base file's BYTES while still
    * targeting it (name/folder/bridge, and a `newVersion` save still lands on it as usual).
    *
@@ -851,6 +893,16 @@ const arrangedThreeMfBakeSchema = z.object({
    * (`apps/slicer/src/index.ts`). Absent/empty ⇒ the base project settings are preserved as-is.
    */
   processSettingOverrides: processSettingOverridesSchema.optional(),
+  /**
+   * Per-MATERIAL filament-setting overrides from the material tune dialog ("Save in this 3MF"),
+   * keyed by the material's 1-based SAVED slot position (post-renumber — never a session id) and
+   * then by filament-config key. The api persists them into `project_settings.config` (whole
+   * column sets, other slots filled from their current/preset values) AND records each key in
+   * that slot's `different_settings_to_system` — the marker that makes a later machine retarget
+   * preserve the edit instead of rebinding it away as a fossil. Absent/empty ⇒ nothing persists
+   * (the overrides still ride slice requests via `filamentMappings[].settingOverrides`).
+   */
+  filamentSettingOverrides: z.record(z.string().regex(/^\d+$/), processSettingOverridesSchema).optional(),
   /**
    * Slicer target (version) used for a cross-model retarget on save. Required alongside
    * `retarget`; chooses which BambuStudio CLI performs the machine switch.
@@ -916,6 +968,13 @@ export const createSlicingJobSchema = z.object({
   outputFileName: z.string().trim().min(1).max(255).optional(),
   outputFolderId: z.string().trim().min(1).nullable().optional(),
   hiddenOutput: z.boolean().optional(),
+  /**
+   * The browser TAB that started this slice (`apps/web/src/lib/tabSession.ts`). It owns the job:
+   * only that tab shows its progress toast, and the API cancels the job when the tab goes away
+   * for good (see `client-sessions.ts`). Optional, and absent means unowned — a job from a script
+   * or a non-browser caller belongs to no tab, so it is nobody's to hide and nobody's to cancel.
+   */
+  ownerClientId: z.string().trim().min(1).max(128).optional(),
   /** 0 slices all plates; positive values are 1-based plate indexes inside the source project. */
   plate: z.number().int().nonnegative().default(0),
   /**
@@ -1005,6 +1064,8 @@ export const slicingJobSchema = z.object({
   outputFileName: z.string().nullable(),
   target: slicingTargetSchema,
   plate: z.number().int().nonnegative(),
+  /** The browser tab that started it; see `createSlicingJobSchema.ownerClientId`. */
+  ownerClientId: z.string().nullable().optional(),
   status: slicingJobStatusSchema,
   queuePosition: z.number().int().positive().nullable(),
   slicerName: z.string().nullable(),
@@ -1046,14 +1107,14 @@ export type SlicingCapabilities = z.infer<typeof slicingCapabilitiesSchema>
  * slicer with a slice request. The API produces these (resolved against the
  * tenant's profiles) and the slicer materialises them as CLI `--load-*` args.
  */
-export const sliceProfileFileSchema = z.object({
+export const slicingPresetFileSchema = z.object({
   id: z.string().trim().min(1),
   source: z.enum(['builtin', 'custom']),
-  kind: slicingProfileKindSchema,
+  kind: slicingPresetKindSchema,
   name: z.string().trim().min(1),
   content: z.string().optional()
 })
-export type SliceProfileFile = z.infer<typeof sliceProfileFileSchema>
+export type SlicingPresetFile = z.infer<typeof slicingPresetFileSchema>
 
 /**
  * Wire contract for the slice-request envelope the API POSTs to the standalone
@@ -1065,6 +1126,6 @@ export const sliceEnvelopeSchema = z.object({
   jobId: z.string().trim().min(1),
   sourceFileName: z.string().trim().min(1),
   request: createSlicingJobSchema,
-  profileFiles: z.array(sliceProfileFileSchema).optional()
+  profileFiles: z.array(slicingPresetFileSchema).optional()
 })
 export type SliceEnvelope = z.infer<typeof sliceEnvelopeSchema>

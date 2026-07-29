@@ -62,6 +62,8 @@ export interface EditorPaintParams {
   activePlateRef: MutableRefObject<EditorPlate | null>
   recordHistoryRef: MutableRefObject<() => void>
   regenerateActiveThumbnailRef: MutableRefObject<(() => void) | null>
+  /** See `useEditorScene`'s param: signals an in-place paint mutation to identity-keyed consumers. */
+  paintCommittedRef: MutableRefObject<(() => void) | null>
 }
 
 /** Everything EditorView (and `useEditorScene`) consume from the paint hook. */
@@ -114,7 +116,8 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     selectedKeyRef,
     activePlateRef,
     recordHistoryRef,
-    regenerateActiveThumbnailRef
+    regenerateActiveThumbnailRef,
+    paintCommittedRef
   } = params
 
   // Support-paint brush: enforce/block/erase + radius (mm). Read via refs inside the
@@ -451,7 +454,8 @@ export function useEditorPaint(params: EditorPaintParams): EditorPaint {
     const group = selectedKeyRef.current ? groupByKeyRef.current.get(selectedKeyRef.current) : null
     if (group) refreshPaintOverlays(group)
     regenerateActiveThumbnailRef.current?.()
-  }, [refreshPaintOverlays, recordHistoryRef, stateRef, activePaintChannelRef, activePlateRef, selectedKeyRef, groupByKeyRef, regenerateActiveThumbnailRef])
+    paintCommittedRef.current?.()
+  }, [refreshPaintOverlays, recordHistoryRef, stateRef, activePaintChannelRef, activePlateRef, selectedKeyRef, groupByKeyRef, regenerateActiveThumbnailRef, paintCommittedRef])
 
   return {
     paintBrushMode,

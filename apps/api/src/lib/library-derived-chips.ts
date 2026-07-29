@@ -12,6 +12,7 @@
  * RPC. Rows are populated lazily: the list warms any file whose cache is missing
  * or stale in the background, so the next listing is fully served from the row.
  */
+import type { ThreeMfSettingsRepairReason } from '@printstream/shared'
 import type { LibraryFile } from '@printstream/shared'
 import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
 
@@ -30,6 +31,8 @@ export interface DerivedChips {
   objectExport?: boolean
   /** Embedded settings contradict the project's machine topology; the user can repair it. */
   needsSettingsRepair?: boolean
+  /** Which invariants failed, so the repair prompt names the user's actual problem. */
+  settingsRepairReasons?: ThreeMfSettingsRepairReason[]
   /** Bambu Studio version that saved the project, for the newer-than-the-engine check. */
   projectVersion?: string | null
 }

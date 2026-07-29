@@ -11,15 +11,15 @@
  * Self-contained like `SlicerDeveloperModeCard`: reads and writes the same `['general-settings']`
  * React Query cache App.tsx owns (so a save here keeps app-wide consumers in sync) and derives
  * edit permission from the cached auth bootstrap. Rendered in the editor settings dialog rather
- * than the Settings page, because that is where these are used — but unlike that dialog's other
- * content they are NOT editor-only state, which is why they live in core settings components.
+ * than the Settings page, because that is where these are used — but the workspace tier is NOT
+ * editor-only state, which is why they live in core settings components.
  */
 import { extractErrorMessage, type EditorSidebarSideSetting, type GeneralSettings, type UpdateGeneralSettingsInput } from '@printstream/shared'
 import { Alert, Option, Select } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { apiFetch } from '../../lib/apiClient'
-import { useShowBedModelOverride, useSidebarSideOverride } from '../../lib/editorViewportSettings'
+import { useShowBedModelOverride, useSidebarSideOverride, useViewportSettingsDeviceOnly } from '../../lib/editorViewportSettings'
 import { DeviceOverrideNotice, GeneralSettingCard, GeneralSettingSelectRow } from './GeneralSettingControls'
 
 /** `follow-default` is the absence of a device override, not a third stored value. */
@@ -51,9 +51,33 @@ function useGeneralSettingsEditor() {
 
 export function BuildPlateSettingCard() {
   const { canManageSettings, settings, save, saveError } = useGeneralSettingsEditor()
+  // With no workspace there is no shared tier to follow, so the card shows one plain setting rather
+  // than a default plus an override of it — see `useViewportSettingsDeviceOnly`.
+  const deviceOnly = useViewportSettingsDeviceOnly()
   const sharedEnabled = settings?.editorShowBedModel ?? true
   const [deviceOverride, setDeviceOverride] = useShowBedModelOverride()
   const deviceValue: DeviceChoice<'on' | 'off'> = deviceOverride == null ? 'follow-default' : deviceOverride ? 'on' : 'off'
+
+  if (deviceOnly) {
+    return (
+      <GeneralSettingCard
+        title="3D build plate"
+        description="Show the printer’s modelled build plate instead of the plain grid. Turn it off for a plain grid on every printer, including those with no plate model."
+        resetDisabled={deviceOverride == null}
+        onReset={() => setDeviceOverride(null)}
+      >
+        <GeneralSettingSelectRow label="Build plate" helper="Saved in this browser.">
+          <Select<'on' | 'off'>
+            value={deviceOverride ?? true ? 'on' : 'off'}
+            onChange={(_event, value) => { if (value) setDeviceOverride(value === 'on') }}
+          >
+            <Option value="on">Shown</Option>
+            <Option value="off">Hidden</Option>
+          </Select>
+        </GeneralSettingSelectRow>
+      </GeneralSettingCard>
+    )
+  }
 
   return (
     <GeneralSettingCard
@@ -106,8 +130,31 @@ export function BuildPlateSettingCard() {
 
 export function PanelPositionSettingCard() {
   const { canManageSettings, settings, save, saveError } = useGeneralSettingsEditor()
+  const deviceOnly = useViewportSettingsDeviceOnly()
   const sharedSide = settings?.editorSidebarSide ?? 'right'
   const [deviceOverride, setDeviceOverride] = useSidebarSideOverride()
+
+  if (deviceOnly) {
+    // One tier, same reasoning as the build-plate card above.
+    return (
+      <GeneralSettingCard
+        title="Panel position"
+        description="Which side the objects and settings panel sits on."
+        resetDisabled={deviceOverride == null}
+        onReset={() => setDeviceOverride(null)}
+      >
+        <GeneralSettingSelectRow label="Panel side" helper="Saved in this browser.">
+          <Select<EditorSidebarSideSetting>
+            value={deviceOverride ?? 'right'}
+            onChange={(_event, value) => { if (value) setDeviceOverride(value) }}
+          >
+            <Option value="left">Left</Option>
+            <Option value="right">Right</Option>
+          </Select>
+        </GeneralSettingSelectRow>
+      </GeneralSettingCard>
+    )
+  }
   const deviceValue: DeviceChoice<EditorSidebarSideSetting> = deviceOverride ?? 'follow-default'
 
   return (

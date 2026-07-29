@@ -90,8 +90,8 @@ test('readBridgeLibraryThreeMfIndex exposes plate objects (by object_id) for uns
     // These instances carry no identify_id (unsliced project), so the firmware skip
     // handles are empty; sliced projects fill them from each model_instance.
     assert.deepEqual(index.plates[0]?.objects, [
-      { id: 3, name: 'Box', identifyIds: [] },
-      { id: 11, name: 'Lid', identifyIds: [] }
+      { id: 3, name: 'Box', identifyIds: [], processOverrides: {} },
+      { id: 11, name: 'Lid', identifyIds: [], processOverrides: {} }
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })

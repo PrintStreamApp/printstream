@@ -90,7 +90,7 @@ import {
   stopEventPropagation,
   type PlateTypeMismatchIssue
 } from '../../lib/libraryViewHelpers'
-import { plateHasSliceData } from '../../lib/sliceProfileMatching'
+import { plateHasSliceData } from '../../lib/slicingPresetMatching'
 
 interface PrintModalProps {
   file: LibraryFile

@@ -11,6 +11,7 @@ import type { Prisma } from '@prisma/client'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
 import {
   buildFilamentUsageSlices,
+  normalizeFilamentVendorLabel,
   type SpoolCreateInput,
   type SpoolUpdateInput,
   type SpoolAssignInput,
@@ -58,7 +59,11 @@ function writableData(input: Partial<SpoolCreateInput>): Prisma.FilamentSpoolUnc
   const assign = <K extends keyof typeof data>(key: K, value: (typeof data)[K] | undefined) => {
     if (value !== undefined) data[key] = value
   }
-  assign('brand', input.brand ?? undefined)
+  // Canonical vendor spelling on the way in. A spool typed "Bambu Lab" and one auto-ingested from a
+  // tray (where `resolveFilamentIdentity` yields "Bambu") are the same manufacturer, but a stored
+  // spool's own brand OVERRIDES the derived one — so the two spellings coexisted in one inventory,
+  // splitting the brand filter and labelling the same filament two ways across surfaces.
+  assign('brand', input.brand ? normalizeFilamentVendorLabel(input.brand) || input.brand : input.brand ?? undefined)
   assign('filamentType', input.filamentType)
   assign('materialSubtype', input.materialSubtype ?? undefined)
   assign('colorName', input.colorName ?? undefined)

@@ -294,11 +294,13 @@ export function TemplateDialog({
                     size="sm"
                     variant="soft"
                     startDecorator={<AddRoundedIcon />}
-                    onClick={() => setVariants((current) => {
-                      const next = [...current, createEmptyTemplateDraftVariant(`Variant ${current.length + 1}`)]
-                      setExpandedVariantIndex(next.length - 1)
-                      return next
-                    })}
+                    // Both updates are issued from here rather than one from inside the other's
+                    // updater: a setState called during an updater runs at whatever point React
+                    // chooses to evaluate it, which is not a guarantee to build on.
+                    onClick={() => {
+                      setVariants((current) => [...current, createEmptyTemplateDraftVariant(`Variant ${current.length + 1}`)])
+                      setExpandedVariantIndex(variants.length)
+                    }}
                   >
                     Add variant
                   </Button>

@@ -112,7 +112,7 @@ test('weldImportedMeshVertices drops triangles degenerate after welding', () => 
  * is what lets painting be OFFERED on an unsaved import; break it and paint silently misapplies.
  */
 test('a staged import serializes triangles in the same order to STL and to 3MF', async () => {
-  const { renderImportedMeshObjectXmlForTest } = await import('./three-mf-scene-builder.js')
+  const { renderImportedMeshObjectXmlForTest } = await import('@printstream/shared/three-mf')
   const mesh = {
     positions: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 2, 0, 0],
     // Deliberately not sequential, so a serializer that ignored `indices` would be caught.
@@ -124,13 +124,14 @@ test('a staged import serializes triangles in the same order to STL and to 3MF',
   const xmlTriangles = [...xml.matchAll(/<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"\/>/g)]
     .map((match) => [Number(match[1]), Number(match[2]), Number(match[3])])
 
-  const triangleCount = stl.readUInt32LE(80)
+  const stlView = new DataView(stl.buffer, stl.byteOffset, stl.byteLength)
+  const triangleCount = stlView.getUint32(80, true)
   assert.equal(triangleCount, 3)
   assert.equal(xmlTriangles.length, 3)
   for (let triangle = 0; triangle < triangleCount; triangle += 1) {
     for (let vertex = 0; vertex < 3; vertex += 1) {
       const offset = 84 + triangle * 50 + 12 + vertex * 12
-      const stlVertex = [stl.readFloatLE(offset), stl.readFloatLE(offset + 4), stl.readFloatLE(offset + 8)]
+      const stlVertex = [stlView.getFloat32(offset, true), stlView.getFloat32(offset + 4, true), stlView.getFloat32(offset + 8, true)]
       // The XML names a vertex INDEX; resolve it and compare coordinates.
       const index = xmlTriangles[triangle]![vertex]!
       const xmlVertex = [mesh.positions[index * 3]!, mesh.positions[index * 3 + 1]!, mesh.positions[index * 3 + 2]!]

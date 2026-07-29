@@ -6,10 +6,20 @@ import { buildLayeredGcodePreview, parseGcodeLayers, representativeLayerHeight }
 /** Profile vertex count of the bead cross-section (mirrors PROFILE in gcodePreview.ts). */
 const P = 6
 
-/** Pull the extrusion mesh geometry out of a built preview. */
+/**
+ * The FIRST layer's bead geometry. The bead is split into one mesh per layer (see
+ * `buildPerLayerMeshes`), and these tests build single-layer G-code, so this is that layer.
+ */
 function extrusionGeometry(preview: ReturnType<typeof buildLayeredGcodePreview>): THREE.BufferGeometry {
   const mesh = preview.object.children.find((child) => (child as THREE.Mesh).isMesh) as THREE.Mesh
   return mesh.geometry
+}
+
+/** Every layer's bead geometry, for checks that must hold across the whole print. */
+function allExtrusionGeometries(preview: ReturnType<typeof buildLayeredGcodePreview>): THREE.BufferGeometry[] {
+  return preview.object.children
+    .filter((child) => (child as unknown as { isMesh?: boolean }).isMesh)
+    .map((child) => (child as THREE.Mesh).geometry)
 }
 
 /** Compare positions tolerant of Float32Array precision. */
@@ -373,30 +383,33 @@ test('buildLayeredGcodePreview keeps per-layer draw ranges aligned with welded g
   ].join('\n')
 
   const preview = buildLayeredGcodePreview(parseGcodeLayers(gcode))
-  const geometry = extrusionGeometry(preview)
   assert.equal(preview.layerCount, 2)
-  const totalIndices = geometry.getIndex()!.count
+  // Asserted through what is DRAWN rather than a single draw range: the bead is now one mesh per
+  // layer, so "visible" is a per-layer decision plus a range on the top layer alone.
+  const totalTriangles = allExtrusionGeometries(preview).reduce((sum, g) => sum + g.getIndex()!.count, 0) / 3
+  const singleLayerTriangles = (P * 6 + 2 * (P - 2) * 3) / 3
+
   preview.setVisibleLayers(1)
-  assert.equal(geometry.drawRange.start, 0)
-  assert.equal(geometry.drawRange.count, totalIndices)
+  assert.equal(drawnTriangles(preview).size, totalTriangles, 'the whole print draws every triangle')
+
   preview.setVisibleLayers(1, { single: true })
   // Single layer 1: one isolated segment = 1 tube + 2 caps.
-  assert.equal(geometry.drawRange.count, P * 6 + 2 * (P - 2) * 3)
-  assert.equal(geometry.drawRange.start, totalIndices - geometry.drawRange.count)
-  // Within-layer scrub: layer 0 has 2 welded moves; truncating after the first must end the
-  // draw range at that move's recorded boundary, and moveEnd 0 hides the whole top layer.
+  assert.equal(drawnTriangles(preview).size, singleLayerTriangles)
+
+  // Within-layer scrub: layer 0 has 2 welded moves; truncating after the first must stop at that
+  // move's recorded boundary, and moveEnd 0 hides the whole top layer.
   assert.equal(preview.moveCount(0), 2)
   assert.equal(preview.moveCount(1), 1)
   preview.setVisibleLayers(0, { moveEnd: 1 })
-  assert.equal(geometry.drawRange.start, 0)
-  assert.ok(geometry.drawRange.count > 0 && geometry.drawRange.count < totalIndices - (P * 6 + 2 * (P - 2) * 3))
+  const truncated = drawnTriangles(preview).size
+  assert.ok(truncated > 0 && truncated < totalTriangles - singleLayerTriangles)
   preview.setVisibleLayers(0, { moveEnd: 0 })
-  assert.equal(geometry.drawRange.count, 0)
+  assert.equal(drawnTriangles(preview).size, 0, 'moveEnd 0 draws nothing')
   // moveEnd at/above the move count shows the full layer again.
   preview.setVisibleLayers(0, { moveEnd: 99 })
-  assert.equal(geometry.drawRange.count, totalIndices - (P * 6 + 2 * (P - 2) * 3))
+  assert.equal(drawnTriangles(preview).size, totalTriangles - singleLayerTriangles)
   // No vertex slot escaped initialization (caps/welds only shrink usage; the buffers are trimmed).
-  const positions = geometry.getAttribute('position')
+  const positions = extrusionGeometry(preview).getAttribute('position')
   for (let i = 0; i < positions.count; i++) {
     assert.ok(Number.isFinite(positions.getX(i)) && Number.isFinite(positions.getY(i)) && Number.isFinite(positions.getZ(i)))
   }
@@ -433,4 +446,152 @@ test('parseGcodeDuration formats via the header regex: hours and days', () => {
   const gcode = ['; model printing time: 8m 2s; total estimated time: 1d 2h 3m 4s', 'G90'].join('\n')
   const { stats } = parseGcodeLayers(gcode)
   assert.equal(stats.headerTotalSeconds, 86400 + 2 * 3600 + 3 * 60 + 4)
+})
+
+/*
+ * Winding, checked as pure geometry with no GPU involved.
+ *
+ * Each triangle's GEOMETRIC normal (from its vertex order) must agree with the OUTWARD normal the
+ * builder authored per vertex — `pushVertex` is given an explicit outward direction, so the two
+ * agreeing is exactly "this triangle is wound front-side out". That invariant holds for any path
+ * shape; an earlier cut of this compared against the solid's centre instead, which is only valid
+ * for a CONVEX solid and reported false failures the moment the path turned a corner.
+ *
+ * It matters because the mesh was drawn `side: DoubleSide`, shading BOTH faces of all 2.6M
+ * triangles (measured on a real plate) for back faces a closed bead can never show. Culling them
+ * is free only if the winding is consistent — which DoubleSide let us never establish.
+ */
+function windingReport(geometry: THREE.BufferGeometry): { total: number; inward: number } {
+  const position = geometry.getAttribute('position')
+  const normal = geometry.getAttribute('normal')
+  const index = geometry.getIndex()
+  assert.ok(index, 'indexed geometry')
+  assert.ok(normal, 'authored outward normals')
+
+  let inward = 0
+  const total = index.count / 3
+  for (let t = 0; t < total; t++) {
+    const a = index.getX(t * 3), b = index.getX(t * 3 + 1), c = index.getX(t * 3 + 2)
+    const ax = position.getX(a), ay = position.getY(a), az = position.getZ(a)
+    const bx = position.getX(b), by = position.getY(b), bz = position.getZ(b)
+    const cx2 = position.getX(c), cy2 = position.getY(c), cz2 = position.getZ(c)
+    // Geometric normal = (B-A) x (C-A); CCW when viewed from the side it faces.
+    const ux = bx - ax, uy = by - ay, uz = bz - az
+    const vx = cx2 - ax, vy = cy2 - ay, vz = cz2 - az
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx
+    // Outward reference: the normals the builder authored for these vertices.
+    const ox = (normal.getX(a) + normal.getX(b) + normal.getX(c)) / 3
+    const oy = (normal.getY(a) + normal.getY(b) + normal.getY(c)) / 3
+    const oz = (normal.getZ(a) + normal.getZ(b) + normal.getZ(c)) / 3
+    if (nx * ox + ny * oy + nz * oz <= 0) inward += 1
+  }
+  return { total, inward }
+}
+
+test('every bead triangle faces outward, so back-face culling is safe', () => {
+  // One straight extrusion: side quads plus a cap at each end.
+  const parsed = parseGcodeLayers([
+    'G1 Z0.2',
+    'G1 X0 Y0',
+    'G1 X20 Y0 E5'
+  ].join('\n'))
+  const preview = buildLayeredGcodePreview(parsed)
+  let total = 0, inward = 0
+  for (const geometry of allExtrusionGeometries(preview)) {
+    const report = windingReport(geometry)
+    total += report.total; inward += report.inward
+  }
+  assert.ok(total > 0, 'geometry was built')
+  assert.equal(inward, 0, `${inward} of ${total} triangles face inward`)
+})
+
+test('winding holds through a welded joint and a direction reversal', () => {
+  // A corner welds two segments (shared ring) and reverses direction — the cases where a
+  // hand-rolled winding is most likely to flip.
+  // E is ABSOLUTE here, so each move must raise it or the parser reads a travel and the corner
+  // never gets built (the first cut of this test silently checked one straight segment).
+  const parsed = parseGcodeLayers([
+    'G1 Z0.2',
+    'G1 X0 Y0',
+    'G1 X20 Y0 E5',
+    'G1 X20 Y20 E10',
+    'G1 X0 Y20 E15'
+  ].join('\n'))
+  assert.equal(parsed.extrusionPositions.length / 6, 3, 'three extrusion segments, not one')
+  const { total, inward } = windingReport(extrusionGeometry(buildLayeredGcodePreview(parsed)))
+  assert.ok(total > 20, 'more than the single-segment case')
+  assert.equal(inward, 0, `${inward} of ${total} triangles face inward`)
+})
+
+/** Every triangle the preview would actually draw, as a set of "a,b,c" index triples. */
+function drawnTriangles(preview: ReturnType<typeof buildLayeredGcodePreview>): Set<string> {
+  const drawn = new Set<string>()
+  for (const child of preview.object.children) {
+    const mesh = child as THREE.Mesh
+    if (!(mesh as unknown as { isMesh?: boolean }).isMesh || !mesh.visible) continue
+    const index = mesh.geometry.getIndex()
+    if (!index) continue
+    const range = mesh.geometry.drawRange
+    const start = range.start
+    const count = Math.min(range.count === Infinity ? index.count : range.count, index.count - start)
+    for (let i = 0; i < count; i += 3) {
+      drawn.add(`${index.getX(start + i)},${index.getX(start + i + 1)},${index.getX(start + i + 2)}`)
+    }
+  }
+  return drawn
+}
+
+// The bead is split into one mesh PER LAYER so three can sort them front-to-back (`painterSortStable`
+// orders opaque objects by ascending camera z, which lets early-Z discard buried fragments). A
+// single mesh drew layer 0 first — back-to-front for a top-down camera — so every layer was shaded
+// and then painted over. The split must not change WHICH triangles are drawn, only their order.
+test('the layer split draws one mesh per layer and nothing else changes', () => {
+  const parsed = parseGcodeLayers([
+    'G1 Z0.2', 'G1 X0 Y0', 'G1 X20 Y0 E5', 'G1 X20 Y20 E10',
+    'G1 Z0.4', 'G1 X0 Y0', 'G1 X20 Y0 E15',
+    'G1 Z0.6', 'G1 X0 Y0', 'G1 X20 Y0 E20'
+  ].join('\n'))
+  const preview = buildLayeredGcodePreview(parsed)
+  assert.equal(preview.layerCount, 3)
+  const meshes = preview.object.children.filter((c) => (c as unknown as { isMesh?: boolean }).isMesh)
+  assert.equal(meshes.length, 3, 'one mesh per layer')
+
+  // Each layer's bounds must be its OWN, not the whole print's — the trap when geometries share a
+  // position buffer, because computeBoundingSphere would read all of it and cull nothing.
+  const zs = meshes.map((m) => (m as THREE.Mesh).geometry.boundingBox!.min.z)
+  assert.deepEqual([...zs].sort((a, b) => a - b), zs, 'layer bounds ascend with Z')
+  assert.ok(zs[0]! < zs[2]!, 'the bottom layer does not claim the top layer position')
+
+  // Showing everything draws every triangle exactly once.
+  preview.setVisibleLayers(2)
+  const all = drawnTriangles(preview)
+  const totalIndices = meshes.reduce((sum, m) => sum + ((m as THREE.Mesh).geometry.getIndex()?.count ?? 0), 0)
+  assert.equal(all.size, totalIndices / 3, 'every triangle drawn once, none duplicated')
+})
+
+test('scrubbing hides upper layers and truncates the top one, as the single mesh did', () => {
+  const parsed = parseGcodeLayers([
+    'G1 Z0.2', 'G1 X0 Y0', 'G1 X20 Y0 E5',
+    'G1 Z0.4', 'G1 X0 Y0', 'G1 X20 Y0 E10', 'G1 X20 Y20 E15'
+  ].join('\n'))
+  const preview = buildLayeredGcodePreview(parsed)
+
+  preview.setVisibleLayers(1)
+  const both = drawnTriangles(preview)
+  preview.setVisibleLayers(0)
+  const bottomOnly = drawnTriangles(preview)
+  assert.ok(bottomOnly.size > 0 && bottomOnly.size < both.size, 'hiding the top layer draws less')
+  for (const triangle of bottomOnly) assert.ok(both.has(triangle), 'and draws a SUBSET, not different geometry')
+
+  // `single` shows only the top layer — disjoint from the bottom-only set.
+  preview.setVisibleLayers(1, { single: true })
+  const topOnly = drawnTriangles(preview)
+  assert.ok(topOnly.size > 0)
+  for (const triangle of topOnly) assert.ok(!bottomOnly.has(triangle), 'single mode excludes lower layers')
+
+  // Truncating the top layer's moves draws strictly fewer than the whole layer.
+  preview.setVisibleLayers(1, { single: true, moveEnd: 1 })
+  const truncated = drawnTriangles(preview)
+  assert.ok(truncated.size > 0 && truncated.size < topOnly.size, 'the move scrub still truncates')
+  for (const triangle of truncated) assert.ok(topOnly.has(triangle))
 })

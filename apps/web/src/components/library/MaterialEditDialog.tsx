@@ -6,6 +6,10 @@
  * slice controller's setters — the same live semantics the inputs had when they sat
  * inline on the row — so "Done" only closes; there is no separate apply/cancel state.
  *
+ * In 'add' mode the same inputs choose what a slot WILL be before it exists (`AddMaterialDialog`
+ * owns that pending state), which is why the close callback reports the user's intent rather than
+ * just closing.
+ *
  * This is the MANUAL path only: assigning what the printer already has loaded is the swatch
  * menu's job, so the dialog carries no printer shortcut of its own.
  */
@@ -17,9 +21,10 @@ import {
 import { BackAwareModal } from '../BackAwareModal'
 import { DeferredKeyboardAutocomplete } from '../DeferredKeyboardAutocomplete'
 import { FilamentColorPicker } from './FilamentColorPicker'
-import type { SliceMaterialOption } from '../../lib/sliceProfileMatching'
+import { filterSliceMaterialOptions, type SliceMaterialOption } from '../../lib/slicingPresetMatching'
 
 export function MaterialEditDialog({
+  mode = 'edit',
   filamentIndex,
   filamentLabel,
   typeFilter,
@@ -32,6 +37,12 @@ export function MaterialEditDialog({
   onColorChange,
   onClose
 }: {
+  /**
+   * 'edit' retunes an existing slot; 'add' picks what a NOT-YET-CREATED slot will be, so the
+   * caller creates it only on a 'done' close. Adding first and asking after produced slots the
+   * user never chose — see `AddedMaterialChoice`.
+   */
+  mode?: 'edit' | 'add'
   filamentIndex: number
   /** Project filament label (e.g. "PLA"), the color-family fallback when no preset is picked. */
   filamentLabel: string
@@ -45,7 +56,8 @@ export function MaterialEditDialog({
   /** Normalized current color hex. */
   color: string
   onColorChange: (color: string) => void
-  onClose: () => void
+  /** Carries the user's intent: 'add' mode creates the slot only on 'done'. */
+  onClose: (outcome: 'done' | 'cancel') => void
 }) {
   // Edits apply LIVE through the controller — that is what keeps the editor's dirty flag and undo
   // history correct. So Cancel restores the values the dialog opened with rather than staging edits
@@ -56,12 +68,12 @@ export function MaterialEditDialog({
     if (initial.typeFilter !== typeFilter) onTypeFilterChange(initial.typeFilter)
     if (initial.option?.id !== selectedOption?.id) onMaterialOptionChange(initial.option)
     if (initial.color !== color) onColorChange(initial.color)
-    onClose()
+    onClose('cancel')
   }
   return (
     <BackAwareModal open onClose={revertAndClose}>
       <ModalDialog sx={{ maxWidth: 420, width: '100%' }}>
-        <Typography level="h4">Material {filamentIndex + 1}</Typography>
+        <Typography level="h4">{mode === 'add' ? 'Add material' : `Material ${filamentIndex + 1}`}</Typography>
         <Stack spacing={1.25}>
           <FormControl>
             <FormLabel>Type</FormLabel>
@@ -99,9 +111,16 @@ export function MaterialEditDialog({
               placeholder="Choose a material profile"
               onChange={onMaterialOptionChange}
             />
-            {/* The field itself shows the preset in effect; only flag the cases needing
-                the user to act — and always say WHY Done is disabled rather than
-                leaving a dead button with no explanation. */}
+            {/* The field shows the ALIAS, which is the same text for every variant of a product —
+                including a workspace preset derived from a built-in. Reading it as confirmation of
+                which preset is bound is therefore a mistake the field invites, so name the literal
+                preset underneath whenever it says more. The option rows already do this; the field
+                is what a user checks after the dialog closes. */}
+            {selectedOption?.profileId && selectedOption.material && selectedOption.material !== (selectedOption.presetLabel ?? selectedOption.label) && (
+              <FormHelperText sx={{ color: 'text.tertiary' }}>{selectedOption.material}</FormHelperText>
+            )}
+            {/* Only flag the cases needing the user to act — and always say WHY Done is disabled
+                rather than leaving a dead button with no explanation. */}
             {!selectedOption && (
               <FormHelperText sx={{ color: 'warning.400' }}>
                 {materialOptions.length > 0
@@ -133,9 +152,12 @@ export function MaterialEditDialog({
             to fill by default) and right-aligned, per dialog conventions. */}
         <DialogActions buttonFlex="0 1 auto" sx={{ pt: 1, justifyContent: 'flex-end' }}>
           <Button type="button" variant="plain" color="neutral" onClick={revertAndClose}>Cancel</Button>
-          {/* A slot with no preset would be dropped from the slice request, so Done cannot
-              confirm one — the user picks a preset or cancels back to what was there. */}
-          <Button type="button" onClick={onClose} disabled={!selectedOption} sx={{ minWidth: 96 }}>Done</Button>
+          {/* A slot with no preset would be dropped from the slice request, so this cannot
+              confirm one — the user picks a preset or cancels back to what was there. In 'add'
+              mode that is also what stops a slot existing before its material is chosen. */}
+          <Button type="button" onClick={() => onClose('done')} disabled={!selectedOption} sx={{ minWidth: 96 }}>
+            {mode === 'add' ? 'Add' : 'Done'}
+          </Button>
         </DialogActions>
       </ModalDialog>
     </BackAwareModal>
@@ -181,6 +203,12 @@ function SliceMaterialAutocomplete({
         setInputValue(nextValue)
       }}
       getOptionLabel={(option) => option.label}
+      // Search the whole identity, not just the displayed label. The label is the ALIAS, which has
+      // the vendor prefix stripped ("PLA Basic"), so typing a brand matched no built-in preset at
+      // all — the reason a separate Brand dropdown was needed, and why removing it in favour of
+      // "just type it" did not work. Terms are ANDed so "bambu pla basic" narrows rather than
+      // widening, and the literal preset name is searchable too ("@BBL A1" finds that variant).
+      filterOptions={(available, state) => filterSliceMaterialOptions(available, state.inputValue, displayValue)}
       // Joy calls this while reconciling an empty/!changing selection, so both sides
       // must tolerate absence rather than assuming a value is always present.
       isOptionEqualToValue={(option, selected) => option?.id === selected?.id}
@@ -200,6 +228,14 @@ function SliceMaterialAutocomplete({
                 <Typography level="body-xs" textColor="text.tertiary">
                   {[option.brand, option.metadata].filter(Boolean).join(' · ')}
                 </Typography>
+                {/* The LITERAL preset name. The row above shows the alias, which is the same text
+                    for every machine variant of a product — so without this there is no way to see
+                    which variant a pick actually landed on. Only when it adds something. */}
+                {option.profileId && option.material && option.material !== option.label && (
+                  <Typography level="body-xs" textColor="text.tertiary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {option.material}
+                  </Typography>
+                )}
               </Stack>
             </Stack>
           </ListItemContent>

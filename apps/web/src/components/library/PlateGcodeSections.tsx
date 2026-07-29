@@ -27,6 +27,7 @@ import {
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded'
+import { StickySectionHeader } from './StickySectionHeader'
 
 /** A selectable project material (1-based id) with its live colour + display labels. */
 export type FilamentOption = { id: number; color: string | null; label: string | null; colorName: string | null }
@@ -91,14 +92,18 @@ function SectionHelpPopup({ ariaLabel, title, children }: {
  * the filament-change rows. Renders like the settings sidebar's other sections (title
  * row + outlined container) with the Add action anchored right, below
  * {@link PlateFilamentChangesSection}.
+ *
+ * Returns the header and body as SIBLINGS, not a wrapper: the header sticks while the section
+ * scrolls, and a wrapper would become its containing block and evict it (see
+ * `StickySectionHeader`). Callers must render it into a column that supplies the row spacing.
  */
 export function PlatePausesSection({ pauses, onChange }: {
   pauses: PlatePause[]
   onChange: (pauses: PlatePause[]) => void
 }) {
   return (
-    <Stack spacing={0.75} sx={{ minWidth: 0 }}>
-      <Stack direction="row" spacing={0.25} alignItems="center">
+    <>
+      <StickySectionHeader spacing={0.25}>
         <Typography level="title-sm">Pauses</Typography>
         <SectionHelpPopup ariaLabel="About pauses" title="Pauses">
           <Typography level="body-xs">
@@ -130,8 +135,8 @@ export function PlatePausesSection({ pauses, onChange }: {
         >
           Add pause
         </Button>
-      </Stack>
-      <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
+      </StickySectionHeader>
+      <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', minWidth: 0 }}>
         <Stack spacing={0.75}>
           {pauses.length === 0 && (
             <Typography level="body-sm" textColor="text.tertiary">No pauses on this plate.</Typography>
@@ -164,7 +169,7 @@ export function PlatePausesSection({ pauses, onChange }: {
           ))}
         </Stack>
       </Sheet>
-    </Stack>
+    </>
   )
 }
 
@@ -174,6 +179,8 @@ export function PlatePausesSection({ pauses, onChange }: {
  * (title row + outlined container, above {@link PlatePausesSection}) with the Add
  * action anchored right and a compact swatch+id material select — the open listbox
  * still shows the full material names.
+ *
+ * Header and body are siblings for the same sticky reason as {@link PlatePausesSection}.
  */
 export function PlateFilamentChangesSection({ changes, filamentOptions, onChange }: {
   changes: PlateFilamentChange[]
@@ -181,8 +188,8 @@ export function PlateFilamentChangesSection({ changes, filamentOptions, onChange
   onChange: (changes: PlateFilamentChange[]) => void
 }) {
   return (
-    <Stack spacing={0.75} sx={{ minWidth: 0 }}>
-      <Stack direction="row" spacing={0.25} alignItems="center">
+    <>
+      <StickySectionHeader spacing={0.25}>
         <Typography level="title-sm">Filament changes</Typography>
         <SectionHelpPopup ariaLabel="About filament changes" title="Filament changes">
           <Typography level="body-xs">
@@ -211,8 +218,8 @@ export function PlateFilamentChangesSection({ changes, filamentOptions, onChange
         >
           Add change
         </Button>
-      </Stack>
-      <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
+      </StickySectionHeader>
+      <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm', minWidth: 0 }}>
         <Stack spacing={0.75}>
           {changes.length === 0 && (
             <Typography level="body-sm" textColor="text.tertiary">No filament changes on this plate.</Typography>
@@ -271,6 +278,6 @@ export function PlateFilamentChangesSection({ changes, filamentOptions, onChange
           ))}
         </Stack>
       </Sheet>
-    </Stack>
+    </>
   )
 }

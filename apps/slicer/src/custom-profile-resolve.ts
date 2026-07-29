@@ -20,7 +20,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { SlicingProfileKind } from '@printstream/shared'
+import type { SlicingPresetKind } from '@printstream/shared'
 import { sanitizeProfileFileName } from './profile-file-name.js'
 
 type ProfileRecord = Record<string, unknown>
@@ -30,7 +30,7 @@ type ProfileRecord = Record<string, unknown>
  * when the preset file does not exist (e.g. internal `fdm_*` templates that are
  * not shipped as instantiable presets).
  */
-export type SystemPresetReader = (kind: SlicingProfileKind, name: string) => Promise<ProfileRecord | null>
+export type SystemPresetReader = (kind: SlicingPresetKind, name: string) => Promise<ProfileRecord | null>
 
 /**
  * Merges a custom profile's JSON `content` onto its inherited system base and
@@ -38,7 +38,7 @@ export type SystemPresetReader = (kind: SlicingProfileKind, name: string) => Pro
  */
 export async function resolveCustomProfileConfig(
   content: string,
-  kind: SlicingProfileKind,
+  kind: SlicingPresetKind,
   profileDir: string
 ): Promise<ProfileRecord> {
   return resolveCustomProfileConfigWith(content, kind, createFileSystemPresetReader(profileDir))
@@ -50,7 +50,7 @@ export async function resolveCustomProfileConfig(
  */
 export async function resolveCustomProfileConfigWith(
   content: string,
-  kind: SlicingProfileKind,
+  kind: SlicingPresetKind,
   readSystemPreset: SystemPresetReader
 ): Promise<ProfileRecord> {
   const custom = JSON.parse(content) as ProfileRecord
@@ -74,7 +74,7 @@ function createFileSystemPresetReader(profileDir: string): SystemPresetReader {
 
 async function mergeInheritedBase(
   profile: ProfileRecord,
-  kind: SlicingProfileKind,
+  kind: SlicingPresetKind,
   readSystemPreset: SystemPresetReader,
   visited: Set<string>
 ): Promise<ProfileRecord> {

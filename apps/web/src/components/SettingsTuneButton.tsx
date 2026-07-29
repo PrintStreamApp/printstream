@@ -24,7 +24,15 @@ export function SettingsTuneButton({ changedCount, title, ariaLabel, disabled, o
     <Tooltip title={title}>
       {/* span wrapper so the tooltip still shows when the button is disabled. */}
       <span>
-        <Badge badgeContent={changedCount} size="sm" color="primary" badgeInset="15%">
+        <Badge
+          badgeContent={changedCount}
+          size="sm"
+          color="primary"
+          badgeInset="15%"
+          // The badge sits ON the button, so it swallowed clicks aimed at the corner it covers and
+          // the button did nothing. It is a label, never a target — let the press fall through.
+          slotProps={{ badge: { sx: { pointerEvents: 'none' } } }}
+        >
           <IconButton
             size="sm"
             variant="plain"

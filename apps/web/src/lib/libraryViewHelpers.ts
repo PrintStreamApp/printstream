@@ -32,7 +32,7 @@ import type {
   SceneEditPlateFilamentChanges,
   SceneEditPlatePauses,
   SlicingCapabilities,
-  SlicingProfileSummary,
+  SlicingPresetSummary,
   ThreeMfProjectFilament
 } from '@printstream/shared'
 import { createSlicingJobSchema } from '@printstream/shared'
@@ -45,6 +45,7 @@ import {
   supportsPrinterDoorSensor
 } from '@printstream/shared'
 import { hasLoadedFilament } from './filamentColor'
+import { readTabSessionId } from './tabSession'
 import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from './libraryDirectory'
 import { amsUnitLetter, type PrinterTrayGroup as PrinterTrayGroupBase } from './printerTrayMapping'
 import { type LibrarySort, type LibraryViewMode } from '../components/LibraryBrowser'
@@ -73,7 +74,7 @@ export const VIRTUAL_TRAY_DEPUTY_ID = 254
 export const AVAILABLE_PRINT_STAGES = new Set<PrinterStatus['stage']>(['idle', 'finished', 'failed', 'unknown'])
 export const PUBLIC_DEMO_LIBRARY_UPLOAD_NOTICE = 'This is a public demo. Curated library files stay read-only. Uploads are private temporary files, limited to 15 MB, and removed within 12 hours.'
 export const EMPTY_SLICER_TARGETS: SlicingCapabilities['targets'] = []
-export const EMPTY_SLICING_PROFILES: SlicingProfileSummary[] = []
+export const EMPTY_SLICING_PRESETS: SlicingPresetSummary[] = []
 
 export interface PlateTypeMismatchIssue {
   requiredPlateType: string
@@ -128,9 +129,12 @@ export function toHistoryPrintFile(version: LibraryFileVersion): LibraryFile {
   }
 }
 
-export function buildSlicedOutputFileName(fileName: string, options?: { plateName?: string | null; plateNumber?: number | null }): string {
+export function buildSlicedOutputFileName(
+  fileName: string,
+  options?: { plateName?: string | null; plateNumber?: number | null; plateCount?: number | null }
+): string {
   const baseName = humanizeProjectName(fileName.replace(/\.3mf$/i, ''))
-  const plateLabel = buildSlicedPlateLabel(options?.plateName, options?.plateNumber)
+  const plateLabel = buildSlicedPlateLabel(options?.plateName, options?.plateNumber, options?.plateCount)
   const suffix = plateLabel ? ` - ${plateLabel}` : ''
   return `${baseName}${suffix}.gcode.3mf`
 }
@@ -141,10 +145,21 @@ export function humanizeProjectName(value: string): string {
   return humanized || value.trim()
 }
 
-/** Build a human-readable plate label ("Plate 4") for a sliced output file, preserving spaces. */
-export function buildSlicedPlateLabel(plateName: string | null | undefined, plateNumber: number | null | undefined): string | null {
+/**
+ * Build a human-readable plate label ("Plate 4") for a sliced output file, preserving spaces.
+ *
+ * `plateCount` suppresses the NUMBERED fallback on a single-plate project: "Plate 1" is noise
+ * there, since it distinguishes nothing. An explicitly NAMED plate still shows even when it is the
+ * only one — the user named it on purpose, so it carries information a number does not.
+ */
+export function buildSlicedPlateLabel(
+  plateName: string | null | undefined,
+  plateNumber: number | null | undefined,
+  plateCount?: number | null
+): string | null {
   const normalized = plateName?.trim().replace(/\s+/g, ' ')
   if (normalized) return normalizeFallbackPlateLabel(normalized)
+  if (plateCount === 1) return null
   if (plateNumber != null && plateNumber > 0) return `Plate ${plateNumber}`
   return null
 }
@@ -531,6 +546,10 @@ export function buildCreateSlicingJobBody(
     outputFileName: input.outputFileName,
     outputFolderId: extras.outputFolderId ?? null,
     hiddenOutput: extras.hiddenOutput,
+    // Every browser-started slice is owned by the tab that started it: only that tab toasts it,
+    // and the API cancels it when the tab is gone. Stamped here rather than at each call site so
+    // no slice entry point can forget it (see tabSession.ts).
+    ownerClientId: readTabSessionId(),
     plate: input.plate,
     selectedObjectIds: input.selectedObjectIds,
     objectProcessOverrides: input.objectProcessOverrides,

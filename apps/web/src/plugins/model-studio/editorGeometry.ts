@@ -14,9 +14,10 @@ import * as THREE from 'three'
 import { ConvexGeometry } from 'three-stdlib'
 import type { LibraryThreeMfPrimeTower, SceneEditPartSubtype } from '@printstream/shared'
 import type { SliceConfigSnapshot } from '../../components/library/SliceSettingsPanel'
-import type { TrianglePaintChannel } from './lib/threeMfScene'
+import { disposeObject3D, type TrianglePaintChannel } from './lib/threeMfScene'
 import { FOOTPRINT_CELL_MM, footprintCellKey } from './lib/arrange'
 import { estimateWipeTowerFootprint } from './lib/primeTower'
+import { primeTowerReachIssue } from './lib/primeTowerReach'
 import {
   SEAM_PAINT_COLORS,
   SEAM_PAINT_OVERLAY_NAME,
@@ -236,6 +237,22 @@ export function nextIdle(): Promise<void> {
  * generally smaller than the raw `prime_tower_width` square we used to draw. The Z height is just
  * a visual marker (rises to the print height) and isn't significant.
  */
+/**
+ * Remove (and dispose) every prime tower under `root`.
+ *
+ * The tower has TWO adders — the async plate build and the live used-material toggle in
+ * `EditorView` — so neither may trust a single ref to find "the" tower: doing so left an orphaned
+ * one in the scene (duplicate towers). Both call this first, which makes tower placement
+ * idempotent regardless of which ran last.
+ */
+export function removePrimeTowers(root: THREE.Object3D): void {
+  for (const child of [...root.children]) {
+    if (child.userData.isPrimeTower !== true) continue
+    root.remove(child)
+    disposeObject3D(child)
+  }
+}
+
 export function createPrimeTowerObject(
   tower: LibraryThreeMfPrimeTower,
   plateFilamentCount: number,
@@ -515,10 +532,22 @@ export function footprintHitsExcludeZones(
   return false
 }
 
+const OFF_BED_ISSUES = new Set(['extends past the plate', 'is in an unprintable area'])
+
+/** Stable warning key for the purge tower, which has no instance key of its own. */
+export const PRIME_TOWER_WARNING_KEY = 'prime-tower'
+
 export interface PlacementWarning {
   key: string
   name: string
   issues: string[]
+  /**
+   * The object does not FIT the plate (past its edge, or inside a truly unprintable area) — as
+   * opposed to a collision or floating, which the user can fix without resizing the bed. Machine
+   * switching keys its "no longer fits the new bed" warning on this, so a smaller target bed is
+   * reported at switch time instead of surfacing as the CLI's exit-206 at slice time.
+   */
+  offBed: boolean
 }
 
 /**
@@ -618,6 +647,11 @@ export function computePlacementWarnings(
       add(instance.key, 'overlaps the purge tower')
     }
   }
+  // The tower is not an object, but it can be unprintable in a way no object can: every extruder
+  // purges into it, so unlike a part it may never sit in a single-nozzle-only zone whatever the
+  // materials are. Reported through the same channel so it reaches the user before save/slice
+  // without a second warning surface. See `lib/primeTowerReach.ts`.
+  const towerIssue = primeTowerReachIssue(primeTower, plate.bed.excludeAreas)
   for (let i = 0; i < entries.length; i += 1) {
     for (let j = i + 1; j < entries.length; j += 1) {
       const a = entries[i]!
@@ -634,9 +668,24 @@ export function computePlacementWarnings(
       }
     }
   }
-  return entries
+  const warnings = entries
     .filter(({ instance }) => issues.has(instance.key))
-    .map(({ instance }) => ({ key: instance.key, name: instance.name ?? 'Object', issues: [...issues.get(instance.key)!] }))
+    .map(({ instance }) => {
+      const list = [...issues.get(instance.key)!]
+      return {
+        key: instance.key,
+        name: instance.name ?? 'Object',
+        issues: list,
+        offBed: list.some((issue) => OFF_BED_ISSUES.has(issue))
+      }
+    })
+  // Appended rather than folded into the object loop above: the tower is not an instance, so it has
+  // no entry to hang off. `offBed` stays false — it is a reachability problem, not a bed-size one,
+  // and the machine-switch warning counts off-bed OBJECTS.
+  if (towerIssue) {
+    warnings.push({ key: PRIME_TOWER_WARNING_KEY, name: 'Purge tower', issues: [towerIssue], offBed: false })
+  }
+  return warnings
 }
 
 /**

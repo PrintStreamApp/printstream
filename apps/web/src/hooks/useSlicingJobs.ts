@@ -4,11 +4,19 @@ import { apiFetch } from '../lib/apiClient'
 import { isActiveSlicingJob } from '../lib/slicingJobPresentation'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
 
+/**
+ * A job-list fetch that has not settled in this long is treated as a stalled transport, aborted,
+ * and retried. Generous against the poll interval on purpose — this is a wedge guard, not a
+ * latency budget — but bounded, because a never-settling fetch here takes the whole key down:
+ * the interval stops firing and every `invalidateQueries(['slicing-jobs'])` waits on it forever.
+ */
+const SLICING_JOBS_TIMEOUT_MS = 20_000
+
 export function useSlicingJobs(options?: { enabled?: boolean; suppressGlobalErrorToast?: boolean }) {
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   return useQuery({
     queryKey: workspaceQueryKeys.slicingJobs(workspaceScopeKey),
-    queryFn: ({ signal }) => apiFetch<SlicingJobsResponse>('/api/slicing/jobs', { signal }),
+    queryFn: ({ signal }) => apiFetch<SlicingJobsResponse>('/api/slicing/jobs', { signal, timeoutMs: SLICING_JOBS_TIMEOUT_MS }),
     enabled: options?.enabled ?? true,
     // Job state + progress are pushed over WS (resource.changed:'slicing' invalidates this key on
     // every transition/progress chunk), so polling is only a safety net for dropped events /

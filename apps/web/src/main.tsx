@@ -16,6 +16,7 @@ import { shouldSuppressGlobalErrorToast, shouldSuppressPassiveAuthQueryError } f
 import { extractDisabledPluginNameFromErrorMessage } from './lib/pluginSettings'
 import { PLUGIN_CATALOG_QUERY_KEY } from './lib/pluginCatalogQuery'
 import { isMarketingPath, marketingRoutePaths } from './lib/marketingManifest'
+import { isPublicToolPath } from './lib/publicToolManifest'
 import { dismissSplashScreenImmediately, setSplashScreenProgress } from './lib/splashScreen'
 import { toast } from './lib/toast'
 // Self-hosted brand fonts (no Google Fonts CDN dependency). Weights mirror the
@@ -45,7 +46,10 @@ async function clearOldOriginState(): Promise<void> {
 // A cold load of a public marketing page must not show the app-boot splash ("Loading the app…"),
 // so dismiss it immediately and skip the boot-progress text — Root renders the light marketing
 // branch. Real app loads (and entering the app from marketing, see Root) keep/re-show the splash.
-const marketingColdLoad = marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname)
+// Public tools get the same treatment for the same reason: they render their own surface and never
+// wait on app bootstrap, so the "Loading the app…" splash would be a lie.
+const marketingColdLoad = isPublicToolPath(window.location.pathname)
+  || (marketingRoutePaths.length > 0 && isMarketingPath(window.location.pathname))
 const bootProgress = (percent: number, status: string): void => {
   if (!marketingColdLoad) setSplashScreenProgress(percent, status)
 }

@@ -9,7 +9,7 @@ import { PNG } from 'pngjs'
 import yazl from 'yazl'
 import { applyObjectProcessOverridesXml, buildPlateObjectsWithPreview, buildThreeMfIndex, createObjectCustomizedThreeMf, createObjectFilteredThreeMf, createSinglePlateThreeMf, plateObjectIdsFromModelSettingsXml, readEntry, readPlateIndex, readSceneManifest, rekeyReplacedObjectOverrides, setBuildItemsUnprintableXml, threeMfTransformFromTRS, writeArrangedThreeMf } from './three-mf.js'
 import { plateSkipIdentifyIdsFromIndex } from './three-mf-output.js'
-import { applyFilamentList, applyGlobalProcessOverrides, applyModelKindMarker, applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from './three-mf-scene-builder.js'
+import { applyFilamentList, applyGlobalProcessOverrides, applyModelKindMarker, applyNozzleAssignmentToProjectSettings, applyPartProcessOverrides, applyPartTypeChanges, applyTrianglePaintToModelEntry, mergeCustomGcodePerLayer, rewriteSliceInfoNozzleGroups, serializeBrimEarPoints } from '@printstream/shared/three-mf'
 import { rewriteThreeMfEntries } from './three-mf-internal.js'
 import { parseBrimEarPoints, parseCustomGcodePauses, parseCustomGcodeToolChanges, parseModelSettingsScene } from './three-mf-reader.js'
 import type { SceneEdit, SceneEditFilament } from '@printstream/shared'
@@ -129,7 +129,7 @@ test('buildThreeMfIndex merges slice-info and project settings metadata', () => 
   assert.equal(index.plates[0]?.filaments[0]?.chamberTemperature, 45)
   // slice_info objects are keyed by identify_id, so the entry's own id doubles as its
   // firmware skip handle.
-  assert.deepEqual(index.plates[0]?.objects[0], { id: 7, name: 'Bracket', identifyIds: [7] })
+  assert.deepEqual(index.plates[0]?.objects[0], { id: 7, name: 'Bracket', identifyIds: [7], processOverrides: {} })
 })
 
 test('buildThreeMfIndex decodes XML entities in plate and object names', () => {
@@ -164,12 +164,12 @@ test('buildThreeMfIndex prefers model_settings object_id over slice_info identif
     '</config>'
   ].join('\n')
   const modelSettingsPlates = [
-    { index: 1, name: null, thumbnailFile: null, usedFilamentIds: [], objects: [{ id: 71, name: 'My Sign Draft.3mf', identifyIds: [48216] }] }
+    { index: 1, name: null, thumbnailFile: null, usedFilamentIds: [], objects: [{ id: 71, name: 'My Sign Draft.3mf', identifyIds: [48216], processOverrides: {} }] }
   ]
 
   const index = buildThreeMfIndex(sliceInfoXml, null, modelSettingsPlates, new Map())
 
-  assert.deepEqual(index.plates.find((plate) => plate.index === 1)?.objects, [{ id: 71, name: 'My Sign Draft.3mf', identifyIds: [48216] }])
+  assert.deepEqual(index.plates.find((plate) => plate.index === 1)?.objects, [{ id: 71, name: 'My Sign Draft.3mf', identifyIds: [48216], processOverrides: {} }])
 })
 
 test('buildThreeMfIndex parses string chamber temperatures from project settings', () => {
@@ -555,6 +555,95 @@ test('applyFilamentList blanks a changed slot\'s different_settings_to_system re
   assert.deepEqual(next.different_settings_to_system, ['layer_height', '', 'fan_min_speed', 'printable_area'])
 })
 
+// BambuStudio 2.x VARIANT EXPANSION: numeric filament settings carry one value per
+// (filament x extruder variant) — N*V-long arrays that the length==N logic used to skip
+// entirely. That skip is how a material switch kept the OLD material's physics (a production
+// H2D save renamed 5 X1C filaments to 1 PETG while nozzle_temperature kept all 10 stale
+// columns), showing phantom "changed vs preset" badges. Slot i owns the V-wide block at i*V.
+test('applyFilamentList drops variant-expanded physics on a material change, remapping filament_extruder_variant', () => {
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'PETG'],
+    filament_settings_id: ['Bambu ABS @BBL H2D', 'Bambu PETG HF @BBL H2D 0.4 nozzle'],
+    filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive Standard', 'Direct Drive High Flow'],
+    nozzle_temperature: ['270', '270', '245', '245'],
+    filament_max_volumetric_speed: ['22', '24', '25', '40']
+  })
+  // Slot 0 ABS -> PETG (material change); slot 1 unchanged.
+  const filaments: SceneEditFilament[] = [
+    { color: '#00AE42', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' },
+    { color: '#000000', sourceIndex: 1, type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+  // The ABS physics is gone from the variant-expanded arrays too…
+  assert.equal('nozzle_temperature' in next, false)
+  assert.equal('filament_max_volumetric_speed' in next, false)
+  // …while the variant layout's identity column survives by block-remap (dropping it would break
+  // the topology every other N*V-long key is decoded against).
+  assert.deepEqual(next.filament_extruder_variant, ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive Standard', 'Direct Drive High Flow'])
+})
+
+test('applyFilamentList block-remaps variant-expanded arrays on a remove without material change', () => {
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'PETG'],
+    filament_settings_id: ['Bambu ABS @BBL H2D', 'Bambu PETG HF @BBL H2D 0.4 nozzle'],
+    filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive Standard', 'Direct Drive High Flow'],
+    nozzle_temperature: ['270', '272', '245', '247']
+  })
+  // Keep only the PETG slot (its identity unchanged) — its V-wide block must follow it to slot 1.
+  const filaments: SceneEditFilament[] = [
+    { color: '#000000', sourceIndex: 1, type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+  assert.deepEqual(next.nozzle_temperature, ['245', '247'])
+  assert.deepEqual(next.filament_extruder_variant, ['Direct Drive Standard', 'Direct Drive High Flow'])
+  assert.deepEqual(next.filament_settings_id, ['Bambu PETG HF @BBL H2D 0.4 nozzle'])
+})
+
+test('applyFilamentList heals stale filament-catalog arrays whose length matches neither width', () => {
+  // The production disease: a pre-variant-aware save left 10 physics columns (5 old filaments x 2
+  // variants) beside a 1-entry filament list. No index mapping can read them, so a re-save must
+  // drop them (the slicer re-derives from filament_settings_id) — while arrays we cannot
+  // positively classify as filament-domain (per-plate wipe_tower_x, unknown keys) survive.
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#000000'],
+    filament_type: ['PETG'],
+    filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle'],
+    filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow'],
+    nozzle_temperature: ['220', '220', '245', '245', '245', '245', '245', '245', '230', '230'],
+    wipe_tower_x: ['165', '15', '15', '15', '15', '15', '15', '15', '15', '15'],
+    some_future_key: ['a', 'b', 'c']
+  })
+  // Identity-preserving save (no material change) — healing must not depend on one.
+  const filaments: SceneEditFilament[] = [
+    { color: '#000000', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+  assert.equal('nozzle_temperature' in next, false, 'stale physics columns are dropped')
+  assert.deepEqual(next.wipe_tower_x, ['165', '15', '15', '15', '15', '15', '15', '15', '15', '15'], 'per-plate arrays survive')
+  assert.deepEqual(next.some_future_key, ['a', 'b', 'c'], 'unclassifiable arrays survive')
+  assert.deepEqual(next.filament_extruder_variant, ['Direct Drive Standard', 'Direct Drive High Flow'])
+})
+
+test('applyFilamentList leaves an N*V-length per-plate array alone on a material change', () => {
+  // 2 filaments x 2 variants makes every 4-long array length-collide with the variant width; only
+  // keys positively classified as filament-domain may be dropped/remapped on that signal.
+  const projectSettings = JSON.stringify({
+    filament_colour: ['#FFC72C', '#000000'],
+    filament_type: ['ABS', 'PETG'],
+    filament_settings_id: ['Bambu ABS @BBL H2D', 'Bambu PETG HF @BBL H2D 0.4 nozzle'],
+    filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive Standard', 'Direct Drive High Flow'],
+    wipe_tower_x: ['165', '15', '15', '15']
+  })
+  const filaments: SceneEditFilament[] = [
+    { color: '#00AE42', sourceIndex: 0, type: 'PETG', settingsId: 'Bambu PETG Basic @BBL H2D 0.4 nozzle' },
+    { color: '#000000', sourceIndex: 1, type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle' }
+  ]
+  const next = JSON.parse(applyFilamentList(projectSettings, filaments)) as Record<string, unknown>
+  assert.deepEqual(next.wipe_tower_x, ['165', '15', '15', '15'])
+})
+
 test('applyFilamentList keeps physics (full clone) when only colour changes, no material change', () => {
   const projectSettings = JSON.stringify({
     filament_colour: ['#FFC72C', '#000000'],
@@ -755,6 +844,42 @@ test('readPlateIndex falls back to model-settings plates and default print profi
   }
 })
 
+test('readPlateIndex drops object-extruder refs beyond the project filament list (stale save data)', async () => {
+  // Production shape: a save removed materials down to ONE filament but a part still said
+  // `extruder=2`. Surfacing that ref fabricates a second plate filament, which flips every
+  // multi-material consumer (the editor rendered a prime tower on a single-filament plate).
+  // BambuStudio clamps such refs on load; the index must not report filaments the project lacks.
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-stale-extruder-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['Metadata/model_settings.config', Buffer.from([
+        '<config>',
+        '  <object id="2">',
+        '    <metadata key="name" value="Funnel"/>',
+        '    <metadata key="extruder" value="1"/>',
+        '    <part id="1" subtype="normal_part"><metadata key="name" value="Funnel part"/><metadata key="extruder" value="2"/></part>',
+        '  </object>',
+        '  <plate>',
+        '    <metadata key="plater_id" value="1"/>',
+        '    <model_instance><metadata key="object_id" value="2"/><metadata key="instance_id" value="0"/><metadata key="identify_id" value="100"/></model_instance>',
+        '  </plate>',
+        '</config>'
+      ].join('\n'), 'utf8')],
+      ['Metadata/project_settings.config', Buffer.from(JSON.stringify({
+        filament_colour: ['#000000'],
+        filament_type: ['PETG'],
+        filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle'],
+        printer_settings_id: 'Bambu Lab H2D 0.4 nozzle'
+      }), 'utf8')]
+    ])
+    const index = await readPlateIndex(sourcePath)
+    assert.deepEqual(index.plates[0]?.filaments.map((filament) => filament.id), [1], 'the stale extruder-2 ref must not fabricate a filament')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 const OBJECT_MODEL_SETTINGS_XML = [
   '<config>',
   '  <object id="3">',
@@ -803,8 +928,8 @@ test('readPlateIndex exposes plate objects (by object_id) for unsliced model-set
     // the firmware skip handles -- so consumers can map object -> skip ids from the
     // index alone, without re-reading the file.
     assert.deepEqual(index.plates[0]?.objects, [
-      { id: 3, name: 'Box', identifyIds: [153] },
-      { id: 11, name: 'Lid', identifyIds: [204] }
+      { id: 3, name: 'Box', identifyIds: [153], processOverrides: {} },
+      { id: 11, name: 'Lid', identifyIds: [204], processOverrides: {} }
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -912,11 +1037,11 @@ test('plateSkipIdentifyIdsFromIndex maps deselected plate objects through the pa
       {
         index: 1,
         objects: [
-          { id: 3, name: 'Box', identifyIds: [153, 154] },
-          { id: 11, name: 'Lid', identifyIds: [204] }
+          { id: 3, name: 'Box', identifyIds: [153, 154], processOverrides: {} },
+          { id: 11, name: 'Lid', identifyIds: [204], processOverrides: {} }
         ]
       },
-      { index: 2, objects: [{ id: 11, name: 'Lid', identifyIds: [205] }] }
+      { index: 2, objects: [{ id: 11, name: 'Lid', identifyIds: [205], processOverrides: {} }] }
     ]
   }
 
@@ -933,7 +1058,7 @@ test('plateSkipIdentifyIdsFromIndex maps deselected plate objects through the pa
   assert.deepEqual(unmatched.identifyIds, [153, 154])
   assert.deepEqual(unmatched.unmatchedObjectIds, [99])
   const noHandles = {
-    plates: [{ index: 1, objects: [{ id: 5, name: 'Plain', identifyIds: [] as number[] }] }]
+    plates: [{ index: 1, objects: [{ id: 5, name: 'Plain', identifyIds: [] as number[], processOverrides: {} }] }]
   }
   const withoutHandles = plateSkipIdentifyIdsFromIndex(noHandles, 1, new Set([5]))
   assert.deepEqual(withoutHandles.unmatchedObjectIds, [5])
@@ -996,8 +1121,8 @@ test('readPlateIndex backfills plate objects from model_settings when slice_info
 
     const index = await readPlateIndex(sourcePath)
     assert.deepEqual(index.plates[0]?.objects, [
-      { id: 3, name: 'Box', identifyIds: [153] },
-      { id: 11, name: 'Lid', identifyIds: [204] }
+      { id: 3, name: 'Box', identifyIds: [153], processOverrides: {} },
+      { id: 11, name: 'Lid', identifyIds: [204], processOverrides: {} }
     ])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -2521,6 +2646,80 @@ test('rewriteThreeMfEntries upserts appendEntries: appended when absent, transfo
   }
 })
 
+// The author-anew contract, from the save side. The editor's state is seeded ONCE
+// (`if (stateRef.current) return` in EditorView), so it keeps its synthetic import ids for the
+// whole session and re-sends the SAME import on every save. That is only safe because each save is
+// authored from the ORIGINAL opened bytes, which hold no import — so re-injecting is correct and
+// save N reproduces save 1 exactly.
+//
+// Chaining onto the previous save's output instead (which already contains that geometry) injects
+// it a second time and strands the earlier copy unreferenced: one dead mesh object per solid per
+// save, silently, on every ordinary project with an import. Both halves are asserted below,
+// because the defect is invisible in the placed scene — only the object COUNT shows it.
+test('a save authored from the original is stable; chaining onto the last save strands a copy per solid', async () => {
+  const { buildEditedThreeMf } = await import('./three-mf.js')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-resave-'))
+  const originalPath = path.join(tempDir, 'original.3mf')
+  const firstSavePath = path.join(tempDir, 'save-1.3mf')
+  const secondSavePath = path.join(tempDir, 'save-2.3mf')
+  const countObjects = async (filePath: string): Promise<number> =>
+    [...(await readEntry(filePath, '3D/3dmodel.model')).toString('utf8').matchAll(/<object\b[^>]*\bid="\d+"/g)].length
+  try {
+    // A MULTI-SOLID import: each solid becomes its own component object, which is where the
+    // reported bloat was found (a 134-part assembly).
+    const quad = (z: number) => ({
+      positions: [0, 0, z, 10, 0, z, 10, 10, z, 0, 10, z],
+      indices: [0, 1, 2, 0, 2, 3],
+      bounds: { min: { x: 0, y: 0, z }, max: { x: 10, y: 10, z } }
+    })
+    const mesh = { ...quad(0), parts: [{ name: 'Solid A', mesh: quad(0) }, { name: 'Solid B', mesh: quad(5) }] }
+    // An ordinary opened project: no imports of its own.
+    await buildEditedThreeMf(null, originalPath, { plates: [{ index: 1 }], instances: [] }, [])
+    const objectsInOriginal = await countObjects(originalPath)
+
+    // The session imports a mesh and saves. The editor keeps the SYNTHETIC id afterwards, so the
+    // identical edit is what a second save sends too.
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { importId: 'imp-1', plateIndex: 1, position: { x: 10, y: 20, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ]
+    }
+    const imports = [{ importId: 'imp-1', name: 'Assembly', mesh, parts: mesh.parts }]
+    await buildEditedThreeMf(originalPath, firstSavePath, edit, imports)
+    const objectsAfterFirstSave = await countObjects(firstSavePath)
+    assert.ok(objectsAfterFirstSave > objectsInOriginal, 'the first save injects the import')
+
+    // Save again from the ORIGINAL — what a pinned content base gives the bake.
+    await buildEditedThreeMf(originalPath, secondSavePath, edit, imports)
+    const objectsAfterSecondSave = await countObjects(secondSavePath)
+
+    assert.equal(
+      objectsAfterSecondSave,
+      objectsAfterFirstSave,
+      'authoring from the original reproduces the first save exactly, however many times it runs'
+    )
+
+    // And the counterfactual, so a regression to chaining fails here rather than as slow file
+    // growth in the field. A SINGLE-solid import does not reproduce it (the lone object is
+    // replaced rather than stranded), which is why it went unnoticed until a 134-part assembly.
+    const chainedPath = path.join(tempDir, 'save-2-chained.3mf')
+    await buildEditedThreeMf(firstSavePath, chainedPath, edit, imports)
+    assert.equal(
+      await countObjects(chainedPath),
+      objectsAfterFirstSave + mesh.parts.length,
+      'chaining strands one object PER SOLID'
+    )
+    // Only ONE instance is placed either way, so the extras are dead weight rather than a visible
+    // duplicate — which is exactly why the file grew silently.
+    const scene = await readSceneManifest(secondSavePath, 1)
+    assert.equal(scene.instances.length, 1)
+    assert.equal((await readSceneManifest(chainedPath, 1)).instances.length, 1)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('buildEditedThreeMf creates a new-project 3MF with an injected imported mesh placed on a plate', async () => {
   const { buildEditedThreeMf } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-import-'))
@@ -3441,7 +3640,7 @@ test('readSceneManifest reads the prime tower; buildEditedThreeMf persists a mov
     // Config omits the sizing keys, so the parser fills in BambuStudio's defaults.
     const DEFAULT_SIZING = {
       wipeVolume: 45, layerHeight: 0.2, infillGap: 1.5, ribWall: true,
-      ribWidth: 8, extraRibLength: 0, extruderCount: 1, needWipeTower: false
+      ribWidth: 8, extraRibLength: 0, extruderCount: 1, needWipeTower: false, spiralMode: false
     }
     const scene = await readSceneManifest(sourcePath, 1)
     assert.deepEqual(scene.primeTower, { x: 15, y: 220, width: 35, sizing: DEFAULT_SIZING })
@@ -3497,7 +3696,8 @@ test('readSceneManifest captures prime-tower sizing config (purge volume, layer 
       ribWidth: 6,
       extraRibLength: 0,
       extruderCount: 2,       // two nozzle_diameter entries
-      needWipeTower: false
+      needWipeTower: false,
+      spiralMode: false
     })
   } finally {
     await rm(tempDir, { recursive: true, force: true })

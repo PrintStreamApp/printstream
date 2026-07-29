@@ -5,7 +5,7 @@
  *
  * Presentational: `EditorView` owns the selection and every mutation. The type Select offers all
  * five subtypes, so a part added as a support blocker can become a printed part without being
- * removed and re-added — the same retype `ModelList`'s part rows offer for baked parts.
+ * removed and re-added — the same retype `ObjectList`'s part rows offer for baked parts.
  */
 import { Box, Button, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import { threeMfPartSubtypeCarriesFilament, type SceneEditPartSubtype } from '@printstream/shared'

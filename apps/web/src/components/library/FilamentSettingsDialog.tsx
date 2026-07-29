@@ -20,16 +20,18 @@ import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import {
-  diffFilamentConfig,
-  filamentConfigValuesEqual,
+  diffFilamentVariantConfig,
   filamentSettingsCatalog,
+  filamentVariantValuesEqual,
   isProcessOptionVisibleInMode,
   prepareResolvedFilamentState,
   scalarizeFilamentConfig,
   type FilamentConfig,
   type FilamentSettingOption,
   type FilamentSettingOverrides,
-  type ResolveFilamentConfigResponse
+  type ResolveFilamentConfigResponse,
+  type ResolvedFilamentState,
+  isNilSettingValue
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
@@ -46,31 +48,77 @@ export interface FilamentSettingsDialogProps {
   /** Slicing profile id of the material (`builtin:filament:…`, a custom id, or `project:filament:…`). */
   filamentProfileId: string
   filamentProfileName: string
+  /**
+   * The preset's LITERAL name, including the `@<printer>` suffix ("Bambu PLA Basic @BBL A1").
+   * Display only, and deliberately separate from `filamentProfileName`: that one is the alias shown
+   * in the title AND the name written when saving a preset, so it must stay the alias. This tells
+   * the user which machine variant they are actually tuning, which the alias hides.
+   */
+  filamentPresetFullName?: string | null
   /** Source 3MF id + slot, required to resolve a `project:filament:` material's embedded base. */
   sourceFileId?: string | null
   projectFilamentId?: number | null
   initialOverrides: FilamentSettingOverrides
   /** Whether the current material is a workspace custom preset (so "Update preset" is offered). */
   canEditOriginal?: boolean
+  /**
+   * What the Apply button commits to: a `project` (the 3D editor, where the override persists with
+   * the next project save) or a one-off `slice` (the print/slice dialog). Only changes the button
+   * wording — mirrors {@link ProcessSettingsDialogProps.applyScope} so the two dialogs read alike.
+   */
+  /**
+   * What the dialog is editing FOR.
+   *
+   * 'slice' / 'project' edit a slice's config and emit an override map through `onApply`.
+   * 'preset' edits the stored preset ITSELF — opened from the slicer-profiles settings, where
+   * there is no slice to apply to: the Apply button is hidden and `onApply` is never called, so
+   * the only ways out are Save as preset, Update preset (custom presets only, via
+   * `canEditOriginal`) and Cancel. That mirrors BambuStudio, where editing a SYSTEM preset can
+   * only ever produce a new user preset.
+   */
+  applyScope?: 'project' | 'slice' | 'preset'
+  /**
+   * How the dialog resolves a preset's base config. Defaults to the TENANT route
+   * (`/api/slicing/profiles/resolve-filament`). The public 3MF editor passes an anonymous resolver
+   * (built-in presets via `/api/public/slicing/...`; project filaments from the in-tab 3MF slot), so
+   * it can run with no workspace. Additive — omitting it preserves the exact library behaviour.
+   */
+  resolveConfig?: FilamentConfigResolver
   /** Emits the sparse override map for THIS material back to the slice dialog (per-material). */
-  onApply: (overrides: FilamentSettingOverrides) => void
+  /** Omitted for `applyScope: 'preset'`, which has nothing to apply to. */
+  onApply?: (overrides: FilamentSettingOverrides) => void
 }
+
+/** Resolves a filament preset's base config for the dialog. See {@link FilamentSettingsDialogProps.resolveConfig}. */
+export type FilamentConfigResolver = (request: {
+  filamentProfileId: string
+  targetId: string | null
+  sourceFileId: string | null
+  projectFilamentId: number | null
+}) => Promise<ResolveFilamentConfigResponse>
 
 
 export default function FilamentSettingsDialog(props: FilamentSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, filamentProfileId, filamentProfileName, sourceFileId, projectFilamentId, initialOverrides, canEditOriginal, onApply } = props
+  const { open, onClose, slicerTargetId, filamentProfileId, filamentProfileName, filamentPresetFullName, sourceFileId, projectFilamentId, initialOverrides, canEditOriginal, applyScope = 'slice', resolveConfig, onApply } = props
   const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
   const isOptionVisibleInMode = (option: FilamentSettingOption): boolean =>
     isProcessOptionVisibleInMode(option, showDeveloperOptions)
   const { promptText } = usePromptDialog()
 
-  // `baseConfig` is the preset baseline (reset target + "modified" diff source); `sliceBase` is the
-  // effective config the slicer merges overrides onto (the 3MF's embedded values for a project
-  // filament — equal to baseConfig for installed presets). `bakedKeys` marks 3MF changes whose
-  // baseline could not be resolved, so they still read as modified. Mirrors ProcessSettingsDialog.
+  // `baseConfig` is the preset baseline (reset target + "modified" diff source) in element-0 scalar
+  // space, which is what the fields edit. `bakedKeys` marks 3MF changes whose baseline could not be
+  // resolved, so they still read as modified. Mirrors ProcessSettingsDialog.
   const [baseConfig, setBaseConfig] = useState<FilamentConfig | null>(null)
-  const [sliceBase, setSliceBase] = useState<FilamentConfig>({})
+  // The preset's own parent, for the emphasis-only state above. Null until resolved.
+  const [parentBaseline, setParentBaseline] = useState<FilamentConfig | null>(null)
+  // The same three configs before the element-0 collapse, plus the edited config in that space. The
+  // FIELDS edit element 0 (as BambuStudio's filament tab does), but a value can differ on a later
+  // extruder variant only, so every "is this changed" question and the emitted overrides work here.
+  const [raw, setRaw] = useState<ResolvedFilamentState['raw'] | null>(null)
+  const [rawConfig, setRawConfig] = useState<FilamentConfig>({})
   const [bakedKeys, setBakedKeys] = useState<Set<string>>(new Set())
+  /** See the twin in ProcessSettingsDialog: declared record present => `bakedKeys` is the whole truth. */
+  const [declaresOverrides, setDeclaresOverrides] = useState(false)
   const [config, setConfig] = useState<FilamentConfig>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -94,10 +142,13 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     setLoading(true)
     setError(null)
     setBaseConfig(null)
-    apiFetch<ResolveFilamentConfigResponse>('/api/slicing/profiles/resolve-filament', {
-      method: 'POST',
-      body: { filamentProfileId, targetId: slicerTargetId || null, sourceFileId: sourceFileId || null, projectFilamentId: projectFilamentId ?? null }
-    })
+    const resolve = resolveConfig
+      ? resolveConfig({ filamentProfileId, targetId: slicerTargetId || null, sourceFileId: sourceFileId || null, projectFilamentId: projectFilamentId ?? null })
+      : apiFetch<ResolveFilamentConfigResponse>('/api/slicing/profiles/resolve-filament', {
+          method: 'POST',
+          body: { filamentProfileId, targetId: slicerTargetId || null, sourceFileId: sourceFileId || null, projectFilamentId: projectFilamentId ?? null }
+        })
+    resolve
       .then((response) => {
         if (cancelled) return
         // "Modified" = the value differs from the preset OUTSIDE the project (value-diff vs the
@@ -106,10 +157,13 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
         // what drives the slice dialog's pre-open "changed values" badge, so the two agree.
         const state = prepareResolvedFilamentState(response)
         baseShapesRef.current = state.shapes
-        setSliceBase(state.effective)
         setBaseConfig(state.baseline)
+        setParentBaseline(state.parentBaseline)
         setBakedKeys(new Set(state.bakedKeys))
+        setDeclaresOverrides(response.declaresOverrides === true)
         setConfig({ ...state.effective, ...scalarizeFilamentConfig(initialOverrides) })
+        setRaw(state.raw)
+        setRawConfig({ ...state.raw.effective, ...initialOverrides })
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -118,8 +172,15 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
     // initialOverrides is read inside but content-keyed above so an unstable identity doesn't refire.
+    // `resolveConfig` (public editor) must be a stable identity or this refires every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, filamentProfileId, slicerTargetId, sourceFileId, projectFilamentId, initialOverridesKey])
+  }, [open, filamentProfileId, slicerTargetId, sourceFileId, projectFilamentId, initialOverridesKey, resolveConfig])
+
+  /** Broadcast a scalar to the key's original variant count (a shorter value slices under-length). */
+  const broadcast = (key: string, scalar: string): FilamentConfig[string] => {
+    const length = baseShapesRef.current[key] ?? 1
+    return length > 1 ? Array.from({ length }, () => scalar) : scalar
+  }
 
   const setScalar = (key: string, scalar: string) => {
     setConfig((prev) => {
@@ -131,6 +192,9 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
       }
       return { ...prev, [key]: scalar }
     })
+    // An edit applies to every variant: the field shows one number, so leaving the others at their
+    // old values would silently keep printing a value the user just replaced.
+    setRawConfig((prev) => ({ ...prev, [key]: broadcast(key, scalar) }))
   }
 
   const resetKey = (key: string) => {
@@ -141,28 +205,89 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
       else next[key] = baseConfig[key]
       return next
     })
+    setRawConfig((prev) => {
+      const next = { ...prev }
+      const presetValue = raw?.baseline[key]
+      if (presetValue === undefined) delete next[key]
+      else next[key] = presetValue
+      return next
+    })
   }
 
   const canReset = (key: string): boolean =>
-    baseConfig !== null && !filamentConfigValuesEqual(baseConfig[key], config[key], filamentSettingsCatalog.options[key])
+    raw !== null && !filamentVariantValuesEqual(raw.baseline[key], rawConfig[key], filamentSettingsCatalog.options[key])
 
   /**
    * True when a key differs from its preset baseline — either a resettable value diff, or a
    * 3MF-baked change whose baseline value couldn't be resolved (`bakedKeys`, still untouched
    * relative to the effective config). Mirrors ProcessSettingsDialog.
    */
-  const isModified = (key: string): boolean => {
-    if (baseConfig === null) return false
+  const isProjectChange = (key: string): boolean => {
+    if (raw === null) return false
     const option = filamentSettingsCatalog.options[key]
-    if (!filamentConfigValuesEqual(baseConfig[key], config[key], option)) return true
-    return bakedKeys.has(key) && filamentConfigValuesEqual(config[key], sliceBase[key], option)
+    // Declared record present: the file's list plus this session's edits, and nothing else. An
+    // undeclared difference from the preset is drift BambuStudio normalizes away — reporting it as
+    // this project's change is what showed stock materials as edited.
+    if (declaresOverrides) {
+      return bakedKeys.has(key) || !filamentVariantValuesEqual(raw.effective[key], rawConfig[key], option)
+    }
+    if (!filamentVariantValuesEqual(raw.baseline[key], rawConfig[key], option)) return true
+    return bakedKeys.has(key) && filamentVariantValuesEqual(rawConfig[key], raw.effective[key], option)
+  }
+
+  /**
+   * The keys BambuStudio renders with an enable checkbox — its filament "Setting Overrides" page.
+   * Unchecked means the value is nil ("not overridden"); checked restores a real value. Derived
+   * from the catalog page rather than a second hand-kept list, so the two cannot drift.
+   */
+  const overrideKeys = useMemo(() => new Set(
+    (filamentSettingsCatalog.pages.find((page) => page.id === 'setting-overrides')?.groups ?? [])
+      .flatMap((group) => group.lines.flatMap((line) => line.keys))
+  ), [])
+
+  /**
+   * An override the PRESET itself carries relative to its parent — emphasis only, never a badge and
+   * never caught by "changed only". BambuStudio keeps this as a separate question from "modified"
+   * (`current_different_from_parent_options` vs `current_dirty_options`), and only the latter drives
+   * its modified marker. Counting these made a user preset's own saved settings look like edits the
+   * project had made, complete with a reset button that would have discarded them.
+   */
+  const isPresetOverride = (key: string): boolean =>
+    parentBaseline !== null && raw !== null
+    && !filamentVariantValuesEqual(raw.parentBaseline[key], raw.baseline[key], filamentSettingsCatalog.options[key])
+
+  /**
+   * What a changed value replaced. A project change is measured against the preset; an override the
+   * preset carries is measured against its parent — so the tooltip names which baseline it is
+   * showing rather than leaving "original" ambiguous between the two.
+   */
+  const originalOf = (key: string): { value: string; label: string } | null => {
+    // A per-variant value renders every variant ("25 / 40"), because the field only shows the first:
+    // collapsed to element 0 the hover would repeat the number already on screen.
+    const asText = (value: FilamentConfig[string] | undefined): string | null => {
+      if (Array.isArray(value)) {
+        const parts = value.map((entry) => String(entry ?? ''))
+        const text = parts.every((entry) => entry === parts[0]) ? (parts[0] ?? '') : parts.join(' / ')
+        return text === '' ? null : text
+      }
+      return value === undefined || value === '' ? null : String(value)
+    }
+    if (isProjectChange(key)) {
+      const value = asText(raw?.baseline[key])
+      return value === null ? null : { value, label: 'Preset value' }
+    }
+    if (isPresetOverride(key)) {
+      const value = asText(raw?.parentBaseline[key])
+      return value === null ? null : { value, label: 'Inherited value' }
+    }
+    return null
   }
 
   const modifiedKeyCount = useMemo(() => {
     if (!baseConfig) return 0
-    return Object.keys(filamentSettingsCatalog.options).filter(isModified).length
+    return Object.keys(filamentSettingsCatalog.options).filter(isProjectChange).length
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseConfig, config, bakedKeys])
+  }, [baseConfig, rawConfig, raw, bakedKeys])
 
   const modifiedPages = useMemo(() => {
     const result = new Set<number>()
@@ -171,14 +296,14 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
       const anyModified = page.groups.some((group) =>
         group.lines.some((line) => line.keys.some((key) => {
           const option = filamentSettingsCatalog.options[key]
-          return Boolean(option) && isOptionVisibleInMode(option!) && isModified(key)
+          return Boolean(option) && isOptionVisibleInMode(option!) && isProjectChange(key)
         }))
       )
       if (anyModified) result.add(index)
     })
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseConfig, config, bakedKeys, showDeveloperOptions])
+  }, [baseConfig, rawConfig, raw, bakedKeys, declaresOverrides, showDeveloperOptions])
 
   const pageMatchCounts = useMemo(() => filamentSettingsCatalog.pages.map((page) => {
     if (!normalizedQuery) return 0
@@ -202,7 +327,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
       const option = filamentSettingsCatalog.options[key]
       if (!option || !isOptionVisibleInMode(option)) return false
       if (normalizedQuery && !filamentKeyMatchesQuery(key, normalizedQuery)) return false
-      if (showChangedOnly && !isModified(key)) return false
+      if (showChangedOnly && !isProjectChange(key)) return false
       return true
     })
 
@@ -220,29 +345,35 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageHasContentKey, activePage])
 
-  /** Broadcast each changed element-0 scalar back to the key's original vector length for the slice. */
-  const expandOverrides = (diff: FilamentSettingOverrides): FilamentSettingOverrides => {
+  /**
+   * The overrides this session should ride the slice with: every key whose per-variant value differs
+   * from the effective slice base, each broadcast back to the key's original vector length (a
+   * scalar written where a multi-variant machine expects N values would slice under-length).
+   *
+   * Measured against the effective base, not the preset, so baked-but-untouched values aren't
+   * re-sent while a RESET of a baked deviation becomes an explicit override back to the preset
+   * value — which is what actually heals a drifted project filament at slice time.
+   */
+  const changedOverrides = (): FilamentSettingOverrides => {
+    if (!raw) return {}
+    const diff = diffFilamentVariantConfig(raw.effective, rawConfig)
     const expanded: FilamentSettingOverrides = {}
     for (const [key, value] of Object.entries(diff)) {
-      const scalar = Array.isArray(value) ? (value[0] ?? '') : value
-      const length = baseShapesRef.current[key] ?? 1
-      expanded[key] = length > 1 ? Array.from({ length }, () => scalar) : scalar
+      expanded[key] = Array.isArray(value) ? value : broadcast(key, value)
     }
     return expanded
   }
 
   const handleApply = () => {
     if (!baseConfig) return
-    // Emit overrides relative to the effective slice base so baked-but-untouched values aren't
-    // re-sent, while a RESET of a baked deviation becomes an explicit override back to the preset
-    // value — which is what actually heals a drifted project filament at slice time.
-    onApply(expandOverrides(diffFilamentConfig(sliceBase, config)))
+    onApply?.(changedOverrides())
     onClose()
   }
 
   const handleResetAll = () => {
-    if (!baseConfig) return
+    if (!baseConfig || !raw) return
     setConfig({ ...baseConfig })
+    setRawConfig({ ...raw.baseline })
   }
 
   /** Save the edited material as a preset. `overwrite` updates the original custom preset in place. */
@@ -255,7 +386,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
         method: 'POST',
         body: { kind: 'filament', fileName: `${name}.json`, encoding: 'utf8', overwrite, content: JSON.stringify(presetConfig, null, 2) }
       })
-      onApply(expandOverrides(diffFilamentConfig(sliceBase, config)))
+      onApply?.(changedOverrides())
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save preset')
@@ -287,6 +418,9 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 720, width: '100%' }}>
         <Typography level="h4">Filament settings — {modifiedKeyCount > 0 ? '*' : ''}{filamentProfileName}</Typography>
+        {filamentPresetFullName && filamentPresetFullName !== filamentProfileName && (
+          <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: -0.5 }}>{filamentPresetFullName}</Typography>
+        )}
         {loading && (
           <ScrollableDialogBody sx={{ mt: 1, px: 0 }}>
             <Stack alignItems="center" justifyContent="center" sx={{ py: 6 }} spacing={1}>
@@ -329,12 +463,21 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
                 disabled={modifiedKeyCount === 0 && !showChangedOnly}
               />
             </Stack>
-            <TabList sx={{ overflowX: 'auto', flexWrap: 'nowrap', flexShrink: 0 }}>
+            <TabList sx={{
+              overflowX: 'auto',
+              flexWrap: 'nowrap',
+              flexShrink: 0,
+                // The list scrolls rather than wraps (overflowX/nowrap above), but a Tab defaults to
+                // `white-space: normal` and is shrinkable — so instead of scrolling, tabs squeezed
+                // below their text and wrapped onto two lines while the row still had slack. Pinning
+                // each tab to its own width is what makes the scroll actually engage.
+                '& > *': { flexShrink: 0, whiteSpace: 'nowrap' }
+            }}>
               {pages.map((page, index) => pageHasContent[index] ? (
                 <Tab
                   key={page.id}
                   value={index}
-                  sx={modifiedPages.has(index) ? { color: 'warning.plainColor', fontWeight: 'lg' } : undefined}
+                  sx={modifiedPages.has(index) ? { color: 'warning.plainColor', fontWeight: 700 } : undefined}
                 >
                   {page.title}{normalizedQuery ? ` (${pageMatchCounts[index] ?? 0})` : ''}
                 </Tab>
@@ -360,8 +503,12 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
                                 keys={line.keys}
                                 showDeveloperOptions={showDeveloperOptions}
                                 code={line.code}
+                                fullWidth={line.fullWidth}
                                 config={config}
-                                isModified={isModified}
+                                isProjectChange={isProjectChange}
+                                isPresetOverride={isPresetOverride}
+                                originalOf={originalOf}
+                                overrideKeys={overrideKeys}
                                 canReset={canReset}
                                 onReset={resetKey}
                                 onScalarChange={setScalar}
@@ -398,9 +545,11 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
             <Button variant="outlined" onClick={handleSaveAsPreset} disabled={loading || !baseConfig || saving} loading={saving}>
               Save as preset
             </Button>
-            <Button variant="solid" onClick={handleApply} disabled={loading || !baseConfig || saving}>
-              Save in this 3MF
-            </Button>
+            {applyScope !== 'preset' && (
+              <Button variant="solid" onClick={handleApply} disabled={loading || !baseConfig || saving}>
+                {applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice'}
+              </Button>
+            )}
           </Stack>
         </DialogActions>
       </ScrollableModalDialog>
@@ -422,8 +571,16 @@ interface FilamentSettingLineRowProps {
   keys: string[]
   showDeveloperOptions: boolean
   code?: boolean
+  /** The line spans the row (BambuStudio's full-width lines: Notes and the G-code editors). */
+  fullWidth?: boolean
   config: FilamentConfig
-  isModified: (key: string) => boolean
+  /** Changed by THIS project/session versus the preset in use — coloured, badged, filterable. */
+  isProjectChange: (key: string) => boolean
+  /** An override the preset itself carries versus its parent — emphasis only. */
+  isPresetOverride: (key: string) => boolean
+  /** The baseline a changed value replaced, for the hover. */
+  originalOf: (key: string) => { value: string; label: string } | null
+  overrideKeys: ReadonlySet<string>
   canReset: (key: string) => boolean
   onReset: (key: string) => void
   onScalarChange: (key: string, value: string) => void
@@ -431,7 +588,7 @@ interface FilamentSettingLineRowProps {
 
 /** Renders one settings line (label + one or more value controls) with per-control reset. */
 function FilamentSettingLineRow(props: FilamentSettingLineRowProps): JSX.Element | null {
-  const { keys, lineLabel, showDeveloperOptions, code, config, isModified, canReset, onReset, onScalarChange } = props
+  const { keys, lineLabel, showDeveloperOptions, code, fullWidth, config, isProjectChange, isPresetOverride, originalOf, overrideKeys, canReset, onReset, onScalarChange } = props
   const visibleKeys = keys.filter((key) => {
     const option = filamentSettingsCatalog.options[key]
     return option && isProcessOptionVisibleInMode(option, showDeveloperOptions)
@@ -441,7 +598,10 @@ function FilamentSettingLineRow(props: FilamentSettingLineRowProps): JSX.Element
   const firstKey = visibleKeys[0] ?? keys[0] ?? ''
   const firstOption = filamentSettingsCatalog.options[firstKey]
   const label = lineLabel ?? firstOption?.label ?? firstKey
-  const lineModified = visibleKeys.some((key) => isModified(key))
+  const lineProjectChange = visibleKeys.some((key) => isProjectChange(key))
+  const linePresetOverride = visibleKeys.some((key) => isPresetOverride(key))
+  // Full-width lines take the label above and the whole row: the G-code editors and Notes.
+  const spansRow = Boolean(code || fullWidth)
 
   const scalarOf = (key: string): string => {
     const value = config[key]
@@ -449,11 +609,23 @@ function FilamentSettingLineRow(props: FilamentSettingLineRowProps): JSX.Element
     return typeof value === 'string' ? value : ''
   }
 
+  // See the note at its use: one control -> FormControl (so the label is really associated);
+  // several -> a plain Box, because each control carries its own label.
+  // Cast: both accept children and no required props, but a union of two component types is not
+  // callable as a JSX tag.
+  const RowRoot = (visibleKeys.length === 1 ? FormControl : Box) as typeof Box
   return (
-    <FormControl>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
-        <Box sx={{ minWidth: { sm: 220 }, flexShrink: 0 }}>
-          <FormLabel sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, color: lineModified ? 'warning.plainColor' : undefined, fontWeight: lineModified ? 'lg' : undefined }}>
+    // A Joy FormControl may contain exactly ONE control, and it labels that control. A row with
+    // several visible keys is one setting per extruder variant — several controls, each labelling
+    // itself via `showOwnLabel` — so wrapping those in a FormControl is both a Joy error (logged on
+    // every render) and a false label association. Use it only when there really is one control.
+    <RowRoot>
+      {/* A G-code field is a multi-line editor, not a value in a column: it takes the label ABOVE
+          and the full row width, the way BambuStudio lays its G-code groups out. Beside a 220px
+          label column it was stuck at its 280px minimum in a 720px dialog. */}
+      <Stack direction={spansRow ? 'column' : { xs: 'column', sm: 'row' }} spacing={1} alignItems={spansRow ? 'stretch' : { sm: 'center' }}>
+        <Box sx={{ minWidth: spansRow ? undefined : { sm: 220 }, flexShrink: 0 }}>
+          <FormLabel sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, color: lineProjectChange ? 'warning.plainColor' : undefined, fontWeight: linePresetOverride || lineProjectChange ? 700 : undefined, fontStyle: linePresetOverride && !lineProjectChange ? 'italic' : undefined }}>
             {label}
             {firstOption?.tooltip && (
               <Tooltip title={firstOption.tooltip} variant="soft" sx={{ maxWidth: 320 }}>
@@ -464,18 +636,36 @@ function FilamentSettingLineRow(props: FilamentSettingLineRowProps): JSX.Element
             )}
           </FormLabel>
         </Box>
-        <Stack direction="row" spacing={1} sx={{ flex: 1, flexWrap: 'wrap', justifyContent: { sm: 'flex-end' } }}>
+        <Stack direction="row" spacing={1} sx={{ flex: 1, flexWrap: 'wrap', justifyContent: spansRow ? 'stretch' : { sm: 'flex-end' }, width: spansRow ? '100%' : undefined }}>
           {visibleKeys.map((key) => {
             const option = filamentSettingsCatalog.options[key]
             if (!option) return null
+            const isOverride = overrideKeys.has(key)
+            const overridden = isOverride && !isNilSettingValue(config[key])
             return (
-              <Stack key={key} direction="row" spacing={0.25} alignItems="center">
+              <Stack key={key} direction="row" spacing={0.25} alignItems="center" sx={spansRow ? { flex: 1, minWidth: 0 } : undefined}>
+                {isOverride && (
+                  <Tooltip title={overridden ? 'Overriding the printer setting — uncheck to use the printer value' : 'Not overridden — check to set a filament-specific value'} variant="soft">
+                    <Checkbox
+                      size="sm"
+                      checked={overridden}
+                      slotProps={{ input: { 'aria-label': `Override ${option.label}` } }}
+                      // Mirrors BambuStudio's Field::set_na_value / set_last_meaningful_value:
+                      // unchecking stores nil, checking restores a real value (the catalog default,
+                      // which is what the printer would have used anyway).
+                      onChange={(event) => onScalarChange(key, event.target.checked ? (option.default ?? '0') : 'nil')}
+                    />
+                  </Tooltip>
+                )}
                 <SettingValueField
                   settingKey={key}
                   option={option}
                   value={scalarOf(key)}
+                  enabled={!isOverride || overridden}
                   showOwnLabel={visibleKeys.length > 1}
-                  modified={isModified(key)}
+                  modified={isPresetOverride(key)}
+                  unsaved={isProjectChange(key)}
+                  original={originalOf(key)}
                   onScalarChange={onScalarChange}
                   isCode={code}
                 />
@@ -500,6 +690,6 @@ function FilamentSettingLineRow(props: FilamentSettingLineRowProps): JSX.Element
           })}
         </Stack>
       </Stack>
-    </FormControl>
+    </RowRoot>
   )
 }

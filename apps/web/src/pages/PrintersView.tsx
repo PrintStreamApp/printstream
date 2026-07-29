@@ -13,7 +13,8 @@ import { Printer3dRoundedIcon } from '../components/Printer3dRoundedIcon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { LIBRARY_UPLOAD_PERMISSION, CAMERA_VIEW_PERMISSION, JOBS_DELETE_PERMISSION, JOBS_VIEW_PERMISSION, PRINTERS_CONTROL_PERMISSION, PRINTERS_MANAGE_PERMISSION, PRINTERS_VIEW_PERMISSION, PRINTER_STORAGE_DOWNLOAD_PERMISSION, PRINTER_STORAGE_VIEW_PERMISSION, PRINTS_DISPATCH_PERMISSION, type BridgeListResponse, defaultPrinterViewSort, extractErrorMessage, type Permission, type DiscoveredPrinter, type LibraryFile, type PrintDispatchJob, type PrintJob, type PrinterStatsResponse, type PrinterCardContentSettings, type Printer, type PrinterModel, type StartOrderPrintInput, type PrinterStatus, type SlicingCapabilities, type SlicingJobResponse, type PrinterView, type PrinterViewInput, type PrinterViewSort } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
-import { prefetchSlicingProfiles } from '../lib/slicingProfilesQuery'
+import { prefetchSlicingPresets } from '../lib/slicingPresetsQuery'
+import { refreshSlicingJobs, seedSlicingJob } from '../lib/slicingJobsCache'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
@@ -334,7 +335,7 @@ export function PrintersView() {
   // Warm the slicer profile catalogue before a print-from-library flow opens the slice dialog.
   const slicingCapabilitiesData = slicingCapabilitiesQuery.data
   useEffect(() => {
-    prefetchSlicingProfiles(queryClient, slicingCapabilitiesData)
+    prefetchSlicingPresets(queryClient, slicingCapabilitiesData)
   }, [queryClient, slicingCapabilitiesData])
   const jobsQuery = useQuery({
     queryKey: ['jobs'],
@@ -612,10 +613,12 @@ export function PrintersView() {
       })
       return await apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
-    onSuccess: async (response, variables) => {
+    onSuccess: (response, variables) => {
       // Keep the slice dialog mounted beneath the print flow so its "Back" returns to
       // slice settings; the whole flow is torn down together via closePrintFlow.
-      await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
+      // The list refresh is not awaited — see slicingJobsCache.
+      seedSlicingJob(queryClient, response.job)
+      refreshSlicingJobs(queryClient)
       if (variables.action === 'print') {
         setSliceThenPrintTarget({
           sourceFile: variables.file,
@@ -1633,7 +1636,6 @@ export function PrintersView() {
           key={sliceTarget.file.id}
           file={sliceTarget.file}
           printers={printersQuery.data?.printers ?? []}
-          printerStatuses={status ?? {}}
           capabilities={slicingCapabilitiesQuery.data ?? null}
           capabilitiesLoading={slicingCapabilitiesQuery.isLoading && !slicingCapabilitiesQuery.data}
           capabilitiesError={slicingCapabilitiesQuery.error instanceof Error ? slicingCapabilitiesQuery.error.message : null}

@@ -55,7 +55,7 @@ const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
  * configs our save path can embed (filament colours + plate type, optionally machine/process keys
  * from a retarget but never the full defaulted filament arrays) always miss at least one.
  */
-const COMPLETE_SETTINGS_SENTINEL_KEYS = ['printable_area', 'layer_height', 'nozzle_temperature'] as const
+export const COMPLETE_SETTINGS_SENTINEL_KEYS = ['printable_area', 'layer_height', 'nozzle_temperature'] as const
 
 /** The embedded `project_settings.config` as a parsed record, or null when absent/unreadable. */
 async function readEmbeddedProjectSettings(inputPath: string): Promise<Record<string, unknown> | null> {

@@ -1504,6 +1504,79 @@ test('library scene entry streams the requested internal model xml', async () =>
   })
 })
 
+/**
+ * The editor parses the 3MF in the browser, so it needs the whole archive. That read is gated on
+ * `library.view` — NOT `library.download` — or every viewer who can open the editor today would
+ * lose it. Pinned because flipping this gate back would silently take the editor away from a whole
+ * role, and because the archive is what makes the editor self-sufficient after open.
+ */
+test('library archive streams the whole 3MF to view-permitted actors, and revalidates', async () => {
+  // Padded past `sendModelBuffer`'s 4KB compression threshold so the fixture exercises the path a
+  // real project takes rather than the small-payload shortcut. The filler is deterministic
+  // pseudo-random bytes because the archive is DEFLATED — anything periodic compresses back below
+  // the threshold and the test silently stops covering what it claims to.
+  const filler = Buffer.alloc(64 * 1024)
+  let seed = 0x12345678
+  for (let index = 0; index < filler.length; index += 1) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
+    filler[index] = (seed >>> 16) & 0xff
+  }
+  const archivePath = await createSceneArchive({
+    rootModelXml: MINIMAL_SCENE_MODEL_XML,
+    modelSettingsXml: MINIMAL_SCENE_MODEL_SETTINGS_XML,
+    projectSettingsJson: '{}',
+    entries: [{ name: 'Metadata/filler.bin', content: filler }]
+  })
+  prisma.libraryFile.findUnique = ((async () => ({
+    id: 'file-1',
+    tenantId: 'tenant-1',
+    ownerBridgeId: null,
+    folderId: null,
+    name: 'Project.3mf',
+    storedPath: archivePath,
+    sizeBytes: 1024,
+    kind: '3mf',
+    hidden: false,
+    compatiblePrinterModels: null,
+    snapshotKey: null,
+    uploadedAt: new Date('2026-05-01T00:00:00.000Z'),
+    createdAt: new Date('2026-05-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-05-01T00:00:00.000Z')
+  })) as unknown) as typeof prisma.libraryFile.findUnique
+
+  await withLibraryApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [LIBRARY_VIEW_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/library/file-1/archive`, {
+      headers: { 'accept-encoding': 'gzip' }
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'model/3mf')
+    // Served through `sendModelBuffer`, not a bare stream pipe. Load-bearing, not cosmetic: a raw
+    // `createReadStream().pipe()` body never completes when read back through
+    // `fetch().arrayBuffer()` behind the Vite dev proxy, which is exactly how the editor consumes
+    // this — the open hangs with headers received and the tail never arriving.
+    assert.equal(response.headers.get('content-encoding'), 'gzip')
+    // Not a download: no attachment disposition, so this cannot be mistaken for the gated route.
+    assert.equal(response.headers.get('content-disposition'), null)
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    // A ZIP, i.e. the real archive rather than a parsed representation of it.
+    assert.deepEqual([...bytes.slice(0, 2)], [0x50, 0x4b])
+
+    // Reopening an unchanged project must not re-send the archive — it is now the big body.
+    const etag = response.headers.get('etag')
+    assert.ok(etag)
+    const revalidated = await fetch(`${baseUrl}/api/library/file-1/archive`, {
+      headers: { 'if-none-match': etag }
+    })
+    assert.equal(revalidated.status, 304)
+  })
+})
+
 test('library mesh streams raw STL bytes to view-permitted actors', async () => {
   const stlPath = await createStlFile()
   prisma.libraryFile.findUnique = ((async () => ({

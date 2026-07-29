@@ -8,13 +8,13 @@
  */
 import { useCallback, useEffect, useState, type ComponentProps } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { LibraryFile, Printer, PrinterStatus, QueueOrderLink, SlicingCapabilities, SlicingJobResponse } from '@printstream/shared'
+import type { LibraryFile, Printer, QueueOrderLink, SlicingCapabilities, SlicingJobResponse } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
-import { prefetchSlicingProfiles } from '../../lib/slicingProfilesQuery'
+import { prefetchSlicingPresets } from '../../lib/slicingPresetsQuery'
+import { refreshSlicingJobs, seedSlicingJob } from '../../lib/slicingJobsCache'
 import { SliceFileModal } from '../../components/library/SliceFileModal'
 import { buildCreateSlicingJobBody } from '../../lib/libraryViewHelpers'
 import { SliceThenPrintModal } from '../../components/library/SliceThenPrintModal'
-import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
 import { QueueItemDialog } from './QueueItemDialog'
 
 type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
@@ -66,17 +66,8 @@ export function SliceToQueueFlow({
   // Warm the slicer profile catalogue before the queue's slice dialog needs it.
   const slicingCapabilitiesData = slicingCapabilitiesQuery.data
   useEffect(() => {
-    prefetchSlicingProfiles(queryClient, slicingCapabilitiesData)
+    prefetchSlicingPresets(queryClient, slicingCapabilitiesData)
   }, [queryClient, slicingCapabilitiesData])
-  const workspaceScopeKey = readCurrentWorkspaceScopeKey()
-  const statusQuery = useQuery<Record<string, PrinterStatus>>({
-    queryKey: workspaceQueryKeys.printerStatus(workspaceScopeKey),
-    queryFn: () => Promise.resolve({}),
-    initialData: {},
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false
-  })
 
   const startSlicingJob = useMutation({
     mutationFn: async (input: { action: SliceFlowSubmitAction } & SliceFlowSubmitInput) => {
@@ -87,8 +78,12 @@ export function SliceToQueueFlow({
       })
       return apiFetch<SlicingJobResponse>('/api/slicing/jobs', { method: 'POST', body })
     },
-    onSuccess: async (response) => {
-      await queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
+    onSuccess: (response) => {
+      // Seeded, not awaited: the queue step below reads the job out of the list cache, and
+      // waiting on a list refetch to hand it over is what wedges the button (see
+      // slicingJobsCache).
+      seedSlicingJob(queryClient, response.job)
+      refreshSlicingJobs(queryClient)
       setJobId(response.job.id)
     }
   })
@@ -105,7 +100,6 @@ export function SliceToQueueFlow({
         key={file.id}
         file={file}
         printers={printersQuery.data.printers}
-        printerStatuses={statusQuery.data ?? {}}
         capabilities={slicingCapabilitiesQuery.data ?? null}
         capabilitiesLoading={slicingCapabilitiesQuery.isLoading && !slicingCapabilitiesQuery.data}
         capabilitiesError={slicingCapabilitiesQuery.error instanceof Error ? slicingCapabilitiesQuery.error.message : null}

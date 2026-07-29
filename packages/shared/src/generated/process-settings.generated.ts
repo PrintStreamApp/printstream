@@ -2831,14 +2831,15 @@ export const processSettingsCatalog: ProcessSettingsCatalog = {
       "default": "60"
     },
     "small_perimeter_speed": {
-      "type": "string",
+      "type": "floatOrPercent",
       "vector": true,
       "label": "Small perimeters",
       "tooltip": "This setting will affect the speed of perimeters having radius <= small perimeter threshold(usually holes). If expressed as percentage (for example: 80%) it will be calculated onthe outer wall speed setting above. Set to zero for auto.",
       "sidetext": "mm/s or %",
       "category": "Speed",
       "mode": "advanced",
-      "min": 0
+      "min": 0,
+      "default": "50%"
     },
     "small_perimeter_threshold": {
       "type": "float",
@@ -2874,14 +2875,15 @@ export const processSettingsCatalog: ProcessSettingsCatalog = {
       "default": "100"
     },
     "vertical_shell_speed": {
-      "type": "string",
+      "type": "floatOrPercent",
       "vector": true,
       "label": "Vertical shell speed",
       "tooltip": "Speed for vertical shells with overhang regions. If expressed as percentage (for example: 80%) it will be calculated onthe internal solid infill speed above",
       "sidetext": "mm/s or %",
       "category": "Speed",
       "mode": "advanced",
-      "min": 0
+      "min": 0,
+      "default": "80%"
     },
     "top_surface_speed": {
       "type": "float",
@@ -3168,13 +3170,14 @@ export const processSettingsCatalog: ProcessSettingsCatalog = {
       "default": "500"
     },
     "sparse_infill_acceleration": {
-      "type": "string",
+      "type": "floatOrPercent",
       "vector": true,
       "label": "Sparse infill",
       "tooltip": "Acceleration of sparse infill. If the value is expressed as a percentage (e.g. 100%), it will be calculated based on the default acceleration.",
       "sidetext": "mm/s² or %",
       "mode": "advanced",
-      "min": 0
+      "min": 0,
+      "default": "100%"
     },
     "accel_to_decel_enable": {
       "type": "bool",

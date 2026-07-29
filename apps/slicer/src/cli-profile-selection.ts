@@ -1,7 +1,8 @@
-import type { SlicingProfileKind } from '@printstream/shared'
+import type { SlicingPresetKind } from '@printstream/shared'
 
-type SliceProfileKind = {
-  kind: SlicingProfileKind
+/** Anything carrying a preset kind — these selectors care about nothing else. */
+type PresetKinded = {
+  kind: SlicingPresetKind
 }
 
 /**
@@ -11,7 +12,7 @@ type SliceProfileKind = {
  * correct machine, and re-loading a machine preset alongside a project is what
  * the CLI's crash matrix punishes (see docs/slicer-cross-model-machine-switch.md).
  */
-export function selectCliProfileFiles<T extends SliceProfileKind>(
+export function selectCliProfileFiles<T extends PresetKinded>(
   profileFiles: readonly T[],
   input: {
     rewroteProjectSettings: boolean
@@ -22,6 +23,23 @@ export function selectCliProfileFiles<T extends SliceProfileKind>(
   }
 
   return profileFiles.filter((profile) => profile.kind !== 'machine')
+}
+
+/**
+ * Which profile files reach the settings-repair export (`ensureEmbeddedProjectSettings` ->
+ * `--export-settings`). ALWAYS all of them — this deliberately does NOT apply
+ * {@link selectCliProfileFiles}'s machine drop.
+ *
+ * That drop is right for the slice, where the rewritten 3MF already carries the machine. The
+ * export is the opposite situation: it loads NO 3MF at all, so a dropped machine leaves
+ * BambuStudio with no printer to test the process preset's `compatible_printers` against, and
+ * `run()` fails every process as incompatible (exit 239 CLI_PROCESS_NOT_COMPATIBLE — verified:
+ * process-only exits -17, machine + process exports fine). The API then retries without the
+ * builtin profiles, so the slice silently completes on the project's own presets instead of the
+ * process the user picked.
+ */
+export function selectSettingsExportProfileFiles<T extends PresetKinded>(profileFiles: readonly T[]): T[] {
+  return [...profileFiles]
 }
 
 /**

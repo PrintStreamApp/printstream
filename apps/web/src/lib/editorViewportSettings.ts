@@ -21,12 +21,32 @@
  * its own default, so an override shared across workspaces would silently shadow a default it was
  * never chosen against. This mirrors the nav-order and landing-page overrides.
  */
+import { createContext, createElement, useContext, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { EditorSidebarSideSetting, GeneralSettings } from '@printstream/shared'
 import { DEVICE_EDITOR_SHOW_BED_MODEL_OVERRIDE_KEY_PREFIX, DEVICE_EDITOR_SIDEBAR_SIDE_OVERRIDE_KEY_PREFIX } from '../appShellHelpers'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { useAuthBootstrapQuery } from './authQuery'
 import { apiFetch } from './apiClient'
+
+/**
+ * Marks a host that has no workspace behind it — the public editor, where a file comes from the
+ * user's disk and there is no tenant, no `/api/settings`, and nobody to set a house default.
+ *
+ * The two-tier model is meaningless there: "workspace default vs this device" collapses to just
+ * "this device". Under this scope the shared query never runs (it would 401), the effective value is
+ * the device override or the shipped default, and the settings UI shows one tier instead of two.
+ */
+const ViewportSettingsScopeContext = createContext<{ deviceOnly: boolean }>({ deviceOnly: false })
+
+export function ViewportSettingsScopeProvider({ deviceOnly, children }: { deviceOnly: boolean; children: ReactNode }) {
+  return createElement(ViewportSettingsScopeContext.Provider, { value: { deviceOnly } }, children)
+}
+
+/** Whether the current host has a workspace tier at all. */
+export function useViewportSettingsDeviceOnly(): boolean {
+  return useContext(ViewportSettingsScopeContext).deviceOnly
+}
 
 /** Fallbacks used until general settings load, matching the schema defaults. */
 const SHOW_BED_MODEL_DEFAULT = true
@@ -51,14 +71,22 @@ function parseNullableSide(raw: string): EditorSidebarSideSetting | null {
  * `ambient` outside a workspace, matching how App.tsx keys its own per-device overrides.
  */
 function useWorkspaceKeySuffix(): string {
-  return useAuthBootstrapQuery().data?.tenant?.slug ?? 'ambient'
+  const deviceOnly = useViewportSettingsDeviceOnly()
+  const slug = useAuthBootstrapQuery().data?.tenant?.slug
+  // A server-less host keys on its own name rather than `ambient`: it is not "signed in without a
+  // workspace", it is a different surface, and sharing a key would let one shadow the other.
+  if (deviceOnly) return 'local'
+  return slug ?? 'ambient'
 }
 
 /** The cached shared settings both defaults come from; one query, shared by every hook here. */
 function useSharedGeneralSettings(): GeneralSettings | undefined {
+  const deviceOnly = useViewportSettingsDeviceOnly()
   return useQuery({
     queryKey: ['general-settings'],
-    queryFn: ({ signal }) => apiFetch<GeneralSettings>('/api/settings', { signal })
+    queryFn: ({ signal }) => apiFetch<GeneralSettings>('/api/settings', { signal }),
+    // No workspace means no shared settings to fetch; the request would only 401.
+    enabled: !deviceOnly
   }).data
 }
 

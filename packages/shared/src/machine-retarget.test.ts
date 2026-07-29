@@ -43,8 +43,14 @@ test('retargets project_settings to the target machine, preserving filaments + l
   assert.deepEqual(out.nozzle_diameter, ['0.4', '0.4'])
   assert.deepEqual(out.physical_extruder_map, ['1', '0'])
 
-  // Dependent runtime maps are re-derived for the new (dual-extruder) topology.
-  assert.deepEqual(out.filament_nozzle_map, ['1', '0']) // verbatim from physical_extruder_map
+  // Dependent runtime maps are re-derived for the new (dual-extruder) topology. The per-FILAMENT
+  // nozzle map keeps each slot's own assignment when the target still has that nozzle — both
+  // filaments were on nozzle 0 and H2D has one, so they stay there. (This assertion used to expect
+  // `physical_extruder_map` copied in verbatim, which only looked right because a 2-filament project
+  // and a 2-extruder machine have the same length: it silently split the two filaments across
+  // nozzles, and for any other filament count it produced a WRONG-LENGTH map that BambuStudio read
+  // out of bounds. See the per-filament tests below.)
+  assert.deepEqual(out.filament_nozzle_map, ['0', '0'])
   assert.ok(Array.isArray(out.filament_volume_map) && (out.filament_volume_map as string[]).length === 2)
 
   // Filament selection + the project's own filament settings are untouched.
@@ -149,4 +155,75 @@ test('retarget preserves an already correctly sized flush_volumes_matrix', () =>
     printerModel: 'Bambu Lab H2D'
   })
   assert.deepEqual(out.flush_volumes_matrix, ['0', '632', '136', '0', '0', '632', '136', '0'])
+})
+
+// `filament_nozzle_map` is indexed by FILAMENT, not by extruder. Copying `physical_extruder_map`
+// into it produced a wrong-LENGTH map whenever the filament count differed from the extruder count,
+// and BambuStudio then read a filament's extruder past the end of that vector — the documented
+// "can not be printed on extruder <garbage>" abort / mid-slice SIGSEGV (CLI exit 139).
+test('retarget rebuilds filament_nozzle_map per FILAMENT, not per extruder', () => {
+  // 3 filaments onto a 2-extruder machine: the map must have 3 entries, not 2.
+  const threeFilaments = {
+    ...a1Project,
+    filament_type: ['PLA', 'PETG', 'PLA'],
+    filament_settings_id: ['A', 'B', 'C'],
+    filament_nozzle_map: ['0', '0', '0']
+  }
+  const toH2D = retargetProjectSettingsToMachine(threeFilaments, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.equal((toH2D.filament_nozzle_map as string[]).length, 3, 'one entry per filament')
+})
+
+test('a dual -> single-nozzle retarget collapses every filament onto the remaining extruder', () => {
+  // The H2D project has a filament assigned to the LEFT nozzle; A1 mini has only extruder 0, so
+  // leaving the 1 behind is exactly what made the slice reference a nozzle that does not exist.
+  const h2dProject = {
+    ...a1Project,
+    printer_settings_id: 'Bambu Lab H2D 0.4 nozzle',
+    printer_model: 'Bambu Lab H2D',
+    nozzle_diameter: ['0.4', '0.4'],
+    physical_extruder_map: ['1', '0'],
+    filament_type: ['PETG', 'PLA'],
+    filament_settings_id: ['A', 'B'],
+    filament_nozzle_map: ['1', '0']
+  }
+  const a1Machine = {
+    name: 'Bambu Lab A1 mini 0.4 nozzle',
+    type: 'machine',
+    printer_model: 'Bambu Lab A1 mini',
+    printable_area: ['0x0', '180x0', '180x180', '0x180'],
+    nozzle_diameter: ['0.4'],
+    physical_extruder_map: ['0'],
+    extruder_variant_list: ['Direct Drive Standard'],
+    default_nozzle_volume_type: ['Standard'],
+    extruder_max_nozzle_count: ['1']
+  }
+  const next = retargetProjectSettingsToMachine(h2dProject, a1Machine, {
+    printerSettingsId: 'Bambu Lab A1 mini 0.4 nozzle',
+    printerModel: 'Bambu Lab A1 mini'
+  })
+  assert.deepEqual(next.filament_nozzle_map, ['0', '0'], 'no filament may reference the gone nozzle')
+})
+
+test('a retarget that keeps both nozzles preserves each filament’s own assignment', () => {
+  // A coherent H2D project (dual topology + H2D identity) retargeted onto H2D.
+  const h2dProject = {
+    printer_settings_id: 'Bambu Lab H2D 0.4 nozzle',
+    printer_model: 'Bambu Lab H2D',
+    printable_area: ['0x0', '325x0', '325x320', '0x320'],
+    nozzle_diameter: ['0.4', '0.4'],
+    physical_extruder_map: ['1', '0'],
+    extruder_variant_list: ['Direct Drive High Flow', 'Direct Drive High Flow'],
+    filament_type: ['PETG', 'PLA'],
+    filament_settings_id: ['A', 'B'],
+    nozzle_temperature: ['255', '220'],
+    filament_nozzle_map: ['1', '0']
+  }
+  const next = retargetProjectSettingsToMachine(h2dProject, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(next.filament_nozzle_map, ['1', '0'], 'valid per-slot choices survive the switch')
 })

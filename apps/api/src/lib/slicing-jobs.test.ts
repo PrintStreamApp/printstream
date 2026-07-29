@@ -60,8 +60,8 @@ test('slicing jobs surface live slicer output before the run finishes', async ()
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
   slicerClient.progress = (async () => {
     progressCalls += 1
-    if (progressCalls < 2) return []
-    return [makeOutput('stdout', 'Processing layer 12/248')]
+    if (progressCalls < 2) return { kind: 'output', lines: [] }
+    return { kind: 'output', lines: [makeOutput('stdout', 'Processing layer 12/248')] }
   }) as typeof slicerClient.progress
   slicerClient.run = (async () => {
     await runReleased
@@ -107,10 +107,10 @@ test('slicing jobs log lifecycle changes and CLI output lines', async () => {
   console.debug = ((...args: unknown[]) => { logged.push(args.join(' ')) }) as typeof console.debug
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => [
+  slicerClient.progress = (async () => ({ kind: 'output', lines: [
     makeOutput('stdout', 'Processing layer 12/248'),
     makeOutput('stderr', 'warning: unsupported seam hint')
-  ]) as typeof slicerClient.progress
+  ] })) as typeof slicerClient.progress
   slicerClient.run = (async () => {
     await runReleased
     throw new SlicerServiceError('Slicing failed', [])
@@ -147,7 +147,7 @@ test('slicing jobs emit elapsed-time heartbeats when live output is unavailable'
   })
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async () => {
     await runReleased
     throw new SlicerServiceError('Slicing failed', [])
@@ -165,7 +165,7 @@ test('slicing jobs emit elapsed-time heartbeats when live output is unavailable'
 
   await waitFor(async () => {
     const current = jobs.get('tenant-1', job.id)
-    assert.equal(current.output.some((entry) => entry.text.includes('Slicer is still processing...')), true)
+    assert.equal(current.output.some((entry) => entry.text.includes('Slicing...')), true)
   })
 
   if (releaseRun) releaseRun()
@@ -174,6 +174,52 @@ test('slicing jobs emit elapsed-time heartbeats when live output is unavailable'
     const current = jobs.get('tenant-1', job.id)
     assert.equal(current.status, 'failed')
   })
+})
+
+test('a slice the slicer stops acknowledging fails with the real reason, not a hang or a cancel', async () => {
+  // The scenario this exists for: the slicer service restarts mid-slice. Its POST can sit
+  // half-open until the 30-minute ceiling, so the progress channel is the only prompt signal —
+  // and it used to be discarded while the job kept claiming it was slicing.
+  const jobs = new SlicingJobs({
+    progressPollIntervalMs: 5,
+    progressHeartbeatIntervalMs: 10,
+    lostUnknownGraceMs: 20,
+    resolveSource: passthroughResolveSource
+  })
+  let aborted: AbortSignal | undefined
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  // The instance is up and has never heard of this job.
+  slicerClient.progress = (async () => ({ kind: 'unknown' })) as typeof slicerClient.progress
+  slicerClient.run = ((async (input: { signal?: AbortSignal }) => {
+    aborted = input.signal
+    // Never resolves on its own — only the watchdog's abort can end this slice, which is the
+    // half-open socket the ceiling would otherwise cover for.
+    await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
+    throw new Error('The operation was aborted')
+  })) as unknown as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    request: makeRequest()
+  })
+
+  await waitFor(async () => {
+    const current = jobs.get('tenant-1', job.id)
+    assert.equal(current.status, 'failed')
+  })
+  const finished = jobs.get('tenant-1', job.id)
+  assert.notEqual(finished.status, 'cancelled', 'a lost slice must not be blamed on the user')
+  assert.match(finished.error ?? '', /slicer service restarted/i)
+  assert.equal(aborted?.aborted, true, 'the slice request itself must be aborted, not left running')
+  // The heartbeat must never have claimed progress while the slicer was disowning the job.
+  assert.equal(finished.output.some((entry) => entry.text.includes('Slicing...')), false)
+  assert.equal(finished.output.some((entry) => entry.text.includes('no longer tracking this job')), true)
 })
 
 test('slicing jobs reload persisted history after restart', async () => {
@@ -188,7 +234,7 @@ test('slicing jobs reload persisted history after restart', async () => {
   }
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async () => {
     throw new SlicerServiceError('Slicing failed', [])
   }) as typeof slicerClient.run
@@ -259,7 +305,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
   await createTestThreeMf(artifactPath, { printer_settings_id: 'Bambu Lab X1C 0.4 nozzle' })
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async () => ({
     outputFileName: 'result.gcode.3mf',
     output: [],
@@ -286,13 +332,111 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
       const current = jobs.get('tenant-1', job.id)
       assert.equal(current.status, 'ready')
       assert.equal(current.outputFileId, 'hidden-output-file')
-      assert.equal(current.output.some((entry) => entry.text === 'Prepared sliced artifact for printing'), true)
+      assert.equal(current.output.some((entry) => entry.text === 'Ready to print'), true)
     })
 
     assert.deepEqual(persistedInputs, [{ hidden: true, folderId: 'folder-1', fileName: 'result.gcode.3mf' }])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+})
+
+test('the job list carries a finished job as its outcome line alone', async () => {
+  // The list is polled by every open tab and grows with history — measured at 471 KB over 194
+  // jobs, of which `output` was 208 KB. A finished job is rendered from its LAST system line (its
+  // outcome) and nothing else, so that is all the list ships. An ACTIVE job must keep stdout — its
+  // progress frames come from there.
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 5, resolveSource: passthroughResolveSource })
+  let releaseRun: (() => void) | undefined
+  const runReleased = new Promise<void>((resolve) => { releaseRun = resolve })
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  // The engine's own chatter only ever arrives on stdout/stderr.
+  slicerClient.progress = (async () => ({ kind: 'output', lines: [
+    makeOutput('stdout', '{"message":"Exporting 3mf","total_percent":97}')
+  ] })) as typeof slicerClient.progress
+  slicerClient.run = (async () => {
+    await runReleased
+    throw new SlicerServiceError('Slicing failed', [])
+  }) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    request: makeRequest()
+  })
+
+  await waitFor(async () => {
+    const whileActive = jobs.list('tenant-1').find((entry) => entry.id === job.id)
+    assert.equal(whileActive?.output.some((line) => line.stream === 'stdout'), true, 'a running job keeps its progress frames')
+  })
+
+  if (releaseRun) releaseRun()
+  await waitFor(async () => {
+    assert.equal(jobs.get('tenant-1', job.id).status, 'failed')
+  })
+
+  const listed = jobs.list('tenant-1').find((entry) => entry.id === job.id)
+  assert.equal(listed?.output.some((line) => line.stream !== 'system'), false, 'a finished job ships no engine log')
+  assert.equal(listed?.output.length, 1, 'exactly its outcome, not every status line it passed through')
+  assert.equal(listed?.output[0]?.text, 'Slicing failed', 'and that outcome is the last line, not the first')
+  assert.equal(
+    listed?.output.some((line) => line.text === 'Preparing the project'),
+    false,
+    'the earlier status lines are dead weight once the job is over'
+  )
+  // The single-job route is still the full record, engine log included.
+  const full = jobs.get('tenant-1', job.id)
+  assert.equal(full.output.some((line) => line.stream === 'stdout'), true)
+  assert.equal(full.output.some((line) => line.text === 'Preparing the project'), true)
+})
+
+test('closing the tab that started a slice cancels it, and leaves other tabs and finished jobs alone', async () => {
+  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource })
+  let releaseRun: (() => void) | undefined
+  const runReleased = new Promise<void>((resolve) => { releaseRun = resolve })
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => {
+    await runReleased
+    throw new SlicerServiceError('Slicing failed', [])
+  }) as typeof slicerClient.run
+
+  const enqueueFor = (ownerClientId: string | undefined) => jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    request: { ...makeRequest(), ownerClientId }
+  })
+
+  const mine = enqueueFor('tab-1')
+  const theirs = enqueueFor('tab-2')
+  // A job with no owning tab (a script, an integration) is nobody's to reap.
+  const unowned = enqueueFor(undefined)
+
+  jobs.cancelForOwner('tab-1')
+
+  assert.equal(jobs.get('tenant-1', mine.id).cancelRequested, true)
+  assert.equal(jobs.get('tenant-1', theirs.id).cancelRequested, false, "another tab's slice is untouched")
+  assert.equal(jobs.get('tenant-1', unowned.id).cancelRequested, false, 'an unowned slice is untouched')
+
+  if (releaseRun) releaseRun()
+  await waitFor(async () => {
+    assert.equal(jobs.get('tenant-1', theirs.id).status, 'failed')
+  })
+
+  // A slice that already finished belongs to the user, not to the tab that started it.
+  const finishedStatus = jobs.get('tenant-1', theirs.id).status
+  jobs.cancelForOwner('tab-2')
+  assert.equal(jobs.get('tenant-1', theirs.id).status, finishedStatus, 'a terminal job is never re-cancelled')
 })
 
 test('slicing jobs persist durable history thumbnails and clean them up on delete', async () => {
@@ -329,7 +473,7 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
   await createTestThreeMf(artifactPath, { printer_settings_id: 'Bambu Lab X1C 0.4 nozzle' })
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async () => ({
     outputFileName: 'result.gcode.3mf',
     output: [],
@@ -384,7 +528,7 @@ test('slicing jobs retry without incompatible builtin profiles after compatibili
   const runJobIds: string[] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
     runJobIds.push(input.jobId)
     runProfileCounts.push(input.profileFiles?.length ?? 0)
@@ -421,7 +565,7 @@ test('slicing jobs retry without incompatible builtin profiles after compatibili
       ['builtin:machine', 'custom:process'],
       ['custom:process']
     ])
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying slicer without incompatible built-in machine profile')), true)
+    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in machine profile')), true)
   })
 })
 
@@ -431,7 +575,7 @@ test('slicing jobs retry when compatibility fallback matches generated builtin:m
   const runJobIds: string[] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
     runJobIds.push(input.jobId)
     runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
@@ -466,7 +610,7 @@ test('slicing jobs retry when compatibility fallback matches generated builtin:m
       ['builtin:machine', 'custom:process'],
       ['custom:process']
     ])
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying slicer without incompatible built-in machine profile')), true)
+    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in machine profile')), true)
   })
 })
 
@@ -479,7 +623,7 @@ test('slicing jobs retry without builtin machine/process after a settings-merge 
   const runProfileKinds: string[][] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
     runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
     if (runProfileKinds.length === 1) {
@@ -511,7 +655,7 @@ test('slicing jobs retry without builtin machine/process after a settings-merge 
       ['builtin:machine', 'builtin:process', 'builtin:filament'],
       ['builtin:filament']
     ])
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying slicer without incompatible built-in')), true)
+    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in')), true)
   })
 })
 
@@ -522,7 +666,7 @@ test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, 
   const runJobIds: string[] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
     runJobIds.push(input.jobId)
     throw new SlicerServiceError('Slicer CLI exited with code 139', [])
@@ -547,7 +691,7 @@ test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, 
     // Exactly one retry: two run attempts with distinct attempt job ids, then the crash surfaces.
     assert.equal(runJobIds.length, 2)
     assert.notEqual(runJobIds[0], runJobIds[1])
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying slice after the slicer engine crashed mid-run')), true)
+    assert.equal(current.output.some((entry) => entry.text.includes('The slicer crashed mid-run; retrying')), true)
     assert.match(current.error ?? '', /exited with code 139/)
   })
 })
@@ -557,7 +701,7 @@ test('slicing jobs do not crash-retry ordinary non-signal slicer failures', asyn
   let runs = 0
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async () => {
     runs += 1
     throw new SlicerServiceError('Slicer CLI exited with code 1', [])
@@ -592,7 +736,7 @@ test('slicing jobs preserve manual machine/profile selections on retry after bui
   const runProfileKinds: string[][] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
     runJobIds.push(input.jobId)
     runMachineProfileIds.push(input.request.target.printerProfileId ?? '<null>')
@@ -635,7 +779,7 @@ test('slicing jobs preserve manual machine/profile selections on retry after bui
     assert.equal(runProcessProfileIds[1], 'process-profile')
     assert.equal(runFilamentMappingCounts[0], 0)
     assert.equal(runFilamentMappingCounts[1], 0)
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying slicer without incompatible built-in machine profile')), true)
+    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in machine profile')), true)
   })
 })
 
@@ -658,7 +802,7 @@ test('slicing jobs rewrite project settings and retry when compatibility fallbac
   })
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
     runSourcePaths.push(input.sourcePath)
     runJobIds.push(input.jobId)
@@ -691,7 +835,7 @@ test('slicing jobs rewrite project settings and retry when compatibility fallbac
       assert.equal(current.status, 'failed')
       assert.equal(runJobIds.length, 2)
       assert.notEqual(runSourcePaths[0], runSourcePaths[1])
-      assert.equal(current.output.some((entry) => entry.text.includes('Retrying slicer without incompatible built-in process profile')), true)
+      assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in process profile')), true)
     })
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -704,7 +848,7 @@ test('slicing jobs retry incompatible built-in machine profiles per job without 
   const runJobIds: string[] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
     runJobIds.push(input.jobId)
     runProfileKinds.push((input.profileFiles ?? []).map((profile) => `${profile.source}:${profile.kind}`))
@@ -759,7 +903,7 @@ test('slicing jobs retry incompatible built-in machine profiles per job without 
       []
     ])
     assert.equal(current.output.some((entry) => entry.text.includes('Applying cached builtin-profile compatibility fallback for machine profile')), false)
-    assert.equal(current.output.some((entry) => entry.text.includes('Retrying slicer without incompatible built-in machine profile')), true)
+    assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in machine profile')), true)
   })
 })
 
@@ -783,7 +927,7 @@ test('slicing jobs do not proactively rewrite process profiles on subsequent job
   })
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
-  slicerClient.progress = (async () => null) as typeof slicerClient.progress
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
   slicerClient.run = (async (input) => {
     runSourcePaths.push(input.sourcePath)
     if (runSourcePaths.length === 1 || runSourcePaths.length === 3) {
@@ -833,7 +977,7 @@ test('slicing jobs do not proactively rewrite process profiles on subsequent job
       assert.equal(runSourcePaths[2], secondSourcePath)
       assert.notEqual(runSourcePaths[3], secondSourcePath)
       assert.equal(current.output.some((entry) => entry.text.includes('Applying cached builtin-profile compatibility fallback for process profile')), false)
-      assert.equal(current.output.some((entry) => entry.text.includes('Retrying slicer without incompatible built-in process profile')), true)
+      assert.equal(current.output.some((entry) => entry.text.includes('Retrying without the incompatible built-in process profile')), true)
     })
   } finally {
     await rm(tempDir, { recursive: true, force: true })

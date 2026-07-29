@@ -561,6 +561,12 @@ interface ExtrusionGeometryBuild {
   /** Cumulative index count at the END of each layer (drives the layer slider draw range). */
   layerIndexEnd: number[]
   /**
+   * Cumulative VERTEX count at the end of each layer. Vertices are emitted layer by layer, so this
+   * gives each layer a contiguous range — which is what lets a per-layer mesh compute its own
+   * bounds while sharing one position buffer with every other layer.
+   */
+  layerVertexEnd: number[]
+  /**
    * Cumulative emitted-move count at the end of each layer (the bead mesh skips
    * degenerate segments, so this can differ from the parsed segment count).
    */
@@ -662,6 +668,7 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
   const macroUps = new Uint8Array(vertexCount)
   const indices = vertexCount > 65536 ? new Uint32Array(indexCount) : new Uint16Array(indexCount)
   const layerIndexEnd: number[] = []
+  const layerVertexEnd: number[] = []
   const moveIndexEnd: number[] = []
   const layerMoveEnd: number[] = []
   let vCount = 0
@@ -679,22 +686,33 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
     macroUps[vCount] = macroUp
     return vCount++
   }
+  /**
+   * A side quad, wound so its front face points OUT of the bead. Orientation is load-bearing now
+   * that the mesh is back-face culled — `gcodePreview.test.ts` asserts every triangle's geometric
+   * normal agrees with the outward normal `pushVertex` authored for it.
+   */
   const pushQuad = (a: number, b: number, c: number, d: number) => {
-    indices[iCount++] = a; indices[iCount++] = b; indices[iCount++] = c
-    indices[iCount++] = a; indices[iCount++] = c; indices[iCount++] = d
+    indices[iCount++] = a; indices[iCount++] = c; indices[iCount++] = b
+    indices[iCount++] = a; indices[iCount++] = d; indices[iCount++] = c
   }
   /**
    * Close an open tube end: duplicate the ring with flat axial normals (so the cap does not
-   * inherit the ring's radial shading) and fan over it. Winding-agnostic via DoubleSide.
+   * inherit the ring's radial shading) and fan over it. `flip` runs the fan the other way for the
+   * cap that faces backwards, so both end up front-side out.
    */
-  const pushCap = (ringBase: number, nx: number, ny: number) => {
+  const pushCap = (ringBase: number, nx: number, ny: number, flip: boolean) => {
     const base = vCount
     for (let p = 0; p < P; p++) {
       const o = (ringBase + p) * 3
       pushVertex(positions[o]!, positions[o + 1]!, positions[o + 2]!, nx, ny, 0)
     }
+    // The two caps face OPPOSITE ways, so one fan has to run the other way round; emitting both in
+    // the same order left every path with one inward-facing end, invisible only because the mesh
+    // was double-sided.
     for (let p = 1; p < P - 1; p++) {
-      indices[iCount++] = base; indices[iCount++] = base + p; indices[iCount++] = base + p + 1
+      indices[iCount++] = base
+      indices[iCount++] = flip ? base + p + 1 : base + p
+      indices[iCount++] = flip ? base + p : base + p + 1
     }
   }
   /** Emit one profile ring at (cx,cy) offset along the unit perp (px,py), scaled by halfW. */
@@ -737,12 +755,12 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
       const endHalfW = weldNext ? jointHalfW[seg]! : halfW
 
       const startBase = weldRingBase >= 0 ? weldRingBase : pushRing(ax, ay, nx, ny, halfW, bot, layerHeight)
-      if (weldRingBase < 0) pushCap(startBase, -dx, -dy)
+      if (weldRingBase < 0) pushCap(startBase, -dx, -dy, true)
       const endBase = pushRing(bx, by, endPx, endPy, endHalfW, bot, layerHeight)
-      if (!weldNext) pushCap(endBase, dx, dy)
+      if (!weldNext) pushCap(endBase, dx, dy, false)
       weldRingBase = weldNext ? endBase : -1
 
-      // Connect the two rings into a closed tube (P side quads). Winding-agnostic via DoubleSide.
+      // Connect the two rings into a closed tube (P side quads), wound outward — see pushQuad.
       for (let p = 0; p < P; p++) {
         const p1 = (p + 1) % P
         pushQuad(startBase + p, endBase + p, endBase + p1, startBase + p1)
@@ -750,6 +768,7 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
       moveIndexEnd.push(iCount)
     }
     layerIndexEnd.push(iCount)
+    layerVertexEnd.push(vCount)
     layerMoveEnd.push(moveIndexEnd.length)
   }
 
@@ -764,7 +783,7 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3, true))
   geometry.setAttribute('aMacroUp', new THREE.BufferAttribute(macroUps, 1))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
-  return { geometry, layerIndexEnd, layerMoveEnd, moveEndIndex: (move) => moveIndexEnd[move] ?? 0 }
+  return { geometry, layerIndexEnd, layerVertexEnd, layerMoveEnd, moveEndIndex: (move) => moveIndexEnd[move] ?? 0 }
 }
 
 /**
@@ -783,21 +802,101 @@ function buildExtrusionGeometry(parsed: ParsedGcodeLayers): ExtrusionGeometryBui
  * first render, and a lost WebGL context must be recovered by rebuilding the preview, not
  * by three's automatic restore (which would re-upload from the freed arrays).
  */
+/**
+ * One mesh per layer, over ONE shared set of vertex buffers.
+ *
+ * The point is DRAW ORDER, not culling. A single mesh draws its triangles in buffer order — layer 0
+ * first — which for a camera looking down at a plate is back-to-front, the worst case: every layer
+ * is fully shaded and then painted over by the one above it, so a 45-layer print shades each pixel
+ * ~45 times. Three sorts opaque OBJECTS front-to-back (`painterSortStable`, ascending camera-space
+ * z) precisely so early-Z can reject hidden fragments before the fragment shader runs, but it
+ * cannot sort WITHIN a mesh. Splitting by layer hands it that lever, and costs nothing in memory:
+ * the geometries share the same BufferAttribute INSTANCES, which three uploads once per attribute
+ * object, and only the small index views differ.
+ *
+ * Bounds are set MANUALLY, for two independent reasons, and getting either wrong is silent:
+ * `computeBoundingSphere` reads the whole shared position buffer, so every layer would claim the
+ * bounds of the entire plate (sorting still works, culling quietly does nothing); and the caller
+ * frees the CPU-side arrays on upload, so a lazily computed sphere would read a freed array mid-sort
+ * and kill the render loop on the object's first frame.
+ */
+function buildPerLayerMeshes(
+  source: THREE.BufferGeometry,
+  layerIndexEnd: number[],
+  layerVertexEnd: number[],
+  material: THREE.Material
+): THREE.Mesh[] {
+  const index = source.getIndex()
+  const position = source.getAttribute('position')
+  if (!index) return []
+  const indexArray = index.array as Uint16Array | Uint32Array
+  const meshes: THREE.Mesh[] = []
+  for (let layer = 0; layer < layerIndexEnd.length; layer++) {
+    const indexStart = layer > 0 ? layerIndexEnd[layer - 1]! : 0
+    const indexEnd = layerIndexEnd[layer]!
+    if (indexEnd <= indexStart) continue
+    const geometry = new THREE.BufferGeometry()
+    // Shared instances — one upload for all layers, not one per layer.
+    for (const [name, attribute] of Object.entries(source.attributes)) geometry.setAttribute(name, attribute)
+    geometry.setIndex(new THREE.BufferAttribute(indexArray.subarray(indexStart, indexEnd), 1))
+
+    const vertexStart = layer > 0 ? layerVertexEnd[layer - 1]! : 0
+    const vertexEnd = layerVertexEnd[layer]!
+    let minX = Infinity, minY = Infinity, minZ = Infinity
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+    for (let v = vertexStart; v < vertexEnd; v++) {
+      const x = position.getX(v), y = position.getY(v), z = position.getZ(v)
+      if (x < minX) minX = x
+      if (y < minY) minY = y
+      if (z < minZ) minZ = z
+      if (x > maxX) maxX = x
+      if (y > maxY) maxY = y
+      if (z > maxZ) maxZ = z
+    }
+    if (minX <= maxX) {
+      geometry.boundingBox = new THREE.Box3(new THREE.Vector3(minX, minY, minZ), new THREE.Vector3(maxX, maxY, maxZ))
+      const centre = geometry.boundingBox.getCenter(new THREE.Vector3())
+      // The corner distance bounds every vertex in the box, so this sphere always contains the
+      // layer — never tight, never wrong, and it costs one pass instead of two.
+      geometry.boundingSphere = new THREE.Sphere(centre, centre.distanceTo(geometry.boundingBox.max))
+    } else {
+      geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 0)
+    }
+
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.userData.layer = layer
+    meshes.push(mesh)
+  }
+  return meshes
+}
+
 export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcodePreview {
   const group = new THREE.Group()
   const build = buildExtrusionGeometry(parsed)
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.82, metalness: 0.0 })
+  // FrontSide, not DoubleSide: a bead is a CLOSED tube (capped at every open end, welded rings
+  // through joints), so its back faces are always occluded by its own front faces and shading them
+  // was pure cost — doubled per-fragment PBR work across a mesh measured at 2.6M triangles on a
+  // real plate, on a preview that resets the GPU process. Back-face culling happens before fragment
+  // shading, so it also drops half the raster work, and the image is identical.
+  //
+  // This is only safe because the winding is now consistent — `gcodePreview.test.ts` asserts every
+  // triangle's geometric normal agrees with the outward normal the builder authored. It was NOT
+  // consistent before (all side quads were inverted, and one cap of every path), which is what
+  // DoubleSide was quietly covering for.
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.FrontSide, roughness: 0.82, metalness: 0.0 })
   applyMoireFade(material, representativeLayerHeight(parsed.extrusionHeights), medianPositive(parsed.extrusionWidths, DEFAULT_EXTRUSION_WIDTH))
-  const extrusion = new THREE.Mesh(build.geometry, material)
-  const { geometry: extrusionGeometry, layerIndexEnd, layerMoveEnd, moveEndIndex } = build
-  extrusion.frustumCulled = false
+  const { geometry: extrusionGeometry, layerIndexEnd, layerVertexEnd, layerMoveEnd, moveEndIndex } = build
+  // One mesh per layer so three can sort them front-to-back — see buildPerLayerMeshes. Their bounds
+  // are real (not the whole plate), so frustum culling is left ON here, unlike the single mesh this
+  // replaced, whose draw-range scrubbing invalidated any bounds it might have had.
+  const layerMeshes = buildPerLayerMeshes(extrusionGeometry, layerIndexEnd, layerVertexEnd, material)
 
   const travelGeometry = new THREE.BufferGeometry()
   travelGeometry.setAttribute('position', new THREE.BufferAttribute(parsed.travelPositions, 3))
   const travel = new THREE.LineSegments(travelGeometry, new THREE.LineBasicMaterial({ color: TRAVEL_COLOR, transparent: true, opacity: 0.45 }))
   travel.frustumCulled = false
 
-  group.add(extrusion)
+  for (const mesh of layerMeshes) group.add(mesh)
   group.add(travel)
 
   // Copy the small per-layer tables out of `parsed` — the closures below must not
@@ -813,8 +912,8 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   // frame — so a lazy compute would read a null array, throw, and kill the render loop
   // on the object's first frame. Precomputed bounds also make the caller's framing
   // (Box3.setFromObject) free.
-  extrusionGeometry.computeBoundingBox()
-  extrusionGeometry.computeBoundingSphere()
+  // The per-layer geometries already carry hand-computed bounds (buildPerLayerMeshes); the source
+  // geometry is never rendered itself, so only travel needs this.
   travelGeometry.computeBoundingBox()
   travelGeometry.computeBoundingSphere()
 
@@ -825,10 +924,11 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   const releaseArray = function (this: THREE.BufferAttribute) {
     ;(this as unknown as { array: unknown }).array = null
   } as unknown as () => void
-  const extrusionIndex = extrusionGeometry.getIndex()
   const uploadOnce = [
+    // The vertex attributes are shared by every layer mesh, so freeing them once frees them for all.
     ...Object.values(extrusionGeometry.attributes),
-    ...(extrusionIndex ? [extrusionIndex] : []),
+    // Each layer's index is its own view; they free independently as they upload.
+    ...layerMeshes.map((mesh) => mesh.geometry.getIndex()).filter((index): index is THREE.BufferAttribute => index !== null),
     travelGeometry.getAttribute('position')
   ]
   for (const attribute of uploadOnce) (attribute as THREE.BufferAttribute).onUpload(releaseArray)
@@ -842,17 +942,31 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
   const setVisibleLayers: LayeredGcodePreview['setVisibleLayers'] = (topLayer, options) => {
     const clamped = Math.max(0, Math.min(topLayer, layerCount - 1))
     const single = options?.single ?? false
-    const start = single && clamped > 0 ? layerIndexEnd[clamped - 1]! : 0
-    let end = layerIndexEnd[clamped] ?? 0
-    // Truncate the top layer after its first `moveEnd` moves (the within-layer scrub).
+    // Where the TOP layer should stop, in the global index space (the within-layer scrub).
+    const topLayerStart = clamped > 0 ? layerIndexEnd[clamped - 1]! : 0
+    let topEnd = layerIndexEnd[clamped] ?? 0
     if (options?.moveEnd !== undefined && options.moveEnd < layerMoveCount(clamped)) {
       const firstMove = clamped > 0 ? layerMoveEnd[clamped - 1]! : 0
       const lastMove = firstMove + Math.max(0, Math.floor(options.moveEnd)) - 1
-      end = lastMove >= firstMove
-        ? moveEndIndex(lastMove)
-        : (clamped > 0 ? layerIndexEnd[clamped - 1]! : 0)
+      topEnd = lastMove >= firstMove ? moveEndIndex(lastMove) : topLayerStart
     }
-    extrusionGeometry.setDrawRange(start, Math.max(0, end - start))
+    // Visibility per layer instead of one draw range: below the top they are whole, the top one is
+    // truncated, and `single` shows only the top. A hidden mesh is not submitted OR sorted, so this
+    // is also what keeps the front-to-back ordering meaningful while scrubbing.
+    for (const mesh of layerMeshes) {
+      const layer = mesh.userData.layer as number
+      if (layer > clamped || (single && layer !== clamped)) {
+        mesh.visible = false
+        continue
+      }
+      mesh.visible = true
+      if (layer === clamped) {
+        // Draw ranges are LOCAL to each layer's own index view.
+        mesh.geometry.setDrawRange(0, Math.max(0, topEnd - topLayerStart))
+      } else {
+        mesh.geometry.setDrawRange(0, Infinity)
+      }
+    }
 
     if (options?.showTravel) {
       const travelStart = clamped > 0 ? travelLayerEnd[clamped - 1]! : 0
@@ -873,9 +987,12 @@ export function buildLayeredGcodePreview(parsed: ParsedGcodeLayers): LayeredGcod
     moveCount: layerMoveCount,
     layerZ: (layer: number) => layerZ[Math.max(0, Math.min(layer, layerCount - 1))] ?? 0,
     dispose: () => {
+      // The layer geometries share the source's attributes, so disposing the source releases the
+      // vertex buffers once; each layer geometry still owns its index view.
+      for (const mesh of layerMeshes) mesh.geometry.dispose()
       extrusionGeometry.dispose()
       travelGeometry.dispose()
-      ;(extrusion.material as THREE.Material).dispose()
+      material.dispose()
       ;(travel.material as THREE.Material).dispose()
     }
   }

@@ -5,13 +5,7 @@ import { formatSecondsDuration } from './time'
 export interface SlicingProgressFrame {
   message: string
   totalPercent: number | null
-  displayPercent: number | null
-  stageIndex: number
-  totalStages: number
 }
-
-const MACHINE_SWITCH_STAGE_START = 'Normalizing project with upstream machine-switch export'
-const MACHINE_SWITCH_STAGE_SLICE = 'Slicing normalized project'
 
 export function isActiveSlicingJob(job: SlicingJob): boolean {
   return job.status === 'queued' || job.status === 'preparing' || job.status === 'slicing' || job.status === 'saving'
@@ -30,54 +24,38 @@ export function getSlicingJobStatusLabel(job: SlicingJob): string {
   }
 }
 
+/** The engine's own progress, parsed from the JSON frames it writes to stdout. */
 export function getLatestSlicingProgressFrame(job: SlicingJob): SlicingProgressFrame | null {
   let latestFrame: SlicingProgressFrame | null = null
-  let totalStages = 1
-  let stageIndex = 1
 
   for (const line of job.output) {
     const text = line?.text?.trim()
     if (!text) continue
-
-    if (line.stream === 'system') {
-      if (text === MACHINE_SWITCH_STAGE_START) {
-        totalStages = 2
-        stageIndex = 1
-      } else if (text === MACHINE_SWITCH_STAGE_SLICE) {
-        totalStages = 2
-        stageIndex = 2
-      }
-    }
-
     const frame = parseSlicingProgressFrame(text)
-    if (!frame) continue
-
-    latestFrame = {
-      ...frame,
-      stageIndex,
-      totalStages,
-      displayPercent: resolveDisplayPercent(stageIndex, totalStages, frame.totalPercent)
-    }
+    if (frame) latestFrame = frame
   }
 
   return latestFrame
 }
 
 export function formatSlicingProgress(job: SlicingJob, progressFrame: SlicingProgressFrame | null): string {
-  if (progressFrame) {
-    const stagePrefix = progressFrame.totalStages > 1 ? `Stage ${progressFrame.stageIndex} of ${progressFrame.totalStages}: ` : ''
-    if (progressFrame.totalPercent == null) return `${stagePrefix}${progressFrame.message}`
-    return `${stagePrefix}${progressFrame.message} (${Math.round(progressFrame.totalPercent)}%)`
+  // The engine's own progress belongs to a RUNNING slice only. Its last frame survives in the
+  // output after the job ends, and rendering it left a finished slice reading "Exporting 3mf
+  // (97%)" next to a "Ready" chip. A finished job reports its outcome instead — which `finish()`
+  // wrote as the job's final system line ("Ready to print", "Sliced file saved to the library").
+  if (isActiveSlicingJob(job) && progressFrame) {
+    if (progressFrame.totalPercent == null) return progressFrame.message
+    return `${progressFrame.message} (${Math.round(progressFrame.totalPercent)}%)`
   }
 
+  // Before the engine emits a frame, the API's own status lines are all there is to show.
   const latestSystemLine = getLatestSystemOutputLine(job)
-  const explicitStageStatus = formatExplicitStageStatus(job, latestSystemLine)
-  if (explicitStageStatus) return explicitStageStatus
   if (latestSystemLine) return latestSystemLine
 
   if (job.status === 'ready' && job.outputFileName) return `Saved as ${formatLibraryFileName(job.outputFileName)}`
   if (job.status === 'queued') return getSlicingJobStatusLabel(job)
-  if (job.status === 'preparing' || job.status === 'slicing' || job.status === 'saving') return 'Slicer is still processing...'
+  if (job.status === 'preparing') return 'Preparing the project...'
+  if (job.status === 'slicing' || job.status === 'saving') return 'Slicing...'
   if (job.status === 'cancelled') return 'Slicing cancelled'
   if (job.status === 'failed') return job.error ?? 'Slicing failed'
   return job.sourceFileName
@@ -170,16 +148,3 @@ function normalizeProgressPercent(value: number | null): number | null {
   return Math.max(0, Math.min(100, value))
 }
 
-function resolveDisplayPercent(stageIndex: number, totalStages: number, totalPercent: number | null): number | null {
-  if (totalPercent == null) return null
-  if (totalStages <= 1) return totalPercent
-  const aggregatePercent = ((stageIndex - 1) + (totalPercent / 100)) / totalStages * 100
-  return normalizeProgressPercent(aggregatePercent)
-}
-
-function formatExplicitStageStatus(job: SlicingJob, latestSystemLine: string | null): string | null {
-  if (job.status !== 'preparing' && job.status !== 'slicing') return null
-  if (latestSystemLine === MACHINE_SWITCH_STAGE_START) return 'Stage 1 of 2: Normalizing project'
-  if (latestSystemLine === MACHINE_SWITCH_STAGE_SLICE) return 'Stage 2 of 2: Slicing normalized project'
-  return null
-}
