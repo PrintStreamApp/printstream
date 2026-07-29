@@ -11,12 +11,13 @@
  * (the host's `<PluginSlot>` already renders nothing in that case). Mounted by
  * `SliceFileModal` in `LibraryView.tsx`.
  */
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy, useCallback, useState } from 'react'
 import { Button } from '@mui/joy'
 import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import type { SceneEdit } from '@printstream/shared'
 import type { SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { LazyDialogFallback } from '../../components/LazyDialogFallback'
+import { SlicingPresetsDialog } from '../../components/library/SlicingPresetsDialog'
 
 const EditorView = lazy(() => import('./EditorView'))
 
@@ -52,6 +53,12 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
   const autoOpen = props.autoOpen === true
   const hostOnClose = typeof props.onClose === 'function' ? (props.onClose as () => void) : undefined
   const [open, setOpen] = useState(autoOpen)
+  // This host HAS a workspace, so its manager is the tenant one. The public editor supplies its own
+  // browser-storage manager instead — see `LocalEditorSurface`.
+  const presetManager = useCallback(
+    (managerProps: { open: boolean; onClose: () => void }) => <SlicingPresetsDialog {...managerProps} />,
+    []
+  )
 
   if (!fileId || !onApply) return null
 
@@ -88,6 +95,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             currentEdit={currentEdit}
             initialPlateIndex={initialPlateIndex}
             targetPrinterModel={targetPrinterModel}
+            presetManager={presetManager}
             onApply={(edit) => { onApply(edit); closeEditor() }}
             onSavedAs={onSavedAs}
             onClose={closeEditor}

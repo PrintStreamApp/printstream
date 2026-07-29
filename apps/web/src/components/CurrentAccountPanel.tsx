@@ -1,6 +1,10 @@
+import BadgeRoundedIcon from '@mui/icons-material/BadgeRounded'
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded'
+import DevicesRoundedIcon from '@mui/icons-material/DevicesRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import ManageAccountsRoundedIcon from '@mui/icons-material/ManageAccountsRounded'
+import ShieldRoundedIcon from '@mui/icons-material/ShieldRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { Alert, Box, Button, Card, CardContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy'
 import {
@@ -18,6 +22,7 @@ import { apiFetch } from '../lib/apiClient'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { isPlatformWorkspacePath } from '../lib/workspaceRoute'
+import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
 import { mobileSectionNavReserveSpace, sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
@@ -224,7 +229,7 @@ export function CurrentAccountPanel({
 
   if (shouldOpenPlatformAccount) {
     return (
-      <Stack spacing={2}>
+      <Stack spacing={pageSectionStackSpacing}>
         {showHeading && <Typography level="h3">Account</Typography>}
 
         {bootstrapError && (
@@ -236,7 +241,8 @@ export function CurrentAccountPanel({
         {billingSection}
         {messagesSection}
 
-        <AccountSectionHeading
+        <PageSectionHeading
+          icon={<ManageAccountsRoundedIcon />}
           title="Open your platform account"
           description="Support users manage their own account only from the platform workspace. Continue there to view or edit your account."
         />
@@ -265,14 +271,13 @@ export function CurrentAccountPanel({
   }
 
   return (
-    <Stack spacing={2} sx={{ pb: showSectionNav ? { xs: mobileSectionNavReserveSpace, sm: 0 } : undefined }}>
+    <Stack spacing={pageSectionStackSpacing} sx={{ pb: showSectionNav ? { xs: mobileSectionNavReserveSpace, sm: 0 } : undefined }}>
       {sections.length > 0 && <SectionNav aria-label="Account sections" sections={sections} mb={0} />}
 
       {showHeading && (
-        <AccountSectionHeading
+        <AccountPageHeading
           title={accountHeadingTitle}
           description={accountHeadingDescription}
-          titleLevel="h3"
           actions={isAuthenticatedUser ? (
             <Button
               variant="soft"
@@ -296,11 +301,13 @@ export function CurrentAccountPanel({
       <Box id="general" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
         <Stack spacing={1.25}>
           {!showHeading && (
-            <AccountSectionHeading
+            <PageSectionHeading
+              icon={<ManageAccountsRoundedIcon />}
               title={accountHeadingTitle}
               description={accountHeadingDescription}
               actions={isAuthenticatedUser ? (
                 <Button
+                  size="sm"
                   variant="soft"
                   color="neutral"
                   loading={logoutMutation.isPending}
@@ -333,7 +340,11 @@ export function CurrentAccountPanel({
       {isAuthenticatedUser && (
         <Box id="profile" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
           <Stack spacing={1.25}>
-            <AccountSectionHeading title="Profile" />
+            <PageSectionHeading
+              icon={<BadgeRoundedIcon />}
+              title="Profile"
+              description="How your account appears to everyone else in PrintStream."
+            />
 
           <Card variant="outlined">
             <CardContent>
@@ -388,7 +399,8 @@ export function CurrentAccountPanel({
       {showsAccountSecuritySection && (
         <Box id="security" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
           <Stack spacing={1.25}>
-            <AccountSectionHeading
+            <PageSectionHeading
+              icon={<ShieldRoundedIcon />}
               title="Security"
               description="Review and manage the sign-in methods trusted on this account."
             />
@@ -410,9 +422,11 @@ export function CurrentAccountPanel({
       {isAuthenticatedUser && (
         <Box id="sessions" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
           <Stack spacing={1.25}>
-            <AccountSectionHeading
+            <PageSectionHeading
+              icon={<DevicesRoundedIcon />}
               title="Active sessions"
               description="Review other browsers or devices that still have access to this account."
+              count={sessions.length}
             />
 
           <Card variant="outlined">
@@ -452,15 +466,17 @@ export function CurrentAccountPanel({
   )
 }
 
-function AccountSectionHeading({
+/**
+ * The panel's own page heading. Distinct from {@link PageSectionHeading}, which titles the
+ * sections BELOW it — this one has no icon, count, or rule so the sections cannot outweigh it.
+ */
+function AccountPageHeading({
   title,
   description,
-  titleLevel = 'title-lg',
   actions
 }: {
   title: string
   description?: string
-  titleLevel?: React.ComponentProps<typeof Typography>['level']
   actions?: React.ReactNode
 }) {
   return (
@@ -471,7 +487,7 @@ function AccountSectionHeading({
       alignItems={{ xs: 'flex-start', sm: 'flex-start' }}
     >
       <Box sx={{ minWidth: 0 }}>
-        <Typography level={titleLevel}>{title}</Typography>
+        <Typography level="h3">{title}</Typography>
         {description && (
           <Typography level="body-sm" textColor="text.tertiary">
             {description}

@@ -117,8 +117,10 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
   const [raw, setRaw] = useState<ResolvedFilamentState['raw'] | null>(null)
   const [rawConfig, setRawConfig] = useState<FilamentConfig>({})
   const [bakedKeys, setBakedKeys] = useState<Set<string>>(new Set())
-  /** See the twin in ProcessSettingsDialog: declared record present => `bakedKeys` is the whole truth. */
+  /** See the twin in ProcessSettingsDialog: a declared record narrows what counts as this project's. */
   const [declaresOverrides, setDeclaresOverrides] = useState(false)
+  /** False when no preset resolved to diff against — see {@link ResolvedFilamentState.baselineResolved}. */
+  const [baselineResolved, setBaselineResolved] = useState(true)
   const [config, setConfig] = useState<FilamentConfig>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -160,7 +162,8 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
         setBaseConfig(state.baseline)
         setParentBaseline(state.parentBaseline)
         setBakedKeys(new Set(state.bakedKeys))
-        setDeclaresOverrides(response.declaresOverrides === true)
+        setDeclaresOverrides(state.declaresOverrides)
+        setBaselineResolved(state.baselineResolved)
         setConfig({ ...state.effective, ...scalarizeFilamentConfig(initialOverrides) })
         setRaw(state.raw)
         setRawConfig({ ...state.raw.effective, ...initialOverrides })
@@ -218,21 +221,31 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     raw !== null && !filamentVariantValuesEqual(raw.baseline[key], rawConfig[key], filamentSettingsCatalog.options[key])
 
   /**
-   * True when a key differs from its preset baseline — either a resettable value diff, or a
-   * 3MF-baked change whose baseline value couldn't be resolved (`bakedKeys`, still untouched
-   * relative to the effective config). Mirrors ProcessSettingsDialog.
+   * True when this project/session changed the key relative to the preset in use.
+   *
+   * Two conditions, both required, and the first is what keeps the surface honest: the value must
+   * actually DIFFER from the preset — the same test {@link canReset} uses — so anything marked
+   * changed can always be reset, and "Reset all" always clears the marks. BambuStudio agrees: its
+   * modified marker is `PresetCollection::dirty_options`, a value diff against the selected preset.
+   * The declared record (`different_settings_to_system`) decides which of the file's values SURVIVE
+   * loading (`update_non_diff_values_to_base_config`), not what counts as changed; treating it as
+   * the marker put three permanently-un-resettable "changes" on every material of a stock project.
+   *
+   * The exception is a preset that did not resolve (`baselineResolved` false): there is nothing to
+   * diff against, so the record is the only evidence a setting was changed and is taken at its word
+   * — an honest "changed, and we cannot say from what". Mirrors ProcessSettingsDialog.
    */
   const isProjectChange = (key: string): boolean => {
     if (raw === null) return false
     const option = filamentSettingsCatalog.options[key]
-    // Declared record present: the file's list plus this session's edits, and nothing else. An
-    // undeclared difference from the preset is drift BambuStudio normalizes away — reporting it as
-    // this project's change is what showed stock materials as edited.
-    if (declaresOverrides) {
-      return bakedKeys.has(key) || !filamentVariantValuesEqual(raw.effective[key], rawConfig[key], option)
-    }
-    if (!filamentVariantValuesEqual(raw.baseline[key], rawConfig[key], option)) return true
-    return bakedKeys.has(key) && filamentVariantValuesEqual(rawConfig[key], raw.effective[key], option)
+    if (!baselineResolved) return bakedKeys.has(key)
+    if (filamentVariantValuesEqual(raw.baseline[key], rawConfig[key], option)) return false
+    // With a record present, an undeclared difference is drift BambuStudio normalizes away, not
+    // this project's change; a key edited in this session always counts.
+    if (declaresOverrides
+      && !bakedKeys.has(key)
+      && filamentVariantValuesEqual(raw.effective[key], rawConfig[key], option)) return false
+    return true
   }
 
   /**

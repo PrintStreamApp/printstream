@@ -8,8 +8,9 @@
  * cards). These compose the shared leaves from `./OrderShared`, the cards from
  * `./OrderCards`, and the pure transforms from `../ordersViewHelpers`.
  *
- * These are extracted from `OrdersView.tsx` unchanged; behavior, props, and
- * markup are preserved.
+ * Neither list route renders a heading for the route itself: `OrdersView` owns
+ * the page heading, the Orders/Templates switch, and the create action for
+ * whichever route is showing. What these routes title is their own sections.
  */
 import {
   Button,
@@ -18,15 +19,18 @@ import {
   Input,
   Option,
   Select,
-  Stack,
-  Typography
+  Stack
 } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
-import PlaylistAddRoundedIcon from '@mui/icons-material/PlaylistAddRounded'
+import PendingActionsRoundedIcon from '@mui/icons-material/PendingActionsRounded'
+import TaskAltRoundedIcon from '@mui/icons-material/TaskAltRounded'
 import type { LibraryFile, Order, OrderTemplate } from '@printstream/shared'
+import { type ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
 import { type DirectorySortDirection } from '../../../components/DirectoryControls'
 import { DirectoryPrimaryToolbar } from '../../../components/DirectoryToolbar'
+import { NestedViewHeader } from '../../../components/NestedViewHeader'
+import { PageSectionHeading, pageSectionStackSpacing } from '../../../components/dashboard/PageSectionHeading'
 import { PaginatedSection } from '../../../components/PaginationFooter'
 import { formatDateTime } from '../../../lib/time'
 import {
@@ -39,8 +43,7 @@ import {
   DetailHeader,
   DetailNotFound,
   EmptyBlock,
-  SectionEmptyState,
-  SectionHeading
+  SectionEmptyState
 } from './OrderShared'
 import { OrderCard, OrderListCard, TemplateDetailCard } from './OrderCards'
 
@@ -138,22 +141,10 @@ export function OrdersListRoute({
   loading: boolean
 }) {
   return (
-    <Stack spacing={1.5}>
-      <SectionHeading
-        title="Production orders"
-        subtitle={`${openOrders.length} open • ${completedOrders.length} completed`}
-        actions={(
-          <Button
-            size="sm"
-            variant="soft"
-            startDecorator={<PlaylistAddRoundedIcon />}
-            disabled={!canManageOrders || !templatesAvailable}
-            onClick={onCreateOrder}
-          >
-            New order
-          </Button>
-        )}
-      />
+    // No wrapper heading above the two tables: the page heading plus the Orders/Templates switch
+    // already name this route, and the open/completed counts it used to restate now sit on the
+    // sections themselves. The "New order" action lives beside the page heading (`OrdersView`).
+    <Stack spacing={pageSectionStackSpacing}>
       {orders.length === 0 && !loading ? (
         <EmptyBlock
           title="No production orders"
@@ -163,10 +154,12 @@ export function OrdersListRoute({
           onAction={onCreateOrder}
         />
       ) : (
-        <Stack spacing={1.5}>
+        <Stack spacing={pageSectionStackSpacing}>
           <OrdersTableSection
+            icon={<PendingActionsRoundedIcon />}
             title="Active orders"
-            subtitle={`${openOrders.length} active`}
+            description="Open orders still working through their prints."
+            count={openOrders.length}
             orders={filteredOpenOrders}
             visibleOrders={visibleOpenOrders}
             page={safeActiveOrdersPage}
@@ -198,8 +191,10 @@ export function OrdersListRoute({
             canStartOrderPrint={canStartOrderPrint}
           />
           <OrdersTableSection
+            icon={<TaskAltRoundedIcon />}
             title="Completed orders"
-            subtitle={`${completedOrders.length} completed`}
+            description="Every print confirmed or closed out."
+            count={completedOrders.length}
             orders={filteredCompletedOrders}
             visibleOrders={visibleCompletedOrders}
             page={safeCompletedOrdersPage}
@@ -247,6 +242,7 @@ export function TemplatesListRoute({
   onTemplateSearchChange,
   onTemplatesPageChange,
   onTemplatesPageSizeChange,
+  onBack,
   onCreateTemplate,
   onCreateOrder,
   onEditTemplate,
@@ -265,6 +261,8 @@ export function TemplatesListRoute({
   onTemplateSearchChange: (value: string) => void
   onTemplatesPageChange: (page: number) => void
   onTemplatesPageSizeChange: (value: number) => void
+  /** Returns to the orders list — this route is a nested view of it, not a peer tab. */
+  onBack: () => void
   onCreateTemplate: () => void
   onCreateOrder: (template: OrderTemplate) => void
   onEditTemplate: (template: OrderTemplate) => void
@@ -275,15 +273,23 @@ export function TemplatesListRoute({
 }) {
   return (
     <Stack spacing={1.5}>
-      <SectionHeading
-        title="Templates"
-        subtitle={`${templates.length} saved template${templates.length === 1 ? '' : 's'}`}
-        actions={(
-          <Button size="sm" variant="soft" startDecorator={<AddRoundedIcon />} disabled={!canManageOrders} onClick={onCreateTemplate}>
-            New template
-          </Button>
-        )}
-      />
+      {/* Heads itself: this route is nested under the orders list, so the `Orders /` crumb is the
+          way back rather than a peer tab in the page header. */}
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
+        <NestedViewHeader
+          crumbs={[{ label: 'Orders', onClick: onBack }, { label: 'Templates' }]}
+          description={`${templates.length} saved template${templates.length === 1 ? '' : 's'} to create orders from.`}
+        />
+        <Button
+          size="sm"
+          startDecorator={<AddRoundedIcon />}
+          disabled={!canManageOrders}
+          onClick={onCreateTemplate}
+          sx={{ flexShrink: 0 }}
+        >
+          New template
+        </Button>
+      </Stack>
       {templates.length > 0 && (
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
           <FormControl sx={{ flex: 1 }}>
@@ -429,8 +435,10 @@ export function OrderDetailRoute({
 }
 
 export function OrdersTableSection({
+  icon,
   title,
-  subtitle,
+  description,
+  count,
   orders,
   visibleOrders,
   page,
@@ -461,8 +469,11 @@ export function OrdersTableSection({
   canManageOrders,
   canStartOrderPrint
 }: {
+  icon: ReactNode
   title: string
-  subtitle: string
+  description: string
+  /** Total orders in this bucket, unfiltered — the search/sort state below is not part of the label. */
+  count: number
   orders: Order[]
   visibleOrders: Order[]
   page: number
@@ -495,10 +506,7 @@ export function OrdersTableSection({
 }) {
   return (
     <Stack spacing={1}>
-      <Stack spacing={0.25}>
-        <Typography level="title-md">{title}</Typography>
-        <Typography level="body-sm" textColor="text.tertiary">{subtitle}</Typography>
-      </Stack>
+      <PageSectionHeading icon={icon} title={title} description={description} count={count} />
       <DirectoryPrimaryToolbar
         pinStorageKey="orders"
         searchValue={searchValue}

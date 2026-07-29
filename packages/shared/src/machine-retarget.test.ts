@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyProcessProfileToProjectSettings, retargetProjectSettingsToMachine } from './machine-retarget.js'
+import {
+  applyMachineRetargetToProjectSettings,
+  applyProcessProfileToProjectSettings,
+  retargetProjectSettingsToMachine,
+  stripSliceInfoPrinterModelId
+} from './machine-retarget.js'
 
 // A single-extruder A1-mini-ish project (only the fields that matter here).
 const a1Project = {
@@ -226,4 +231,58 @@ test('a retarget that keeps both nozzles preserves each filament’s own assignm
     printerModel: 'Bambu Lab H2D'
   })
   assert.deepEqual(next.filament_nozzle_map, ['1', '0'], 'valid per-slot choices survive the switch')
+})
+
+// ---- The whole operation in one call --------------------------------------
+// `applyMachineRetargetToProjectSettings` is what the API's save and the public editor's
+// browser-side save both run, so its ORDER is the contract: machine (rebuilds the topology maps
+// everything later indexes by), then process, then the filament rebind. Doing the process step
+// first would have the machine overwrite re-clobber it.
+
+test('applyMachineRetargetToProjectSettings composes machine, process, and rebind in that order', () => {
+  const next = applyMachineRetargetToProjectSettings(
+    { ...a1Project, filament_colour: ['#000000', '#FFFFFF'], pre_start_fan_time: ['0', '0'], layer_height: ['0.28'] },
+    {
+      machineConfig: h2dMachine,
+      printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+      printerModel: 'Bambu Lab H2D',
+      processConfig: { name: '0.20mm Standard @BBL H2D', layer_height: ['0.2'] },
+      processSettingOverrides: { layer_height: '0.16' },
+      filamentRebinds: [
+        { config: { pre_start_fan_time: ['2'] }, settingsId: 'Bambu PLA Basic @BBL H2D' },
+        { config: { pre_start_fan_time: ['2'] }, settingsId: 'Bambu PLA Basic @BBL H2D' }
+      ]
+    }
+  )
+  assert.equal(next.printer_model, 'Bambu Lab H2D')
+  assert.equal(next.print_settings_id, '0.20mm Standard @BBL H2D')
+  assert.deepEqual(next.layer_height, '0.16', 'the session override outranks the resolved process preset')
+  assert.deepEqual(next.filament_settings_id, ['Bambu PLA Basic @BBL H2D', 'Bambu PLA Basic @BBL H2D'])
+  assert.deepEqual(next.pre_start_fan_time, ['2', '2'], 'the old machine’s fossil rebinds to the new stock')
+})
+
+test('applyMachineRetargetToProjectSettings with only a machine leaves process and filaments alone', () => {
+  // Both are best-effort: an unresolvable process (a project-embedded preset has no file) must not
+  // block the machine retarget, which is the part that makes the project openable on the new printer.
+  const next = applyMachineRetargetToProjectSettings(
+    { ...a1Project, filament_colour: ['#000000', '#FFFFFF'], layer_height: ['0.28'] },
+    { machineConfig: h2dMachine, printerSettingsId: 'Bambu Lab H2D 0.4 nozzle', printerModel: 'Bambu Lab H2D' }
+  )
+  assert.equal(next.printer_model, 'Bambu Lab H2D')
+  assert.deepEqual(next.layer_height, ['0.28'])
+  assert.deepEqual(next.filament_settings_id, ['Bambu PLA Basic @BBL A1M', 'Bambu PLA Basic @BBL A1M'])
+})
+
+test('stripSliceInfoPrinterModelId drops the previous slice’s printer, and nothing else', () => {
+  const xml = [
+    '<config>',
+    '  <metadata key="printer_model_id" value="BL-P001"/>',
+    '  <metadata key="index" value="1"/>',
+    '</config>'
+  ].join('\n')
+  const stripped = stripSliceInfoPrinterModelId(xml)
+  assert.doesNotMatch(stripped, /printer_model_id/)
+  assert.match(stripped, /key="index" value="1"/)
+  // A project that never carried one is untouched rather than reformatted.
+  assert.equal(stripSliceInfoPrinterModelId('<config><plate/></config>'), '<config><plate/></config>')
 })

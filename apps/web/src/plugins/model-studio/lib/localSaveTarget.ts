@@ -8,10 +8,17 @@
  * Per-object process overrides ride the save REQUEST rather than the `SceneEdit`, so they are only
  * visible here — they are handed to the bake explicitly. The api applies the same transform in its
  * own later pass while preparing a slice; the browser folds it into its single bake.
+ *
+ * The MACHINE RETARGET rides the request the same way (`payload.retarget`) and is applied here for
+ * the same reason: the api runs it as a post-bake pass over the file it just wrote, so the browser
+ * runs it as a post-bake pass over the file it just wrote. Both call the same shared rewrite — see
+ * `lib/localMachineRetarget.ts`. Without it a printer switch was simply lost on save: the bake
+ * preserves the project's embedded machine, so reopening showed the original printer again.
  */
-import type { ExportArrangedThreeMf, SaveArrangedThreeMf } from '@printstream/shared'
+import type { ExportArrangedThreeMf, ProfileRecord, SaveArrangedThreeMf, SlicingPresetSummary } from '@printstream/shared'
 import type { ThreeMfBakeOptions } from '@printstream/shared/three-mf'
 import { bakeClientThreeMf } from './clientThreeMfBake'
+import { buildLocalMachineRetargetPlan } from './localMachineRetarget'
 import type { EditorImportStore } from './editorImportStore'
 import type { EditorSaveTarget } from './editorSaveTarget'
 import type { ThreeMfArchive } from './threeMfArchive'
@@ -26,6 +33,11 @@ export interface LocalSaveTargetOptions {
   projectFile: () => LocalProjectFile | null
   /** Called after a save writes somewhere new, so the host can adopt the handle for later saves. */
   onProjectFileChanged: (file: LocalProjectFile) => void
+  /**
+   * The filament catalogue a machine retarget picks its slot rebinds from — built-ins plus the
+   * user's browser-stored presets, read live because it settles asynchronously after open.
+   */
+  filamentPresets: () => readonly SlicingPresetSummary[]
 }
 
 export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSaveTarget {
@@ -36,11 +48,24 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
       ...(payload.objectExport ? { objectExportMarker: true } : {}),
       ...(objectOverrides ? { objectProcessOverrides: objectOverrides } : {})
     }
+    // A single-object EXPORT is deliberately excluded: it is a copy of one object taken out of the
+    // project, not the project being saved for a different printer, and the api's export path does
+    // not retarget either.
+    const retarget = (payload as SaveArrangedThreeMf).retarget
+    const resolveRetargetPlan = retarget && !payload.objectExport
+      ? (projectSettings: ProfileRecord) => buildLocalMachineRetargetPlan({
+        target: retarget,
+        slicerTargetId: (payload as SaveArrangedThreeMf).slicerTargetId ?? '',
+        projectSettings,
+        filamentPresets: options.filamentPresets()
+      })
+      : null
     const { bytes } = await bakeClientThreeMf(
       options.archive(),
       payload.sceneEdit,
       options.importStore.importsForBake(),
-      bakeOptions
+      bakeOptions,
+      resolveRetargetPlan
     )
     return bytes
   }

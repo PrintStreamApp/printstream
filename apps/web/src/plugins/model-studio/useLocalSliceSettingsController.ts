@@ -12,11 +12,12 @@
  * render them is already hidden: `SliceSettingsPanel` drops the Plate/Objects sections in editor
  * mode and hides the printer picker when there are no printers.
  *
- * KNOWN GAP: the process/material "tune" dialogs (`ProcessSettingsDialog`) resolve a preset's full
- * config via the TENANT `/api/slicing/profiles/resolve-process`, which an anonymous host cannot
- * call. Until a public resolve endpoint exists, `carryOverridesOnRepick` is null (a machine switch
- * won't carry baked deltas here) and those dialogs will not load. The SIDEBAR — target, model,
- * nozzle, plate, process-preset pick, material pick/colour/add/remove — needs no resolve and works.
+ * The process and material "tune" dialogs work here too, through the anonymous resolvers in
+ * `lib/localProcessResolver.ts` / `lib/localFilamentResolver.ts` (built-ins via
+ * `/api/public/slicing/resolve-*`, project presets straight out of the in-tab 3MF). This hook owns
+ * only the OPEN state for the material one — the dialogs themselves are rendered by the host, which
+ * is why `filamentSettingsFilamentId` and the ungated resolvers are returned alongside the
+ * controller rather than buried in it.
  *
  * Counterpart: `apps/web/src/components/library/SliceFileModal.tsx` (the workspace controller).
  */
@@ -24,7 +25,8 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { useNavigate } from 'react-router-dom'
 import type {
-  SlicingManualProfileTarget
+  SlicingManualProfileTarget,
+  SlicingPresetSummary
 } from '@printstream/shared'
 import { isProjectNewerThanSlicer, isProjectSlicingPresetId, slicingPresetProvenance } from '@printstream/shared'
 import {
@@ -61,8 +63,6 @@ export interface LocalSliceSettingsControllerParams {
   project: ClientThreeMfProject
   isMobileViewport: boolean
   onClose: () => void
-  /** Bumped by the host when the user's browser-stored presets change, to re-read them. */
-  localProfilesToken?: unknown
 }
 
 /** A navigate that goes nowhere: the public host has no library routes for the controller to reach. */
@@ -82,8 +82,26 @@ export interface LocalSliceSettings {
    * a server-less host (the library host's still-mounted slice dialog does that job).
    */
   resolveProcessConfig: ProcessConfigResolver
+  /**
+   * Anonymous resolver for the MATERIAL tune dialog, which the host renders for the same reason as
+   * the process one. Ungated (unlike the controller's `resolveFilamentConfig`, which waits for the
+   * catalogue so the sidebar badge cannot cache a wrong count) — a dialog is opened long after the
+   * catalogue has settled.
+   */
+  resolveFilamentConfig: FilamentConfigResolver
   /** Whether the global process settings dialog is open (the controller owns the toggle state). */
   processSettingsDialogOpen: boolean
+  /**
+   * The INSTALLED filament catalogue (built-ins + the user's browser-stored presets), for the save's
+   * machine retarget to pick each slot's rebind from. Project-embedded presets are deliberately not
+   * in here: a rebind target has to be a preset that exists on the new machine.
+   */
+  installedFilamentPresets: SlicingPresetSummary[]
+  /** Which material's tune dialog is open, by 1-based project filament id. Null when none is. */
+  filamentSettingsFilamentId: number | null
+  setFilamentSettingsFilamentId: (filamentId: number | null) => void
+  /** Record an override set for one material slot, as the host's tune dialog applies it. */
+  setFilamentSettingOverridesById: React.Dispatch<React.SetStateAction<Record<number, Record<string, string | string[]>>>>
   /**
    * Caveat for the process dialog when the selected process is a project preset that is NOT a plain
    * built-in — i.e. a workspace custom preset unavailable here, so its "changed" markers are relative
@@ -94,7 +112,7 @@ export interface LocalSliceSettings {
 }
 
 export function useLocalSliceSettingsController(params: LocalSliceSettingsControllerParams): LocalSliceSettings {
-  const { project, isMobileViewport, onClose, localProfilesToken } = params
+  const { project, isMobileViewport, onClose } = params
 
   const file = useMemo(() => localSliceLibraryFile(project), [project])
   const bakedIndex = useMemo(() => localBakedIndex(project), [project])
@@ -129,7 +147,11 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   }, [])
 
   const profilesQuery = useQuery(publicSlicingPresetsQueryOptions(selectedSlicerTargetId))
-  const localProfiles = useMemo(() => listLocalSlicingPresets(), [localProfilesToken])
+  // Browser storage is read at OPEN and then only when the user has been in the preset manager —
+  // held state, not a per-render read, so an editor session cannot have its catalogue change under
+  // it. The same user-initiated carve-out the workspace host's `refreshSlicingPresets` is.
+  const [localProfiles, setLocalProfiles] = useState(listLocalSlicingPresets)
+  const refreshSlicingPresets = useCallback(() => { setLocalProfiles(listLocalSlicingPresets()) }, [])
   const catalogue = useMemo(
     () => mergeLocalProfilesIntoCatalogue(profilesQuery.data ?? [], localProfiles),
     [profilesQuery.data, localProfiles]
@@ -256,9 +278,10 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     [filamentProfiles, selectedMachineProfile, selectedNozzleDiameters, selectedPrinterModel, selectedProcessProfile]
   )
   const materialOptions = useMemo(() => buildSliceMaterialOptions(compatibleFilamentProfiles, []), [compatibleFilamentProfiles])
-  // The tune-dialog open state is exposed via `openFilamentSettings` for a future host that renders
-  // the material dialog from the sidebar row; the value is read there, not here.
-  const [, setFilamentSettingsFilamentId] = useState<number | null>(null)
+  // Which material's tune dialog is open. Owned here because the sidebar row opens it through the
+  // controller, but RENDERED by the host — a server-less host has no still-mounted slice dialog to
+  // render it from, which is the same split the global process dialog uses.
+  const [filamentSettingsFilamentId, setFilamentSettingsFilamentId] = useState<number | null>(null)
   const processEditListenerRef = useRef<(() => void) | null>(null)
 
   const baseProjectFilaments = useMemo(() => buildSliceDialogProjectFilaments(file, bakedIndex, selectedPlate), [bakedIndex, file, selectedPlate])
@@ -276,7 +299,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     filamentColors, setFilamentColors,
     filamentToolheadIds, setFilamentToolheadIds,
     filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
-    filamentSettingOverridesById,
+    filamentSettingOverridesById, setFilamentSettingOverridesById,
     handleAddFilament, handleRemoveFilament, handleMaterialOptionChange,
     materialEditListenerRef,
     desiredFilaments, filamentMappingResult,
@@ -467,8 +490,22 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     // The tune dialogs use the raw `resolveProcessConfig` directly (opened later, always ready).
     resolveConfig: slicerDataReady ? resolveProcessConfig : undefined,
     // Same gating for the per-material "changed vs preset" badge's filament resolver.
-    resolveFilamentConfig: slicerDataReady ? resolveFilamentConfig : undefined
+    resolveFilamentConfig: slicerDataReady ? resolveFilamentConfig : undefined,
+    // Re-read browser storage after the user has been in the preset manager. Same contract as the
+    // workspace controller's: only a change the user made THERE reaches the open editor.
+    refreshSlicingPresets
   }
 
-  return { controller, targetPrinterModel: targetPrinterModel ?? undefined, resolveProcessConfig, processSettingsDialogOpen, processBaselineNote }
+  return {
+    controller,
+    targetPrinterModel: targetPrinterModel ?? undefined,
+    resolveProcessConfig,
+    resolveFilamentConfig,
+    installedFilamentPresets: installedFilamentProfiles,
+    processSettingsDialogOpen,
+    filamentSettingsFilamentId,
+    setFilamentSettingsFilamentId,
+    setFilamentSettingOverridesById,
+    processBaselineNote
+  }
 }

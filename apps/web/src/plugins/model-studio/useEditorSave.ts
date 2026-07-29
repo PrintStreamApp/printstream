@@ -15,6 +15,7 @@
 import { useCallback, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ExportArrangedThreeMf, type SaveArrangedThreeMf, type SceneEdit } from '@printstream/shared'
+import { afterNextPaint } from '../../lib/afterNextPaint'
 import { apiFetch } from '../../lib/apiClient'
 import { downloadBlob } from '../../lib/downloadBlob'
 import { toast } from '../../lib/toast'
@@ -209,9 +210,17 @@ export function useEditorSave({
   const handleApply = useCallback(() => {
     const current = stateRef.current
     if (!current || !onApply) return
+    // Busy BEFORE the thumbnail capture, not after: capture + scene build take seconds on a big
+    // project, and until this flips the button looks unclicked. See `afterNextPaint`.
+    setSaving(true)
     void (async () => {
-      const thumbnails = await captureAllPlateThumbnails(current)
-      onApply(buildSceneEditOut(current, { thumbnails }))
+      try {
+          await afterNextPaint()
+          const thumbnails = await captureAllPlateThumbnails(current)
+          onApply(buildSceneEditOut(current, { thumbnails }))
+      } finally {
+        setSaving(false)
+      }
     })()
   }, [onApply, buildSceneEditOut, captureAllPlateThumbnails, stateRef])
 
@@ -238,44 +247,44 @@ export function useEditorSave({
       const asProject = options?.asProject !== false
       setSaving(true)
       try {
-        const file = await saveTarget.persist(payload)
-        // Null means the user backed out (a dismissed destination picker), not a failure: leave the
-        // project dirty and say nothing, rather than reporting a save that did not happen.
-        if (!file) return null
-        // Before anything else: the bytes we authored from now live at an archived id. Pinning is
-        // not conditional on `asProject` — a single-object export writes a real version too, and
-        // leaving the pin on a head that has moved would silently re-chain the next save.
-        adoptArchivedVersion(file.id, file.archivedVersionId)
-        if (asProject) {
-          markSaved()
-          // The save renumbered the session's filament ids to the desired list's 1..N (the
-          // emit-side translation in buildSceneEditOut); the live editor state must follow — see
-          // onFilamentsRenumbered. Computed HERE, from the same controller list the bake used,
-          // so the two sides of the invariant can never disagree about the map.
-          if (onFilamentsRenumbered) {
-            const sessionIds = sliceConfigRef.current?.projectFilaments.map((filament) => filament.projectFilamentId)
-            const remap = sessionIds && sessionIds.length > 0 ? buildSessionFilamentIdRemap(sessionIds) : null
-            if (remap) onFilamentsRenumbered(remap)
+          const file = await saveTarget.persist(payload)
+          // Null means the user backed out (a dismissed destination picker), not a failure: leave the
+          // project dirty and say nothing, rather than reporting a save that did not happen.
+          if (!file) return null
+          // Before anything else: the bytes we authored from now live at an archived id. Pinning is
+          // not conditional on `asProject` — a single-object export writes a real version too, and
+          // leaving the pin on a head that has moved would silently re-chain the next save.
+          adoptArchivedVersion(file.id, file.archivedVersionId)
+          if (asProject) {
+            markSaved()
+            // The save renumbered the session's filament ids to the desired list's 1..N (the
+            // emit-side translation in buildSceneEditOut); the live editor state must follow — see
+            // onFilamentsRenumbered. Computed HERE, from the same controller list the bake used,
+            // so the two sides of the invariant can never disagree about the map.
+            if (onFilamentsRenumbered) {
+              const sessionIds = sliceConfigRef.current?.projectFilaments.map((filament) => filament.projectFilamentId)
+              const remap = sessionIds && sessionIds.length > 0 ? buildSessionFilamentIdRemap(sessionIds) : null
+              if (remap) onFilamentsRenumbered(remap)
+            }
+            // The saved 3MF bakes the session's material list as its filament list; tell the
+            // controller so it renumbers to match. It does that IN MEMORY and immediately — it wrote
+            // the list, so it does not need the refetched index to tell it what it just saved — which
+            // is why there is no ordering constraint here any more. This call used to have to happen
+            // BEFORE the invalidation below, because the controller detected the save by watching its
+            // base material list change; arming late lost the race and an added material rendered
+            // twice, then baked into the NEXT save as a real duplicate slot.
+            const sourceRemap = sliceConfigRef.current?.onProjectSaved() ?? null
+            if (sourceRemap) onFilamentSourcesRemapped?.(sourceRemap)
           }
-          // The saved 3MF bakes the session's material list as its filament list; tell the
-          // controller so it renumbers to match. It does that IN MEMORY and immediately — it wrote
-          // the list, so it does not need the refetched index to tell it what it just saved — which
-          // is why there is no ordering constraint here any more. This call used to have to happen
-          // BEFORE the invalidation below, because the controller detected the save by watching its
-          // base material list change; arming late lost the race and an added material rendered
-          // twice, then baked into the NEXT save as a real duplicate slot.
-          const sourceRemap = sliceConfigRef.current?.onProjectSaved() ?? null
-          if (sourceRemap) onFilamentSourcesRemapped?.(sourceRemap)
-        }
-        // Library bookkeeping only: a local target has no cached listings to refresh.
-        if (saveTarget.isLibraryBacked) await invalidateLibraryQueries(queryClient)
-        toast.success(successMessage)
-        if (asProject) onSaved?.(file)
-        // Keep the editor open after saving so the user can keep arranging/printing.
-        return file
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Unable to save the project.')
-        return null
+          // Library bookkeeping only: a local target has no cached listings to refresh.
+          if (saveTarget.isLibraryBacked) await invalidateLibraryQueries(queryClient)
+          toast.success(successMessage)
+          if (asProject) onSaved?.(file)
+          // Keep the editor open after saving so the user can keep arranging/printing.
+          return file
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : 'Unable to save the project.')
+          return null
       } finally {
         setSaving(false)
       }
@@ -344,23 +353,32 @@ export function useEditorSave({
     // A library save needs a file to version. A local one does not have (or need) an id at all —
     // requiring one here made Save a no-op for a project opened from disk.
     if (saveTarget.isLibraryBacked && effectiveBaseFileId === null) return
+    // Busy from the click, not from `runSave`: the concurrent-save check is a network read and the
+    // thumbnail capture is seconds of main-thread work, all of it BEFORE `runSave` would have shown
+    // anything. See `afterNextPaint` for why the yield is needed for the spinner to paint.
+    setSaving(true)
     void (async () => {
-      if (!await confirmOverwritingConcurrentSave(effectiveBaseFileId)) return
-      const thumbnails = await captureAllPlateThumbnails(current)
-      const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
-      await runSave(
-        {
-          baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
-          mode: 'newVersion', ignoreBaseContent: editorBorn,
-          sceneEdit: buildSceneEditOut(current, { thumbnails }),
-          objectProcessOverrides: collectObjectProcessOverrides(),
-          processSettingOverrides: collectProcessSettingOverrides(),
-          filamentSettingOverrides: collectFilamentSettingOverrides(),
-          retarget,
-          slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
-        },
-        retarget ? `Saved a new version for ${retarget.printerModel}` : 'Saved a new version'
-      )
+      try {
+        await afterNextPaint()
+        if (!await confirmOverwritingConcurrentSave(effectiveBaseFileId)) return
+        const thumbnails = await captureAllPlateThumbnails(current)
+        const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+        await runSave(
+          {
+            baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
+            mode: 'newVersion', ignoreBaseContent: editorBorn,
+            sceneEdit: buildSceneEditOut(current, { thumbnails }),
+            objectProcessOverrides: collectObjectProcessOverrides(),
+            processSettingOverrides: collectProcessSettingOverrides(),
+            filamentSettingOverrides: collectFilamentSettingOverrides(),
+            retarget,
+            slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
+          },
+          retarget ? `Saved a new version for ${retarget.printerModel}` : 'Saved a new version'
+        )
+      } finally {
+        setSaving(false)
+      }
     })()
   }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
 
@@ -368,41 +386,48 @@ export function useEditorSave({
     const current = stateRef.current
     if (!current) return
     setSaveAsOpen(false)
+    // Busy before the capture — same reason as `handleSaveVersion`.
+    setSaving(true)
     void (async () => {
-      const thumbnails = await captureAllPlateThumbnails(current)
-      const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
-      // A project born in the editor has never been persisted, so its first save is a "save as"
-      // only mechanically — there is no earlier file to strand the user on, and its own scaffold
-      // holds nothing the editor state doesn't model. Bake from the state so the editor can adopt
-      // the result instead of re-mounting on it.
-      const firstSaveOfEditorBornProject = editorBorn && savedFile === null
-      const saved = await runSave(
-        {
-          baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
-          mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
-          ignoreBaseContent: firstSaveOfEditorBornProject,
-          sceneEdit: buildSceneEditOut(current, { thumbnails }),
-          objectProcessOverrides: collectObjectProcessOverrides(),
-          processSettingOverrides: collectProcessSettingOverrides(),
-          filamentSettingOverrides: collectFilamentSettingOverrides(),
-          retarget,
-          slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
-        },
-        `Saved “${name}”`
-      )
-      if (!saved) return
-      if (firstSaveOfEditorBornProject) {
-        // Adopt the new file in place: the editor keeps its scene and its (still import-backed)
-        // state, and later saves become ordinary new-version saves against it. Re-mounting here
-        // is what made a plain Save look like the project reloaded.
-        setSavedFile(saved)
-        return
+      try {
+        await afterNextPaint()
+        const thumbnails = await captureAllPlateThumbnails(current)
+        const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+        // A project born in the editor has never been persisted, so its first save is a "save as"
+        // only mechanically — there is no earlier file to strand the user on, and its own scaffold
+        // holds nothing the editor state doesn't model. Bake from the state so the editor can adopt
+        // the result instead of re-mounting on it.
+        const firstSaveOfEditorBornProject = editorBorn && savedFile === null
+        const saved = await runSave(
+          {
+            baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
+            mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
+            ignoreBaseContent: firstSaveOfEditorBornProject,
+            sceneEdit: buildSceneEditOut(current, { thumbnails }),
+            objectProcessOverrides: collectObjectProcessOverrides(),
+            processSettingOverrides: collectProcessSettingOverrides(),
+            filamentSettingOverrides: collectFilamentSettingOverrides(),
+            retarget,
+            slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined
+          },
+          `Saved “${name}”`
+        )
+        if (!saved) return
+        if (firstSaveOfEditorBornProject) {
+          // Adopt the new file in place: the editor keeps its scene and its (still import-backed)
+          // state, and later saves become ordinary new-version saves against it. Re-mounting here
+          // is what made a plain Save look like the project reloaded.
+          setSavedFile(saved)
+          return
+        }
+        // A real "save as" DOES make a new file while an older one stays behind, so leaving the
+        // editor on the old project would silently send further edits to the wrong file. Re-open
+        // on the new one — and re-reading it is also what turns this session's staged imports into
+        // in-project objects, which an adopted project deliberately skips.
+        onSavedAs?.(saved)
+      } finally {
+        setSaving(false)
       }
-      // A real "save as" DOES make a new file while an older one stays behind, so leaving the
-      // editor on the old project would silently send further edits to the wrong file. Re-open
-      // on the new one — and re-reading it is also what turns this session's staged imports into
-      // in-project objects, which an adopted project deliberately skips.
-      onSavedAs?.(saved)
     })()
   }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
 
@@ -418,27 +443,33 @@ export function useEditorSave({
     if (!current) return
     const exportState = buildSingleObjectExportState(current, key, worldFootprintCenterFor(key) ?? undefined)
     if (!exportState) return
+    setSaving(true)
     void (async () => {
-      // Fresh thumbnail of the exported object alone; force (the synthetic plate has no
-      // live strip entry) and don't repaint the live plate strip with it.
-      const thumbnails = await captureAllPlateThumbnails(exportState, { force: true, updateLive: false })
-      const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
-      await runSave(
-        {
-          baseFileId, baseVersionId, mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
-          sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
-          objectProcessOverrides: collectObjectProcessOverrides(exportState),
-          processSettingOverrides: collectProcessSettingOverrides(),
-          filamentSettingOverrides: collectFilamentSettingOverrides(),
-          retarget,
-          slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
-          // Marker: the library treats the export as a reusable model (preview on click),
-          // not an openable project — see the shared index parser's model-kind doc.
-          objectExport: true
-        },
-        `Exported “${name}”`,
-        { asProject: false }
-      )
+      try {
+        await afterNextPaint()
+        // Fresh thumbnail of the exported object alone; force (the synthetic plate has no
+        // live strip entry) and don't repaint the live plate strip with it.
+        const thumbnails = await captureAllPlateThumbnails(exportState, { force: true, updateLive: false })
+        const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+        await runSave(
+          {
+            baseFileId, baseVersionId, mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
+            sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
+            objectProcessOverrides: collectObjectProcessOverrides(exportState),
+            processSettingOverrides: collectProcessSettingOverrides(),
+            filamentSettingOverrides: collectFilamentSettingOverrides(),
+            retarget,
+            slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
+            // Marker: the library treats the export as a reusable model (preview on click),
+            // not an openable project — see the shared index parser's model-kind doc.
+            objectExport: true
+          },
+          `Exported “${name}”`,
+          { asProject: false }
+        )
+      } finally {
+        setSaving(false)
+      }
     })()
   }, [baseFileId, baseVersionId, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, worldFootprintCenterFor, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef])
 
@@ -461,26 +492,27 @@ export function useEditorSave({
     void (async () => {
       setSaving(true)
       try {
-        const thumbnails = await captureAllPlateThumbnails(exportState, { force: true, updateLive: false })
-        const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
-        const payload: ExportArrangedThreeMf = {
-          baseFileId,
-          baseVersionId,
-          name: fileName,
-          sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
-          objectProcessOverrides: collectObjectProcessOverrides(exportState),
-          processSettingOverrides: collectProcessSettingOverrides(),
-          filamentSettingOverrides: collectFilamentSettingOverrides(),
-          retarget,
-          slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
-          // Marker: re-uploaded downloads classify as reusable models, not projects.
-          objectExport: true
-        }
-        const bytes = await saveTarget.exportBytes(payload)
-        downloadBlob(new Blob([bytes as BlobPart], { type: 'model/3mf' }), fileName)
-        toast.success(`Exported ${fileName}.`)
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Unable to export the object.')
+          await afterNextPaint()
+          const thumbnails = await captureAllPlateThumbnails(exportState, { force: true, updateLive: false })
+          const retarget = sliceConfigRef.current?.retargetTarget ?? undefined
+          const payload: ExportArrangedThreeMf = {
+            baseFileId,
+            baseVersionId,
+            name: fileName,
+            sceneEdit: buildSceneEditOut(exportState, { thumbnails }),
+            objectProcessOverrides: collectObjectProcessOverrides(exportState),
+            processSettingOverrides: collectProcessSettingOverrides(),
+            filamentSettingOverrides: collectFilamentSettingOverrides(),
+            retarget,
+            slicerTargetId: retarget ? sliceConfigRef.current?.selectedSlicerTargetId : undefined,
+            // Marker: re-uploaded downloads classify as reusable models, not projects.
+            objectExport: true
+          }
+          const bytes = await saveTarget.exportBytes(payload)
+          downloadBlob(new Blob([bytes as BlobPart], { type: 'model/3mf' }), fileName)
+          toast.success(`Exported ${fileName}.`)
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : 'Unable to export the object.')
       } finally {
         setSaving(false)
       }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildThreeMfIndex, extractProjectVersion, parseModelSettingsPlates } from './index-parser.js'
+import { buildThreeMfIndex, extractProjectVersion, normalizePrinterModelName, parseModelSettingsPlates } from './index-parser.js'
 
 test('extractProjectVersion reads the Bambu Studio version that saved the project', () => {
   // Used to warn before a slice: BambuStudio refuses a project newer than the engine (exit 232).
@@ -77,4 +77,22 @@ test('a project filament slot keeps the raw filament_settings_id, not just the d
       ['Bambu PLA Basic', 'Bambu PLA Basic @BBL H2D - 55 degree plate']
     ]
   )
+})
+
+// A project's model decides its bed, its compatible presets, and what the editor's printer picker
+// shows. A model the normalizer does not recognize is not a soft miss: the index reports NO
+// compatible model and the target falls back to the first machine in the catalogue, so an X1
+// project silently opened as an A1.
+test('normalizePrinterModelName tells the X1 family apart, plain X1 included', () => {
+  assert.equal(normalizePrinterModelName('Bambu Lab X1'), 'X1')
+  assert.equal(normalizePrinterModelName('Bambu Lab X1 0.4 nozzle'), 'X1')
+  assert.equal(normalizePrinterModelName('X1'), 'X1')
+  // The suffixed siblings must never fall through to the plain branch.
+  assert.equal(normalizePrinterModelName('Bambu Lab X1 Carbon'), 'X1C')
+  assert.equal(normalizePrinterModelName('X1C'), 'X1C')
+  assert.equal(normalizePrinterModelName('Bambu Lab X1E'), 'X1E')
+  // Nor may a model that merely CONTAINS the digits reach it — the A1-vs-A1-mini trap's twin.
+  assert.equal(normalizePrinterModelName('Bambu Lab X2D'), 'X2D')
+  assert.equal(normalizePrinterModelName('Bambu Lab H2D'), 'H2D')
+  assert.equal(normalizePrinterModelName('Bambu Lab A1 mini'), 'A1mini')
 })

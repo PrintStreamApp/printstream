@@ -94,7 +94,8 @@ test('saving locally preserves the project rather than baking an empty one', asy
       archive: () => project.archive,
       importStore: createLocalImportStore(),
       projectFile: () => file,
-      onProjectFileChanged: () => {}
+      onProjectFileChanged: () => {},
+    filamentPresets: () => []
     })
 
     await target.persist({

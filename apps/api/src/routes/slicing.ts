@@ -162,7 +162,11 @@ slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY
           config: project.config,
           baseConfig: project.config,
           overriddenKeys: project.overriddenKeys,
-          declaresOverrides: project.declaresOverrides
+          declaresOverrides: project.declaresOverrides,
+          // No preset resolved: `baseConfig` is a stand-in copy, so a value diff is empty by
+          // construction and only the declared record can say what changed. Say so explicitly —
+          // the payload alone cannot be told apart from a project that changed nothing.
+          baselineResolved: false
         }
     response.json(responseBody)
     return
@@ -223,7 +227,11 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
           config: project.config,
           baseConfig: project.config,
           overriddenKeys: project.overriddenKeys,
-          declaresOverrides: project.declaresOverrides
+          declaresOverrides: project.declaresOverrides,
+          // No preset resolved: `baseConfig` is a stand-in copy, so a value diff is empty by
+          // construction and only the declared record can say what changed. Say so explicitly —
+          // the payload alone cannot be told apart from a project that changed nothing.
+          baselineResolved: false
         }
     response.json(responseBody)
     return

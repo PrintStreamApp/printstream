@@ -20,11 +20,19 @@ import {
   emptyThreeMfBakeSource,
   planEditedThreeMf,
   readThreeMfBakeSource,
+  THREE_MF_PROJECT_SETTINGS_ENTRY,
+  THREE_MF_SLICE_INFO_ENTRY,
   type ImportedObjectInput,
   type ThreeMfBakeOptions,
   type ThreeMfBakeResult
 } from '@printstream/shared/three-mf'
-import type { SceneEdit } from '@printstream/shared'
+import {
+  applyMachineRetargetToProjectSettings,
+  stripSliceInfoPrinterModelId,
+  type MachineRetargetPlan,
+  type ProfileRecord,
+  type SceneEdit
+} from '@printstream/shared'
 import type { ThreeMfArchive } from './threeMfArchive'
 
 export interface ClientBakeOutput {
@@ -40,12 +48,20 @@ export interface ClientBakeOutput {
  *
  * `archive` null means a from-scratch project: the plan then supplies the complete entry list
  * rather than a set of rewrites.
+ *
+ * `machineRetarget` saves the project FOR A DIFFERENT PRINTER. It runs after the bake and before
+ * the archive is written, which is the same position the api's `retargetSavedProjectMachine` pass
+ * holds relative to its own bake — deliberately, so the two hosts produce the same file. It is a
+ * separate parameter rather than a `ThreeMfBakeOptions` field because the plan is RESOLVED input
+ * (preset configs the host fetched), not a bake decision, and it is a FUNCTION of the baked
+ * settings because the rebind targets are picked from the filament list this bake just wrote.
  */
 export async function bakeClientThreeMf(
   archive: ThreeMfArchive | null,
   edit: SceneEdit,
   imports: ImportedObjectInput[] = [],
-  options: ThreeMfBakeOptions = {}
+  options: ThreeMfBakeOptions = {},
+  machineRetarget: ((projectSettings: ProfileRecord) => Promise<MachineRetargetPlan | null>) | null = null
 ): Promise<ClientBakeOutput> {
   const source = archive
     ? await readThreeMfBakeSource(async (entryPath) => archive.entryText(entryPath), edit)
@@ -77,7 +93,47 @@ export async function bakeClientThreeMf(
     for (const entry of plan.freshEntries ?? []) output[entry.name] = encoder.encode(entry.content)
   }
 
+  if (machineRetarget) await applyMachineRetargetToEntries(output, machineRetarget)
+
   return { bytes: await deflateArchive(output), result: plan.result }
+}
+
+/**
+ * Rewrite the baked archive's settings entries for the target machine, in place.
+ *
+ * A project with no `project_settings.config` (a from-scratch scaffold) is retargeted from an empty
+ * object, exactly as the api does — the resolved machine supplies every field, the way BambuStudio
+ * picking a printer for a fresh project does. Unreadable settings abort the retarget rather than
+ * being replaced: losing the printer switch is recoverable, dropping settings the user's only copy
+ * of the file still carries is not.
+ */
+async function applyMachineRetargetToEntries(
+  output: Record<string, Uint8Array>,
+  resolvePlan: (projectSettings: ProfileRecord) => Promise<MachineRetargetPlan | null>
+): Promise<void> {
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  const existing = output[THREE_MF_PROJECT_SETTINGS_ENTRY]
+  let projectSettings: ProfileRecord = {}
+  if (existing && existing.length > 0) {
+    try {
+      projectSettings = JSON.parse(decoder.decode(existing)) as ProfileRecord
+    } catch (error) {
+      // Abort the retarget rather than replacing settings we could not read — see the doc above.
+      console.warn('[editor] project settings could not be parsed; saving without the machine retarget:',
+        error instanceof Error ? error.message : error)
+      return
+    }
+  }
+  const plan = await resolvePlan(projectSettings)
+  if (!plan) return
+  output[THREE_MF_PROJECT_SETTINGS_ENTRY] = encoder.encode(
+    JSON.stringify(applyMachineRetargetToProjectSettings(projectSettings, plan))
+  )
+  const sliceInfo = output[THREE_MF_SLICE_INFO_ENTRY]
+  if (sliceInfo && sliceInfo.length > 0) {
+    output[THREE_MF_SLICE_INFO_ENTRY] = encoder.encode(stripSliceInfoPrinterModelId(decoder.decode(sliceInfo)))
+  }
 }
 
 /** fflate's callback zip as a promise. Level 6 matches what BambuStudio writes. */

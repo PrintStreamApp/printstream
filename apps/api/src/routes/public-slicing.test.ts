@@ -17,14 +17,17 @@ import { slicerClient } from '../lib/slicer-client.js'
 
 const originalProfiles = slicerClient.profiles.bind(slicerClient)
 const originalCapabilities = slicerClient.capabilities.bind(slicerClient)
+const originalResolveMachineConfig = slicerClient.resolveMachineConfig.bind(slicerClient)
 
 afterEach(() => {
   slicerClient.profiles = originalProfiles
   slicerClient.capabilities = originalCapabilities
+  slicerClient.resolveMachineConfig = originalResolveMachineConfig
 })
 
 async function withApp(run: (baseUrl: string) => Promise<void>): Promise<void> {
   const app = express()
+  app.use(express.json())
   app.use('/api/public/slicing', publicSlicingRouter)
   const server: Server = await new Promise((resolve) => {
     const listening = app.listen(0, () => resolve(listening))
@@ -103,5 +106,45 @@ test('a printer with no bundled bed model answers 404 rather than erroring', asy
     const response = await fetch(`${baseUrl}/bed-model`)
     // Missing printerModel is a bad request, not a 500.
     assert.equal(response.status, 400)
+  })
+})
+
+// The public editor rewrites a project's machine IN THE BROWSER when saving it for a different
+// printer, but the target machine's full preset only exists inside the slicer image — this route is
+// the one hop that cannot move into the tab. Counterpart:
+// `apps/web/src/plugins/model-studio/lib/localMachineRetarget.ts`.
+test('a built-in printer preset resolves anonymously, for the browser-side machine retarget', async () => {
+  slicerClient.resolveMachineConfig = async (_targetId, file) => (
+    { printer_model: 'H2D', printer_settings_id: file.name } as unknown as Awaited<ReturnType<typeof slicerClient.resolveMachineConfig>>
+  )
+  const { buildBuiltinSlicingPresetId } = await import('@printstream/shared')
+
+  await withApp(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/resolve-machine`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ machineProfileId: buildBuiltinSlicingPresetId('machine', 'Bambu Lab H2D 0.4 nozzle') })
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json() as { config: Record<string, unknown>; name: string }
+    assert.equal(body.name, 'Bambu Lab H2D 0.4 nozzle')
+    assert.equal(body.config.printer_model, 'H2D')
+  })
+})
+
+test('a workspace preset id is refused here rather than reaching a tenant lookup', async () => {
+  // The whole point of the surface: nothing here ever consults a tenant, so a custom preset must be
+  // rejected at the boundary instead of being resolved through some other path.
+  let resolved = 0
+  slicerClient.resolveMachineConfig = async () => { resolved += 1; return null }
+
+  await withApp(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/resolve-machine`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ machineProfileId: 'custom:machine:abc' })
+    })
+    assert.equal(response.status, 400)
+    assert.equal(resolved, 0)
   })
 })

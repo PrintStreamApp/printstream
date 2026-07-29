@@ -293,8 +293,14 @@ editor always shows the advanced superset (simple + advanced) and hides the
 `develop`-tier options unless **developer slicer settings** is on. That preference
 follows the general-settings shape: a workspace-wide shared default persisted in
 `GeneralSettings.slicerDeveloperMode` (via `/api/settings`) plus an optional
-per-device localStorage override, both edited from the Slicing settings page
-(`components/settings/SlicerDeveloperModeCard.tsx`). The editor reads the effective
+per-device localStorage override, both edited from the **editor settings dialog**
+(`components/settings/SlicerDeveloperModeCard.tsx`, rendered by
+`components/library/EditorSettingsDialog.tsx`). It sits there rather than in Settings
+because it decides what the editor's own process-settings dialog shows; the Settings >
+Slicing page held nothing else and is gone. The card is not gated on `canManageSettings`
+— it carries that gate itself (shared default read-only without the capability, per-device
+override personal) — and the public editor omits it, having no workspace to read a shared
+default from. The editor reads the effective
 value through `useEffectiveSlicerDeveloperMode` (`apps/web/src/lib/slicerDeveloperMode.ts`);
 the tier gate is `isProcessOptionVisibleInMode` in
 `packages/shared/src/process-settings.ts`. Revealed options still obey the usual

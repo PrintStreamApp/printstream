@@ -122,11 +122,14 @@ test('prepareResolvedFilamentState + resolvedFilamentModifiedKeys: drift shows, 
 
 test('resolvedFilamentModifiedKeys falls back to the 3MF record when the parent is unresolved', async () => {
   const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
-  // Parent not installed: baseConfig === config, so value-diff finds nothing; the record flags.
+  // Parent not installed: the route sends baseConfig === config as a stand-in and says so with
+  // `baselineResolved: false`, because that payload is otherwise identical to a project that
+  // changed nothing. The record is then the only evidence a setting was changed.
   const state = prepareResolvedFilamentState({
     config: { nozzle_temperature: '270' },
     baseConfig: { nozzle_temperature: '270' },
-    overriddenKeys: ['nozzle_temperature']
+    overriddenKeys: ['nozzle_temperature'],
+    baselineResolved: false
   })
   assert.deepEqual(resolvedFilamentModifiedKeys(state), ['nozzle_temperature'])
   // A session edit replaces the record flag with a value flag (still exactly one key).
@@ -259,4 +262,74 @@ test('a project slot\'s values carry to a same-type preset only, per BambuStudio
   )
   // With no type to compare, keep the slot rather than silently discarding a project's real values.
   assert.equal(filamentSlotValuesCarryTo({ nozzle_temperature: '245' }, { filament_type: ['PLA'] }), true)
+})
+
+// PRODUCTION REGRESSION (Best Shot Golf (PETG), 2026-07-29). Every material showed three changes
+// the user never made, in warning colour, with no reset icon and a "Reset all" that did nothing.
+// The 3MF DECLARES these three keys in `different_settings_to_system`, but their values are
+// identical to the preset — so treating the declared record as the modified marker flagged them
+// while the value-diff-based reset affordance correctly offered nothing to reset.
+//
+// BambuStudio does not work that way: its marker is `PresetCollection::dirty_options`, a value diff
+// against the selected preset. The declared record decides which of the file's values SURVIVE
+// loading (`update_non_diff_values_to_base_config`), not what counts as changed.
+//
+// The invariant this pins: anything reported as modified must also be resettable.
+test('a declared key whose value equals the preset is NOT a change (prod: three phantom per material)', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
+  // Values copied verbatim from the production resolve-filament response for slot 1.
+  const preset = {
+    filament_max_volumetric_speed: ['25', '40'],
+    nozzle_temperature_initial_layer: ['245', '245'],
+    nozzle_temperature: ['245', '245']
+  }
+  const state = prepareResolvedFilamentState({
+    config: { ...preset },
+    baseConfig: { ...preset },
+    overriddenKeys: ['filament_max_volumetric_speed', 'nozzle_temperature_initial_layer', 'nozzle_temperature'],
+    declaresOverrides: true
+  })
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), [])
+})
+
+test('a declared key whose value DOES differ is still a change, and an undeclared difference is not', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
+  const state = prepareResolvedFilamentState({
+    config: { nozzle_temperature: ['260', '260'], filament_flow_ratio: ['0.95'] },
+    baseConfig: { nozzle_temperature: ['245', '245'], filament_flow_ratio: ['0.98'] },
+    // Only the temperature is declared; the flow ratio's difference is drift between the file and a
+    // since-updated preset, which BambuStudio normalizes away rather than attributing to the user.
+    overriddenKeys: ['nozzle_temperature'],
+    declaresOverrides: true
+  })
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), ['nozzle_temperature'])
+})
+
+test('a session edit counts even when the file declared nothing for that key', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
+  const state = prepareResolvedFilamentState({
+    config: { nozzle_temperature: ['245', '245'] },
+    baseConfig: { nozzle_temperature: ['245', '245'] },
+    overriddenKeys: [],
+    declaresOverrides: true
+  })
+  assert.deepEqual(resolvedFilamentModifiedKeys(state, { nozzle_temperature: '260' }), ['nozzle_temperature'])
+  // ...and an edit BACK to the preset value clears it again, so Reset all always reaches zero.
+  assert.deepEqual(resolvedFilamentModifiedKeys(state, { nozzle_temperature: '245' }), [])
+})
+
+test('with no preset to diff against, the declared record is taken at its word', async () => {
+  const { prepareResolvedFilamentState, resolvedFilamentModifiedKeys } = await import('./filament-settings.js')
+  // The named preset is not installed, so the route sends `baseConfig` as a stand-in COPY of
+  // `config` and flags it. A value diff is then empty by construction — reporting "nothing changed"
+  // for a project whose preset went missing would be a confident lie, and it is indistinguishable
+  // from the stock-project payload above without the flag.
+  const state = prepareResolvedFilamentState({
+    config: { nozzle_temperature: ['260', '260'] },
+    baseConfig: { nozzle_temperature: ['260', '260'] },
+    overriddenKeys: ['nozzle_temperature'],
+    declaresOverrides: true,
+    baselineResolved: false
+  })
+  assert.deepEqual(resolvedFilamentModifiedKeys(state), ['nozzle_temperature'])
 })

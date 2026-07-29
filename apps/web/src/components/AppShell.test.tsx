@@ -63,7 +63,9 @@ test('AppShell renders a shared workspace label above the current view', () => {
   assert.ok(view.getByText('Body'))
 })
 
-test('AppShell renders the mobile nav logo by default when navigation is shown', () => {
+// The shell renders the logo once, in the desktop header. The mobile bottom tab bar used to
+// carry a second copy; it ate ~54px of a 375px dock and duplicated the same home affordance.
+test('AppShell renders the logo only in the desktop header, not the mobile tab bar', () => {
   const view = renderWithProviders(
     <AppShell
       tabs={tabs}
@@ -75,8 +77,8 @@ test('AppShell renders the mobile nav logo by default when navigation is shown',
     </AppShell>
   )
 
-  const logo = view.container.querySelector('img[src="/icon-512.png"]')
-  assert.ok(logo)
+  assert.equal(view.container.querySelectorAll('img[src="/icon-512.png"]').length, 1)
+  assert.equal(view.getAllByRole('button', { name: 'PrintStream home' }).length, 1)
 })
 
 test('AppShell opens home from the logo action', () => {

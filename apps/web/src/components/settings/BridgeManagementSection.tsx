@@ -1,6 +1,7 @@
 import React from 'react'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import ArticleRoundedIcon from '@mui/icons-material/ArticleRounded'
+import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import HubRoundedIcon from '@mui/icons-material/HubRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded'
@@ -18,6 +19,7 @@ import {
   extractErrorMessage
 } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { PageSectionHeading, pageSectionStackSpacing } from '../dashboard/PageSectionHeading'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { getBrowserEnv } from '../../lib/browserEnv'
@@ -79,7 +81,7 @@ export function BridgeSettingsSection() {
   }
 
   return (
-    <Stack spacing={1.5}>
+    <Stack spacing={pageSectionStackSpacing}>
       <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
         <Stack
           direction="row"
@@ -101,41 +103,43 @@ export function BridgeSettingsSection() {
         </Stack>
       </Alert>
 
-      <Box>
-        <Typography level="title-md">Install a bridge</Typography>
-        <Typography level="body-sm" textColor="text.tertiary">
-          Run the bridge on a computer near your printers — install a native build or run it with Docker.
-          It shows a connect code once it starts.
-        </Typography>
-      </Box>
-      <BridgeInstallCard
-        downloads={bridgeDownloads}
-        detectedPlatformKey={detectedPlatformKey}
-        serverUrl={bridgeServerUrl}
-      />
-
-      <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
-        <Box sx={{ minWidth: 0 }}>
-          <Typography level="title-md">Bridges</Typography>
-          <Typography level="body-sm" textColor="text.tertiary">
-            Review connected bridges and keep their names clear for library and printer routing.
-          </Typography>
-        </Box>
-        <Button size="sm" startDecorator={<AddRoundedIcon />} onClick={openConnectDialog} sx={{ flexShrink: 0 }}>
-          Connect a bridge
-        </Button>
+      <Stack spacing={1.25}>
+        <PageSectionHeading
+          icon={<DownloadRoundedIcon />}
+          title="Install a bridge"
+          description="Run the bridge on a computer near your printers — install a native build or run it with Docker. It shows a connect code once it starts."
+        />
+        <BridgeInstallCard
+          downloads={bridgeDownloads}
+          detectedPlatformKey={detectedPlatformKey}
+          serverUrl={bridgeServerUrl}
+        />
       </Stack>
 
-      {listError && <Alert color="danger">{listError}</Alert>}
-      {!listError && bridges.length === 0 ? (
-        <Alert color="neutral">No bridges are connected yet. Use “Connect a bridge” with the code your bridge shows.</Alert>
-      ) : (
-        <Stack spacing={1}>
-          {bridges.map((bridge) => (
-            <BridgeSettingsRow key={bridge.id} bridge={bridge} />
-          ))}
-        </Stack>
-      )}
+      <Stack spacing={1.25}>
+        <PageSectionHeading
+          icon={<HubRoundedIcon />}
+          title="Bridges"
+          description="Review connected bridges and keep their names clear for library and printer routing."
+          count={bridges.length}
+          actions={(
+            <Button size="sm" startDecorator={<AddRoundedIcon />} onClick={openConnectDialog}>
+              Connect a bridge
+            </Button>
+          )}
+        />
+
+        {listError && <Alert color="danger">{listError}</Alert>}
+        {!listError && bridges.length === 0 ? (
+          <Alert color="neutral">No bridges are connected yet. Use “Connect a bridge” with the code your bridge shows.</Alert>
+        ) : (
+          <Stack spacing={1}>
+            {bridges.map((bridge) => (
+              <BridgeSettingsRow key={bridge.id} bridge={bridge} />
+            ))}
+          </Stack>
+        )}
+      </Stack>
 
       {connectOpen && (
         <ConnectBridgeDialog initialCode={initialConnectCode} onClose={() => setConnectOpen(false)} />

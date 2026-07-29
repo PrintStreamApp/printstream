@@ -25,6 +25,7 @@
  * rebind targets (name/alias matching + the slicer's profile resolver) in
  * `apps/api/src/lib/save-retarget.ts`; this module never fetches.
  */
+import { canonicalBambuModelKey } from './bambu-model-keys.js'
 import { FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
 import type { ProcessConfig } from './process-settings.js'
 import { extractFilamentOverriddenKeys } from './three-mf-project-config.js'
@@ -146,6 +147,81 @@ export function applyFilamentSlotOverrides(
   }
   next.different_settings_to_system = existingRecord
   return next
+}
+
+/**
+ * The bit of a catalogue entry the rebind selection needs. Structural on purpose: `SlicingPresetSummary`
+ * lives in the slicing contract module and pulling it in here would couple the pure rebind math to it.
+ */
+export interface FilamentRebindCandidate {
+  id: string
+  name: string
+  /** Printer models the preset declares. Empty/absent means "judge by the name's `@<printer>` suffix". */
+  printerModels?: string[] | null
+}
+
+/** Where one slot rebinds: its current preset name, and the catalogue entry it maps to (null = no move). */
+export interface FilamentRebindSelection {
+  slotName: string
+  target: FilamentRebindCandidate | null
+}
+
+/**
+ * Choose where each filament slot rebinds on the target machine, mirroring BambuStudio's alias
+ * re-selection: the slot's exact preset when it is still compatible, else the same FAMILY's variant
+ * for that machine (preferring one matching the target machine preset's nozzle token), else nothing
+ * (the slot keeps its values).
+ *
+ * Pure selection only — resolving each chosen preset's CONFIG is the caller's job, because the two
+ * hosts reach it differently (the api through the slicer + its tenant preset files, the browser
+ * through the anonymous resolve endpoint). Returns null when the record has no usable slot list,
+ * which callers treat as "nothing to rebind".
+ *
+ * `candidates` must already be filtered to filament presets, ordered most-preferred first (custom
+ * before builtin), exactly as the pickers order them.
+ */
+export function selectFilamentRebindTargets(input: {
+  /** The retargeted record's `filament_settings_id`. */
+  filamentSettingsIds: unknown
+  candidates: readonly FilamentRebindCandidate[]
+  /** Canonical model key of the target machine (see `canonicalBambuModelKey`). */
+  targetModelKey: string
+  /** The target machine preset name; its nozzle token breaks family-variant ties. */
+  nozzleHint: string
+}): FilamentRebindSelection[] | null {
+  const raw = input.filamentSettingsIds
+  if (!Array.isArray(raw)) return null
+  const names = raw.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+  // A partly-blank slot list means the record is not describing its filaments the way the rebind
+  // assumes; mis-columning it is worse than skipping the improvement pass.
+  if (names.length === 0 || names.length !== raw.length) return null
+  if (input.candidates.length === 0) return null
+
+  const compatible = (candidate: FilamentRebindCandidate): boolean => {
+    if (candidate.printerModels && candidate.printerModels.length > 0) {
+      return candidate.printerModels.some((model) => canonicalBambuModelKey(model) === input.targetModelKey)
+    }
+    // No declared models: judge by the name's own `@<printer>` suffix; a suffix-less preset
+    // ("Generic PLA") is machine-agnostic and always eligible.
+    const at = candidate.name.indexOf(' @')
+    if (at < 0) return true
+    const suffix = candidate.name.slice(at + 2).replace(/^BBL\s+/i, '').replace(/\s+\d+(?:\.\d+)?\s*nozzle.*$/i, '')
+    return canonicalBambuModelKey(suffix) === input.targetModelKey
+  }
+  const nozzleToken = input.nozzleHint.match(/\d+(?:\.\d+)?\s*nozzle/i)?.[0]?.toLowerCase() ?? null
+
+  return names.map((slotName) => {
+    const exact = input.candidates.find((candidate) => candidate.name === slotName)
+    if (exact && compatible(exact)) return { slotName, target: exact }
+    const family = filamentPresetFamilyName(slotName)
+    const familyCandidates = input.candidates.filter(
+      (candidate) => filamentPresetFamilyName(candidate.name) === family && compatible(candidate)
+    )
+    const target = (nozzleToken ? familyCandidates.find((candidate) => candidate.name.toLowerCase().includes(nozzleToken)) : undefined)
+      ?? familyCandidates[0]
+      ?? null
+    return { slotName, target }
+  })
 }
 
 export function rebindProjectFilamentPhysics(

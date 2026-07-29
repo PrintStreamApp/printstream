@@ -10,8 +10,12 @@
  *
  * Self-contained: it reads/writes the same `['general-settings']` React Query
  * cache App.tsx owns (so a save here keeps the app-wide consumers in sync) and
- * derives edit permission from the cached auth bootstrap. Rendered only in the
- * Slicing settings subview, which is already gated on `canManageSettings`.
+ * derives edit permission from the cached auth bootstrap. Rendered from
+ * `EditorSettingsDialog`, which is NOT gated on `canManageSettings` — the card
+ * carries that gate itself: the shared default is read-only without the
+ * capability, while the per-device override is a personal preference anyone
+ * using the editor may set. The public editor omits it (no workspace to read a
+ * shared default from).
  */
 import { extractErrorMessage, type GeneralSettings, type UpdateGeneralSettingsInput } from '@printstream/shared'
 import { Alert, Option, Select } from '@mui/joy'

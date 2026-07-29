@@ -12,12 +12,12 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AuthAccessSection } from '../components/AuthAccessSection'
+import { pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
 import { NestedViewHeader } from '../components/NestedViewHeader'
 import { NotificationChannelsPanel } from '../components/NotificationChannelsPanel'
 import { NotificationTemplatesPanel } from '../components/NotificationTemplatesPanel'
 import { BridgeSettingsSection } from '../components/settings/BridgeManagementSection'
 import { NavTabOrderEditor } from '../components/settings/NavTabOrderEditor'
-import { SlicerDeveloperModeCard } from '../components/settings/SlicerDeveloperModeCard'
 import { PluginManagerSection } from '../components/PluginManagerSection'
 import { apiFetch } from '../lib/apiClient'
 import { authQueryKeys, resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
@@ -35,7 +35,7 @@ type LandingPageSettingSelectValue = AppLandingPageSetting
 type DeviceLandingPageSettingSelectValue = 'follow-default' | LandingPageSettingSelectValue
 type WidthSettingSelectValue = 'centered' | 'full-width'
 type DeviceWidthSettingSelectValue = 'follow-default' | WidthSettingSelectValue
-type SettingsSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'bridges' | 'slicing' | 'auth-users' | 'auth-roles'
+type SettingsSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'bridges' | 'auth-users' | 'auth-roles'
 
 /**
  * Settings shell. Uses a card index on the root route and dedicated
@@ -124,7 +124,6 @@ export function SettingsView({
   const showsTenantNotifications = hasTenantContext && canManageSettings
   const showsTenantLogs = hasTenantContext && canManageSettings
   const showsTenantBridges = hasTenantContext && canManageSettings && !managedBridge
-  const showsTenantSlicingPresets = hasTenantContext && canManageSettings
   const workspacePath = parseWorkspacePathname(location.pathname)
   const currentSubview = resolveSettingsSubview(workspacePath.appPathname)
   const settingsPath = (path = '/settings') => workspacePath.tenantSlug
@@ -136,7 +135,6 @@ export function SettingsView({
     showsTenantNotifications,
     showsTenantLogs,
     showsTenantBridges,
-    showsTenantSlicingPresets,
     canViewAuth
   })
   const authManagementStatusQuery = useQuery({
@@ -212,14 +210,6 @@ export function SettingsView({
             />
           )}
 
-          {showsTenantSlicingPresets && (
-            <SettingsOverviewCard
-              title="Slicing"
-              description="Slicing behaviour for this workspace; manage custom presets from the editor."
-              onAction={() => navigate(settingsPath('/settings/slicing'))}
-            />
-          )}
-
           {showsTenantLogs && (
             <SettingsOverviewCard
               title="Logs"
@@ -229,7 +219,7 @@ export function SettingsView({
           )}
         </Stack>
       ) : visibleSubview === 'auth-users' || visibleSubview === 'auth-roles' ? (
-        <Stack spacing={2}>
+        <Stack spacing={pageSectionStackSpacing}>
           <NestedViewHeader
             crumbs={[
               { label: 'Settings', onClick: () => navigate(settingsPath()) },
@@ -425,7 +415,9 @@ export function SettingsView({
           )}
         </Stack>
       ) : visibleSubview === 'authentication' ? (
-        <Stack spacing={1.5}>
+        // Section spacing, not card spacing: the provider panels and `AuthAccessSection`'s own
+        // sections stack as peers here, so they need the same gap as sections anywhere else.
+        <Stack spacing={pageSectionStackSpacing}>
           <NestedViewHeader
             crumbs={[
               { label: 'Settings', onClick: () => navigate(settingsPath()) },
@@ -436,31 +428,35 @@ export function SettingsView({
               : 'Authentication setup, support access, sessions, and shortcuts into user and role management.'}
           />
 
-          <StaticPluginSlot
-            name="settings.authenticationProviders"
-            context={{
-              authProviders,
-              authBootstrapReady: authBootstrapQuery.isSuccess,
-              authScopeKey,
-              canManageAuthProviders
-            }}
-          />
-
-          {showsAuthSetup && (!hasTenantContext || selfHosted) && (
+          {/* The provider panels are a CARD LIST, so they keep card spacing among themselves; the
+              section gap belongs between this group and the sections below, not inside it. */}
+          <Stack spacing={1.5}>
             <StaticPluginSlot
-              name="settings.authenticationSetup"
+              name="settings.authenticationProviders"
               context={{
                 authProviders,
-                authSetupRequired: authBootstrapQuery.data?.setupRequired ?? false,
                 authBootstrapReady: authBootstrapQuery.isSuccess,
-                authTenantId,
                 authScopeKey,
-                authHost: 'settings',
-                actorType: authBootstrapQuery.data?.actor.type ?? 'anonymous',
                 canManageAuthProviders
               }}
             />
-          )}
+
+            {showsAuthSetup && (!hasTenantContext || selfHosted) && (
+              <StaticPluginSlot
+                name="settings.authenticationSetup"
+                context={{
+                  authProviders,
+                  authSetupRequired: authBootstrapQuery.data?.setupRequired ?? false,
+                  authBootstrapReady: authBootstrapQuery.isSuccess,
+                  authTenantId,
+                  authScopeKey,
+                  authHost: 'settings',
+                  actorType: authBootstrapQuery.data?.actor.type ?? 'anonymous',
+                  canManageAuthProviders
+                }}
+              />
+            )}
+          </Stack>
 
           {canViewAuth && (
             <AuthAccessSection
@@ -511,17 +507,6 @@ export function SettingsView({
           <NotificationChannelsPanel />
           <NotificationTemplatesPanel />
         </Stack>
-      ) : visibleSubview === 'slicing' ? (
-        <Stack spacing={1.5}>
-          <NestedViewHeader
-            crumbs={[
-              { label: 'Settings', onClick: () => navigate(settingsPath()) },
-              { label: 'Slicing' }
-            ]}
-            description="Slicing behaviour for this workspace. Custom presets are managed from the editor’s settings."
-          />
-          <SlicerDeveloperModeCard />
-        </Stack>
       ) : (
         <Stack spacing={1.5}>
           <NestedViewHeader
@@ -545,7 +530,6 @@ function resolveSettingsSubview(pathname: string): SettingsSubview {
   if (pathname === '/settings/notifications') return 'notifications'
   if (pathname === '/settings/logs') return 'logs'
   if (pathname === '/settings/bridges') return 'bridges'
-  if (pathname === '/settings/slicing') return 'slicing'
   if (pathname === '/settings/auth/users') return 'auth-users'
   if (pathname === '/settings/auth/roles') return 'auth-roles'
   if (pathname === '/settings/general') return 'general'
@@ -560,7 +544,6 @@ function resolveVisibleTenantSettingsSubview(
     showsTenantNotifications: boolean
     showsTenantLogs: boolean
     showsTenantBridges: boolean
-    showsTenantSlicingPresets: boolean
     canViewAuth: boolean
   }
 ) {
@@ -571,7 +554,6 @@ function resolveVisibleTenantSettingsSubview(
   if (subview === 'notifications' && !options.showsTenantNotifications) return 'root'
   if (subview === 'logs' && !options.showsTenantLogs) return 'root'
   if (subview === 'bridges' && !options.showsTenantBridges) return 'root'
-  if (subview === 'slicing' && !options.showsTenantSlicingPresets) return 'root'
   return subview
 }
 

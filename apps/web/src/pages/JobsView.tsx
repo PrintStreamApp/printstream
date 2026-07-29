@@ -48,6 +48,7 @@ import { PrinterJobMediaStrip } from '../components/PrinterJobMediaStrip'
 import { type DirectorySortDirection, type DirectoryViewMode } from '../components/DirectoryControls'
 import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
 import { MultiSelectOption } from '../components/MultiSelectOption'
+import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
 import { sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
@@ -498,7 +499,7 @@ export function JobsView() {
   ]
 
   return (
-    <Stack spacing={2}>
+    <Stack spacing={pageSectionStackSpacing}>
       {!showNoConnectedBridgesPlaceholder && <SectionNav aria-label="Jobs sections" sections={sections} mb={0} />}
       <Typography level="h3" startDecorator={<HistoryRoundedIcon />}>Jobs</Typography>
       {authBootstrapQuery.isLoading && <Typography>Loading…</Typography>}
@@ -528,7 +529,12 @@ export function JobsView() {
       <PluginSlot name="jobs.sections" context={{ registerSection }} />
       <Box id="active" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
         <Stack spacing={1}>
-          <Typography level="title-md">In progress</Typography>
+          <PageSectionHeading
+            icon={<PrintRoundedIcon />}
+            title="In progress"
+            description="Slicing, uploading, and printing right now."
+            count={inProgressCount}
+          />
           {inProgressCount === 0 && (
             <EmptyState
               compact
@@ -671,7 +677,12 @@ export function JobsView() {
 
       <Box id="history" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
         <Stack spacing={1}>
-          <Typography level="title-md">Job history</Typography>
+          <PageSectionHeading
+            icon={<HistoryRoundedIcon />}
+            title="Job history"
+            description="Finished, failed, and cancelled jobs."
+            count={historyEntries.length}
+          />
           {historyEntries.length === 0 && (
             <EmptyState
               compact

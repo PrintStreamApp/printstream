@@ -3,16 +3,16 @@
  * plugin's routes and cards.
  *
  * Owns the presentational primitives that the orders/templates list, detail,
- * and card surfaces all reuse: section headings and empty states, the nested
- * detail header / not-found block, the order progress and selected-variant
- * chips, the order row action menu, the template item thumbnail, and the order
- * print plate thumbnail / name. `useLibraryPlateLabel` resolves a 3MF plate's
- * display name from the library plates index.
+ * and card surfaces all reuse: empty states, the nested detail header /
+ * not-found block, the order progress and selected-variant chips, the order row
+ * action menu, the template item thumbnail, and the order print plate thumbnail
+ * / name. `useLibraryPlateLabel` resolves a 3MF plate's display name from the
+ * library plates index.
  *
- * These are extracted from `OrdersView.tsx` unchanged; behavior, props, and
- * markup are preserved.
+ * Section headings are NOT here: every section title on this page goes through
+ * the app-wide `components/dashboard/PageSectionHeading`, so the orders sections
+ * carry the same icon / count / rule as Jobs and Calibration.
  */
-import { type ReactNode } from 'react'
 import {
   Box,
   Button,
@@ -43,26 +43,6 @@ import { EmptyState } from '../../../components/EmptyState'
 import { NestedViewHeader } from '../../../components/NestedViewHeader'
 import { SquareMediaFrame } from '../../../components/SquareMediaFrame'
 import { formatProjectFilamentLabel, getVisibleOrderSelectedVariants, stopEventPropagation } from '../ordersViewHelpers'
-
-export function SectionHeading({
-  title,
-  subtitle,
-  actions
-}: {
-  title: string
-  subtitle: string
-  actions?: ReactNode
-}) {
-  return (
-    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
-      <Stack spacing={0.25}>
-        <Typography level="title-lg">{title}</Typography>
-        <Typography level="body-sm" textColor="text.tertiary">{subtitle}</Typography>
-      </Stack>
-      {actions}
-    </Stack>
-  )
-}
 
 export function EmptyBlock({
   title,

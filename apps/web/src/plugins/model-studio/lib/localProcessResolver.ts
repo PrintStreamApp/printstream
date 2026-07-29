@@ -75,7 +75,10 @@ export function buildLocalProcessConfigResolver(input: {
       // that baseline was a user's change or drift the vendor would normalize away.
       return baseline
         ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides }
-        : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides }
+        // No preset resolved: `baseConfig` is a stand-in copy, so only the declared record can say
+        // what changed. Flagged explicitly — the payload cannot be told apart from an unmodified
+        // project otherwise. Same contract as the tenant route.
+        : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false }
     }
     if (slicingPresetProvenance(processProfileId) === 'builtin') {
       return resolveBuiltinProcess(processProfileId, targetId)

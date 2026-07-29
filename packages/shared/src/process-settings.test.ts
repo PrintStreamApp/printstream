@@ -229,10 +229,29 @@ test('resolvedProcessModifiedKeys counts final-vs-baseline diffs, healed by over
   assert.deepEqual(resolvedProcessModifiedKeys(response), ['layer_height'])
   // A session override back to the baseline value heals the badge to zero.
   assert.deepEqual(resolvedProcessModifiedKeys(response, { layer_height: '0.2' }), [])
-  // The 3MF record stands in when the baseline could not resolve (baseConfig === config).
+  // The 3MF record stands in when the baseline could not resolve. The route sends `baseConfig` as a
+  // stand-in copy of `config` there, which is byte-identical to a project that changed nothing —
+  // so `baselineResolved: false` is what tells the two apart. Without it, a stock project's
+  // declared-but-unchanged keys were reported as changes nobody could reset.
   assert.deepEqual(
-    resolvedProcessModifiedKeys({ config: { layer_height: '0.28' }, baseConfig: { layer_height: '0.28' }, overriddenKeys: ['layer_height'] }),
+    resolvedProcessModifiedKeys({
+      config: { layer_height: '0.28' },
+      baseConfig: { layer_height: '0.28' },
+      overriddenKeys: ['layer_height'],
+      baselineResolved: false
+    }),
     ['layer_height']
+  )
+  // ...and with a resolved baseline the same payload is what a STOCK project looks like: declared,
+  // but equal to the preset, so nothing is modified and nothing needs resetting.
+  assert.deepEqual(
+    resolvedProcessModifiedKeys({
+      config: { layer_height: '0.28' },
+      baseConfig: { layer_height: '0.28' },
+      overriddenKeys: ['layer_height'],
+      declaresOverrides: true
+    }),
+    []
   )
 })
 

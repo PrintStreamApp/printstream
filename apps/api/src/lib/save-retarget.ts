@@ -17,14 +17,14 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
-  applyProcessProfileToProjectSettings,
+  applyMachineRetargetToProjectSettings,
   canonicalBambuModelKey,
-  filamentPresetFamilyName,
   H2_DUAL_NOZZLE_MODEL_KEYS,
   hasDualNozzleMachineShape,
-  rebindProjectFilamentPhysics,
   retargetProjectSettingsToMachine,
+  selectFilamentRebindTargets,
   slicingPresetProvenance,
+  stripSliceInfoPrinterModelId,
   type FilamentSlotRebind,
   type SceneEditFilament,
   type SlicingManualProfileTarget,
@@ -38,17 +38,6 @@ import { readEntry, rewriteModelSettingsThreeMf, rewriteThreeMfEntries } from '.
 import { applyNozzleAssignmentToProjectSettings } from '@printstream/shared/three-mf'
 
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
-
-/**
- * Drops the stale `printer_model_id` metadata from a retargeted project's `slice_info.config`.
- * That entry describes the project's last slice on the SOURCE printer, so its `printer_model_id`
- * (e.g. `N1` → A1) otherwise lingers as a wrong compatibility chip on the H2D project. BambuStudio's
- * saved-but-not-sliced projects carry no `printer_model_id` either, so removing it matches BS and the
- * project reads as "needs a fresh slice for the new printer".
- */
-function stripSliceInfoPrinterModelId(sliceInfoXml: string): string {
-  return sliceInfoXml.replace(/[ \t]*<metadata\s+key="printer_model_id"\s+value="[^"]*"\s*\/>\s*\r?\n?/g, '')
-}
 
 /**
  * Author a resolved machine's COMPLETE settings into a baked project 3MF; returns the new path.
@@ -182,9 +171,14 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
     }
   }
 
-  let retargeted = retargetProjectSettingsToMachine(projectSettings, machineConfig, {
+  const printerModel = firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(machineFile.name)
+  // The machine step alone, so the rebind selection can read the RETARGETED filament layout (its
+  // variant widths and slot names come from the new machine, not the old one). The full apply
+  // below re-runs it — cheap, pure, and it keeps the shared composition the single definition of
+  // the operation's ORDER rather than open-coding half of it here.
+  const machineRetargeted = retargetProjectSettingsToMachine(projectSettings, machineConfig, {
     printerSettingsId: machineFile.name,
-    printerModel: firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(machineFile.name)
+    printerModel
   })
 
   // Bring the process (print/quality) settings over to the target printer's process too, so the
@@ -192,9 +186,6 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   // resolved (e.g. a project-embedded preset) must not block the machine retarget, which is what
   // makes the project openable/printable on the new machine.
   const processConfig = await resolveTargetProcessConfig(input)
-  if (processConfig) {
-    retargeted = applyProcessProfileToProjectSettings(retargeted, processConfig, input.retarget.processSettingOverrides ?? {})
-  }
 
   // Rebind each filament slot's PHYSICS to its preset on the NEW machine — BambuStudio's
   // machine-switch semantics (`PresetBundle::update_compatible` re-selects filament presets by
@@ -202,14 +193,22 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   // this the old machine's numeric columns ride along as fossils that read as phantom "changed
   // vs preset" markers forever (X1C's `pre_start_fan_time` 0 vs H2D's stock 2). Best-effort per
   // slot: an unresolvable slot keeps its current values rather than blocking the save.
-  const rebinds = await resolveFilamentSlotRebinds({
+  const filamentRebinds = await resolveFilamentSlotRebinds({
     tenantId: input.tenantId,
     slicerTargetId: input.slicerTargetId,
-    record: retargeted,
-    targetModel: firstString(machineConfig.printer_model) ?? deriveModelFromMachineName(machineFile.name),
+    record: machineRetargeted,
+    targetModel: printerModel,
     nozzleHint: machineFile.name
   })
-  if (rebinds) retargeted = rebindProjectFilamentPhysics(retargeted, rebinds)
+
+  const retargeted = applyMachineRetargetToProjectSettings(projectSettings, {
+    machineConfig,
+    printerSettingsId: machineFile.name,
+    printerModel,
+    processConfig,
+    processSettingOverrides: input.retarget.processSettingOverrides ?? {},
+    filamentRebinds
+  })
 
   const outDir = await mkdtemp(path.join(tmpdir(), 'printstream-retarget-'))
   const stagePath = path.join(outDir, 'stage-project-settings.3mf')
@@ -320,45 +319,29 @@ export async function resolveFilamentSlotRebinds(input: {
   /** The retargeted machine preset name; its nozzle token breaks family-variant ties. */
   nozzleHint: string
 }): Promise<FilamentSlotRebind[] | null> {
-  const names = Array.isArray(input.record.filament_settings_id)
-    ? input.record.filament_settings_id.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
-    : []
-  if (names.length === 0 || names.length !== (input.record.filament_settings_id as unknown[]).length) return null
-  const targetKey = canonicalBambuModelKey(input.targetModel)
-  if (!targetKey) return null
+  const targetModelKey = canonicalBambuModelKey(input.targetModel)
+  if (!targetModelKey) return null
   let candidates: SlicingPresetSummary[]
   try {
     const builtins = await slicerClient.profiles(input.slicerTargetId)
     const customs = await listCustomSlicingPresets(input.tenantId, builtins)
+    // Customs first: they outrank a builtin of the same name, matching the profile list.
     candidates = [...customs, ...builtins].filter((profile) => profile.kind === 'filament')
   } catch {
     return null
   }
-  if (candidates.length === 0) return null
-
-  const compatibleWithTarget = (profile: SlicingPresetSummary): boolean => {
-    if (profile.printerModels && profile.printerModels.length > 0) {
-      return profile.printerModels.some((model) => canonicalBambuModelKey(model) === targetKey)
-    }
-    // No declared models: judge by the name's own `@<printer>` suffix; a suffix-less preset
-    // ("Generic PLA") is machine-agnostic and always eligible.
-    const at = profile.name.indexOf(' @')
-    if (at < 0) return true
-    return canonicalBambuModelKey(profile.name.slice(at + 2).replace(/^BBL\s+/i, '').replace(/\s+\d+(?:\.\d+)?\s*nozzle.*$/i, '')) === targetKey
-  }
-  const nozzleToken = input.nozzleHint.match(/\d+(?:\.\d+)?\s*nozzle/i)?.[0]?.toLowerCase() ?? null
+  // The MATCHING is shared with the public editor's save — see `selectFilamentRebindTargets`.
+  // Only the config resolution below is host-specific.
+  const selections = selectFilamentRebindTargets({
+    filamentSettingsIds: input.record.filament_settings_id,
+    candidates,
+    targetModelKey,
+    nozzleHint: input.nozzleHint
+  })
+  if (!selections) return null
 
   const rebinds: FilamentSlotRebind[] = []
-  for (const name of names) {
-    const exact = candidates.find((profile) => profile.name === name)
-    let target: SlicingPresetSummary | null = exact && compatibleWithTarget(exact) ? exact : null
-    if (!target) {
-      const family = filamentPresetFamilyName(name)
-      const familyCandidates = candidates.filter((profile) => filamentPresetFamilyName(profile.name) === family && compatibleWithTarget(profile))
-      target = (nozzleToken ? familyCandidates.find((profile) => profile.name.toLowerCase().includes(nozzleToken)) : undefined)
-        ?? familyCandidates[0]
-        ?? null
-    }
+  for (const { slotName, target } of selections) {
     if (!target) {
       rebinds.push({ config: null })
       continue
@@ -376,7 +359,7 @@ export async function resolveFilamentSlotRebinds(input: {
     } catch {
       config = null
     }
-    rebinds.push({ config, settingsId: config && target.name !== name ? target.name : null })
+    rebinds.push({ config, settingsId: config && target.name !== slotName ? target.name : null })
   }
   return rebinds.some((rebind) => rebind.config != null || rebind.settingsId != null) ? rebinds : null
 }

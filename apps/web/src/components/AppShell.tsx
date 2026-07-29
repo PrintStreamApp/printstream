@@ -42,7 +42,6 @@ interface AppShellProps<TValue extends string> {
   workspaceChooserAvailable?: boolean
   onOpenWorkspaceChooser?: () => void
   workspaceChooserPending?: boolean
-  showMobileNavLogo?: boolean
   onLogoClick?: () => void
   contentHeaderTrailing?: ReactNode
   footerTrailing?: ReactNode
@@ -63,7 +62,6 @@ export function AppShell<TValue extends string>({
   workspaceChooserAvailable = false,
   onOpenWorkspaceChooser,
   workspaceChooserPending = false,
-  showMobileNavLogo = true,
   onLogoClick,
   contentHeaderTrailing,
   footerTrailing,
@@ -215,41 +213,9 @@ export function AppShell<TValue extends string>({
                     boxShadow: 'none'
                   }}
                 >
-                  {showMobileNavLogo ? (
-                    <Box
-                      component="button"
-                      type="button"
-                      aria-label="PrintStream home"
-                      onClick={handleLogoClick}
-                      sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        flexShrink: 0,
-                        background: 'transparent',
-                        border: 0,
-                        cursor: onLogoClick ? 'pointer' : 'default',
-                        pl: 0.25,
-                        pr: 0.375,
-                        py: 0,
-                        '&:focus-visible': {
-                          outline: '2px solid var(--printstream-section-nav-focus-ring)',
-                          outlineOffset: 2
-                        }
-                      }}
-                    >
-                      <Box
-                        component="img"
-                        src="/icon-512.png"
-                        alt=""
-                        sx={{
-                          display: 'block',
-                          width: 48,
-                          height: 'auto',
-                          objectFit: 'contain'
-                        }}
-                      />
-                    </Box>
-                  ) : null}
+                  {/* No logo in this bar. It cost ~54px of a 375px-wide dock — enough to push a
+                      tab off the end — and it duplicated the desktop header's home affordance
+                      while the bar's whole job is reaching the tabs. */}
                   {tabs.map((tab) => (
                     <Tab
                       key={tab.value}

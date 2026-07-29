@@ -6,7 +6,9 @@ import {
   Typography
 } from '@mui/joy'
 import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
+import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
+import PlaylistAddRoundedIcon from '@mui/icons-material/PlaylistAddRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import type {
@@ -401,25 +403,28 @@ export function OrdersView() {
         </Alert>
       )}
 
-      {!showingOrderDetail && (
-        <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ xs: 'stretch', lg: 'center' }}>
-          <Stack spacing={0.5}>
-            <Typography level="h3" startDecorator={<ChecklistRoundedIcon />}>Orders</Typography>
-          </Stack>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+      {/* Only the orders list carries the page heading. Templates and order detail are nested
+          views that head themselves with an `Orders /` breadcrumb back to this route. */}
+      {!showingOrderDetail && currentSection === 'orders' && (
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }}>
+          <Typography level="h3" startDecorator={<ChecklistRoundedIcon />}>Orders</Typography>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
             <Button
               size="sm"
-              variant={currentSection === 'orders' ? 'solid' : 'soft'}
-              onClick={() => navigate(ordersRoute('/orders'))}
-            >
-              Orders
-            </Button>
-            <Button
-              size="sm"
-              variant={currentSection === 'templates' ? 'solid' : 'soft'}
+              variant="soft"
+              color="neutral"
+              startDecorator={<DescriptionRoundedIcon />}
               onClick={() => navigate(ordersRoute('/orders/templates'))}
             >
               Templates
+            </Button>
+            <Button
+              size="sm"
+              startDecorator={<PlaylistAddRoundedIcon />}
+              disabled={!canManageOrders || templates.length === 0}
+              onClick={() => setCreatingOrderFor(templates[0] ?? null)}
+            >
+              New order
             </Button>
           </Stack>
         </Stack>
@@ -542,6 +547,7 @@ export function OrdersView() {
                 setTemplatesPage(0)
                 setTemplatesPageSize(value)
               }}
+              onBack={() => navigate(ordersRoute('/orders'))}
               onCreateTemplate={() => setCreatingTemplate(true)}
               onCreateOrder={(template) => setCreatingOrderFor(template)}
               onEditTemplate={setEditingTemplate}

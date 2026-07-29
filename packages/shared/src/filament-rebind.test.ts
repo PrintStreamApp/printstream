@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyFilamentSlotOverrides, filamentPresetFamilyName, rebindProjectFilamentPhysics } from './filament-rebind.js'
+import { applyFilamentSlotOverrides, filamentPresetFamilyName, rebindProjectFilamentPhysics, selectFilamentRebindTargets } from './filament-rebind.js'
 
 test('filamentPresetFamilyName strips the machine variant suffix (the BambuStudio alias)', () => {
   assert.equal(filamentPresetFamilyName('Bambu PETG HF @BBL X1C'), 'Bambu PETG HF')
@@ -171,4 +171,61 @@ test('the tune-edit record survives a subsequent machine retarget (the passes co
   }])
   assert.deepEqual(retargeted.nozzle_temperature, ['270'], 'the recorded tune edit outranks the new preset')
   assert.deepEqual(retargeted.pre_start_fan_time, ['2'], 'the unrecorded fossil rebinds to stock')
+})
+
+// The rebind SELECTION, shared so the api's save and the public editor's browser-side save cannot
+// disagree about where a slot lands. Both then resolve the chosen preset's config their own way.
+test('selectFilamentRebindTargets keeps a compatible exact preset', () => {
+  const selections = selectFilamentRebindTargets({
+    filamentSettingsIds: ['Bambu PLA Basic @BBL H2D'],
+    candidates: [{ id: 'a', name: 'Bambu PLA Basic @BBL H2D', printerModels: ['H2D'] }],
+    targetModelKey: 'H2D',
+    nozzleHint: 'Bambu Lab H2D 0.4 nozzle'
+  })
+  assert.equal(selections?.[0]?.target?.name, 'Bambu PLA Basic @BBL H2D')
+})
+
+test('selectFilamentRebindTargets moves an incompatible slot to its family variant, nozzle-matched', () => {
+  const selections = selectFilamentRebindTargets({
+    filamentSettingsIds: ['Bambu PLA Basic @BBL X1C'],
+    candidates: [
+      { id: 'a', name: 'Bambu PLA Basic @BBL X1C', printerModels: ['X1C'] },
+      { id: 'b', name: 'Bambu PLA Basic @BBL H2D 0.2 nozzle', printerModels: ['H2D'] },
+      { id: 'c', name: 'Bambu PLA Basic @BBL H2D 0.4 nozzle', printerModels: ['H2D'] }
+    ],
+    targetModelKey: 'H2D',
+    nozzleHint: 'Bambu Lab H2D 0.4 nozzle'
+  })
+  assert.equal(selections?.[0]?.target?.name, 'Bambu PLA Basic @BBL H2D 0.4 nozzle')
+})
+
+test('selectFilamentRebindTargets leaves a slot alone when its family has no variant for the target', () => {
+  const selections = selectFilamentRebindTargets({
+    filamentSettingsIds: ['Some Exotic PA-CF @BBL X1C'],
+    candidates: [{ id: 'a', name: 'Bambu PLA Basic @BBL H2D', printerModels: ['H2D'] }],
+    targetModelKey: 'H2D',
+    nozzleHint: 'Bambu Lab H2D 0.4 nozzle'
+  })
+  assert.equal(selections?.[0]?.target, null)
+})
+
+test('selectFilamentRebindTargets treats a suffix-less preset as machine-agnostic', () => {
+  // "Generic PLA" declares no printers and carries no `@<printer>` suffix, so it is eligible for
+  // every machine — narrowing it would strand every project using one.
+  const selections = selectFilamentRebindTargets({
+    filamentSettingsIds: ['Generic PLA'],
+    candidates: [{ id: 'a', name: 'Generic PLA' }],
+    targetModelKey: 'H2D',
+    nozzleHint: 'Bambu Lab H2D 0.4 nozzle'
+  })
+  assert.equal(selections?.[0]?.target?.name, 'Generic PLA')
+})
+
+test('selectFilamentRebindTargets refuses a partly-blank slot list rather than mis-columning it', () => {
+  assert.equal(selectFilamentRebindTargets({
+    filamentSettingsIds: ['Bambu PLA Basic @BBL H2D', ''],
+    candidates: [{ id: 'a', name: 'Bambu PLA Basic @BBL H2D', printerModels: ['H2D'] }],
+    targetModelKey: 'H2D',
+    nozzleHint: 'Bambu Lab H2D 0.4 nozzle'
+  }), null)
 })

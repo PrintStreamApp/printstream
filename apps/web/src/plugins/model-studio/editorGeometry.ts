@@ -98,7 +98,11 @@ export const PAINT_CHANNEL_SPECS: Record<TrianglePaintChannel, {
  * measure) detaches the gizmo and drives its own floating panel instead. Single source of
  * truth for both the detach decision and whether the readout renders, so the two can't drift.
  */
-export function isTransformGizmoMode(mode: GizmoMode): boolean {
+/** The three modes that put the move/rotate/scale gizmo on the selection and show its readout. */
+export type TransformGizmoMode = Extract<GizmoMode, 'translate' | 'rotate' | 'scale'>
+
+/** Narrows to {@link TransformGizmoMode} so callers can hand the mode straight to the readout. */
+export function isTransformGizmoMode(mode: GizmoMode): mode is TransformGizmoMode {
   return mode === 'translate' || mode === 'rotate' || mode === 'scale'
 }
 

@@ -146,6 +146,8 @@ type ResolveResponse = {
   overriddenKeys?: string[]
   /** Whether the 3MF declared a changed-from-system record — see `ResolveProcessConfigResponse`. */
   declaresOverrides?: boolean
+  /** Whether `baseConfig` is a real resolved preset — see `ResolveProcessConfigResponse`. */
+  baselineResolved?: boolean
 }
 
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
@@ -174,6 +176,12 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
    * recorded nothing, where the value diff is all we have.
    */
   const [declaresOverrides, setDeclaresOverrides] = useState(false)
+  /**
+   * False when the response carried no `baseConfig` — the named preset is not installed, so the
+   * baseline is a copy of the profile's own values and a value diff can only ever be empty. The
+   * declared record is then the only evidence of a change there is.
+   */
+  const [baselineResolved, setBaselineResolved] = useState(true)
   const [config, setConfig] = useState<ProcessConfig>({})
   // PER-OBJECT mode (baseOverlay present): the keys EXPLICITLY set as per-object overrides, tracked
   // apart from value equality. BambuStudio lists a per-object setting as "set" whenever it is present
@@ -238,6 +246,8 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           // "parent preset" of its own — the distinction does not apply here.
           setParentBaseline(null)
           setBakedKeys(new Set())
+          // Per-object: the inherited config IS the baseline, so it always resolves.
+          setBaselineResolved(true)
           // Every key the object explicitly overrides is "set", value-matching or not.
           setExplicitKeys(new Set(Object.keys(initialOverrides)))
           setConfig({ ...globalEffective, ...initialOverrides })
@@ -250,6 +260,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
             : null)
           setBakedKeys(new Set(response.overriddenKeys ?? []))
           setDeclaresOverrides(response.declaresOverrides === true)
+          setBaselineResolved(response.baselineResolved !== false)
           setExplicitKeys(new Set())
           setConfig({ ...effective, ...initialOverrides })
         }
@@ -274,9 +285,16 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const accessor = useMemo(() => createProcessConfigAccessor(config), [config])
 
   /**
-   * True when a key differs from its preset baseline — either a resettable value diff, or a
-   * 3MF-baked override whose baseline value couldn't be resolved (`bakedKeys`, still untouched
-   * relative to the effective config). Surfaces both in-session edits and sealed-in overrides.
+   * True when this project/session changed the key relative to the preset in use.
+   *
+   * The value must actually DIFFER from the preset — the same test the reset affordance uses — so a
+   * key marked modified can always be reset and "Reset all" always clears the marks. BambuStudio
+   * agrees: its modified marker is `PresetCollection::dirty_options`, a value diff against the
+   * selected preset. The declared record decides which of the file's values SURVIVE loading
+   * (`update_non_diff_values_to_base_config`), not what counts as changed.
+   *
+   * The exception is a preset that did not resolve (`baselineResolved` false): there is nothing to
+   * diff against, so the record is the only evidence of a change and is taken at its word.
    * Declared here (before `pageHasContent`) so the tab-visibility and "changed only" filter can use it.
    */
   const isModified = (key: string): boolean => {
@@ -285,15 +303,15 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     // inherited one (see `explicitKeys`) — it is still an override.
     if (perObjectMode && explicitKeys.has(key)) return true
     const option = processSettingsCatalog.options[key]
-    // The file said what it changed, so believe it: declared keys are modified, and an in-session
-    // edit is modified because the user just made it. A difference from the preset that is neither
-    // is version drift between the preset and the file — which BambuStudio silently normalizes
-    // away, and which we used to badge as the user's own change.
-    if (declaresOverrides) {
-      return bakedKeys.has(key) || !processConfigValuesEqual(sliceBase[key], config[key], option)
-    }
-    if (!processConfigValuesEqual(baseConfig[key], config[key], option)) return true
-    return bakedKeys.has(key) && processConfigValuesEqual(config[key], sliceBase[key], option)
+    if (!baselineResolved) return bakedKeys.has(key)
+    if (processConfigValuesEqual(baseConfig[key], config[key], option)) return false
+    // With a record present, an undeclared difference is version drift between the preset and the
+    // file — which BambuStudio normalizes away, not the user's change. An in-session edit always
+    // counts, because the user just made it.
+    if (declaresOverrides
+      && !bakedKeys.has(key)
+      && processConfigValuesEqual(sliceBase[key], config[key], option)) return false
+    return true
   }
 
   /** True when a key's VALUE differs from the baseline (the orange "changed" state, vs the plain

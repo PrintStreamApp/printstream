@@ -19,6 +19,7 @@ import { Router } from 'express'
 import {
   parseBuiltinSlicingPresetId,
   resolveFilamentConfigRequestSchema,
+  resolveMachineConfigRequestSchema,
   resolveProcessConfigRequestSchema,
   type ResolveFilamentConfigResponse,
   type ResolveProcessConfigResponse
@@ -99,6 +100,27 @@ publicSlicingRouter.post('/resolve-filament', async (request, response) => {
   if (!config) throw notFound('Filament profile could not be resolved')
   const body: ResolveFilamentConfigResponse = { config, baseConfig: config, overriddenKeys: [] }
   response.json(body)
+})
+
+/**
+ * Sibling of {@link resolve-process} for a BUILTIN machine preset, so the public editor can retarget
+ * a project to a different printer while SAVING it — the settings rewrite runs in the browser (the
+ * file never leaves it), but the target machine's full preset lives in the slicer image and can only
+ * come from here. Builtin-only for the same reason as the others: a custom machine preset is
+ * workspace data.
+ *
+ * Unlike the tenant route there is no parent-preset baseline in the response: the browser uses this
+ * to AUTHOR settings, not to diff them, so `baseConfig` would be dead weight on a multi-hundred-key
+ * body. Counterpart: `apps/web/src/plugins/model-studio/lib/localMachineRetarget.ts`.
+ */
+publicSlicingRouter.post('/resolve-machine', async (request, response) => {
+  const parsed = resolveMachineConfigRequestSchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid resolve request')
+  const builtin = parseBuiltinSlicingPresetId(parsed.data.machineProfileId)
+  if (!builtin || builtin.kind !== 'machine') throw badRequest('Only built-in printer presets can be resolved here')
+  const config = await slicerClient.resolveMachineConfig(parsed.data.targetId ?? null, { source: 'builtin', name: builtin.name })
+  if (!config) throw notFound('Printer profile could not be resolved')
+  response.json({ config, name: builtin.name })
 })
 
 /**

@@ -20,7 +20,13 @@ import {
   Stack,
   Typography
 } from '@mui/joy'
+import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
+import PeopleRoundedIcon from '@mui/icons-material/PeopleRounded'
+import ScheduleRoundedIcon from '@mui/icons-material/ScheduleRounded'
+import ShieldRoundedIcon from '@mui/icons-material/ShieldRounded'
+import SmartToyRoundedIcon from '@mui/icons-material/SmartToyRounded'
+import SupportAgentRoundedIcon from '@mui/icons-material/SupportAgentRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import {
   AUTH_RECENT_VERIFICATION_REQUIRED_MESSAGE,
@@ -72,6 +78,7 @@ import { type DirectoryViewMode } from './DirectoryControls'
 import { DirectoryPrimaryToolbar } from './DirectoryToolbar'
 import { MultiSelectOption } from './MultiSelectOption'
 import { useMobileViewport } from './useMobileViewport'
+import { PageSectionHeading, pageSectionStackSpacing } from './dashboard/PageSectionHeading'
 import { SectionNav } from './dashboard/SectionNav'
 import { sectionScrollMarginTop } from './dashboard/SectionNav.constants'
 import { ProviderRecentVerificationDialog } from './ProviderRecentVerificationDialog'
@@ -920,26 +927,18 @@ export function AuthAccessSection({
   }
 
   return (
-    <Stack spacing={1.5}>
+    <Stack spacing={pageSectionStackSpacing}>
       <>
           {showSectionNav && <SectionNav aria-label="Authentication sections" sections={sections} mb={0} />}
 
           {(showSessionSecurity || showAuthHealth || showManagementOverview) && (
             <Box id="session-security" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
               <Stack spacing={1.25}>
-                <Stack
-                  direction={{ xs: 'column', md: 'row' }}
-                  spacing={1.5}
-                  justifyContent="space-between"
-                  alignItems={{ xs: 'flex-start', md: 'center' }}
-                >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography level="title-md">Session security</Typography>
-                    <Typography level="body-sm" textColor="text.tertiary">
-                      Review authentication health and browser-session policy.
-                    </Typography>
-                  </Box>
-                </Stack>
+                <PageSectionHeading
+                  icon={<ShieldRoundedIcon />}
+                  title="Session security"
+                  description="Review authentication health and browser-session policy."
+                />
 
                 <Card variant="outlined">
                   <CardContent>
@@ -977,24 +976,16 @@ export function AuthAccessSection({
           {showSessionDuration && (
             <Box id="session-duration" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
               <Stack spacing={1.25}>
-                <Stack
-                  direction={{ xs: 'column', md: 'row' }}
-                  spacing={1.5}
-                  justifyContent="space-between"
-                  alignItems={{ xs: 'flex-start', md: 'center' }}
-                >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography level="title-md">Session duration</Typography>
-                    <Typography level="body-sm" textColor="text.tertiary">
-                      Choose how long browser sessions stay active without user activity.
-                    </Typography>
-                  </Box>
-                  {status && (
+                <PageSectionHeading
+                  icon={<ScheduleRoundedIcon />}
+                  title="Session duration"
+                  description="Choose how long browser sessions stay active without user activity."
+                  actions={status ? (
                     <Chip size="sm" variant="soft" color="primary">
                       Idle timeout: {formatSessionDurationLabel(status.sessionDuration)}
                     </Chip>
-                  )}
-                </Stack>
+                  ) : undefined}
+                />
 
                 <Card variant="outlined">
                   <CardContent>
@@ -1139,23 +1130,17 @@ export function AuthAccessSection({
           {showUsers && (
             <Box id="users" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
               <Stack spacing={1.25}>
-                <Stack spacing={0.5}>
-                  <Stack
-                    direction="row"
-                    spacing={1}
-                    useFlexGap
-                    justifyContent="space-between"
-                    alignItems="center"
-                    sx={{ flexWrap: 'wrap' }}
-                  >
-                    <Typography level="title-md">Users</Typography>
-                    {canCreateUsers && (
-                      <Button size="sm" variant="solid" color="primary" onClick={openCreateUserDialog}>
-                        Create user
-                      </Button>
-                    )}
-                  </Stack>
-                </Stack>
+                <PageSectionHeading
+                  icon={<PeopleRoundedIcon />}
+                  title="Users"
+                  description="People who can sign in to this workspace, and the roles they hold."
+                  count={status?.counts.users ?? users.length}
+                  actions={canCreateUsers ? (
+                    <Button size="sm" variant="solid" color="primary" onClick={openCreateUserDialog}>
+                      Create user
+                    </Button>
+                  ) : undefined}
+                />
 
                 {canViewUsers && !usersQuery.isLoading && !usersQuery.error && users.length > 0 && (
                   <Stack spacing={1.25}>
@@ -1391,39 +1376,30 @@ export function AuthAccessSection({
           {showRoles && (
             <Box id="roles" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
               <Stack spacing={1.25}>
-                <Stack
-                  direction={{ xs: 'column', md: 'row' }}
-                  spacing={1.5}
-                  justifyContent="space-between"
-                  alignItems={{ xs: 'flex-start', md: 'center' }}
-                >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography level="title-md">{rolesSectionTitle}</Typography>
-                    <Typography level="body-sm" textColor="text.tertiary">
-                      {rolesSectionDescription}
-                    </Typography>
-                  </Box>
-
-                  <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                    <Chip size="sm" variant="soft" color="primary">
-                      {status?.counts.groups ?? groups.length} role{(status?.counts.groups ?? groups.length) === 1 ? '' : 's'}
-                    </Chip>
-                    <Chip size="sm" variant="soft" color="neutral">
-                      {permissionDefinitions.length} permission{permissionDefinitions.length === 1 ? '' : 's'}
-                    </Chip>
-                    {canCreateRoles && (
-                      <Button
-                        size="sm"
-                        variant="solid"
-                        color="primary"
-                        onClick={openCreateRole}
-                        disabled={permissionDefinitions.length === 0}
-                      >
-                        Create role
-                      </Button>
-                    )}
-                  </Stack>
-                </Stack>
+                <PageSectionHeading
+                  icon={<AdminPanelSettingsRoundedIcon />}
+                  title={rolesSectionTitle}
+                  description={rolesSectionDescription}
+                  count={status?.counts.groups ?? groups.length}
+                  actions={(
+                    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+                      <Chip size="sm" variant="soft" color="neutral">
+                        {permissionDefinitions.length} permission{permissionDefinitions.length === 1 ? '' : 's'}
+                      </Chip>
+                      {canCreateRoles && (
+                        <Button
+                          size="sm"
+                          variant="solid"
+                          color="primary"
+                          onClick={openCreateRole}
+                          disabled={permissionDefinitions.length === 0}
+                        >
+                          Create role
+                        </Button>
+                      )}
+                    </Stack>
+                  )}
+                />
 
               {statusLoading && !status && (
                 <Typography level="body-sm" textColor="text.tertiary">
@@ -1486,29 +1462,17 @@ export function AuthAccessSection({
           {showServiceAccounts && (
             <Box id="service-accounts" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
               <Stack spacing={1.25}>
-                <Stack
-                  direction={{ xs: 'column', md: 'row' }}
-                  spacing={1.5}
-                  justifyContent="space-between"
-                  alignItems={{ xs: 'flex-start', md: 'center' }}
-                >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography level="title-md">Service accounts</Typography>
-                    <Typography level="body-sm" textColor="text.tertiary">
-                      Create machine identities with role-based permissions for automation and integrations.
-                    </Typography>
-                  </Box>
-                  <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-                    <Chip size="sm" variant="soft" color="neutral">
-                      {status?.counts.serviceAccounts ?? serviceAccounts.length} account{(status?.counts.serviceAccounts ?? serviceAccounts.length) === 1 ? '' : 's'}
-                    </Chip>
-                    {canCreateServiceAccounts && (
-                      <Button size="sm" variant="solid" color="primary" onClick={openCreateServiceAccount}>
-                        Create service account
-                      </Button>
-                    )}
-                  </Stack>
-                </Stack>
+                <PageSectionHeading
+                  icon={<SmartToyRoundedIcon />}
+                  title="Service accounts"
+                  description="Create machine identities with role-based permissions for automation and integrations."
+                  count={status?.counts.serviceAccounts ?? serviceAccounts.length}
+                  actions={canCreateServiceAccounts ? (
+                    <Button size="sm" variant="solid" color="primary" onClick={openCreateServiceAccount}>
+                      Create service account
+                    </Button>
+                  ) : undefined}
+                />
 
                 {serviceAccountRevokeError && (
                   <Alert color="danger" variant="soft">
@@ -1634,22 +1598,16 @@ export function AuthAccessSection({
           {showSupportControls && hasTenantScopedSettings && (
             <Box id="support-access" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
               <Stack spacing={1.25}>
-                <Stack
-                  direction={{ xs: 'column', md: 'row' }}
-                  spacing={1.5}
-                  justifyContent="space-between"
-                  alignItems={{ xs: 'flex-start', md: 'center' }}
-                >
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography level="title-md">Support access</Typography>
-                    <Typography level="body-sm" textColor="text.tertiary">
-                      Choose whether support users can enter this workspace and what they can do while helping.
-                    </Typography>
-                  </Box>
-                  <Chip size="sm" variant="soft" color={supportAccessEnabled ? 'success' : 'warning'}>
-                    {supportAccessEnabled ? 'Enabled' : 'Disabled'}
-                  </Chip>
-                </Stack>
+                <PageSectionHeading
+                  icon={<SupportAgentRoundedIcon />}
+                  title="Support access"
+                  description="Choose whether support users can enter this workspace and what they can do while helping."
+                  actions={(
+                    <Chip size="sm" variant="soft" color={supportAccessEnabled ? 'success' : 'warning'}>
+                      {supportAccessEnabled ? 'Enabled' : 'Disabled'}
+                    </Chip>
+                  )}
+                />
 
                 {supportAccessError && (
                   <Alert color="danger" variant="soft">

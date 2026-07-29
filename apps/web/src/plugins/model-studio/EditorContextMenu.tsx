@@ -295,6 +295,14 @@ export function EditorContextMenu({
             <ListItemDecorator><PrintDisabledRoundedIcon /></ListItemDecorator>
             Skip printing{suffix}
           </MenuItem>
+          <ListDivider />
+          {/* Centring has real N-object semantics — the selection moves as a unit and keeps its
+              relative layout (BambuStudio's `Selection::center`), so it belongs here rather than
+              being one of the per-object placement items below. */}
+          <MenuItem onClick={() => { onCenterOnPlate(); onClose() }}>
+            <ListItemDecorator><CenterFocusStrongRoundedIcon /></ListItemDecorator>
+            Center on plate{suffix}
+          </MenuItem>
           {moveToPlateItems}
           <ListDivider />
           {deleteItem}

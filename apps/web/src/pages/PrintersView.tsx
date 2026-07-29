@@ -1,6 +1,8 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { Alert, Box, Button, ButtonGroup, CircularProgress, Divider, FormControl, IconButton, Menu, MenuItem, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import AddIcon from '@mui/icons-material/Add'
+import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
+import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -30,6 +32,7 @@ import { usePromptDialog } from '../components/PromptDialogProvider'
 import { type DirectorySortDirection, type DirectoryViewMode } from '../components/DirectoryControls'
 import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
 import { MultiSelectOption } from '../components/MultiSelectOption'
+import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
 import { SliceFileModal } from '../components/library/SliceFileModal'
 import { buildCreateSlicingJobBody } from '../lib/libraryViewHelpers'
 import { SliceThenPrintModal } from '../components/library/SliceThenPrintModal'
@@ -1037,7 +1040,7 @@ export function PrintersView() {
       )}
 
       {authBootstrapQuery.isSuccess && canViewPrinters && (singlePrinterView ? (
-        <Stack spacing={2}>
+        <Stack spacing={pageSectionStackSpacing}>
           {!printersQuery.isLoading && !printersQuery.error && !selectedPrinter && (
             <EmptyState
               icon={<Printer3dRoundedIcon />}
@@ -1075,7 +1078,11 @@ export function PrintersView() {
 
           {selectedPrinter && (
             <Stack spacing={1.5}>
-              <Typography level="title-lg">Print stats</Typography>
+              <PageSectionHeading
+                icon={<QueryStatsRoundedIcon />}
+                title="Print stats"
+                description="Totals and runtime recorded for this printer."
+              />
 
               {printerStatsQuery.isLoading && (
                 <Stack direction="row" spacing={1} alignItems="center">
@@ -1098,7 +1105,12 @@ export function PrintersView() {
 
           {selectedPrinter && (
             <Stack spacing={1}>
-              <Typography level="title-lg">Print history</Typography>
+              <PageSectionHeading
+                icon={<HistoryRoundedIcon />}
+                title="Print history"
+                description="Finished, failed, and cancelled prints on this printer."
+                count={selectedPrinterJobs.length}
+              />
 
               {jobsQuery.isLoading && <Typography>Loading history…</Typography>}
               {jobsQuery.error && <Typography color="danger">{(jobsQuery.error as Error).message}</Typography>}

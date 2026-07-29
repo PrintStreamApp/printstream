@@ -158,8 +158,18 @@ export interface ResolvedFilamentState {
    * `baseline` when no parent resolved, which collapses the distinction rather than inventing one.
    */
   parentBaseline: ProcessConfig
-  /** Fallback changed-keys record (`different_settings_to_system`) when the parent didn't resolve. */
+  /** The 3MF's changed-from-system record for this slot (`different_settings_to_system`). */
   bakedKeys: string[]
+  /** See {@link ResolveFilamentConfigResponse.declaresOverrides} — carried so the badge can apply it. */
+  declaresOverrides: boolean
+  /**
+   * Whether a real PRESET resolved to diff against. False when the response carried no `baseConfig`
+   * (the named preset is not installed), in which case {@link baseline} is just a copy of the
+   * profile's own values and a value diff can only ever be empty — so the declared record is the
+   * only evidence of a change there is. Consumers must branch on this rather than silently
+   * reporting "nothing changed" for a project whose preset went missing.
+   */
+  baselineResolved: boolean
   /** Per-key original vector length (baseline's shape preferred, own config's as fallback). */
   shapes: Record<string, number>
   /**
@@ -196,6 +206,8 @@ export function prepareResolvedFilamentState(response: ResolveFilamentConfigResp
     baseline,
     parentBaseline,
     bakedKeys: response.overriddenKeys ?? [],
+    declaresOverrides: response.declaresOverrides === true,
+    baselineResolved: response.baselineResolved !== false,
     shapes,
     raw: { effective: rawEffective, baseline: rawBaseline, parentBaseline: rawParentBaseline }
   }
@@ -317,18 +329,29 @@ export function resolvedFilamentModifiedKeys(state: ResolvedFilamentState, overr
   // An override is whatever the dialog emitted for that key (a scalar, which broadcasts to every
   // variant at apply time); untouched keys keep their per-variant shape.
   const finalConfig = { ...state.raw.effective, ...overrides }
-  const keys = new Set<string>()
+  const declared = new Set(state.bakedKeys)
+  // No preset resolved, so there is no value to diff against: the file's own record is the only
+  // evidence a setting was changed, and it is taken at its word.
+  if (!state.baselineResolved) {
+    return [...declared].filter((key) => FILAMENT_SETTING_KEYS.has(key) && !isFilamentIdentitySettingKey(key))
+  }
+  const keys: string[] = []
   for (const key of Object.keys(finalConfig)) {
     if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
-    if (!filamentVariantValuesEqual(state.raw.baseline[key], finalConfig[key], filamentSettingsCatalog.options[key])) keys.add(key)
+    const option = filamentSettingsCatalog.options[key]
+    // BambuStudio's own modified marker is a VALUE diff against the selected preset
+    // (`PresetCollection::dirty_options`); the declared record decides which of the file's values
+    // survive loading, not what counts as changed. Flagging a declared key whose value equals the
+    // preset is what put three un-resettable "changes" on every material of a stock project.
+    if (filamentVariantValuesEqual(state.raw.baseline[key], finalConfig[key], option)) continue
+    // With a record present, an UNDECLARED difference is drift BambuStudio normalizes away at load
+    // — not this project's change. A key the user edited this session always counts.
+    if (state.declaresOverrides
+      && !declared.has(key)
+      && filamentVariantValuesEqual(state.raw.effective[key], finalConfig[key], option)) continue
+    keys.push(key)
   }
-  // Record-marked keys stay flagged while untouched relative to the embedded config (parent
-  // baseline unresolved), mirroring the dialog's bakedKeys condition.
-  for (const key of state.bakedKeys) {
-    if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
-    if (filamentVariantValuesEqual(finalConfig[key], state.raw.effective[key], filamentSettingsCatalog.options[key])) keys.add(key)
-  }
-  return [...keys]
+  return keys
 }
 
 /**
@@ -398,4 +421,17 @@ export interface ResolveFilamentConfigResponse {
    * have — which is why this is not just `overriddenKeys.length === 0`.
    */
   declaresOverrides?: boolean
+  /**
+   * Whether {@link baseConfig} is a REAL preset resolved for this slot, rather than a copy of
+   * `config` standing in because the named preset is not installed here.
+   *
+   * The distinction cannot be recovered from the payload — a project that changed nothing and a
+   * project whose preset went missing both send `baseConfig` deep-equal to `config` — and
+   * conflating them is what put three un-resettable "changes" on every material of a stock project.
+   * When true, a value diff is meaningful and is the modified marker (BambuStudio's
+   * `dirty_options`). When false there is nothing to diff against, so {@link overriddenKeys} is the
+   * only evidence of a change and is taken at its word. Absent means true, so a producer that
+   * always resolves needs no change.
+   */
+  baselineResolved?: boolean
 }

@@ -1,8 +1,12 @@
 /**
  * Retargeting a 3MF project's `project_settings.config` to a different Bambu machine —
  * the "change the project's printer" operation, done by rewriting settings rather than
- * re-slicing. Pure functions (no I/O), shared by the API (the editor's save-as-a-different-
- * printer flow) and the slicer (the estimate-mode cross-model switch's topology repair).
+ * re-slicing. Pure functions (no I/O), shared by three callers: the API (the workspace editor's
+ * save-as-a-different-printer flow), the browser (the public editor's save, which never uploads
+ * the file), and the slicer (the estimate-mode cross-model switch's topology repair).
+ *
+ * {@link applyMachineRetargetToProjectSettings} is the whole operation in one call and is what the
+ * two editor hosts share; the individual steps stay exported for the slicer's narrower repair.
  *
  * Update resilience: {@link retargetProjectSettingsToMachine} overwrites **every** key the
  * resolved machine profile defines (minus profile metadata), so when BambuStudio adds new
@@ -15,6 +19,7 @@
 import { processSettingsCatalog } from './process-settings.js'
 import { repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
 import { buildFilamentVariantRows } from './filament-variant-index.js'
+import { rebindProjectFilamentPhysics, type FilamentSlotRebind } from './filament-rebind.js'
 
 export type ProfileRecord = Record<string, unknown>
 
@@ -157,6 +162,73 @@ export function applyProcessProfileToProjectSettings(
     next[key] = cloneValue(value)
   }
   return next
+}
+
+/**
+ * Everything a machine retarget needs, already RESOLVED. Assembling this is where the two editor
+ * hosts differ — the api resolves through the slicer plus the tenant's preset files, the browser
+ * through `/api/public/slicing/resolve-*` — and applying it is where they must not.
+ */
+export interface MachineRetargetPlan {
+  /** Fully-resolved machine preset for the TARGET printer. */
+  machineConfig: ProfileRecord
+  /** Machine preset name, persisted as `printer_settings_id`. */
+  printerSettingsId: string
+  printerModel: string
+  /**
+   * Fully-resolved process preset for the target, when one could be resolved. Absent/null leaves
+   * the project's embedded process alone — deliberate: an unresolvable process (e.g. a project
+   * preset, which has no separate file) must not block the machine retarget, which is what makes
+   * the project openable on the new printer at all.
+   */
+  processConfig?: ProfileRecord | null
+  /** The session's process overrides, applied on top of `processConfig`. */
+  processSettingOverrides?: Record<string, string | string[]>
+  /**
+   * Per-slot filament rebinds, index-aligned with the project's filament list. Absent/null keeps
+   * every slot's current values — the rebind is an improvement pass, never a requirement.
+   */
+  filamentRebinds?: FilamentSlotRebind[] | null
+}
+
+/**
+ * Apply a resolved {@link MachineRetargetPlan} to a project's parsed `project_settings.config`.
+ *
+ * The one definition of what "save this project for a different printer" DOES, shared so the two
+ * hosts cannot drift: the api runs it over the 3MF it just baked, the browser over the 3MF it just
+ * baked in the tab. Order matters and is fixed here — machine first (it re-derives the topology
+ * maps every later step indexes by), then the process preset (process keys are disjoint from
+ * machine keys, so it composes without clobbering), then the filament rebind (which reads the
+ * retargeted variant layout).
+ */
+export function applyMachineRetargetToProjectSettings(
+  projectSettings: ProfileRecord,
+  plan: MachineRetargetPlan
+): ProfileRecord {
+  let next = retargetProjectSettingsToMachine(projectSettings, plan.machineConfig, {
+    printerSettingsId: plan.printerSettingsId,
+    printerModel: plan.printerModel
+  })
+  if (plan.processConfig) {
+    next = applyProcessProfileToProjectSettings(next, plan.processConfig, plan.processSettingOverrides ?? {})
+  }
+  if (plan.filamentRebinds && plan.filamentRebinds.length > 0) {
+    next = rebindProjectFilamentPhysics(next, plan.filamentRebinds)
+  }
+  return next
+}
+
+/**
+ * Drops the stale `printer_model_id` metadata from a retargeted project's `slice_info.config`.
+ *
+ * That entry describes the project's last slice on the SOURCE printer, so its `printer_model_id`
+ * (e.g. `N1` -> A1) otherwise lingers as a wrong compatibility chip on the retargeted project.
+ * BambuStudio's saved-but-not-sliced projects carry no `printer_model_id` either, so removing it
+ * matches BS and the project reads as "needs a fresh slice for the new printer". A no-op when the
+ * entry has none.
+ */
+export function stripSliceInfoPrinterModelId(sliceInfoXml: string): string {
+  return sliceInfoXml.replace(/[ \t]*<metadata\s+key="printer_model_id"\s+value="[^"]*"\s*\/>\s*\r?\n?/g, '')
 }
 
 /** Bambu models whose machine block must carry the dual-nozzle (two-extruder) topology. */
@@ -352,14 +424,6 @@ function buildPrinterExtruderIds(variantList: string[]): string[] {
     const variants = value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
     return Array.from({ length: variants.length }, () => String(index + 1))
   })
-}
-
-function uniqueVariants(variants: string[]): string[] {
-  const ordered = new Set<string>()
-  for (const variant of variants) {
-    if (variant.trim().length > 0) ordered.add(variant)
-  }
-  return Array.from(ordered)
 }
 
 function mergeMissingProfileFields(target: ProfileRecord, source: ProfileRecord): void {

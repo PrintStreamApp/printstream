@@ -46,6 +46,31 @@ Steps:
    an upsert: the entry is appended when the settings-less source has none to transform), copying
    every other entry verbatim.
 
+### Two hosts, one rewrite
+
+The steps above describe the **workspace editor**, where the API bakes the save. The **public 3MF
+editor** (`/3mf-editor`) performs the same operation entirely in the browser — the user's file never
+leaves the tab — and it must produce the same file, so the DECISIONS are shared and only the I/O
+differs:
+
+| Piece | Shared | Workspace host | Public host |
+| --- | --- | --- | --- |
+| What a retarget rewrites, and in what order | `applyMachineRetargetToProjectSettings` (`packages/shared/src/machine-retarget.ts`) | — | — |
+| Which preset each filament slot rebinds to | `selectFilamentRebindTargets` (`packages/shared/src/filament-rebind.ts`) | — | — |
+| Dropping the stale slice identity | `stripSliceInfoPrinterModelId` | — | — |
+| Resolving the machine / process / filament presets | — | `slicerClient` + the tenant's preset files (`save-retarget.ts`) | `POST /api/public/slicing/resolve-{machine,process,filament}` (`lib/localMachineRetarget.ts`) |
+| Applying it to the 3MF | — | post-bake ZIP rewrite (`rewriteThreeMfEntries`) | post-bake entry rewrite in the tab (`lib/clientThreeMfBake.ts`) |
+
+Both run the rewrite in the **same position**: after the bake, before the archive is written. The one
+step that cannot move into the browser is resolving the target machine's preset — that data lives in
+the slicer image — hence the anonymous `resolve-machine` route, which is **built-in presets only**
+(a custom preset is workspace data by definition).
+
+Failure posture differs by host and deliberately so: the workspace save **fails loudly** if the
+machine cannot be resolved (see Failure modes), while the public editor **warns to the console and
+saves without the retarget** — it has no server-side transaction to abort, and losing the user's only
+copy of the file to a failed save would be far worse than losing the printer switch.
+
 ### What carries over (and what doesn't)
 
 | Aspect | Behavior on retarget |

@@ -15,7 +15,7 @@
  * the `SceneEdit` instance — the backend recomposes M = T * R(eulerXYZ) * S. Values
  * stay plate-local (plate origin is never baked in).
  */
-import { type ComponentProps, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ComponentProps, type ReactNode, lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Box,
@@ -63,9 +63,11 @@ import {
   LIBRARY_DOWNLOAD_PERMISSION,
   LIBRARY_UPLOAD_PERMISSION,
   PER_OBJECT_PROCESS_KEYS,
+  extractErrorMessage,
   isNonRenderableThreeMfPartSubtype,
   threeMfPartSubtypeCarriesFilament
 } from '@printstream/shared'
+import { afterNextPaint } from '../../lib/afterNextPaint'
 import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { downloadBlob } from '../../lib/downloadBlob'
@@ -84,7 +86,6 @@ import { formatLibraryFileName, splitLibraryFileNameForRename } from '../../lib/
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
 import { EditorSettingsDialog } from '../../components/library/EditorSettingsDialog'
-import { SlicingPresetsDialog } from '../../components/library/SlicingPresetsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { StickySectionHeader, StickySectionScope } from '../../components/library/StickySectionHeader'
 import {
@@ -325,6 +326,14 @@ interface EditorViewProps {
    * a stable reference. The GLOBAL process dialog is rendered by the host, which passes this itself.
    */
   resolveProcessConfig?: ProcessConfigResolver
+  /**
+   * The host's slicing-preset manager, opened by the sidebar's "Manage" action.
+   *
+   * Deliberately un-defaulted: the workspace manager is a tenant surface, and quietly defaulting to
+   * it is exactly what made the public editor open a dialog whose every request 403s. A host with
+   * no manager passes nothing and the button does not render at all.
+   */
+  presetManager?: (props: { open: boolean; onClose: () => void }) => ReactNode
   /** Slice-time apply (only present when launched from the slice dialog). */
   onApply?: (edit: SceneEdit) => void
   /** Library folder + bridge to save new files into (from the host context). */
@@ -435,6 +444,7 @@ function EditorView({
   targetPrinterModel,
   bedModelPath,
   resolveProcessConfig,
+  presetManager,
   onApply,
   folderId = null,
   bridgeId = null,
@@ -449,7 +459,7 @@ function EditorView({
   presentation = 'dialog',
   canSlice = false,
   sliceDisabledReason,
-  slicing = false,
+  slicing: slicingProp = false,
   onSlice
 }: EditorViewProps) {
   // `hasNoBaseFile` gates DATA loading (a fileless project seeds empty, skipping the scene
@@ -682,8 +692,9 @@ function EditorView({
   const sidebarSide = useEffectiveSidebarSide()
   const [bedModelGeometry, setBedModelGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [editorSettingsOpen, setEditorSettingsOpen] = useState(false)
-  // The preset manager is its own dialog, reached from the sidebar's "Manage" action; the gear
-  // opens editor settings. Deliberately no path from one to the other — see EditorSettingsDialog.
+  // The preset manager is its own dialog, supplied by the host and reached from the sidebar's
+  // "Manage" action; the gear opens editor settings. Deliberately no path from one to the other —
+  // see EditorSettingsDialog.
   const [slicingPresetsOpen, setSlicingPresetsOpen] = useState(false)
   const openSlicingPresets = useCallback(() => setSlicingPresetsOpen(true), [])
   // Cut tool: plane axis + offset (world mm), the selected object's range along that axis,
@@ -967,6 +978,14 @@ function EditorView({
   // target / slicer version) without a stale closure or being re-created every render.
   const sliceConfigRef = useRef(sliceConfig)
   sliceConfigRef.current = sliceConfig
+  // Declared here rather than beside `openSlicingPresets` because it reads the controller ref.
+  const closeSlicingPresets = useCallback(() => {
+    setSlicingPresetsOpen(false)
+    // The editor renders from a catalogue snapshot taken at open, so a preset added or removed in
+    // the manager would otherwise not reach it. This is the deliberate carve-out: a change the user
+    // made THERE applies back, while ambient refetches stay excluded.
+    sliceConfigRef.current?.refreshSlicingPresets?.()
+  }, [])
 
   // ---- Undo/redo history -----------------------------------------------------
   // Undo/redo stacks plus unsaved-edit ("dirty") tracking, and the material add/remove
@@ -4440,6 +4459,36 @@ function EditorView({
     regenerateActivePlateThumbnail()
   }, [recordHistory, bakeExactMatrix, writeBackGroupTransform, syncSelectedTransform, regenerateActivePlateThumbnail])
 
+  /**
+   * Centre the selection on the active plate — BambuStudio's "Center" (`Selection::center`), which
+   * moves the WHOLE selection by one delta computed from its combined bounding box, so the objects
+   * keep their relative layout. Centring each object on its own would stack them all on one spot,
+   * which is why this is a selection-level action rather than a per-object one repeated N times.
+   *
+   * The delta is measured from the rendered FOOTPRINT, never by assigning the plate centre to
+   * `position`: that field is the transform's translation (the object's local origin) and a Bambu
+   * mesh routinely carries plate coordinates in its vertices, so assigning there displaces the
+   * model by its whole origin-to-centroid offset — the same trap the single-object 3MF export hit.
+   * Z is untouched: centring is a bed-plane operation, and resting is `Drop to bed`'s job.
+   */
+  const centerSelectionOnPlate = useCallback(() => {
+    const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
+    if (!plate) return
+    const box = new THREE.Box3()
+    for (const key of allSelectedKeysRef.current()) {
+      const group = groupByKeyRef.current.get(key)
+      if (!group) continue
+      const groupBox = printableMeshBox(group)
+      if (!groupBox.isEmpty()) box.union(groupBox)
+    }
+    if (box.isEmpty()) return
+    const center = box.getCenter(new THREE.Vector3())
+    nudgeSelection(
+      (plate.bed.minX + plate.bed.maxX) / 2 - center.x,
+      (plate.bed.minY + plate.bed.maxY) / 2 - center.y
+    )
+  }, [activePlateIndex, nudgeSelection])
+
   /** The scene object of the part currently holding the gizmo (added mesh or baked part group). */
   const selectedPartObject = useCallback((): THREE.Object3D | null => {
     const key = selectedKeyRef.current
@@ -4757,6 +4806,40 @@ function EditorView({
     onFilamentsRenumbered: handleFilamentsRenumbered,
     onFilamentSourcesRemapped: (sourceRemap) => rebaseHistoryFilamentSourcesRef.current(sourceRemap)
   })
+  /**
+   * Slice the given plate (0 = all plates).
+   *
+   * Owns the Slice button's busy state for the window the HOST cannot see: capturing every plate's
+   * thumbnail and building the SceneEdit are seconds of main-thread work that run BEFORE `onSlice`
+   * is called, and the host's `slicing` flag only turns on after that. Without this the button sat
+   * inert long enough that users clicked it again. Stays true until the host takes over (its
+   * `slicing` prop arrives), so there is no gap between the two spinners.
+   */
+  const [preparingSlice, setPreparingSlice] = useState(false)
+  const slicing = slicingProp || preparingSlice
+  useEffect(() => {
+    if (slicingProp) setPreparingSlice(false)
+  }, [slicingProp])
+  const startSlice = useCallback((plate: number) => {
+    const current = stateRef.current
+    if (!current || !onSlice) return
+    setPreparingSlice(true)
+    void (async () => {
+      try {
+        await afterNextPaint()
+        const thumbnails = await captureAllPlateThumbnails(current)
+        onSlice({ plate, sceneEdit: buildSceneEditOut(current, { thumbnails }) })
+      } catch (error) {
+        // Rethrowing here would only become an unhandled rejection: the console sees it but the
+        // /api/logs buffer (which captures console.*) does not, and the user is left staring at a
+        // spinner that never resolves because `onSlice` was never reached.
+        setPreparingSlice(false)
+        console.error('[editor] preparing the slice failed', error)
+        toast.error(extractErrorMessage(error, 'Could not prepare the slice.'))
+      }
+    })()
+  }, [onSlice, captureAllPlateThumbnails, buildSceneEditOut, stateRef])
+
   // Once an editor-born project has been saved it is a real library file, so it stops presenting
   // as "New Project" and gains the ordinary Save-version path — without the editor re-mounting.
   const savedAsProject = savedFile !== null
@@ -5152,14 +5235,14 @@ function EditorView({
                       left: '50%',
                       transform: 'translateX(-50%)',
                       zIndex: (theme) => theme.zIndex.tooltip,
-                      // Wide enough for the one-row axis layout when the viewport allows it,
-                      // always clearing the tool rail (left) and undo/redo + help (right);
-                      // the panel's own container query stacks the axes when it lands narrow.
-                      width: 'min(820px, calc(100% - 260px))'
+                      // Sized for the ONE axis group the active tool shows (three fields), and
+                      // always clearing the tool rail (left) and undo/redo + help (right).
+                      width: 'min(320px, calc(100% - 260px))'
                     }}
                   >
                     <LiveTransformPanel
                       floating
+                      mode={gizmoMode}
                       initial={selectedTransform}
                       setterRef={transformReadoutSetterRef}
                       // With a part on the gizmo the values are the PART's placement inside
@@ -5338,6 +5421,7 @@ function EditorView({
                 </StickySectionHeader>
                 {isMobile && selectedTransform && isTransformGizmoMode(gizmoMode) && (
                   <LiveTransformPanel
+                    mode={gizmoMode}
                     initial={selectedTransform}
                     setterRef={transformReadoutSetterRef}
                     // With a part on the gizmo the values are the PART's placement inside
@@ -5429,7 +5513,7 @@ function EditorView({
               </>
             ) : null
             const settingsPanel = sliceConfigForPanel
-              ? <SliceSettingsPanel controller={sliceConfigForPanel} mode="editor" activePlateIndex={activePlateIndex} onManagePresets={openSlicingPresets} />
+              ? <SliceSettingsPanel controller={sliceConfigForPanel} mode="editor" activePlateIndex={activePlateIndex} onManagePresets={presetManager ? openSlicingPresets : undefined} />
               : null
 
             // The sidebar's contents, shared by the desktop panel column and the mobile tab, so the
@@ -5547,11 +5631,11 @@ function EditorView({
                 disabled={!state || !canSlice || slicing || saving}
                 disabledReason={!state ? 'Preparing the model…' : (slicing || saving) ? undefined : sliceDisabledReason}
                 activePlateIndex={activePlateIndex}
-                onSliceAll={() => { const current = stateRef.current; if (!current) return; void (async () => { const thumbnails = await captureAllPlateThumbnails(current); onSlice({ plate: 0, sceneEdit: buildSceneEditOut(current, { thumbnails }) }) })() }}
-                onSlicePlate={() => { const current = stateRef.current; if (!current) return; void (async () => { const thumbnails = await captureAllPlateThumbnails(current); onSlice({ plate: activePlateIndex, sceneEdit: buildSceneEditOut(current, { thumbnails }) }) })() }}
+                onSliceAll={() => startSlice(0)}
+                onSlicePlate={() => startSlice(activePlateIndex)}
               />
             ) : onApply ? (
-              <Button type="button" variant="soft" color="primary" disabled={!state || saving} onClick={handleApply}>Use this layout</Button>
+              <Button type="button" variant="soft" color="primary" loading={saving} disabled={!state || saving} onClick={handleApply}>Use this layout</Button>
             ) : null}
             <SaveSplitButton
               saving={saving}
@@ -5635,14 +5719,7 @@ function EditorView({
             onChangeMaterial={(filamentId) => reassignSelectionFilament(contextMenu.key, filamentId)}
             onSetPrintable={(printable) => handleSetPrintableSelection(selectionFor(contextMenu.key), printable)}
             onEditObjectSettings={perObject ? () => openObjectSettingsFor(contextMenu.key) : undefined}
-            onCenterOnPlate={() => {
-              const plate = stateRef.current?.plates.find((entry) => entry.index === activePlateIndex)
-              if (plate) {
-                const cx = (plate.bed.minX + plate.bed.maxX) / 2
-                const cy = (plate.bed.minY + plate.bed.maxY) / 2
-                mutateSelectedGroup((group) => { group.position.x = cx; group.position.y = cy })
-              }
-            }}
+            onCenterOnPlate={centerSelectionOnPlate}
             onDropToBed={handleDropToBed}
             onResetRotation={() => mutateSelectedGroup((group) => { rotorOf(group).rotation.set(0, 0, 0) })}
             onResetScale={() => mutateSelectedGroup((group) => { group.scale.set(1, 1, 1) })}
@@ -5681,16 +5758,7 @@ function EditorView({
       onClose={() => setEditorSettingsOpen(false)}
     />
 
-    <SlicingPresetsDialog
-      open={slicingPresetsOpen}
-      onClose={() => {
-        setSlicingPresetsOpen(false)
-        // The editor renders from a catalogue snapshot taken at open, so a preset edited in there
-        // would otherwise not reach it. This is the deliberate carve-out: a change the user made
-        // HERE applies back, while ambient refetches stay excluded.
-        sliceConfigRef.current?.refreshSlicingPresets?.()
-      }}
-    />
+    {presetManager?.({ open: slicingPresetsOpen, onClose: closeSlicingPresets })}
 
     {libraryPickerOpen && (
       <LibraryFilePickerDialog

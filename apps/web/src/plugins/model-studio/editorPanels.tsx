@@ -71,7 +71,7 @@ import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { useMobileViewport } from '../../components/useMobileViewport'
 import { SettingsTuneButton } from '../../components/SettingsTuneButton'
 import { SplitButton } from '../../components/SplitButton'
-import { PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform } from './editorGeometry'
+import { PART_SUBTYPE_OPTIONS, type GizmoMode, type SelectedTransform, type TransformGizmoMode } from './editorGeometry'
 import { HELPER_VOLUME_SPECS, helperVolumeCssColor } from './lib/helperVolumes'
 import { printedParts, summarizeInstanceMaterial } from './lib/editorModel'
 import type { EditorAddedPart, EditorInstance, EditorPlate } from './lib/editorModel'
@@ -101,13 +101,6 @@ const AXIS_HEADER_HEIGHT = 24
 
 /** Floor for one axis field: fits a signed two-decimal value plus its axis letter. */
 const AXIS_FIELD_MIN_WIDTH = 74
-
-/**
- * Panel width at which the transform readout's three axis groups fit on one row: three
- * groups of three {@link AXIS_FIELD_MIN_WIDTH} fields, plus the gaps between fields, groups,
- * and the panel's own padding. Below it the groups stack instead of squeezing the values.
- */
-export const TRANSFORM_ROW_MIN_WIDTH = 720
 
 /** Width of the vertical tool rail (sm+): icon buttons plus the button group's own border. */
 export const TOOL_RAIL_WIDTH = 40
@@ -647,12 +640,18 @@ export function KeyboardHelpButton() {
 }
 
 /**
- * Bambu-style manual transform panel for the selected object: position (mm),
- * rotation (deg), and per-axis scale (%) with a uniform-lock toggle. Editing a
- * field updates the live object + gizmo; values reflect the current gizmo state.
+ * Manual transform readout for the selected object: position (mm), rotation (deg), or per-axis
+ * scale (%) with a uniform-lock toggle. Editing a field updates the live object + gizmo; values
+ * reflect the current gizmo state.
+ *
+ * Shows the ONE group the active tool edits, not all three. BambuStudio does show all three at
+ * once, but its panel is a docked sidebar with room for them; ours floats over the viewport, where
+ * two-thirds of the widest chrome on screen being inert readouts costs the user real bed space and
+ * invites edits that the current gizmo will not reflect.
  */
 export function TransformPanel({
   transform,
+  mode,
   heading,
   uniformScale,
   onToggleUniformScale,
@@ -662,6 +661,8 @@ export function TransformPanel({
   floating = false
 }: {
   transform: SelectedTransform
+  /** Which tool is active, and therefore which axis group this panel shows. */
+  mode: TransformGizmoMode
   /**
    * Shown above the rows when the values describe something other than the selected
    * object — e.g. a selected PART's object-local placement (BambuStudio's "Volume
@@ -689,30 +690,17 @@ export function TransformPanel({
         display: 'flex',
         flexDirection: 'column',
         gap: floating ? 0.5 : 1,
-        // Establish the query container the axis grid above measures itself against.
-        containerType: 'inline-size',
         ...(floating ? { boxShadow: 'md' } : {})
       }}
     >
       {heading && <Typography level="body-xs" sx={{ fontWeight: 600 }}>{heading}</Typography>}
-      {/*
-        Position / Rotation / Scale sit side by side on ONE row when the panel is wide enough
-        for all three, and stack into three rows when it is not. A container query (keyed to
-        this panel's own inline size, not the viewport) is what makes it all-or-nothing —
-        plain flex-wrap would leave a ragged 2-then-1 at in-between widths.
-      */}
-      <Box
-        sx={{
-          display: 'grid',
-          gap: floating ? 0.75 : 1,
-          gridTemplateColumns: 'minmax(0, 1fr)',
-          [`@container (min-width: ${TRANSFORM_ROW_MIN_WIDTH}px)`]: {
-            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))'
-          }
-        }}
-      >
+      {mode === 'translate' && (
         <AxisGroup label="Position (mm)" values={transform.position} step={1} onChange={onPosition} />
+      )}
+      {mode === 'rotate' && (
         <AxisGroup label="Rotation (°)" values={transform.rotationDeg} step={1} onChange={onRotation} />
+      )}
+      {mode === 'scale' && (
         <AxisGroup
           label="Scale (%)"
           values={transform.scalePct}
@@ -734,7 +722,7 @@ export function TransformPanel({
             </Tooltip>
           }
         />
-      </Box>
+      )}
     </Sheet>
   )
 }

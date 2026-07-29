@@ -9,11 +9,13 @@ import { Box, Button, Card, Chip, IconButton, Sheet, Stack, Table, Typography } 
 import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CalibrationRun, Printer } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
 import { EmptyState } from '../../components/EmptyState'
+import { PageSectionHeading, pageSectionStackSpacing } from '../../components/dashboard/PageSectionHeading'
 import {
   calibrationKeys,
   deleteCalibrationResult,
@@ -110,14 +112,19 @@ export function CalibrationView() {
   const printerName = useMemo(() => new Map(printers.map((printer) => [printer.id, printer.name])), [printers])
 
   return (
-    <Stack spacing={2}>
+    <Stack spacing={pageSectionStackSpacing}>
       <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between" sx={{ flexWrap: 'wrap' }}>
         <Typography level="h3" startDecorator={<ScienceRoundedIcon />}>Calibration</Typography>
         <Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowNew(true)} disabled={printers.length === 0}>New calibration</Button>
       </Stack>
 
-      <Box>
-        <Typography level="title-md" sx={{ mb: 1 }}>Runs</Typography>
+      <Stack spacing={1}>
+        <PageSectionHeading
+          icon={<ScienceRoundedIcon />}
+          title="Runs"
+          description="Calibration prints working through slicing, printing, and result entry."
+          count={runs.length}
+        />
         {runs.length === 0 ? (
           <Sheet variant="soft" sx={{ borderRadius: 'md', p: 2 }}>
             <EmptyState icon={<ScienceRoundedIcon />} title="No calibrations yet" description="Print a pressure-advance tower or flow-ratio plate, then enter the result to save it." action={<Button size="sm" startDecorator={<AddRoundedIcon />} onClick={() => setShowNew(true)} disabled={printers.length === 0}>New calibration</Button>} />
@@ -160,12 +167,17 @@ export function CalibrationView() {
           })}
         </Stack>
         )}
-      </Box>
+      </Stack>
 
-      <Box>
-        <Typography level="title-md" sx={{ mb: 1 }}>Saved values</Typography>
+      <Stack spacing={1}>
+        <PageSectionHeading
+          icon={<TuneRoundedIcon />}
+          title="Saved values"
+          description="Applied automatically when matching filament is loaded."
+          count={results.length}
+        />
         {results.length === 0 ? (
-          <Typography level="body-sm" textColor="text.tertiary">Saved calibrations appear here and are applied automatically to matching filament.</Typography>
+          <Typography level="body-sm" textColor="text.tertiary">Nothing saved yet. Enter the result on a run to save it.</Typography>
         ) : (
           <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
             <Table size="sm" borderAxis="xBetween" hoverRow>
@@ -186,7 +198,7 @@ export function CalibrationView() {
             </Table>
           </Sheet>
         )}
-      </Box>
+      </Stack>
 
       {showNew ? <NewCalibrationDialog printers={printers} onClose={closeNewDialog} /> : null}
       {resultRun ? <CalibrationResultDialog run={resultRun} onClose={closeResultDialog} /> : null}

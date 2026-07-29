@@ -29,6 +29,7 @@ import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { EmptyState } from '../../components/EmptyState'
+import { PageSectionHeading } from '../../components/dashboard/PageSectionHeading'
 import { toast } from '../../lib/toast'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
 import {
@@ -257,9 +258,12 @@ export function QueueSection(props: Record<string, unknown>) {
 
   return (
     <Stack id="queue" spacing={1} sx={{ scrollMarginTop: sectionScrollMarginTop }}>
-      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-        <Typography level="title-md">Print queue</Typography>
-        {canManage ? (
+      <PageSectionHeading
+        icon={<PlaylistPlayRounded />}
+        title="Print queue"
+        description="Prints lined up to run next."
+        count={items.length}
+        actions={canManage ? (
           <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
             <Button
               size="sm"
@@ -276,8 +280,8 @@ export function QueueSection(props: Record<string, unknown>) {
               Add to queue
             </Button>
           </Stack>
-        ) : null}
-      </Stack>
+        ) : undefined}
+      />
 
       {items.length === 0 ? (
         <EmptyState

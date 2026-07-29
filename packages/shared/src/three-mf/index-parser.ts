@@ -51,8 +51,10 @@ export { decodeXmlAttributeValue }
  *      can show and re-send them; a partial map is dropped by the authoritative slice transform.
  * v21: per-slot `filamentPresetName` — the raw `filament_settings_id`, because the display name
  *      beside it strips the machine suffix and cannot identify a preset (see the field's doc).
+ * v22: the plain X1 is recognized. Not a shape change but a VALUE one: an X1 project previously
+ *      reported no compatible model at all, so cached indexes hold that miss and must re-derive.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 21
+export const THREE_MF_INDEX_PARSER_VERSION = 22
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -927,6 +929,11 @@ export function normalizePrinterModelName(value: string | undefined): PrinterMod
   if (!canonical) return null
   if (canonical.includes('X1E')) return 'X1E'
   if (canonical.includes('X1 CARBON') || canonical.includes('X1C')) return 'X1C'
+  // The plain X1, AFTER its two suffixed siblings and on a token boundary so "X1C"/"X1E"/"X2D"
+  // can never reach it. Without this branch a genuine X1 project's `printer_model`
+  // ("Bambu Lab X1") normalized to null, the index reported no compatible model at all, and the
+  // slice/editor target fell back to the first machine in the catalogue — an A1.
+  if (/(^|[^A-Z0-9])X1($|[^A-Z0-9])/.test(canonical)) return 'X1'
   if (canonical.includes('X2D')) return 'X2D'
   if (canonical.includes('P1S')) return 'P1S'
   if (canonical.includes('P2S')) return 'P2S'

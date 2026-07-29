@@ -1,7 +1,10 @@
 /**
  * Editor settings dialog — preferences that belong to the 3D editor itself.
  *
- * Only the viewport preferences live here. Slicing-preset management used to sit alongside them
+ * The viewport preferences and the developer-slicer-options toggle live here. The latter moved out
+ * of Settings > Slicing (which held nothing else and is gone): it decides what the editor's own
+ * process-settings dialog shows, so it is an editor preference, and its per-device tier is a
+ * personal choice rather than a workspace-management one. Slicing-preset management used to sit alongside them
  * as a second tab; it moved to `SlicingPresetsDialog` once the slice sidebar grew its own "Manage"
  * action, because managing presets is a task of its own rather than an editor preference — and
  * hosting it here meant nesting the manager's kind tabs inside this dialog's tab strip. This dialog
@@ -20,6 +23,8 @@ import type { EditorSidebarSideSetting } from '@printstream/shared'
 import { BackAwareModal } from '../BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { BuildPlateSettingCard, PanelPositionSettingCard } from '../settings/EditorViewportSettingsCards'
+import { SlicerDeveloperModeCard } from '../settings/SlicerDeveloperModeCard'
+import { useViewportSettingsDeviceOnly } from '../../lib/editorViewportSettings'
 
 /** Which side of the 3D viewport the editor's settings/objects panel sits on. */
 export type EditorSidebarSide = EditorSidebarSideSetting
@@ -28,6 +33,10 @@ export function EditorSettingsDialog({ open, onClose }: {
   open: boolean
   onClose: () => void
 }): JSX.Element {
+  // The public editor has no workspace to read a shared default from, and its host suppresses
+  // `/api/settings` entirely — so the developer-mode card, whose shared tier IS that request,
+  // has nothing to show there.
+  const deviceOnly = useViewportSettingsDeviceOnly()
   return (
     <BackAwareModal open={open} onClose={onClose}>
       <ScrollableModalDialog sx={{ maxWidth: 640, width: '100%' }}>
@@ -36,6 +45,7 @@ export function EditorSettingsDialog({ open, onClose }: {
           <Stack spacing={1.5}>
             <BuildPlateSettingCard />
             <PanelPositionSettingCard />
+            {!deviceOnly && <SlicerDeveloperModeCard />}
           </Stack>
         </ScrollableDialogBody>
         <DialogActions>

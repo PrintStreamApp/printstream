@@ -174,6 +174,19 @@ export interface ResolveProcessConfigResponse {
    * Absent/false means the writer recorded nothing and the value diff is all we have.
    */
   declaresOverrides?: boolean
+  /**
+   * Whether {@link baseConfig} is a REAL preset resolved for this slot, rather than a copy of
+   * `config` standing in because the named preset is not installed here.
+   *
+   * The distinction cannot be recovered from the payload — a project that changed nothing and a
+   * project whose preset went missing both send `baseConfig` deep-equal to `config` — and
+   * conflating them is what put three un-resettable "changes" on every material of a stock project.
+   * When true, a value diff is meaningful and is the modified marker (BambuStudio's
+   * `dirty_options`). When false there is nothing to diff against, so {@link overriddenKeys} is the
+   * only evidence of a change and is taken at its word. Absent means true, so a producer that
+   * always resolves needs no change.
+   */
+  baselineResolved?: boolean
 }
 
 /** Machine-derived context that affects conditional visibility. */
@@ -883,21 +896,36 @@ export function resolvedProcessPresetOverrideKeys(
 }
 
 export function resolvedProcessModifiedKeys(
-  response: { config: ProcessConfig; baseConfig?: ProcessConfig; overriddenKeys?: string[] },
+  response: {
+    config: ProcessConfig
+    baseConfig?: ProcessConfig
+    overriddenKeys?: string[]
+    declaresOverrides?: boolean
+    baselineResolved?: boolean
+  },
   overrides: ProcessConfig = {}
 ): string[] {
   const effective = applyProcessConfigDefaults(response.config)
   const baseline = applyProcessConfigDefaults(response.baseConfig ?? response.config)
   const finalConfig = { ...effective, ...overrides }
-  const keys = new Set<string>()
+  const declared = new Set(response.overriddenKeys ?? [])
+  // No preset resolved, so there is no value to diff against: the file's own record is the only
+  // evidence a setting was changed, and it is taken at its word. See the filament twin.
+  if (response.baselineResolved === false) return [...declared].filter(isProcessSettingKey)
+  const keys: string[] = []
   for (const key of Object.keys(finalConfig)) {
     if (!isProcessSettingKey(key)) continue
-    if (!processConfigValuesEqual(baseline[key], finalConfig[key], processSettingsCatalog.options[key])) keys.add(key)
+    const option = processSettingsCatalog.options[key]
+    // BambuStudio's modified marker is a VALUE diff against the selected preset
+    // (`PresetCollection::dirty_options`); the declared record decides which of the file's values
+    // survive loading, not what counts as changed.
+    if (processConfigValuesEqual(baseline[key], finalConfig[key], option)) continue
+    // With a record present, an UNDECLARED difference is drift BambuStudio normalizes away at load
+    // — not this project's change. A key the user edited this session always counts.
+    if (response.declaresOverrides === true
+      && !declared.has(key)
+      && processConfigValuesEqual(effective[key], finalConfig[key], option)) continue
+    keys.push(key)
   }
-  // 3MF-recorded changes whose baseline couldn't resolve stay flagged while untouched relative to
-  // the effective config, mirroring the dialog's bakedKeys condition.
-  for (const key of response.overriddenKeys ?? []) {
-    if (isProcessSettingKey(key) && processConfigValuesEqual(finalConfig[key], effective[key], processSettingsCatalog.options[key])) keys.add(key)
-  }
-  return [...keys]
+  return keys
 }
