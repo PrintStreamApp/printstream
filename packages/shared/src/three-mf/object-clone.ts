@@ -176,8 +176,11 @@ function resolveObjectId(objectId: number, clones: ReadonlyMap<number, ClonedObj
   return clones.get(objectId)?.objectId ?? objectId
 }
 
-/** Resolve a part reference: both the owning object and, for a copy, the part's component id. */
-function resolvePart<T extends { objectId: number; componentObjectId: number }>(
+/**
+ * Resolve a MESH-scoped part reference (paint): both the owning object and, for a copy, the part's
+ * component id — a copy gets its own mesh entries, so the id must be remapped.
+ */
+function resolvePartMesh<T extends { objectId: number; componentObjectId: number }>(
   entry: T,
   clones: ReadonlyMap<number, ClonedObjectIds>
 ): T {
@@ -188,6 +191,20 @@ function resolvePart<T extends { objectId: number; componentObjectId: number }>(
     objectId: clone.objectId,
     componentObjectId: clone.components.get(entry.componentObjectId) ?? entry.componentObjectId
   }
+}
+
+/**
+ * Resolve an ORDINAL-scoped part reference (filament / process overrides / type / transform). Only
+ * the owning object moves: a copy is a deep copy of the source's parts IN ORDER, so part N of the
+ * copy is part N of the source. That is the whole benefit of BambuStudio's positional identity —
+ * there is no per-part id to remap and therefore no way for the mapping to go stale.
+ */
+function resolvePartSlot<T extends { objectId: number }>(
+  entry: T,
+  clones: ReadonlyMap<number, ClonedObjectIds>
+): T {
+  const clone = clones.get(entry.objectId)
+  return clone ? { ...entry, objectId: clone.objectId } : entry
 }
 
 /**
@@ -274,13 +291,13 @@ export function applyObjectClones(
       instances: edit.instances.map((instance) => (instance.objectId != null
         ? { ...instance, objectId: resolveObjectId(instance.objectId, clones) }
         : instance)),
-      ...(edit.partFilaments ? { partFilaments: edit.partFilaments.map((entry) => resolvePart(entry, clones)) } : {}),
-      ...(edit.partProcessOverrides ? { partProcessOverrides: edit.partProcessOverrides.map((entry) => resolvePart(entry, clones)) } : {}),
-      ...(edit.partTypeChanges ? { partTypeChanges: edit.partTypeChanges.map((entry) => resolvePart(entry, clones)) } : {}),
-      ...(edit.partTransforms ? { partTransforms: edit.partTransforms.map((entry) => resolvePart(entry, clones)) } : {}),
-      ...(edit.supportPaint ? { supportPaint: edit.supportPaint.map((entry) => resolvePart(entry, clones)) } : {}),
-      ...(edit.seamPaint ? { seamPaint: edit.seamPaint.map((entry) => resolvePart(entry, clones)) } : {}),
-      ...(edit.colorPaint ? { colorPaint: edit.colorPaint.map((entry) => resolvePart(entry, clones)) } : {}),
+      ...(edit.partFilaments ? { partFilaments: edit.partFilaments.map((entry) => resolvePartSlot(entry, clones)) } : {}),
+      ...(edit.partProcessOverrides ? { partProcessOverrides: edit.partProcessOverrides.map((entry) => resolvePartSlot(entry, clones)) } : {}),
+      ...(edit.partTypeChanges ? { partTypeChanges: edit.partTypeChanges.map((entry) => resolvePartSlot(entry, clones)) } : {}),
+      ...(edit.partTransforms ? { partTransforms: edit.partTransforms.map((entry) => resolvePartSlot(entry, clones)) } : {}),
+      ...(edit.supportPaint ? { supportPaint: edit.supportPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
+      ...(edit.seamPaint ? { seamPaint: edit.seamPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
+      ...(edit.colorPaint ? { colorPaint: edit.colorPaint.map((entry) => resolvePartMesh(entry, clones)) } : {}),
       ...(edit.brimEars
         ? { brimEars: edit.brimEars.map((entry) => ({ ...entry, objectId: resolveObjectId(entry.objectId, clones) })) }
         : {}),

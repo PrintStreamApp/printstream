@@ -127,12 +127,78 @@ test('validateLibraryPrint surfaces a disconnected target printer', async () => 
   await assert.rejects(validateLibraryPrint(makePrintInput(), 'tenant-1'), /not connected/)
 })
 
+test('library print carries the printed file\'s re-slice provenance onto the dispatch', async () => {
+  // This is the only seam between "the slice preserved a project" and "print history can offer
+  // Slice again": every print entrypoint funnels through here, and the fields ride the dispatch
+  // onto the PrintJob row. Dropped here, the feature is invisible everywhere.
+  prisma.libraryFile.findFirst = ((async () => makeLibraryFile({
+    id: 'output-file',
+    sourceProjectFileId: 'project-snapshot',
+    sliceSettingsJson: '{"plate":2}'
+  })) as unknown) as typeof prisma.libraryFile.findFirst
+  prisma.printer.findFirst = ((async () => makePrinter()) as unknown) as typeof prisma.printer.findFirst
+  bridgeSessionManager.isConnected = (() => true) as typeof bridgeSessionManager.isConnected
+  printerManager.getPrinter = (() => makePrinter()) as typeof printerManager.getPrinter
+
+  let dispatched: { sourceProjectFileId?: string | null; sliceSettingsJson?: string | null } | null = null
+  printDispatcher.enqueueSnapshotPrint = (async (input) => {
+    dispatched = {
+      sourceProjectFileId: input.sourceProjectFileId,
+      sliceSettingsJson: input.sliceSettingsJson
+    }
+    return makeJob()
+  }) as typeof printDispatcher.enqueueSnapshotPrint
+
+  await enqueueLibraryPrint(makePrintInput(), 'tenant-1')
+
+  assert.deepEqual(dispatched, {
+    sourceProjectFileId: 'project-snapshot',
+    sliceSettingsJson: '{"plate":2}'
+  })
+})
+
+test('library print takes the re-slice provenance from the file it actually dispatches', async () => {
+  // A disconnected owner makes this substitute a duplicate on a connected bridge. That copy is a
+  // different file with its own history, so the provenance must follow the substitution — reading
+  // it off the requested file would attribute one project's settings to another file's bytes.
+  prisma.libraryFile.findFirst = ((async () => makeLibraryFile({
+    id: 'old-file',
+    ownerBridgeId: 'old-bridge',
+    storedPath: 'old.gcode',
+    sourceProjectFileId: 'requested-project'
+  })) as unknown) as typeof prisma.libraryFile.findFirst
+  prisma.libraryFile.findMany = ((async () => [
+    makeLibraryFile({
+      id: 'new-file',
+      ownerBridgeId: 'new-bridge',
+      storedPath: 'new.gcode',
+      snapshotKey: 'new-snapshot',
+      sourceProjectFileId: 'dispatched-project'
+    })
+  ]) as unknown) as typeof prisma.libraryFile.findMany
+  prisma.printer.findFirst = ((async () => makePrinter()) as unknown) as typeof prisma.printer.findFirst
+  bridgeSessionManager.isConnected = ((bridgeId: string) => bridgeId === 'new-bridge') as typeof bridgeSessionManager.isConnected
+  printerManager.getPrinter = (() => makePrinter()) as typeof printerManager.getPrinter
+
+  let dispatchedProjectId: string | null | undefined
+  printDispatcher.enqueueSnapshotPrint = (async (input) => {
+    dispatchedProjectId = input.sourceProjectFileId
+    return makeJob()
+  }) as typeof printDispatcher.enqueueSnapshotPrint
+
+  await enqueueLibraryPrint(makePrintInput(), 'tenant-1')
+
+  assert.equal(dispatchedProjectId, 'dispatched-project')
+})
+
 function makeLibraryFile(overrides: Partial<{
   id: string
   ownerBridgeId: string | null
   storedPath: string
   snapshotKey: string | null
   hidden: boolean
+  sourceProjectFileId: string | null
+  sliceSettingsJson: string | null
 }> = {}) {
   return {
     id: overrides.id ?? 'file-1',
@@ -147,7 +213,9 @@ function makeLibraryFile(overrides: Partial<{
     currentVersionNumber: 1,
     folderId: null,
     snapshotKey: overrides.snapshotKey ?? 'snapshot-1',
-    hidden: overrides.hidden ?? false
+    hidden: overrides.hidden ?? false,
+    sourceProjectFileId: overrides.sourceProjectFileId ?? null,
+    sliceSettingsJson: overrides.sliceSettingsJson ?? null
   }
 }
 

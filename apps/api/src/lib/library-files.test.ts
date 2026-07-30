@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Prisma } from '@prisma/client'
 import { prisma } from './prisma.js'
-import { deleteLibraryFolderTree, ensureLibraryFolderPath, unhideSlicedOutput } from './library-files.js'
+import { deleteLibraryFolderTree, discardHiddenSlicedOutput, ensureLibraryFolderPath, unhideSlicedOutput } from './library-files.js'
 import { usePrismaStubs } from '../test-utils/prisma-stubs.js'
 
 const stub = usePrismaStubs()
@@ -228,6 +228,61 @@ test('unhideSlicedOutput replaces an existing same-name file with version archiv
   assert.equal(applied?.data.hidden, undefined)
 })
 
+test('unhideSlicedOutput moves the re-slice link onto the file it merged into', async () => {
+  // The surviving row now holds the OUTPUT's bytes, so it must hold the output's preserved
+  // project too. Keeping the replaced file's would point "Slice again" at a project that
+  // produced different G-code — and the output row is deleted here, so nothing else would
+  // reference the project it was sliced from.
+  let updateArgs: { where: { id: string }; data: Record<string, unknown> } | null = null
+  stub(prisma.libraryFile, 'findUnique', async () => ({
+    id: 'output-1',
+    tenantId: 'tenant-1',
+    ownerBridgeId: 'bridge-1',
+    name: 'widget.gcode.3mf',
+    storedPath: 'output-1.gcode.3mf',
+    sizeBytes: 512,
+    kind: 'gcode',
+    thumbnailPath: null,
+    folderId: 'folder-1',
+    hidden: true,
+    createdById: 'user-1',
+    createdByName: 'Sam',
+    sourceProjectFileId: 'project-new',
+    sliceSettingsJson: '{"plate":2}'
+  }))
+  stub(prisma.libraryFile, 'findFirst', async () => ({
+    id: 'existing-1',
+    tenantId: 'tenant-1',
+    ownerBridgeId: 'bridge-1',
+    name: 'widget.gcode.3mf',
+    storedPath: 'existing-1.gcode.3mf',
+    sizeBytes: 256,
+    uploadedAt: new Date('2026-06-01T00:00:00.000Z'),
+    kind: 'gcode',
+    thumbnailPath: null,
+    folderId: 'folder-1',
+    currentVersionNumber: 3,
+    createdById: 'user-0',
+    createdByName: 'Avery',
+    restoredFromVersionNumber: null,
+    sourceProjectFileId: 'project-stale',
+    sliceSettingsJson: '{"plate":9}'
+  }))
+  stub(prisma.libraryFileVersion, 'create', async (args: { data: unknown }) => args.data)
+  stub(prisma.libraryFile, 'delete', async (args: { where: { id: string } }) => ({ id: args.where.id }))
+  stub(prisma.libraryFile, 'update', async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+    updateArgs = args
+    return { id: args.where.id, name: args.data.name }
+  })
+  stub(prisma, '$transaction', async (run: (tx: typeof prisma) => Promise<unknown>) => await run(prisma))
+
+  await unhideSlicedOutput('output-1', { folderId: 'folder-1', name: 'widget' })
+
+  const applied = updateArgs as { where: { id: string }; data: Record<string, unknown> } | null
+  assert.equal(applied?.data.sourceProjectFileId, 'project-new')
+  assert.equal(applied?.data.sliceSettingsJson, '{"plate":2}')
+})
+
 test('unhideSlicedOutput simply unhides when no same-name file exists', async () => {
   let updateArgs: { where: { id: string }; data: Record<string, unknown> } | null = null
   stub(prisma.libraryFile, 'findUnique', async () => ({
@@ -291,4 +346,43 @@ test('unhideSlicedOutput appends .gcode.3mf unless the full compound extension i
     const result = await unhideSlicedOutput('output-1', { name: input })
     assert.equal(result.name, saved)
   }
+})
+
+test('discarding an unsaved slice also drops the preserved project nothing else references', async () => {
+  // Snapshot rows are exempt from every cleanup pass, so a discard that leaves the project behind
+  // leaks its bytes permanently — one copy per discarded slice, never reclaimed. Found by actually
+  // discarding a slice on the dev stack and finding the snapshot row still there.
+  const deleted: string[] = []
+  stub(prisma.libraryFile, 'findUnique', async (args: { where: { id: string } }) => (
+    args.where.id === 'output-1'
+      ? { id: 'output-1', ownerBridgeId: 'bridge-1', storedPath: 'out.gcode.3mf', hidden: true, sourceProjectFileId: 'project-1', versions: [] }
+      : { id: 'project-1', ownerBridgeId: 'bridge-1', storedPath: 'proj.3mf', snapshotKey: 'abc:proj.3mf' }
+  ))
+  stub(prisma.libraryFile, 'count', async () => 0)
+  stub(prisma.printJob, 'count', async () => 0)
+  stub(prisma.libraryFile, 'delete', async (args: { where: { id: string } }) => {
+    deleted.push(args.where.id)
+    return { id: args.where.id }
+  })
+
+  assert.equal(await discardHiddenSlicedOutput('output-1'), true)
+  assert.deepEqual(deleted, ['output-1', 'project-1'])
+})
+
+test('discarding a slice keeps a preserved project another slice still points at', async () => {
+  // The snapshot is content-addressed, so two slices of identical bytes SHARE one row; a print's
+  // history row references it too. Deleting a shared project would break the survivor's re-slice.
+  const deleted: string[] = []
+  stub(prisma.libraryFile, 'findUnique', async () => (
+    { id: 'output-1', ownerBridgeId: 'bridge-1', storedPath: 'out.gcode.3mf', hidden: true, sourceProjectFileId: 'project-1', versions: [] }
+  ))
+  stub(prisma.libraryFile, 'count', async () => 1)
+  stub(prisma.printJob, 'count', async () => 0)
+  stub(prisma.libraryFile, 'delete', async (args: { where: { id: string } }) => {
+    deleted.push(args.where.id)
+    return { id: args.where.id }
+  })
+
+  assert.equal(await discardHiddenSlicedOutput('output-1'), true)
+  assert.deepEqual(deleted, ['output-1'], 'the shared project survives')
 })

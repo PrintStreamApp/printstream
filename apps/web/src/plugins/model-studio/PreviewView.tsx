@@ -15,10 +15,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Box, Button, Chip, CircularProgress, DialogContent, Divider, IconButton, LinearProgress, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded'
-import OpenInFullRoundedIcon from '@mui/icons-material/OpenInFullRounded'
-import CloseFullscreenRoundedIcon from '@mui/icons-material/CloseFullscreenRounded'
-import FullscreenRoundedIcon from '@mui/icons-material/FullscreenRounded'
-import FullscreenExitRoundedIcon from '@mui/icons-material/FullscreenExitRounded'
 import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
 import { useQuery } from '@tanstack/react-query'
 import type { LibraryFile, LibraryThreeMfScene, ThreeMfIndex } from '@printstream/shared'
@@ -32,6 +28,8 @@ import { buildLayeredGcodePreview, GCODE_FEATURE_COLORS, GCODE_FEATURE_NAMES, pa
 import { formatSecondsDuration } from '../../lib/time'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { DialogFileTitle } from '../../components/DialogFileTitle'
+import { FullScreenDialogButton, MaximizeDialogButton } from '../../components/DialogPresentationToggles'
+import { useDialogPresentationState } from '../../hooks/useDialogPresentationState'
 import { LibraryPlateCardPicker } from '../../components/LibraryPlateSelect'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { formatLibraryFileName } from '../../lib/libraryDisplay'
@@ -171,12 +169,12 @@ export function PreviewView(props: Record<string, unknown>) {
     (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
     String
   )
-  // Expanded mode sizes the dialog like the full editor (96vw/96dvh) and lets the
-  // viewer fill the freed height instead of keeping its fixed dvh band.
-  // Full view: the 3D area and nothing else, matching the editor's toggle. Deliberately NOT
-  // persisted — a mode that hides the plate picker (and, in the editor, Save) must not be what
-  // greets you on open. It IMPLIES maximized, being the same intent taken all the way.
-  const [viewportOnly, setViewportOnly] = useState(false)
+  // Maximized frees the viewer from its fixed dvh band; full screen drops the plate picker and
+  // header too. Both come from the shared dialog modes, which also own the rule that only the
+  // maximized preference is remembered — see `hooks/useDialogPresentationState.ts`.
+  const { presentation, maximized, setMaximized, fullScreen, setFullScreen } = useDialogPresentationState({
+    maximizedStorageKey: 'bambu.preview.maximized'
+  })
   const [previewBodyNode, setPreviewBodyNode] = useState<HTMLDivElement | null>(null)
   const [previewBodySize, setPreviewBodySize] = useState({ width: 0, height: 0 })
   useEffect(() => {
@@ -193,13 +191,6 @@ export function PreviewView(props: Record<string, unknown>) {
     observer.observe(previewBodyNode)
     return () => observer.disconnect()
   }, [previewBodyNode])
-  const [maximized, setMaximized] = useLocalStorageState(
-    'bambu.preview.maximized',
-    false,
-    (raw) => (raw === 'true' ? true : raw === 'false' ? false : null),
-    String
-  )
-
   const fileQuery = useQuery({
     queryKey: ['library-preview-file', fileId ?? 'missing'],
     queryFn: ({ signal }) => apiFetch<{ file: LibraryFile }>(`/api/library/${fileId}`, { signal }),
@@ -821,18 +812,17 @@ export function PreviewView(props: Record<string, unknown>) {
   const heading = isMeshPreviewMode(previewMode) ? '3D preview' : '3D plate preview'
   const showPlatePicker = !isMeshPreviewMode(previewMode) && plates.length > 0
 
-  // Expanded mode pins the dialog to the full editor's footprint (96vw/96dvh) and
-  // switches the body from a scrolling column to a flex column so the viewer fills
-  // the freed height (no scrolling needed at a fixed dialog height).
-  const expanded = maximized || viewportOnly
+  // Either enlarged mode switches the body from a scrolling column to a flex column so the viewer
+  // fills the freed height instead of keeping its fixed dvh band.
+  const expanded = presentation !== 'standard'
   /**
-   * Vertical space the header icons need INSIDE the 3D area. Normally they sit in the dialog's
-   * header, above the viewport; full view removes that padding, so they overlap it — and the layer
-   * scrubber runs the full right edge, exactly where they land. Anything anchored top-right in the
-   * viewport must start below this.
+   * Vertical space the top-right viewport controls need INSIDE the 3D area. The full-screen toggle
+   * lives ON the viewport (it enlarges the 3D area, not the dialog) and the dialog's close joins it
+   * there once full screen drops the padding — while the layer scrubber runs the full right edge,
+   * exactly where they land. Anything anchored top-right in the viewport must start below this.
    */
-  const viewportTopReserve = viewportOnly ? 52 : 0
-  const showPreviewChrome = !viewportOnly
+  const VIEWPORT_TOP_RESERVE = 52
+  const showPreviewChrome = !fullScreen
   // Same rule the editor uses: the strip runs along whichever axis leaves the 3D area best
   // proportioned. There is no sidebar here, so the whole body width is the viewport's to spend.
   const plateStripOrientation = choosePlateStripOrientation({
@@ -855,57 +845,32 @@ export function PreviewView(props: Record<string, unknown>) {
     <Modal open onClose={onClose}>
       <ScrollableModalDialog
         variant="outlined"
-        sx={viewportOnly
-          // Full view takes the lot, padding included — with no chrome left to inset, that padding
-          // is a border of nothing around the model.
-          ? { width: '100vw', maxWidth: '100%', minHeight: '100dvh', p: 0, borderRadius: 0 }
-          : maximized
-            // minHeight, not height: inside ModalOverflow, Joy pins a centered dialog to
-            // `height: max-content` (higher specificity than sx), which would collapse the
-            // flex body; min-height wins over that at computed-value time.
-            ? { width: '96vw', maxWidth: '100%', minHeight: '96dvh' }
-            : { width: { xs: '100%', md: 1120 }, maxWidth: '100%' }}
+        presentation={presentation}
+        // Only the standard footprint is this view's to pick; the enlarged modes are the shared
+        // geometry, applied over this by the shell.
+        sx={{ width: { xs: '100%', md: 1120 }, maxWidth: '100%', ...(fullScreen ? { p: 0 } : null) }}
       >
+        {/* Maximize resizes the DIALOG, so it belongs in the dialog's header. Its full-screen
+            sibling does not: that enlarges the 3D area alone, so its toggle sits on the 3D area
+            (below), the way the editor's viewport toolbar carries it. */}
         {showPreviewChrome && (
-          <Tooltip title={maximized ? 'Shrink preview' : 'Expand preview'}>
-            <IconButton
-              aria-label={maximized ? 'Shrink preview' : 'Expand preview'}
-              variant="plain"
-              color="neutral"
-              size="sm"
-              onClick={() => setMaximized(!maximized)}
-              sx={{ position: 'absolute', top: 12, right: 92, zIndex: 2 }}
-            >
-              {maximized ? <CloseFullscreenRoundedIcon fontSize="small" /> : <OpenInFullRoundedIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-        )}
-        <Tooltip title={viewportOnly ? 'Exit full view' : 'Full view (3D only)'}>
-          <IconButton
-            aria-label={viewportOnly ? 'Exit full view' : 'Full view, 3D only'}
-            variant="plain"
-            color="neutral"
-            size="sm"
-            aria-pressed={viewportOnly}
-            onClick={() => setViewportOnly(!viewportOnly)}
+          <MaximizeDialogButton
+            active={maximized}
+            onToggle={setMaximized}
             sx={{ position: 'absolute', top: 12, right: 52, zIndex: 2 }}
-          >
-            {viewportOnly ? <FullscreenExitRoundedIcon fontSize="small" /> : <FullscreenRoundedIcon fontSize="small" />}
-          </IconButton>
-        </Tooltip>
-        {/* Kept in full view: unlike the editor there is no toolbar under it, so this is the
-            mode's always-visible exit. */}
+          />
+        )}
         <ModalClose onClick={onClose} sx={{ top: 12, right: 12, zIndex: 2 }} />
-        {/* Extra right padding clears the header icons (full view + expand/shrink + close). */}
+        {/* Extra right padding clears the header icons (maximize/shrink + close). */}
         {showPreviewChrome && (
-          <DialogFileTitle title={heading} fileName={file ? formatLibraryFileName(file.name) : null} sx={{ pr: 18 }} />
+          <DialogFileTitle title={heading} fileName={file ? formatLibraryFileName(file.name) : null} sx={{ pr: 12 }} />
         )}
         <BodyContainer
           ref={setPreviewBodyNode}
-          sx={{ pt: viewportOnly ? 0 : 1.5, ...(expanded ? { flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column' } : null) }}
+          sx={{ pt: fullScreen ? 0 : 1.5, ...(expanded ? { flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column' } : null) }}
         >
           <Stack
-            spacing={viewportOnly ? 0 : 1.5}
+            spacing={fullScreen ? 0 : 1.5}
             // The rail is a COLUMN beside the 3D area; a band stacks above it as before.
             direction={platesVertical ? 'row' : 'column'}
             sx={{ minWidth: 0, ...(expanded ? { flex: 1, minHeight: 0 } : null) }}
@@ -938,16 +903,28 @@ export function PreviewView(props: Record<string, unknown>) {
                 height: expanded ? 'auto' : { xs: '50dvh', sm: '62dvh' },
                 flex: expanded ? 1 : 'initial',
                 minWidth: 0,
-                // Full view has no chrome to leave room for, so the floor would only stop the
+                // Full screen has no chrome to leave room for, so the floor would only stop the
                 // canvas shrinking with the window.
-                minHeight: viewportOnly ? 0 : { xs: 300, sm: 360 },
-                borderRadius: viewportOnly ? 0 : 'md',
+                minHeight: fullScreen ? 0 : { xs: 300, sm: 360 },
+                borderRadius: fullScreen ? 0 : 'md',
                 position: 'relative',
                 overflow: 'hidden',
                 bgcolor: '#0d1322'
               }}
             >
               <Box ref={setViewerContainer} sx={{ position: 'absolute', inset: 0 }} />
+              {/* On the 3D area, not in the dialog header: this mode enlarges the viewport alone, so
+                  the control belongs on the thing it resizes — the editor's viewport toolbar carries
+                  its twin the same way. `soft` because `plain` disappears against the scene. Full
+                  screen drops the dialog's padding, which brings the close X down over this corner,
+                  so step left of it there. */}
+              <FullScreenDialogButton
+                active={fullScreen}
+                onToggle={setFullScreen}
+                contentLabel="3D only"
+                variant="soft"
+                sx={{ position: 'absolute', top: 12, right: fullScreen ? 52 : 12, zIndex: 2 }}
+              />
               {viewerState.loading && (
                 <Stack
                   spacing={1}
@@ -967,8 +944,9 @@ export function PreviewView(props: Record<string, unknown>) {
                     position: 'absolute',
                     top: 12,
                     left: 12,
-                    // Clears the header icons, which sit inside the viewport in full view.
-                    right: viewportOnly ? 96 : 12,
+                    // Clears the viewport's own top-right controls: the full-screen toggle always,
+                    // plus the dialog's close X once full screen drops the padding between them.
+                    right: fullScreen ? 96 : 52,
                     zIndex: 2,
                     px: 1.5,
                     py: 0.75,
@@ -1034,7 +1012,7 @@ export function PreviewView(props: Record<string, unknown>) {
                   variant="soft"
                   sx={{
                     position: 'absolute',
-                    top: 12 + viewportTopReserve,
+                    top: 12 + VIEWPORT_TOP_RESERVE,
                     right: 12,
                     bottom: 12,
                     zIndex: 1,

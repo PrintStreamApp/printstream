@@ -10,13 +10,19 @@ import type { CreateSlicingJob, SlicingOutputLine } from '@printstream/shared'
 import yazl from 'yazl'
 import { readPrintJobThumbnail, savePrintJobThumbnail } from './print-job-thumbnails.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
-import { SlicingJobs, resolveSlicingSourcePath, type PersistSlicedArtifact, type ResolveSlicingSource } from './slicing-jobs.js'
+import { SlicingJobs, resolveSlicingSourcePath, type AuthorSliceSettings, type PersistSlicedArtifact, type ResolveSlicingSource } from './slicing-jobs.js'
 import { readEntry } from './three-mf.js'
 
 // These suites slice from fixture paths that don't exist on disk and mock the
 // slicer, so use the persisted path as-is rather than re-resolving from the DB.
 // (Re-resolution itself is covered by the resolveSlicingSourcePath tests.)
 const passthroughResolveSource: ResolveSlicingSource = async ({ sourcePath }) => sourcePath
+
+// The settings-authoring step reaches the slicer's profile resolver and the tenant's stored
+// presets, neither of which exists here. Its own behaviour is covered by
+// slice-settings-authoring.test.ts; returning null is the "nothing to author" path, so the chain
+// slices the file it already had. The test below drives the authored path explicitly.
+const noAuthoring: AuthorSliceSettings = async () => null
 
 const originalIsConfigured = slicerClient.isConfigured
 const originalRun = slicerClient.run
@@ -50,7 +56,7 @@ test('resolveSlicingSourcePath returns the persisted path when it still exists',
 })
 
 test('slicing jobs surface live slicer output before the run finishes', async () => {
-  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   let releaseRun: (() => void) | undefined
   const runReleased = new Promise<void>((resolve) => {
     releaseRun = resolve
@@ -94,7 +100,7 @@ test('slicing jobs surface live slicer output before the run finishes', async ()
 })
 
 test('slicing jobs log lifecycle changes and CLI output lines', async () => {
-  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const logged: string[] = []
   let releaseRun: (() => void) | undefined
   const runReleased = new Promise<void>((resolve) => {
@@ -140,7 +146,7 @@ test('slicing jobs log lifecycle changes and CLI output lines', async () => {
 })
 
 test('slicing jobs emit elapsed-time heartbeats when live output is unavailable', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 20, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 20, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   let releaseRun: (() => void) | undefined
   const runReleased = new Promise<void>((resolve) => {
     releaseRun = resolve
@@ -184,7 +190,7 @@ test('a slice the slicer stops acknowledging fails with the real reason, not a h
     progressPollIntervalMs: 5,
     progressHeartbeatIntervalMs: 10,
     lostUnknownGraceMs: 20,
-    resolveSource: passthroughResolveSource
+    resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring
   })
   let aborted: AbortSignal | undefined
 
@@ -230,7 +236,7 @@ test('slicing jobs reload persisted history after restart', async () => {
     progressHeartbeatIntervalMs: 10,
     persistState: true,
     stateFilePath,
-    resolveSource: passthroughResolveSource
+    resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring
   }
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
@@ -277,7 +283,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
   const jobs = new SlicingJobs({
     progressPollIntervalMs: 10,
     progressHeartbeatIntervalMs: 10_000,
-    resolveSource: passthroughResolveSource,
+    resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring,
     persistArtifact: async (input) => {
       persistedInputs.push({ hidden: input.hidden, folderId: input.folderId, fileName: input.fileName })
       return {
@@ -341,12 +347,183 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
   }
 })
 
+test('a successful slice keeps the project it handed the engine, linked to the output', async () => {
+  // The project the CLI actually consumed lives in a temp dir that runSlicerJob deletes on
+  // the way out, so this asserts the preserved bytes are read WHILE they still exist and are
+  // the prepared project — not the library file, and not the sliced G-code.
+  const preserved: Array<{ bytes: string; fileName: string; outputId: string; settings: unknown }> = []
+  const jobs = new SlicingJobs({
+    progressPollIntervalMs: 10,
+    progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring,
+    persistArtifact: async (input) => ({
+      file: { id: 'output-file', ownerBridgeId: input.bridgeId, name: input.fileName },
+      unchanged: false
+    } as Awaited<ReturnType<PersistSlicedArtifact>>),
+    preserveProject: async (input) => {
+      preserved.push({
+        bytes: (await readFile(input.preparedProjectPath)).toString('utf8'),
+        fileName: input.fileName,
+        outputId: input.output.id,
+        settings: input.settings
+      })
+      return 'project-snapshot'
+    }
+  })
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-preserve-'))
+  const sourcePath = path.join(tempDir, 'part.3mf')
+  const artifactPath = path.join(tempDir, 'result.gcode.3mf')
+  await writeFile(sourcePath, 'prepared project bytes')
+  await createTestThreeMf(artifactPath, { printer_settings_id: 'Bambu Lab X1C 0.4 nozzle' })
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => ({
+    outputFileName: 'result.gcode.3mf',
+    output: [],
+    metadata: undefined,
+    artifactPath
+  })) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath,
+    targetBridgeId: 'bridge-1',
+    request: { ...makeRequest(), plate: 2 }
+  })
+
+  try {
+    await waitFor(async () => {
+      assert.equal(jobs.get('tenant-1', job.id).status, 'ready')
+    })
+    assert.equal(preserved.length, 1)
+    assert.equal(preserved[0]?.bytes, 'prepared project bytes')
+    // Named after the SOURCE project, not the .gcode.3mf it produced.
+    assert.equal(preserved[0]?.fileName, 'part.3mf')
+    assert.equal(preserved[0]?.outputId, 'output-file')
+    // Only what re-slicing the preserved project needs; the scene is already baked into it.
+    assert.deepEqual(preserved[0]?.settings, { target: makeRequest().target, plate: 2 })
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('the project the engine slices is the project that gets kept', async () => {
+  // The whole reason settings authoring sits in the rewrite chain rather than in the preservation
+  // step: whatever the chain produces must be BOTH what the CLI reads and what we keep. If the two
+  // ever diverge, "slice again" reopens a project that never produced this print.
+  let slicedPath: string | null = null
+  const preserved: string[] = []
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-authored-'))
+  // Its OWN directory: every entry in the chain's `rewrittenSourcePaths` has its containing dir
+  // removed wholesale afterwards, so sharing one with the artifact deletes the artifact.
+  const authoredDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-authored-out-'))
+  const sourcePath = path.join(tempDir, 'part.3mf')
+  const authoredPath = path.join(authoredDir, 'authored.3mf')
+  const artifactPath = path.join(tempDir, 'result.gcode.3mf')
+  await writeFile(sourcePath, 'the project before authoring')
+  await writeFile(authoredPath, 'the project WITH this slice\'s settings')
+  await createTestThreeMf(artifactPath, { printer_settings_id: 'Bambu Lab X1C 0.4 nozzle' })
+
+  const jobs = new SlicingJobs({
+    progressPollIntervalMs: 10,
+    progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource,
+    authorSliceSettings: async () => authoredPath,
+    persistArtifact: async (input) => ({
+      file: { id: 'output-file', ownerBridgeId: input.bridgeId, name: input.fileName },
+      unchanged: false
+    } as Awaited<ReturnType<PersistSlicedArtifact>>),
+    preserveProject: async (input) => {
+      preserved.push((await readFile(input.preparedProjectPath)).toString('utf8'))
+      return 'project-snapshot'
+    }
+  })
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async (input: { sourcePath: string }) => {
+    slicedPath = input.sourcePath
+    return { outputFileName: 'result.gcode.3mf', output: [], metadata: undefined, artifactPath }
+  }) as unknown as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath,
+    targetBridgeId: 'bridge-1',
+    request: makeRequest()
+  })
+
+  try {
+    await waitFor(async () => {
+      assert.equal(jobs.get('tenant-1', job.id).status, 'ready')
+    })
+    assert.equal(slicedPath, authoredPath, 'the engine reads the authored project, not the raw source')
+    assert.deepEqual(preserved, ['the project WITH this slice\'s settings'], 'and that is what we keep')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+    await rm(authoredDir, { recursive: true, force: true })
+  }
+})
+
+test('a slice whose output is not persisted keeps no project', async () => {
+  // Preserving is only safe once the output is durable: a snapshot row is never swept, so
+  // one written for a slice that produced nothing would be unreferenced bytes forever.
+  let preserveCalls = 0
+  const jobs = new SlicingJobs({
+    progressPollIntervalMs: 10,
+    progressHeartbeatIntervalMs: 10_000,
+    resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring,
+    persistArtifact: async () => { throw new Error('bridge offline') },
+    preserveProject: async () => { preserveCalls += 1; return 'project-snapshot' }
+  })
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-preserve-skip-'))
+  const sourcePath = path.join(tempDir, 'part.3mf')
+  const artifactPath = path.join(tempDir, 'result.gcode.3mf')
+  await writeFile(sourcePath, 'prepared project bytes')
+  await createTestThreeMf(artifactPath, { printer_settings_id: 'Bambu Lab X1C 0.4 nozzle' })
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => ({
+    outputFileName: 'result.gcode.3mf',
+    output: [],
+    metadata: undefined,
+    artifactPath
+  })) as typeof slicerClient.run
+
+  const job = jobs.enqueue({
+    tenantId: 'tenant-1',
+    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath,
+    targetBridgeId: 'bridge-1',
+    request: makeRequest()
+  })
+
+  try {
+    await waitFor(async () => {
+      assert.equal(jobs.get('tenant-1', job.id).status, 'failed')
+    })
+    assert.equal(preserveCalls, 0)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('the job list carries a finished job as its outcome line alone', async () => {
   // The list is polled by every open tab and grows with history — measured at 471 KB over 194
   // jobs, of which `output` was 208 KB. A finished job is rendered from its LAST system line (its
   // outcome) and nothing else, so that is all the list ships. An ACTIVE job must keep stdout — its
   // progress frames come from there.
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 5, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 5, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   let releaseRun: (() => void) | undefined
   const runReleased = new Promise<void>((resolve) => { releaseRun = resolve })
 
@@ -396,7 +573,7 @@ test('the job list carries a finished job as its outcome line alone', async () =
 })
 
 test('closing the tab that started a slice cancels it, and leaves other tabs and finished jobs alone', async () => {
-  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   let releaseRun: (() => void) | undefined
   const runReleased = new Promise<void>((resolve) => { releaseRun = resolve })
 
@@ -444,7 +621,7 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
   const jobs = new SlicingJobs({
     progressPollIntervalMs: 10,
     progressHeartbeatIntervalMs: 10_000,
-    resolveSource: passthroughResolveSource,
+    resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring,
     persistArtifact: async (input) => ({
       file: {
       id: 'output-file-1',
@@ -522,7 +699,7 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
 })
 
 test('slicing jobs retry without incompatible builtin profiles after compatibility failures', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const runProfileCounts: number[] = []
   const runProfileKinds: string[][] = []
   const runJobIds: string[] = []
@@ -570,7 +747,7 @@ test('slicing jobs retry without incompatible builtin profiles after compatibili
 })
 
 test('slicing jobs retry when compatibility fallback matches generated builtin:machine profile file names', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const runProfileKinds: string[][] = []
   const runJobIds: string[] = []
 
@@ -619,7 +796,7 @@ test('slicing jobs retry without builtin machine/process after a settings-merge 
   // repair export hits CLI_PROCESS_NOT_COMPATIBLE (exit 239) — e.g. a stale slice dialog pairing
   // an X1C process with an H2D machine. That message must keep flowing into the existing
   // exit-239 compatibility fallback so the slice recovers onto the project's own presets.
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const runProfileKinds: string[][] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
@@ -662,7 +839,7 @@ test('slicing jobs retry without builtin machine/process after a settings-merge 
 test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, then fail', async () => {
   // Exit 139 (SIGSEGV) et al. happen intermittently under qemu emulation on inputs that slice
   // clean when re-run; one bounded retry absorbs the flake without masking a deterministic crash.
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const runJobIds: string[] = []
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
@@ -697,7 +874,7 @@ test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, 
 })
 
 test('slicing jobs do not crash-retry ordinary non-signal slicer failures', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   let runs = 0
 
   slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
@@ -728,7 +905,7 @@ test('slicing jobs do not crash-retry ordinary non-signal slicer failures', asyn
 })
 
 test('slicing jobs preserve manual machine/profile selections on retry after builtin machine removal', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const runJobIds: string[] = []
   const runMachineProfileIds: string[] = []
   const runProcessProfileIds: Array<string | null | undefined> = []
@@ -784,7 +961,7 @@ test('slicing jobs preserve manual machine/profile selections on retry after bui
 })
 
 test('slicing jobs rewrite project settings and retry when compatibility fallback matches process_full profiles', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const runSourcePaths: string[] = []
   const runJobIds: string[] = []
   const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-test-'))
@@ -843,7 +1020,7 @@ test('slicing jobs rewrite project settings and retry when compatibility fallbac
 })
 
 test('slicing jobs retry incompatible built-in machine profiles per job without caching across subsequent jobs', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const runProfileKinds: string[][] = []
   const runJobIds: string[] = []
 
@@ -908,7 +1085,7 @@ test('slicing jobs retry incompatible built-in machine profiles per job without 
 })
 
 test('slicing jobs do not proactively rewrite process profiles on subsequent jobs', async () => {
-  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource })
+  const jobs = new SlicingJobs({ progressPollIntervalMs: 10, progressHeartbeatIntervalMs: 10_000, resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring })
   const runSourcePaths: string[] = []
   const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-test-'))
   const firstSourcePath = path.join(tempDir, 'first.3mf')

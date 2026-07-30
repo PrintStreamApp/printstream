@@ -15,7 +15,7 @@ export function PreviewOverlay(props: Record<string, unknown>) {
   // Only mount (and thus fetch the chunk) once a preview has been requested.
   if (typeof props.previewFileId !== 'string' || !props.previewFileId) return null
   return (
-    <Suspense fallback={<LazyDialogFallback variant="fullscreen" label="Opening the 3D preview…" />}>
+    <Suspense fallback={<LazyDialogFallback variant="maximized" label="Opening the 3D preview…" />}>
       <PreviewView {...props} />
     </Suspense>
   )

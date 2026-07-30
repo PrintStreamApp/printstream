@@ -40,13 +40,17 @@ const REPAIR_COPY: Record<ThreeMfSettingsRepairReason, { title: string; body: st
   variantIndex: {
     title: 'This project won’t open in Bambu Studio',
     body: 'Its filament settings are missing a value Bambu Studio needs, so Bambu Studio reports an invalid configuration and refuses to open it. Slicing here is unaffected.'
+  },
+  filamentIds: {
+    title: 'This project’s materials don’t match their presets',
+    body: 'One or more materials were changed without their identity being updated, so Bambu Studio shows them as unnamed project presets with default settings instead of the materials you chose. Slicing here is unaffected.'
   }
 }
 
 /** Both at once: name the worse consequence (unopenable) without hiding the other. */
 const REPAIR_COPY_BOTH = {
   title: 'This project’s saved settings need repairing',
-  body: 'Its filament settings are missing a value Bambu Studio needs, and its purge settings don’t match its printer — so Bambu Studio won’t open it and slicing can fail.'
+  body: 'Several of its saved settings disagree with each other, which can stop Bambu Studio opening the project or showing the right materials, and can make slicing fail.'
 }
 
 export function RepairProjectSettingsAlert({ fileId, reasons, onRepaired, sx }: {
@@ -64,6 +68,8 @@ export function RepairProjectSettingsAlert({ fileId, reasons, onRepaired, sx }: 
   const queryClient = useQueryClient()
   const [repairing, setRepairing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** Slot numbers a completed repair could not resolve, so the outcome can be reported honestly. */
+  const [partial, setPartial] = useState<number[] | null>(null)
   const copy = reasons && reasons.length > 1
     ? REPAIR_COPY_BOTH
     : REPAIR_COPY[reasons?.[0] ?? 'flushMatrix']
@@ -72,14 +78,40 @@ export function RepairProjectSettingsAlert({ fileId, reasons, onRepaired, sx }: 
     setRepairing(true)
     setError(null)
     try {
-      await apiFetch(`/api/library/${fileId}/repair-settings`, { method: 'POST' })
+      const result = await apiFetch<{ repaired: boolean; unresolvedSlots?: number[] }>(
+        `/api/library/${fileId}/repair-settings`,
+        { method: 'POST' }
+      )
       await invalidateLibraryQueries(queryClient)
+      // A PARTIAL repair must say so instead of closing silently: a slot whose preset matches no
+      // known material keeps the identity it had, so the project is improved but not clean, and a
+      // user told nothing would reasonably assume it was. Stays on screen rather than handing the
+      // caller `onRepaired` (which typically closes the surface).
+      const unresolved = result.unresolvedSlots ?? []
+      if (unresolved.length > 0) {
+        setPartial(unresolved)
+        return
+      }
       onRepaired?.()
     } catch (caught) {
       setError(extractErrorMessage(caught, 'Could not repair this project.'))
     } finally {
       setRepairing(false)
     }
+  }
+
+  if (partial) {
+    const slots = partial.length === 1 ? `material ${partial[0]}` : `materials ${partial.join(', ')}`
+    return (
+      <Alert variant="soft" color="warning" startDecorator={<WarningAmberIcon />} sx={[{ alignItems: 'flex-start' }, ...(Array.isArray(sx) ? sx : [sx])]}>
+        <div>
+          <Typography level="title-sm">Repaired, but {slots} still need attention</Typography>
+          <Typography level="body-sm">
+            {`Their presets aren’t ones we recognise, so we left them as they were rather than guessing. Pick those materials again and save to finish the repair.`}
+          </Typography>
+        </div>
+      </Alert>
+    )
   }
 
   return (

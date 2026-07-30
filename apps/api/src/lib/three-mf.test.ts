@@ -1202,7 +1202,7 @@ test('parseModelSettingsScene reads object process overrides but not structural 
 
 test('applyPartProcessOverrides sets a part\'s process metadata without touching the object or siblings', () => {
   const xml = '<config><object id="3"><metadata key="name" value="Asm"/><metadata key="wall_loops" value="2"/><part id="3"><metadata key="name" value="A"/></part><part id="4"><metadata key="name" value="B"/></part></object></config>'
-  const out = applyPartProcessOverrides(xml, [{ objectId: 3, componentObjectId: 4, overrides: { wall_loops: '6' } }])
+  const out = applyPartProcessOverrides(xml, [{ objectId: 3, partIndex: 1, overrides: { wall_loops: '6' } }])
   // Part 4 gains the override; its name (structural) stays; part 3 and the object head are untouched.
   const part4 = /<part id="4">[\s\S]*?<\/part>/.exec(out)?.[0] ?? ''
   assert.match(part4, /<metadata key="wall_loops" value="6"\/>/)
@@ -1219,7 +1219,7 @@ test('applyPartProcessOverrides refuses to inject structural keys smuggled into 
   const xml = '<config><object id="3"><part id="4"><metadata key="name" value="B"/><metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/></part></object></config>'
   const out = applyPartProcessOverrides(xml, [{
     objectId: 3,
-    componentObjectId: 4,
+    partIndex: 0,
     overrides: { wall_loops: '6', matrix: '9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9', source_offset_x: '42', name: 'evil' }
   }])
   const part4 = /<part id="4">[\s\S]*?<\/part>/.exec(out)?.[0] ?? ''
@@ -1234,7 +1234,7 @@ test('applyPartProcessOverrides refuses to inject structural keys smuggled into 
 
 test('applyPartTypeChanges rewrites only the targeted part\'s subtype', () => {
   const xml = '<config><object id="3"><part id="3" subtype="normal_part"><metadata key="name" value="A"/></part><part id="4" subtype="normal_part"><metadata key="name" value="B"/></part></object><object id="7"><part id="8" subtype="normal_part"/></object></config>'
-  const out = applyPartTypeChanges(xml, [{ objectId: 3, componentObjectId: 4, subtype: 'modifier_part' }])
+  const out = applyPartTypeChanges(xml, [{ objectId: 3, partIndex: 1, subtype: 'modifier_part' }])
   assert.match(out, /<part id="4" subtype="modifier_part">/)
   assert.match(out, /<part id="3" subtype="normal_part">/)
   assert.match(out, /<part id="8" subtype="normal_part"\/>/)
@@ -1242,7 +1242,7 @@ test('applyPartTypeChanges rewrites only the targeted part\'s subtype', () => {
 
 test('applyPartTypeChanges inserts a subtype attribute when the part has none', () => {
   const xml = '<config><object id="3"><part id="4"><metadata key="name" value="B"/></part></object></config>'
-  const out = applyPartTypeChanges(xml, [{ objectId: 3, componentObjectId: 4, subtype: 'support_blocker' }])
+  const out = applyPartTypeChanges(xml, [{ objectId: 3, partIndex: 0, subtype: 'support_blocker' }])
   assert.match(out, /<part id="4" subtype="support_blocker">/)
 })
 
@@ -1691,8 +1691,8 @@ test('partFilaments on SOME parts round-trips without painting the untouched par
         { objectId: 11, plateIndex: 1, position: { x: 40, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
       ],
       partFilaments: [
-        { objectId: 3, componentObjectId: 2, filamentId: 2 },
-        { objectId: 11, componentObjectId: 4, filamentId: 3 }
+        { objectId: 3, partIndex: 1, filamentId: 2 },
+        { objectId: 11, partIndex: 0, filamentId: 3 }
       ]
     }
     await writeArrangedThreeMf(sourcePath, outputPath, edit)
@@ -1761,7 +1761,7 @@ test('partTransforms rewrite the component transform and mirror the matrix metad
       instances: [
         { objectId: 3, plateIndex: 1, position: { x: -40, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
       ],
-      partTransforms: [{ objectId: 3, componentObjectId: 2, matrix }]
+      partTransforms: [{ objectId: 3, partIndex: 1, matrix }]
     }
     await writeArrangedThreeMf(sourcePath, outputPath, edit)
 
@@ -1778,6 +1778,74 @@ test('partTransforms rewrite the component transform and mirror the matrix metad
     const parts = scene.instances.find((entry) => entry.objectId === 3)?.parts ?? []
     assert.deepEqual(parts.find((part) => part.componentObjectId === 2)?.transform, matrix)
     assert.deepEqual(parts.find((part) => part.componentObjectId === 1)?.transform, [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+// PRODUCTION REGRESSION (CHM - H2 "Assembly", 2026-07-29): four modifier cubes cut from ONE cube
+// mesh, so all four `<part>`/`<component>` entries carry id 22. Moving one collapsed the other
+// three onto it. `<part id>` is a MESH reference and BambuStudio deliberately writes it duplicated
+// for shared meshes (`m_share_mesh`); the part's identity is its ORDINAL, which is what its own
+// importer keys on (`_handle_start_config_volume` uses `volumes.size()`).
+test('a part sharing its mesh id with siblings moves alone', async () => {
+  const shared = (objectid: string, tx: string) =>
+    `<component p:path="/3D/Objects/object_3.model" objectid="${objectid}" transform="1 0 0 0 1 0 0 0 1 ${tx} 0 0"/>`
+  const modelXml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<model xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">',
+    '  <resources>',
+    '    <object id="3" type="model"><components>'
+      + shared('21', '0') + shared('22', '10') + shared('22', '20') + shared('22', '30')
+      + '</components></object>',
+    '  </resources>',
+    '  <build><item objectid="3" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/></build>',
+    '</model>'
+  ].join('\n')
+  const modelSettingsXml = [
+    '<config>',
+    '  <object id="3"><metadata key="name" value="Assembly"/>'
+      + '<part id="21" subtype="normal_part"><metadata key="name" value="Mount"/></part>'
+      + '<part id="22" subtype="modifier_part"><metadata key="name" value="Cube"/></part>'
+      + '<part id="22" subtype="modifier_part"><metadata key="name" value="Cube"/></part>'
+      + '<part id="22" subtype="modifier_part"><metadata key="name" value="Cube"/></part></object>',
+    '  <plate><metadata key="plater_id" value="1"/>',
+    '    <model_instance><metadata key="object_id" value="3"/><metadata key="instance_id" value="0"/></model_instance>',
+    '  </plate>',
+    '</config>'
+  ].join('\n')
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-shared-mesh-'))
+  const sourcePath = path.join(tempDir, 'source.3mf')
+  const outputPath = path.join(tempDir, 'arranged.3mf')
+  try {
+    await writeZipFixture(sourcePath, [
+      ['3D/3dmodel.model', Buffer.from(modelXml, 'utf8')],
+      ['Metadata/model_settings.config', Buffer.from(modelSettingsXml, 'utf8')]
+    ])
+    // Move the SECOND cube (ordinal 2) only.
+    const edit: SceneEdit = {
+      plates: [{ index: 1 }],
+      instances: [
+        { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
+      ],
+      partTransforms: [{ objectId: 3, partIndex: 2, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 99, 0, 0] }],
+      partTypeChanges: [{ objectId: 3, partIndex: 3, subtype: 'support_blocker' }]
+    }
+    await writeArrangedThreeMf(sourcePath, outputPath, edit)
+
+    const rewritten = (await readEntry(outputPath, '3D/3dmodel.model')).toString('utf8')
+    const transforms = [...rewritten.matchAll(/<component[^>]*transform="([^"]*)"/g)].map((match) => match[1])
+    // Only the third component (ordinal 2) moved; its mesh-sharing siblings are untouched.
+    assert.deepEqual(transforms, [
+      '1 0 0 0 1 0 0 0 1 0 0 0',
+      '1 0 0 0 1 0 0 0 1 10 0 0',
+      '1 0 0 0 1 0 0 0 1 99 0 0',
+      '1 0 0 0 1 0 0 0 1 30 0 0'
+    ])
+    // And a type change lands on its own ordinal, not on every part sharing the mesh.
+    const settings = (await readEntry(outputPath, 'Metadata/model_settings.config')).toString('utf8')
+    const subtypes = [...settings.matchAll(/<part id="\d+" subtype="([^"]*)"/g)].map((match) => match[1])
+    assert.deepEqual(subtypes, ['normal_part', 'modifier_part', 'modifier_part', 'support_blocker'])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -2819,7 +2887,7 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
         { objectId: bakedObjectId, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
       ],
       partProcessOverrides: [
-        { objectId: bakedObjectId, componentObjectId: bakedParts[1]!.componentObjectId, overrides: { sparse_infill_density: '99%' } }
+        { objectId: bakedObjectId, partIndex: 1, overrides: { sparse_infill_density: '99%' } }
       ]
     }
     const reOutput = path.join(tempDir, 'reedited.3mf')
@@ -2969,8 +3037,8 @@ test('buildEditedThreeMf applies part-type changes on baked parts and import sol
         { objectId: scene.instances[0]!.objectId, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
       ],
       partTypeChanges: [
-        { objectId: scene.instances[0]!.objectId, componentObjectId: parts[1]!.componentObjectId, subtype: 'support_enforcer' },
-        { objectId: scene.instances[0]!.objectId, componentObjectId: parts[0]!.componentObjectId, subtype: 'negative_part' }
+        { objectId: scene.instances[0]!.objectId, partIndex: 1, subtype: 'support_enforcer' },
+        { objectId: scene.instances[0]!.objectId, partIndex: 0, subtype: 'negative_part' }
       ]
     }
     const reOutput = path.join(tempDir, 'reedited.3mf')

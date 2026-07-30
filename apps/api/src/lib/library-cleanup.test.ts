@@ -209,6 +209,53 @@ test('pruneUnreferencedSlicedOutputs removes only stale slice-origin hidden rows
   assert.deepEqual(where.queueItems, { none: {} })
 })
 
+test('pruneUnreferencedProjectSnapshots enforces "no job, no kept project"', async () => {
+  // A slice preserves the project it handed the engine, but that is only worth keeping if the user
+  // went on to start a print (or kept the sliced output). Snapshot rows are exempt from every other
+  // pass here, so without this one an abandoned slice leaks its project bytes forever.
+  const { pruneUnreferencedProjectSnapshots } = await import('./library-cleanup.js')
+  const originalLibraryFile = rootPrisma.libraryFile
+  const queries: unknown[] = []
+  const deletedIds: string[] = []
+  const deletedBytes: string[] = []
+  Object.defineProperty(rootPrisma, 'libraryFile', {
+    configurable: true,
+    value: {
+      ...originalLibraryFile,
+      findMany: async (args: unknown) => {
+        queries.push(args)
+        return [{ id: 'project-1', ownerBridgeId: 'bridge-1', storedPath: 'abc-part.3mf' }]
+      },
+      delete: async (args: { where: { id: string } }) => {
+        deletedIds.push(args.where.id)
+        return { id: args.where.id }
+      }
+    }
+  })
+
+  try {
+    const result = await pruneUnreferencedProjectSnapshots({
+      deleteLibraryFileBytes: async (input: { storedPath: string }) => {
+        deletedBytes.push(input.storedPath)
+      }
+    })
+
+    assert.equal(result.removed, 1)
+    assert.deepEqual(deletedIds, ['project-1'])
+    assert.deepEqual(deletedBytes, ['abc-part.3mf'])
+    const where = (queries[0] as { where: Record<string, unknown> }).where
+    // Both markers: print-file snapshots also carry a snapshotKey, so origin is what narrows this
+    // to a preserved project. Deleting a dispatched print's snapshot would break its reprint.
+    assert.equal(where.origin, 'snapshot')
+    assert.deepEqual(where.snapshotKey, { not: null })
+    // A started job or a kept output is exactly what "referenced" means.
+    assert.deepEqual(where.slicedOutputs, { none: {} })
+    assert.deepEqual(where.sourceProjectJobs, { none: {} })
+  } finally {
+    Object.defineProperty(rootPrisma, 'libraryFile', { configurable: true, value: originalLibraryFile })
+  }
+})
+
 test('pruneDormantBridges reaps only never-connected, unpaired, expired registrations', async () => {
   const { pruneDormantBridges } = await import('./library-cleanup.js')
   const originalBridge = rootPrisma.bridge

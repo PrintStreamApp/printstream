@@ -12,6 +12,7 @@
  */
 import { z } from 'zod'
 import { auditLogEntrySchema } from './logs.js'
+import { preservedSliceSettingsSchema } from './slicing.js'
 import { AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
 
 /**
@@ -942,6 +943,16 @@ export const printJobSchema = z.object({
   fileId: z.string().nullable(),
   fileName: z.string().nullable(),
   fileSizeBytes: z.number().int().nonnegative().nullable(),
+  /**
+   * The project 3MF this print was sliced from, preserved exactly as it was handed to
+   * the slicer, plus the settings that produced it. Present only for prints of something
+   * this workspace sliced (never for direct uploads or externally started jobs), and
+   * cleared once the project is deleted — so a null here means "slice again is not
+   * offered", never "look it up somewhere else".
+   */
+  sourceProjectFileId: z.string().nullable().default(null),
+  sourceProjectFileName: z.string().nullable().default(null),
+  sliceSettings: preservedSliceSettingsSchema.nullable().default(null),
   projectFilamentChips: z.array(projectFilamentChipSchema),
   plate: z.number().int().positive().nullable(),
   useAms: z.boolean().nullable(),
@@ -953,7 +964,14 @@ export const printJobSchema = z.object({
 })
 export type PrintJob = z.infer<typeof printJobSchema>
 
-export type ThreeMfSettingsRepairReason = 'flushMatrix' | 'variantIndex'
+/**
+ * Repairable `project_settings.config` defects. The MEMBERS live here as one list so a new defect
+ * cannot be added to the type and forgotten in a schema — every wire schema derives from this.
+ * The checks themselves live in `repairs/` (see `collectSettingsRepairReasons`).
+ */
+export const threeMfSettingsRepairReasons = ['flushMatrix', 'variantIndex', 'filamentIds'] as const
+export const threeMfSettingsRepairReasonSchema = z.enum(threeMfSettingsRepairReasons)
+export type ThreeMfSettingsRepairReason = z.infer<typeof threeMfSettingsRepairReasonSchema>
 
 export const libraryFileSchema = z.object({
   id: z.string(),
@@ -999,7 +1017,7 @@ export const libraryFileSchema = z.object({
    *   to OPEN the project ("Invalid configuration file"), while our own slices work fine.
    * Absent/empty on a healthy project. `needsSettingsRepair` stays the gate.
    */
-  settingsRepairReasons: z.array(z.enum(['flushMatrix', 'variantIndex'])).optional(),
+  settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
   /**
    * The Bambu Studio version that saved this project (e.g. `"02.08.00.50"`). Absent for non-3MFs
    * and for projects that carry no version. BambuStudio REFUSES a project newer than the engine

@@ -705,7 +705,9 @@ slicingRouter.post('/jobs/:id/discard', requireRequestPermission(LIBRARY_UPLOAD_
   annotateRequestAuditLog(request, {
     action: 'discard-sliced-output',
     resource: 'slicing job',
-    summary: `Discarded the unsaved sliced output for ${slicingJob.sourceFileName}.`,
+    // Names both artifacts because this now removes two: the unsaved G-code AND the project that
+    // was preserved for re-slicing it (nothing else references it once the output is gone).
+    summary: `Discarded the unsaved sliced output and its preserved project for ${slicingJob.sourceFileName}.`,
     metadata: {
       slicingJobId: slicingJob.id,
       fileId: slicingJob.sourceFileId,

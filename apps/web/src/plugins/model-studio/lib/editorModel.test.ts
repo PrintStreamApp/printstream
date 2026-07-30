@@ -128,7 +128,7 @@ test('buildSceneEdit routes part-type changes to partTypeChanges (objects) and i
   }
 
   const edit = buildSceneEdit(state)
-  assert.deepEqual(edit.partTypeChanges, [{ objectId: 7, componentObjectId: 5, subtype: 'support_blocker' }])
+  assert.deepEqual(edit.partTypeChanges, [{ objectId: 7, partIndex: 5, subtype: 'support_blocker' }])
   assert.deepEqual(edit.importPartTypes, [{ importId: 'imp-3', partIndex: 1, subtype: 'modifier_part' }])
 })
 
@@ -146,7 +146,7 @@ test('buildSceneEdit emits partTransforms for placed objects only, and cloneEdit
   }
 
   const edit = buildSceneEdit(state)
-  assert.deepEqual(edit.partTransforms, [{ objectId: 7, componentObjectId: 5, matrix }])
+  assert.deepEqual(edit.partTransforms, [{ objectId: 7, partIndex: 5, matrix }])
 
   // History snapshots must not share the live matrix arrays.
   const clone = cloneEditorState(state)
@@ -271,7 +271,7 @@ test('replaceInstanceGeometry retains placement, material, printability, name an
   source.scale.set(1.5, 1.5, 1.5)
   source.filamentId = 3
   source.printable = false
-  source.parts = [{ entryPath: '/x.model', componentObjectId: 2, transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: 3, name: 'p', color: null, subtype: null }]
+  source.parts = [{ entryPath: '/x.model', componentObjectId: 2, partIndex: 0, transform: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: 3, name: 'p', color: null, subtype: null }]
 
   const replacement: StagedImport = { ...STAGED, importId: 'imp-2', name: 'Gear.stl' }
   const next = replaceInstanceGeometry(source, replacement, 9)
@@ -670,8 +670,9 @@ test('an independent copy gets its own identity and inherits the source session 
 
   const edit = buildSceneEdit(state)
   assert.deepEqual(edit.objectClones, [{ objectId: copy.objectId, sourceObjectId: 3 }])
-  // Component ids stay the SOURCE's — the bake's clone pre-pass remaps them onto the copy's parts.
-  assert.ok(edit.partTypeChanges?.some((entry) => entry.objectId === copy.objectId && entry.componentObjectId === 11))
+  // A part is addressed by its ORDINAL, which a copy shares with its source — so unlike the mesh
+  // ids the clone pre-pass remaps, there is nothing per-part to translate here.
+  assert.ok(edit.partTypeChanges?.some((entry) => entry.objectId === copy.objectId && entry.partIndex === 11))
 
   // Deleting the copy must not ship a dangling clone (the bake rejects one).
   state.plates[0]!.instances = [source]
@@ -948,8 +949,8 @@ test('seeding never gives a support blocker the object material, and never bakes
   // The save must not write an `extruder` back onto the blocker.
   const edit = buildSceneEdit(state)
   assert.deepEqual(
-    edit.partFilaments?.map((entry) => entry.componentObjectId).sort(),
-    [1, 5]
+    edit.partFilaments?.map((entry) => entry.partIndex).sort(),
+    [0, 2]
   )
 })
 
@@ -975,8 +976,8 @@ test('rebaseSceneEditFilamentIds translates every id-carrying field and drops un
       { objectId: 3, plateIndex: 1, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, filamentId: 5 }
     ],
     partFilaments: [
-      { objectId: 2, componentObjectId: 1, filamentId: 2 },
-      { objectId: 2, componentObjectId: 4, filamentId: 5 }
+      { objectId: 2, partIndex: 0, filamentId: 2 },
+      { objectId: 2, partIndex: 1, filamentId: 5 }
     ],
     importPartFilaments: [{ importId: 'imp-1', partIndex: 0, filamentId: 2 }],
     addedParts: [{ objectId: 2, meshImportId: 'imp-2', subtype: 'normal_part', name: 'Cube', matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], filamentId: 2 }],
@@ -985,7 +986,7 @@ test('rebaseSceneEditFilamentIds translates every id-carrying field and drops un
   const next = rebaseSceneEditFilamentIds(edit, remap)
   assert.equal(next.instances[0]!.filamentId, 1, 'kept slot follows to its saved id')
   assert.equal(next.instances[1]!.filamentId, null, 'a removed material becomes inherit, never a guess')
-  assert.deepEqual(next.partFilaments, [{ objectId: 2, componentObjectId: 1, filamentId: 1 }], 'unmappable part assignment dropped')
+  assert.deepEqual(next.partFilaments, [{ objectId: 2, partIndex: 0, filamentId: 1 }], 'unmappable part assignment dropped')
   assert.deepEqual(next.importPartFilaments, [{ importId: 'imp-1', partIndex: 0, filamentId: 1 }])
   assert.equal(next.addedParts![0]!.filamentId, 1)
   assert.deepEqual(next.filamentChanges![0]!.changes, [{ z: 3, filamentId: 1 }], 'a change to a removed material is dropped')

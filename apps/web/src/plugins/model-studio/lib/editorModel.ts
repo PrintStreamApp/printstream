@@ -141,7 +141,20 @@ export interface EditorInstance {
  */
 export interface EditorInstancePart {
   entryPath: string
+  /**
+   * The MESH this part draws — a `<component objectid>` / `<part id>` reference. NOT an identity:
+   * BambuStudio writes the same id for every volume sharing a mesh, so an object can hold several
+   * parts with the same `componentObjectId`. Use {@link EditorInstancePart.partIndex} to address a
+   * part; use this only to find its geometry (and for MESH-scoped state like paint, which such
+   * parts genuinely share).
+   */
   componentObjectId: number
+  /**
+   * The part's 0-based ordinal within its object — BambuStudio's own part identity (it keys a
+   * volume by its position as it parses `model_settings.config`). Stable for a given file because
+   * `<part>`/`<component>` are written and read in volume order.
+   */
+  partIndex: number
   /** Component-local 12-element transform, applied under the instance placement. */
   transform: number[]
   /** Per-part filament/extruder assignment from the source 3MF (parts can differ from the object). */
@@ -342,6 +355,26 @@ export function supportPaintKey(objectId: number, componentObjectId: number): st
   return `${objectId}:${componentObjectId}`
 }
 
+/**
+ * Key for the ORDINAL-scoped per-part session maps — `partTransforms`, `partTypeChanges`,
+ * `partProcessOverrides`. Deliberately separate from {@link supportPaintKey} despite the identical
+ * string shape: paint is a property of the MESH (parts sharing a mesh share their paint, which is
+ * BambuStudio's behaviour), while placement/type/process belong to the individual volume and must
+ * not bleed between parts that happen to reference the same mesh.
+ */
+export function partSlotKey(objectId: number, partIndex: number): string {
+  return `${objectId}:${partIndex}`
+}
+
+/** Inverse of {@link partSlotKey}; null when the key is malformed. */
+export function parsePartSlotKey(key: string): { objectId: number; partIndex: number } | null {
+  const [objectPart, indexPart] = key.split(':')
+  const objectId = Number(objectPart)
+  const partIndex = Number(indexPart)
+  if (!Number.isInteger(objectId) || !Number.isInteger(partIndex) || partIndex < 0) return null
+  return { objectId, partIndex }
+}
+
 const DEFAULT_BED = { minX: -128, maxX: 128, minY: -128, maxY: 128, excludeAreas: [] as Array<{ polygon: Array<{ x: number; y: number }>; label: string | null }> }
 
 /** Generate a unique, stable key for an editor instance. */
@@ -454,7 +487,7 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
     ...(instance.brimEars && instance.brimEars.length > 0
       ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) }
       : {}),
-    parts: instance.parts.map((part) => {
+    parts: instance.parts.map((part, partIndex) => {
       const info = partInfo.get(partInfoKey(part.entryPath, part.componentObjectId))
       // Object-material inheritance is for PRINTED parts only. A support blocker/enforcer or
       // negative volume has no material at all, and a modifier's is "default" until the user
@@ -467,6 +500,7 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
       return {
         entryPath: part.entryPath,
         componentObjectId: part.componentObjectId,
+        partIndex,
         transform: [...part.transform],
         filamentId: carriesFilament ? info?.filamentId ?? inherited : null,
         name: info?.name ?? null,
@@ -608,6 +642,7 @@ export function instanceFromStagedImport(
         // import and `componentObjectId` is the solid's index (a stable client key).
         entryPath: `import:${staged.importId}`,
         componentObjectId: index,
+        partIndex: index,
         transform: IDENTITY_PART_TRANSFORM.slice(),
         filamentId: null,
         name: part.name,
@@ -1301,11 +1336,11 @@ function collectPartTypeChanges(state: EditorState): SceneEdit['partTypeChanges'
   const placed = placedObjectIds(state)
   const out: NonNullable<SceneEdit['partTypeChanges']> = []
   for (const [key, subtype] of Object.entries(state.partTypeChanges)) {
-    const parsedKey = parsePartPaintKey(key)
+    const parsedKey = parsePartSlotKey(key)
     if (!parsedKey) continue
-    const { objectId, componentObjectId } = parsedKey
+    const { objectId, partIndex } = parsedKey
     if (!placed.has(objectId)) continue
-    out.push({ objectId, componentObjectId, subtype })
+    out.push({ objectId, partIndex, subtype })
   }
   return out.length > 0 ? out : undefined
 }
@@ -1316,11 +1351,11 @@ function collectPartTransforms(state: EditorState): SceneEdit['partTransforms'] 
   const placed = placedObjectIds(state)
   const out: NonNullable<SceneEdit['partTransforms']> = []
   for (const [key, matrix] of Object.entries(state.partTransforms)) {
-    const parsedKey = parsePartPaintKey(key)
+    const parsedKey = parsePartSlotKey(key)
     if (!parsedKey) continue
-    const { objectId, componentObjectId } = parsedKey
+    const { objectId, partIndex } = parsedKey
     if (!placed.has(objectId) || matrix.length !== 12) continue
-    out.push({ objectId, componentObjectId, matrix: [...matrix] })
+    out.push({ objectId, partIndex, matrix: [...matrix] })
   }
   return out.length > 0 ? out : undefined
 }
@@ -1371,17 +1406,17 @@ function collectImportPartTransforms(state: EditorState): SceneEdit['importPartT
   return out.length > 0 ? out : undefined
 }
 
-/** Per-part process overrides for parts whose object is still placed (keyed objectId:componentId). */
+/** Per-part process overrides for parts whose object is still placed (keyed objectId:partIndex). */
 function collectPartProcessOverrides(state: EditorState): SceneEdit['partProcessOverrides'] {
   if (!state.partProcessOverrides) return undefined
   const placed = placedObjectIds(state)
   const out: NonNullable<SceneEdit['partProcessOverrides']> = []
   for (const [key, overrides] of Object.entries(state.partProcessOverrides)) {
-    const parsedKey = parsePartPaintKey(key)
+    const parsedKey = parsePartSlotKey(key)
     if (!parsedKey) continue
-    const { objectId, componentObjectId } = parsedKey
+    const { objectId, partIndex } = parsedKey
     if (!placed.has(objectId) || Object.keys(overrides).length === 0) continue
-    out.push({ objectId, componentObjectId, overrides })
+    out.push({ objectId, partIndex, overrides })
   }
   return out.length > 0 ? out : undefined
 }
@@ -1408,19 +1443,19 @@ function collectObjectNames(state: EditorState): SceneEdit['objectNames'] {
 
 /**
  * Distinct per-object-part filament assignments across the scene. Filament is shared by
- * every instance of an object, so we dedupe by objectId+componentObjectId; the slice-time
+ * every instance of an object, so we dedupe by objectId + the part's ORDINAL; the slice-time
  * writer rewrites those parts' `extruder` metadata to persist material reassignments.
  */
 function collectPartFilaments(state: EditorState): SceneEdit['partFilaments'] {
-  const byKey = new Map<string, { objectId: number; componentObjectId: number; filamentId: number }>()
+  const byKey = new Map<string, { objectId: number; partIndex: number; filamentId: number }>()
   for (const plate of state.plates) {
     for (const instance of plate.instances) {
       if (instance.source.kind !== 'object') continue
       for (const part of instance.parts) {
         if (part.filamentId == null) continue
-        byKey.set(`${instance.objectId}:${part.componentObjectId}`, {
+        byKey.set(partSlotKey(instance.objectId, part.partIndex), {
           objectId: instance.objectId,
-          componentObjectId: part.componentObjectId,
+          partIndex: part.partIndex,
           filamentId: part.filamentId
         })
       }
@@ -1663,6 +1698,7 @@ export function cloneEditorState(state: EditorState): EditorState {
         ...(instance.brimEars ? { brimEars: instance.brimEars.map((ear) => ({ ...ear })) } : {}),
         parts: instance.parts.map((part) => ({
           entryPath: part.entryPath,
+          partIndex: part.partIndex,
           componentObjectId: part.componentObjectId,
           transform: [...part.transform],
           filamentId: part.filamentId,

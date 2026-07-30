@@ -56,3 +56,53 @@ test('useLocalStorageState reloads changed keys without overwriting the next key
   await waitFor(() => assert.equal(view.getByRole('button').textContent, 'bravo'))
   assert.equal(window.localStorage.getItem('tenant-b'), 'bravo')
 })
+
+/**
+ * Two independent readers of ONE key — a settings dialog and the surface its preference governs.
+ * The write must reach both, or the setting looks broken until the surface remounts. This is the
+ * public editor's viewport preferences: localStorage is their only tier, so nothing else propagates.
+ */
+function TwoReaders() {
+  return (
+    <>
+      <div data-testid="writer"><StoredValue storageKey="shared" /></div>
+      <div data-testid="reader"><StoredValue storageKey="shared" /></div>
+    </>
+  )
+}
+
+test('a write reaches every instance reading the same key', async () => {
+  window.localStorage.setItem('shared', 'before')
+  const view = render(<TwoReaders />)
+  const writer = view.getByTestId('writer').querySelector('button')!
+  const reader = view.getByTestId('reader').querySelector('button')!
+  assert.equal(reader.textContent, 'before')
+
+  fireEvent.click(writer)
+
+  await waitFor(() => assert.equal(writer.textContent, 'updated'))
+  await waitFor(() => assert.equal(reader.textContent, 'updated'))
+})
+
+/** A JSON preference: `parse` returns a fresh object each call, so a naive sync loops forever. */
+function JsonReader({ testid }: { testid: string }) {
+  const [value, setValue] = useLocalStorageState<{ n: number }>(
+    'json-pref',
+    { n: 0 },
+    (raw) => { try { return JSON.parse(raw) as { n: number } } catch { return null } }
+  )
+  return (
+    <button type="button" data-testid={testid} onClick={() => setValue({ n: value.n + 1 })}>
+      {String(value.n)}
+    </button>
+  )
+}
+
+test('an object-valued preference syncs without bouncing between instances', async () => {
+  const view = render(<><JsonReader testid="a" /><JsonReader testid="b" /></>)
+  fireEvent.click(view.getByTestId('a'))
+  await waitFor(() => assert.equal(view.getByTestId('b').textContent, '1'))
+  // Settled, not oscillating: both agree and storage holds exactly one increment.
+  assert.equal(view.getByTestId('a').textContent, '1')
+  assert.equal(window.localStorage.getItem('json-pref'), JSON.stringify({ n: 1 }))
+})

@@ -86,6 +86,15 @@ interface DispatchJobState {
   fileSizeBytes: number
   sourceKind: '3mf' | 'gcode'
   projectFilamentChips: PrintDispatchJob['projectFilamentChips']
+  /**
+   * Re-slice provenance carried from the printed library file onto the history row:
+   * the preserved project 3MF this artifact was sliced from, and the settings that
+   * produced it. Null whenever the file was not sliced here (a direct upload, or an
+   * output from before project preservation shipped). Recorded, never acted on —
+   * dispatch always sends the artifact it was given.
+   */
+  sourceProjectFileId: string | null
+  sliceSettingsJson: string | null
   localPath: string | null
   bridgeLibraryPath: string | null
   remoteName: string
@@ -126,6 +135,9 @@ interface EnqueueLibraryPrintInput extends PrintFromLibrary {
 interface EnqueueSnapshotPrintInput extends Omit<EnqueueLibraryPrintInput, 'fileId'> {
   fileName: string
   snapshot: SnapshotLibraryFile
+  /** See `DispatchJobState.sourceProjectFileId`; read off the printed file by the caller. */
+  sourceProjectFileId?: string | null
+  sliceSettingsJson?: string | null
 }
 
 type PrintStartOptionSelection = Pick<
@@ -279,6 +291,8 @@ class PrintDispatcher {
       fileSizeBytes: snapshot.sizeBytes,
       sourceKind,
       projectFilamentChips,
+      sourceProjectFileId: input.sourceProjectFileId ?? null,
+      sliceSettingsJson: input.sliceSettingsJson ?? null,
       localPath,
       bridgeLibraryPath,
       remoteName: target.remoteName,
@@ -667,6 +681,8 @@ class PrintDispatcher {
       fileName: job.fileName,
       fileSizeBytes: job.fileSizeBytes,
       sourceKind: job.sourceKind,
+      sourceProjectFileId: job.sourceProjectFileId,
+      sliceSettingsJson: job.sliceSettingsJson,
       plate: job.options.plate,
       useAms: job.options.useAms,
       bedLevel: job.options.bedLevel !== 'off',

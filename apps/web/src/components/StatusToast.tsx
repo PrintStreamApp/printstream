@@ -2,15 +2,24 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import { Alert, Box, IconButton, Stack, type AlertProps } from '@mui/joy'
 import { Portal } from '@mui/base/Portal'
 import type { ReactNode } from 'react'
+import { useAnyDialogOpen } from '../hooks/useAnyDialogOpen'
+import { TOAST_EDGE_GAP, resolveToastBottomGap } from '../lib/toastPlacement'
 
 export function StatusToastStack({ children, width = 390 }: { children: ReactNode; width?: number }) {
+  // The lift exists to clear the mobile tab bar, so it has to go when a dialog covers that tab bar
+  // — toasts render above the modal layer (zIndex.tooltip), so a raised toast would otherwise hang
+  // in empty space over the dialog. Desktop is unaffected: it has no bottom chrome to clear.
+  const mobileGap = resolveToastBottomGap({ dialogOpen: useAnyDialogOpen() })
   return (
     <Portal>
       <Box
         sx={{
           position: 'fixed',
           right: { xs: 12, sm: 20 },
-          bottom: { xs: 'calc(var(--app-safe-bottom, 0px) + 84px)', sm: 'calc(var(--app-safe-bottom, 0px) + 12px)' },
+          bottom: {
+            xs: `calc(var(--app-safe-bottom, 0px) + ${mobileGap}px)`,
+            sm: `calc(var(--app-safe-bottom, 0px) + ${TOAST_EDGE_GAP}px)`
+          },
           left: { xs: 12, sm: 'auto' },
           width: { xs: 'auto', sm: width },
           zIndex: (theme) => theme.zIndex.tooltip,

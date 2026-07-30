@@ -12,7 +12,7 @@
  *   (the anchor) to the target, replacing the previous selection but keeping the
  *   anchor as the primary.
  *
- * Parts are keyed geometry-level (`objectId` + `componentObjectId`) — the same
+ * Parts are keyed geometry-level (`objectId` + the part's ORDINAL `partIndex`) — the same
  * identity used by filament reassignment, part-type changes, and per-part process
  * overrides — so a part selection means "this part on every instance of the object".
  */
@@ -22,7 +22,7 @@ export interface PartSelection {
   /** Owning object id (a baked object's Bambu id, or an import's synthetic identity). */
   objectId: number
   /** The selected parts' component object ids, in selection order (first = anchor). */
-  componentObjectIds: ReadonlyArray<number>
+  partIndexes: ReadonlyArray<number>
 }
 
 /**
@@ -33,16 +33,16 @@ export interface PartSelection {
 export function togglePartInSelection(
   current: PartSelection | null,
   objectId: number,
-  componentObjectId: number
+  partIndex: number
 ): PartSelection | null {
   if (!current || current.objectId !== objectId) {
-    return { objectId, componentObjectIds: [componentObjectId] }
+    return { objectId, partIndexes: [partIndex] }
   }
-  if (current.componentObjectIds.includes(componentObjectId)) {
-    const rest = current.componentObjectIds.filter((id) => id !== componentObjectId)
-    return rest.length > 0 ? { objectId, componentObjectIds: rest } : null
+  if (current.partIndexes.includes(partIndex)) {
+    const rest = current.partIndexes.filter((id) => id !== partIndex)
+    return rest.length > 0 ? { objectId, partIndexes: rest } : null
   }
-  return { objectId, componentObjectIds: [...current.componentObjectIds, componentObjectId] }
+  return { objectId, partIndexes: [...current.partIndexes, partIndex] }
 }
 
 /**
@@ -66,26 +66,26 @@ export function rangeSlice<T>(ordered: ReadonlyArray<T>, anchor: T | null, targe
  */
 export function rangePartSelection(
   objectId: number,
-  orderedComponentIds: ReadonlyArray<number>,
-  anchor: { objectId: number; componentObjectId: number } | null,
-  targetComponentId: number
+  orderedPartIndexes: ReadonlyArray<number>,
+  anchor: { objectId: number; partIndex: number } | null,
+  targetPartIndex: number
 ): PartSelection {
-  const anchorId = anchor && anchor.objectId === objectId ? anchor.componentObjectId : null
-  return { objectId, componentObjectIds: rangeSlice(orderedComponentIds, anchorId, targetComponentId) }
+  const anchorId = anchor && anchor.objectId === objectId ? anchor.partIndex : null
+  return { objectId, partIndexes: rangeSlice(orderedPartIndexes, anchorId, targetPartIndex) }
 }
 
 /**
  * Drop selected parts that no longer exist (object deleted, parts changed by an
- * undo/replace). `ownerComponentIds` is the owning object's current part ids, or null
+ * undo/replace). `ownerPartIndexes` is the owning object's current part ids, or null
  * when no instance of the object remains anywhere in the project.
  */
 export function prunePartSelection(
   current: PartSelection | null,
-  ownerComponentIds: ReadonlyArray<number> | null
+  ownerPartIndexes: ReadonlyArray<number> | null
 ): PartSelection | null {
   if (!current) return null
-  if (!ownerComponentIds) return null
-  const kept = current.componentObjectIds.filter((id) => ownerComponentIds.includes(id))
+  if (!ownerPartIndexes) return null
+  const kept = current.partIndexes.filter((id) => ownerPartIndexes.includes(id))
   if (kept.length === 0) return null
-  return kept.length === current.componentObjectIds.length ? current : { ...current, componentObjectIds: kept }
+  return kept.length === current.partIndexes.length ? current : { ...current, partIndexes: kept }
 }

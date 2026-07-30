@@ -120,7 +120,11 @@ export async function persistLibraryFileFromLocalPath(input: {
             createdById: attribution.createdById,
             createdByName: attribution.createdByName,
             // Fresh content replaces whatever the previous version's
-            // provenance was.
+            // provenance was — including the re-slice link, which described the
+            // bytes being replaced. A slice re-sets it immediately afterwards
+            // (see `preserveSlicedProject`); an upload correctly leaves it clear.
+            sourceProjectFileId: null,
+            sliceSettingsJson: null,
             restoredFromVersionNumber: null
           }
         })
@@ -416,6 +420,12 @@ export async function unhideSlicedOutput(
           origin: 'slice',
           createdById: output.createdById,
           createdByName: output.createdByName,
+          // The surviving row now holds the OUTPUT's bytes, so it must hold the output's
+          // re-slice provenance too — keeping the replaced file's would describe a project
+          // that no longer produced this content. The output row is deleted just above, so
+          // this is also what keeps its preserved project referenced.
+          sourceProjectFileId: output.sourceProjectFileId,
+          sliceSettingsJson: output.sliceSettingsJson,
           restoredFromVersionNumber: null
         },
         select: { id: true, name: true }
@@ -447,5 +457,39 @@ export async function discardHiddenSlicedOutput(fileId: string): Promise<boolean
   await prisma.libraryFile.delete({ where: { id: row.id } })
   await deleteLibraryFileBytes(row).catch(() => undefined)
   await Promise.all(row.versions.map((version) => deleteLibraryFileBytes(version).catch(() => undefined)))
+  await discardUnreferencedProjectSnapshot(row.sourceProjectFileId)
   return true
+}
+
+/**
+ * Drop the preserved project a discarded slice was the only reference to.
+ *
+ * Snapshot rows are exempt from every cleanup pass (`library-cleanup.ts` skips rows with a
+ * `snapshotKey`), so without this a discarded "slice without saving" leaks its project bytes
+ * permanently — one copy per discard, never reclaimed. Deliberately conservative: it only deletes
+ * when NOTHING else points at the snapshot, because the same content-addressed row is shared by
+ * every slice of identical bytes, and a print's history row references it too.
+ *
+ * Best-effort — a failure here leaks bytes, which must not fail the discard the user asked for.
+ */
+async function discardUnreferencedProjectSnapshot(projectFileId: string | null): Promise<void> {
+  if (!projectFileId) return
+  try {
+    const [outputs, jobs] = await Promise.all([
+      prisma.libraryFile.count({ where: { sourceProjectFileId: projectFileId } }),
+      prisma.printJob.count({ where: { sourceProjectFileId: projectFileId } })
+    ])
+    if (outputs > 0 || jobs > 0) return
+    const project = await prisma.libraryFile.findUnique({
+      where: { id: projectFileId },
+      select: { id: true, ownerBridgeId: true, storedPath: true, snapshotKey: true }
+    })
+    // Only ever a project SNAPSHOT: a null snapshotKey would mean a real library file got linked
+    // here, and deleting the user's own project would be catastrophic.
+    if (!project?.snapshotKey) return
+    await prisma.libraryFile.delete({ where: { id: project.id } })
+    await deleteLibraryFileBytes(project).catch(() => undefined)
+  } catch (error) {
+    console.warn('[library] failed to discard the preserved project snapshot', (error as Error).message)
+  }
 }

@@ -1,11 +1,12 @@
 /**
  * Printer history and lifetime-stats summary cards extracted from
  * `pages/PrintersView.tsx`: `PrinterHistoryCard` wraps a finished job with
- * reprint/delete actions, and `PrinterStatsCardGrid` lays out the lifetime
+ * reprint / slice-again / delete actions, and `PrinterStatsCardGrid` lays out the lifetime
  * print/filament breakdown cards for a single printer.
  */
-import { Box, Button, Stack } from '@mui/joy'
+import { Box, Button, ListItemDecorator, MenuItem, Stack } from '@mui/joy'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
+import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import AccessTimeRoundedIcon from '@mui/icons-material/AccessTimeRounded'
@@ -14,6 +15,7 @@ import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
 import { isDirectPrintableFileName, type PrintJob, type PrinterStatsResponse } from '@printstream/shared'
 import { BreakdownStatCard } from '../StatsCards'
 import { PrintJobHistoryCard } from '../PrintJobHistoryCard'
+import { SplitButton } from '../SplitButton'
 import { formatPrinterStatsWholeNumber, formatPrinterStatsDecimal } from '../../lib/printersViewHelpers'
 import { SUCCESS_COLOR, FAILED_COLOR, CANCELLED_COLOR, MANUAL_COLOR } from '../../lib/printerViewConstants'
 
@@ -22,21 +24,26 @@ export function PrinterHistoryCard({
   canDeleteJobs,
   canDispatchPrints,
   canControlPrinters,
+  canSliceFiles,
   deletingJobId,
   replayingJobId,
   onDelete,
   onReprintLibrary,
-  onReprintCalibration
+  onReprintCalibration,
+  onReslice
 }: {
   job: PrintJob
   canDeleteJobs: boolean
   canDispatchPrints: boolean
   canControlPrinters: boolean
+  canSliceFiles: boolean
   deletingJobId: string | null
   replayingJobId: string | null
   onDelete: (jobId: string) => void
   onReprintLibrary: (job: PrintJob) => void
   onReprintCalibration: (jobId: string) => void
+  /** Re-slice the project this print was produced from (see `job.sourceProjectFileId`). */
+  onReslice: (job: PrintJob) => void
 }) {
   const canReprintLibrary = Boolean(
     canDispatchPrints
@@ -52,9 +59,32 @@ export function PrinterHistoryCard({
     && job.calibrationOption != null
   )
 
-  const reprintAction = canReprintLibrary ? (
+  // Mirrors JobsView's history actions: re-slicing the preserved project is offered
+  // wherever a finished print is, so the two history surfaces don't diverge.
+  const canReslice = Boolean(canSliceFiles && canDispatchPrints && job.finishedAt && job.sourceProjectFileId)
+
+  const reprintAction = canReprintLibrary && canReslice ? (
+    <SplitButton
+      size="sm"
+      variant="soft"
+      color="neutral"
+      label="Reprint"
+      ariaLabel={`Reprint ${job.jobName}`}
+      startDecorator={<RestartAltRoundedIcon />}
+      onClick={() => onReprintLibrary(job)}
+    >
+      <MenuItem onClick={() => onReslice(job)}>
+        <ListItemDecorator><ContentCutRoundedIcon /></ListItemDecorator>
+        Slice again
+      </MenuItem>
+    </SplitButton>
+  ) : canReprintLibrary ? (
     <Button size="sm" variant="soft" startDecorator={<RestartAltRoundedIcon />} onClick={() => onReprintLibrary(job)}>
       Reprint
+    </Button>
+  ) : canReslice ? (
+    <Button size="sm" variant="soft" startDecorator={<ContentCutRoundedIcon />} onClick={() => onReslice(job)}>
+      Slice again
     </Button>
   ) : canReprintCalibration ? (
     <Button

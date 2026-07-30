@@ -1058,8 +1058,8 @@ function setPartExtruderMetadata(partBlock: string, extruder: number): string {
 /**
  * Apply per-part filament reassignments by rewriting the matching `<part>`s' `extruder`
  * metadata inside `model_settings.config`. Filament is a property of the object's part, so
- * the change is keyed by objectId + componentObjectId (the part id) and affects every
- * instance of that object. Everything else in the document is left untouched.
+ * the change is keyed by objectId + the part's ORDINAL and affects every instance of that
+ * object. Everything else in the document is left untouched.
  */
 function applyPartFilamentOverrides(
   modelSettingsXml: string,
@@ -1072,15 +1072,16 @@ function applyPartFilamentOverrides(
     const extruder = inverse.get(override.filamentId) ?? override.filamentId
     let parts = extruderByObjectPart.get(override.objectId)
     if (!parts) { parts = new Map(); extruderByObjectPart.set(override.objectId, parts) }
-    parts.set(override.componentObjectId, extruder)
+    parts.set(override.partIndex, extruder)
   }
   return modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
     const parts = extruderByObjectPart.get(objectId)
     if (!parts) return objectBlock
-    return objectBlock.replace(/<part\b([^>]*)>[\s\S]*?<\/part>/g, (partBlock, partAttrs: string) => {
-      const partId = Number.parseInt(parseAttrs(partAttrs).id ?? '', 10)
-      const extruder = parts.get(partId)
+    let partIndex = -1
+    return objectBlock.replace(/<part\b([^>]*)>[\s\S]*?<\/part>/g, (partBlock) => {
+      partIndex += 1
+      const extruder = parts.get(partIndex)
       return extruder == null ? partBlock : setPartExtruderMetadata(partBlock, extruder)
     })
   })
@@ -1089,7 +1090,7 @@ function applyPartFilamentOverrides(
 /**
  * Apply per-PART process overrides: set each part's process `<metadata>` inside its
  * `model_settings.config` `<part>` block (replacing the whole non-structural override set so a
- * cleared key is removed), keyed by objectId + componentObjectId. Mirrors
+ * cleared key is removed), keyed by objectId + the part's ORDINAL. Mirrors
  * {@link applyObjectProcessOverridesXml} but scoped to one part rather than the object head.
  */
 export function applyPartProcessOverrides(modelSettingsXml: string, overrides: SceneEditPartProcessOverride[]): string {
@@ -1097,15 +1098,16 @@ export function applyPartProcessOverrides(modelSettingsXml: string, overrides: S
   for (const override of overrides) {
     let parts = byObjectPart.get(override.objectId)
     if (!parts) { parts = new Map(); byObjectPart.set(override.objectId, parts) }
-    parts.set(override.componentObjectId, override.overrides)
+    parts.set(override.partIndex, override.overrides)
   }
   return modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
     const parts = byObjectPart.get(objectId)
     if (!parts) return objectBlock
+    let partIndex = -1
     return objectBlock.replace(/<part\b([^>]*)>([\s\S]*?)<\/part>/g, (partBlock, partAttrs: string, partBody: string) => {
-      const partId = Number.parseInt(parseAttrs(partAttrs).id ?? '', 10)
-      const partOverrides = parts.get(partId)
+      partIndex += 1
+      const partOverrides = parts.get(partIndex)
       if (!partOverrides) return partBlock
       // Drop existing part-level PROCESS overrides only; keep everything else (name/extruder AND
       // identity/placement metadata like source_object_id, source_offset_*, matrix).
@@ -1126,7 +1128,7 @@ export function applyPartProcessOverrides(modelSettingsXml: string, overrides: S
 /**
  * Apply part-type changes (BambuStudio's "Change type": normal/negative/modifier/support
  * blocker/enforcer) by rewriting the matching `<part>`s' `subtype` attribute inside
- * `model_settings.config`. Keyed by objectId + componentObjectId like
+ * `model_settings.config`. Keyed by objectId + the part's ORDINAL like
  * {@link applyPartProcessOverrides}; the type is shared by every instance of the object.
  */
 export function applyPartTypeChanges(modelSettingsXml: string, changes: SceneEditPartTypeChange[]): string {
@@ -1134,15 +1136,16 @@ export function applyPartTypeChanges(modelSettingsXml: string, changes: SceneEdi
   for (const change of changes) {
     let parts = byObjectPart.get(change.objectId)
     if (!parts) { parts = new Map(); byObjectPart.set(change.objectId, parts) }
-    parts.set(change.componentObjectId, change.subtype)
+    parts.set(change.partIndex, change.subtype)
   }
   return modelSettingsXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
     const parts = byObjectPart.get(objectId)
     if (!parts) return objectBlock
+    let partIndex = -1
     return objectBlock.replace(/<part\b([^>]*)>/g, (partTag, partAttrs: string) => {
-      const parsed = parseAttrs(partAttrs)
-      const subtype = parts.get(Number.parseInt(parsed.id ?? '', 10))
+      partIndex += 1
+      const subtype = parts.get(partIndex)
       if (!subtype) return partTag
       if (/\bsubtype="[^"]*"/.test(partAttrs)) {
         return `<part${partAttrs.replace(/\bsubtype="[^"]*"/, `subtype="${escapeXmlAttribute(subtype)}"`)}>`
@@ -1172,14 +1175,19 @@ export function applyPartTransforms(
   for (const change of partTransforms) {
     let parts = byObjectPart.get(change.objectId)
     if (!parts) { parts = new Map(); byObjectPart.set(change.objectId, parts) }
-    parts.set(change.componentObjectId, change.matrix)
+    parts.set(change.partIndex, change.matrix)
   }
   const nextModelXml = modelXml.replace(/<object\b([^>]*)>[\s\S]*?<\/object>/g, (objectBlock, attrs: string) => {
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
     const parts = byObjectPart.get(objectId)
     if (!parts) return objectBlock
+    // The Nth `<component>` and the Nth `<part>` are the same volume: BambuStudio writes both in
+    // volume order and parses them positionally. Matching on `objectid`/`id` instead moved every
+    // volume sharing a mesh (four modifier cubes cut from one cube) whenever one was moved.
+    let componentIndex = -1
     return objectBlock.replace(/<component\b([^>]*)\/>/g, (componentTag, componentAttrs: string) => {
-      const matrix = parts.get(Number.parseInt(parseAttrs(componentAttrs).objectid ?? '', 10))
+      componentIndex += 1
+      const matrix = parts.get(componentIndex)
       if (!matrix) return componentTag
       const transform = matrix.map(formatThreeMfTransformValue).join(' ')
       if (/\btransform="[^"]*"/.test(componentAttrs)) {
@@ -1192,8 +1200,10 @@ export function applyPartTransforms(
     const objectId = Number.parseInt(parseAttrs(attrs).id ?? '', 10)
     const parts = byObjectPart.get(objectId)
     if (!parts) return objectBlock
-    return objectBlock.replace(/<part\b([^>]*)>[\s\S]*?<\/part>/g, (partBlock, partAttrs: string) => {
-      const matrix = parts.get(Number.parseInt(parseAttrs(partAttrs).id ?? '', 10))
+    let settingsPartIndex = -1
+    return objectBlock.replace(/<part\b[^>]*>[\s\S]*?<\/part>/g, (partBlock) => {
+      settingsPartIndex += 1
+      const matrix = parts.get(settingsPartIndex)
       if (!matrix || !/<metadata\s+key="matrix"/.test(partBlock)) return partBlock
       // Column-major 12 -> row-major 4x4 16 (BambuStudio's transform3d_from_string layout).
       const m = (index: number) => formatThreeMfTransformValue(matrix[index] ?? 0)
@@ -1374,6 +1384,13 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     Array.isArray(record.filament_settings_id) ? record.filament_settings_id.length : 0
   )
   const newCount = filaments.length
+  /**
+   * Whether slot `i` switched material, published out of the remap block below so the
+   * `filament_ids` authoring at the end can tell "kept its material" (keep the id) from "changed
+   * material with no resolvable id" (report unknown). Null when there was no base list to compare
+   * against, in which case nothing was carried over and no slot counts as changed.
+   */
+  let materialChangedBySlot: ((index: number) => boolean) | null = null
 
   if (oldCount > 0) {
     // Desired slot i is seeded from this old index (clamped into range).
@@ -1392,6 +1409,7 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
         || (filament?.type != null && filament.type !== sourceTypes[src])
     }
     const materialChanged = filaments.some((_filament, i) => slotMaterialChanged(i))
+    materialChangedBySlot = slotMaterialChanged
     // BambuStudio 2.x VARIANT EXPANSION: on machines with extruder variants (H2D dual-nozzle, and
     // even X1C's standard/high-flow pair) the numeric per-filament settings carry one value per
     // (filament x variant) — `filament_extruder_variant` is that same layout's identity column, so
@@ -1500,9 +1518,71 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
   // survives a save — otherwise `filament_settings_id` keeps the prior preset and the project reopens
   // as the old material (with a name/type mismatch). A slot with no explicit `settingsId` keeps the
   // value carried over from its source slot above.
+  // NEVER an empty name. An empty entry resolves to no preset, so BambuStudio mints a
+  // project-embedded preset out of its BARE CONFIG DEFAULTS (max volumetric speed 2, flow ratio 1,
+  // `compatible_printers` All) and names it `(<project>.3mf)` — the empty name plus its project
+  // suffix, with `1(<project>.3mf)` for a second one. It then writes that junk preset into the file
+  // as a `Metadata/filament_settings_N.config` sidecar and re-embeds it on EVERY later save (see
+  // `PresetCollection::get_project_embedded_presets`), so one bad save follows the project forever
+  // and the slot prints with default physics. Reported from a real file: slots reading
+  // `1(test.3mf)` / `(test.3mf)`.
+  //
+  // The remap above only supplies a name when the base HAD a filament list; an editor-born project
+  // (`oldCount === 0`) has none, so a slot whose material never resolved to a preset arrived here
+  // with nothing. It inherits the name of the slot its physics were cloned from instead — the same
+  // `sourceIndex` every other per-filament array is remapped through, so the name and the physics
+  // describe one material. The gate below guarantees at least one resolved name exists to fall back
+  // to, which is what makes the empty case unreachable rather than merely unlikely.
   if (filaments.some((filament) => filament.settingsId)) {
     const previousSettingsIds = Array.isArray(record.filament_settings_id) ? record.filament_settings_id : []
-    record.filament_settings_id = filaments.map((filament, i) => filament.settingsId ?? (typeof previousSettingsIds[i] === 'string' ? previousSettingsIds[i] : ''))
+    const previousNameAt = (index: number): string | null =>
+      (typeof previousSettingsIds[index] === 'string' && previousSettingsIds[index] !== ''
+        ? previousSettingsIds[index] as string
+        : null)
+    const clonedFrom = (index: number): number => {
+      const requested = filaments[index]?.sourceIndex
+      const source = requested == null ? index : requested
+      return source >= 0 && source < filaments.length ? source : 0
+    }
+    const anyResolvedName = filaments.find((filament) => filament.settingsId)?.settingsId as string
+    record.filament_settings_id = filaments.map((filament, i) => {
+      const source = clonedFrom(i)
+      return filament.settingsId
+        ?? previousNameAt(i)
+        ?? filaments[source]?.settingsId
+        ?? previousNameAt(source)
+        ?? anyResolvedName
+    })
+  }
+
+  // `filament_ids` is BambuStudio's BINDING key, and it must describe the same preset as
+  // `filament_settings_id` above. BambuStudio guarantees that by construction — both arrays are
+  // parallel projections of one selected-preset list (`PresetBundle`: `filament_settings_id` gets
+  // `preset.name`, `filament_ids` gets `preset.filament_id`) — so they cannot drift. Ours could,
+  // because `filament_ids` is an IDENTITY key above and identity keys are cloned from the slot a
+  // material came FROM. That is right for a colour or a nozzle pick (user choices worth carrying)
+  // and wrong here: the id is derived from the material, so switching a slot's material kept the old
+  // material's id under the new name. A real ABS -> PETG project therefore saved as
+  // `["GFB00","GFB00","GFS06"]` (ABS, ABS, Support-for-ABS) while naming PETG HF and PLA Basic;
+  // BambuStudio could not reconcile the two and fabricated a defaults-only project preset per slot,
+  // named `(<project>.3mf)`. Sliced output was unaffected only because slice prep re-derives the
+  // filament config from the NAMES.
+  //
+  // Mirrors BambuStudio for the unknown case too: it emplaces `preset.filament_id`, which is `""`
+  // when the preset declares none (after the parent-preset fallback), so an unknown id is an EMPTY
+  // entry that keeps the array positional — never a stale value, and never a dropped key.
+  {
+    const previousIds = Array.isArray(record.filament_ids) ? record.filament_ids : []
+    const previousIdAt = (index: number): string | null =>
+      (typeof previousIds[index] === 'string' ? previousIds[index] as string : null)
+    const changedAt = materialChangedBySlot ?? (() => false)
+    if (filaments.some((filament) => filament.filamentId) || previousIds.length > 0) {
+      record.filament_ids = filaments.map((filament, i) => (
+        // An explicit id always wins; otherwise a slot that kept its material keeps its id, and a
+        // slot that CHANGED material without a resolvable id reports unknown rather than lying.
+        filament.filamentId ?? (changedAt(i) ? '' : previousIdAt(i) ?? '')
+      ))
+    }
   }
 
   return JSON.stringify(record)

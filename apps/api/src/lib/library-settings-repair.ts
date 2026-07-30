@@ -19,7 +19,14 @@
  * untouched by another.
  */
 import { readEntry, rewriteThreeMfEntries } from './three-mf-internal.js'
-import { inspectProjectFilamentSelfIndex, inspectProjectFlushVolumesMatrix, repairFilamentSelfIndex, repairFlushVolumesMatrix } from '@printstream/shared'
+import {
+  inspectProjectFilamentIds,
+  inspectProjectFilamentSelfIndex,
+  inspectProjectFlushVolumesMatrix,
+  repairFilamentIds,
+  repairFilamentSelfIndex,
+  repairFlushVolumesMatrix
+} from '@printstream/shared'
 
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
 
@@ -30,6 +37,16 @@ export interface ProjectSettingsRepairResult {
   matrix: { before: number; after: number; filaments: number; extruders: number } | null
   /** Variant-index entry count before and after. Null when that invariant was already satisfied. */
   variantIndex: { before: number; after: number; variantRows: number } | null
+  /**
+   * Slots whose `filament_ids` entry named a different material from their preset. `corrected`
+   * lists what changed; `unresolved` lists contradictory slots whose preset the catalogue could not
+   * match, which are deliberately LEFT ALONE — callers surface them so the user knows the repair
+   * was partial rather than assuming the project is now clean.
+   */
+  filamentIds: {
+    corrected: Array<{ slot: number; from: string; to: string }>
+    unresolved: Array<{ slot: number; id: string; presetName: string }>
+  } | null
 }
 
 /**
@@ -45,7 +62,7 @@ export async function repairProjectSettingsThreeMf(
   outputPath: string
 ): Promise<ProjectSettingsRepairResult> {
   const raw = await readEntry(sourcePath, PROJECT_SETTINGS_ENTRY).catch(() => null)
-  if (!raw || raw.length === 0) return { repaired: false, matrix: null, variantIndex: null }
+  if (!raw || raw.length === 0) return { repaired: false, matrix: null, variantIndex: null, filamentIds: null }
   const json = raw.toString('utf8')
 
   // NO early return on the flush matrix alone. It used to gate the whole function, which silently
@@ -58,7 +75,7 @@ export async function repairProjectSettingsThreeMf(
     // Unparseable settings are "nothing to repair", not a failed user action — but say so rather
     // than lose it, since the caller only got here because something flagged this file.
     console.warn(`[library-settings-repair] settings parsed for inspection but not for repair (${sourcePath}): ${(error as Error).message}`)
-    return { repaired: false, matrix: null, variantIndex: null }
+    return { repaired: false, matrix: null, variantIndex: null, filamentIds: null }
   }
   // Two independent invariants share this one user action, so repair whichever actually apply and
   // write the file ONCE. Either alone is enough to make the project unusable — a bad matrix kills
@@ -77,16 +94,23 @@ export async function repairProjectSettingsThreeMf(
   const repairedIndex = indexInspection?.inconsistent ? repairFilamentSelfIndex(record) : null
   if (repairedIndex) record.filament_self_index = repairedIndex
 
+  // A slot naming one material while its id claims another: BambuStudio binds on the ID, so it
+  // fabricates a defaults-only project preset for the slot instead of opening it. Only slots whose
+  // preset resolves to a catalogue id EXACTLY are corrected (see `repairs/filament-ids.ts`).
+  const idInspection = inspectProjectFilamentIds(json)
+  const correctedIds = idInspection?.inconsistent ? repairFilamentIds(record) : []
+
   // The caller only got here because something was flagged, so producing NO change means the
   // detection and the repair disagree. Say so rather than write an unchanged file and call it
   // repaired — that is how a defect becomes undiagnosable.
-  if (!repairedMatrix && !repairedIndex) {
+  if (!repairedMatrix && !repairedIndex && correctedIds.length === 0) {
     console.warn(
       `[library-settings-repair] inspection flagged ${sourcePath} but neither repair produced a change ` +
       `(matrix ${matrixInspection?.actualLength ?? 'n/a'}/${matrixInspection?.expectedLength ?? 'n/a'}, ` +
-      `variant index ${indexInspection?.actualLength ?? 'n/a'}/${indexInspection?.variantRows ?? 'n/a'})`
+      `variant index ${indexInspection?.actualLength ?? 'n/a'}/${indexInspection?.variantRows ?? 'n/a'}, ` +
+      `filament ids ${idInspection?.repairable.length ?? 0} repairable / ${idInspection?.unresolved.length ?? 0} unresolved)`
     )
-    return { repaired: false, matrix: null, variantIndex: null }
+    return { repaired: false, matrix: null, variantIndex: null, filamentIds: null }
   }
 
   const nextJson = JSON.stringify(record)
@@ -103,6 +127,12 @@ export async function repairProjectSettingsThreeMf(
       : null,
     variantIndex: repairedIndex && indexInspection
       ? { before: indexInspection.actualLength, after: repairedIndex.length, variantRows: indexInspection.variantRows }
+      : null,
+    filamentIds: correctedIds.length > 0 || (idInspection?.unresolved.length ?? 0) > 0
+      ? {
+        corrected: correctedIds.map((slot) => ({ slot: slot.index + 1, from: slot.currentId, to: slot.expectedId ?? '' })),
+        unresolved: (idInspection?.unresolved ?? []).map((slot) => ({ slot: slot.index + 1, id: slot.currentId, presetName: slot.presetName }))
+      }
       : null
   }
 }

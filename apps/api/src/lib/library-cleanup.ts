@@ -8,10 +8,12 @@
  * `snapshotKey` and are excluded from this cleanup path.
  * Without cleanup these would accumulate forever, so we age them out
  * after `LIBRARY_TRANSIENT_RETENTION_DAYS` (default 7) of not being
- * touched. Two further passes handle: unreferenced sliced outputs
+ * touched. Three further passes handle: unreferenced sliced outputs
  * (origin='slice', never kept or snapshotted — swept after
- * `LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS`) and expired recycle-bin
- * entries (`LIBRARY_RECYCLE_RETENTION_DAYS`).
+ * `LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS`), preserved project
+ * snapshots no job or kept output points at any more (the "no job, no
+ * kept project" rule), and expired recycle-bin entries
+ * (`LIBRARY_RECYCLE_RETENTION_DAYS`).
  *
  * Eligibility is based on `uploadedAt` rather than "last printed" — we
  * don't track print recency on the row, and the Bambu firmware keeps
@@ -189,6 +191,52 @@ export async function pruneUnreferencedSlicedOutputs(
 }
 
 /**
+ * Delete preserved project snapshots that nothing references any more.
+ *
+ * The rule this enforces is "no job, no kept project": a slice preserves the project it handed the
+ * engine, but that is only worth keeping if the user went on to START A PRINT (or deliberately kept
+ * the sliced output). A slice they abandoned should leave nothing behind — and snapshot rows are
+ * exempt from every other pass here (they are the retained variant), so without this pass an
+ * abandoned slice leaks its project bytes permanently.
+ *
+ * `discardHiddenSlicedOutput` already deletes promptly when the user closes the dialog; this is the
+ * backstop for the paths that never reach it — a closed tab, a crashed browser, or the sliced output
+ * itself being aged out by {@link pruneUnreferencedSlicedOutputs}. Run AFTER that pass so a single
+ * maintenance cycle reclaims both.
+ *
+ * Only ever removes rows with BOTH a `snapshotKey` and `origin='snapshot'` — the print-file snapshots
+ * share the first marker, so the pair is what identifies a preserved project, and a row referenced by
+ * any library file or any print job is left alone (the row is content-addressed, so it can be shared).
+ */
+export async function pruneUnreferencedProjectSnapshots(
+  deps: { deleteLibraryFileBytes: typeof deleteLibraryFileBytes } = { deleteLibraryFileBytes }
+): Promise<{ removed: number }> {
+  const cutoff = new Date(Date.now() - env.LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS * ONE_HOUR_MS)
+  const stale = await rootPrisma.libraryFile.findMany({
+    where: {
+      origin: 'snapshot',
+      snapshotKey: { not: null },
+      uploadedAt: { lt: cutoff },
+      slicedOutputs: { none: {} },
+      sourceProjectJobs: { none: {} }
+    },
+    select: { id: true, ownerBridgeId: true, storedPath: true }
+  })
+  let removed = 0
+  for (const row of stale) {
+    await deps.deleteLibraryFileBytes(row).catch((err) => {
+      console.warn(`[library-cleanup] failed to delete bytes for ${row.id}`, (err as Error).message)
+    })
+    await rootPrisma.libraryFile.delete({ where: { id: row.id } })
+    removed += 1
+  }
+  if (removed > 0) {
+    console.log(`[library-cleanup] pruned ${removed} unreferenced project snapshot${removed === 1 ? '' : 's'}`)
+  }
+  return { removed }
+}
+
+/**
  * Reap abandoned chunked-upload sessions. The chunked-upload flow
  * (`POST /api/library/uploads` + `/chunks`) stages bytes into
  * `<libraryDir>/.uploads/<id>.part` alongside a `<id>.json` session file, and
@@ -304,11 +352,16 @@ export async function pruneDormantBridges(): Promise<{ removed: number }> {
 }
 
 export async function runArtifactMaintenance(): Promise<void> {
+  // Sequenced deliberately, not folded into the batch below: aging out a sliced output is what
+  // makes its preserved project unreferenced, so running the snapshot pass afterwards lets ONE
+  // maintenance cycle reclaim both instead of leaving the project until the next run.
+  await pruneUnreferencedSlicedOutputs()
+  await pruneUnreferencedProjectSnapshots()
+
   // Several prunes run purely for their side effects; we only bind the few whose
   // counts we log below (positional holes skip the rest).
-  const [, , , , , , coverCache, bridgeDerivedCache, meshThumbnails, auditLogs, , bridgeLocalCache, dispatchJournal] = await Promise.all([
+  const [, , , , , coverCache, bridgeDerivedCache, meshThumbnails, auditLogs, , bridgeLocalCache, dispatchJournal] = await Promise.all([
     pruneHiddenLibraryFiles(),
-    pruneUnreferencedSlicedOutputs(),
     pruneRecycledLibraryFiles(),
     pruneAbandonedUploadSessions(),
     prunePrintJobThumbnails(),

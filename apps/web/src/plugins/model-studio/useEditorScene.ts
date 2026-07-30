@@ -122,9 +122,13 @@ export interface EditorSceneParams {
   selectExclusiveRef: MutableRefObject<(key: string | null) => void>
   toggleAdditiveSelectionRef: MutableRefObject<(key: string) => void>
   selectedAddedPartKeyRef: MutableRefObject<string | null>
-  /** Existing baked part currently holding the gizmo (counterpart of selectedAddedPartKey). */
-  selectedBakedPartRef: MutableRefObject<{ objectId: number; componentObjectId: number } | null>
-  setSelectedBakedPart: Dispatch<SetStateAction<{ objectId: number; componentObjectId: number } | null>>
+  /**
+   * Existing baked part currently holding the gizmo (counterpart of selectedAddedPartKey),
+   * identified by its ORDINAL within the object — see the note on `selectedBakedPart` in
+   * `EditorView`; `componentObjectId` is a mesh reference and does not identify a part.
+   */
+  selectedBakedPartRef: MutableRefObject<{ objectId: number; partIndex: number } | null>
+  setSelectedBakedPart: Dispatch<SetStateAction<{ objectId: number; partIndex: number } | null>>
   setSelectionHighlightRef: MutableRefObject<((group: THREE.Object3D | null) => void) | null>
   // Gizmo + transform write-back.
   gizmoModeRef: MutableRefObject<GizmoMode>
@@ -470,7 +474,7 @@ export function useEditorScene(params: EditorSceneParams): void {
       // The bulk part selection, or the single baked part currently holding the gizmo.
       const baked = selectedBakedPartRef.current
       const selection = partSelectionRef.current
-        ?? (baked ? { objectId: baked.objectId, componentObjectIds: [baked.componentObjectId] } : null)
+        ?? (baked ? { objectId: baked.objectId, partIndexes: [baked.partIndex] } : null)
       const wanted = new Map<string, THREE.Object3D>()
       if (selection) {
         for (const instance of activePlateRef.current?.instances ?? []) {
@@ -480,8 +484,10 @@ export function useEditorScene(params: EditorSceneParams): void {
           if (!group) continue
           group.traverse((node) => {
             const ref = partGroupRef(node)
-            if (ref && selection.componentObjectIds.includes(ref.componentObjectId)) {
-              wanted.set(`${instance.key}:${ref.componentObjectId}`, node)
+            if (ref && selection.partIndexes.includes(ref.partIndex)) {
+              // Keyed by the part's ORDINAL: several parts of one object can share a mesh id, and
+              // keying on that collapsed their four selection boxes into one.
+              wanted.set(`${instance.key}:${ref.partIndex}`, node)
             }
           })
         }
@@ -735,7 +741,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     let collapseClickCandidate: { key: string; x: number; y: number } | null = null
     // BambuStudio drill-down: a motionless click on an already-selected multi-part object
     // selects the baked PART under the cursor on release; a drag moves the whole object.
-    let bakedPartClickCandidate: { part: { objectId: number; componentObjectId: number }; x: number; y: number } | null = null
+    let bakedPartClickCandidate: { part: { objectId: number; partIndex: number }; x: number; y: number } | null = null
     /** Capture co-drag offsets for every selected group except the grabbed one. */
     const beginSelectionCoDrag = (grabbedKey: string) => {
       bodyDragExtras = allSelectedKeysRef.current()
@@ -1091,7 +1097,7 @@ export function useEditorScene(params: EditorSceneParams): void {
             : null
           if (instance && ownerId != null && instance.parts.length > 1) {
             bakedPartClickCandidate = {
-              part: { objectId: ownerId, componentObjectId: partRef.componentObjectId },
+              part: { objectId: ownerId, partIndex: partRef.partIndex },
               x: event.clientX,
               y: event.clientY
             }

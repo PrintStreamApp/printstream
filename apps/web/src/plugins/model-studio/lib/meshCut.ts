@@ -259,6 +259,46 @@ export function rebaseTriangleSoup(soup: Float32Array): { offset: { x: number; y
   return { offset }
 }
 
+/**
+ * Which side(s) of an axis-aligned cut a HELPER volume belongs to.
+ *
+ * BambuStudio's rule verbatim (`ModelObject::process_modifier_cut`, Model.cpp): a modifier /
+ * negative / blocker volume is **never geometrically cut** — it is assigned by its bounding box in
+ * the cut plane's frame, and one that STRADDLES the plane is carried onto BOTH halves so each piece
+ * keeps the region it needs. Our cut is axis-aligned, so the plane's frame is just `axis` vs
+ * `offset` where BambuStudio uses z vs 0.
+ *
+ * An empty soup belongs to neither side rather than to both — carrying a volume with no geometry
+ * would put an invisible part on every piece.
+ */
+export function helperVolumeCutSides(
+  soup: Float32Array,
+  axis: CutAxis,
+  offset: number
+): { lower: boolean; upper: boolean } {
+  const component = axis === 'x' ? 0 : axis === 'y' ? 1 : 2
+  let min = Infinity
+  let max = -Infinity
+  for (let i = component; i < soup.length; i += 3) {
+    const value = soup[i]!
+    if (value < min) min = value
+    if (value > max) max = value
+  }
+  if (min === Infinity) return { lower: false, upper: false }
+  const straddles = min <= offset && max >= offset
+  return { lower: max <= offset || straddles, upper: min >= offset || straddles }
+}
+
+/** Shift a triangle soup by `-offset`, in place — the half's rebase applied to a carried volume. */
+export function shiftTriangleSoup(soup: Float32Array, offset: { x: number; y: number; z: number }): Float32Array {
+  for (let i = 0; i < soup.length; i += 3) {
+    soup[i] = soup[i]! - offset.x
+    soup[i + 1] = soup[i + 1]! - offset.y
+    soup[i + 2] = soup[i + 2]! - offset.z
+  }
+  return soup
+}
+
 /** Serialize a triangle soup as a binary STL (the staged-import upload format). */
 export function triangleSoupToBinaryStl(soup: Float32Array): ArrayBuffer {
   const triCount = Math.floor(soup.length / 9)

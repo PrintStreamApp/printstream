@@ -34,6 +34,7 @@ import { DirectoryPrimaryToolbar } from '../components/DirectoryToolbar'
 import { MultiSelectOption } from '../components/MultiSelectOption'
 import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashboard/PageSectionHeading'
 import { SliceFileModal } from '../components/library/SliceFileModal'
+import { SliceThenPrintFlow } from '../components/library/SliceThenPrintFlow'
 import { buildCreateSlicingJobBody } from '../lib/libraryViewHelpers'
 import { SliceThenPrintModal } from '../components/library/SliceThenPrintModal'
 import { PrintModal } from '../components/library/PrintModal'
@@ -126,6 +127,9 @@ export function PrintersView() {
   } | null>(null)
   const [sliceTarget, setSliceTarget] = useState<{ file: LibraryFile; preferredPrinterId: string } | null>(null)
   const [sliceThenPrintTarget, setSliceThenPrintTarget] = useState<{ sourceFile: LibraryFile; jobId: string; preferredPrinterId: string } | null>(null)
+  // "Slice again": re-slice the project a finished print was produced from, rather than
+  // re-dispatching the identical G-code. Mirrors JobsView.
+  const [resliceJob, setResliceJob] = useState<PrintJob | null>(null)
   const [replayingJobId, setReplayingJobId] = useState<string | null>(null)
   const [deleteHistoryJobTarget, setDeleteHistoryJobTarget] = useState<PrintJob | null>(null)
   const [deletePrinterViewTarget, setDeletePrinterViewTarget] = useState<PrinterView | null>(null)
@@ -1217,6 +1221,8 @@ export function PrintersView() {
                         canDeleteJobs={canDeleteJobs}
                         canDispatchPrints={canDispatchPrints}
                         canControlPrinters={canControlPrinters}
+                        canSliceFiles={canUploadLibrary}
+                        onReslice={setResliceJob}
                         deletingJobId={deleteHistoryJob.isPending ? deleteHistoryJob.variables ?? null : null}
                         replayingJobId={replayingJobId}
                         onDelete={(jobId) => {
@@ -1665,6 +1671,21 @@ export function PrintersView() {
             action,
             ...input
           })}
+        />
+      )}
+
+      {canUploadLibrary && canDispatchPrints && resliceJob?.sourceProjectFileId && (
+        <SliceThenPrintFlow
+          fileId={resliceJob.sourceProjectFileId}
+          printers={printersQuery.data?.printers ?? []}
+          preferredPrinterId={resliceJob.printerId}
+          defaultPlate={resliceJob.plate ?? 1}
+          initialSlicerTargetId={resliceJob.sliceSettings?.slicerTargetId}
+          flowCopy={{
+            title: `Slice ${formatLibraryFileName(resliceJob.sourceProjectFileName ?? resliceJob.jobName)} again`,
+            description: 'These are the settings this print was sliced with. Change anything you like, then continue to printer selection.'
+          }}
+          onClose={() => setResliceJob(null)}
         />
       )}
 

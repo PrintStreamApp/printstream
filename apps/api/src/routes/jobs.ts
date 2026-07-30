@@ -19,6 +19,7 @@ import {
   type AuditLogEntry,
   JOBS_DELETE_PERMISSION,
   JOBS_VIEW_PERMISSION,
+  parsePreservedSliceSettings,
   PRINTS_DISPATCH_PERMISSION,
   printFromLibrarySchema,
   PRINTERS_CONTROL_CALIBRATE_SCOPE
@@ -39,6 +40,8 @@ import { broadcastJobsChanged, broadcastPrintDispatchChanged } from '../lib/ws-r
 import { parseAmsMapping, reprintJobFromRow, toPrintJobKind } from '../lib/print-reprint.js'
 
 export const jobsRouter = Router()
+const RESLICE_UNAVAILABLE = { sourceProjectFileId: null, sourceProjectFileName: null, sliceSettings: null } as const
+
 const reprintJobSchema = printFromLibrarySchema
   .omit({ fileId: true, printerId: true })
   .partial()
@@ -73,12 +76,18 @@ interface ModernJobRow extends JobRowBase {
   sourceType: string | null
   calibrationOption: number | null
   snapshotPath: string | null
+  sourceProjectFileId: string | null
+  sliceSettingsJson: string | null
   printer: { name: string }
   file: {
     sizeBytes: number
     ownerBridgeId: string | null
     storedPath: string
     kind: string
+  } | null
+  sourceProject: {
+    name: string
+    deletedAt: Date | null
   } | null
 }
 
@@ -272,6 +281,8 @@ async function listJobs(tenantId: string, printerId: string | undefined): Promis
         fileId: true,
         fileName: true,
         fileSizeBytes: true,
+        sourceProjectFileId: true,
+        sliceSettingsJson: true,
         plate: true,
         useAms: true,
         bedLevel: true,
@@ -294,6 +305,15 @@ async function listJobs(tenantId: string, printerId: string | undefined): Promis
             ownerBridgeId: true,
             storedPath: true,
             kind: true
+          }
+        },
+        // The preserved project 3MF this print was sliced from. Selected (rather than
+        // resolved lazily in the UI) because it is a hidden row the library never lists,
+        // and its `deletedAt` is what tells "Slice again" the project is really gone.
+        sourceProject: {
+          select: {
+            name: true,
+            deletedAt: true
           }
         }
       },
@@ -335,9 +355,29 @@ async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
     amsMapping: parseAmsMapping(row.amsMapping),
     jobKind,
     calibrationOption: 'calibrationOption' in row ? row.calibrationOption : null,
+    ...toReslicePresentation(row),
     activity,
     thumbnailPath: row.thumbnailPath,
     snapshotPath: 'snapshotPath' in row ? row.snapshotPath : null
+  }
+}
+
+/**
+ * The "Slice again" affordance for a history row: the preserved project 3MF and the
+ * settings that produced this print, or nulls when re-slicing is not offered.
+ *
+ * All three collapse to null together — a soft-deleted (recycled) project is treated as
+ * absent so the action never opens a dialog on a file the user has thrown away, and the
+ * legacy jobs query has no such columns at all. Settings are best-effort on top: a row
+ * whose blob no longer parses still offers the project, just without seeded settings.
+ */
+function toReslicePresentation(row: PrintJobRow) {
+  const project = 'sourceProject' in row ? row.sourceProject : null
+  if (!project || project.deletedAt) return RESLICE_UNAVAILABLE
+  return {
+    sourceProjectFileId: 'sourceProjectFileId' in row ? row.sourceProjectFileId : null,
+    sourceProjectFileName: project.name,
+    sliceSettings: parsePreservedSliceSettings('sliceSettingsJson' in row ? row.sliceSettingsJson : null)
   }
 }
 

@@ -103,7 +103,7 @@ test('buildObjectsStl merges several groups into one STL, keeping relative place
 /** A part group tagged the way the editor tags render parts. */
 function partGroup(tag: 'partRef' | 'importPartRef', componentObjectId: number, position: [number, number, number], modifier = false): THREE.Group {
   const group = new THREE.Group()
-  group.userData[tag] = { componentObjectId }
+  group.userData[tag] = { componentObjectId, partIndex: componentObjectId }
   group.add(cubeMesh(position, modifier ? { isHelperVolume: true } : {}))
   return group
 }

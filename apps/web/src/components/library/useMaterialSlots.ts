@@ -738,6 +738,17 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         // name matches no catalog preset, so slice-time physics re-derivation silently falls
         // back to Generic PLA.
         settingsId: selectedOption?.profileId ? selectedOption.material : null,
+        // The Bambu filament id OF THAT SAME PRESET, read from the preset itself exactly as
+        // BambuStudio does (`PresetBundle` writes `filament_settings_id` from `preset.name` and
+        // `filament_ids` from `preset.filament_id`, both over one selected-preset list). It is the
+        // key BambuStudio BINDS a slot on, so a slot naming PETG HF while carrying the old
+        // material's ABS id makes BambuStudio fabricate a junk project preset. Resolved from
+        // `profileId` rather than the option's own fields because only the preset knows its id.
+        // Null when the option resolved no preset — the bake then reports unknown rather than
+        // letting the previous material's id stand.
+        filamentId: (selectedOption?.profileId
+          ? filamentProfiles.find((profile) => profile.id === selectedOption.profileId)?.filamentIds?.[0]
+          : null) ?? null,
         sourceIndex,
         // The chosen toolhead's runtime nozzle id (0 = right, 1 = left), falling back to the slot's
         // baked nozzle so unchanged slots keep their assignment — but ONLY when the current machine
@@ -747,7 +758,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
         nozzleId: clampNozzleId(parseSliceToolheadNozzleId(filamentToolheadIds[filament.projectFilamentId]) ?? filament.nozzleId ?? null, availableNozzleIds)
       }
     })
-  }, [sessionSlots, baseProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, availableNozzleIds])
+  }, [sessionSlots, baseProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, filamentToolheadIds, availableNozzleIds, filamentProfiles])
 
   const materialSnapshot = useMemo<MaterialSlotsSnapshot>(() => ({
     // Always a concrete list, which is the point of holding one: a frame describes what the user

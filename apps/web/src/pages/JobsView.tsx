@@ -1,4 +1,5 @@
-import { Box, Button, Card, CardContent, Chip, FormControl, LinearProgress, Select, Stack, Typography } from '@mui/joy'
+import { Box, Button, Card, CardContent, Chip, FormControl, LinearProgress, ListItemDecorator, MenuItem, Select, Stack, Typography } from '@mui/joy'
+import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -80,6 +81,8 @@ import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { useSlicingJobs } from '../hooks/useSlicingJobs'
 import { PluginSlot } from '../plugin/PluginSlot'
 import { PrintModal } from '../components/library/PrintModal'
+import { SliceThenPrintFlow } from '../components/library/SliceThenPrintFlow'
+import { SplitButton } from '../components/SplitButton'
 
 interface LiveJob {
   jobId: string
@@ -195,6 +198,10 @@ export function JobsView() {
   const { tenantSlug } = useParams<{ tenantSlug: string }>()
   const workspacePath = (path: string) => tenantSlug ? buildTenantWorkspacePath(tenantSlug, path) : path
   const [reprintJob, setReprintJob] = useState<PrintJob | null>(null)
+  // "Slice again": re-slice the project a finished print was produced from, rather than
+  // re-dispatching the identical G-code. Held as the whole job so the flow can seed the
+  // plate, engine and printer the original run used.
+  const [resliceJob, setResliceJob] = useState<PrintJob | null>(null)
   const [deleteHistoryJobTarget, setDeleteHistoryJobTarget] = useState<PrintJob | null>(null)
   const [deleteSlicingHistoryJobTarget, setDeleteSlicingHistoryJobTarget] = useState<SlicingJob | null>(null)
   const [restartingJobId, setRestartingJobId] = useState<string | null>(null)
@@ -227,6 +234,7 @@ export function JobsView() {
   const canControlPrinters = hasPermission(PRINTERS_CONTROL_PERMISSION)
   const canViewCamera = hasPermission(CAMERA_VIEW_PERMISSION)
   const canCancelSlicing = hasPermission(LIBRARY_UPLOAD_PERMISSION)
+  const canSliceFiles = hasPermission(LIBRARY_UPLOAD_PERMISSION)
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   const jobsQuery = useQuery({
     queryKey: ['jobs'],
@@ -843,7 +851,31 @@ export function JobsView() {
                     && job.jobKind === 'calibration'
                     && job.calibrationOption != null
                   )
-                  const restartAction = canRestartFile ? (
+                  // Offered only when the project this print was sliced from was preserved
+                  // and still exists; re-slicing needs the same permission as slicing anything.
+                  const canReslice = Boolean(
+                    canSliceFiles
+                    && canDispatchPrints
+                    && canViewPrinters
+                    && job.finishedAt
+                    && job.sourceProjectFileId
+                  )
+                  const restartAction = canRestartFile && canReslice ? (
+                    <SplitButton
+                      size="sm"
+                      variant="soft"
+                      color="neutral"
+                      label="Reprint"
+                      ariaLabel={`Reprint ${job.jobName}`}
+                      startDecorator={<ReplayRoundedIcon />}
+                      onClick={() => setReprintJob(job)}
+                    >
+                      <MenuItem onClick={() => setResliceJob(job)}>
+                        <ListItemDecorator><ContentCutRoundedIcon /></ListItemDecorator>
+                        Slice again
+                      </MenuItem>
+                    </SplitButton>
+                  ) : canRestartFile ? (
                     <Button
                       size="sm"
                       variant="soft"
@@ -851,6 +883,18 @@ export function JobsView() {
                       onClick={() => setReprintJob(job)}
                     >
                       Reprint
+                    </Button>
+                  ) : canReslice ? (
+                    // The G-code is gone (deleted, or never re-printable) but its project
+                    // survives — re-slicing is the only way back to this print, so offer it
+                    // on its own rather than hiding it behind an unavailable Reprint.
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      startDecorator={<ContentCutRoundedIcon />}
+                      onClick={() => setResliceJob(job)}
+                    >
+                      Slice again
                     </Button>
                   ) : canRestartCalibration ? (
                     <Button
@@ -907,6 +951,22 @@ export function JobsView() {
             })
           }}
           onClose={() => setReprintJob(null)}
+        />
+      )}
+
+      {canSliceFiles && canDispatchPrints && canViewPrinters && resliceJob?.sourceProjectFileId && (
+        <SliceThenPrintFlow
+          fileId={resliceJob.sourceProjectFileId}
+          printers={printers}
+          preferredPrinterId={resliceJob.printerId}
+          // The project was preserved with every plate it had; the print used one of them.
+          defaultPlate={resliceJob.plate ?? 1}
+          initialSlicerTargetId={resliceJob.sliceSettings?.slicerTargetId}
+          flowCopy={{
+            title: `Slice ${formatLibraryFileName(resliceJob.sourceProjectFileName ?? resliceJob.jobName)} again`,
+            description: 'These are the settings this print was sliced with. Change anything you like, then continue to printer selection.'
+          }}
+          onClose={() => setResliceJob(null)}
         />
       )}
 

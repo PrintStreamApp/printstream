@@ -17,6 +17,9 @@ __pycache__/
 !/data/demo-library/Card Holder (3 rows).gcode.3mf
 !/data/demo-library/Number Plates.gcode.3mf
 !/data/demo-library/Tire Rotation Markers.gcode.3mf
+# Ad-hoc 3MF fixtures dropped in the repo root while investigating a file (multi-megabyte,
+# user-specific). Real fixtures live beside their tests or under /data/demo-library.
+/*.3mf
 apps/api/data/
 apps/api/prisma/data/
 # Transient BambuStudio CLI output written to CWD when the slicer (or a manual CLI probe)

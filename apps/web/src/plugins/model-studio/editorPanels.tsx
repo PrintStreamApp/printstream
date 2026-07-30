@@ -1257,15 +1257,15 @@ export function ObjectList({
   /** Additional multi-selected instance keys (Ctrl/Cmd-click). */
   extraSelectedKeys?: ReadonlyArray<string>
   /** Selected PARTS of one object (mutually exclusive with the object selection). */
-  partSelection?: { objectId: number; componentObjectIds: ReadonlyArray<number> } | null
+  partSelection?: { objectId: number; partIndexes: ReadonlyArray<number> } | null
   /** The baked part currently holding the transform gizmo (row highlight). */
-  selectedBakedPart?: { objectId: number; componentObjectId: number } | null
+  selectedBakedPart?: { objectId: number; partIndex: number } | null
   onSelect: (key: string, modifiers?: { additive?: boolean; range?: boolean }) => void
   /**
    * Select a part row: plain click hands the part the gizmo (move/rotate/scale);
    * Ctrl-toggle / Shift-range build the bulk selection (BambuStudio volume-mode rules).
    */
-  onSelectPart?: (objectId: number, componentObjectId: number, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
+  onSelectPart?: (objectId: number, partIndex: number, modifiers: { additive: boolean; range: boolean }, instanceKey: string) => void
   /**
    * How many placed instances share this one's object. >1 shows the linked-copy badge, which is
    * the only place the editor tells the user that editing this object also edits its copies.
@@ -1274,16 +1274,16 @@ export function ObjectList({
   /** Right-click on an object row: open the object context menu at the pointer. */
   onObjectContextMenu?: (key: string, position: { x: number; y: number }) => void
   /** Right-click on a part row: open the part context menu at the pointer. */
-  onPartContextMenu?: (objectId: number, componentObjectId: number, position: { x: number; y: number }) => void
+  onPartContextMenu?: (objectId: number, partIndex: number, position: { x: number; y: number }) => void
   filamentColors?: Record<number, string>
   filamentOptions?: FilamentOption[]
-  onReassignFilament?: (targets: Array<{ objectId: number; componentObjectId: number }>, filamentId: number) => void
+  onReassignFilament?: (targets: Array<{ objectId: number; partIndex: number }>, filamentId: number) => void
   /** Map a (possibly-removed) material id to the one shown (removed -> material 1). */
   resolveFilamentId?: (id: number | null) => number | null
   /** Toggle an instance's Bambu "Printable" flag (per-instance, editor-owned). */
   onTogglePrintable: (key: string) => void
   /** Change a part's Bambu volume type (BambuStudio's "Change type"), keyed like part filament. */
-  onChangePartType?: (objectId: number, componentObjectId: number, subtype: SceneEditPartSubtype) => void
+  onChangePartType?: (objectId: number, partIndex: number, subtype: SceneEditPartSubtype) => void
   /** Part volumes ADDED this session (blockers/enforcers/modifiers/negatives) for an instance's object. */
   addedPartsFor?: (instance: EditorInstance) => EditorAddedPart[]
   /** The added part currently holding the transform gizmo (row highlight). */
@@ -1302,8 +1302,8 @@ export function ObjectList({
     overrideCountFor: (objectId: number) => number
     onEditObject: (objectId: number, name: string) => void
     /** Open per-PART process settings for one part of an object (separate from the object's). */
-    onEditPart?: (objectId: number, componentObjectId: number, name: string) => void
-    partOverrideCountFor?: (objectId: number, componentObjectId: number) => number
+    onEditPart?: (objectId: number, partIndex: number, name: string) => void
+    partOverrideCountFor?: (objectId: number, partIndex: number) => number
   }
 }) {
   const resolveId = resolveFilamentId ?? ((id: number | null) => id)
@@ -1380,7 +1380,7 @@ export function ObjectList({
                     title={materialParts.length > 1
                       ? (partMaterial.mixedColors ? "Mixed materials — set all parts' material" : "Set all parts' material")
                       : 'Change material'}
-                    onReassign={(fid) => onReassignFilament(materialParts.map((p) => ({ objectId: perObjectId, componentObjectId: p.componentObjectId })), fid)}
+                    onReassign={(fid) => onReassignFilament(materialParts.map((p) => ({ objectId: perObjectId, partIndex: p.partIndex })), fid)}
                   />
                 ) : (!showParts && <FilamentBadge filamentId={resolveId(instance.filamentId)} color={liveColor(resolveId(instance.filamentId), instance.color)} />)}
                 {perObject && sliceObject != null && (
@@ -1396,9 +1396,9 @@ export function ObjectList({
             {showParts && instance.parts.map((part, index) => {
               const partSelected = perObjectId != null
                 && ((partSelection?.objectId === perObjectId
-                  && partSelection.componentObjectIds.includes(part.componentObjectId))
+                  && partSelection.partIndexes.includes(part.partIndex))
                   || (selectedBakedPart?.objectId === perObjectId
-                    && selectedBakedPart.componentObjectId === part.componentObjectId))
+                    && selectedBakedPart.partIndex === part.partIndex))
               // BambuStudio draws the extruder swatch for normal parts and modifiers only: a
               // blocker/enforcer/negative volume has no material to show, so its row leads with
               // the subtype chip instead — the same marker the session-added rows below use.
@@ -1410,7 +1410,7 @@ export function ObjectList({
                 key={`${instance.key}:${index}`}
                 onContextMenu={onPartContextMenu && perObjectId != null ? (event) => {
                   event.preventDefault()
-                  onPartContextMenu(perObjectId, part.componentObjectId, { x: event.clientX, y: event.clientY })
+                  onPartContextMenu(perObjectId, part.partIndex, { x: event.clientX, y: event.clientY })
                 } : undefined}
                 sx={{ pl: 3, borderRadius: 'sm', bgcolor: partSelected ? 'neutral.softBg' : undefined }}
               >
@@ -1420,7 +1420,7 @@ export function ObjectList({
                     level="body-xs"
                     noWrap
                     onClick={onSelectPart && perObjectId != null ? (event) => {
-                      onSelectPart(perObjectId, part.componentObjectId, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey }, instance.key)
+                      onSelectPart(perObjectId, part.partIndex, { additive: event.ctrlKey || event.metaKey, range: event.shiftKey }, instance.key)
                     } : undefined}
                     sx={{
                       flex: 1,
@@ -1436,24 +1436,24 @@ export function ObjectList({
                       color={liveColor(resolveId(part.filamentId), part.color)}
                       options={filamentOptions}
                       title={helperSubtype ? 'Material printed inside this modifier' : undefined}
-                      onReassign={onReassignFilament && perObjectId != null ? (fid) => onReassignFilament([{ objectId: perObjectId, componentObjectId: part.componentObjectId }], fid) : undefined}
+                      onReassign={onReassignFilament && perObjectId != null ? (fid) => onReassignFilament([{ objectId: perObjectId, partIndex: part.partIndex }], fid) : undefined}
                     />
                   )}
                   {onChangePartType && perObjectId != null && (
                     <PartTypeMenu
                       subtype={part.subtype}
                       partName={part.name ?? `Part ${index + 1}`}
-                      onChange={(subtype) => onChangePartType(perObjectId, part.componentObjectId, subtype)}
+                      onChange={(subtype) => onChangePartType(perObjectId, part.partIndex, subtype)}
                     />
                   )}
                   {perObject?.onEditPart && sliceObject != null && (() => {
-                    const partOverrides = perObject!.partOverrideCountFor?.(sliceObject, part.componentObjectId) ?? 0
+                    const partOverrides = perObject!.partOverrideCountFor?.(sliceObject, part.partIndex) ?? 0
                     return (
                       <SettingsTuneButton
                         changedCount={partOverrides}
                         title="Per-part settings"
                         ariaLabel={`Per-part settings for ${part.name ?? `Part ${index + 1}`}`}
-                        onClick={() => perObject!.onEditPart!(sliceObject, part.componentObjectId, part.name ?? `Part ${index + 1}`)}
+                        onClick={() => perObject!.onEditPart!(sliceObject, part.partIndex, part.name ?? `Part ${index + 1}`)}
                       />
                     )
                   })()}

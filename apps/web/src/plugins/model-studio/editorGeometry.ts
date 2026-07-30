@@ -58,8 +58,15 @@ export function plateDeltaToPartLocal(rotorMatrixWorld: THREE.Matrix4, dx: numbe
     .applyMatrix4(new THREE.Matrix4().copy(rotorMatrixWorld).setPosition(0, 0, 0).invert())
 }
 
-export function partGroupRef(node: THREE.Object3D): { componentObjectId: number } | null {
-  const ref = (node.userData.partRef ?? node.userData.importPartRef) as { componentObjectId: number } | undefined
+/**
+ * The part a render group draws, or null. `partIndex` is the IDENTITY (the part's ordinal within
+ * its object, BambuStudio's own key); `componentObjectId` is the MESH it references and is NOT
+ * unique — several volumes of one object legitimately share a mesh, and keying on it made an edit
+ * to one of them hit every sibling that shared it.
+ */
+export function partGroupRef(node: THREE.Object3D): { componentObjectId: number; partIndex: number } | null {
+  const ref = (node.userData.partRef ?? node.userData.importPartRef) as
+    { componentObjectId: number; partIndex: number } | undefined
   return ref ?? null
 }
 

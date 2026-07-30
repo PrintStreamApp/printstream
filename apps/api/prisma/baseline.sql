@@ -119,6 +119,8 @@ CREATE TABLE "PrintJob" (
     "fileId" TEXT,
     "fileName" TEXT,
     "fileSizeBytes" INTEGER,
+    "sourceProjectFileId" TEXT,
+    "sliceSettingsJson" TEXT,
     "plate" INTEGER,
     "useAms" BOOLEAN,
     "bedLevel" BOOLEAN,
@@ -266,6 +268,8 @@ CREATE TABLE "LibraryFile" (
     "derivedChipsVersion" INTEGER,
     "printCount" INTEGER NOT NULL DEFAULT 0,
     "lastPrintedAt" TIMESTAMP(3),
+    "sourceProjectFileId" TEXT,
+    "sliceSettingsJson" TEXT,
 
     CONSTRAINT "LibraryFile_pkey" PRIMARY KEY ("id")
 );
@@ -1351,6 +1355,9 @@ ALTER TABLE "PrintJob" ADD CONSTRAINT "PrintJob_printerId_fkey" FOREIGN KEY ("pr
 ALTER TABLE "PrintJob" ADD CONSTRAINT "PrintJob_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "LibraryFile"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "PrintJob" ADD CONSTRAINT "PrintJob_sourceProjectFileId_fkey" FOREIGN KEY ("sourceProjectFileId") REFERENCES "LibraryFile"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "DispatchJob" ADD CONSTRAINT "DispatchJob_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -1370,6 +1377,9 @@ ALTER TABLE "LibraryFile" ADD CONSTRAINT "LibraryFile_ownerBridgeId_fkey" FOREIG
 
 -- AddForeignKey
 ALTER TABLE "LibraryFile" ADD CONSTRAINT "LibraryFile_folderId_fkey" FOREIGN KEY ("folderId") REFERENCES "LibraryFolder"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "LibraryFile" ADD CONSTRAINT "LibraryFile_sourceProjectFileId_fkey" FOREIGN KEY ("sourceProjectFileId") REFERENCES "LibraryFile"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "LibraryFileFavorite" ADD CONSTRAINT "LibraryFileFavorite_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

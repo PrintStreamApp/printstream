@@ -34,6 +34,8 @@ export * from './logs.js'
 export * from './delete-operations.js'
 export * from './bambu-file-version.js'
 export * from './flush-volumes-matrix.js'
+// Repairable-defect detection + fixes; see repairs/index.ts for the shared contract.
+export * from './repairs/index.js'
 export * from './filament-variant-index.js'
 export * from './machine-retarget.js'
 export * from './bambu-model-keys.js'

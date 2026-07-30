@@ -8,10 +8,17 @@
  */
 import { randomUUID } from 'node:crypto'
 import { createWriteStream, readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import type { CreateSlicingJob, SlicingJob, SlicingJobStatus, SlicingOutputLine, SlicingMetadata } from '@printstream/shared'
+import type {
+  CreateSlicingJob,
+  PreservedSliceSettings,
+  SlicingJob,
+  SlicingJobStatus,
+  SlicingOutputLine,
+  SlicingMetadata
+} from '@printstream/shared'
 import { isDirectPrintableFileName } from '@printstream/shared'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
 import yazl from 'yazl'
@@ -19,6 +26,8 @@ import { env } from './env.js'
 import { conflict, HttpError, notFound } from './http-error.js'
 import { persistHistoryThumbnailFromLibrary } from './job-history-thumbnail-source.js'
 import { persistLibraryFileFromLocalPath } from './library-files.js'
+import { authorSliceSettingsIntoProject } from './slice-settings-authoring.js'
+import { preserveSlicedProject } from './sliced-project-preservation.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { authorProjectMachineFromProfile } from './save-retarget.js'
 import { SlicerServiceError, slicerClient } from './slicer-client.js'
@@ -112,6 +121,8 @@ interface PersistedSlicingJobState {
 
 export type PersistSlicedArtifact = typeof persistLibraryFileFromLocalPath
 export type PersistSlicingHistoryThumbnail = typeof persistHistoryThumbnailFromLibrary
+export type PreserveSlicedProject = typeof preserveSlicedProject
+export type AuthorSliceSettings = typeof authorSliceSettingsIntoProject
 export type ResolveSlicingSource = (input: { sourceFileId: string; sourcePath: string }) => Promise<string>
 
 /**
@@ -152,6 +163,8 @@ export class SlicingJobs {
   private readonly persistencePath: string | null
   private readonly persistArtifact: PersistSlicedArtifact
   private readonly persistThumbnail: PersistSlicingHistoryThumbnail
+  private readonly preserveProject: PreserveSlicedProject
+  private readonly authorSliceSettings: AuthorSliceSettings
   private readonly resolveSource: ResolveSlicingSource
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private persistPromise: Promise<void> = Promise.resolve()
@@ -165,6 +178,8 @@ export class SlicingJobs {
     stateFilePath?: string
     persistArtifact?: PersistSlicedArtifact
     persistThumbnail?: PersistSlicingHistoryThumbnail
+    preserveProject?: PreserveSlicedProject
+    authorSliceSettings?: AuthorSliceSettings
     resolveSource?: ResolveSlicingSource
   }) {
     this.progressPollIntervalMs = options?.progressPollIntervalMs ?? DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS
@@ -173,6 +188,8 @@ export class SlicingJobs {
     this.lostUnreachableGraceMs = options?.lostUnreachableGraceMs ?? UNREACHABLE_GRACE_MS
     this.persistArtifact = options?.persistArtifact ?? persistLibraryFileFromLocalPath
     this.persistThumbnail = options?.persistThumbnail ?? persistHistoryThumbnailFromLibrary
+    this.preserveProject = options?.preserveProject ?? preserveSlicedProject
+    this.authorSliceSettings = options?.authorSliceSettings ?? authorSliceSettingsIntoProject
     this.resolveSource = options?.resolveSource ?? resolveSlicingSourcePath
 
     const persistState = options?.persistState ?? env.NODE_ENV !== 'test'
@@ -450,6 +467,9 @@ export class SlicingJobs {
         })
         job.outputFileId = saved.id
         job.outputFileName = saved.name
+        // Only now that the output is durable: a snapshot for a cancelled or unsaved slice
+        // would never be swept (see print-file-snapshots.ts) and nothing would point at it.
+        await this.keepSlicedProject(job, result.preparedProjectPath, saved)
         await this.ensureHistoryThumbnail(job)
         this.logJobEvent(job, 'info', `Saved sliced artifact as ${saved.name}`, {
           outputFileId: saved.id,
@@ -478,6 +498,11 @@ export class SlicingJobs {
         // already removed it, but a failure/cancel after the slice completed would otherwise leak it.
         if (result?.artifactPath) {
           await rm(pathDirname(result.artifactPath), { recursive: true, force: true }).catch(() => undefined)
+        }
+        // Same for the staged project copy — preserved by now on the success path, and
+        // deliberately discarded on every other, where no output points at it.
+        if (result?.preparedProjectPath) {
+          await rm(pathDirname(result.preparedProjectPath), { recursive: true, force: true }).catch(() => undefined)
         }
         progressController.abort()
         await progressTracker.catch(() => undefined)
@@ -593,6 +618,31 @@ export class SlicingJobs {
         }
       }
 
+      // Now the machine is in, author the REST of this slice's settings into the project: the
+      // chosen process preset, each slot's filament preset, the dialog's per-slice and
+      // per-material overrides, and the plate type. All of those otherwise reach the CLI only as
+      // command-line profile files, leaving the project ignorant of what it was sliced with — which
+      // is what made a preserved project reopen with its old presets, and what let a project's own
+      // settings outrank the chosen preset on the compatibility-fallback retry. Must run AFTER the
+      // machine step: the process and filament writes index the topology maps it rebuilds.
+      // Best-effort — a slice that worked before must still work.
+      {
+        const authoredPath = await this.authorSliceSettings({
+          tenantId: job.tenantId,
+          slicerTargetId: job.request.slicerTargetId,
+          target: job.request.target,
+          projectPath: sourcePath,
+          fileName: path.basename(job.sourceFileName) || 'source.3mf'
+        }).catch((error: unknown) => {
+          this.logJobEvent(job, 'warn', `Could not author the slice settings into the project: ${(error as Error).message}`)
+          return null
+        })
+        if (authoredPath) {
+          rewrittenSourcePaths.push(authoredPath)
+          sourcePath = authoredPath
+        }
+      }
+
       // Heal index-level triangle-soup meshes (older editor imports) before slicing:
       // BambuStudio chains layer contours by vertex index, so unwelded meshes fall into
       // its 2mm gap-closing heuristic and small features (inlaid text) slice mangled.
@@ -620,11 +670,22 @@ export class SlicingJobs {
       this.setStatus(job, 'slicing', 'Starting the slice')
 
       let crashRetryUsed = false
+      // The project to ARCHIVE for "Slice again", when it must differ from the one the engine
+      // consumed. A profile-compatibility retry BLANKS the project's preset identities
+      // (`sanitizeProjectSettingsConfig`: `printer_settings_id`, `print_settings_id` /
+      // `default_print_profile` / `inherits_group[0]`, and every `filament_settings_id` slot) so the
+      // CLI falls back to its own presets. That is right for the engine and wrong for an archive a
+      // user opens: BambuStudio treats "" as a preset NAME, mints a project-embedded preset from its
+      // bare config defaults, names it `(<project>.3mf)`, and re-embeds it on every later save — so
+      // the kept project would misreport its own materials forever, and a re-slice would use default
+      // physics instead of the chosen material. Holds the last version whose identities were still
+      // intact; null while nothing has blanked them.
+      let projectToArchive: string | null = null
       while (true) {
         const slicerJobId = buildSlicerAttemptJobId(job.id, retryAttempt)
         job.activeSlicerJobId = slicerJobId
         try {
-          return await slicerClient.run({
+          const result = await slicerClient.run({
             jobId: slicerJobId,
             sourceFileName: job.sourceFileName,
             sourcePath,
@@ -632,6 +693,18 @@ export class SlicingJobs {
             profileFiles,
             signal
           })
+          // Staged from INSIDE the try: these paths point into a temp dir the finally below
+          // deletes, and this is the last moment they still exist. Which attempt won matters —
+          // a profile-compatibility retry slices a REWRITTEN project, so archiving a pre-retry
+          // version means archiving a project the engine never sliced. That is the deliberate
+          // trade for the one field it differs in: `projectToArchive` (above) is the same
+          // project minus the blanked preset identities, so the archive names its materials
+          // honestly. Everything else — geometry, arrangement, authored settings — is identical,
+          // since the fallback rewrite only touches `project_settings.config` identity fields.
+          return {
+            ...result,
+            preparedProjectPath: await this.stagePreparedProject(job, projectToArchive ?? sourcePath)
+          }
         } catch (error) {
           // A signal-death exit (segfault et al.) gets ONE retry with unchanged inputs: under
           // qemu emulation the engine crashes intermittently on runs that slice clean when
@@ -659,6 +732,10 @@ export class SlicingJobs {
           })
           profileFiles = fallback.profileFiles
           request = fallback.request
+          // Remember the version whose preset identities are still intact, BEFORE this rewrite
+          // replaces them with blanks. Only the first time: a second retry blanks a further kind,
+          // and the archive wants the version that predates ALL of them.
+          if (fallback.sourcePath !== sourcePath && projectToArchive == null) projectToArchive = sourcePath
           sourcePath = fallback.sourcePath
           rewrittenSourcePaths.push(...fallback.rewrittenSourcePaths)
           const changed = fallback.changed
@@ -805,6 +882,54 @@ export class SlicingJobs {
     }
   }
 
+  /**
+   * Copy the project the engine was handed into a temp dir that outlives `runSlicerJob`'s
+   * cleanup, so `run()` can preserve it once the sliced output is safely persisted.
+   *
+   * Staged rather than preserved directly because the two have different lifetimes: a slice
+   * that is cancelled or fails during saving must leave no snapshot behind (snapshots are
+   * never swept), and that is only known after the artifact is stored. Best-effort — a
+   * staging failure costs the re-slice affordance, never the slice.
+   */
+  private async stagePreparedProject(job: SlicingJobState, preparedPath: string): Promise<string | null> {
+    try {
+      const stagedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-project-'))
+      const stagedPath = path.join(stagedDir, path.basename(job.sourceFileName) || 'source.3mf')
+      await copyFile(preparedPath, stagedPath)
+      return stagedPath
+    } catch (error) {
+      this.logJobEvent(job, 'warn', `Could not keep the sliced project: ${(error as Error).message}`)
+      return null
+    }
+  }
+
+  /**
+   * Keep the staged project (see `sliced-project-preservation.ts`) so this print can be
+   * sliced again later. Best-effort: every failure here degrades to a print that simply
+   * cannot be re-sliced, never to a failed slice.
+   */
+  private async keepSlicedProject(
+    job: SlicingJobState,
+    preparedProjectPath: string | null,
+    saved: { id: string; ownerBridgeId: string | null }
+  ): Promise<void> {
+    if (!preparedProjectPath) return
+    try {
+      const projectFileId = await this.preserveProject({
+        tenantId: job.tenantId,
+        fileName: job.sourceFileName,
+        preparedProjectPath,
+        output: saved,
+        settings: toPreservedSliceSettings(job.request)
+      })
+      if (projectFileId) {
+        this.logJobEvent(job, 'info', 'Kept the sliced project for re-slicing', { projectFileId })
+      }
+    } catch (error) {
+      this.logJobEvent(job, 'warn', `Could not keep the sliced project: ${(error as Error).message}`)
+    }
+  }
+
   private touch(job: SlicingJobState, message: string): void {
     job.updatedAt = new Date()
     job.output.push({ stream: 'system', text: message, createdAt: job.updatedAt.toISOString() })
@@ -907,6 +1032,26 @@ export class SlicingJobs {
 
 function shouldHideSlicedArtifact(request: CreateSlicingJob): boolean {
   return request.hiddenOutput === true
+}
+
+/**
+ * Narrow a slice request down to what re-slicing the PRESERVED project needs.
+ *
+ * Everything the request expressed about the project — the arranged scene, object selection,
+ * per-object overrides, layer G-code edits, and (authored in by `slice-settings-authoring.ts`)
+ * the process and filament presets with their overrides — is already baked into the project we
+ * kept, so carrying it here would re-apply it to a project that already has it. What survives is
+ * only what stays outside the file: the engine target, the plate scope, and the newer-project
+ * acknowledgement. The preset target rides along because the dialog seeds its pickers from it,
+ * not because re-slicing needs it.
+ */
+function toPreservedSliceSettings(request: CreateSlicingJob): PreservedSliceSettings {
+  return {
+    ...(request.slicerTargetId ? { slicerTargetId: request.slicerTargetId } : {}),
+    target: request.target,
+    plate: request.plate,
+    ...(request.allowNewerProjectFile ? { allowNewerProjectFile: true } : {})
+  }
 }
 
 // These strings are the job's user-facing status line, not a log: the web renders the newest

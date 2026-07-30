@@ -74,6 +74,27 @@ function replaceCurrentDialogHistoryWithActiveStack() {
   window.history.replaceState(buildDialogHistoryState(getActiveDialogStack()), document.title)
 }
 
+const openDialogListeners = new Set<() => void>()
+
+/**
+ * Subscribe to "is any dialog open". Exists so fixed-position chrome OUTSIDE the dialog can react
+ * to being covered — the toast stack lifts itself clear of the mobile tab bar, and a dialog hides
+ * that tab bar, so the lift has to drop while one is open. Module-level because every dialog in the
+ * app mounts through this component; a context would only see part of the tree.
+ */
+export function subscribeToOpenDialogs(listener: () => void): () => void {
+  openDialogListeners.add(listener)
+  return () => openDialogListeners.delete(listener)
+}
+
+export function getOpenDialogCount(): number {
+  return activeDialogEntries.length
+}
+
+function notifyOpenDialogListeners() {
+  for (const listener of openDialogListeners) listener()
+}
+
 function registerActiveDialog(token: string, requestClose: () => void) {
   const existingEntry = activeDialogEntries.find((entry) => entry.token === token)
   if (existingEntry) {
@@ -81,6 +102,7 @@ function registerActiveDialog(token: string, requestClose: () => void) {
     return false
   }
   activeDialogEntries.push({ token, requestClose })
+  notifyOpenDialogListeners()
   return true
 }
 
@@ -89,6 +111,7 @@ function unregisterActiveDialog(token: string) {
   if (entryIndex === -1) return false
   activeDialogEntries.splice(entryIndex, 1)
   disableDialogManualScrollRestoration()
+  notifyOpenDialogListeners()
   return true
 }
 

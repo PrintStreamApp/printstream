@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { exportArrangedThreeMfSchema, saveArrangedThreeMfSchema, MAX_PAINT_CODE_LENGTH } from './slicing.js'
+import {
+  exportArrangedThreeMfSchema,
+  parsePreservedSliceSettings,
+  saveArrangedThreeMfSchema,
+  slicingTargetSchema,
+  MAX_PAINT_CODE_LENGTH
+} from './slicing.js'
 
 const sceneEdit = { plates: [{ index: 1 }], instances: [] }
 const retarget = {
@@ -62,4 +68,30 @@ test('seam/support/colour paint accepts long sub-triangle split codes', () => {
     sceneEdit: { ...sceneEdit, seamPaint: [{ objectId: 1, componentObjectId: 1, triangles: { '1': 'A'.repeat(MAX_PAINT_CODE_LENGTH + 1) } }] }
   })
   assert.equal(tooLong.success, false)
+})
+
+test('preserved slice settings survive the JSON round trip they are stored as', () => {
+  // The blob is a persisted column, so everything that identifies the slice must come back
+  // out — a settings shape that silently drops its presets would seed "Slice again" with
+  // defaults and quietly print something else. (The target is re-parsed, so it gains the
+  // filament-mapping `source` default; that is normalization, not loss.)
+  const settings = { slicerTargetId: 'bambustudio-2-7-1-57', target: retarget, plate: 2 }
+  const parsed = parsePreservedSliceSettings(JSON.stringify(settings))
+  assert.equal(parsed?.slicerTargetId, 'bambustudio-2-7-1-57')
+  assert.equal(parsed?.plate, 2)
+  assert.deepEqual(parsed?.target, slicingTargetSchema.parse(retarget))
+})
+
+test('preserved slice settings degrade to null rather than throwing on unusable rows', () => {
+  // Callers offer the affordance on the strength of this; a row written by an older build,
+  // truncated, or hand-edited must read as "no seed", never as a failed request.
+  assert.equal(parsePreservedSliceSettings(null), null)
+  assert.equal(parsePreservedSliceSettings(''), null)
+  assert.equal(parsePreservedSliceSettings('{'), null)
+  assert.equal(parsePreservedSliceSettings('{"plate":1}'), null, 'a blob with no target cannot seed anything')
+})
+
+test('preserved slice settings default an absent plate to every plate', () => {
+  const parsed = parsePreservedSliceSettings(JSON.stringify({ target: retarget }))
+  assert.equal(parsed?.plate, 0)
 })

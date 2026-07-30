@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { cutTriangleSoup, cutTriangleSoupAtZ, rebaseTriangleSoup, splitTriangleSoup, triangleSoupToBinaryStl } from './meshCut'
+import { cutTriangleSoup, cutTriangleSoupAtZ, helperVolumeCutSides, rebaseTriangleSoup, shiftTriangleSoup, splitTriangleSoup, triangleSoupToBinaryStl } from './meshCut'
 
 /** Append a quad (two triangles) a->b->c->d with the given winding. */
 function quad(out: number[], a: number[], b: number[], c: number[], d: number[]): void {
@@ -164,4 +164,59 @@ test('splitTriangleSoup separates disconnected shells, largest first', () => {
   assertWatertight(parts[1]!, 'second shell')
   // A single connected shell comes back whole.
   assert.equal(splitTriangleSoup(big).length, 1)
+})
+
+// USER-REPORTED DATA LOSS (2026-07-29): cutting an object lost its modifiers/blockers. A helper
+// volume is never geometrically cut — BambuStudio assigns it by bounding box and carries a volume
+// that STRADDLES the plane onto BOTH halves (`ModelObject::process_modifier_cut`, Model.cpp). These
+// pin that rule; the editor's cut handler carries whatever they select onto each half.
+test('a helper volume entirely on one side of the cut goes to that side only', () => {
+  const above = boxSoup(0, 0, 12, 4, 4, 16)
+  assert.deepEqual(helperVolumeCutSides(above, 'z', 10), { lower: false, upper: true })
+  const below = boxSoup(0, 0, 2, 4, 4, 6)
+  assert.deepEqual(helperVolumeCutSides(below, 'z', 10), { lower: true, upper: false })
+})
+
+test('a helper volume straddling the cut is carried onto BOTH halves', () => {
+  // Not cut in half — each piece keeps the whole volume, because the region it describes is
+  // meaningful to both. This is the case that silently vanished before.
+  const straddling = boxSoup(0, 0, 5, 4, 4, 15)
+  assert.deepEqual(helperVolumeCutSides(straddling, 'z', 10), { lower: true, upper: true })
+})
+
+test('a helper volume touching the plane exactly counts as on both sides', () => {
+  // BambuStudio's test is inclusive (`bb.min[Z] <= 0 && bb.max[Z] >= 0`), so a volume resting
+  // exactly on the plane is kept rather than dropped by a strict comparison.
+  const touchingFromBelow = boxSoup(0, 0, 4, 4, 4, 10)
+  assert.deepEqual(helperVolumeCutSides(touchingFromBelow, 'z', 10), { lower: true, upper: true })
+})
+
+test('helperVolumeCutSides honours the cut axis', () => {
+  const rightOfX = boxSoup(20, 0, 0, 30, 4, 4)
+  assert.deepEqual(helperVolumeCutSides(rightOfX, 'x', 10), { lower: false, upper: true })
+  assert.deepEqual(helperVolumeCutSides(rightOfX, 'y', 10), { lower: true, upper: false })
+})
+
+test('an empty helper volume belongs to neither side', () => {
+  // Carrying a volume with no geometry would attach an invisible part to every piece.
+  assert.deepEqual(helperVolumeCutSides(new Float32Array(), 'z', 10), { lower: false, upper: false })
+})
+
+test('a carried volume keeps its placement RELATIVE to the half it rides on', () => {
+  // The invariant the whole carry rests on. The half's mesh is rebased by `rebaseTriangleSoup`, and
+  // the carried volume is shifted by that SAME offset and re-attached with an identity transform
+  // into the same space — so their relative geometry is preserved exactly and there is no frame
+  // left to get wrong. Get this wrong and the modifier lands somewhere else, which is worse for the
+  // user than losing it.
+  const half = boxSoup(0, 0, 4, 10, 10, 14)      // not resting on the bed, so offset.z is non-zero
+  const volume = boxSoup(2, 3, 5, 4, 5, 7)
+  const relativeBefore = [volume[0]! - half[0]!, volume[1]! - half[1]!, volume[2]! - half[2]!]
+
+  const { offset } = rebaseTriangleSoup(half)     // mutates `half` in place
+  const carried = shiftTriangleSoup(volume.slice(), offset)
+
+  const relativeAfter = [carried[0]! - half[0]!, carried[1]! - half[1]!, carried[2]! - half[2]!]
+  assert.deepEqual(relativeAfter, relativeBefore)
+  // And the shift really was the half's own rebase, not a no-op.
+  assert.notDeepEqual([carried[0], carried[1], carried[2]], [volume[0], volume[1], volume[2]])
 })

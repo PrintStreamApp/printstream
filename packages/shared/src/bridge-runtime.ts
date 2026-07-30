@@ -5,6 +5,7 @@
  * library file access, and 3MF inspection, and the release/update manifest.
  */
 import { z } from 'zod'
+import { threeMfSettingsRepairReasonSchema } from './printer-contracts.js'
 import {
   bridgeDebugCaptureStatusSchema,
   bridgeSummarySchema,
@@ -782,7 +783,7 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
    */
   needsSettingsRepair: z.boolean().default(false),
   /** Which invariants failed, so the repair prompt can name the user's actual problem. */
-  settingsRepairReasons: z.array(z.enum(['flushMatrix', 'variantIndex'])).default([]),
+  settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).default([]),
   /**
    * The Bambu Studio version that saved the project (zero-padded, e.g. `"02.08.00.50"`), or null
    * when unknown. BambuStudio refuses to open a project saved by a newer version than the engine

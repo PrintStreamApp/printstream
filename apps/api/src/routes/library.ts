@@ -1194,11 +1194,22 @@ libraryRouter.post('/:id/repair-settings', requireRequestPermission(LIBRARY_UPLO
         // broken" from "Bambu Studio could not open it", since one repair action covers both.
         variantIndexBefore: result.variantIndex?.before ?? null,
         variantIndexAfter: result.variantIndex?.after ?? null,
-        variantRows: result.variantIndex?.variantRows ?? null
+        variantRows: result.variantIndex?.variantRows ?? null,
+        // Slot ids corrected, and the slots deliberately left alone because their preset could not
+        // be matched — the trail must record a PARTIAL repair as partial, or a still-affected
+        // project looks like one that was fixed.
+        filamentIdsCorrected: result.filamentIds?.corrected ?? null,
+        filamentIdsUnresolvedSlots: result.filamentIds?.unresolved.map((slot) => slot.slot) ?? null
       }
     })
     broadcastLibraryChanged()
-    response.json({ repaired: true, file: { id: saved.id, name: saved.name } })
+    // `unresolvedSlots` tells the caller the repair was PARTIAL: those slots' presets could not be
+    // matched to a known material, so their ids were left as they were rather than guessed at.
+    response.json({
+      repaired: true,
+      file: { id: saved.id, name: saved.name },
+      unresolvedSlots: result.filamentIds?.unresolved.map((slot) => slot.slot) ?? []
+    })
   } finally {
     await rm(workDir, { recursive: true, force: true })
   }
@@ -1256,7 +1267,11 @@ libraryRouter.post('/versions/:versionId/print', requireRequestPermission(PRINTS
     storedPath: version.storedPath,
     sizeBytes: version.sizeBytes,
     kind: version.kind,
-    snapshotKey: null
+    snapshotKey: null,
+    // An archived version has no preserved project of its own: the re-slice link is
+    // recorded per sliced OUTPUT, and this dispatches historical bytes instead.
+    sourceProjectFileId: null,
+    sliceSettingsJson: null
   })
   annotateRequestAuditLog(request, {
     action: 'start-print-version',

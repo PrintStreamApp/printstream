@@ -15,6 +15,13 @@ export interface PendingPrintJobSource {
   fileName: string | null
   fileSizeBytes: number | null
   sourceKind: '3mf' | 'gcode' | null
+  /**
+   * Re-slice provenance for the printed artifact: the preserved project 3MF it was
+   * sliced from and the settings that produced it. Optional because only the library
+   * dispatch path knows them — calibration and externally-observed starts never do.
+   */
+  sourceProjectFileId?: string | null
+  sliceSettingsJson?: string | null
   plate: number | null
   useAms: boolean | null
   bedLevel: boolean | null

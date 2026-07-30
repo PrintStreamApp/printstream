@@ -501,7 +501,16 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
             backdropFilter: 'blur(10px)',
             WebkitBackdropFilter: 'blur(10px)',
             borderColor: 'var(--printstream-modal-dialog-border)',
-            boxShadow: 'var(--printstream-surface-panel-shadow)'
+            boxShadow: 'var(--printstream-surface-panel-shadow)',
+            // The maximized / full-screen modes exist to escape the viewport clamp above, and Joy
+            // applies these styleOverrides AFTER `sx` — so a dialog cannot lift it from its own
+            // styles at any specificity short of `!important`. `lib/dialogPresentation.ts` marks the
+            // element instead and the exemption lives here, next to the rule it lifts. It also
+            // clears Joy's own `layout="center"` caps, which are narrower still.
+            [`&[data-dialog-presentation="maximized"], &[data-dialog-presentation="fullscreen"]`]: {
+              maxWidth: 'none',
+              maxHeight: 'none'
+            }
           }
         }
       },

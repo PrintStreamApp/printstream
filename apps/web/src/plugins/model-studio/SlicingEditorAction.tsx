@@ -82,7 +82,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
         </Button>
       )}
       {open && (
-        <Suspense fallback={<LazyDialogFallback variant="fullscreen" label="Opening the editor…" />}>
+        <Suspense fallback={<LazyDialogFallback variant="maximized" label="Opening the editor…" />}>
           <EditorView
             // Re-mount on a different file/version so all per-file state and one-shot guards
             // (seeded scene, re-hydration set, frozen preferred plate) reset cleanly.

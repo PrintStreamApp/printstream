@@ -23,6 +23,14 @@ import { visibleLibraryFilesWhere } from './library-visibility.js'
 
 export interface LibraryPrintSource extends SnapshotLibraryFile {
   fileId: string
+  /**
+   * Re-slice provenance carried onto the history row (see `DispatchJobState`). Read
+   * from the file that is actually dispatched, which is not always the one asked for:
+   * `resolveConnectedLibrarySource` can substitute a duplicate on a connected bridge,
+   * and that copy has its own project link.
+   */
+  sourceProjectFileId: string | null
+  sliceSettingsJson: string | null
 }
 
 interface LibraryFilePrintRow extends SnapshotLibraryFile {
@@ -30,6 +38,8 @@ interface LibraryFilePrintRow extends SnapshotLibraryFile {
   tenantId: string
   folderId: string | null
   hidden: boolean
+  sourceProjectFileId?: string | null
+  sliceSettingsJson?: string | null
 }
 
 export async function enqueueLibraryPrint(input: PrintFromLibrary, tenantId: string): Promise<PrintDispatchJob> {
@@ -93,7 +103,9 @@ function toLibraryPrintSource(file: LibraryFilePrintRow): LibraryPrintSource {
     sizeBytes: file.sizeBytes,
     kind: file.kind,
     snapshotKey: file.snapshotKey,
-    id: file.id
+    id: file.id,
+    sourceProjectFileId: file.sourceProjectFileId ?? null,
+    sliceSettingsJson: file.sliceSettingsJson ?? null
   }
 }
 
@@ -128,6 +140,10 @@ export async function enqueueLibraryPrintSource(
       ...input,
       fileName: source.name,
       snapshot,
+      // From the source, not the snapshot: the snapshot is content-deduped and may be
+      // shared with an unrelated print of identical bytes, so it carries no project link.
+      sourceProjectFileId: source.sourceProjectFileId,
+      sliceSettingsJson: source.sliceSettingsJson,
       plateName,
       isMultiPlate: index ? index.plates.length > 1 : true
     }, printer)

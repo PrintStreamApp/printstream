@@ -18,10 +18,8 @@
  * strips anything the schema omits) and bump {@link THREE_MF_INDEX_PARSER_VERSION} so both apps'
  * caches re-derive instead of serving stale indexes.
  */
-import { inspectProjectFlushVolumesMatrix } from '../flush-volumes-matrix.js'
-import { inspectProjectFilamentSelfIndex } from '../filament-variant-index.js'
-import type { ThreeMfSettingsRepairReason } from '../printer-contracts.js'
 import type { PrinterModel } from '../printer.js'
+import { collectSettingsRepairReasons } from '../repairs/index.js'
 import type {
   BridgeLibraryThreeMfFilament,
   BridgeLibraryThreeMfIndex,
@@ -53,8 +51,11 @@ export { decodeXmlAttributeValue }
  *      beside it strips the machine suffix and cannot identify a preset (see the field's doc).
  * v22: the plain X1 is recognized. Not a shape change but a VALUE one: an X1 project previously
  *      reported no compatible model at all, so cached indexes hold that miss and must re-derive.
+ * v23: `settingsRepairReasons` also covers a slot whose `filament_ids` entry names a different
+ *      material from its preset. A VALUE change — cached indexes were derived before the reason
+ *      existed, so they report an affected project as clean and must re-derive.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 22
+export const THREE_MF_INDEX_PARSER_VERSION = 23
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -227,9 +228,9 @@ export function buildThreeMfIndex(
   // has to tell the user what is actually wrong with THEIR file, and the two failures have nothing
   // in common from where they sit — one makes slicing fail, the other stops Bambu Studio opening
   // the project at all. `needsSettingsRepair` stays as the gate so existing callers are unaffected.
-  const settingsRepairReasons: ThreeMfSettingsRepairReason[] = []
-  if (inspectProjectFlushVolumesMatrix(projectSettingsJson)?.inconsistent === true) settingsRepairReasons.push('flushMatrix')
-  if (inspectProjectFilamentSelfIndex(projectSettingsJson)?.inconsistent === true) settingsRepairReasons.push('variantIndex')
+  // Which defects exist is owned by `repairs/` — this path only reports what it is told, so a new
+  // repairable defect never edits the parser.
+  const settingsRepairReasons = collectSettingsRepairReasons(projectSettingsJson)
   const needsSettingsRepair = settingsRepairReasons.length > 0
   // The Bambu Studio build that saved this project. BambuStudio REFUSES to open a project from a
   // newer version than the engine slicing it (major.minor only — see bambu-file-version.ts), so

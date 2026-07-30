@@ -101,7 +101,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         bedModelPath="/api/public/slicing/bed-model"
         resolveProcessConfig={resolveProcessConfig}
         presetManager={presetManager}
-        presentation="fullscreen"
+        hosting="page"
         onClose={onClose}
       />
       {processSettingsDialogOpen && controller.selectedProcessProfile && (

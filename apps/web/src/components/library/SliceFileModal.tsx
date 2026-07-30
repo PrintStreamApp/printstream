@@ -148,6 +148,7 @@ export function SliceFileModal({
   flow = 'library',
   preferredPrinterId,
   defaultPlateNumber,
+  initialSlicerTargetId,
   flowCopy,
   onBack,
   onClose,
@@ -175,6 +176,12 @@ export function SliceFileModal({
   preferredPrinterId?: string
   /** Preselect this plate (e.g. an order item's plate) instead of plate 1. */
   defaultPlateNumber?: number
+  /**
+   * Seed the engine-target INTENT (e.g. re-slicing a project with the engine its earlier
+   * slice used). Only an initial value: it goes through the same resolution ladder as a
+   * user pick, so an engine that is no longer installed falls back rather than sticking.
+   */
+  initialSlicerTargetId?: string
   /** Override the print-flow title/description/continue-button copy (e.g. for "add to queue"). */
   flowCopy?: { title?: string; description?: string | null; continueLabel?: string }
   /**
@@ -227,7 +234,7 @@ export function SliceFileModal({
   // The engine target: the user's pick while that target still exists, else the shared fallback
   // ladder (which never lands on a prerelease). Derived rather than reconciled by an effect —
   // the same shape as the machine target below, and it retires the third copy of this ladder.
-  const [slicerTargetIntent, setSlicerTargetIntent] = useState<string | undefined>(undefined)
+  const [slicerTargetIntent, setSlicerTargetIntent] = useState<string | undefined>(initialSlicerTargetId)
   const selectedSlicerTargetId = resolveSlicerTargetId(slicerTargets, capabilities?.defaultTargetId, slicerTargetIntent)
   // An updater form has to see the RESOLVED id, not the sparse intent (which is undefined until
   // the user picks) — same rule as the machine target's setters.

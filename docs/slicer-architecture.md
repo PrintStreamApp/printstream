@@ -226,7 +226,7 @@ index because an unsaved import has no baked 3MF part ids. It is applied as that
 since an import's per-solid meshes already share assembly space.
 `partTypeChanges` / `importPartTypes` carry BambuStudio's "Change type" (normal /
 negative / modifier / support blocker / enforcer) on existing parts: the first keys by
-objectId+componentObjectId (baked parts, applied by rewriting the `<part>`'s `subtype`
+objectId+partIndex (baked parts, applied by rewriting the Nth `<part>`'s `subtype`
 attribute), the second by importId+solid index (unsaved multi-solid imports, whose parts
 are baked with the chosen subtype instead of `normal_part`). Retyped parts render as
 translucent volumes and per-part process overrides apply inside them, exactly like
@@ -234,7 +234,7 @@ added modifier volumes.
 
 `partTransforms` carries part-placement edits (moving / rotating / scaling a BAKED part
 inside its object — e.g. repositioning a support blocker after a save): keyed by
-objectId+componentObjectId with the part's new object-local 12-number matrix. The writer
+objectId+partIndex with the part's new object-local 12-number matrix. The writer
 rewrites the part's `<component transform>` — the placement BambuStudio and the CLI
 slicer actually load into the volume (verified against the BambuStudio reader:
 `model_settings`'s `matrix` metadata only feeds `volume->source.transform`) — and
@@ -402,6 +402,101 @@ per **instance** — build items appear in instance-id order, so an object with 
 and skipped items skips only the toggled instances, while an object whose items are all
 unprintable skips every instance.
 
+## The sliced project is kept, so a print can be sliced again
+
+Print history is otherwise G-code-deep: `PrintJob.fileId` points at an immutable snapshot of the
+dispatched artifact, and "Reprint" re-sends exactly those bytes. That is right for "print that
+again", and useless for "print that again with one thing changed" — the project it came from was
+never recorded, and for a slice started from the editor it may never have existed in the library
+at all.
+
+So every successful slice also preserves its **project**: `sourcePath` at the moment
+`runSlicerJob` hands the file to the engine, which is after our rewrites (arranged scene, object
+selection, per-object process overrides, layer G-code edits, authored machine, mesh weld) and
+before the slicer's own mechanical prep (`input.materials.3mf`: machine retarget, filament-map
+injection, `slice_info` stripping). That boundary is the point: everything above it is user
+intent, everything below it is a CLI workaround that must not be baked into a project the user
+will re-open.
+
+That file alone would not be enough, because a slice carries settings that never entered it: the
+process preset, the per-slot filament presets, the per-slice and per-material setting overrides,
+and the plate type all travelled beside the 3MF as resolved profile files and reached the CLI on the
+command line. A project preserved without them reopens showing whatever presets it was last SAVED
+with and silently drops every override set in the prepare-print dialog — the opposite of the point.
+
+So `slice-settings-authoring.ts` writes them into the project **as a step of the rewrite chain**,
+before the engine sees it — upholding the same rule the rest of this document rests on: PrintStream
+authors the 3MF, the CLI only slices it. The engine and the preserved copy therefore read one file,
+so "slice again" reopens the exact project that produced the print rather than a reconstruction of
+it. It reuses the shared pieces "save for a different printer" uses
+(`applyProcessProfileToProjectSettings`, `rebindProjectFilamentPhysics`,
+`applyFilamentSlotOverrides`) so the two cannot drift on what a setting kind means, and it must run
+AFTER the machine step, whose topology maps the process and filament writes index.
+
+**The invariant that makes it safe to run before the engine:** the authored config must describe what
+the engine actually did, so authoring cannot change a slice's output. That is MEASURED, not reasoned:
+the same project (declaring `sparse_infill_pattern=3dhoneycomb`, `top_shell_layers=4`,
+`top_surface_pattern=monotonic` against a custom preset) was sliced twice against a builtin preset,
+once with this pass and once without, and both runs produced identical G-code —
+`grid/5/monotonicline`, the PRESET's values.
+
+That A/B settled a question worth writing down: **a process preset loaded on the command line
+overrides the project's embedded process values outright, so a project's `different_settings_to_system`
+deltas are inert once a preset is loaded.** The process step therefore lets the preset win. An earlier
+cut of this code restored those deltas, on the theory that the CLI honoured them — it does not, and
+restoring them left the kept project declaring changes the print never had (the phantom-changed-
+settings failure mode). The FILAMENT step is deliberately the other way round:
+`rebindProjectFilamentPhysics` preserves a slot's declared keys, which is right there because a
+filament preset binds per slot rather than being loaded wholesale over the project.
+
+Moving authoring ahead of the slice also closed a residual of "picked Extra Fine, silently got the
+project's 0.20mm": the compatibility-fallback retry blanks a preset's *identity*
+(`sanitizeProjectSettingsConfig`) but not its values, so the retry now re-slices with the chosen
+preset's settings instead of falling back to whatever the project happened to carry.
+
+The mechanics, and why each piece is where it is:
+
+- `slicing-jobs.ts` **stages** a copy into its own temp dir before returning, because `sourcePath`
+  lives in a dir the `finally` deletes. It **preserves** only after `persistArtifact` succeeds:
+  snapshots are never swept (`library-cleanup.ts` skips rows with a `snapshotKey`), so writing one
+  for a cancelled or unsaved slice would leak unreferenced bytes forever. Which attempt won matters
+  too — a compatibility retry slices a rewritten project, and preserving the pre-retry one would
+  keep a project that produced nothing.
+- Every entry in the chain's `rewrittenSourcePaths` owns its containing directory: the cleanup
+  removes the whole dir, so a rewrite step must `mkdtemp` rather than write beside its input.
+- `sliced-project-preservation.ts` stores it via `ensureLibrarySnapshotFromLocalPath` — hidden,
+  `origin: 'snapshot'`, content-addressed, so slicing the same project repeatedly stores one copy —
+  and records `sourceProjectFileId` + `sliceSettingsJson` on the sliced **output**. Not on the
+  snapshot: snapshots are shared between any two files with identical bytes and cannot carry
+  per-slice facts.
+- `library-printing.ts` copies both onto the `PrintJob` at dispatch, so the association survives
+  the output being deleted. `library-files.ts` clears them on an overwrite (fresh content, stale
+  provenance) and carries them across an `unhideSlicedOutput` merge (the surviving row now holds
+  the output's bytes).
+- The preserved settings (`preservedSliceSettingsSchema`) are deliberately narrow: engine target,
+  preset target, plate, newer-file acknowledgement. Everything else is baked into the project;
+  re-sending it would apply it twice. The preset target rides along only so the dialog can seed
+  its pickers.
+- Process overrides are authored UNDECLARED and filament overrides DECLARED, matching what the
+  editor's own two save paths do (`applyGlobalProcessOverrides` vs `applyFilamentSlotOverrides`).
+  The asymmetry is pre-existing, not an oversight here: a saved global process override becomes the
+  project's baseline, while a material tune stays marked as the user's edit so it keeps a reset.
+- **No job, no kept project.** A preserved project only earns its place if the user went on to START
+  A PRINT (or deliberately kept the sliced output) — a slice they abandoned must leave nothing behind.
+  The write still happens during the slice, because that is the only moment the prepared bytes exist;
+  what enforces the rule is that survival is conditional on a reference. Two halves:
+  `discardHiddenSlicedOutput` → `discardUnreferencedProjectSnapshot` deletes promptly when the user
+  closes the dialog, and `pruneUnreferencedProjectSnapshots` is the backstop for the paths that never
+  reach it (closed tab, crashed browser, or the output itself aged out). Both delete only when NOTHING
+  references the row — it is content-addressed, so it is shared between slices of identical bytes, and
+  a print's history row points at it too. Snapshot rows are exempt from every other cleanup pass, so
+  without this the leak is permanent.
+
+The web offers it as "Slice again" beside Reprint on both history surfaces (`JobsView`,
+`PrinterSummaryCards`), which open `SliceThenPrintFlow` on the preserved project. Because the
+project now declares its own presets, the dialog derives the right ones with no seeding — which is
+the same rule as everywhere else (see "project presets are the basis").
+
 ## Calibration (plugin surface)
 
 Filament calibration (`calibration` plugin: `apps/api/src/plugins/calibration/`,
@@ -548,6 +643,10 @@ model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outpu
   reading can't short-circuit every filament onto one nozzle. The read side (`extractNozzleMapping`)
   and this write side share `sliceExtruderForNozzleId` so they cannot drift; cover any change with a
   read→write→read round-trip through `buildThreeMfIndex`.
+- **A project snapshot is only written for a slice whose output was persisted.** Snapshot rows are
+  exempt from every cleanup pass, so one written for a cancelled, failed, or discarded slice is
+  bytes nothing will ever reference or reclaim. Stage the copy early (the prepared project's temp
+  dir is deleted the moment the slice returns), preserve it late.
 - The editor reflects new state through scene re-render, not optimistic UI guesses.
 
 ## Known god files / target decomposition (roadmap)

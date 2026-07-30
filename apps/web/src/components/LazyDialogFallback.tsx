@@ -17,16 +17,17 @@
  * content uses its own fallback (see `Markdown.tsx`, which shows the raw text meanwhile).
  */
 import { Box, CircularProgress, Modal, ModalDialog, Stack, Typography } from '@mui/joy'
+import { dialogPresentationProps } from '../lib/dialogPresentation'
 import { ScrollableModalDialog } from './ScrollableDialog'
 
 export interface LazyDialogFallbackProps {
   /** What is opening, as the user would say it. Announced to screen readers. */
   label: string
   /**
-   * Which shell to draw. `fullscreen` matches the 3D editor/preview's near-fullscreen dialog
-   * (99vw/99dvh); `dialog` matches the standard 720px-wide scrollable form dialogs.
+   * Which shell to draw. `maximized` matches the 3D editor/preview, which open at the shared
+   * maximized size; `dialog` matches the standard 720px-wide scrollable form dialogs.
    */
-  variant?: 'dialog' | 'fullscreen'
+  variant?: 'dialog' | 'maximized'
 }
 
 /** Centred spinner + label, the same idiom the editor uses for its own "Loading plates…" state. */
@@ -45,15 +46,13 @@ export function LazyDialogFallback({ label, variant = 'dialog' }: LazyDialogFall
   // `open` is unconditional: the fallback only exists while React is suspended, and it unmounts
   // itself the moment the real dialog mounts. Closing is therefore not its job — a dismissible
   // shell would leave the pending import with nowhere to render.
-  if (variant === 'fullscreen') {
+  if (variant === 'maximized') {
+    // The same shared geometry the real dialog uses, so the swap when the chunk lands is a fill-in
+    // rather than a resize.
+    const mode = dialogPresentationProps('maximized')
     return (
       <Modal open>
-        <ModalDialog
-          variant="outlined"
-          layout="center"
-          aria-busy
-          sx={{ width: '99vw', height: '99dvh', display: 'flex', p: 0 }}
-        >
+        <ModalDialog variant="outlined" aria-busy {...mode} sx={[mode.sx, { display: 'flex', p: 0 }]}>
           <LoadingBody label={label} />
         </ModalDialog>
       </Modal>

@@ -77,20 +77,20 @@ export function buildObjectsStl(groups: ReadonlyArray<THREE.Object3D>): ArrayBuf
  * Serialize specific PARTS of one object's render group as one binary STL. Parts are
  * matched by the render tags carried on part groups — `partRef` (baked in-project
  * parts) or `importPartRef` (solids of a multi-solid import, e.g. a STEP assembly) —
- * against the part-selection's `componentObjectId` key space. Unlike the whole-object
+ * against the part-selection's ORDINAL (`partIndex`) key space. Unlike the whole-object
  * export, a selected helper volume (negative/modifier/blocker/enforcer part) IS
  * exported: picking the part is the deliberate ask for that volume's mesh.
  */
 export function buildPartsStl(
   group: THREE.Object3D,
-  componentObjectIds: ReadonlyArray<number>
+  partIndexes: ReadonlyArray<number>
 ): ArrayBuffer | null {
-  const wanted = new Set(componentObjectIds)
+  const wanted = new Set(partIndexes)
   const soups: Float32Array[] = []
   group.updateWorldMatrix(true, true)
   group.traverse((node) => {
-    const ref = (node.userData.partRef ?? node.userData.importPartRef) as { componentObjectId: number } | undefined
-    if (!ref || !wanted.has(ref.componentObjectId)) return
+    const ref = (node.userData.partRef ?? node.userData.importPartRef) as { partIndex: number } | undefined
+    if (!ref || !wanted.has(ref.partIndex)) return
     const soup = collectWorldTriangles(node, { includeModifierVolumes: true })
     if (soup.length > 0) soups.push(soup)
   })
@@ -106,11 +106,11 @@ export function buildPartsStl(
  * the destination dialog's suggested-name field so both agree.
  */
 export function partsExportName(
-  instance: { name: string; parts: ReadonlyArray<{ componentObjectId: number; name: string | null }> },
-  componentObjectIds: ReadonlyArray<number>
+  instance: { name: string; parts: ReadonlyArray<{ partIndex: number; name: string | null }> },
+  partIndexes: ReadonlyArray<number>
 ): string {
-  if (componentObjectIds.length === 1) {
-    const part = instance.parts.find((entry) => entry.componentObjectId === componentObjectIds[0])
+  if (partIndexes.length === 1) {
+    const part = instance.parts.find((entry) => entry.partIndex === partIndexes[0])
     return part?.name || `${instance.name} part`
   }
   return `${instance.name} parts`

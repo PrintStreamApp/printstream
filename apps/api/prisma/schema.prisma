@@ -264,6 +264,12 @@ model PrintJob {
   fileId          String?
   fileName        String?
   fileSizeBytes   Int?
+  // Re-slice provenance, copied off the printed library file at dispatch so it
+  // survives that file being deleted: the preserved project 3MF handed to the
+  // slicer, plus the settings that produced this print. Null for prints of a
+  // file that was never sliced here (direct uploads, external starts).
+  sourceProjectFileId String?
+  sliceSettingsJson   String?
   plate           Int?
   useAms          Boolean?
   bedLevel        Boolean?
@@ -281,7 +287,8 @@ model PrintJob {
 
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   printer         Printer   @relation(fields: [printerId], references: [id], onDelete: Cascade)
-  file            LibraryFile? @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  file            LibraryFile? @relation("PrintJobFile", fields: [fileId], references: [id], onDelete: SetNull)
+  sourceProject   LibraryFile? @relation("PrintJobSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
   orderPrints     OrderPrint[] @relation("OrderPrintLastJob")
   queueItems      QueueItem[]  @relation("QueueItemLastJob")
 
@@ -451,10 +458,11 @@ model LibraryFile {
   // Hidden files are persisted on disk so previously-printed jobs can
   // still be re-dispatched, but they don't appear in the user-facing
   // library listing. Some hidden files are transient one-off uploads,
-  // while others are immutable job snapshots retained for future
-  // reprints. `snapshotKey` is only populated for the retained snapshot
-  // variant; transient hidden files keep it null and are eligible for
-  // periodic cleanup.
+  // while others are immutable snapshots retained for future reprints —
+  // both the dispatched artifact and the project 3MF it was sliced from
+  // (`sourceProjectFileId`). `snapshotKey` is only populated for the
+  // retained snapshot variant (and is its content-dedupe key); transient
+  // hidden files keep it null and are eligible for periodic cleanup.
   hidden        Boolean  @default(false)
   // Recycle bin: soft-deleted files keep their bytes + version history and
   // stay restorable until the cleanup task hard-deletes them after the
@@ -484,12 +492,23 @@ model LibraryFile {
   // order correctly before the recency cap, without a per-listing PrintJob groupBy.
   printCount    Int      @default(0)
   lastPrintedAt DateTime?
+  // Re-slice provenance for a sliced output (origin='slice'): the preserved
+  // project 3MF exactly as it was handed to the slicer — a hidden, immutable,
+  // content-deduped snapshot row — and the settings that produced this output.
+  // Set on the output, never on the project snapshot itself. Null on uploads and
+  // on outputs sliced before project preservation shipped; the UI treats null as
+  // "re-slice unavailable" rather than re-deriving anything.
+  sourceProjectFileId String?
+  sliceSettingsJson   String?
 
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ownerBridge   Bridge?  @relation("LibraryFileOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
   folder        LibraryFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  sourceProject LibraryFile?   @relation("LibraryFileSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
+  slicedOutputs LibraryFile[]  @relation("LibraryFileSourceProject")
   replicas      LibraryFileReplica[]
-  jobs          PrintJob[]
+  jobs          PrintJob[]     @relation("PrintJobFile")
+  sourceProjectJobs PrintJob[] @relation("PrintJobSourceProject")
   versions      LibraryFileVersion[]
   downloadLinks LibraryDownloadLink[]
   favorites     LibraryFileFavorite[]

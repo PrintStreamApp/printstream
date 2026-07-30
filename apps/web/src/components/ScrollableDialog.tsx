@@ -5,6 +5,12 @@ import {
   MODAL_DIALOG_VIEWPORT_MAX_HEIGHT_FALLBACK,
   modalDialogStructuredLayoutStyles
 } from '../lib/modalDialogLayout'
+import {
+  DIALOG_PRESENTATION_ATTRIBUTE,
+  scrollableDialogPresentation,
+  withoutDialogSizing,
+  type DialogPresentation
+} from '../lib/dialogPresentation'
 import { useScrollbarGutter } from '../hooks/useScrollbarGutter'
 
 function sxArray<T>(value: T | readonly T[] | undefined): T[] {
@@ -15,48 +21,63 @@ function sxArray<T>(value: T | readonly T[] | undefined): T[] {
 /**
  * Preferred modal shell for longer forms and detail panes whose body should
  * scroll without pushing the footer out of the viewport.
+ *
+ * `presentation` switches the shell between its normal footprint and the shared maximized /
+ * full-screen modes (`lib/dialogPresentation.ts`). The mode is applied LAST, so it wins over the
+ * caller's own width; leave it unset (or `standard`) for an ordinary dialog. Switching it only
+ * changes props on the same elements — nothing remounts, so a WebGL canvas in the body survives the
+ * toggle.
  */
-export const ScrollableModalDialog = React.forwardRef<HTMLDivElement, ModalDialogProps>(function ScrollableModalDialog({ sx, ...props }, ref) {
-  return (
-    <ModalOverflow
-      ref={ref}
-      sx={{
-        minHeight: '100dvh',
-        display: 'flex',
-        alignItems: { xs: 'stretch', sm: 'center' },
-        justifyContent: { xs: 'flex-end', sm: 'center' },
-        px: { xs: 1, sm: 2 },
-        pt: {
-          xs: 'calc(var(--app-top-inset, 0px) + 0.75rem)',
-          sm: 2
-        },
-        pb: {
-          xs: 'calc(var(--app-safe-bottom, 0px) + 0.75rem)',
-          sm: 2
-        },
-        boxSizing: 'border-box',
-        '& .MuiModalDialog-root': {
-          maxHeight: MODAL_DIALOG_VIEWPORT_MAX_HEIGHT_FALLBACK,
-          '@supports (height: 100dvh)': {
-            maxHeight: MODAL_DIALOG_VIEWPORT_MAX_HEIGHT
-          }
-        }
-      }}
-    >
-      <ModalDialog
-        {...props}
+export const ScrollableModalDialog = React.forwardRef<HTMLDivElement, ModalDialogProps & { presentation?: DialogPresentation }>(
+  function ScrollableModalDialog({ sx, presentation = 'standard', layout, ...props }, ref) {
+    const mode = scrollableDialogPresentation(presentation)
+    // A mode owns the layout it needs (full screen is Joy's `fullscreen` layout); only an ordinary
+    // dialog keeps whatever the caller asked for.
+    const resolvedLayout = presentation === 'standard' ? layout : mode.layout
+    return (
+      <ModalOverflow
+        ref={ref}
         sx={[
           {
-            ...modalDialogStructuredLayoutStyles,
-            maxWidth: '100%',
-            width: '100%'
+            minHeight: '100dvh',
+            display: 'flex',
+            alignItems: { xs: 'stretch', sm: 'center' },
+            justifyContent: { xs: 'flex-end', sm: 'center' },
+            // The scroller's PADDING is owned entirely by the presentation (standard included), not
+            // set here and overridden per mode: MUI emits a responsive value's `xs` entry as
+            // `@media (min-width:0px)`, and that media block beats a later flat override however the
+            // `sx` array is ordered — a maximized dialog silently kept this shell's 8px gutter.
+            boxSizing: 'border-box',
+            '& .MuiModalDialog-root': {
+              maxHeight: MODAL_DIALOG_VIEWPORT_MAX_HEIGHT_FALLBACK,
+              '@supports (height: 100dvh)': {
+                maxHeight: MODAL_DIALOG_VIEWPORT_MAX_HEIGHT
+              }
+            }
           },
-          ...sxArray(sx)
+          mode.overflowSx
         ]}
-      />
-    </ModalOverflow>
-  )
-})
+      >
+        <ModalDialog
+          {...props}
+          layout={resolvedLayout}
+          {...{ [DIALOG_PRESENTATION_ATTRIBUTE]: presentation }}
+          sx={[
+            {
+              ...modalDialogStructuredLayoutStyles,
+              maxWidth: '100%',
+              width: '100%'
+            },
+            // An enlarged mode replaces the dialog's footprint, so the caller's own size declarations
+            // are removed rather than merely overridden — see `withoutDialogSizing`.
+            ...(presentation === 'standard' ? sxArray(sx) : sxArray(sx).map(withoutDialogSizing)),
+            mode.dialogSx
+          ]}
+        />
+      </ModalOverflow>
+    )
+  }
+)
 
 function assignRef<T>(ref: React.ForwardedRef<T>, value: T | null) {
   if (typeof ref === 'function') {

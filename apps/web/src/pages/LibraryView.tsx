@@ -8,7 +8,7 @@
  */
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import {
-  Alert, Box, Button, CircularProgress, Dropdown, IconButton,
+  Alert, Badge, Box, Button, CircularProgress, Dropdown, IconButton,
   Menu, MenuButton, MenuItem, Sheet, Stack, Tooltip, Typography
 } from '@mui/joy'
 import CreateNewFolderRoundedIcon from '@mui/icons-material/CreateNewFolderRounded'
@@ -36,6 +36,7 @@ import type {
   LibraryFile,
   LibraryFileVersion,
   LibraryFolder,
+  LibraryRecycleBinResponse,
   SlicingCapabilities,
   SlicingJobResponse,
   Permission,
@@ -290,6 +291,18 @@ export function LibraryView() {
   const allFolders = useMemo(() => foldersQuery.data?.folders ?? [], [foldersQuery.data])
   const browseData = browseQuery.data
   const bridgeRootMode = browseData?.mode === 'bridge-root'
+  // How many files are sitting in the recycle bin, for the badge on its toolbar button — a soft
+  // delete is otherwise invisible, so files accumulate there unnoticed. Deliberately the SAME query
+  // key `LibraryRecycleBinModal` uses: opening the bin then needs no second fetch, and the two can
+  // never disagree about what it holds. `invalidateLibraryListQueries` already refreshes this key,
+  // so recycling, restoring, or emptying updates the badge with no extra wiring. Gated on the same
+  // condition as the button so nobody fetches a bin they cannot open.
+  const recycleBinQuery = useQuery({
+    queryKey: ['library-recycle-bin'],
+    queryFn: ({ signal }) => apiFetch<LibraryRecycleBinResponse>('/api/library/recycle-bin', { signal }),
+    enabled: canManageLibrary && !bridgeRootMode
+  })
+  const recycledFileCount = recycleBinQuery.data?.files.length ?? 0
   const bridgeEntries = useMemo(
     () => browseData?.bridgeEntries ?? [],
     [browseData?.bridgeEntries]
@@ -1201,10 +1214,28 @@ export function LibraryView() {
           </Tooltip>
         )}
         {canManageLibrary && !bridgeRootMode && (
-          <Tooltip title="Recycle bin" variant="soft">
-            <IconButton size="sm" variant="plain" color="neutral" aria-label="Recycle bin" onClick={() => setRecycleBinOpen(true)} sx={{ flexShrink: 0 }}>
-              <RestoreFromTrashRoundedIcon />
-            </IconButton>
+          <Tooltip
+            title={recycledFileCount > 0
+              ? `Recycle bin (${recycledFileCount} ${recycledFileCount === 1 ? 'file' : 'files'})`
+              : 'Recycle bin'}
+            variant="soft"
+          >
+            {/* The count is on the BADGE and in the label, not only the tooltip: a tooltip needs a
+                hover, which a touch device has no way to give. Joy hides a zero badge itself
+                (`showZero` defaults off), so an empty bin keeps the bare icon. */}
+            <Badge badgeContent={recycledFileCount} max={99} size="sm" sx={{ flexShrink: 0 }}>
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                aria-label={recycledFileCount > 0
+                  ? `Recycle bin, ${recycledFileCount} ${recycledFileCount === 1 ? 'file' : 'files'}`
+                  : 'Recycle bin'}
+                onClick={() => setRecycleBinOpen(true)}
+              >
+                <RestoreFromTrashRoundedIcon />
+              </IconButton>
+            </Badge>
           </Tooltip>
         )}
       </Stack>

@@ -285,7 +285,15 @@ export type SceneEditPlate = z.infer<typeof sceneEditPlateSchema>
 export const sceneEditPartFilamentSchema = z.object({
   /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
   objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
-  componentObjectId: z.number().int().positive(),
+  /**
+   * The part's 0-based ORDINAL within its object — BambuStudio's own part identity
+   * (`bbs_3mf.cpp _handle_start_config_volume` keys a volume by `volumes.size()` as it parses, i.e.
+   * document order). The `<part id>` / `<component objectid>` attribute is a MESH reference and is
+   * NOT unique: BambuStudio deliberately writes the same id for every volume sharing a mesh
+   * (`m_share_mesh`), so an object with four modifier cubes cut from one cube mesh has four parts
+   * all reading id 22. Keying on that made an edit to one of them hit all four.
+   */
+  partIndex: z.number().int().nonnegative(),
   filamentId: z.number().int().positive()
 })
 export type SceneEditPartFilament = z.infer<typeof sceneEditPartFilamentSchema>
@@ -293,13 +301,21 @@ export type SceneEditPartFilament = z.infer<typeof sceneEditPartFilamentSchema>
 /**
  * Per-PART process overrides — process settings on one part (volume) of an object, separate from
  * the object's overall overrides (BambuStudio's per-volume config). Keyed by the object id + the
- * part's component object id; written as `<metadata>` inside that part's `model_settings` block.
+ * part's ORDINAL (`partIndex`); written as `<metadata>` inside that part's `model_settings` block.
  * Like {@link sceneEditPartFilamentSchema}, a part is shared by every instance of the object.
  */
 export const sceneEditPartProcessOverrideSchema = z.object({
   /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
   objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
-  componentObjectId: z.number().int().positive(),
+  /**
+   * The part's 0-based ORDINAL within its object — BambuStudio's own part identity
+   * (`bbs_3mf.cpp _handle_start_config_volume` keys a volume by `volumes.size()` as it parses, i.e.
+   * document order). The `<part id>` / `<component objectid>` attribute is a MESH reference and is
+   * NOT unique: BambuStudio deliberately writes the same id for every volume sharing a mesh
+   * (`m_share_mesh`), so an object with four modifier cubes cut from one cube mesh has four parts
+   * all reading id 22. Keying on that made an edit to one of them hit all four.
+   */
+  partIndex: z.number().int().nonnegative(),
   overrides: processSettingOverridesSchema
 })
 export type SceneEditPartProcessOverride = z.infer<typeof sceneEditPartProcessOverrideSchema>
@@ -442,6 +458,22 @@ export const sceneEditFilamentSchema = z.object({
    * old preset name and reopens as the previous material. Null/omitted keeps the existing id.
    */
   settingsId: z.string().trim().min(1).nullable().optional(),
+  /**
+   * The Bambu FILAMENT ID of the preset named in {@link sceneEditFilamentSchema.shape.settingsId}
+   * (e.g. `GFG02` for Bambu PETG HF) — the preset's own `filament_id`, which the catalogue exposes
+   * as `filamentIds`.
+   *
+   * Load-bearing, and it must describe the SAME preset as `settingsId`: BambuStudio builds the two
+   * project arrays as parallel projections of one selected-preset list
+   * (`PresetBundle`: `filament_settings_id = [p.name…]`, `filament_ids = [p.filament_id…]`), and it
+   * BINDS a slot on the id. A slot naming PETG HF while carrying an ABS id cannot be reconciled, so
+   * BambuStudio fabricates a defaults-only project preset per slot named `(<project>.3mf)` — which
+   * is what a real ABS-to-PETG switch produced, since `filament_ids` used to be carried over from
+   * the old material positionally. Omitted leaves the slot's existing id alone (an unchanged slot);
+   * for a slot whose material CHANGED, absent means "unknown", written as BambuStudio writes an
+   * unknown id: an empty entry, never the previous material's.
+   */
+  filamentId: z.string().trim().min(1).nullable().optional(),
   sourceIndex: z.number().int().nonnegative().nullable().optional(),
   /**
    * Desired runtime nozzle for this slot on a dual-nozzle machine (0 = right, 1 = left) —
@@ -500,14 +532,22 @@ export type SceneEditPartSubtype = z.infer<typeof sceneEditPartSubtypeSchema>
 /**
  * A part-type change on one part (volume) of an in-project object — BambuStudio's
  * "Change type" (e.g. turning an imported solid into a modifier volume). Keyed like
- * {@link sceneEditPartProcessOverrideSchema} by objectId + the part's component object id;
+ * {@link sceneEditPartProcessOverrideSchema} by objectId + the part's ORDINAL (`partIndex`);
  * applied by rewriting the part's `subtype` attribute in `model_settings.config`. The type
  * is a property of the object's part, shared by every placed instance.
  */
 export const sceneEditPartTypeChangeSchema = z.object({
   /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
   objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
-  componentObjectId: z.number().int().positive(),
+  /**
+   * The part's 0-based ORDINAL within its object — BambuStudio's own part identity
+   * (`bbs_3mf.cpp _handle_start_config_volume` keys a volume by `volumes.size()` as it parses, i.e.
+   * document order). The `<part id>` / `<component objectid>` attribute is a MESH reference and is
+   * NOT unique: BambuStudio deliberately writes the same id for every volume sharing a mesh
+   * (`m_share_mesh`), so an object with four modifier cubes cut from one cube mesh has four parts
+   * all reading id 22. Keying on that made an edit to one of them hit all four.
+   */
+  partIndex: z.number().int().nonnegative(),
   subtype: sceneEditPartSubtypeSchema
 })
 export type SceneEditPartTypeChange = z.infer<typeof sceneEditPartTypeChangeSchema>
@@ -518,13 +558,21 @@ export type SceneEditPartTypeChange = z.infer<typeof sceneEditPartTypeChangeSche
  * baked). `matrix` is the part's new OBJECT-LOCAL placement (12 numbers, column-major
  * 3x3 + translation — the same convention as `sceneEditInstanceSchema.matrix`), applied
  * by rewriting the part's `<component>` transform. Keyed like
- * {@link sceneEditPartTypeChangeSchema} by objectId + the part's component object id;
+ * {@link sceneEditPartTypeChangeSchema} by objectId + the part's ORDINAL (`partIndex`);
  * the placement is a property of the object's part, shared by every placed instance.
  */
 export const sceneEditPartTransformSchema = z.object({
   /** In-project object id, or a NEGATIVE clone placeholder (see `sceneEditObjectCloneSchema`). */
   objectId: z.number().int().refine((value) => value !== 0, 'objectId must not be 0'),
-  componentObjectId: z.number().int().positive(),
+  /**
+   * The part's 0-based ORDINAL within its object — BambuStudio's own part identity
+   * (`bbs_3mf.cpp _handle_start_config_volume` keys a volume by `volumes.size()` as it parses, i.e.
+   * document order). The `<part id>` / `<component objectid>` attribute is a MESH reference and is
+   * NOT unique: BambuStudio deliberately writes the same id for every volume sharing a mesh
+   * (`m_share_mesh`), so an object with four modifier cubes cut from one cube mesh has four parts
+   * all reading id 22. Keying on that made an edit to one of them hit all four.
+   */
+  partIndex: z.number().int().nonnegative(),
   matrix: threeMfTransformSchema
 })
 export type SceneEditPartTransform = z.infer<typeof sceneEditPartTransformSchema>
@@ -1015,6 +1063,45 @@ export const createSlicingJobSchema = z.object({
   plateThumbnails: z.array(sceneEditPlateThumbnailSchema).optional()
 })
 export type CreateSlicingJob = z.infer<typeof createSlicingJobSchema>
+
+/**
+ * The slice settings preserved beside a sliced output's project 3MF, so a later
+ * "slice again" can reopen the prepare-print dialog on what actually ran.
+ *
+ * A deliberately narrow subset of {@link createSlicingJobSchema}: the engine target,
+ * the preset target, the plate scope, and the newer-project acknowledgement. Everything
+ * else the original slice applied is already BAKED INTO the preserved project — the
+ * arranged scene, object selection, per-object overrides, the authored machine, and (via
+ * `slice-settings-authoring.ts`) the process and filament presets with their overrides —
+ * so repeating it from here would apply it twice. What survives is only what is genuinely
+ * not project state: which engine build ran it, and which plate was printed.
+ *
+ * This is a persisted wire format (a JSON column on `LibraryFile`/`PrintJob`): new fields
+ * must be optional, and a row that fails to parse is treated as absent rather than fatal.
+ */
+export const preservedSliceSettingsSchema = z.object({
+  slicerTargetId: z.string().trim().min(1).optional(),
+  target: slicingTargetSchema,
+  plate: z.number().int().nonnegative().default(0),
+  allowNewerProjectFile: z.boolean().optional()
+})
+export type PreservedSliceSettings = z.infer<typeof preservedSliceSettingsSchema>
+
+/**
+ * Parse a persisted {@link PreservedSliceSettings} blob, returning null for absent or
+ * unreadable values. Callers use it to decide whether a re-slice can be seeded; they must
+ * never fail a request over it (an old or hand-edited row is a missing convenience, not an
+ * error).
+ */
+export function parsePreservedSliceSettings(value: string | null | undefined): PreservedSliceSettings | null {
+  if (!value) return null
+  try {
+    const parsed = preservedSliceSettingsSchema.safeParse(JSON.parse(value))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
 
 export const slicingJobStatusSchema = z.enum([
   'queued',
