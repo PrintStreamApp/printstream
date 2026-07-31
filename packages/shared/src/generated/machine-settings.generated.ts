@@ -823,7 +823,8 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
         "Direct Drive",
         "Bowden"
       ],
-      "mode": "advanced"
+      "mode": "advanced",
+      "default": "Direct Drive"
     },
     "nozzle_diameter": {
       "type": "float",
@@ -852,7 +853,8 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
         "Hybrid",
         "TPU High Flow"
       ],
-      "mode": "develop"
+      "mode": "develop",
+      "default": "Standard"
     },
     "nozzle_volume": {
       "type": "float",

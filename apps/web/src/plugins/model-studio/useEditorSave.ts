@@ -36,6 +36,13 @@ export interface EditorSaveParams {
   /** Adopt the current state as the saved baseline (from useEditorHistory). */
   markSaved: () => void
   buildSceneEditOut: (current: EditorState, options?: { thumbnails?: PlateThumbnail[] }) => SceneEdit
+  /**
+   * Fills in each filament slot's resolved preset config before the edit is persisted, so the saved
+   * project carries the material's own physics rather than only its name (see
+   * `lib/filamentConfigAuthoring.ts`). Async because resolving a preset is a request; best-effort, so
+   * it must never reject. Omitted leaves the edit untouched.
+   */
+  authorFilamentConfigs?: (edit: SceneEdit) => Promise<SceneEdit>
   captureAllPlateThumbnails: (current: EditorState, options?: { force?: boolean; updateLive?: boolean }) => Promise<PlateThumbnail[]>
   /**
    * The rendered XY footprint centre (plate coordinates, helper volumes excluded) of an instance,
@@ -122,6 +129,7 @@ export function useEditorSave({
   dirtyRef,
   markSaved,
   buildSceneEditOut,
+  authorFilamentConfigs,
   captureAllPlateThumbnails,
   worldFootprintCenterFor,
   baseFileId,
@@ -140,6 +148,11 @@ export function useEditorSave({
   onFilamentSourcesRemapped
 }: EditorSaveParams): EditorSave {
   const queryClient = useQueryClient()
+  /** Author the resolved filament configs onto an edit, or hand it back untouched. */
+  const authorEdit = useCallback(
+    async (edit: SceneEdit): Promise<SceneEdit> => (authorFilamentConfigs ? await authorFilamentConfigs(edit) : edit),
+    [authorFilamentConfigs]
+  )
   const [saving, setSaving] = useState(false)
   const [saveAsOpen, setSaveAsOpen] = useState(false)
   const [savedFile, setSavedFile] = useState<{ id: string; name: string } | null>(null)
@@ -367,7 +380,7 @@ export function useEditorSave({
           {
             baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
             mode: 'newVersion', ignoreBaseContent: editorBorn,
-            sceneEdit: buildSceneEditOut(current, { thumbnails }),
+            sceneEdit: await authorEdit(buildSceneEditOut(current, { thumbnails })),
             objectProcessOverrides: collectObjectProcessOverrides(),
             processSettingOverrides: collectProcessSettingOverrides(),
             filamentSettingOverrides: collectFilamentSettingOverrides(),
@@ -380,7 +393,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
 
   const handleSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
@@ -403,7 +416,7 @@ export function useEditorSave({
             baseFileId: effectiveBaseFileId, baseVersionId: effectiveBaseVersionId, contentBase,
             mode: 'saveAs', name, folderId: destinationFolderId, bridgeId: saveAsBridgeId,
             ignoreBaseContent: firstSaveOfEditorBornProject,
-            sceneEdit: buildSceneEditOut(current, { thumbnails }),
+            sceneEdit: await authorEdit(buildSceneEditOut(current, { thumbnails })),
             objectProcessOverrides: collectObjectProcessOverrides(),
             processSettingOverrides: collectProcessSettingOverrides(),
             filamentSettingOverrides: collectFilamentSettingOverrides(),
@@ -429,7 +442,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
 
   /**
    * "Export object as 3MF": bake ONLY the given object into a new single-plate 3MF library

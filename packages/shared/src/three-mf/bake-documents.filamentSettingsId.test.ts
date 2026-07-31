@@ -133,3 +133,88 @@ test('an untouched project keeps its filament ids exactly', () => {
   ])
   assert.deepEqual(out.filament_ids, ['GFB00', 'GFB00', 'GFS06'])
 })
+
+/**
+ * A material change must leave the project SELF-CONTAINED. Dropping the old material's physics and
+ * leaning on slice-time re-derivation is true for our slicer and false for BambuStudio: it opens a
+ * project whose slots have no values, cannot name a preset for them, and shows each as an unnamed
+ * `(<project>.3mf)` preset of bare defaults. Confirmed against a real affected file — restoring
+ * exactly these keys made BambuStudio show all three materials correctly.
+ */
+test('a resolved preset authors the new material\'s physics instead of dropping it', () => {
+  const out = bake(
+    {
+      ...ABS_PROJECT,
+      nozzle_temperature: ['270', '270', '270'],
+      filament_flow_ratio: ['0.9', '0.9', '0.9']
+    },
+    [
+      filament({ type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle', filamentId: 'GFG02', sourceIndex: 0, config: { nozzle_temperature: ['245'], filament_flow_ratio: ['0.95'] } }),
+      filament({ type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle', filamentId: 'GFG02', sourceIndex: 1, config: { nozzle_temperature: ['245'], filament_flow_ratio: ['0.95'] } }),
+      filament({ type: 'PLA', settingsId: 'Bambu PLA Basic @BBL H2D', filamentId: 'GFA00', sourceIndex: 2, config: { nozzle_temperature: ['220'], filament_flow_ratio: ['0.98'] } })
+    ]
+  )
+  // The keys SURVIVE, carrying the new materials' values — not the ABS ones, and not absent.
+  assert.deepEqual(out.nozzle_temperature, ['245', '245', '220'])
+  assert.deepEqual(out.filament_flow_ratio, ['0.95', '0.95', '0.98'])
+})
+
+test('without a resolved preset the old drop behaviour is unchanged', () => {
+  // A host that cannot resolve the presets must be no worse off than before, never left with the
+  // OLD material's temperatures under the new material's name.
+  const out = bake(
+    { ...ABS_PROJECT, nozzle_temperature: ['270', '270', '270'] },
+    [
+      filament({ type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle', filamentId: 'GFG02', sourceIndex: 0 }),
+      filament({ type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle', filamentId: 'GFG02', sourceIndex: 1 }),
+      filament({ type: 'PLA', settingsId: 'Bambu PLA Basic @BBL H2D', filamentId: 'GFA00', sourceIndex: 2 })
+    ]
+  )
+  assert.equal('nozzle_temperature' in out, false, 'the old material\'s physics must not survive unauthored')
+})
+
+test('an untouched slot keeps the project\'s own values, not the preset\'s', () => {
+  // Slot 2 did not change material, so its in-project value stands even though a sibling is
+  // re-authored — a save must not quietly normalise settings the user did not touch.
+  const out = bake(
+    {
+      filament_colour: ['#1', '#2'],
+      filament_type: ['ABS', 'ABS'],
+      filament_ids: ['GFB00', 'GFB00'],
+      filament_settings_id: ['Bambu ABS @BBL H2D', 'Bambu ABS @BBL H2D'],
+      nozzle_temperature: ['270', '265']
+    },
+    [
+      filament({ type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle', filamentId: 'GFG02', sourceIndex: 0, config: { nozzle_temperature: ['245'] } }),
+      filament({ type: 'ABS', settingsId: 'Bambu ABS @BBL H2D', filamentId: 'GFB00', sourceIndex: 1, config: { nozzle_temperature: ['999'] } })
+    ]
+  )
+  assert.deepEqual(out.nozzle_temperature, ['245', '265'])
+})
+
+test('saving a project whose physics was dropped restores it', () => {
+  // The repair for `filamentPhysics`: an older save kept the names and dropped every value, so
+  // BambuStudio showed unnamed default presets. Reopening and saving writes the materials back.
+  // Regression-guarded because `rebindProjectFilamentPhysics` alone returns such a project UNCHANGED
+  // (it only rewrites keys still present) — this needs `restoreFilamentPhysics`.
+  const out = bake(
+    {
+      filament_colour: ['#1', '#2'],
+      filament_type: ['PETG', 'PLA'],
+      filament_ids: ['GFG02', 'GFA00'],
+      filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle', 'Bambu PLA Basic @BBL H2D'],
+      // Survives the physics drop, and is what declares 2 variants per slot — the width a
+      // variant-scoped option is restored at. Without it the restore writes 1 column, correctly.
+      filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow', 'Direct Drive Standard', 'Direct Drive High Flow']
+    },
+    [
+      filament({ type: 'PETG', settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle', filamentId: 'GFG02', sourceIndex: 0, config: { nozzle_temperature: ['245', '245'], filament_density: ['1.28'] } }),
+      filament({ type: 'PLA', settingsId: 'Bambu PLA Basic @BBL H2D', filamentId: 'GFA00', sourceIndex: 1, config: { nozzle_temperature: ['220', '220'], filament_density: ['1.26'] } })
+    ]
+  )
+  // Widths follow BambuStudio's option definition x this project's declared variants — NOT the shape
+  // of the preset that was resolved. `nozzle_temperature` is variant-scoped (2 per slot here),
+  // `filament_density` is not (1 per slot), matching a real dual-nozzle project.
+  assert.deepEqual(out.nozzle_temperature, ['245', '245', '220', '220'])
+  assert.deepEqual(out.filament_density, ['1.28', '1.26'])
+})

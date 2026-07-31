@@ -286,3 +286,44 @@ test('stripSliceInfoPrinterModelId drops the previous slice’s printer, and not
   // A project that never carried one is untouched rather than reformatted.
   assert.equal(stripSliceInfoPrinterModelId('<config><plate/></config>'), '<config><plate/></config>')
 })
+
+/**
+ * A machine PRESET and a PROJECT spell the same value differently, so the wholesale copy has to
+ * translate. Both cases measured against BambuStudio's own save of a real H2D project, which writes
+ * `best_object_pos: "0.3,0.5"` and `enable_long_retraction_when_cut: "2"` where its machine preset
+ * holds `"0.3x0.5"` and `["2"]`. Copying either verbatim left the project holding a value
+ * BambuStudio never wrote.
+ */
+test('a point from the machine preset is rewritten in the project\'s serialization', () => {
+  const next = retargetProjectSettingsToMachine(
+    { best_object_pos: '0.3,0.5' } as never,
+    { best_object_pos: '0.3x0.5' } as never,
+    { printerSettingsId: 'Bambu Lab H2D 0.4 nozzle', printerModel: 'Bambu Lab H2D' }
+  )
+  assert.equal(next.best_object_pos, '0.3,0.5')
+})
+
+test('a one-element preset vector does not widen a scalar the project holds bare', () => {
+  const next = retargetProjectSettingsToMachine(
+    { enable_long_retraction_when_cut: '2' } as never,
+    { enable_long_retraction_when_cut: ['2'] } as never,
+    { printerSettingsId: 'Bambu Lab H2D 0.4 nozzle', printerModel: 'Bambu Lab H2D' }
+  )
+  assert.equal(next.enable_long_retraction_when_cut, '2')
+})
+
+/**
+ * `extruder_nozzle_stats` is `VolumeType#count` per extruder, where the count is how many filaments
+ * that extruder feeds — the BAKE owns it (it changes with every nozzle assignment). It is NOT
+ * `extruder_max_nozzle_count`, which is a different quantity: a real H2D project carries
+ * `["Standard#2","Standard#1"]` beside `extruder_max_nozzle_count: ["1","1"]`, so recomputing it
+ * here flattened the project's own correct value to `["Standard#1","Standard#1"]` on every save.
+ */
+test('extruder_nozzle_stats survives a retarget that cannot derive it', () => {
+  const next = retargetProjectSettingsToMachine(
+    { extruder_nozzle_stats: ['Standard#2', 'Standard#1'] } as never,
+    { extruder_max_nozzle_count: ['1', '1'], nozzle_volume_type: ['Standard', 'Standard'] } as never,
+    { printerSettingsId: 'Bambu Lab H2D 0.4 nozzle', printerModel: 'Bambu Lab H2D' }
+  )
+  assert.deepEqual(next.extruder_nozzle_stats, ['Standard#2', 'Standard#1'])
+})

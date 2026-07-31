@@ -19,7 +19,12 @@
  */
 import { canonicalCurrBedType } from '../plate-types.js'
 import { FILAMENT_SETTING_KEYS } from '../filament-settings.js'
-import { isProcessSettingKey } from '../process-settings.js'
+import { isProcessSettingKey, type ProcessConfig } from '../process-settings.js'
+import { rebindProjectFilamentPhysics } from '../filament-rebind.js'
+import { isFilamentVariantOption } from '../variant-options.js'
+import { inspectProjectFilamentPhysics } from '../repairs/filament-physics.js'
+import { applyFilamentPresetBindings } from '../filament-preset-binding.js'
+import { restoreFilamentPhysics } from '../repairs/restore-filament-physics.js'
 import { threeMfPartSubtypeCarriesFilament } from '../three-mf-part-subtype.js'
 import type {
   SceneEdit,
@@ -1410,6 +1415,10 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
     }
     const materialChanged = filaments.some((_filament, i) => slotMaterialChanged(i))
     materialChangedBySlot = slotMaterialChanged
+    // When the caller resolved the new presets, the old material's physics is REPLACED rather than
+    // dropped — see `authorFilamentPhysics` below. The drop stays for a caller that could not
+    // resolve them, so nothing regresses.
+    const authoringPhysics = materialChanged && filaments.some((filament) => filament.config != null)
     // BambuStudio 2.x VARIANT EXPANSION: on machines with extruder variants (H2D dual-nozzle, and
     // even X1C's standard/high-flow pair) the numeric per-filament settings carry one value per
     // (filament x variant) — `filament_extruder_variant` is that same layout's identity column, so
@@ -1456,8 +1465,12 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
       // filament-domain (the filament catalog, plus the layout's own identity column) — unlike the
       // N-long path below, an N*V length is too weak a signal on its own (a 4-plate project with
       // 2 filaments x 2 variants would convict per-plate arrays like `wipe_tower_x`).
+      // Classified by BambuStudio's OPTION rule, not by length. A length test both convicts and
+      // acquits wrongly: an ordinary per-slot array whose count happens to equal `slots x variants`
+      // gets re-blocked, while a genuine variant key stored at another width is skipped. The layout's
+      // own identity column is variant-scoped by definition. See `variant-options.ts`.
       const isVariantExpanded = variantCount > 1 && value.length === oldCount * variantCount
-        && (key === 'filament_extruder_variant' || FILAMENT_SETTING_KEYS.has(key))
+        && (key === 'filament_extruder_variant' || isFilamentVariantOption(key))
       if (isVariantExpanded) {
         // Slot i owns the V-wide block starting at i*V. The layout's identity column
         // (`filament_extruder_variant`) must ALWAYS survive by block-remap — losing it breaks the
@@ -1487,8 +1500,10 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
         if (FILAMENT_SETTING_KEYS.has(key) && !FILAMENT_IDENTITY_KEYS.has(key)) delete record[key]
         continue
       }
-      if (materialChanged && !FILAMENT_IDENTITY_KEYS.has(key)) {
-        // Drop the OLD material's cloned physics; the slicer re-derives it from the new preset.
+      if (materialChanged && !authoringPhysics && !FILAMENT_IDENTITY_KEYS.has(key)) {
+        // No resolved presets to author from, so drop the OLD material's cloned physics and let the
+        // slicer re-derive it from the name. Leaves the project incomplete for BambuStudio, which is
+        // why a caller that CAN resolve the presets takes the authoring path instead.
         delete record[key]
         continue
       }
@@ -1509,6 +1524,44 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
       ]
     }
   }
+
+  // Write each changed slot's NEW material physics from its resolved preset, replacing the values
+  // cloned from the slot it came from. This is what keeps a saved project self-contained: the file
+  // carries the material's own temperatures, flow, cooling and retraction rather than only its name,
+  // so BambuStudio can bind the slot to a NAMED preset instead of inventing an unnamed one from bare
+  // defaults. Runs INSTEAD of the wholesale drop above, never after it — `rebindProjectFilamentPhysics`
+  // only rewrites keys that are still present, so a dropped key would stay dropped. It preserves a
+  // slot's genuine in-project overrides by contract (`different_settings_to_system`), which is the
+  // behaviour a save wants: the user's own tweaks outlive a material change.
+  if (materialChangedBySlot && filaments.some((filament) => filament.config != null)) {
+    const rebound = rebindProjectFilamentPhysics(record, filaments.map((filament, i) => ({
+      // Only a CHANGED slot is re-authored; an untouched slot keeps what the project already had.
+      config: materialChangedBySlot(i) ? (filament.config as ProcessConfig | null) ?? null : null,
+      settingsId: null
+    })))
+    for (const key of Object.keys(record)) if (!(key in rebound)) delete record[key]
+    Object.assign(record, rebound)
+  }
+
+  // A project whose physics was DROPPED by an older save has no arrays left for
+  // `rebindProjectFilamentPhysics` to rewrite (it only touches keys still present), so the values are
+  // written from scratch instead — see `repairs/restore-filament-physics.ts` for why the column width
+  // has to come from the preset rather than be guessed. This is what makes SAVING the repair for the
+  // `filamentPhysics` defect: reopening an affected project and saving restores its materials.
+  if (inspectProjectFilamentPhysics(projectSettingsJson)?.inconsistent === true) {
+    restoreFilamentPhysics(record, filaments.map((filament) => (filament.config as ProcessConfig | null) ?? null))
+  }
+
+  // Name each slot's parent preset and declare what it changed. Writing the VALUES above is only
+  // half of binding a slot: BambuStudio normalizes a slot against its parent before comparing it to
+  // the installed preset, and for a USER preset that step is reached only through `inherits_group`.
+  // Without it a slot whose values were byte-identical to a BambuStudio-written file still opened
+  // as a `(<project>.3mf)` copy. See `filament-preset-binding.ts`.
+  applyFilamentPresetBindings(record, filaments.map((filament) => (
+    filament.presetInherits === undefined && filament.presetChangedKeys === undefined
+      ? null
+      : { inherits: filament.presetInherits ?? null, changedKeys: filament.presetChangedKeys ?? [] }
+  )))
 
   // Authoritative colour/type from the desired list (overrides the cloned values above).
   record.filament_colour = filaments.map((filament) => filamentColourOut(filament.color))
@@ -1642,6 +1695,16 @@ export function applyNozzleAssignmentToProjectSettings(projectSettingsJson: stri
     if (extruder != null && extruder < extruderUsage.length) extruderUsage[extruder] = (extruderUsage[extruder] ?? 0) + 1
   })
   record.filament_nozzle_map = nozzleMap
+  // `extruder_nozzle_stats` is `VolumeType#count` per EXTRUDER, and the count IS how many filaments
+  // that extruder feeds — BambuStudio's own save of a 3-filament dual-nozzle project reads
+  // ["Standard#2","Standard#1"] for a 2/1 split, matching this. It must be rewritten whenever the
+  // assignment changes: our index parser treats an extruder with count 0 as inactive and
+  // short-circuits every filament onto the other nozzle, so a stale value makes a reassignment
+  // silently fail to persist (pinned in `apps/api/src/lib/three-mf.test.ts`).
+  //
+  // The corruption seen in production came from the RETARGET recomputing this from
+  // `extruder_max_nozzle_count` instead — that is a different quantity (["1","1"] on the very
+  // machine whose stats are ["Standard#2","Standard#1"]) — and it now preserves the value instead.
   if (filaments.every((filament) => filament.nozzleId != null)) {
     record.extruder_nozzle_stats = extruderUsage.map((count) => `Standard#${count}`)
   }

@@ -17,6 +17,7 @@ import type {
   LibraryThreeMfPrimeTower,
   LibraryThreeMfScene,
   LibraryThreeMfSceneInstance,
+  ProcessConfig,
   SceneEdit,
   SceneEditImportPartFilament,
   SceneEditPartFilament,
@@ -25,6 +26,7 @@ import type {
   ThreeMfIndex
 } from '@printstream/shared'
 import { isNonRenderableThreeMfPartSubtype, threeMfPartSubtypeCarriesFilament } from '@printstream/shared'
+import type { RepairedFilamentPreset } from './filamentConfigAuthoring'
 import { randomUUID } from '../../../lib/randomId'
 import { createThreeMfMatrix } from './threeMfScene'
 import { importMeshUrl } from './editorImports'
@@ -223,6 +225,23 @@ export interface EditorState {
    * {@link cloneEditorState} and is emitted by {@link buildSceneEdit}.
    */
   supportPaint?: Record<string, Record<number, string>>
+  /**
+   * Filament physics recovered this session by the "missing material settings" repair, keyed by
+   * 1-based project filament id. Present only after the user ran that repair.
+   *
+   * Session state rather than an immediate write, so the repair behaves like every other edit: it
+   * lights up Save, it is undoable (this map is cloned by {@link cloneEditorState}, so the scene
+   * checkpoint covers it), and it never touches the stored file until the user saves. Each entry is
+   * a whole resolved preset config plus the preset's BINDING (its parent's name and its own
+   * deltas); the bake consumes them as `SceneEditFilament.config` / `presetInherits` /
+   * `presetChangedKeys`. The binding is not optional garnish — without it BambuStudio reopens a
+   * slot backed by a USER preset as a `(<project>.3mf)` copy however correct its values are (see
+   * `filament-preset-binding.ts`).
+   *
+   * ALL SLOTS OR NONE — the repair only populates this once every slot's preset resolved, because
+   * the arrays it feeds are positional (see `repairs/restore-filament-physics.ts`).
+   */
+  repairedFilamentConfigs?: Record<number, RepairedFilamentPreset>
   /** Seam-brush counterpart of {@link EditorState.supportPaint} (`paint_seam` codes). */
   seamPaint?: Record<string, Record<number, string>>
   /** Colour-brush counterpart of {@link EditorState.supportPaint} (`paint_color` codes). */
@@ -1756,6 +1775,17 @@ export function cloneEditorState(state: EditorState): EditorState {
           Object.entries(state.brimEars).map(([key, ears]) => [key, ears.map((ear) => ({ ...ear }))])
         )
       }
+      : {}),
+    ...(state.repairedFilamentConfigs
+      ? {
+          repairedFilamentConfigs: Object.fromEntries(
+            Object.entries(state.repairedFilamentConfigs).map(([slot, preset]) => [slot, {
+              ...preset,
+              config: { ...preset.config },
+              ...(preset.changedKeys ? { changedKeys: [...preset.changedKeys] } : {})
+            }])
+          )
+        }
       : {}),
     ...(state.repairedObjectIds ? { repairedObjectIds: [...state.repairedObjectIds] } : {}),
     ...(state.objectClones ? { objectClones: { ...state.objectClones } } : {}),

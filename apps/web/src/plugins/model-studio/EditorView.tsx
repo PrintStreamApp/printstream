@@ -63,7 +63,11 @@ import {
   PER_OBJECT_PROCESS_KEYS,
   extractErrorMessage,
   isNonRenderableThreeMfPartSubtype,
-  threeMfPartSubtypeCarriesFilament
+  threeMfPartSubtypeCarriesFilament,
+  FILAMENT_SETTING_KEYS,
+  isFilamentIdentitySettingKey,
+  type ProcessConfig,
+  type ThreeMfSettingsRepairReason
 } from '@printstream/shared'
 import { afterNextPaint } from '../../lib/afterNextPaint'
 import { apiFetch } from '../../lib/apiClient'
@@ -85,6 +89,8 @@ import { useMobileViewport } from '../../components/useMobileViewport'
 import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
 import { EditorSettingsDialog } from '../../components/library/EditorSettingsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
+import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
+import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, type RepairedFilamentPreset } from './lib/filamentConfigAuthoring'
 import { StickySectionHeader, StickySectionScope } from '../../components/library/StickySectionHeader'
 import {
   createPreviewPlateSurface,
@@ -331,6 +337,23 @@ interface EditorViewProps {
    */
   resolveProcessConfig?: ProcessConfigResolver
   /**
+   * Resolves a filament preset's config, so a save can author the material's own physics into the
+   * project instead of only its name (see `lib/filamentConfigAuthoring.ts`). Host-supplied and
+   * un-defaulted like `resolveProcessConfig`: the workspace host passes the tenant route's resolver,
+   * the public editor its in-tab one. Without it a save keeps the previous drop behaviour.
+   */
+  resolveFilamentConfig?: FilamentConfigResolver
+  /**
+   * Repairable defects in the OPEN project, for a host whose project is not a library file.
+   *
+   * The library host needs nothing here — it reads them off the file DTO. A host that opened the
+   * project from disk has no DTO, and the reasons are a pure function of the parsed settings
+   * (`collectSettingsRepairReasons`), so it passes them in rather than the notice being
+   * workspace-only. Without this the public editor showed no warning at all on a file it could
+   * describe perfectly well.
+   */
+  repairReasons?: readonly ThreeMfSettingsRepairReason[]
+  /**
    * The host's slicing-preset manager, opened by the sidebar's "Manage" action.
    *
    * Deliberately un-defaulted: the workspace manager is a tenant surface, and quietly defaulting to
@@ -449,6 +472,8 @@ function EditorView({
   targetPrinterModel,
   bedModelPath,
   resolveProcessConfig,
+  resolveFilamentConfig,
+  repairReasons,
   presetManager,
   onApply,
   folderId = null,
@@ -1058,6 +1083,18 @@ function EditorView({
     && baseFileQuery.data?.file.needsSettingsRepair === true
     ? baseFileId
     : null
+  // The defects to warn about, from whichever source this host has: the library DTO, or the host's
+  // own parse. Kept separate from the file id above because a host can have reasons and NO file
+  // (the public editor) — conflating the two is what made the notice workspace-only.
+  const rawSettingsRepairReasons: readonly ThreeMfSettingsRepairReason[] =
+    (needsSettingsRepairFileId ? baseFileQuery.data?.file.settingsRepairReasons : repairReasons) ?? []
+  // A repair the user ran THIS SESSION drops its reason immediately, before any save: the session is
+  // authoritative once the project is open, and leaving a warning up after the action that fixes it
+  // reads as the action having failed. It comes back on undo for free, because the pin it reads
+  // lives in the undo-cloned editor state.
+  const settingsRepairReasons = state?.repairedFilamentConfigs
+    ? rawSettingsRepairReasons.filter((reason) => reason !== 'filamentPhysics')
+    : rawSettingsRepairReasons
   const editorFoldersQuery = useQuery({
     queryKey: ['library-folders', saveAsBridgeId ?? 'none'],
     enabled: saveAsBridgeId !== null,
@@ -4913,6 +4950,21 @@ function EditorView({
     dirtyRef,
     markSaved,
     buildSceneEditOut,
+    // Resolve each slot's preset in the BROWSER at save time — the editor authors what it saves.
+    // A slot the "missing material settings" repair already resolved this session wins: that repair
+    // is an undoable edit whose whole content is those configs, so re-resolving here could quietly
+    // save something other than what the user accepted (and repeats work already done).
+    authorFilamentConfigs: useCallback(async (edit: SceneEdit) => attachResolvedFilamentConfigs(
+      applyRepairedFilamentConfigs(edit, stateRef.current?.repairedFilamentConfigs),
+      resolveFilamentConfig,
+      {
+        targetId: sliceConfigRef.current?.selectedSlicerTargetId ?? null,
+        sourceFileId: baseFileId ?? null,
+        profileIdByFilamentId: Object.fromEntries(Object.entries(sliceConfigRef.current?.filamentMaterialOptionIds ?? {}).map(
+          ([filamentId, optionId]) => [filamentId, sliceConfigRef.current?.materialOptions.find((option) => option.id === optionId)?.profileId ?? undefined]
+        ))
+      }
+    ), [resolveFilamentConfig, sliceConfigRef, baseFileId]),
     captureAllPlateThumbnails,
     worldFootprintCenterFor,
     // Only meaningful for a session on the file's HEAD: editing an archived version means the head
@@ -4972,6 +5024,104 @@ function EditorView({
   // as "New Project" and gains the ordinary Save-version path — without the editor re-mounting.
   const savedAsProject = savedFile !== null
   const showAsNewProject = isNewProject && !savedAsProject
+  /** In-flight / failed state for the "missing material settings" repair below. */
+  const [repairingPhysics, setRepairingPhysics] = useState(false)
+  const [physicsRepairError, setPhysicsRepairError] = useState<string | null>(null)
+  /**
+   * A repair belongs to the PROJECT it was run against. This editor is not remounted when the host
+   * opens a different file (the public editor's close-and-choose flow reuses it), so without this the
+   * pin — and the banner suppression that reads it — carried into the next project: a still-defective
+   * file opened showing no warning, which read as "the repair worked". It is also how a save that
+   * silently restored nothing looked like a success.
+   */
+  useEffect(() => {
+    setPhysicsRepairError(null)
+    setState((prev) => (prev?.repairedFilamentConfigs ? { ...prev, repairedFilamentConfigs: undefined } : prev))
+  }, [projectSource, baseFileId])
+  /**
+   * Recover the project's dropped filament physics as an UNDOABLE EDIT.
+   *
+   * Resolves every slot's preset now and pins the results in `EditorState.repairedFilamentConfigs`,
+   * which the next save bakes into the file. Deliberately NOT a save of its own: writing the user's
+   * file from a notice is surprising (on a local project it prompts for a destination), and an edit
+   * that lights up Save is what every other change in this editor does.
+   *
+   * ALL SLOTS OR NONE. The arrays this feeds are positional, so a partial resolve cannot be written
+   * without inventing values for the rest — which is what produced a 3-material project that
+   * reopened with 6 (see `repairs/restore-filament-physics.ts`). An unresolvable slot is reported
+   * instead, naming the slots, because the user can fix that by picking those materials explicitly.
+   */
+  const handleRepairFilamentPhysics = useCallback(async () => {
+    const controller = sliceConfigRef.current
+    if (!resolveFilamentConfig || !controller) return
+    setRepairingPhysics(true)
+    setPhysicsRepairError(null)
+    try {
+      const resolved: Record<number, RepairedFilamentPreset> = {}
+      const unresolved: number[] = []
+      for (const slot of controller.projectFilaments) {
+        const optionId = controller.filamentMaterialOptionIds[slot.projectFilamentId]
+        const profileId = controller.materialOptions.find((option) => option.id === optionId)?.profileId
+        if (!profileId) {
+          unresolved.push(slot.projectFilamentId)
+          continue
+        }
+        try {
+          const response = await resolveFilamentConfig({
+            filamentProfileId: profileId,
+            targetId: controller.selectedSlicerTargetId || null,
+            sourceFileId: baseFileId ?? null,
+            projectFilamentId: slot.projectFilamentId
+          })
+          // A config OBJECT is not the same as a config with VALUES. A slot whose preset resolves to
+          // the project's own (physics-dropped) slot comes back as `{}` — truthy, so it used to count
+          // as resolved: the repair reported success, the banner cleared, and the save then wrote
+          // nothing because no slot defined any key. The user got a "repaired" file that was
+          // untouched. Require at least one real filament setting before believing the slot.
+          const physicsKeys = response.config
+            ? Object.keys(response.config).filter((key) => FILAMENT_SETTING_KEYS.has(key) && !isFilamentIdentitySettingKey(key))
+            : []
+          if (physicsKeys.length > 0) {
+            resolved[slot.projectFilamentId] = {
+              config: response.config!,
+              // Pinned with the values, because it is half of the same fact: a slot backed by a
+              // USER preset needs its parent named in the saved project or BambuStudio reopens it
+              // as a `(<project>.3mf)` copy. Absent when the parent did not resolve.
+              ...(response.presetInherits === undefined
+                ? {}
+                : { inherits: response.presetInherits, changedKeys: response.presetChangedKeys ?? [] })
+            }
+          } else unresolved.push(slot.projectFilamentId)
+        } catch {
+          // A preset kind this host cannot resolve (the public editor throws on any provenance its
+          // local resolver does not implement) counts as unresolved like any other miss.
+          unresolved.push(slot.projectFilamentId)
+        }
+      }
+      if (unresolved.length > 0 || Object.keys(resolved).length === 0) {
+        const slots = unresolved.length === 1 ? `material ${unresolved[0]}` : `materials ${unresolved.join(', ')}`
+        setPhysicsRepairError(
+          unresolved.length > 0
+            ? `We couldn’t match ${slots} to a known preset, so nothing was changed. Pick those materials again, then repair.`
+            : 'No materials could be matched to a preset, so nothing was changed.'
+        )
+        return
+      }
+      // Checkpoint BEFORE the change, like every other scene edit — this is also what marks the
+      // project dirty, so Save lights up.
+      recordHistoryRef.current?.()
+      setState((prev) => (prev ? { ...prev, repairedFilamentConfigs: resolved } : prev))
+    } finally {
+      setRepairingPhysics(false)
+    }
+  }, [resolveFilamentConfig, sliceConfigRef, baseFileId, recordHistoryRef])
+  /**
+   * Whether "Save" has somewhere to land WITHOUT asking the user for a destination — an opened
+   * library file, an opened local file, or a scaffold already saved once this session. Shared by the
+   * footer's Save button and the repair notice's Repair, so the notice cannot offer a save the
+   * footer would have refused.
+   */
+  const canSaveOverOpenProject = savesToLocalFile || savedAsProject || (baseFileId !== null && !isNewProject)
 
   // ---- Render ----------------------------------------------------------------
   const loading = !hasNoBaseFile && (
@@ -5047,14 +5197,34 @@ function EditorView({
           repaired behind the user's back) so they can fix the stored file with one click; the
           editor's own save/slice bake already rewrites the settings correctly either way.
         */}
-        {showEditorChrome && needsSettingsRepairFileId && (
+        {showEditorChrome && settingsRepairReasons.length > 0 && (
           <RepairProjectSettingsAlert
-            fileId={needsSettingsRepairFileId}
-            reasons={baseFileQuery.data?.file.settingsRepairReasons}
+            // Undefined for a host with no stored file: the notice still renders, minus the
+            // route-backed Repair button it could not honour.
+            fileId={needsSettingsRepairFileId ?? undefined}
+            reasons={settingsRepairReasons}
             // Repair rewrites the project's settings, so its result must reach this editor even
             // though the editor otherwise renders from a snapshot taken at open. The user asked
             // for it from in here, which is exactly the carve-out.
             onRepaired={() => sliceConfigRef.current?.refreshProjectIndex?.()}
+            // `filamentPhysics` is repaired by the save path, not the route — and Save is greyed out
+            // on a project with no unsaved edits, so without this the notice named a remedy the user
+            // could not reach.
+            //
+            // Available on EVERY host, including a project opened from disk: this no longer saves
+            // anything, it stages an undoable edit, so there is no file write to be surprised by.
+            // Offered wherever a resolver exists AND the preset catalogue has settled. Whether every
+            // slot CAN resolve is not knowable without asking — a slot can hold a preset id whose kind
+            // this host's resolver does not implement — so the attempt reports the miss rather than a
+            // pre-flight predicting it. The catalogue, though, IS knowable: pressed before it loads,
+            // every slot resolves to no preset id and the repair fails with "couldn't match materials
+            // 1, 2" on a project whose materials are perfectly fine. Reproduced by clicking the moment
+            // the button appears, which is exactly what an eager user does.
+            onRepairInEditor={resolveFilamentConfig && sliceConfig?.slicerStatus.slicerDataReady
+              ? handleRepairFilamentPhysics
+              : undefined}
+            repairingInEditor={repairingPhysics}
+            repairInEditorError={physicsRepairError}
             sx={{ mb: 1 }}
           />
         )}
@@ -5749,7 +5919,7 @@ function EditorView({
               saving={saving}
               disabled={!state || (sliceConfig != null && !hasMaterials)}
               dirty={hasUnsavedChanges}
-              canSaveVersion={savesToLocalFile || savedAsProject || (baseFileId !== null && !isNewProject)}
+              canSaveVersion={canSaveOverOpenProject}
               onSaveVersion={handleSaveVersion}
               onSaveAs={() => {
                 // Local: hand the name straight to the target, whose picker IS the destination

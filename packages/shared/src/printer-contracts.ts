@@ -969,7 +969,7 @@ export type PrintJob = z.infer<typeof printJobSchema>
  * cannot be added to the type and forgotten in a schema — every wire schema derives from this.
  * The checks themselves live in `repairs/` (see `collectSettingsRepairReasons`).
  */
-export const threeMfSettingsRepairReasons = ['flushMatrix', 'variantIndex', 'filamentIds'] as const
+export const threeMfSettingsRepairReasons = ['flushMatrix', 'variantIndex', 'filamentIds', 'filamentPhysics'] as const
 export const threeMfSettingsRepairReasonSchema = z.enum(threeMfSettingsRepairReasons)
 export type ThreeMfSettingsRepairReason = z.infer<typeof threeMfSettingsRepairReasonSchema>
 

@@ -290,10 +290,25 @@ export function filamentVariantValuesEqual(
  * discarding a project's real values on a guess is the worse failure.
  */
 export function filamentSlotValuesCarryTo(slotConfig: ProcessConfig, presetConfig: ProcessConfig): boolean {
-  const slotType = displayFilamentTypeOf(slotConfig)
-  const presetType = displayFilamentTypeOf(presetConfig)
+  const slotType = rawFilamentTypeOf(slotConfig)
+  const presetType = rawFilamentTypeOf(presetConfig)
   if (!slotType || !presetType) return true
   return slotType.toUpperCase() === presetType.toUpperCase()
+}
+
+/**
+ * The RAW `filament_type` of a config — what BambuStudio's transfer decision reads.
+ *
+ * Deliberately not the DERIVED display type. `Tab::select_preset` compares
+ * `config.option("filament_type")->values[0]` on both presets and sets `no_transfer` only when those
+ * differ; the derived type (which folds in `filament_is_support`, so "Bambu PLA Basic" reads PLA and
+ * "Bambu Support for PLA" reads PLA-S) belongs to DISPLAY and filtering. Using it here made us
+ * discard a user's tuned values on a switch BambuStudio would have carried them through.
+ */
+function rawFilamentTypeOf(config: ProcessConfig): string | undefined {
+  const value = config.filament_type
+  const entry = Array.isArray(value) ? value[0] : value
+  return typeof entry === 'string' && entry.trim() ? entry.trim() : undefined
 }
 
 /** Derived filament type of a config, reading either the scalar or per-slot/variant array form. */
@@ -411,6 +426,21 @@ export interface ResolveFilamentConfigResponse {
    * has none — then nothing is attributed to the preset and everything reads against `baseConfig`.
    */
   parentConfig?: ProcessConfig
+  /**
+   * The name of the preset {@link parentConfig} came from — the preset's `inherits`.
+   *
+   * Not a display field. A saved project must name it in `inherits_group` or BambuStudio will not
+   * bind the slot to a USER preset at all; see `filament-preset-binding.ts` for the vendor rule.
+   * Null for a system preset (which needs none) and absent when the parent did not resolve.
+   */
+  presetInherits?: string | null
+  /**
+   * Keys where the preset differs from {@link parentConfig} — the `different_settings_to_system`
+   * entry a saved project must carry alongside {@link presetInherits}. The pair is one fact: with a
+   * parent named, an UNDER-declared key is normalized back to the parent's value on open, so an
+   * inaccurate list breaks binding just as an absent parent does.
+   */
+  presetChangedKeys?: string[]
   overriddenKeys: string[]
   /**
    * Whether the 3MF carried a changed-from-system record for this slot at all, which makes

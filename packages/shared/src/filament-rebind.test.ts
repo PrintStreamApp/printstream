@@ -26,7 +26,12 @@ test('non-overridden values rebind to the new machine preset; the fossil disappe
     config: { pre_start_fan_time: ['2', '2'], nozzle_temperature: ['245', '245'] },
     settingsId: 'Bambu PETG HF @BBL H2D 0.4 nozzle'
   }])
-  assert.deepEqual(next.pre_start_fan_time, ['2', '2'], 'the fossil rebinds to the new variant stock, at the new variant width')
+  // WIDTH IS PER OPTION. `pre_start_fan_time` is not in BambuStudio's `filament_options_with_variant`,
+  // so it stays one value per slot even on a 2-variant machine — verified against a BambuStudio-saved
+  // file, which writes `['2','2','2']` for three slots. This assertion previously expected `['2','2']`,
+  // encoding the belief that every filament key is variant-expanded; that belief corrupted real
+  // projects (a 3-material file reopened with 6 materials). See `variant-options.ts`.
+  assert.deepEqual(next.pre_start_fan_time, ['2'], 'a per-slot option keeps one value per slot')
   assert.deepEqual(next.nozzle_temperature, ['245', '245'])
   assert.deepEqual(next.filament_settings_id, ['Bambu PETG HF @BBL H2D 0.4 nozzle'], 'the selection follows the alias re-selection')
   assert.equal(record.pre_start_fan_time[0], '0', 'the input record is never mutated')
@@ -48,10 +53,19 @@ test('a recorded user override survives the machine switch at the new variant wi
     config: { nozzle_temperature: ['245', '245'], pre_start_fan_time: ['2', '2'] }
   }])
   assert.deepEqual(next.nozzle_temperature, ['270', '270'], 'the override outranks the new preset')
-  assert.deepEqual(next.pre_start_fan_time, ['2', '2'], 'non-overridden siblings still rebind')
+  // Per-slot option (see the note in the previous test): one value per slot, not per variant.
+  assert.deepEqual(next.pre_start_fan_time, ['2'], 'non-overridden siblings still rebind, at their own width')
 })
 
-test('a present key the new preset does not define drops unless an override needs it', () => {
+/**
+ * SUPERSEDES a test that asserted such a key is DROPPED, on the reasoning that absence equals the
+ * preset default at load. BambuStudio does not read it that way: a missing filament key is a
+ * deviation from the preset, and it mints a `(<project>.3mf)` project preset rather than binding the
+ * user's own. Its own saves store the default explicitly (`ironing_fan_speed: ["-1","-1","-1"]`).
+ * The key therefore stays, at the option default — which still discards the OLD material's value,
+ * which is what dropping was really protecting against.
+ */
+test('a present key the new preset does not define takes the option default, not the old value', () => {
   const record = {
     filament_settings_id: ['Bambu PETG HF @BBL X1C', 'Bambu PLA Basic @BBL X1C'],
     filament_colour: ['#000000', '#FFFFFF'],
@@ -65,8 +79,14 @@ test('a present key the new preset does not define drops unless an override need
     { config: { nozzle_temperature: ['245'] } },
     { config: { nozzle_temperature: ['220'] } }
   ])
-  assert.equal('filament_wipe_distance' in next, false, 'absence means the preset default on the new machine')
-  assert.deepEqual(next.filament_retraction_length, ['0.4', '0.8'], 'kept because slot 2 recorded it (slot 1 keeps its old value to fill the column)')
+  const wipe = next.filament_wipe_distance as string[]
+  assert.equal(wipe.length, 2, 'the key stays present for every slot')
+  assert.notDeepEqual(wipe, ['1', '1'], 'the OLD material\'s value must not linger')
+  // Slot 2 declared retraction as its own change, so it survives; slot 1 did not, so it takes the
+  // default rather than carrying the previous material's number into the new one.
+  const retraction = next.filament_retraction_length as string[]
+  assert.equal(retraction[1], '0.8', 'the declared override survives the switch')
+  assert.notEqual(retraction[0], '0.4', 'an undeclared slot does not carry the old material\'s value')
 })
 
 test('multi-slot: each slot rebinds to its own preset column-block', () => {
@@ -228,4 +248,37 @@ test('selectFilamentRebindTargets refuses a partly-blank slot list rather than m
     targetModelKey: 'H2D',
     nozzleHint: 'Bambu Lab H2D 0.4 nozzle'
   }), null)
+})
+
+/**
+ * A preset that spells out only the FIRST variant column must not overwrite the others with it.
+ * BambuStudio stores genuinely different values per variant (`filament_max_volumetric_speed` is
+ * ["25","40"] — Standard, High Flow), so repeating column 0 rewrote High Flow to the Standard value
+ * and BambuStudio reported it as the user's own change on a merely re-saved project.
+ */
+test('a short preset value keeps the project\'s other variant columns', () => {
+  const record = {
+    filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle'],
+    filament_colour: ['#000000'],
+    filament_type: ['PETG'],
+    filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow'],
+    different_settings_to_system: ['', ''],
+    filament_max_volumetric_speed: ['25', '40']
+  }
+  const next = rebindProjectFilamentPhysics(record, [{ config: { filament_max_volumetric_speed: ['25'] } }])
+  assert.deepEqual(next.filament_max_volumetric_speed, ['25', '40'], 'High Flow survives from the file')
+})
+
+/** A preset that supplies every column still wins outright. */
+test('a full-width preset value replaces every column', () => {
+  const record = {
+    filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle'],
+    filament_colour: ['#000000'],
+    filament_type: ['PETG'],
+    filament_extruder_variant: ['Direct Drive Standard', 'Direct Drive High Flow'],
+    different_settings_to_system: ['', ''],
+    filament_max_volumetric_speed: ['25', '40']
+  }
+  const next = rebindProjectFilamentPhysics(record, [{ config: { filament_max_volumetric_speed: ['30', '50'] } }])
+  assert.deepEqual(next.filament_max_volumetric_speed, ['30', '50'])
 })

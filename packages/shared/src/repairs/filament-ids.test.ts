@@ -10,6 +10,8 @@ import { inspectProjectFilamentIds, repairFilamentIds, filamentIdForPresetName }
 import { collectSettingsRepairReasons } from './index'
 
 const BROKEN = {
+  // A physics sentinel keeps this a project whose ONLY defect is the ids (see filament-physics.ts).
+  nozzle_temperature: ['245', '245', '220'],
   filament_settings_id: [
     'Bambu PETG HF @BBL H2D 0.4 nozzle',
     'Bambu PETG HF @BBL H2D 0.4 nozzle',
@@ -65,12 +67,12 @@ test('an unmatched preset is left alone and reported, never guessed', () => {
 })
 
 test('a consistent project is not flagged, and an empty id is not a contradiction', () => {
-  const consistent = { filament_settings_id: BROKEN.filament_settings_id, filament_ids: ['GFG02', 'GFG02', 'GFA00'] }
+  const consistent = { nozzle_temperature: ['245', '245', '220'], filament_settings_id: BROKEN.filament_settings_id, filament_ids: ['GFG02', 'GFG02', 'GFA00'] }
   assert.equal(inspectProjectFilamentIds(JSON.stringify(consistent))?.inconsistent, false)
   assert.deepEqual(collectSettingsRepairReasons(JSON.stringify(consistent)), [])
 
   // BambuStudio writes '' for a preset that declares no id — a truthful unknown, not a wrong claim.
-  const unknown = { filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle'], filament_ids: [''] }
+  const unknown = { nozzle_temperature: ['245'], filament_settings_id: ['Bambu PETG HF @BBL H2D 0.4 nozzle'], filament_ids: [''] }
   assert.equal(inspectProjectFilamentIds(JSON.stringify(unknown))?.inconsistent, false)
 })
 

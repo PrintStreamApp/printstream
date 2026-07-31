@@ -54,8 +54,10 @@ export { decodeXmlAttributeValue }
  * v23: `settingsRepairReasons` also covers a slot whose `filament_ids` entry names a different
  *      material from its preset. A VALUE change — cached indexes were derived before the reason
  *      existed, so they report an affected project as clean and must re-derive.
+ * v24: `settingsRepairReasons` also covers a project that names filament presets but carries none of
+ *      their values. Same VALUE-change reasoning as v23.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 23
+export const THREE_MF_INDEX_PARSER_VERSION = 24
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {

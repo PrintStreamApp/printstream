@@ -89,6 +89,7 @@ import { useMachineTarget } from './useMachineTarget'
 import { useMaterialSlots } from './useMaterialSlots'
 import { useProcessProfileSelection } from './useProcessProfileSelection'
 import { SliceSettingsPanel, type SliceSettingsController, type SliceConfigSnapshot } from './SliceSettingsPanel'
+import { resolveTenantFilamentConfig } from './tenantFilamentResolver'
 import type { FilamentOption } from './PlateGcodeSections'
 
 const ProcessSettingsDialog = lazy(() => import('../ProcessSettingsDialog'))
@@ -942,7 +943,11 @@ export function SliceFileModal({
     filamentSettingOverridesById, openFilamentSettings: setFilamentSettingsFilamentId,
     handleMaterialOptionChange,
     desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onRemoveFilament: handleRemoveFilament,
-    configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, processEditListenerRef
+    configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, processEditListenerRef,
+    // The editor resolves each slot's preset at SAVE time from this, so the saved project carries the
+    // material's physics and not just its name. Omitting it is not a smaller feature — it silently
+    // reverts the save to dropping those values (see `tenantFilamentResolver.ts`).
+    resolveFilamentConfig: resolveTenantFilamentConfig
   }
 
   // The editor owns geometry; the slice is otherwise valid when printer/process/

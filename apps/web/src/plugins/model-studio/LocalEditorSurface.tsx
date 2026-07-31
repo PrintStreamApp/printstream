@@ -100,6 +100,12 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         targetPrinterModel={targetPrinterModel}
         bedModelPath="/api/public/slicing/bed-model"
         resolveProcessConfig={resolveProcessConfig}
+        resolveFilamentConfig={resolveFilamentConfig}
+        // Straight off the in-tab parse: this host has no library DTO to read them from, and the
+        // reasons are a pure function of the project's settings. Without them a file opened from
+        // disk showed no warning at all, even though `filamentPhysics` is precisely the defect this
+        // host CAN fix — its save resolves presets and writes the values back.
+        repairReasons={project.index.settingsRepairReasons}
         presetManager={presetManager}
         hosting="page"
         onClose={onClose}

@@ -252,13 +252,17 @@ test('a project slot\'s values carry to a same-type preset only, per BambuStudio
 
   assert.equal(filamentSlotValuesCarryTo(petgSlot, { filament_type: ['PLA'] }), false, 'PETG -> PLA carries nothing')
   assert.equal(filamentSlotValuesCarryTo(petgSlot, { filament_type: ['PETG'] }), true, 'PETG -> PETG keeps the slot')
-  // Types are compared DERIVED, so a support filament is its own material (PLA-S is not PLA).
+  // Types are compared RAW, not derived. `Tab::select_preset` reads
+  // `config.option("filament_type")->values[0]` on both presets and sets `no_transfer` only when
+  // THOSE differ — the derived type (which folds in `filament_is_support`, so a support PLA reads
+  // PLA-S) is a DISPLAY concept. This assertion previously expected `false`, which discarded a
+  // user's tuned values on a switch BambuStudio carries them through.
   const supportSlot = { filament_type: 'PLA', filament_is_support: '1', filament_ids: 'GFS00' }
-  assert.equal(filamentSlotValuesCarryTo(supportSlot, { filament_type: ['PLA'] }), false, 'PLA-S -> PLA carries nothing')
+  assert.equal(filamentSlotValuesCarryTo(supportSlot, { filament_type: ['PLA'] }), true, 'raw PLA -> PLA carries, as BambuStudio does')
   assert.equal(
-    filamentSlotValuesCarryTo(supportSlot, { filament_type: ['PLA'], filament_is_support: ['1'], filament_ids: ['GFS00'] }),
-    true,
-    'PLA-S -> PLA-S keeps the slot'
+    filamentSlotValuesCarryTo(supportSlot, { filament_type: ['PETG'] }),
+    false,
+    'a genuine raw type change carries nothing'
   )
   // With no type to compare, keep the slot rather than silently discarding a project's real values.
   assert.equal(filamentSlotValuesCarryTo({ nozzle_temperature: '245' }, { filament_type: ['PLA'] }), true)

@@ -34,6 +34,7 @@ import {
   isNilSettingValue
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
+import { resolveTenantFilamentConfig } from './tenantFilamentResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 import { BackAwareModal } from '../BackAwareModal'
 import { DialogSection } from '../DialogSection'
@@ -144,12 +145,12 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     setLoading(true)
     setError(null)
     setBaseConfig(null)
-    const resolve = resolveConfig
-      ? resolveConfig({ filamentProfileId, targetId: slicerTargetId || null, sourceFileId: sourceFileId || null, projectFilamentId: projectFilamentId ?? null })
-      : apiFetch<ResolveFilamentConfigResponse>('/api/slicing/profiles/resolve-filament', {
-          method: 'POST',
-          body: { filamentProfileId, targetId: slicerTargetId || null, sourceFileId: sourceFileId || null, projectFilamentId: projectFilamentId ?? null }
-        })
+    const resolve = (resolveConfig ?? resolveTenantFilamentConfig)({
+      filamentProfileId,
+      targetId: slicerTargetId || null,
+      sourceFileId: sourceFileId || null,
+      projectFilamentId: projectFilamentId ?? null
+    })
     resolve
       .then((response) => {
         if (cancelled) return

@@ -34,6 +34,8 @@ import {
 } from '@printstream/shared'
 import { retargetProjectSettingsToMachine } from '@printstream/shared'
 import { apiFetch } from '../../../lib/apiClient'
+import { listLocalSlicingPresets } from './localSlicingPresets'
+import { flattenLocalPreset } from './localPresetInheritance'
 
 interface ResolveMachineConfigResponse {
   config: ProfileRecord
@@ -154,6 +156,26 @@ async function resolveFilamentRebinds(
     const name = target && slicingPresetProvenance(target.id) === 'builtin'
       ? parseBuiltinSlicingPresetId(target.id)?.name ?? null
       : null
+    // A preset the user uploaded into THIS BROWSER resolves from that store, not the builtin
+    // endpoint. Without this it fell to `config: null`, and a null slot makes
+    // `rebindProjectFilamentPhysics` DROP the key for every slot — so retargeting a project whose
+    // third material is an uploaded preset deleted the physics the repair had just restored, and the
+    // file reopened still flagged. That is the same blind spot fixed in `localFilamentResolver`.
+    const stored = target ? listLocalSlicingPresets().find((preset) => preset.id === target.id && preset.kind === 'filament') : undefined
+    if (stored) {
+      // Flattened onto its parent, same as the resolver — a delta preset would otherwise rebind the
+      // slot to a near-empty config, and `rebindProjectFilamentPhysics` drops every key no slot
+      // defines, deleting the physics a repair had just restored.
+      const flattened = await flattenLocalPreset(stored, [], async (builtinId) => {
+        const body = await apiFetch<ResolveFilamentConfigResponse>('/api/public/slicing/resolve-filament', {
+          method: 'POST',
+          body: { filamentProfileId: builtinId, targetId: input.slicerTargetId }
+        })
+        return body.config ?? null
+      })
+      rebinds.push({ config: flattened.config, settingsId: null })
+      continue
+    }
     if (!target || !name) {
       rebinds.push({ config: null })
       continue

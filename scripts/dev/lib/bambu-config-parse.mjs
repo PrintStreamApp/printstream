@@ -152,6 +152,13 @@ export function parseBlock(coType, block) {
     else if (s.startsWith('def->category')) opt.category = extractString(s)
     else if (s.startsWith('def->enum_values.push_back') || s.startsWith('def->enum_values.emplace_back')) opt.enumValues.push(extractString(s))
     else if (s.startsWith('def->enum_labels.push_back') || s.startsWith('def->enum_labels.emplace_back')) opt.enumLabels.push(extractString(s))
+    else if (/^def->enum_keys_map\s*=/.test(s)) {
+      // `&ConfigOptionEnum<Type>::get_enum_values()` — the ONLY place the enum's type appears for
+      // options whose default uses the `ConfigOptionEnumsGeneric{...}` form below, which names no
+      // type of its own.
+      const km = /ConfigOptionEnum<(\w+)>/.exec(s)
+      if (km) opt.enumKeysType = km[1]
+    }
     else if (/^def->enum_values\s*=/.test(s)) {
       const ref = /(\w+)->enum_values/.exec(s.split('=')[1] ?? '')
       if (ref) opt.enumRefVar = ref[1]
@@ -173,6 +180,21 @@ export function parseBlock(coType, block) {
         // serialized string via the s_keys_map_<Type> tables in resolveEnumDefaults.
         const em = /ConfigOptionEnum<(\w+)>\s*\(\s*([\w:]+)\s*\)/.exec(s)
         if (em) { opt.enumDefaultType = em[1]; opt.enumDefaultSymbol = em[2] }
+        else {
+          // VECTOR enums use a different spelling that carries no type —
+          // `ConfigOptionEnumsGeneric{ (int)Symbol }`, `{fmsNone}`, `{ Type::symbol }`, or a bare
+          // index `{0}`. Nine options are declared this way and every one came out with NO default.
+          // That is not cosmetic: the filament block is authored from these defaults, so a missing
+          // one wrote an empty string where BambuStudio stores a real value (it writes
+          // `overhang_threshold_participating_cooling: ["95%",…]`; we wrote `["",…]`). An empty
+          // value reads as a deviation from the preset, and BambuStudio answers a deviation by
+          // minting a `(<project>.3mf)` project preset instead of binding the user's own.
+          const gm = /ConfigOptionEnums?Generic\s*\{\s*(?:\(\s*int\s*\)\s*)?([\w:]+)\s*\}/.exec(s)
+          if (gm) {
+            if (/^\d+$/.test(gm[1])) opt.enumDefaultIndex = Number(gm[1])
+            else opt.enumDefaultSymbol = gm[1]
+          }
+        }
       } else {
         opt.default = parseDefault(s, fieldType)
       }
@@ -238,7 +260,10 @@ export function parseDefault(stmt, fieldType) {
     return undefined // handled separately via enum key maps (see resolveEnumDefaults)
   }
   if (fieldType === 'string') {
-    if (/ConfigOptionString[^(]*\(\s*"/.test(inner)) return extractString(inner)
+    // BRACE init counts too: BambuStudio writes both `ConfigOptionString("x")` and the vector form
+    // `ConfigOptionStrings{""}`. Matching only the paren form left `default_filament_colour` with no
+    // default, so the filament block omitted a key BambuStudio writes as `["","",""]`.
+    if (/ConfigOptionString[^({]*[({]\s*"/.test(inner)) return extractString(inner)
     return undefined
   }
   if (fieldType === 'percent') {
@@ -306,11 +331,19 @@ export function resolveEnums(options, varToKey, content) {
   const enumMaps = parseEnumKeyMaps(content)
   for (const opt of Object.values(options)) {
     if (opt.enumDefaultSymbol) {
-      const map = enumMaps.get(opt.enumDefaultType)
+      // The type comes from `set_default_value` when it spells one out, else from the option's
+      // `enum_keys_map` — the vector form (`ConfigOptionEnumsGeneric{…}`) names no type at all.
+      const map = enumMaps.get(opt.enumDefaultType ?? opt.enumKeysType)
       const str = map?.get(normalizeEnumSymbol(opt.enumDefaultSymbol))
       if (str !== undefined) opt.default = str
-      delete opt.enumDefaultType
-      delete opt.enumDefaultSymbol
+    } else if (opt.enumDefaultIndex !== undefined) {
+      // A bare `{0}` is an INDEX into the option's own value list, not a symbol.
+      const values = opt.enumValues ?? []
+      if (values[opt.enumDefaultIndex] !== undefined) opt.default = values[opt.enumDefaultIndex]
     }
+    delete opt.enumDefaultType
+    delete opt.enumDefaultSymbol
+    delete opt.enumDefaultIndex
+    delete opt.enumKeysType
   }
 }

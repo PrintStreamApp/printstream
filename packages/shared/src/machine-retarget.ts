@@ -20,6 +20,8 @@ import { processSettingsCatalog } from './process-settings.js'
 import { repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
 import { buildFilamentVariantRows } from './filament-variant-index.js'
 import { rebindProjectFilamentPhysics, type FilamentSlotRebind } from './filament-rebind.js'
+import { machineSettingsCatalog } from './machine-settings.js'
+import { isPrintVariantOption } from './variant-options.js'
 
 export type ProfileRecord = Record<string, unknown>
 
@@ -58,11 +60,29 @@ const PROFILE_COPY_KEYS = [
   'physical_extruder_map'
 ] as const
 
+/**
+ * Machine-conditional keys: dropped when the target machine's profile does not declare them, so a
+ * retarget cannot leave a previous machine's capability flag behind.
+ */
 const PROFILE_DELETE_IF_MISSING_KEYS = [
   'enable_filament_dynamic_map',
-  'filament_extruder_compatibility',
   'filament_map_2'
 ] as const
+
+/**
+ * Per-FILAMENT keys the same rule used to drop wholesale, which is too blunt for them.
+ *
+ * `filament_extruder_compatibility` is in BambuStudio's own `s_Preset_filament_options`, has a
+ * PrintConfig default, and BambuStudio writes it for every project (`["0","0","0"]`) whatever the
+ * machine preset mentions — so its presence is not the machine's to decide, and deleting it left the
+ * filament block one key short of the preset. BambuStudio reads that absence as a deviation and
+ * mints a `(<project>.3mf)` copy rather than binding the user's preset.
+ *
+ * What the deletion was really protecting against is a value whose SHAPE no longer fits: an
+ * estimate-mode export carries `['0']` for a project that now has two filaments, and no index
+ * mapping can read that. So drop it only when it is mis-shaped, and keep a well-formed one.
+ */
+const PROFILE_RESHAPE_IF_MISSING_KEYS = ['filament_extruder_compatibility'] as const
 
 const NOZZLE_VOLUME_TYPE_INDEX: Record<string, string> = {
   standard: '0',
@@ -84,7 +104,7 @@ export function retargetProjectSettingsToMachine(
   const next: ProfileRecord = { ...projectSettings }
   for (const [key, value] of Object.entries(machineProfile)) {
     if (NON_SETTING_PROFILE_KEYS.has(key)) continue
-    next[key] = cloneValue(value)
+    next[key] = normalizeProfileValueForProject(key, cloneValue(value), projectSettings[key])
   }
   next.printer_settings_id = target.printerSettingsId
   next.printer_model = target.printerModel
@@ -201,6 +221,39 @@ export interface MachineRetargetPlan {
  * machine keys, so it composes without clobbering), then the filament rebind (which reads the
  * retargeted variant layout).
  */
+/**
+ * A machine PRESET and a PROJECT spell the same value differently, so a wholesale copy has to
+ * translate rather than transcribe.
+ *
+ * Two differences, both seen on a real H2D save:
+ *  - a POINT is `"0.3x0.5"` in the preset and `"0.3,0.5"` in the project (`best_object_pos`)
+ *  - a SCALAR option can arrive from the preset as a one-element vector, where the project stores it
+ *    bare (`enable_long_retraction_when_cut`: `["2"]` vs `"2"` — `coInt` in BambuStudio, and absent
+ *    from our machine catalogue because it is `comDevelop`, so the project's own shape is the only
+ *    guide we have)
+ *
+ * Copying either verbatim leaves the project holding a value BambuStudio did not write. Both were
+ * measured against BambuStudio's own file, which is the authority here.
+ */
+function normalizeProfileValueForProject(
+  key: string,
+  value: ProfileRecord[string],
+  existing: ProfileRecord[string] | undefined
+): ProfileRecord[string] {
+  // A point the preset spells with `x`. Only ever applied to catalogue-known point options, so a
+  // string that merely contains an `x` (a gcode snippet, a name) is never touched.
+  if (machineSettingsCatalog.options[key]?.type === 'point' && typeof value === 'string' && value.includes('x')) {
+    return value.replace(/x/g, ',')
+  }
+  // The preset wrapped a scalar the project keeps bare. Narrow on purpose: only a ONE-element array,
+  // and only where the project already holds a plain string, so a machine that genuinely gains
+  // extruders still widens the key.
+  if (Array.isArray(value) && value.length === 1 && typeof existing === 'string') {
+    return value[0] as ProfileRecord[string]
+  }
+  return value
+}
+
 export function applyMachineRetargetToProjectSettings(
   projectSettings: ProfileRecord,
   plan: MachineRetargetPlan
@@ -335,7 +388,13 @@ export function repairEstimateModeProjectSettings(settings: ProfileRecord, machi
     next.filament_volume_map = volumeTypes.map(mapNozzleVolumeTypeToIndex)
   }
 
-  if (volumeTypes.length > 0 && maxNozzleCounts.length > 0) {
+  // Only REBUILT when the existing value cannot describe the new machine — i.e. it is missing or has
+  // the wrong number of extruders. `extruder_max_nozzle_count` is not the same quantity: a real H2D
+  // project carries `["Standard#2","Standard#1"]` beside `extruder_max_nozzle_count: ["1","1"]`, so
+  // deriving from it flattened the project's own correct value to `["Standard#1","Standard#1"]` on
+  // every retarget. Preserve what the file holds rather than compute something we cannot derive.
+  const existingNozzleStats = stringArray(next.extruder_nozzle_stats)
+  if (volumeTypes.length > 0 && maxNozzleCounts.length > 0 && existingNozzleStats.length !== maxNozzleCounts.length) {
     next.extruder_nozzle_stats = maxNozzleCounts.map((count, index) => {
       const volumeType = volumeTypes[Math.min(index, volumeTypes.length - 1)] ?? 'Standard'
       return `${volumeType}#${count}`
@@ -350,6 +409,16 @@ export function repairEstimateModeProjectSettings(settings: ProfileRecord, machi
     if (machineProfile[key] === undefined) {
       delete next[key]
     }
+  }
+  const retargetFilamentCount = Math.max(
+    stringArray(next.filament_type).length,
+    stringArray(next.filament_settings_id).length,
+    stringArray(next.filament_colour).length
+  )
+  for (const key of PROFILE_RESHAPE_IF_MISSING_KEYS) {
+    if (machineProfile[key] !== undefined) continue
+    const value = next[key]
+    if (Array.isArray(value) && retargetFilamentCount > 0 && value.length !== retargetFilamentCount) delete next[key]
   }
 
   return next
@@ -386,8 +455,8 @@ function stringArray(value: unknown): string[] {
  * single-variant A1 mini kept 5 — a process topology the new machine cannot index. That mismatch
  * segfaults the engine mid-load (CLI exit 139), reproduced with the real CLI on a real project.
  *
- * The filament side has the identical rule (see `applyFilamentList`'s variant expansion); this is
- * its process twin. Columns are matched BY VARIANT NAME so a shared variant keeps its own tuned
+ * The filament side has the identical rule (`FILAMENT_OPTIONS_WITH_VARIANT`); this is its process
+ * twin, and both read their key set from `variant-options.ts` rather than inferring it from lengths. Columns are matched BY VARIANT NAME so a shared variant keeps its own tuned
  * values, falling back to the first column for a variant the source never had. Only keys the
  * process catalog knows are touched — an unrelated array that merely shares the column count
  * (`head_wrap_detect_zone`, `printable_area`) must never be re-indexed.
@@ -408,6 +477,12 @@ function retargetProcessExtruderVariants(
   })
   for (const [key, value] of Object.entries(next)) {
     if (!Array.isArray(value) || value.length !== sourceVariants.length) continue
+    // BambuStudio's OPTION rule decides this, not the length. Catalog membership plus a matching
+    // length convicts any ordinary process array that happens to be as long as the variant list —
+    // likeliest on a 2-column machine, where plenty of unrelated pairs are that length — and
+    // re-indexing one silently rewrites values the user set. The filament side had the same flaw
+    // and it corrupted real projects; see `variant-options.ts`.
+    if (!isPrintVariantOption(key)) continue
     if (processSettingsCatalog.options[key] === undefined) continue
     next[key] = columnForVariant.map((column) => value[column])
   }

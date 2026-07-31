@@ -474,6 +474,34 @@ export const sceneEditFilamentSchema = z.object({
    * unknown id: an empty entry, never the previous material's.
    */
   filamentId: z.string().trim().min(1).nullable().optional(),
+  /**
+   * The RESOLVED config of the preset named in `settingsId`, so a saved project carries the new
+   * material's physics instead of only its name.
+   *
+   * Without it, a material change drops every non-identity filament array (the old material's
+   * temperatures, flow, cooling, retraction) and leans on the slicer to re-derive them from the
+   * name at slice time. That is true for our slicer and FALSE for BambuStudio: it opens a project
+   * whose slots have no values, has nothing to name a preset after, and shows the slot as an unnamed
+   * `(<project>.3mf)` project preset carrying bare defaults. Confirmed by restoring exactly these
+   * keys into an affected file, which made BambuStudio show all three materials correctly.
+   *
+   * Resolved IN THE BROWSER (both hosts already own a `FilamentConfigResolver` for the tune dialog
+   * and the changed-vs-preset badge), keeping the editor's authoring client-side like the rest of the
+   * model studio. Omitted keeps the previous behaviour — the drop — so a host that cannot resolve a
+   * slot is no worse off than before.
+   */
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
+  /**
+   * The SYSTEM preset `settingsId` derives from, and the keys it changed — written to the project's
+   * `inherits_group` / `different_settings_to_system` so BambuStudio can bind the slot to a USER
+   * preset. Carrying the preset's VALUES is not enough on its own: without a named parent
+   * BambuStudio skips the normalization step it applies to its own files, and any residual drift
+   * makes it mint a `(<project>.3mf)` copy instead. See `filament-preset-binding.ts` for the rule
+   * and the measurement. Omitted leaves the slot's existing record alone; `presetInherits: null`
+   * says the preset IS a system one, which is a different statement from "unknown".
+   */
+  presetInherits: z.string().nullable().optional(),
+  presetChangedKeys: z.array(z.string()).optional(),
   sourceIndex: z.number().int().nonnegative().nullable().optional(),
   /**
    * Desired runtime nozzle for this slot on a dual-nozzle machine (0 = right, 1 = left) —

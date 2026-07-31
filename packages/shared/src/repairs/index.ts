@@ -22,8 +22,11 @@ import type { ThreeMfSettingsRepairReason } from '../printer-contracts.js'
 import { inspectProjectFlushVolumesMatrix } from '../flush-volumes-matrix.js'
 import { inspectProjectFilamentSelfIndex } from '../filament-variant-index.js'
 import { inspectProjectFilamentIds } from './filament-ids.js'
+import { inspectProjectFilamentPhysics } from './filament-physics.js'
 
 export * from './filament-ids.js'
+export * from './filament-physics.js'
+export * from './restore-filament-physics.js'
 
 /**
  * Every repairable defect this project carries, in no particular order. Empty means nothing to
@@ -42,5 +45,9 @@ export function collectSettingsRepairReasons(
   // A slot's `filament_ids` entry naming a different material from its preset — BambuStudio binds on
   // the id, so it fabricates a defaults-only project preset for the slot instead of opening it.
   if (inspectProjectFilamentIds(projectSettingsJson)?.inconsistent === true) reasons.push('filamentIds')
+  // Named presets with none of their values. Repaired by SAVING: the bake restores them from the
+  // resolved presets (`restore-filament-physics.ts`), so unlike the others this one has no entry in
+  // the API repair route.
+  if (inspectProjectFilamentPhysics(projectSettingsJson)?.inconsistent === true) reasons.push('filamentPhysics')
   return reasons
 }

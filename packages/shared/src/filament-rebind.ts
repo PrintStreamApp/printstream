@@ -26,7 +26,9 @@
  * `apps/api/src/lib/save-retarget.ts`; this module never fetches.
  */
 import { canonicalBambuModelKey } from './bambu-model-keys.js'
-import { FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
+import { filamentKeyWidth, filamentVariantsPerSlot } from './variant-options.js'
+import { filamentSettingsCatalog, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
+import { FILAMENT_PRESET_DEFAULTS } from './generated/filament-preset-options.generated.js'
 import type { ProcessConfig } from './process-settings.js'
 import { extractFilamentOverriddenKeys } from './three-mf-project-config.js'
 
@@ -92,10 +94,9 @@ export function applyFilamentSlotOverrides(
   const positions = Object.keys(overridesByPosition).map(Number).filter((position) => Number.isInteger(position) && position >= 1 && position <= identityCount)
   if (positions.length === 0) return record
 
-  const variantColumns = Array.isArray(record.filament_extruder_variant) ? record.filament_extruder_variant.length : 0
-  const variantCount = variantColumns > identityCount && variantColumns % identityCount === 0
-    ? variantColumns / identityCount
-    : 1
+  // Variants the PROJECT declares. How many columns a given key actually gets is decided per option
+  // below — this is only the ceiling for the ones that are variant-scoped.
+  const variantCount = filamentVariantsPerSlot(record, identityCount)
 
   const next: Record<string, unknown> = { ...record }
   const recordedBySlot = new Map<number, Set<string>>()
@@ -107,22 +108,46 @@ export function applyFilamentSlotOverrides(
   }
   for (const key of overriddenKeys) {
     const existing = next[key]
-    const oldWidth = Array.isArray(existing) && existing.length % identityCount === 0 ? existing.length / identityCount : 1
+    // Stride for READING the existing array. Derived from its own length (a file written before this
+    // rule may still be uniformly widened), but never wider than the option can legitimately be.
+    const storedWidth = Array.isArray(existing) && existing.length % identityCount === 0 ? existing.length / identityCount : 1
+    const oldWidth = Math.min(storedWidth, filamentKeyWidth(key, variantCount))
     const columns: string[][] = []
     let complete = true
     for (let slot = 0; slot < identityCount; slot++) {
       const override = overridesByPosition[slot + 1]?.[key]
-      const source = override
-        ?? (Array.isArray(existing) || typeof existing === 'string'
-          ? scalarAt(existing, slot * oldWidth) ?? scalarAt(existing, slot)
+      // WIDTH PER OPTION, not one number for every key. Broadcasting every filament setting to the
+      // variant count widened per-slot keys like `filament_density` to `slots x variants`, and since
+      // `parseProjectFilaments` sizes the material list from the longest filament array, the project
+      // reopened with N times the materials it has. See `variant-options.ts`.
+      const width = filamentKeyWidth(key, variantCount)
+      // Read the slot's OWN COLUMN VECTOR, not a single scalar. Collapsing the slot to column 0 and
+      // then repeating it across the variants destroyed every later column: BambuStudio stores
+      // genuinely different values per variant (`filament_max_volumetric_speed` is ["25","40"] —
+      // Standard, High Flow), so the High Flow value came back rewritten to the Standard one and
+      // BambuStudio reported it as the user's own change.
+      const existingColumn = (variant: number): string | null =>
+        (Array.isArray(existing) || typeof existing === 'string'
+          ? scalarAt(existing, slot * oldWidth + variant) ?? (variant === 0 ? scalarAt(existing, slot) : null)
           : null)
-        ?? slotConfigs[slot]?.[key]
-        ?? null
-      if (source == null) {
+      const presetValue = slotConfigs[slot]?.[key]
+      const column = (variant: number): string | null =>
+        scalarAt(override, variant)
+          ?? existingColumn(variant)
+          ?? scalarAt(presetValue, variant)
+          // Only column 0 may stand in for a missing column, and only from the SAME source that
+          // supplied it — never as a way to invent a variant nobody specified.
+          ?? (variant === 0 ? scalarAt(override, 0) ?? scalarAt(presetValue, 0) : null)
+      if (column(0) == null) {
         complete = false
         break
       }
-      columns.push(Array.from({ length: variantCount }, (_unused, variant) => scalarAt(source, variant) ?? scalarAt(source, 0) ?? ''))
+      const built = Array.from({ length: width }, (_unused, variant) => column(variant))
+      if (built.some((value) => value == null)) {
+        complete = false
+        break
+      }
+      columns.push(built as string[])
     }
     if (!complete) continue
     next[key] = columns.flat()
@@ -238,10 +263,8 @@ export function rebindProjectFilamentPhysics(
   if (identityCount === 0 || slots.length !== identityCount) return record
   if (slots.every((slot) => slot.config == null && slot.settingsId == null)) return record
 
-  const variantColumns = Array.isArray(record.filament_extruder_variant) ? record.filament_extruder_variant.length : 0
-  const variantCount = variantColumns > identityCount && variantColumns % identityCount === 0
-    ? variantColumns / identityCount
-    : 1
+  // Variants the PROJECT declares; the per-KEY width is decided from the option below.
+  const variantCount = filamentVariantsPerSlot(record, identityCount)
   const overriddenBySlot = slots.map((_slot, index) => new Set(extractFilamentOverriddenKeys(record.different_settings_to_system, index + 1)))
 
   const next: Record<string, unknown> = { ...record }
@@ -249,10 +272,16 @@ export function rebindProjectFilamentPhysics(
     if (!FILAMENT_SETTING_KEYS.has(key) || isFilamentIdentitySettingKey(key)) continue
     const value = record[key]
     if (typeof value !== 'string' && !Array.isArray(value)) continue
-    // The old per-slot scalar, read variant-aware from whatever width the value has now.
-    const oldWidth = Array.isArray(value) && identityCount > 0 && value.length % identityCount === 0
+    // How wide this option is ALLOWED to be here — from BambuStudio's per-option rule, never from
+    // one number applied to every key. Writing a per-slot key at variant width is what made a
+    // 3-material project reopen with 6 (see `variant-options.ts`).
+    const width = filamentKeyWidth(key, variantCount)
+    // Stride for READING the current value, which may still carry a uniformly-widened layout from a
+    // save made before this rule. Clamped so a stale wide array cannot re-widen the output.
+    const storedWidth = Array.isArray(value) && identityCount > 0 && value.length % identityCount === 0
       ? value.length / identityCount
       : 1
+    const oldWidth = Math.min(storedWidth, width)
     const columns: string[][] = []
     let anyColumn = false
     for (let slot = 0; slot < identityCount; slot++) {
@@ -260,21 +289,63 @@ export function rebindProjectFilamentPhysics(
       const presetValue = slots[slot]?.config?.[key]
       let slotColumns: string[] | null
       if (overriddenBySlot[slot]!.has(key)) {
-        // Genuine user override — survives the machine switch, broadcast to the new width.
-        slotColumns = oldScalar != null ? Array.from({ length: variantCount }, () => oldScalar) : null
+        // Genuine user override — survives the machine switch, PER COLUMN. It used to take the
+        // slot's first column and repeat it across the variants, which silently rewrote every later
+        // variant to the first one: a slot that declared `filament_max_volumetric_speed` as changed
+        // came back ["25","25"] where BambuStudio had ["25","40"] (Standard, High Flow), and
+        // BambuStudio reported the High Flow value as the user's own edit. Keep each column the file
+        // actually holds; only a column the file lacks falls back to its first.
+        slotColumns = oldScalar != null
+          ? Array.from({ length: width }, (_unused, variant) => scalarAt(value, slot * oldWidth + variant) ?? oldScalar)
+          : null
       } else if (presetValue != null) {
         // Rebind to the new variant's value. Preset arrays already carry per-variant columns.
-        slotColumns = Array.from({ length: variantCount }, (_unused, variant) =>
-          scalarAt(presetValue, variant) ?? scalarAt(presetValue, 0) ?? '')
+        // Per COLUMN, and never by repeating column 0. The variants genuinely differ —
+        // BambuStudio writes `filament_max_volumetric_speed: ["25","40"]` (Standard, High Flow) —
+        // so a preset that spells out only the first column used to overwrite High Flow with the
+        // Standard value, and BambuStudio then reported it as the user's own change on a project
+        // that had merely been re-saved. A column the preset does not supply keeps what the PROJECT
+        // already had; only if the file has nothing either does the preset's first column stand in.
+        slotColumns = Array.from({ length: width }, (_unused, variant) =>
+          scalarAt(presetValue, variant)
+            ?? scalarAt(value, slot * oldWidth + variant)
+            ?? scalarAt(presetValue, 0)
+            ?? '')
       } else {
-        // The new preset does not define the key and nothing overrides it: absence is the
-        // correct state (preset default at load) — vote to drop the whole column set.
-        slotColumns = null
+        // The new preset does not define the key, so the slot takes the OPTION'S DEFAULT — which is
+        // what BambuStudio itself stores for an unset value (its own save has
+        // `pressure_advance: ["0.02","0.02","0.02"]`, `ironing_fan_speed: ["-1","-1","-1"]`).
+        //
+        // This used to DROP the key instead, reasoning that absence equals the preset default at
+        // load. It does not: BambuStudio reads a missing filament key as a deviation and mints a
+        // `(<project>.3mf)` preset rather than binding the user's own. MEASURED — nine keys the
+        // resolver never returns were written by the repair and deleted again here, and the slot
+        // would not bind until they survived. Filling with the DEFAULT rather than keeping the old
+        // value preserves what dropping was actually for: the previous material's physics still
+        // must not linger after a material change.
+        // WHICH absence is this? A slot with NO config at all was never touched — the caller is
+        // re-authoring a sibling — and its values must stand: "a save must not quietly normalise
+        // settings the user did not touch" is a load-bearing invariant, pinned by
+        // `bake-documents.filamentSettingsId.test.ts`. Only a slot that HAS a config (its material
+        // changed) and simply lacks this key falls to the option default, so the previous material's
+        // number cannot follow the new one.
+        if (slots[slot]?.config == null) {
+          slotColumns = oldScalar != null
+            ? Array.from({ length: width }, (_unused, variant) => scalarAt(value, slot * oldWidth + variant) ?? oldScalar)
+            : null
+        } else {
+          // Same default source as the authoring pass — BambuStudio's PrintConfig default for the
+          // option, falling back to the tune dialog's narrower catalogue. Using only the catalogue
+          // here left preset options it does not list (`filament_extruder_compatibility`) with an
+          // empty value, which the drop-vote below then discarded entirely.
+          const fallback = FILAMENT_PRESET_DEFAULTS[key] ?? filamentSettingsCatalog.options[key]?.default ?? ''
+          slotColumns = Array.from({ length: width }, () => fallback)
+        }
       }
       if (slotColumns == null) {
         // A key's array must cover every slot; one unresolvable slot keeps its old value only
         // when another slot's override forces the key to stay (handled below via anyColumn).
-        slotColumns = oldScalar != null ? Array.from({ length: variantCount }, () => oldScalar) : Array.from({ length: variantCount }, () => '')
+        slotColumns = oldScalar != null ? Array.from({ length: width }, () => oldScalar) : Array.from({ length: width }, () => '')
       } else {
         anyColumn = true
       }

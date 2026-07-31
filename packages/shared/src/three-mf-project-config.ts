@@ -14,6 +14,7 @@
  */
 import { processSettingsCatalog, type ProcessConfig } from './process-settings.js'
 import { filamentSettingsCatalog } from './filament-settings.js'
+import { filamentKeyWidth, filamentVariantsPerSlot } from './variant-options.js'
 
 export interface ProjectProcessConfig {
   /** Effective, already-merged process config embedded in the 3MF (catalog keys only). */
@@ -141,16 +142,16 @@ export function extractProjectFilamentConfig(projectSettings: unknown, projectFi
   // vacuously true, so every variant-expanded key was written as an empty array and then read as a
   // change against the preset (a 4th material on a 3-filament project reported 39 of them).
   if (filamentCount > 0 && slot >= filamentCount) return null
-  const variantColumns = Array.isArray(record.filament_extruder_variant) ? record.filament_extruder_variant.length : 0
-  const variantCount = filamentCount > 0 && variantColumns > filamentCount && variantColumns % filamentCount === 0
-    ? variantColumns / filamentCount
-    : 1
+  // Variants the project declares; which KEYS are stored that wide is BambuStudio's per-option rule,
+  // applied below. Reading a per-slot key as if it were variant-blocked returns another slot's value.
+  const variantCount = filamentVariantsPerSlot(record, filamentCount)
   const config: ProcessConfig = {}
   for (const key of Object.keys(filamentSettingsCatalog.options)) {
     const value = record[key]
     if (Array.isArray(value)) {
-      if (variantCount > 1 && value.length === filamentCount * variantCount) {
-        const block = value.slice(slot * variantCount, (slot + 1) * variantCount)
+      const width = filamentKeyWidth(key, variantCount)
+      if (width > 1 && value.length === filamentCount * width) {
+        const block = value.slice(slot * width, (slot + 1) * width)
         // `[].every()` is vacuously true — an empty block means the array is shorter than the slot
         // claims, which is absence, not an empty value.
         if (block.length > 0 && block.every((entry): entry is string => typeof entry === 'string')) config[key] = block

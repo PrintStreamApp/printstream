@@ -100,6 +100,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             onSavedAs={onSavedAs}
             onClose={closeEditor}
             sliceConfig={sliceConfig}
+            resolveFilamentConfig={sliceConfig?.resolveFilamentConfig}
             canSlice={canSlice}
             sliceDisabledReason={sliceDisabledReason}
             slicing={slicing}

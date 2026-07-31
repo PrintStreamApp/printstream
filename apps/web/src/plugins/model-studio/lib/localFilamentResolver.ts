@@ -12,7 +12,10 @@
  *   NAME to a built-in in the loaded catalogue and resolving THAT through the public endpoint. This
  *   is exactly what the tenant route does with the file it reads server-side — here the file only
  *   exists in the tab.
- * - CUSTOM/workspace preset -> impossible on an anonymous host; treated as unresolvable.
+ * - BROWSER-STORED preset (`local:filament:`) -> the document the user uploaded through the
+ *   "Manage" dialog, read straight from that store. NOT unresolvable, despite there being no
+ *   workspace: the store is this host's stand-in for one.
+ * - WORKSPACE preset -> genuinely impossible here; treated as unresolvable.
  *
  * A BUILT-IN preset is also asked about a SLOT, because a slot whose picker names a stock preset can
  * still carry drift baked into the 3MF (this is how a project keeps a raised max volumetric speed
@@ -22,6 +25,7 @@
  */
 import {
   extractProjectFilamentConfig,
+  filamentPresetChangedKeys,
   filamentSlotValuesCarryTo,
   isProjectSlicingPresetId,
   slicingPresetProvenance,
@@ -32,6 +36,8 @@ import {
 import { apiFetch } from '../../../lib/apiClient'
 import type { FilamentConfigResolver } from '../../../components/library/FilamentSettingsDialog'
 import { findParentBuiltinPreset } from './localPresetBaseline'
+import { flattenLocalPreset } from './localPresetInheritance'
+import { listLocalSlicingPresets } from './localSlicingPresets'
 import type { ClientThreeMfProject } from './clientThreeMfProject'
 
 /** The project's own values at a filament slot, read from the in-tab archive. Null when absent. */
@@ -102,7 +108,15 @@ export function buildLocalFilamentConfigResolver(input: {
       const slot = projectFilamentId ? readProjectFilamentSlot(input.project, projectFilamentId) : null
       const slotValues = slot && Object.keys(slot.config).length > 0 ? slot.config : null
       const slotConfig = slotValues && filamentSlotValuesCarryTo(slotValues, preset.config) ? slotValues : null
-      if (!slotConfig) return preset
+      // A system preset needs no parent named, but the SLOT's drift over it still has to be declared
+      // — `different_settings_to_system` is what BambuStudio exempts from normalization, so an
+      // under-declared override is silently reset to the preset's value on open, and a STALE
+      // over-declaration keeps a value the preset would have replaced.
+      const systemBinding = (effective: ProcessConfig) => ({
+        presetInherits: null,
+        presetChangedKeys: filamentPresetChangedKeys(effective, preset.config)
+      })
+      if (!slotConfig) return { ...preset, ...systemBinding(preset.config) }
       // Only the DECLARED changes follow the slot onto a different preset (BambuStudio's
       // `Tab::select_preset` carries the dirty options and takes the new preset's value for the
       // rest); without a declared record the whole slot carries, as it always did. Same rule as
@@ -114,9 +128,41 @@ export function buildLocalFilamentConfigResolver(input: {
             return picked
           }, {})
         : null
+      const effective = declaredCarry ? { ...preset.config, ...declaredCarry } : slotConfig
       return {
         ...preset,
-        config: declaredCarry ? { ...preset.config, ...declaredCarry } : slotConfig,
+        config: effective,
+        ...systemBinding(effective),
+        overriddenKeys: slot?.overriddenKeys ?? [],
+        declaresOverrides: slot?.declaresOverrides
+      }
+    }
+    // A preset the user uploaded into THIS BROWSER (the "Manage" dialog's store). The header used to
+    // say a non-builtin preset was "impossible on an anonymous host" — that stopped being true when
+    // that store was added, and the gap was invisible until a repair needed the values: a project
+    // naming an uploaded preset threw here, so the whole all-or-nothing repair failed on a preset
+    // the user could see listed in Manage.
+    const stored = listLocalSlicingPresets().find((preset) => preset.id === filamentProfileId && preset.kind === 'filament')
+    if (stored) {
+      // FLATTENED onto its parent first. A BambuStudio export is a delta (`inherits` + the changed
+      // keys), so handing `raw` out directly gave a slot a handful of values — enough to look
+      // resolved, not enough for the repair to write anything. See `localPresetInheritance.ts`.
+      const { config, parentName, parentConfig } = await flattenLocalPreset(stored, input.filamentProfiles,
+        async (builtinId) => (await resolveBuiltinFilament(builtinId, targetId)).config ?? null)
+      const slot = projectFilamentId ? readProjectFilamentSlot(input.project, projectFilamentId) : null
+      const slotValues = slot && Object.keys(slot.config).length > 0 ? slot.config : null
+      const effective = slotValues && filamentSlotValuesCarryTo(slotValues, config) ? { ...config, ...slotValues } : config
+      return {
+        config: effective,
+        baseConfig: config,
+        // A save needs the parent's name to bind this slot — a user preset whose project does not
+        // name its parent reopens in BambuStudio as a `(<project>.3mf)` copy however right its
+        // values are. Reported only when the parent actually resolved; the declared changes are the
+        // SLOT's (preset deltas plus any project drift) measured against that same system preset,
+        // which is what `different_settings_to_system` means.
+        ...(parentName && parentConfig
+          ? { presetInherits: parentName, presetChangedKeys: filamentPresetChangedKeys(effective, parentConfig) }
+          : {}),
         overriddenKeys: slot?.overriddenKeys ?? [],
         declaresOverrides: slot?.declaresOverrides
       }

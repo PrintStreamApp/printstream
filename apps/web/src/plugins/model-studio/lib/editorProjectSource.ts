@@ -19,6 +19,7 @@
 import type { LibraryThreeMfScene, PrinterModel, ThreeMfIndex } from '@printstream/shared'
 import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { buildApiUrl } from '../../../lib/apiUrl'
+import { getBrowserEnv } from '../../../lib/browserEnv'
 import { MODEL_FETCH_HEADERS_MS, fetchModelBytes } from './modelFetch'
 import { openClientThreeMfProjectFromBytes, type ClientThreeMfProject } from './clientThreeMfProject'
 
@@ -33,6 +34,28 @@ import { openClientThreeMfProjectFromBytes, type ClientThreeMfProject } from './
  * mesh entry.
  */
 const ARCHIVE_STALL_MS = 90_000
+
+/**
+ * Dev-only retry budget for that download, because the trade above INVERTS behind the dev proxy.
+ *
+ * Vite's dev proxy wedges a share of requests that follow an aborted large response: the request
+ * never completes and never errors, so the editor sits on "Loading plates…" until the 90s stall
+ * budget expires. MEASURED against `/api/library/:id/archive` (4.6MB, caching disabled, a genuine
+ * mid-body abort before each attempt): 5 hangs in 20 cycles through the proxy versus 0 in 20
+ * straight to the API on :4000. The editor provokes it constantly because React StrictMode fires
+ * each archive fetch twice in dev and aborts one.
+ *
+ * A retry clears it immediately — the re-download the production reasoning rightly calls too
+ * expensive costs ~400ms on localhost. So dev gets a short stall budget and one retry; production
+ * keeps the single long attempt, where a stall means a real network problem rather than a proxy
+ * that will answer fine if simply asked again.
+ *
+ * NOT a fix for the proxy, which is why this is scoped to dev rather than applied to the transport:
+ * `agent: false` on the proxy entry was tried and changed nothing (11 hangs in 40 cycles versus 12
+ * without it), so the cause is not upstream socket reuse and is still unidentified.
+ */
+const ARCHIVE_DEV_STALL_MS = 8_000
+const ARCHIVE_DEV_ATTEMPTS = 2
 
 export interface EditorProjectSource {
   /** The project's parsed plate index — plates, filaments, objects, predictions. */
@@ -80,14 +103,17 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
     // One download shared by every read. Deliberately NOT given a caller's abort signal: the
     // readers abort independently (a plate switch, a re-key), and the first one to give up would
     // otherwise cancel the archive out from under all the others.
-    // One attempt: a stalled retry re-downloads the WHOLE project, which costs more than the
-    // transient stall it recovers from (the mesh-entry default retries because an entry is small).
+    // One attempt in production: a stalled retry re-downloads the WHOLE project, which costs more
+    // than the transient stall it recovers from (the mesh-entry default retries because an entry is
+    // small). Dev retries instead — see ARCHIVE_DEV_ATTEMPTS for why that trade flips there.
     opening ??= fetchModelBytes(
       buildApiUrl(`${resourceBase}/archive`),
       { method: 'GET', credentials: 'include' },
-      ARCHIVE_STALL_MS,
+      // Through `getBrowserEnv`, not `import.meta.env` directly — that is undefined under the node
+      // test runner, which is the whole reason the helper exists.
+      getBrowserEnv().devMode ? ARCHIVE_DEV_STALL_MS : ARCHIVE_STALL_MS,
       MODEL_FETCH_HEADERS_MS,
-      1
+      getBrowserEnv().devMode ? ARCHIVE_DEV_ATTEMPTS : 1
     )
       .then(async (bytes) => {
         const project = await openClientThreeMfProjectFromBytes(fileName, bytes)

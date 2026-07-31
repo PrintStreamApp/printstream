@@ -9,6 +9,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import {
   createSlicingJobSchema,
+  filamentPresetChangedKeys,
   isDirectPrintableFileName,
   isProjectSlicingPresetId,
   JOBS_DELETE_PERMISSION,
@@ -249,7 +250,8 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
   // `parentConfig` and are emphasis only. Baselining against the parent here is what made a user
   // preset's saved settings (a raised bed temp) read as project changes, offered with a reset
   // button that would have discarded the preset's own values.
-  const parentConfig = await resolveBaselineFilamentConfig(tenantId, parsed.data.targetId ?? null, parentPresetNameOf(profileFile))
+  const parentName = parentPresetNameOf(profileFile)
+  const parentConfig = await resolveBaselineFilamentConfig(tenantId, parsed.data.targetId ?? null, parentName)
   // ...but when the caller names a project SLOT, the values in force are the 3MF's, not the
   // preset's. A slot whose picker shows an installed preset can still carry baked drift (this is
   // how a project keeps a raised max volumetric speed while still naming the stock preset), and
@@ -285,6 +287,13 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
     config: carried ? { ...config, ...carried } : config,
     baseConfig: config,
     parentConfig: parentConfig ?? undefined,
+    // What a SAVE needs to bind this slot: the system preset's name (null when the preset IS
+    // system, which BambuStudio normalizes by another route) plus the slot's declared changes.
+    // Measured against the SYSTEM preset in the chain — the parent for a user preset, the preset
+    // itself when it IS system — because that is what `different_settings_to_system` names, and the
+    // subject is the SLOT (preset plus whatever the project carried), not the preset alone.
+    presetInherits: parentName ?? null,
+    presetChangedKeys: filamentPresetChangedKeys(carried ? { ...config, ...carried } : config, parentConfig ?? config),
     // Only meaningful while the slot's values actually carried: a slot whose material changed had
     // them dropped, so its record describes settings that are no longer in force.
     overriddenKeys: slotValues ? slotConfig!.overriddenKeys : [],

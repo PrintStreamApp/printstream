@@ -762,7 +762,8 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
         "Medium",
         "High"
       ],
-      "mode": "advanced"
+      "mode": "advanced",
+      "default": "None"
     },
     "filament_flow_ratio": {
       "type": "float",
@@ -1201,7 +1202,8 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
         "Contour",
         "Contour and hole"
       ],
-      "mode": "advanced"
+      "mode": "advanced",
+      "default": "none"
     },
     "filament_scarf_height": {
       "type": "floatOrPercent",
@@ -1346,7 +1348,8 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
         "Uniform cooling",
         "Consistent surface"
       ],
-      "mode": "develop"
+      "mode": "develop",
+      "default": "uniform_cooling"
     },
     "cooling_perimeter_transition_distance": {
       "type": "float",
@@ -1398,7 +1401,8 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
         "75%",
         "95%"
       ],
-      "mode": "advanced"
+      "mode": "advanced",
+      "default": "95%"
     },
     "overhang_threshold_participating_cooling": {
       "type": "enum",
@@ -1421,7 +1425,8 @@ export const filamentSettingsCatalog: ProcessSettingsCatalog = {
         "75%",
         "100%"
       ],
-      "mode": "advanced"
+      "mode": "advanced",
+      "default": "95%"
     },
     "overhang_fan_speed": {
       "type": "int",

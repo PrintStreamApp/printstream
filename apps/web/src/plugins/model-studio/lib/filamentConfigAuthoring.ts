@@ -1,0 +1,135 @@
+/**
+ * Resolves each saved filament slot's preset config IN THE BROWSER and attaches it to the
+ * `SceneEdit`, so the bake can author the material's own physics into the project.
+ *
+ * WHY: a material change used to drop every non-identity filament array (temperatures, flow,
+ * cooling, retraction) and rely on the slicer re-deriving them from `filament_settings_id` at slice
+ * time. That holds for our slicer and fails for BambuStudio, which opens a project whose slots have
+ * no values, has nothing to name a preset after, and shows the slot as an unnamed
+ * `(<project>.3mf)` preset carrying bare defaults. PROVEN against a real affected file: restoring
+ * exactly these keys made BambuStudio show every material correctly.
+ *
+ * WHY IN THE BROWSER: the model studio is our own BambuStudio GUI, so it authors what it saves.
+ * Both hosts already own a `FilamentConfigResolver` for the material tune dialog and the
+ * changed-vs-preset badge (the tenant `/api/slicing/profiles/resolve-filament` route, and
+ * `localFilamentResolver` for the public editor), so this needs no new endpoint and no server round
+ * trip the editor was not already making.
+ *
+ * CONTRACT: best-effort and additive. A slot whose preset cannot be resolved is left without a
+ * config, and the bake then falls back to its previous drop behaviour for that save — no worse than
+ * before, and never the OLD material's values under a new name. A resolver that throws is logged
+ * and treated as unresolved rather than failing the user's save.
+ *
+ * Counterpart: `applyFilamentList` in `@printstream/shared/three-mf` consumes
+ * `SceneEditFilament.config`.
+ */
+import type { ProcessConfig, SceneEdit } from '@printstream/shared'
+import type { FilamentConfigResolver } from '../../../components/library/FilamentSettingsDialog'
+
+export interface FilamentConfigAuthoringContext {
+  /** The slice target the presets are resolved against; null on a host with no printer selected. */
+  targetId: string | null
+  /** The library file the project came from, for a project-scoped preset. Null for a local file. */
+  sourceFileId: string | null
+  /** Preset id per 1-based project filament id, for the slots the user has resolved. */
+  profileIdByFilamentId: Record<number, string | undefined>
+}
+
+/**
+ * One slot's preset as the repair resolved it: the values, plus what BambuStudio needs to BIND them.
+ *
+ * The binding travels with the config rather than being re-derived at save time for the same reason
+ * the config itself is pinned — it is what the user accepted, and the catalogue can move underneath.
+ */
+export interface RepairedFilamentPreset {
+  config: ProcessConfig
+  /** The preset's parent (`inherits`). Undefined when it did not resolve; null means "system". */
+  inherits?: string | null
+  /** Keys the preset changes versus that parent. Meaningless without `inherits`. */
+  changedKeys?: string[]
+}
+
+/**
+ * Attach configs the user's in-session repair already resolved, before any re-resolving.
+ *
+ * The "missing material settings" repair is an undoable EDIT: it resolves every slot up front and
+ * pins the result in `EditorState.repairedFilamentConfigs`. Those pinned values are what the user
+ * accepted (and what the banner cleared on), so the save must carry exactly them — re-resolving
+ * could return something different if the catalogue moved underneath, and would silently save a
+ * value nobody agreed to. Slots without a pin are left for {@link attachResolvedFilamentConfigs}.
+ *
+ * Returns the input unchanged when there is no pin, so callers can apply it unconditionally.
+ */
+export function applyRepairedFilamentConfigs(
+  edit: SceneEdit,
+  repaired: Record<number, RepairedFilamentPreset> | undefined
+): SceneEdit {
+  if (!repaired || !edit.filaments || edit.filaments.length === 0) return edit
+  return {
+    ...edit,
+    filaments: edit.filaments.map((filament, index) => {
+      // Slots bake as 1..N, so the position IS the project filament id here — the same rule
+      // `attachResolvedFilamentConfigs` relies on below.
+      const preset = repaired[index + 1]
+      if (!preset) return filament
+      return {
+        ...filament,
+        config: preset.config,
+        // Left OFF when the parent did not resolve, so the bake leaves the project's existing
+        // record alone rather than declaring a binding we cannot stand behind.
+        ...(preset.inherits === undefined ? {} : { presetInherits: preset.inherits, presetChangedKeys: preset.changedKeys ?? [] })
+      }
+    })
+  }
+}
+
+/**
+ * Returns `edit` with `config` filled in on every filament slot whose preset resolves.
+ *
+ * Returns the input unchanged when there is nothing to do (no resolver, no filaments), so callers
+ * can await it unconditionally. A slot that already carries a `config` (an in-session repair, see
+ * {@link applyRepairedFilamentConfigs}) is left alone.
+ */
+export async function attachResolvedFilamentConfigs(
+  edit: SceneEdit,
+  resolve: FilamentConfigResolver | undefined,
+  context: FilamentConfigAuthoringContext
+): Promise<SceneEdit> {
+  if (!resolve || !edit.filaments || edit.filaments.length === 0) return edit
+
+  const resolved = await Promise.all(edit.filaments.map(async (filament, index) => {
+    // Slots are 1-based project filament ids, and the desired list bakes as slots 1..N — so the
+    // position IS the id by the time an edit is built (see `buildSessionFilamentIdRemap`).
+    const profileId = context.profileIdByFilamentId[index + 1]
+    // Already carries the user's repaired config — do not overwrite it with a fresh resolve.
+    if (filament.config) return filament
+    // No preset picked for this slot, or its name never resolved: nothing to author from.
+    if (!profileId || !filament.settingsId) return filament
+    try {
+      const response = await resolve({
+        filamentProfileId: profileId,
+        targetId: context.targetId,
+        sourceFileId: context.sourceFileId,
+        projectFilamentId: index + 1
+      })
+      // `config` is the slot's EFFECTIVE config (preset plus whatever the project declared), which
+      // is what the file should carry — not `baseConfig`, which is the untouched preset and would
+      // discard the user's own in-project tweaks.
+      if (!response.config) return filament
+      return {
+        ...filament,
+        config: response.config,
+        // Same pair as the repair path: values alone do not bind a slot to a USER preset.
+        ...(response.presetInherits === undefined
+          ? {}
+          : { presetInherits: response.presetInherits, presetChangedKeys: response.presetChangedKeys ?? [] })
+      }
+    } catch (error) {
+      // Best-effort: a save must not fail because a preset could not be resolved.
+      console.warn(`[filamentConfigAuthoring] slot ${index + 1} preset ${profileId} did not resolve: ${(error as Error).message}`)
+      return filament
+    }
+  }))
+
+  return { ...edit, filaments: resolved }
+}

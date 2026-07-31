@@ -316,11 +316,17 @@ export interface SliceSettingsController {
    */
   resolveConfig?: ProcessConfigResolver
   /**
-   * Anonymous filament-config resolver (public 3MF editor only) — the filament counterpart of
-   * `resolveConfig`. When set, each material's "changed vs preset" badge (and its tune dialog)
-   * resolves baselines through it instead of the tenant route. Absent for the library host.
+   * How this host resolves a filament preset's config — the filament counterpart of `resolveConfig`.
+   * The library host passes `resolveTenantFilamentConfig`, the public 3MF editor its anonymous one,
+   * and either may pass `undefined` while its catalogue is still loading.
+   *
+   * REQUIRED (though nullable) on purpose. It was optional, and the library host simply never set
+   * it — which type-checked perfectly while disabling the editor's save-time preset resolution, so
+   * every library save silently kept dropping the material physics it was meant to restore. Being
+   * required turns forgetting it into a compile error; passing `undefined` is still allowed, but
+   * only deliberately.
    */
-  resolveFilamentConfig?: FilamentConfigResolver
+  resolveFilamentConfig: FilamentConfigResolver | undefined
 }
 
 /**
