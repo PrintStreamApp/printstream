@@ -31,6 +31,14 @@ function isSubscriptionKey(status: LicenseStatus): boolean {
   return status.edition === 'commercial' && status.expiresAt != null
 }
 
+/**
+ * A Lifetime key: perpetual right to run (no `expiresAt`) with an annual
+ * updates window that the renewal addon extends.
+ */
+function isLifetimeKey(status: LicenseStatus): boolean {
+  return status.edition === 'commercial' && status.expiresAt == null && status.updatesUntil != null
+}
+
 function formatDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleDateString()
 }
@@ -73,6 +81,10 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
   // which would send the operator hunting for a key they already pasted.
   const isExpired = status?.expired === true
   const subscription = status ? isSubscriptionKey(status) : false
+  // Who has something to pull. A subscription re-signs to push its run window
+  // forward; a Lifetime key re-signs when its updates addon is renewed. Only a
+  // community key is genuinely inert.
+  const canPullKey = subscription || (status ? isLifetimeKey(status) : false)
 
   return (
     <Card variant="outlined">
@@ -173,10 +185,11 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
               </Button>
               {/* "Refresh license", not "check for updates" -- beside the
                   updates-and-support copy that phrase reads as SOFTWARE
-                  updates. Only a subscription key has anything to pull: a
-                  Lifetime or community key never phones home, so the button
-                  would always report "nothing to check". */}
-              {subscription ? (
+                  updates. Shown for a Lifetime key too: renewing the annual
+                  addon re-signs the stored key, and this is how an owner who
+                  has just paid collects it without hunting for the email. Only
+                  a community key has nothing to pull. */}
+              {canPullKey ? (
                 <Button variant="outlined" color="neutral" onClick={() => checkMutation.mutate()} loading={checkMutation.isPending}>
                   Refresh license
                 </Button>

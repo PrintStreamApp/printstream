@@ -55,6 +55,12 @@ function describeUpdate(update: NonNullable<AppVersionResponse['update']>): stri
   if (update.status === 'updatesLapsed') {
     return `A newer build is available${target}, but updates and priority support for this license have ended. Renew to install it — the build you have keeps running.`
   }
+  // Two channels want different sentences: the Docker operator runs a command,
+  // the native owner follows a link. Saying "image" to someone running the
+  // single-file app describes something they do not have.
+  if (update.downloadUrl) {
+    return `A newer version is available${target}. Download it to update — the app will not replace itself.`
+  }
   const pull = update.imageRef ? ` Pull ${update.imageRef} to update.` : ''
-  return `A newer image is available${target}.${pull}`
+  return `A newer ${update.imageRef ? 'image' : 'version'} is available${target}.${pull}`
 }

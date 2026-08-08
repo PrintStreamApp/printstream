@@ -34,7 +34,15 @@ export const appUpdateInfoSchema = z.object({
   /** ISO timestamp of the last completed registry check. */
   checkedAt: z.string().nullable(),
   /** Image reference an operator pulls to update (e.g. `ghcr.io/...:latest`). */
-  imageRef: z.string().nullable()
+  imageRef: z.string().nullable(),
+  /**
+   * Where to GET the newer build, for channels that hand out a file rather than
+   * an image to pull — today the native single-file app. Null on the Docker
+   * channel, where `imageRef` is the answer. Kept as a separate field rather
+   * than overloading `imageRef` because the two call for different copy: one is
+   * a command to run, the other is a link to follow.
+   */
+  downloadUrl: z.string().nullable().default(null)
 })
 export type AppUpdateInfo = z.infer<typeof appUpdateInfoSchema>
 

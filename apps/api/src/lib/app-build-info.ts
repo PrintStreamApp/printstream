@@ -98,14 +98,24 @@ export function resolveAppVersionPayload(input: {
   build: AppBuildInfo
   isPlatformUser: boolean
   update: AppUpdateInfo | null
+  /**
+   * The native single-file app. It has its own update channel (the live
+   * server's release manifest) and, like the published image, is a
+   * single-operator install where the running build is not privileged
+   * information.
+   */
+  native?: boolean
 }): AppVersionResponse {
-  const { build, isPlatformUser, update } = input
-  const visible = build.revision != null && (build.published || isPlatformUser)
+  const { build, isPlatformUser, update, native = false } = input
+  const visible = build.revision != null && (build.published || native || isPlatformUser)
   if (!visible) return EMPTY_APP_VERSION_RESPONSE
+  // Only a build with somewhere to get a newer one reports `update`; the cloud
+  // image has no channel and its operators deploy it themselves.
+  const hasUpdateChannel = build.published || native
   return {
     revision: build.revision,
     shortRevision: build.shortRevision,
     published: build.published,
-    update: build.published ? update : null
+    update: hasUpdateChannel ? update : null
   }
 }

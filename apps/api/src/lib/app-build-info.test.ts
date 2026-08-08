@@ -12,7 +12,8 @@ const UPDATE: AppUpdateInfo = {
   latestRevision: 'c'.repeat(40),
   latestShortRevision: 'ccccccc',
   checkedAt: '2026-06-16T00:00:00.000Z',
-  imageRef: 'ghcr.io/printstreamapp/printstream:latest'
+  imageRef: 'ghcr.io/printstreamapp/printstream:latest',
+  downloadUrl: null
 }
 
 test('published image shows the build and update to everyone', () => {

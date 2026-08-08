@@ -7,10 +7,19 @@
  * counts, no telemetry, no install identifier beyond the key's own id. Nothing
  * else in a self-hosted deployment contacts us.
  *
- * It is also skipped entirely for perpetual keys (Lifetime and community), so a
- * free non-commercial install and an offline air-gapped Lifetime install never
- * make a single outbound request. Only a key that carries an `expiresAt` — i.e.
- * one backed by a live subscription — has anything to refresh.
+ * **The daily timer only ever runs for a subscription key.** A perpetual key
+ * (Lifetime or community) is skipped, so a free non-commercial install and an
+ * offline air-gapped Lifetime install never make a single unprompted outbound
+ * request. That is a promise the marketing FAQ makes in as many words; do not
+ * widen the timer without changing that copy too.
+ *
+ * A Lifetime key is not inert, though: renewing the annual updates addon
+ * re-signs it, and the extension is a SIGNED field the install cannot learn any
+ * other way. So a **user-initiated** refresh (`userInitiated`, the Settings
+ * button) is allowed to fetch one. The distinction is consent, not capability —
+ * someone pressing "Refresh license" has asked us to be contacted; a background
+ * timer has not been asked anything. A community key is genuinely inert and is
+ * skipped either way.
  *
  * Failure posture: every error is swallowed and retried on the next tick. A
  * refresh that cannot reach us must never disturb the install; that is what the
@@ -38,17 +47,44 @@ const INITIAL_DELAY_MS = 60_000
 let timer: NodeJS.Timeout | null = null
 
 /**
+ * Whether this key is worth a request to the vendor. Exported for tests: it is
+ * the whole privacy contract in one predicate, so it should be hard to change
+ * by accident.
+ *
+ * - Subscription key (`expiresAt` set): always — its run window is what the
+ *   refresh exists to push forward.
+ * - Lifetime key (perpetual, but with an updates window): only when a person
+ *   asked, because its window changes rarely and never on its own.
+ * - Community key, or no key at all: never. Nothing about it can change.
+ */
+export function shouldContactVendor(
+  status: { expiresAt: number | null; updatesUntil: number | null; edition: string | null; valid: boolean },
+  userInitiated: boolean
+): boolean {
+  if (!status.valid) return false
+  if (status.expiresAt != null) return true
+  return userInitiated && status.edition === 'commercial' && status.updatesUntil != null
+}
+
+/**
  * Run one refresh attempt.
  *
  * @returns what happened, for the settings surface and tests. Never throws:
  * callers on a timer have nothing useful to do with a network error.
  */
-export async function refreshInstalledLicense(): Promise<'skipped' | 'unchanged' | 'renewed' | 'revoked' | 'failed'> {
+export async function refreshInstalledLicense(
+  options: {
+    /**
+     * Set only when a person pressed the button. Lets a Lifetime key collect a
+     * renewed updates window; the background timer must never pass this.
+     */
+    userInitiated?: boolean
+  } = {}
+): Promise<'skipped' | 'unchanged' | 'renewed' | 'revoked' | 'failed'> {
   const key = await getInstalledLicenseKey()
   if (!key) return 'skipped'
   const status = await getInstalledLicenseStatus()
-  // Perpetual keys have no window to extend — do not phone home for them.
-  if (status.expiresAt == null) return 'skipped'
+  if (!shouldContactVendor(status, options.userInitiated === true)) return 'skipped'
 
   try {
     const response = await fetch(new URL('/api/license/refresh', resolveLicenseRefreshOrigin(key)), {

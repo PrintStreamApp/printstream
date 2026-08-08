@@ -14,17 +14,23 @@
  * updates on a transient DB error would be a far worse failure than shipping a
  * build to someone whose addon expired an hour ago.
  */
+import type { LicenseStatus } from '@printstream/shared'
 import { getInstalledLicenseStatus } from './license-state.js'
+
+/** How the installed status is obtained; overridden only by tests. */
+type ReadStatus = () => Promise<LicenseStatus>
 
 /**
  * Whether this install is entitled to newer builds and priority support.
  *
+ * @param readStatus injection point for tests — the fail-open branch below is
+ * the behaviour most worth covering and cannot be reached otherwise.
  * @returns false only when a valid key is installed AND its updates window has
  * demonstrably passed.
  */
-export async function areUpdatesEntitled(): Promise<boolean> {
+export async function areUpdatesEntitled(readStatus: ReadStatus = getInstalledLicenseStatus): Promise<boolean> {
   try {
-    const status = await getInstalledLicenseStatus()
+    const status = await readStatus()
     if (!status.valid) return true
     return !status.updatesExpired
   } catch (error) {
@@ -42,7 +48,7 @@ export async function areUpdatesEntitled(): Promise<boolean> {
  *
  * @returns a reason string when the update must be refused, else null.
  */
-export async function describeUpdateBlock(): Promise<string | null> {
-  if (await areUpdatesEntitled()) return null
+export async function describeUpdateBlock(readStatus: ReadStatus = getInstalledLicenseStatus): Promise<string | null> {
+  if (await areUpdatesEntitled(readStatus)) return null
   return 'Updates and priority support for this license have ended. Renew to install newer releases; the build you have keeps running.'
 }

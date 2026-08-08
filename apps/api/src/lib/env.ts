@@ -298,6 +298,18 @@ const envSchema = z.object({
   SLICING_REQUEST_TIMEOUT_MS: positiveIntEnv(30 * 60 * 1000),
   SLICING_MAX_ARTIFACT_BYTES: positiveIntEnv(1024 * 1024 * 1024),
   BRIDGE_RELEASES_DIR: z.string().default('./data/bridge-releases'),
+  // Native (SEA) server builds the live cloud server offers for download. Not
+  // documented in the example env files on purpose: it is internal plumbing for
+  // the release channel, and a self-hosted server never promotes a build.
+  SERVER_RELEASES_DIR: z.string().default('./data/server-releases'),
+  // Undocumented on purpose (absent from every .env.example and doc): the
+  // native update check polls a BAKED origin, and this exists only to point a
+  // test at a fixture. See native-update-check.ts.
+  NATIVE_UPDATE_ORIGIN: optionalStringEnv(),
+  // Published by the native app at boot (apps/server/src/run.ts) from the
+  // fingerprint baked into its binary. Absent everywhere else, which is what
+  // keeps the native update check inert on Docker/dev runs.
+  PRINTSTREAM_SERVER_FINGERPRINT: optionalStringEnv(),
   PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT: optionalStringEnv(),
   /**
    * Managed-bridge mode. When true, this server provisions and owns a single

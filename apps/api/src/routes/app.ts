@@ -10,12 +10,18 @@ import { appVersionResponseSchema } from '@printstream/shared'
 import { getAppBuildInfo, resolveAppVersionPayload } from '../lib/app-build-info.js'
 import { getAppUpdateInfo } from '../lib/app-update-check.js'
 import { areUpdatesEntitled } from '../lib/license-entitlements.js'
+import { isNativeDeployment } from '../lib/deployment-mode.js'
+import { getNativeUpdateInfo } from '../lib/native-update-check.js'
 
 export const appRouter = Router()
 
 appRouter.get('/version', async (request, response) => {
   const isPlatformUser = request.auth.actor.type === 'user' && request.auth.actor.isPlatformUser === true
-  const update = getAppUpdateInfo()
+  const native = isNativeDeployment()
+  // Two channels, one shape: the native app asks the live server's release
+  // manifest, the published Docker image asks the registry. Exactly one is ever
+  // active in a given process.
+  const update = native ? getNativeUpdateInfo() : getAppUpdateInfo()
   // The registry check answers "is there a newer build"; the license answers
   // "may this install take it". Kept apart on purpose — `app-update-check.ts`
   // stays a pure registry reader, and the entitlement is applied once, here at
@@ -27,7 +33,8 @@ appRouter.get('/version', async (request, response) => {
   const payload = resolveAppVersionPayload({
     build: getAppBuildInfo(),
     isPlatformUser,
-    update: entitledUpdate
+    update: entitledUpdate,
+    native
   })
   response.json(appVersionResponseSchema.parse(payload))
 })

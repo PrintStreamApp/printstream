@@ -106,7 +106,11 @@ licenseRouter.post('/community-request', requireRequestPermission(SETTINGS_MANAG
 })
 
 licenseRouter.post('/check', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (_request, response) => {
-  const outcome = await refreshInstalledLicense()
+  // `userInitiated`: this route exists only because someone pressed "Refresh
+  // license". That consent is what lets a perpetual Lifetime key contact the
+  // vendor to collect a renewed updates window — the background timer stays
+  // silent for it. See `license-refresh-client.ts`.
+  const outcome = await refreshInstalledLicense({ userInitiated: true })
   const body: LicenseCheckResponse = { outcome, ...(await readLicenseStatusResponse()) }
   response.json(body)
 })

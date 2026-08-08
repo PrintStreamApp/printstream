@@ -162,7 +162,9 @@ export function getAppUpdateInfo(): AppUpdateInfo | null {
     latestRevision: cache?.latestRevision ?? null,
     latestShortRevision: shortenRevision(cache?.latestRevision ?? null),
     checkedAt: cache?.checkedAt ?? null,
-    imageRef: getUpdateImageRef()
+    imageRef: getUpdateImageRef(),
+    // Docker updates are an image pull, not a file download.
+    downloadUrl: null
   }
 }
 
