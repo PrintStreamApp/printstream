@@ -63,8 +63,22 @@ export function verifyLicenseToken(token: string, publicKeyPem: string = LICENSE
  * closed. Lapsed *updates* are reported separately and never clear `valid` —
  * the addon buys newer builds and support, not the right to run.
  */
-export function readLicenseStatus(token: string | null | undefined, nowSeconds = Math.floor(Date.now() / 1000)): LicenseStatus {
-  const payload = token ? verifyLicenseToken(token) : null
+export function readLicenseStatus(
+  token: string | null | undefined,
+  nowSeconds = Math.floor(Date.now() / 1000),
+  /**
+   * How the token's signature is checked. Defaults to the embedded vendor key,
+   * which is what an INSTALL must use — it trusts one issuer and nothing else.
+   *
+   * A cloud deployment that issues its own keys passes its issuer-derived
+   * verifier instead (`verifyIssuedLicenseToken`), so it can read the keys it
+   * signed. Without this, staging could never honour its own keys, and the
+   * purchase → install → download loop it exists to exercise would be
+   * untestable there.
+   */
+  verify: (token: string) => LicensePayload | null = verifyLicenseToken
+): LicenseStatus {
+  const payload = token ? verify(token) : null
   if (!payload) {
     return {
       edition: null,
