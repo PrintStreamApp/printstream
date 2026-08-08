@@ -5,7 +5,7 @@
  * previous run died without a clean shutdown — see the bridge crash-tracker.
  * This module records that report three ways:
  *  - a durable crash summary on the `Bridge` row (drives the web's health UI),
- *  - an operational log entry the owning tenant can see in the Logs view, and
+ *  - an operational log entry the owning workspace can see in the Logs view, and
  *  - a rate-limited user notification (fired via the `bridge.crashed` event so
  *    every delivery channel picks it up).
  *
@@ -41,30 +41,30 @@ function shouldNotify(lastNotifiedAt: Date | null, now: Date): boolean {
 }
 
 /**
- * Record a crash report from a bridge session. `sessionTenantId` is the tenant
+ * Record a crash report from a bridge session. `sessionWorkspaceId` is the workspace
  * the session authenticated as (null for an unpaired bridge); it takes priority
- * over the stored row's tenant, which is used only as a fallback.
+ * over the stored row's workspace, which is used only as a fallback.
  */
 export async function ingestBridgeCrashReport(input: {
   bridgeId: string
-  sessionTenantId: string | null
+  sessionWorkspaceId: string | null
   report: BridgeCrashReport
 }): Promise<void> {
-  const { bridgeId, sessionTenantId, report } = input
+  const { bridgeId, sessionWorkspaceId, report } = input
   const bridge = await rootPrisma.bridge.findUnique({
     where: { id: bridgeId },
-    select: { name: true, tenantId: true, lastCrashNotifiedAt: true }
+    select: { name: true, workspaceId: true, lastCrashNotifiedAt: true }
   })
   if (!bridge) {
     console.warn(`[bridge-crash] received a crash report for unknown bridge ${bridgeId}; ignoring`)
     return
   }
 
-  const tenantId = sessionTenantId ?? bridge.tenantId ?? null
+  const workspaceId = sessionWorkspaceId ?? bridge.workspaceId ?? null
   const detectedAt = parseTimestamp(report.detectedAt)
   const reason = report.reason ? firstLine(report.reason) : null
   const looping = report.recentCrashCount >= BRIDGE_CRASH_LOOP_THRESHOLD
-  const notify = tenantId != null && shouldNotify(bridge.lastCrashNotifiedAt, detectedAt)
+  const notify = workspaceId != null && shouldNotify(bridge.lastCrashNotifiedAt, detectedAt)
 
   await rootPrisma.bridge.update({
     where: { id: bridgeId },
@@ -80,15 +80,15 @@ export async function ingestBridgeCrashReport(input: {
   const message = looping
     ? `Bridge "${bridge.name}" is crash-looping: ${report.recentCrashCount} crashes in the last ${windowMinutes}m${reason ? `. Last error: ${reason}` : ' (no reason captured — likely a hard kill)'}`
     : `Bridge "${bridge.name}" crashed and restarted${reason ? `: ${reason}` : ' (no reason captured — likely a hard kill)'}`
-  pushSystemLog({ level: 'error', message, tenantId })
-  broadcastLogsChanged(tenantId)
-  broadcastBridgesChanged(tenantId)
+  pushSystemLog({ level: 'error', message, workspaceId })
+  broadcastLogsChanged(workspaceId)
+  broadcastBridgesChanged(workspaceId)
 
   if (notify) {
     printerEvents.emit('bridge.crashed', {
       bridgeId,
       bridgeName: bridge.name,
-      tenantId,
+      workspaceId,
       recentCrashCount: report.recentCrashCount
     })
   }

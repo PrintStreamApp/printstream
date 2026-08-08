@@ -31,7 +31,7 @@ test('record helpers are safe no-ops before/without initialization', () => {
     recordSliceJob({ outcome: 'failed', durationMs: 9100 })
     recordWsEventBroadcast('printer.status')
     recordBridgeMessageDropped('schema')
-    recordBridgeMetricsSnapshot('bridge-1', 'tenant-1', {
+    recordBridgeMetricsSnapshot('bridge-1', 'workspace-1', {
       printersMonitored: 2,
       printersConnected: 1,
       eventLoopLagSeconds: 0.001,

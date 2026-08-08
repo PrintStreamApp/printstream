@@ -80,10 +80,11 @@ test('plugin auth providers are exposed in bootstrap data only while the plugin 
           recentVerificationMethods: ['passkey', 'email-code']
         }
       }],
-      tenant: null,
-      memberTenants: [],
-      availableTenants: [],
-      tenantHasConnectedBridges: false,
+      workspace: null,
+      memberWorkspaces: [],
+      availableWorkspaces: [],
+    customers: [],
+      workspaceHasConnectedBridges: false,
       runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false }
     })
 
@@ -94,10 +95,11 @@ test('plugin auth providers are exposed in bootstrap data only while the plugin 
       platformAuthEnabled: false,
       setupRequired: false,
       providers: [],
-      tenant: null,
-      memberTenants: [],
-      availableTenants: [],
-      tenantHasConnectedBridges: false,
+      workspace: null,
+      memberWorkspaces: [],
+      availableWorkspaces: [],
+    customers: [],
+      workspaceHasConnectedBridges: false,
       runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false }
     })
   } finally {
@@ -111,7 +113,7 @@ test('plugin auth providers are exposed in bootstrap data only while the plugin 
 test('dual-surface controlled channels have an independent platform-enable bit', async () => {
   const registry = new PluginRegistry()
   const originalSetting = prisma.setting
-  const originalTenantFindMany = prisma.tenant.findMany
+  const originalWorkspaceFindMany = prisma.workspace.findMany
   const store = new Map<string, string>()
 
   Object.defineProperty(prisma, 'setting', {
@@ -131,67 +133,67 @@ test('dual-surface controlled channels have an independent platform-enable bit',
       deleteMany: async () => ({ count: 0 })
     }
   })
-  prisma.tenant.findMany = ((async () => []) as unknown) as typeof prisma.tenant.findMany
+  prisma.workspace.findMany = ((async () => []) as unknown) as typeof prisma.workspace.findMany
 
   try {
     let registrations = 0
     let lastContextPlatformEnabled: boolean | undefined
-    // Mirrors the notification channels: tenant-'controlled' (where `enabled`
-    // means the tenant default) but also running a platform side, whose
+    // Mirrors the notification channels: workspace-'controlled' (where `enabled`
+    // means the workspace default) but also running a platform side, whose
     // enablement is its own persisted bit.
     await registry.register({
       name: 'notifications-test-channel',
       async register(context) {
         registrations += 1
-        lastContextPlatformEnabled = context.isEnabledForTenant?.(null)
+        lastContextPlatformEnabled = context.isEnabledForWorkspace?.(null)
       }
     }, {
-      runtimeSurfaces: ['platform', 'tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['platform', 'workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       defaultEnabled: false
     })
 
     // Fresh install with defaultEnabled false: platform scope starts off.
-    assert.equal(registrations, 0, 'not active until platform-enabled or a tenant enables it')
-    let platformEntry = registry.listCatalog({ tenant: null })[0]
+    assert.equal(registrations, 0, 'not active until platform-enabled or a workspace enables it')
+    let platformEntry = registry.listCatalog({ workspace: null })[0]
     assert.equal(platformEntry?.enabled, false)
     assert.equal(platformEntry?.platformEnabled, false)
     assert.equal(platformEntry?.availableInCurrentContext, true)
 
     // Enabling for the platform activates the plugin without touching the
-    // tenant default.
+    // workspace default.
     await registry.setPlatformEnabled('notifications-test-channel', true)
     assert.equal(registrations, 1, 'platform enable activates the plugin')
     assert.equal(lastContextPlatformEnabled, true)
     assert.equal(store.get('plugin:notifications-test-channel:_platformEnabled'), 'true')
 
-    platformEntry = registry.listCatalog({ tenant: null })[0]
+    platformEntry = registry.listCatalog({ workspace: null })[0]
     assert.equal(platformEntry?.enabled, true)
     assert.equal(platformEntry?.platformEnabled, true)
 
-    const tenantEntry = registry.listCatalog({ tenant: { id: 'tenant-1' } as never })[0]
-    assert.equal(tenantEntry?.enabled, false, 'tenant scope still honors the tenant default')
-    assert.equal(store.get('plugin:notifications-test-channel:_enabled'), undefined, 'tenant default flag untouched')
+    const workspaceEntry = registry.listCatalog({ workspace: { id: 'workspace-1' } as never })[0]
+    assert.equal(workspaceEntry?.enabled, false, 'workspace scope still honors the workspace default')
+    assert.equal(store.get('plugin:notifications-test-channel:_enabled'), undefined, 'workspace default flag untouched')
   } finally {
     Object.defineProperty(prisma, 'setting', {
       configurable: true,
       value: originalSetting
     })
-    prisma.tenant.findMany = originalTenantFindMany
+    prisma.workspace.findMany = originalWorkspaceFindMany
   }
 })
 
-test('controlled tenant plugins use platform policy for availability and tenant-local enablement', async () => {
+test('controlled workspace plugins use platform policy for availability and workspace-local enablement', async () => {
   const registry = new PluginRegistry()
   const originalSetting = prisma.setting
-  const originalTenantFindMany = prisma.tenant.findMany
+  const originalWorkspaceFindMany = prisma.workspace.findMany
   const store = new Map<string, string>()
-  const pluginBroadcastTenantIds: Array<string | null> = []
+  const pluginBroadcastWorkspaceIds: Array<string | null> = []
 
-  wsBroadcaster.broadcast = ((event, tenantId) => {
+  wsBroadcaster.broadcast = ((event, workspaceId) => {
     if (event.type === 'resource.changed' && event.resource === 'plugins') {
-      pluginBroadcastTenantIds.push(tenantId)
+      pluginBroadcastWorkspaceIds.push(workspaceId)
     }
   }) as typeof wsBroadcaster.broadcast
 
@@ -223,23 +225,23 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       }
     }
   })
-  prisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1' },
-    { id: 'tenant-2' }
-  ])) as unknown) as typeof prisma.tenant.findMany
+  prisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1' },
+    { id: 'workspace-2' }
+  ])) as unknown) as typeof prisma.workspace.findMany
 
   try {
     await registry.register({
       name: 'orders',
       async register() {}
     }, {
-      runtimeSurfaces: ['tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       defaultEnabled: false
     })
 
-    assert.deepEqual(registry.listCatalog({ tenant: null }), [{
+    assert.deepEqual(registry.listCatalog({ workspace: null }), [{
       name: 'orders',
       version: undefined,
       description: undefined,
@@ -247,13 +249,13 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       installed: true,
       enabled: false,
       platformEnabled: null,
-      runtimeSurfaces: ['tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       availableInCurrentContext: false
     }])
 
-    assert.deepEqual(registry.listCatalog({ tenant: { id: 'tenant-1' } as never }), [{
+    assert.deepEqual(registry.listCatalog({ workspace: { id: 'workspace-1' } as never }), [{
       name: 'orders',
       version: undefined,
       description: undefined,
@@ -261,15 +263,15 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       installed: true,
       enabled: false,
       platformEnabled: null,
-      runtimeSurfaces: ['tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       availableInCurrentContext: true
     }])
 
-    await registry.setTenantAvailability('orders', { allowed: true, enabledByDefault: true })
+    await registry.setWorkspaceAvailability('orders', { allowed: true, enabledByDefault: true })
 
-    assert.deepEqual(registry.listCatalog({ tenant: { id: 'tenant-1' } as never }), [{
+    assert.deepEqual(registry.listCatalog({ workspace: { id: 'workspace-1' } as never }), [{
       name: 'orders',
       version: undefined,
       description: undefined,
@@ -277,17 +279,17 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       installed: true,
       enabled: true,
       platformEnabled: null,
-      runtimeSurfaces: ['tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       availableInCurrentContext: true
     }])
 
-    await registry.setTenantEnabled('orders', 'tenant-1', false, { tenant: { id: 'tenant-1' } as never })
+    await registry.setWorkspaceEnabled('orders', 'workspace-1', false, { workspace: { id: 'workspace-1' } as never })
 
-    assert.equal(pluginBroadcastTenantIds[pluginBroadcastTenantIds.length - 1], 'tenant-1')
+    assert.equal(pluginBroadcastWorkspaceIds[pluginBroadcastWorkspaceIds.length - 1], 'workspace-1')
 
-    assert.deepEqual(registry.listCatalog({ tenant: { id: 'tenant-1' } as never }), [{
+    assert.deepEqual(registry.listCatalog({ workspace: { id: 'workspace-1' } as never }), [{
       name: 'orders',
       version: undefined,
       description: undefined,
@@ -295,13 +297,13 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       installed: true,
       enabled: false,
       platformEnabled: null,
-      runtimeSurfaces: ['tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       availableInCurrentContext: true
     }])
 
-    assert.deepEqual(registry.listCatalog({ tenant: { id: 'tenant-2' } as never }), [{
+    assert.deepEqual(registry.listCatalog({ workspace: { id: 'workspace-2' } as never }), [{
       name: 'orders',
       version: undefined,
       description: undefined,
@@ -309,9 +311,9 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       installed: true,
       enabled: true,
       platformEnabled: null,
-      runtimeSurfaces: ['tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       availableInCurrentContext: true
     }])
   } finally {
@@ -320,15 +322,15 @@ test('controlled tenant plugins use platform policy for availability and tenant-
       configurable: true,
       value: originalSetting
     })
-    prisma.tenant.findMany = originalTenantFindMany
+    prisma.workspace.findMany = originalWorkspaceFindMany
   }
 })
 
-test('print guards from controlled tenant plugins do not block tenants where the plugin is disabled', async () => {
+test('print guards from controlled workspace plugins do not block workspaces where the plugin is disabled', async () => {
   const registry = new PluginRegistry()
   const originalSetting = prisma.setting
-  const originalTenantFindMany = prisma.tenant.findMany
-  const originalGetTenantId = printerManager.getTenantId.bind(printerManager)
+  const originalWorkspaceFindMany = prisma.workspace.findMany
+  const originalGetWorkspaceId = printerManager.getWorkspaceId.bind(printerManager)
   const store = new Map<string, string>()
 
   Object.defineProperty(prisma, 'setting', {
@@ -359,15 +361,15 @@ test('print guards from controlled tenant plugins do not block tenants where the
       }
     }
   })
-  prisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1' },
-    { id: 'tenant-2' }
-  ])) as unknown) as typeof prisma.tenant.findMany
-  printerManager.getTenantId = ((printerId: string) => {
-    if (printerId === 'printer-1') return 'tenant-1'
-    if (printerId === 'printer-2') return 'tenant-2'
+  prisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1' },
+    { id: 'workspace-2' }
+  ])) as unknown) as typeof prisma.workspace.findMany
+  printerManager.getWorkspaceId = ((printerId: string) => {
+    if (printerId === 'printer-1') return 'workspace-1'
+    if (printerId === 'printer-2') return 'workspace-2'
     return null
-  }) as typeof printerManager.getTenantId
+  }) as typeof printerManager.getWorkspaceId
 
   try {
     await registry.register({
@@ -376,14 +378,14 @@ test('print guards from controlled tenant plugins do not block tenants where the
         context.registerPrintGuard(() => ({ allowed: false, reason: 'blocked' }))
       }
     }, {
-      runtimeSurfaces: ['tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       defaultEnabled: false
     })
 
-    await registry.setTenantAvailability('plate-clearing', { allowed: true, enabledByDefault: true })
-    await registry.setTenantEnabled('plate-clearing', 'tenant-1', false, { tenant: { id: 'tenant-1' } as never })
+    await registry.setWorkspaceAvailability('plate-clearing', { allowed: true, enabledByDefault: true })
+    await registry.setWorkspaceEnabled('plate-clearing', 'workspace-1', false, { workspace: { id: 'workspace-1' } as never })
 
     assert.equal(printGuards.evaluate({ printerId: 'printer-1', source: 'dispatch' }), null)
     assert.deepEqual(printGuards.evaluate({ printerId: 'printer-2', source: 'dispatch' }), {
@@ -396,7 +398,51 @@ test('print guards from controlled tenant plugins do not block tenants where the
       configurable: true,
       value: originalSetting
     })
-    prisma.tenant.findMany = originalTenantFindMany
-    printerManager.getTenantId = originalGetTenantId as typeof printerManager.getTenantId
+    prisma.workspace.findMany = originalWorkspaceFindMany
+    printerManager.getWorkspaceId = originalGetWorkspaceId as typeof printerManager.getWorkspaceId
+  }
+})
+test('a fresh install defaults plugins to disabled even when boot has already written non-plugin settings', async () => {
+  const registry = new PluginRegistry()
+  const originalSetting = prisma.setting
+  // The real shape of the bug: on a self-hosted build `registerLicenseEnforcement()`
+  // stamps `license:first-run-at` from module scope, so by the time the first plugin
+  // registers the table is no longer empty — while no plugin has ever run.
+  const rows = new Map<string, string>([['license:first-run-at', new Date(0).toISOString()]])
+
+  Object.defineProperty(prisma, 'setting', {
+    configurable: true,
+    value: {
+      ...originalSetting,
+      findUnique: async ({ where }: { where: { key: string } }) => {
+        const value = rows.get(where.key)
+        return value == null ? null : { key: where.key, value }
+      },
+      count: async (args?: { where?: { key?: { startsWith?: string } } }) => {
+        const startsWith = args?.where?.key?.startsWith
+        return [...rows.keys()].filter((key) => startsWith == null || key.startsWith(startsWith)).length
+      },
+      upsert: async ({ create }: { create: { key: string; value: string } }) => {
+        rows.set(create.key, create.value)
+        return create
+      },
+      findMany: async () => [],
+      deleteMany: async () => ({ count: 0 })
+    }
+  })
+
+  try {
+    await registry.register({ name: 'orders', async register() {} }, {
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled'
+    })
+
+    assert.equal(rows.get('plugins:_default_enable_mode'), 'disabled')
+    const orders = registry.list().find((plugin) => plugin.name === 'orders')
+    assert.equal(orders?.enabled, false)
+  } finally {
+    await registry.shutdown()
+    Object.defineProperty(prisma, 'setting', { configurable: true, value: originalSetting })
   }
 })

@@ -16,7 +16,7 @@
  *   and the CLI catalogue.
  * - The three id shapes are a **persisted wire format**, not an internal detail.
  *   Builtin ids travel in slice requests and are stored on `SlicingJob` rows;
- *   custom ids are stored in the tenant's `Setting` blob. Their encodings must
+ *   custom ids are stored in the workspace's `Setting` blob. Their encodings must
  *   not change without a data migration — this module only centralises them.
  * - `id -> provenance` is total and pure: any string classifies, with unknown
  *   shapes reported as `null` rather than guessed.
@@ -32,7 +32,7 @@ import type { SlicingPresetKind } from './slicing.js'
  *
  * `project` presets are the 3MF's own embedded settings and are **the basis for
  * the slice** — they win over an identically-named installed preset because they
- * carry the user's authored overrides. `workspace` presets are tenant-uploaded
+ * carry the user's authored overrides. `workspace` presets are workspace-uploaded
  * custom presets. `builtin` presets ship with BambuStudio.
  */
 export type SlicingPresetProvenance = 'project' | 'workspace' | 'builtin'
@@ -44,7 +44,7 @@ export const PROJECT_SLICING_PRESET_ID_PREFIX = 'project:'
 /** A parsed preset id: the kind it belongs to and, for name-encoded shapes, the preset name it carries. */
 export interface ParsedSlicingPresetId {
   provenance: SlicingPresetProvenance
-  /** Absent for `custom:` ids, whose kind lives in tenant storage rather than the id. */
+  /** Absent for `custom:` ids, whose kind lives in workspace storage rather than the id. */
   kind: SlicingPresetKind | null
   /** The preset name encoded in the id. Null for `custom:` ids, which are opaque UUIDs. */
   name: string | null

@@ -13,7 +13,7 @@ import type { RequestAuthContext } from '../../lib/auth-context.js'
 import { HttpError } from '../../lib/http-error.js'
 import { PrinterEventBus } from '../../lib/printer-events.js'
 import { prisma } from '../../lib/prisma.js'
-import { installTenantContext } from '../../lib/tenant-context.js'
+import { installWorkspaceContext } from '../../lib/workspace-context.js'
 import { createOrdersPlugin } from './index.js'
 
 const testRoot = mkdtempSync(path.join(tmpdir(), 'bambu-orders-plugin-test-'))
@@ -1012,15 +1012,15 @@ async function withRegisteredPluginApp<T>(
   },
   run: (context: { baseUrl: string }) => Promise<T>
 ): Promise<T> {
-  const originalTenantFindUnique = prisma.tenant.findUnique
+  const originalWorkspaceFindUnique = prisma.workspace.findFirst
   const app = express()
   app.use(express.json())
-  prisma.tenant.findUnique = ((async () => ({ id: 'tenant-1', slug: 'test-tenant', name: 'Test Tenant' })) as unknown) as typeof prisma.tenant.findUnique
+  prisma.workspace.findFirst = ((async () => ({ id: 'workspace-1', slug: 'test-workspace', name: 'Test Workspace' })) as unknown) as typeof prisma.workspace.findFirst
   app.use((request, _response, next) => {
-    request.headers['x-printstream-tenant'] = 'test-tenant'
+    request.headers['x-printstream-workspace'] = 'test-workspace'
     next()
   })
-  app.use(installTenantContext())
+  app.use(installWorkspaceContext())
   app.use((request, _response, next) => {
     request.auth = {
       authEnabled: false,
@@ -1071,7 +1071,7 @@ async function withRegisteredPluginApp<T>(
     const address = server.address() as AddressInfo
     return await run({ baseUrl: `http://127.0.0.1:${address.port}` })
   } finally {
-    prisma.tenant.findUnique = originalTenantFindUnique
+    prisma.workspace.findFirst = originalWorkspaceFindUnique
     await new Promise<void>((resolve, reject) => {
       server.close((error) => {
         if (error) reject(error)

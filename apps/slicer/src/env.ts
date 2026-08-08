@@ -38,6 +38,39 @@ const envSchema = z.object({
   SLICER_CLI_PATH: optionalStringEnv(),
   SLICER_CLI_ARGS_TEMPLATE: z.string().default('--slice {plate} --debug 2 --outputdir {outputDir} --min-save --export-3mf {outputFileName} --export-json {input} {input}'),
   SLICER_SERVICE_TOKEN: optionalStringEnv(),
+  /**
+   * The shared Linux runtime closure an engine install needs, as a pinned
+   * artifact. CONFIGURATION, never request input: this service downloads it and
+   * the engine then executes against its libraries, so a caller-supplied URL
+   * would be arbitrary code execution — and `SLICER_SERVICE_TOKEN` is optional,
+   * so "caller" can mean anyone who reaches the port.
+   *
+   * The native app sets these from the deployment its licence names; the
+   * container images bake their closure in and leave them unset.
+   */
+  /**
+   * How this host launches an engine — see `engines/launcher.ts`.
+   *
+   * Set to `container` by our own image, which carries the runtime libraries
+   * and the Xvfb/qemu launcher already. Everything else stays `native`, the
+   * answer that assumes nothing about the machine.
+   */
+  SLICER_ENGINE_LAUNCH: z.enum(['native', 'container']).default('native'),
+  /**
+   * Engines to have installed at boot: a comma-separated list of ids, or `all`.
+   *
+   * Unset means "just the default", which is what a self-hosted install wants —
+   * one engine, ~530 MB, and the operator adds others if they need them. The
+   * hosted deployment sets `all`, because its users cannot add engines
+   * themselves (engine management is refused there) and a project saved by an
+   * older Bambu Studio still has to be sliceable.
+   *
+   * Only ever ADDS. Nothing here removes an engine an operator installed.
+   */
+  SLICER_PRELOAD_ENGINES: optionalStringEnv(),
+  SLICER_RUNTIME_URL: optionalStringEnv(),
+  SLICER_RUNTIME_SHA256: optionalStringEnv(),
+  SLICER_RUNTIME_BYTES: optionalStringEnv(),
   SLICER_WORK_DIR: z.string().default('/tmp/printstream-slicer'),
   SLICER_BAMBUSTUDIO_HOME_DIR: z.string().default('/tmp/printstream-slicer/bambustudio-home'),
   SLICER_BAMBUSTUDIO_DATA_DIR: z.string().default('/tmp/printstream-slicer/bambustudio-data'),

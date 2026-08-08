@@ -39,7 +39,7 @@ function fakeScope(entries: StoredSubscription[]) {
   return { delivery, delivered }
 }
 
-test('tenant-scoped targeted push stays in scope and matches only target actors', async () => {
+test('workspace-scoped targeted push stays in scope and matches only target actors', async () => {
   const scoped = fakeScope([
     subscription('endpoint-target', 'user:user-1'),
     subscription('endpoint-other-user', 'user:user-2'),
@@ -47,35 +47,35 @@ test('tenant-scoped targeted push stays in scope and matches only target actors'
   ])
 
   await deliverTargetedPush({
-    tenantId: 'tenant-a',
+    workspaceId: 'workspace-a',
     payload: message(),
     targetUserIds: ['user-1'],
-    getScopedDelivery: async (tenantId) => {
-      assert.equal(tenantId, 'tenant-a')
+    getScopedDelivery: async (workspaceId) => {
+      assert.equal(workspaceId, 'workspace-a')
       return scoped.delivery
     },
-    listSubscriptionTenantScopes: async () => {
+    listSubscriptionWorkspaceScopes: async () => {
       throw new Error('scoped messages must not enumerate other scopes')
     },
-    isEnabledForTenant: () => true
+    isEnabledForWorkspace: () => true
   })
 
   assert.deepEqual(scoped.delivered, ['endpoint-target'])
 })
 
-test('tenant-scoped targeted push applies the scope deliverability filter', async () => {
+test('workspace-scoped targeted push applies the scope deliverability filter', async () => {
   const scoped = fakeScope([
     subscription('endpoint-member', 'user:user-1'),
     subscription('endpoint-ex-member', 'user:user-1')
   ])
 
   await deliverTargetedPush({
-    tenantId: 'tenant-a',
+    workspaceId: 'workspace-a',
     payload: message(),
     targetUserIds: ['user-1'],
     getScopedDelivery: async () => scoped.delivery,
-    listSubscriptionTenantScopes: async () => [],
-    isEnabledForTenant: () => true,
+    listSubscriptionWorkspaceScopes: async () => [],
+    isEnabledForWorkspace: () => true,
     isDeliverableInScope: (entry) => entry.endpoint === 'endpoint-member'
   })
 
@@ -85,49 +85,49 @@ test('tenant-scoped targeted push applies the scope deliverability filter', asyn
 test('platform-wide targeted push spans scopes and dedupes shared endpoints', async () => {
   // The same device endpoint registered in two workspaces plus platform.
   const platform = fakeScope([subscription('endpoint-shared', 'user:user-1')])
-  const tenantA = fakeScope([
+  const workspaceA = fakeScope([
     subscription('endpoint-shared', 'user:user-1'),
-    subscription('endpoint-tenant-a-only', 'user:user-1'),
+    subscription('endpoint-workspace-a-only', 'user:user-1'),
     subscription('endpoint-unrelated', 'user:user-9')
   ])
-  const tenantB = fakeScope([subscription('endpoint-shared', 'user:user-1')])
+  const workspaceB = fakeScope([subscription('endpoint-shared', 'user:user-1')])
   const scopes = new Map<string | null, TargetedPushScopeDelivery>([
     [null, platform.delivery],
-    ['tenant-a', tenantA.delivery],
-    ['tenant-b', tenantB.delivery]
+    ['workspace-a', workspaceA.delivery],
+    ['workspace-b', workspaceB.delivery]
   ])
 
   await deliverTargetedPush({
-    tenantId: null,
+    workspaceId: null,
     payload: message(),
     targetUserIds: ['user-1'],
-    getScopedDelivery: async (tenantId) => scopes.get(tenantId)!,
-    listSubscriptionTenantScopes: async () => ['tenant-a', 'tenant-b'],
-    isEnabledForTenant: () => true
+    getScopedDelivery: async (workspaceId) => scopes.get(workspaceId)!,
+    listSubscriptionWorkspaceScopes: async () => ['workspace-a', 'workspace-b'],
+    isEnabledForWorkspace: () => true
   })
 
   assert.deepEqual(platform.delivered, ['endpoint-shared'])
-  assert.deepEqual(tenantA.delivered, ['endpoint-tenant-a-only'])
-  assert.deepEqual(tenantB.delivered, [])
+  assert.deepEqual(workspaceA.delivered, ['endpoint-workspace-a-only'])
+  assert.deepEqual(workspaceB.delivered, [])
 })
 
 test('platform-wide targeted push skips scopes where the plugin is disabled', async () => {
   const platform = fakeScope([subscription('endpoint-platform', 'user:user-1')])
-  const tenantA = fakeScope([subscription('endpoint-tenant-a', 'user:user-1')])
+  const workspaceA = fakeScope([subscription('endpoint-workspace-a', 'user:user-1')])
   const scopes = new Map<string | null, TargetedPushScopeDelivery>([
     [null, platform.delivery],
-    ['tenant-a', tenantA.delivery]
+    ['workspace-a', workspaceA.delivery]
   ])
 
   await deliverTargetedPush({
-    tenantId: null,
+    workspaceId: null,
     payload: message(),
     targetUserIds: ['user-1'],
-    getScopedDelivery: async (tenantId) => scopes.get(tenantId)!,
-    listSubscriptionTenantScopes: async () => ['tenant-a'],
-    isEnabledForTenant: (tenantId) => tenantId !== 'tenant-a'
+    getScopedDelivery: async (workspaceId) => scopes.get(workspaceId)!,
+    listSubscriptionWorkspaceScopes: async () => ['workspace-a'],
+    isEnabledForWorkspace: (workspaceId) => workspaceId !== 'workspace-a'
   })
 
   assert.deepEqual(platform.delivered, ['endpoint-platform'])
-  assert.deepEqual(tenantA.delivered, [])
+  assert.deepEqual(workspaceA.delivered, [])
 })

@@ -1,10 +1,10 @@
 /**
  * React Query definitions for the ANONYMOUS slicer catalogue (`/api/public/slicing/*`), used by the
- * public 3MF editor. The tenant editor uses `lib/slicingPresetsQuery.ts`; this is the same shape
+ * public 3MF editor. The workspace editor uses `lib/slicingPresetsQuery.ts`; this is the same shape
  * against the no-workspace surface, so nothing here ever needs an account.
  *
  * The profiles body is the largest JSON the app loads (multi-MB) and is served with a long public
- * cache, so this mirrors the tenant query's stall guard: a transport that wedges mid-body (the Vite
+ * cache, so this mirrors the workspace query's stall guard: a transport that wedges mid-body (the Vite
  * dev proxy's large-body stall; a dropped connection) is turned into a retryable error instead of a
  * forever-pending fetch. See the note in `lib/slicingPresetsQuery.ts`.
  */

@@ -89,7 +89,7 @@ import { useMachineTarget } from './useMachineTarget'
 import { useMaterialSlots } from './useMaterialSlots'
 import { useProcessProfileSelection } from './useProcessProfileSelection'
 import { SliceSettingsPanel, type SliceSettingsController, type SliceConfigSnapshot } from './SliceSettingsPanel'
-import { resolveTenantFilamentConfig } from './tenantFilamentResolver'
+import { resolveWorkspaceFilamentConfig } from './workspaceFilamentResolver'
 import type { FilamentOption } from './PlateGcodeSections'
 
 const ProcessSettingsDialog = lazy(() => import('../ProcessSettingsDialog'))
@@ -197,7 +197,7 @@ export function SliceFileModal({
   onSubmit: (input: SliceFileSubmitInput, action: SliceFileSubmitAction, options?: { keepDialogOpen?: boolean }) => void
 }) {
   const navigate = useNavigate()
-  const { tenantSlug } = useParams<{ tenantSlug: string }>()
+  const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
   const resourceBasePath = buildLibraryResourceBasePath(file.id, versionId)
   const requiresSinglePlate = flow === 'print'
   const saveActionVisible = flow === 'library'
@@ -776,6 +776,9 @@ export function SliceFileModal({
     && !printerProfileIncompatible
     && !processProfileIncompatible
     && !blockedByProjectVersion
+    // A flagged file is repaired deliberately in the editor, never printed through slice-time
+    // fix-ups the user never sees. The repair alert above the footer names the remedy.
+    && !needsSettingsRepair
     && selectedNozzleDiameters.length > 0
     && !missingFilamentProfile
     && !missingFilamentToolhead
@@ -880,7 +883,7 @@ export function SliceFileModal({
   // the bridge. See SliceSettingsController.
   const sliceController: SliceSettingsController = {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview, isMobileViewport,
-    tenantSlug, navigate, onClose,
+    workspaceSlug, navigate, onClose,
     slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId,
     projectVersionWarning: projectIsNewerThanSlicer
       ? {
@@ -946,8 +949,8 @@ export function SliceFileModal({
     configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, processEditListenerRef,
     // The editor resolves each slot's preset at SAVE time from this, so the saved project carries the
     // material's physics and not just its name. Omitting it is not a smaller feature — it silently
-    // reverts the save to dropping those values (see `tenantFilamentResolver.ts`).
-    resolveFilamentConfig: resolveTenantFilamentConfig
+    // reverts the save to dropping those values (see `workspaceFilamentResolver.ts`).
+    resolveFilamentConfig: resolveWorkspaceFilamentConfig
   }
 
   // The editor owns geometry; the slice is otherwise valid when printer/process/
@@ -1062,7 +1065,7 @@ export function SliceFileModal({
                   </Typography>
                 )}
               {/* Above the slice settings because it describes the project itself, not a setting. */}
-              {needsSettingsRepair && <RepairProjectSettingsAlert fileId={file.id} reasons={file.settingsRepairReasons} onRepaired={onClose} />}
+              {needsSettingsRepair && <RepairProjectSettingsAlert reasons={file.settingsRepairReasons} />}
               {sliceController.projectVersionWarning && <ProjectVersionWarningAlert {...sliceController.projectVersionWarning} />}
               {/* The panel renders its own slicer availability/loading notices. */}
               <SliceSettingsPanel controller={sliceController} mode="simple" />

@@ -9,6 +9,7 @@ import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { StaticPluginSlot } from '../../plugin/StaticPluginSlot'
+import { LicensedPrinterBillingNotice } from './LicensedPrinterBillingNotice'
 import { type BridgeSummary, type PrinterConnectionValidation, extractErrorMessage, formatNozzleDiameterLabel, getDetectedPrinterNozzleDiameters, mayRequireExternalStorageForActiveSkipObjects, isDirectPrintableFileName, resolvePrinterNozzleDiameters, type DiscoveredPrinter, type LibraryFile, type PrinterNozzleDiameterSelection, type Printer, type PrinterModel, type PrinterStatsResponse, type PrinterStatus } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { toast } from '../../lib/toast'
@@ -445,8 +446,11 @@ export function PrinterFormModal({
         <Typography level="h4">{title}</Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           <Stack spacing={2}>
-            {/* Deployment-specific notices about adding a printer (e.g. the cloud's
-                per-printer billing consent); renders nothing when no plugin fills it. */}
+            {/* What the add will cost or whether it will be refused, said before the
+                form is filled in. Two sources that never both apply: the licence on a
+                self-hosted install (core), and the workspace plan on the cloud (a
+                private module filling the slot, which renders nothing when absent). */}
+            {mode === 'add' && <LicensedPrinterBillingNotice />}
             {mode === 'add' && <StaticPluginSlot name="printers.addDialog.notice" />}
             {mode === 'add' && discovered.length > 0 && (
               <DialogSection

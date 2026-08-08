@@ -9,7 +9,7 @@
  * printer at dispatch flips it to **printing**, after which the existing PrintJob
  * poll-sync (`syncOrderPrintState`) records the result → awaiting-confirmation.
  *
- * Runs outside a request, so it uses `rootPrisma` with the event's explicit `tenantId`
+ * Runs outside a request, so it uses `rootPrisma` with the event's explicit `workspaceId`
  * (mirrors the print-queue's completion handlers).
  */
 import { rootPrisma } from '../../lib/prisma.js'
@@ -21,10 +21,10 @@ interface OrderQueueLinkDeps {
 }
 
 export interface OrderQueueLinkHandlers {
-  onQueued: (event: { tenantId: string; orderPrintId: string }) => Promise<void>
-  onUnqueued: (event: { tenantId: string; orderPrintId: string }) => Promise<void>
+  onQueued: (event: { workspaceId: string; orderPrintId: string }) => Promise<void>
+  onUnqueued: (event: { workspaceId: string; orderPrintId: string }) => Promise<void>
   onDispatched: (event: {
-    tenantId: string
+    workspaceId: string
     orderPrintId: string
     printerId: string
     fileName: string
@@ -33,11 +33,11 @@ export interface OrderQueueLinkHandlers {
 }
 
 export function createOrderQueueLinkHandlers(deps: OrderQueueLinkDeps): OrderQueueLinkHandlers {
-  async function onQueued(event: { tenantId: string; orderPrintId: string }): Promise<void> {
+  async function onQueued(event: { workspaceId: string; orderPrintId: string }): Promise<void> {
     try {
       // Mark a not-yet-started print as queued; never clobber a started/completed one.
       const result = await rootPrisma.orderPrint.updateMany({
-        where: { id: event.orderPrintId, tenantId: event.tenantId, status: 'pending' },
+        where: { id: event.orderPrintId, workspaceId: event.workspaceId, status: 'pending' },
         data: {
           status: 'started',
           startedAt: new Date(),
@@ -49,33 +49,33 @@ export function createOrderQueueLinkHandlers(deps: OrderQueueLinkDeps): OrderQue
           completedAt: null
         }
       })
-      if (result.count > 0) broadcastOrdersChanged(event.tenantId)
+      if (result.count > 0) broadcastOrdersChanged(event.workspaceId)
     } catch (error) {
       deps.logger.warn('Failed to mark order print as queued', { orderPrintId: event.orderPrintId, error })
     }
   }
 
-  async function onUnqueued(event: { tenantId: string; orderPrintId: string }): Promise<void> {
+  async function onUnqueued(event: { workspaceId: string; orderPrintId: string }): Promise<void> {
     try {
       // Revert only if still in the pre-dispatch queued pseudo-state (started, no printer/job).
       const result = await rootPrisma.orderPrint.updateMany({
         where: {
           id: event.orderPrintId,
-          tenantId: event.tenantId,
+          workspaceId: event.workspaceId,
           status: 'started',
           startedPrinterId: null,
           lastPrintJobId: null
         },
         data: { status: 'pending', startedAt: null }
       })
-      if (result.count > 0) broadcastOrdersChanged(event.tenantId)
+      if (result.count > 0) broadcastOrdersChanged(event.workspaceId)
     } catch (error) {
       deps.logger.warn('Failed to release order print from the queue', { orderPrintId: event.orderPrintId, error })
     }
   }
 
   async function onDispatched(event: {
-    tenantId: string
+    workspaceId: string
     orderPrintId: string
     printerId: string
     fileName: string
@@ -88,7 +88,7 @@ export function createOrderQueueLinkHandlers(deps: OrderQueueLinkDeps): OrderQue
       const result = await rootPrisma.orderPrint.updateMany({
         where: {
           id: event.orderPrintId,
-          tenantId: event.tenantId,
+          workspaceId: event.workspaceId,
           status: { in: ['pending', 'started'] },
           lastPrintJobId: null
         },
@@ -106,7 +106,7 @@ export function createOrderQueueLinkHandlers(deps: OrderQueueLinkDeps): OrderQue
           completedAt: null
         }
       })
-      if (result.count > 0) broadcastOrdersChanged(event.tenantId)
+      if (result.count > 0) broadcastOrdersChanged(event.workspaceId)
     } catch (error) {
       deps.logger.warn('Failed to record a queue-dispatched order print', { orderPrintId: event.orderPrintId, error })
     }

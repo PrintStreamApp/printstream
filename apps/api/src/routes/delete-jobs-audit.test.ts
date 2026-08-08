@@ -20,7 +20,7 @@ import { deleteOperationDispatcher } from '../lib/delete-operation-dispatcher.js
 import { HttpError } from '../lib/http-error.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
 import { printerManager } from '../lib/printer-manager.js'
-import type { RequestTenantSummary } from '../lib/tenant-context.js'
+import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
 
 const originalLibraryDelete = deleteOperationDispatcher.enqueueLibraryDelete
 const originalPrinterStorageDelete = deleteOperationDispatcher.enqueuePrinterStorageDelete
@@ -28,7 +28,7 @@ const originalAuditLogCreate = rootPrisma.auditLog.create
 const printerManagerPrototype = Object.getPrototypeOf(printerManager) as typeof printerManager
 const originalGetPrinter = printerManagerPrototype.getPrinter
 const originalPrinterFindUnique = prisma.printer.findUnique
-const TEST_TENANT: RequestTenantSummary = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+const TEST_WORKSPACE: RequestWorkspaceSummary = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
 
 const TEST_PRINTER: Printer = {
   id: 'printer-1',
@@ -81,7 +81,7 @@ test('library delete jobs write an explicit audit entry', async () => {
   assert.equal(auditCreates[0]?.action, 'delete')
   assert.equal(auditCreates[0]?.resource, 'library file')
   assert.equal(auditCreates[0]?.summary, 'Queued delete of library file Test File.3mf.')
-  assert.equal(auditCreates[0]?.tenantId, TEST_TENANT.id)
+  assert.equal(auditCreates[0]?.workspaceId, TEST_WORKSPACE.id)
   assert.equal(typeof auditCreates[0]?.metadataJson, 'string')
   assert.deepEqual(JSON.parse(String(auditCreates[0]?.metadataJson)), {
     deleteOperationId: 'delete-1',
@@ -123,7 +123,7 @@ test('printer storage delete jobs write an explicit audit entry', async () => {
   assert.equal(auditCreates[0]?.action, 'delete')
   assert.equal(auditCreates[0]?.resource, 'printer storage entry')
   assert.equal(auditCreates[0]?.summary, 'Queued delete of printer storage entry plate.3mf on Printer 1.')
-  assert.equal(auditCreates[0]?.tenantId, TEST_TENANT.id)
+  assert.equal(auditCreates[0]?.workspaceId, TEST_WORKSPACE.id)
   assert.equal(typeof auditCreates[0]?.metadataJson, 'string')
   assert.deepEqual(JSON.parse(String(auditCreates[0]?.metadataJson)), {
     deleteOperationId: 'delete-2',
@@ -174,7 +174,7 @@ async function withDeleteJobAuditApp(run: (baseUrl: string) => Promise<void>): P
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = TEST_TENANT
+    request.workspace = TEST_WORKSPACE
     next()
   })
   app.use(installAuditLogCapture())

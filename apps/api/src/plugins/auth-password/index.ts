@@ -23,7 +23,7 @@ import {
 } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { assertAuthProviderCanChangeState, restoreSupportAccessWhenWorkspaceAuthDisabled } from '../../lib/auth-provider-guard.js'
-import { broadcastAuthChangedForTenant } from '../../lib/auth-change-events.js'
+import { broadcastAuthChangedForWorkspace } from '../../lib/auth-change-events.js'
 import { assertAuthMutationsAllowed } from '../../lib/demo-mode.js'
 import {
   readScopedAuthProviderEnabled,
@@ -119,16 +119,16 @@ export function createAuthPasswordPlugin(deps: Partial<AuthPasswordPluginDeps> =
             providerId: 'auth-password',
             currentEnabled,
             nextEnabled: parsed.data.enabled,
-            tenant: request.tenant ?? null,
+            workspace: request.workspace ?? null,
             isPlatformUser: request.auth.actor.type === 'user' && (request.auth.actor.isPlatformUser ?? false)
           })
           await writeScopedAuthProviderEnabled(context.settings, parsed.data.enabled)
           await restoreSupportAccessWhenWorkspaceAuthDisabled({
-            tenant: request.tenant ?? null,
+            workspace: request.workspace ?? null,
             nextEnabled: parsed.data.enabled,
             isPlatformUser: request.auth.actor.type === 'user' && (request.auth.actor.isPlatformUser ?? false)
           })
-          broadcastAuthChangedForTenant(request.tenant?.id)
+          broadcastAuthChangedForWorkspace(request.workspace?.id)
         }
 
         annotateRequestAuditLog(request, {

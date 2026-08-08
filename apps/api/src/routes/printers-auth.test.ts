@@ -24,7 +24,7 @@ import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
 import { printerDiscovery } from '../lib/printer-discovery.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { savePrintJobThumbnail } from '../lib/print-job-thumbnails.js'
-import type { RequestTenantSummary } from '../lib/tenant-context.js'
+import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
 
 const p = prisma as unknown as Record<string, Record<string, unknown>>
 const rp = rootPrisma as unknown as Record<string, Record<string, unknown>>
@@ -44,7 +44,7 @@ restorePrismaMethodsAfterEach([
   [p.printJob, 'groupBy']
 ])
 const printerManagerPrototype = Object.getPrototypeOf(printerManager) as typeof printerManager
-const TEST_TENANT: RequestTenantSummary = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+const TEST_WORKSPACE: RequestWorkspaceSummary = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
 
 const printer: Printer = {
   id: 'printer-1',
@@ -64,7 +64,7 @@ afterEach(() => {
   mock.restoreAll()
 })
 
-test('printer list only returns printers for the active tenant', async () => {
+test('printer list only returns printers for the active workspace', async () => {
   let requestedWhere: unknown = null
   prisma.printer.findMany = ((async (args: { where?: unknown }) => {
     requestedWhere = args.where ?? null
@@ -81,15 +81,15 @@ test('printer list only returns printers for the active tenant', async () => {
 
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { printers: [] })
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 
-  assert.deepEqual(requestedWhere, { tenantId: 'tenant-1' })
+  assert.deepEqual(requestedWhere, { workspaceId: 'workspace-1' })
 })
 
 test('printer list redacts the LAN access code (never sends the secret to the browser)', async () => {
   prisma.printer.findMany = ((async () => [{
     id: 'printer-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     name: 'Printer 1',
     host: '192.168.1.10',
     serial: 'SERIAL123',
@@ -114,14 +114,14 @@ test('printer list redacts the LAN access code (never sends the secret to the br
     const body = await response.json() as { printers: Array<{ accessCode: string; accessCodeConfigured?: boolean }> }
     assert.equal(body.printers[0]?.accessCode, '')
     assert.equal(body.printers[0]?.accessCodeConfigured, true)
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 })
 
 test('printer stats are resolved by the current printer serial and include live activity', async () => {
   let requestedWhere: unknown = null
   prisma.printer.findFirst = ((async (args: { where?: unknown; select?: unknown }) => {
     requestedWhere = args.where ?? null
-    return { id: printer.id, tenantId: TEST_TENANT.id, serial: printer.serial } as never
+    return { id: printer.id, workspaceId: TEST_WORKSPACE.id, serial: printer.serial } as never
   }) as unknown) as typeof prisma.printer.findFirst
   let requestedStatsWhere: unknown = null
   prisma.printerStats.findUnique = ((async (args: { where?: unknown; select?: unknown }) => {
@@ -188,19 +188,19 @@ test('printer stats are resolved by the current printer serial and include live 
         wastedFilamentFeetPrinted: 275.59056
       }
     })
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 
   assert.deepEqual(requestedWhere, { id: printer.id })
   assert.deepEqual(requestedStatsWhere, {
-    tenantId_printerSerial: {
-      tenantId: TEST_TENANT.id,
+    workspaceId_printerSerial: {
+      workspaceId: TEST_WORKSPACE.id,
       printerSerial: printer.serial
     }
   })
 })
 
 test('printer stats fall back to legacy filament totals when breakdown columns are missing', async () => {
-  prisma.printer.findFirst = ((async () => ({ id: printer.id, tenantId: TEST_TENANT.id, serial: printer.serial } as never)) as unknown) as typeof prisma.printer.findFirst
+  prisma.printer.findFirst = ((async () => ({ id: printer.id, workspaceId: TEST_WORKSPACE.id, serial: printer.serial } as never)) as unknown) as typeof prisma.printer.findFirst
   let callCount = 0
   prisma.printerStats.findUnique = ((async () => {
     callCount += 1
@@ -277,12 +277,12 @@ test('printer stats fall back to legacy filament totals when breakdown columns a
         wastedFilamentFeetPrinted: 19.68504
       }
     })
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 
   assert.equal(callCount, 2)
 })
 
-test('printer status snapshot only returns statuses for the active tenant', async () => {
+test('printer status snapshot only returns statuses for the active workspace', async () => {
   let requestedWhere: unknown = null
   prisma.printer.findMany = ((async (args: { where?: unknown; select?: unknown }) => {
     requestedWhere = args.where ?? null
@@ -329,9 +329,9 @@ test('printer status snapshot only returns statuses for the active tenant', asyn
         }
       }
     })
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 
-  assert.deepEqual(requestedWhere, { tenantId: 'tenant-1' })
+  assert.deepEqual(requestedWhere, { workspaceId: 'workspace-1' })
 })
 
 test('printer cover serves persisted job thumbnails before printer storage lookup', async () => {
@@ -375,8 +375,8 @@ test('printer cover serves persisted job thumbnails before printer storage looku
   assert.equal(printerStorageLookupCount, 0)
 })
 
-test('discovered printers stay visible when only another tenant already adopted the same serial', async () => {
-  const otherTenant: RequestTenantSummary = { id: 'tenant-2', slug: 'tenant-2', name: 'Tenant 2' }
+test('discovered printers stay visible when only another workspace already adopted the same serial', async () => {
+  const otherWorkspace: RequestWorkspaceSummary = { id: 'workspace-2', slug: 'workspace-2', name: 'Workspace 2' }
   let requestedWhere: unknown = null
   prisma.printer.findMany = ((async (args: { where?: unknown }) => {
     requestedWhere = args.where ?? null
@@ -405,17 +405,17 @@ test('discovered printers stay visible when only another tenant already adopted 
       serial: printer.serial,
       model: printer.model
     }])
-  }, otherTenant)
+  }, otherWorkspace)
 
-  assert.deepEqual(requestedWhere, { tenantId: otherTenant.id })
+  assert.deepEqual(requestedWhere, { workspaceId: otherWorkspace.id })
 })
 
-test('adopting a printer only dismisses the discovery entry for the active tenant', async () => {
+test('adopting a printer only dismisses the discovery entry for the active workspace', async () => {
   prisma.printer.findFirst = ((async () => null as never) as unknown) as typeof prisma.printer.findFirst
   prisma.bridge.findUnique = ((async () => ({ id: 'bridge-1' } as never)) as unknown) as typeof prisma.bridge.findUnique
   prisma.printer.create = ((async () => ({
     id: printer.id,
-    tenantId: TEST_TENANT.id,
+    workspaceId: TEST_WORKSPACE.id,
     name: printer.name,
     host: printer.host,
     serial: printer.serial,
@@ -454,9 +454,9 @@ test('adopting a printer only dismisses the discovery entry for the active tenan
     })
 
     assert.equal(response.status, 201)
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 
-  assert.deepEqual(dismiss.mock.calls[0]?.arguments, [printer.serial, TEST_TENANT.id])
+  assert.deepEqual(dismiss.mock.calls[0]?.arguments, [printer.serial, TEST_WORKSPACE.id])
   assert.equal(forget.mock.callCount(), 0)
 })
 
@@ -465,7 +465,7 @@ test('adopting a printer can assign it to a connected bridge', async () => {
   prisma.bridge.findUnique = ((async () => ({ id: 'bridge-1' } as never)) as unknown) as typeof prisma.bridge.findUnique
   prisma.printer.create = ((async () => ({
     id: printer.id,
-    tenantId: TEST_TENANT.id,
+    workspaceId: TEST_WORKSPACE.id,
     name: printer.name,
     host: printer.host,
     serial: printer.serial,
@@ -503,12 +503,12 @@ test('adopting a printer can assign it to a connected bridge', async () => {
     })
 
     assert.equal(response.status, 201)
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 
   assert.deepEqual(add.mock.calls[0]?.arguments, [{
     ...printer,
     bridgeId: 'bridge-1'
-  }, TEST_TENANT.id, 'bridge-1'])
+  }, TEST_WORKSPACE.id, 'bridge-1'])
 })
 
 test('printer validation requires a bridge selection', async () => {
@@ -530,7 +530,7 @@ test('printer validation requires a bridge selection', async () => {
 
     assert.equal(response.status, 400)
     assert.deepEqual(await response.json(), { error: 'Bridge assignment is required' })
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 })
 
 test('printer validation runs through the selected bridge', async () => {
@@ -579,7 +579,7 @@ test('printer validation runs through the selected bridge', async () => {
       developerModeEnabled: true,
       warnings: []
     })
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 
   assert.equal(isConnected.mock.callCount(), 1)
   assert.equal(requestRpc.mock.callCount(), 1)
@@ -1328,7 +1328,7 @@ test('print-from-storage allows the current parent print-dispatch permission', a
   mock.method(printerManagerPrototype, 'getPrinter', () => printer)
   prisma.printer.findUnique = ((async () => ({ id: printer.id })) as unknown) as typeof prisma.printer.findUnique
   mock.method(printerManagerPrototype, 'publishCommand', () => true)
-  rootPrisma.printer.findUnique = ((async () => ({ tenantId: TEST_TENANT.id })) as unknown) as typeof rootPrisma.printer.findUnique
+  rootPrisma.printer.findUnique = ((async () => ({ workspaceId: TEST_WORKSPACE.id })) as unknown) as typeof rootPrisma.printer.findUnique
   rootPrisma.printJob.findUnique = ((async () => null) as unknown) as typeof rootPrisma.printJob.findUnique
   rootPrisma.printJob.create = ((async ({ data }: { data: { id: string; jobName: string } }) => ({
     id: data.id,
@@ -1393,7 +1393,7 @@ test('print-from-storage maps auto print modes onto the printer command payload'
   mock.method(printerManagerPrototype, 'getPrinter', () => autoPrinter)
   prisma.printer.findUnique = ((async () => ({ id: autoPrinter.id })) as unknown) as typeof prisma.printer.findUnique
   const publishCommand = mock.method(printerManagerPrototype, 'publishCommand', () => true)
-  rootPrisma.printer.findUnique = ((async () => ({ tenantId: TEST_TENANT.id })) as unknown) as typeof rootPrisma.printer.findUnique
+  rootPrisma.printer.findUnique = ((async () => ({ workspaceId: TEST_WORKSPACE.id })) as unknown) as typeof rootPrisma.printer.findUnique
   rootPrisma.printJob.findUnique = ((async () => null) as unknown) as typeof rootPrisma.printJob.findUnique
   rootPrisma.printJob.create = ((async ({ data }: { data: { id: string; jobName: string } }) => ({
     id: data.id,
@@ -1470,7 +1470,7 @@ test('print-from-storage includes explicit AMS mappings in the printer command p
   mock.method(printerManagerPrototype, 'getPrinter', () => mappedPrinter)
   prisma.printer.findUnique = ((async () => ({ id: mappedPrinter.id })) as unknown) as typeof prisma.printer.findUnique
   const publishCommand = mock.method(printerManagerPrototype, 'publishCommand', () => true)
-  rootPrisma.printer.findUnique = ((async () => ({ tenantId: TEST_TENANT.id })) as unknown) as typeof rootPrisma.printer.findUnique
+  rootPrisma.printer.findUnique = ((async () => ({ workspaceId: TEST_WORKSPACE.id })) as unknown) as typeof rootPrisma.printer.findUnique
   rootPrisma.printJob.findUnique = ((async () => null) as unknown) as typeof rootPrisma.printJob.findUnique
   rootPrisma.printJob.create = ((async ({ data }: { data: { id: string; jobName: string } }) => ({
     id: data.id,
@@ -1546,7 +1546,7 @@ test('print-from-storage uses the printer-reported first-layer inspection defaul
     }
   }) as PrinterStatus)
   const publishCommand = mock.method(printerManagerPrototype, 'publishCommand', () => true)
-  rootPrisma.printer.findUnique = ((async () => ({ tenantId: TEST_TENANT.id })) as unknown) as typeof rootPrisma.printer.findUnique
+  rootPrisma.printer.findUnique = ((async () => ({ workspaceId: TEST_WORKSPACE.id })) as unknown) as typeof rootPrisma.printer.findUnique
   rootPrisma.printJob.findUnique = ((async () => null) as unknown) as typeof rootPrisma.printJob.findUnique
   rootPrisma.printJob.create = ((async ({ data }: { data: { id: string; jobName: string } }) => ({
     id: data.id,
@@ -1585,13 +1585,13 @@ test('print-from-storage uses the printer-reported first-layer inspection defaul
 async function withPrintersApp(
   auth: RequestAuthContext,
   run: (baseUrl: string) => Promise<void>,
-  tenant: RequestTenantSummary | null = null
+  workspace: RequestWorkspaceSummary | null = null
 ): Promise<void> {
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = tenant
+    request.workspace = workspace
     next()
   })
   app.use('/api/printers', printersRouter)

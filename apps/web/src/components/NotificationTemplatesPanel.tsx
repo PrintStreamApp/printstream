@@ -5,7 +5,7 @@
  * title/body. Editing happens in a focused Modal dialog so the page
  * stays scannable when many triggers exist. The server is the source
  * of truth (and owns the defaults), so this component is mostly a
- * controlled-form wrapper around `/api/notifications/templates` (tenant
+ * controlled-form wrapper around `/api/notifications/templates` (workspace
  * print events) or `/api/notifications/platform-templates` (platform
  * operator events — a dynamic, deployment-registered set with no snapshot
  * media; the panel renders nothing when the deployment registers none).
@@ -34,9 +34,10 @@ import { apiFetch } from '../lib/apiClient'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { ConfirmActionDialog } from './ConfirmActionDialog'
 import { DialogSection } from './DialogSection'
+import { ListSkeleton } from '../components/ListSkeleton'
 
 /**
- * Structural template shape covering both scopes: the tenant print-event
+ * Structural template shape covering both scopes: the workspace print-event
  * templates carry `includeSnapshot`; platform templates do not.
  */
 export interface EditableNotificationTemplate {
@@ -59,13 +60,13 @@ interface TemplateResponse {
   template: EditableNotificationTemplate
 }
 
-export type NotificationTemplateScope = 'tenant' | 'platform'
+export type NotificationTemplateScope = 'workspace' | 'platform'
 
 function templatesEndpoint(scope: NotificationTemplateScope): string {
   return scope === 'platform' ? '/api/notifications/platform-templates' : '/api/notifications/templates'
 }
 
-export function NotificationTemplatesPanel({ scope = 'tenant' }: { scope?: NotificationTemplateScope } = {}) {
+export function NotificationTemplatesPanel({ scope = 'workspace' }: { scope?: NotificationTemplateScope } = {}) {
   const query = useQuery({
     queryKey: ['notification-templates', scope],
     queryFn: ({ signal }) => apiFetch<TemplateListResponse>(templatesEndpoint(scope), { signal })
@@ -86,7 +87,7 @@ export function NotificationTemplatesPanel({ scope = 'tenant' }: { scope?: Notif
           : 'Customise the title, body, and media sent for each notification event. Templates are shared by every notification channel (ntfy, Discord, browser push). Use '}
         <code>{'{{variable}}'}</code> placeholders to insert event details.
       </Typography>
-      {query.isLoading && <Typography level="body-sm">Loading…</Typography>}
+      {query.isLoading && <ListSkeleton rows={3} />}
       {query.error && (
         <Typography level="body-sm" color="danger">
           {(query.error as Error).message}
@@ -279,7 +280,7 @@ function TemplateEditorDialog({ scope, template, onClose }: TemplateEditorDialog
                   </Stack>
                 </DialogSection>
 
-                {scope === 'tenant' && (
+                {scope === 'workspace' && (
                 <DialogSection
                   title="Media"
                   description="Attach a chamber-camera frame when the selected printer supports it and the channel can display media."
@@ -339,7 +340,7 @@ function TemplateEditorDialog({ scope, template, onClose }: TemplateEditorDialog
               color="primary"
               disabled={busy || !dirty}
               loading={save.isPending}
-              onClick={() => save.mutate({ enabled, title, body, ...(scope === 'tenant' ? { includeSnapshot } : {}) })}
+              onClick={() => save.mutate({ enabled, title, body, ...(scope === 'workspace' ? { includeSnapshot } : {}) })}
             >
               Save
             </Button>
@@ -350,7 +351,7 @@ function TemplateEditorDialog({ scope, template, onClose }: TemplateEditorDialog
           open={confirmResetOpen}
           title="Reset notification template?"
           description={template
-            ? scope === 'tenant'
+            ? scope === 'workspace'
               ? `Reset "${template.label}" to its default title, body, enabled state, and snapshot setting? Your custom version will be removed.`
               : `Reset "${template.label}" to its default title, body, and enabled state? Your custom version will be removed.`
             : ''}

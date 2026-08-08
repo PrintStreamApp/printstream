@@ -108,7 +108,7 @@ export interface ProcessSettingsDialogProps {
    */
   canEditOriginal?: boolean
   /**
-   * How the dialog resolves a preset's base config. Defaults to the TENANT route
+   * How the dialog resolves a preset's base config. Defaults to the WORKSPACE route
    * (`/api/slicing/profiles/resolve-process`). The public 3MF editor passes an anonymous resolver
    * (built-in presets via `/api/public/slicing/...`; project presets from the in-tab 3MF), so it can
    * run with no workspace. Additive — omitting it preserves the exact library behaviour.

@@ -44,4 +44,9 @@ export async function invalidateLibraryQueries(queryClient: QueryInvalidator): P
   // at `staleTime: Infinity`, so a save that rewrote project_settings left it wrong for the rest of
   // the page session — and those deltas reach a SLICE, unlike a badge count.
   await queryClient.invalidateQueries({ queryKey: ['slice-project-process-carry'] })
+  // Single-file metadata DTOs (name, version counter, repair flags). Refreshing them never
+  // redraws a scene, and NOT refreshing them is how the editor's repair banner stayed up after a
+  // successful repair: the banner gates on `['library-file', id]`, which nothing here touched, so
+  // it kept rendering the pre-repair flags and the repair read as having done nothing.
+  await queryClient.invalidateQueries({ queryKey: ['library-file'] })
 }

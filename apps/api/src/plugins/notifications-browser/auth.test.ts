@@ -113,7 +113,7 @@ test('browser notification subscriptions reject non-members with settings.manage
     const readResponse = await fetch(`${baseUrl}/api/plugins/notifications-browser`)
     const readBody = await readResponse.json() as { subscriptions: number }
     assert.equal(readBody.subscriptions, 0)
-  }, { tenantMembers: [] })
+  }, { workspaceMembers: [] })
 })
 
 test('browser notification dismissals fan out only to the current actor key', async () => {

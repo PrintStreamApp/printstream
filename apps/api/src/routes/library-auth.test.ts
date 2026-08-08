@@ -106,10 +106,10 @@ test('library browse returns a read-only bridge root when no bridge is selected'
   await withLibraryApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' },
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' },
     permissions: [LIBRARY_VIEW_PERMISSION],
     runtimePolicy: { demoMode: false }
-  } as RequestAuthContext & { tenant: { id: string; slug: string; name: string } }, async (baseUrl) => {
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/library/browse`)
 
     assert.equal(response.status, 200)
@@ -124,14 +124,14 @@ test('library browse returns a read-only bridge root when no bridge is selected'
       fileLimit: null
     })
     assert.deepEqual(bridgeFindManyArgs, {
-      where: { tenantId: 'tenant-1' },
+      where: { workspaceId: 'workspace-1' },
       orderBy: { createdAt: 'asc' },
       select: { id: true, name: true }
     })
   })
 })
 
-test('library folders are tenant scoped when a tenant is present', async () => {
+test('library folders are workspace scoped when a workspace is present', async () => {
   let folderFindManyArgs: unknown
   prisma.libraryFolder.findMany = ((async (args: unknown) => {
     folderFindManyArgs = args
@@ -141,10 +141,10 @@ test('library folders are tenant scoped when a tenant is present', async () => {
   await withLibraryApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' },
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' },
     permissions: [LIBRARY_VIEW_PERMISSION],
     runtimePolicy: { demoMode: false }
-  } as RequestAuthContext & { tenant: { id: string; slug: string; name: string } }, async (baseUrl) => {
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/library/folders`)
 
     assert.equal(response.status, 200)
@@ -152,7 +152,7 @@ test('library folders are tenant scoped when a tenant is present', async () => {
     assert.deepEqual(folderFindManyArgs, {
       where: {
         ownerBridgeId: { not: null },
-        tenantId: 'tenant-1'
+        workspaceId: 'workspace-1'
       },
       orderBy: { name: 'asc' }
     })
@@ -290,10 +290,10 @@ test('library folder creation requires an explicit bridge selection', async () =
   await withLibraryApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' },
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' },
     permissions: [LIBRARY_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
-  } as RequestAuthContext & { tenant: { id: string; slug: string; name: string } }, async (baseUrl) => {
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/library/folders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -309,10 +309,10 @@ test('library upload requires an explicit bridge selection', async () => {
   await withLibraryApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' },
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' },
     permissions: [LIBRARY_UPLOAD_PERMISSION],
     runtimePolicy: { demoMode: false }
-  } as RequestAuthContext & { tenant: { id: string; slug: string; name: string } }, async (baseUrl) => {
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
     const form = new FormData()
     form.append('file', new Blob(['bridge-backed file']), 'bridge-test.3mf')
 
@@ -330,10 +330,10 @@ test('chunked library upload assembles chunks before applying upload validation'
   await withLibraryApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' },
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' },
     permissions: [LIBRARY_UPLOAD_PERMISSION],
     runtimePolicy: { demoMode: false }
-  } as RequestAuthContext & { tenant: { id: string; slug: string; name: string } }, async (baseUrl) => {
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
     const beginResponse = await fetch(`${baseUrl}/api/library/uploads`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -383,10 +383,10 @@ test('chunked library upload rejects out-of-order chunks and can be cancelled', 
   await withLibraryApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' },
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' },
     permissions: [LIBRARY_UPLOAD_PERMISSION],
     runtimePolicy: { demoMode: false }
-  } as RequestAuthContext & { tenant: { id: string; slug: string; name: string } }, async (baseUrl) => {
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
     const beginResponse = await fetch(`${baseUrl}/api/library/uploads`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -414,7 +414,7 @@ test('chunked library upload rejects out-of-order chunks and can be cancelled', 
 test('library file history lists the current file and older versions', async () => {
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     folderId: null,
     name: 'History Test.3mf',
@@ -430,7 +430,7 @@ test('library file history lists the current file and older versions', async () 
   prisma.libraryFileVersion.findMany = ((async () => ([
     {
       id: 'version-1',
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       libraryFileId: 'file-1',
       ownerBridgeId: 'bridge-1',
       folderId: null,
@@ -511,7 +511,7 @@ test('demo library delete rejects deleting visible curated files', async () => {
   let deleteCalled = false
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     folderId: null,
     name: 'Demo File.3mf',
@@ -533,10 +533,10 @@ test('demo library delete rejects deleting visible curated files', async () => {
   await withLibraryApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
-    tenant: { id: 'tenant-1', slug: 'demo', name: 'Public Demo' },
+    workspace: { id: 'workspace-1', slug: 'demo', name: 'Public Demo' },
     permissions: [LIBRARY_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: true }
-  } as RequestAuthContext & { tenant: { id: string; slug: string; name: string } }, async (baseUrl) => {
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/library/file-1`, { method: 'DELETE' })
 
     assert.equal(response.status, 403)
@@ -549,7 +549,7 @@ test('demo library patch rejects mutating visible curated files', async () => {
   let updateCalled = false
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     folderId: null,
     name: 'Demo File.3mf',
@@ -571,10 +571,10 @@ test('demo library patch rejects mutating visible curated files', async () => {
   await withLibraryApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
-    tenant: { id: 'tenant-1', slug: 'demo', name: 'Public Demo' },
+    workspace: { id: 'workspace-1', slug: 'demo', name: 'Public Demo' },
     permissions: [LIBRARY_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: true }
-  } as RequestAuthContext & { tenant: { id: string; slug: string; name: string } }, async (baseUrl) => {
+  } as RequestAuthContext & { workspace: { id: string; slug: string; name: string } }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/library/file-1`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -626,7 +626,7 @@ test('library print dispatch passes authorization with prints.dispatch permissio
 test('library plates responses require private revalidation', async () => {
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Plain File.stl',
@@ -666,7 +666,7 @@ test('library plates responses require private revalidation', async () => {
 test('library plates responses return 304 when the file validator still matches', async () => {
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Plain File.stl',
@@ -711,7 +711,7 @@ test('library plate gcode returns the selected plate payload', async () => {
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Cylinders.gcode.3mf',
@@ -744,7 +744,7 @@ test('library plate gcode returns the selected plate payload', async () => {
 test('library plate gcode is unavailable for non-3mf library files', async () => {
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Plain File.stl',
@@ -776,7 +776,7 @@ test('library preview asset returns the embedded STL source for non-gcode 3mf fi
   const archivePath = await createEmbeddedPreviewArchive('Sources/model.stl', SIMPLE_STL)
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Model Project.3mf',
@@ -823,7 +823,7 @@ test('library preview asset reports when a 3mf has no embedded STL or STEP sourc
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Preview-less project.3mf',
@@ -898,7 +898,7 @@ test('library scene returns plated mesh metadata with bed bounds and filament co
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Golf tee.3mf',
@@ -999,7 +999,7 @@ test('library scene folds root build transforms into multi-part plate placements
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Five-part widget.3mf',
@@ -1089,7 +1089,7 @@ test('library scene normalizes later plates into plate-local coordinates', async
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Multi-plate project.3mf',
@@ -1161,7 +1161,7 @@ test('library scene preserves raw printable-area coordinates for H2D storage box
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Storage Box.3mf',
@@ -1246,7 +1246,7 @@ test('library scene falls back to raw P1S bed bounds when printable area metadat
 
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Tests P1S.3mf',
@@ -1338,7 +1338,7 @@ test('library scene preserves distinct filament colors when plate filament maps 
 
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Two-color tag.3mf',
@@ -1419,7 +1419,7 @@ test('library scene renders support/modifier helper subtypes tagged and material
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Putter with helper.3mf',
@@ -1474,7 +1474,7 @@ test('library scene entry streams the requested internal model xml', async () =>
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Internal model.3mf',
@@ -1529,7 +1529,7 @@ test('library archive streams the whole 3MF to view-permitted actors, and revali
   })
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Project.3mf',
@@ -1581,7 +1581,7 @@ test('library mesh streams raw STL bytes to view-permitted actors', async () => 
   const stlPath = await createStlFile()
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Plain File.stl',
@@ -1616,7 +1616,7 @@ test('library mesh is unavailable for non-mesh kinds', async () => {
   // geometry-only 3MFs serve their extracted mesh; project 3MFs 404 after inspection.)
   prisma.libraryFile.findUnique = ((async () => ({
     id: 'file-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: null,
     folderId: null,
     name: 'Sliced.gcode.3mf',
@@ -1650,7 +1650,7 @@ const downloadLinkStub = usePrismaStubs()
 
 const DOWNLOAD_LINK_FILE_ROW = {
   id: 'file-1',
-  tenantId: 'tenant-1',
+  workspaceId: 'workspace-1',
   ownerBridgeId: null,
   folderId: null,
   name: 'Widget.3mf',
@@ -1685,7 +1685,7 @@ test('download link mint requires download permission', async () => {
 })
 
 test('download link mint returns a self-contained URL whose token is persisted only as a hash', async () => {
-  let createdData: { tokenHash: string; expiresAt: Date; libraryFileId: string; tenantId: string } | null = null
+  let createdData: { tokenHash: string; expiresAt: Date; libraryFileId: string; workspaceId: string } | null = null
   downloadLinkStub(prisma.libraryFile, 'findUnique', async () => DOWNLOAD_LINK_FILE_ROW)
   downloadLinkStub(prisma.libraryDownloadLink, 'deleteMany', async () => ({ count: 0 }))
   downloadLinkStub(prisma.libraryDownloadLink, 'create', async (args: { data: typeof createdData }) => {
@@ -1730,7 +1730,7 @@ test('download link fetch streams the file for a valid, unexpired token without 
 
   downloadLinkStub(rootPrisma.libraryDownloadLink, 'findUnique', async () => ({
     id: 'link-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     libraryFileId: 'file-1',
     expiresAt: new Date(Date.now() + 60_000)
   }))
@@ -1751,7 +1751,7 @@ test('download link fetch streams the file for a valid, unexpired token without 
 test('download link fetch returns 404 for an expired token', async () => {
   downloadLinkStub(rootPrisma.libraryDownloadLink, 'findUnique', async () => ({
     id: 'link-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     libraryFileId: 'file-1',
     expiresAt: new Date(Date.now() - 1000)
   }))
@@ -1783,7 +1783,7 @@ async function withLibraryApp(
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = (auth as RequestAuthContext & { tenant?: { id: string; slug: string; name: string } | null }).tenant ?? null
+    request.workspace = (auth as RequestAuthContext & { workspace?: { id: string; slug: string; name: string } | null }).workspace ?? null
     next()
   })
   app.use('/api/library', libraryRouter)

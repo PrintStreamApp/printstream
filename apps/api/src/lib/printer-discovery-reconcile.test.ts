@@ -110,8 +110,8 @@ test('reconcileAdoptedPrinterHost refreshes every adopted copy on the reporting 
   assert.deepEqual(managerUpdates.map((row) => row.host), ['192.168.1.44', '192.168.1.44'])
 })
 
-test('reconcileAdoptedPrinterHost never touches a same-serial printer owned by a different bridge/tenant', async () => {
-  // Two tenants own a printer with the same serial via different bridges. A
+test('reconcileAdoptedPrinterHost never touches a same-serial printer owned by a different bridge/workspace', async () => {
+  // Two workspaces own a printer with the same serial via different bridges. A
   // discovery report from bridge-1 must only ever rewrite bridge-1's row.
   const mine = makePrinterRow({ id: 'mine', host: '192.168.1.10', bridgeId: 'bridge-1' })
   const theirs = makePrinterRow({ id: 'theirs', host: '10.0.0.5', bridgeId: 'bridge-2' })
@@ -141,7 +141,7 @@ test('reconcileAdoptedPrinterHost never touches a same-serial printer owned by a
   )
 
   assert.equal(changed, true)
-  // Only bridge-1's row is rewritten; the other tenant's same-serial printer is untouched.
+  // Only bridge-1's row is rewritten; the other workspace's same-serial printer is untouched.
   assert.deepEqual(writes.map((write) => write.where.id), ['mine'])
   assert.deepEqual(managerUpdates.map((row) => row.id), ['mine'])
 })

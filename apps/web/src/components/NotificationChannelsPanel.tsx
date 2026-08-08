@@ -8,7 +8,7 @@ import { useNotificationChannelEntries } from '../hooks/useNotificationChannelEn
 export function NotificationChannelsPanel({
   description = 'Configure how each device or destination receives print alerts. Browser push is per device, while Discord and ntfy deliver through their configured destinations.'
 }: {
-  /** Section intro copy; the default describes the tenant print channels. */
+  /** Section intro copy; the default describes the workspace print channels. */
   description?: string
 } = {}) {
   const { pluginCatalogQuery, channels } = useNotificationChannelEntries()

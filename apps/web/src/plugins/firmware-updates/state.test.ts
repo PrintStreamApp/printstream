@@ -89,15 +89,15 @@ test('storage helpers round-trip cached updates per workspace and ignore invalid
     updates: []
   }
 
-  assert.equal(readStoredUpdates('tenant-1'), undefined)
-  writeStoredUpdates('tenant-1', updates)
-  writeStoredUpdates('tenant-2', otherUpdates)
-  assert.deepEqual(readStoredUpdates('tenant-1'), updates)
-  assert.deepEqual(readStoredUpdates('tenant-2'), otherUpdates)
+  assert.equal(readStoredUpdates('workspace-1'), undefined)
+  writeStoredUpdates('workspace-1', updates)
+  writeStoredUpdates('workspace-2', otherUpdates)
+  assert.deepEqual(readStoredUpdates('workspace-1'), updates)
+  assert.deepEqual(readStoredUpdates('workspace-2'), otherUpdates)
   assert.equal(storage.getItem(UPDATES_STORAGE_KEY), null)
 
-  storage.setItem(getUpdatesStorageKey('tenant-1'), '{invalid json')
-  assert.equal(readStoredUpdates('tenant-1'), undefined)
+  storage.setItem(getUpdatesStorageKey('workspace-1'), '{invalid json')
+  assert.equal(readStoredUpdates('workspace-1'), undefined)
 })
 
 test('parseUploadProgressEvent accepts firmware upload progress events and ignores others', () => {

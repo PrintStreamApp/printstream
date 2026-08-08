@@ -1,11 +1,11 @@
 /**
  * Data-access helpers for filament spools and their consumption ledger.
  *
- * Every function takes an explicit `db` (the tenant-scoped request client or
- * `rootPrisma` for event/startup code) and `tenantId`, and filters by tenant on
+ * Every function takes an explicit `db` (the workspace-scoped request client or
+ * `rootPrisma` for event/startup code) and `workspaceId`, and filters by workspace on
  * every operation, so the same path is correct in and out of a request context.
- * Single-row writes use `updateMany`/`deleteMany` with `{ id, tenantId }` rather
- * than `update({ where: { id } })` so the tenant filter is enforced atomically.
+ * Single-row writes use `updateMany`/`deleteMany` with `{ id, workspaceId }` rather
+ * than `update({ where: { id } })` so the workspace filter is enforced atomically.
  */
 import type { Prisma } from '@prisma/client'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
@@ -29,10 +29,10 @@ export type ListSpoolsOptions = {
 
 export async function listSpoolRows(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   options: ListSpoolsOptions = {}
 ): Promise<SpoolRowWithPrinter[]> {
-  const where: Prisma.FilamentSpoolWhereInput = { tenantId }
+  const where: Prisma.FilamentSpoolWhereInput = { workspaceId }
   if (!options.includeDeleted) where.deletedAt = null
   if (!options.includeArchived) where.archivedAt = null
   return db.filamentSpool.findMany({
@@ -44,11 +44,11 @@ export async function listSpoolRows(
 
 export async function getSpoolRow(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   id: string
 ): Promise<SpoolRowWithPrinter | null> {
   return db.filamentSpool.findFirst({
-    where: { id, tenantId },
+    where: { id, workspaceId },
     include: loadedPrinterInclude
   }) as Promise<SpoolRowWithPrinter | null>
 }
@@ -91,14 +91,14 @@ function writableData(input: Partial<SpoolCreateInput>): Prisma.FilamentSpoolUnc
 
 export async function createSpoolRow(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   input: SpoolCreateInput
 ): Promise<SpoolRowWithPrinter> {
   const netWeightGrams = input.netWeightGrams ?? 1000
   const created = await db.filamentSpool.create({
     data: {
       ...(writableData(input) as Prisma.FilamentSpoolUncheckedCreateInput),
-      tenantId,
+      workspaceId,
       filamentType: input.filamentType,
       netWeightGrams,
       remainingGrams: input.remainingGrams ?? netWeightGrams,
@@ -111,15 +111,15 @@ export async function createSpoolRow(
 
 export async function updateSpoolRow(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   id: string,
   input: SpoolUpdateInput
 ): Promise<SpoolRowWithPrinter | null> {
   const data = writableData(input)
   if (input.archived !== undefined) data.archivedAt = input.archived ? new Date() : null
-  const result = await db.filamentSpool.updateMany({ where: { id, tenantId }, data })
+  const result = await db.filamentSpool.updateMany({ where: { id, workspaceId }, data })
   if (result.count === 0) return null
-  return getSpoolRow(db, tenantId, id)
+  return getSpoolRow(db, workspaceId, id)
 }
 
 /**
@@ -129,30 +129,30 @@ export async function updateSpoolRow(
  */
 export async function adjustSpoolRow(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   id: string,
   input: { remainingGrams?: number; deltaGrams?: number; note?: string }
 ): Promise<SpoolRowWithPrinter | null> {
-  const current = await getSpoolRow(db, tenantId, id)
+  const current = await getSpoolRow(db, workspaceId, id)
   if (!current) return null
   const next = input.remainingGrams != null
     ? input.remainingGrams
     : Math.max(0, current.remainingGrams + (input.deltaGrams ?? 0))
   const delta = next - current.remainingGrams
-  await db.filamentSpool.updateMany({ where: { id, tenantId }, data: { remainingGrams: next } })
-  await recordUsage(db, tenantId, id, { grams: -delta, source: 'manual', note: input.note ?? null })
-  return getSpoolRow(db, tenantId, id)
+  await db.filamentSpool.updateMany({ where: { id, workspaceId }, data: { remainingGrams: next } })
+  await recordUsage(db, workspaceId, id, { grams: -delta, source: 'manual', note: input.note ?? null })
+  return getSpoolRow(db, workspaceId, id)
 }
 
 export async function assignSpoolRow(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   id: string,
   input: SpoolAssignInput
 ): Promise<SpoolRowWithPrinter | null> {
   const now = new Date()
   const result = await db.filamentSpool.updateMany({
-    where: { id, tenantId },
+    where: { id, workspaceId },
     data: {
       loadedPrinterId: input.printerId,
       loadedAmsId: input.amsId,
@@ -163,44 +163,44 @@ export async function assignSpoolRow(
     }
   })
   if (result.count === 0) return null
-  return getSpoolRow(db, tenantId, id)
+  return getSpoolRow(db, workspaceId, id)
 }
 
 export async function unassignSpoolRow(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   id: string
 ): Promise<SpoolRowWithPrinter | null> {
   const result = await db.filamentSpool.updateMany({
-    where: { id, tenantId },
+    where: { id, workspaceId },
     data: { loadedPrinterId: null, loadedAmsId: null, loadedSlotId: null, loadedAt: null }
   })
   if (result.count === 0) return null
-  return getSpoolRow(db, tenantId, id)
+  return getSpoolRow(db, workspaceId, id)
 }
 
-export async function recycleSpoolRow(db: AnyPrismaClient, tenantId: string, id: string): Promise<boolean> {
+export async function recycleSpoolRow(db: AnyPrismaClient, workspaceId: string, id: string): Promise<boolean> {
   const result = await db.filamentSpool.updateMany({
-    where: { id, tenantId, deletedAt: null },
+    where: { id, workspaceId, deletedAt: null },
     data: { deletedAt: new Date(), loadedPrinterId: null, loadedAmsId: null, loadedSlotId: null, loadedAt: null }
   })
   return result.count > 0
 }
 
-export async function restoreSpoolRow(db: AnyPrismaClient, tenantId: string, id: string): Promise<SpoolRowWithPrinter | null> {
-  const result = await db.filamentSpool.updateMany({ where: { id, tenantId }, data: { deletedAt: null } })
+export async function restoreSpoolRow(db: AnyPrismaClient, workspaceId: string, id: string): Promise<SpoolRowWithPrinter | null> {
+  const result = await db.filamentSpool.updateMany({ where: { id, workspaceId }, data: { deletedAt: null } })
   if (result.count === 0) return null
-  return getSpoolRow(db, tenantId, id)
+  return getSpoolRow(db, workspaceId, id)
 }
 
-export async function deleteSpoolRow(db: AnyPrismaClient, tenantId: string, id: string): Promise<boolean> {
-  const result = await db.filamentSpool.deleteMany({ where: { id, tenantId } })
+export async function deleteSpoolRow(db: AnyPrismaClient, workspaceId: string, id: string): Promise<boolean> {
+  const result = await db.filamentSpool.deleteMany({ where: { id, workspaceId } })
   return result.count > 0
 }
 
-export async function listUsageRows(db: AnyPrismaClient, tenantId: string, spoolId: string, limit = 200) {
+export async function listUsageRows(db: AnyPrismaClient, workspaceId: string, spoolId: string, limit = 200) {
   return db.filamentSpoolUsage.findMany({
-    where: { tenantId, spoolId },
+    where: { workspaceId, spoolId },
     orderBy: { recordedAt: 'desc' },
     take: limit
   })
@@ -238,9 +238,9 @@ type UsageGroupBy = (args: {
  */
 export async function readFilamentUsageStats(
   db: AnyPrismaClient,
-  tenantId: string
+  workspaceId: string
 ): Promise<FilamentUsageStats> {
-  const where: Prisma.FilamentSpoolWhereInput = { tenantId, deletedAt: null }
+  const where: Prisma.FilamentSpoolWhereInput = { workspaceId, deletedAt: null }
   const groupBy = db.filamentSpool.groupBy as unknown as UsageGroupBy
   const [byTypeRows, byBrandRows] = await Promise.all([
     groupBy({ by: ['filamentType'], where, _sum: { netWeightGrams: true, remainingGrams: true } }),
@@ -267,13 +267,13 @@ export async function readFilamentUsageStats(
  */
 export async function findLoadedSpoolIdentity(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   printerId: string,
   amsId: number,
   slotId: number
 ): Promise<{ spoolId: string; brand: string | null; filamentType: string; materialSubtype: string | null; colorName: string | null } | null> {
   const spool = await db.filamentSpool.findFirst({
-    where: { tenantId, loadedPrinterId: printerId, loadedAmsId: amsId, loadedSlotId: slotId, deletedAt: null },
+    where: { workspaceId, loadedPrinterId: printerId, loadedAmsId: amsId, loadedSlotId: slotId, deletedAt: null },
     select: { id: true, brand: true, filamentType: true, materialSubtype: true, colorName: true },
     orderBy: { loadedAt: 'desc' }
   })
@@ -290,13 +290,13 @@ export async function findLoadedSpoolIdentity(
 /** Append a consumption-ledger row. Positive `grams` = filament consumed. */
 export async function recordUsage(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   spoolId: string,
   entry: { grams: number; source: FilamentUsageSource; jobId?: string | null; note?: string | null }
 ): Promise<void> {
   await db.filamentSpoolUsage.create({
     data: {
-      tenantId,
+      workspaceId,
       spoolId,
       grams: entry.grams,
       source: entry.source,

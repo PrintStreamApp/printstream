@@ -1,6 +1,6 @@
 import { Alert, Box, CircularProgress, Stack, Typography } from '@mui/joy'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
-import type { TenantSummary } from '@printstream/shared'
+import type { WorkspaceSummary } from '@printstream/shared'
 import { useEffect, useRef } from 'react'
 import { WorkspaceSelectionView } from './WorkspaceSelectionView'
 
@@ -16,22 +16,22 @@ import { WorkspaceSelectionView } from './WorkspaceSelectionView'
 export function ConnectBridgeView({
   code,
   workspaces,
-  activeTenantId,
+  activeWorkspaceId,
   pending,
   onConnect
 }: {
   code: string | null
-  workspaces: ReadonlyArray<TenantSummary>
-  activeTenantId: string | null
+  workspaces: ReadonlyArray<WorkspaceSummary>
+  activeWorkspaceId: string | null
   pending: boolean
-  onConnect: (tenantId: string) => void
+  onConnect: (workspaceId: string) => void
 }) {
-  // A single accessible workspace (or, in single-tenant contexts, the active
+  // A single accessible workspace (or, in single-workspace contexts, the active
   // one) needs no chooser — route straight to its Bridges page.
   const soleTarget = workspaces.length === 1
     ? workspaces[0]?.id ?? null
-    : workspaces.length === 0 && activeTenantId
-      ? activeTenantId
+    : workspaces.length === 0 && activeWorkspaceId
+      ? activeWorkspaceId
       : null
   const autoConnected = useRef(false)
 
@@ -55,10 +55,10 @@ export function ConnectBridgeView({
   if (workspaces.length >= 2) {
     return (
       <WorkspaceSelectionView
-        tenantOptions={workspaces}
+        workspaceOptions={workspaces}
         title="Connect your bridge"
         description="Choose the workspace this bridge should belong to."
-        onTenantSelect={onConnect}
+        onWorkspaceSelect={onConnect}
         selectionPending={pending}
       />
     )

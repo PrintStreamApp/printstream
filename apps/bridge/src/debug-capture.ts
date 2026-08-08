@@ -14,7 +14,7 @@
  * already-parsed MQTT/event payloads — never the LAN access code or a full
  * `Printer` config object. Keep it that way (the access code is a secret).
  *
- * Single capture at a time: the bridge process is single-tenant and a capture is
+ * Single capture at a time: the bridge process is single-workspace and a capture is
  * a deliberate, short-lived diagnostic, so a new start discards any prior buffer.
  */
 import type {

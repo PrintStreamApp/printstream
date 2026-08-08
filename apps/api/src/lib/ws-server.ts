@@ -2,10 +2,10 @@
  * WebSocket fan-out.
  *
  * One persistent server attached to the same HTTP server as Express.
- * Connections are indexed by tenant so a tenant-scoped broadcast (the hot
- * path — every printer status delta) touches only that tenant's sockets
+ * Connections are indexed by workspace so a workspace-scoped broadcast (the hot
+ * path — every printer status delta) touches only that workspace's sockets
  * rather than scanning every connected client. Platform-wide broadcasts
- * (tenantId === null) still walk the full client map, but those are rare.
+ * (workspaceId === null) still walk the full client map, but those are rare.
  *
  * Camera frames are delivered over binary WS messages to subscribed
  * clients. See {@link CameraRelay} for the shared-socket multiplexing
@@ -33,24 +33,24 @@ import { CameraSnapshotHub } from './camera-snapshot-hub.js'
 import { broadcastJobsChanged } from './ws-resource-events.js'
 import { clientSessions } from './client-sessions.js'
 import { AUTHENTICATION_REQUIRED_MESSAGE, PERMISSION_REQUIRED_MESSAGE } from './authorization.js'
-import { resolveEffectiveTenantForAuth, withResolvedTenantRequestContext, withTenantRequestContext, getCurrentTenant, type RequestTenantSummary } from './tenant-context.js'
+import { resolveEffectiveWorkspaceForAuth, withResolvedWorkspaceRequestContext, withWorkspaceRequestContext, getCurrentWorkspace, type RequestWorkspaceSummary } from './workspace-context.js'
 
 export interface WsBroadcaster {
   /**
    * Fan out a WS event to connected clients.
    *
-   * @param tenantId — pass a tenant ID to restrict delivery to that
-   *   tenant's connections. Pass `null` to broadcast to every connected
+   * @param workspaceId — pass a workspace ID to restrict delivery to that
+   *   workspace's connections. Pass `null` to broadcast to every connected
    *   client (platform-wide events only — use deliberately).
    */
-  broadcast(event: WsEvent, tenantId: string | null): void
-  broadcastSnapshotUpdated(printerId: string, capturedAt: number, tenantId?: string | null): void
-  notifyAuthChanged(input: { userIds?: readonly string[]; tenantId?: string | null }): void
+  broadcast(event: WsEvent, workspaceId: string | null): void
+  broadcastSnapshotUpdated(printerId: string, capturedAt: number, workspaceId?: string | null): void
+  notifyAuthChanged(input: { userIds?: readonly string[]; workspaceId?: string | null }): void
   size(): number
 }
 
 interface WsClientContext {
-  tenant: RequestTenantSummary | null
+  workspace: RequestWorkspaceSummary | null
   auth: RequestAuthContext
 }
 
@@ -60,23 +60,23 @@ export interface AttachedWebSocketServer {
 
 export class Broadcaster implements WsBroadcaster {
   private readonly clients = new Map<WebSocket, WsClientContext>()
-  // Secondary index: tenantId -> that tenant's sockets. Lets a tenant-scoped
-  // broadcast (the per-status-delta hot path) be O(that tenant's connections)
-  // instead of O(all connected clients). Sockets whose context has no tenant are
-  // never indexed here (they never receive tenant-scoped events) and are reached
-  // only via the full `clients` map on platform-wide (tenantId === null) sends.
-  private readonly clientsByTenant = new Map<string, Set<WebSocket>>()
+  // Secondary index: workspaceId -> that workspace's sockets. Lets a workspace-scoped
+  // broadcast (the per-status-delta hot path) be O(that workspace's connections)
+  // instead of O(all connected clients). Sockets whose context has no workspace are
+  // never indexed here (they never receive workspace-scoped events) and are reached
+  // only via the full `clients` map on platform-wide (workspaceId === null) sends.
+  private readonly clientsByWorkspace = new Map<string, Set<WebSocket>>()
 
   add(socket: WebSocket, context: WsClientContext): void {
     this.clients.set(socket, context)
-    const tenantId = context.tenant?.id
-    if (tenantId != null) {
-      let tenantSockets = this.clientsByTenant.get(tenantId)
-      if (!tenantSockets) {
-        tenantSockets = new Set()
-        this.clientsByTenant.set(tenantId, tenantSockets)
+    const workspaceId = context.workspace?.id
+    if (workspaceId != null) {
+      let workspaceSockets = this.clientsByWorkspace.get(workspaceId)
+      if (!workspaceSockets) {
+        workspaceSockets = new Set()
+        this.clientsByWorkspace.set(workspaceId, workspaceSockets)
       }
-      tenantSockets.add(socket)
+      workspaceSockets.add(socket)
     }
     socket.once('close', () => this.remove(socket))
   }
@@ -84,21 +84,21 @@ export class Broadcaster implements WsBroadcaster {
   private remove(socket: WebSocket): void {
     const context = this.clients.get(socket)
     this.clients.delete(socket)
-    const tenantId = context?.tenant?.id
-    if (tenantId == null) return
-    const tenantSockets = this.clientsByTenant.get(tenantId)
-    if (!tenantSockets) return
-    tenantSockets.delete(socket)
-    if (tenantSockets.size === 0) this.clientsByTenant.delete(tenantId)
+    const workspaceId = context?.workspace?.id
+    if (workspaceId == null) return
+    const workspaceSockets = this.clientsByWorkspace.get(workspaceId)
+    if (!workspaceSockets) return
+    workspaceSockets.delete(socket)
+    if (workspaceSockets.size === 0) this.clientsByWorkspace.delete(workspaceId)
   }
 
-  broadcast(event: WsEvent, tenantId: string | null): void {
+  broadcast(event: WsEvent, workspaceId: string | null): void {
     recordWsEventBroadcast(event.type)
     const payload = JSON.stringify(event)
-    if (tenantId != null) {
-      const tenantSockets = this.clientsByTenant.get(tenantId)
-      if (!tenantSockets) return
-      for (const socket of tenantSockets) {
+    if (workspaceId != null) {
+      const workspaceSockets = this.clientsByWorkspace.get(workspaceId)
+      if (!workspaceSockets) return
+      for (const socket of workspaceSockets) {
         if (socket.readyState === WebSocket.OPEN) socket.send(payload)
       }
       return
@@ -108,27 +108,27 @@ export class Broadcaster implements WsBroadcaster {
     }
   }
 
-  broadcastSnapshotUpdated(printerId: string, capturedAt: number, tenantId?: string | null): void {
-    if (tenantId !== undefined) {
-      this.broadcast({ type: 'camera.snapshot.updated', printerId, capturedAt }, tenantId)
+  broadcastSnapshotUpdated(printerId: string, capturedAt: number, workspaceId?: string | null): void {
+    if (workspaceId !== undefined) {
+      this.broadcast({ type: 'camera.snapshot.updated', printerId, capturedAt }, workspaceId)
       return
     }
 
-    void readPrinterTenantId(printerId).then((resolvedTenantId) => {
-      if (!resolvedTenantId) return
-      this.broadcast({ type: 'camera.snapshot.updated', printerId, capturedAt }, resolvedTenantId)
+    void readPrinterWorkspaceId(printerId).then((resolvedWorkspaceId) => {
+      if (!resolvedWorkspaceId) return
+      this.broadcast({ type: 'camera.snapshot.updated', printerId, capturedAt }, resolvedWorkspaceId)
     })
   }
 
-  notifyAuthChanged(input: { userIds?: readonly string[]; tenantId?: string | null }): void {
+  notifyAuthChanged(input: { userIds?: readonly string[]; workspaceId?: string | null }): void {
     const userIds = input.userIds ? new Set(input.userIds) : null
     const payload = JSON.stringify({ type: 'auth.changed' } satisfies WsEvent)
     for (const [socket, context] of this.clients) {
       if (socket.readyState !== WebSocket.OPEN) continue
       const actor = context.auth.actor
       const matchesUser = userIds == null || (actor.type === 'user' && userIds.has(actor.userId))
-      const matchesTenant = input.tenantId === undefined || context.tenant?.id === input.tenantId || (input.tenantId === null && context.tenant == null)
-      if (!matchesUser || !matchesTenant) continue
+      const matchesWorkspace = input.workspaceId === undefined || context.workspace?.id === input.workspaceId || (input.workspaceId === null && context.workspace == null)
+      if (!matchesUser || !matchesWorkspace) continue
       socket.send(payload, () => socket.close(4001, 'auth changed'))
     }
   }
@@ -192,7 +192,7 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
 
       wss.handleUpgrade(request, socket, head, (ws) => {
         ;(request as IncomingMessage & { bambuConnection?: WsClientContext }).bambuConnection = {
-          tenant: resolved.tenant,
+          workspace: resolved.workspace,
           auth: resolved.auth
         }
         wss.emit('connection', ws, request)
@@ -207,7 +207,7 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
 
   wss.on('connection', (socket, request) => {
     const context = (request as IncomingMessage & { bambuConnection?: WsClientContext }).bambuConnection ?? {
-      tenant: null,
+      workspace: null,
       auth: createAnonymousAuthContext({ demoMode: false, authEnabled: false })
     }
     const desiredCameraSubscriptions = new Set<string>()
@@ -225,11 +225,11 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
     socket.send(JSON.stringify({ type: 'hello', serverTime: new Date().toISOString() }))
     // Replay current cached snapshots so the new client doesn't have to
     // wait for the next MQTT delta to render anything.
-    void replayStatusesForTenant(socket, context.tenant)
-    void replayPrinterFtpActivityForTenant(socket, context.tenant)
+    void replayStatusesForWorkspace(socket, context.workspace)
+    void replayPrinterFtpActivityForWorkspace(socket, context.workspace)
     // Replay the current discovered-printer set so the Add Printer
     // dialog can populate immediately on first paint.
-    void sendDiscoveredPrinters(socket, context.tenant)
+    void sendDiscoveredPrinters(socket, context.workspace)
 
     socket.on('message', (data) => {
       if (typeof data !== 'string' && !Buffer.isBuffer(data)) return
@@ -291,20 +291,20 @@ export function attachWebSocketServer(server: HttpServer): AttachedWebSocketServ
   const handleStatus = (status: PrinterStatus) => {
     void broadcastStatus(status)
   }
-  const handlePrinterRemoved = (event: { printerId: string; tenantId: string }) => {
-    wsBroadcaster.broadcast({ type: 'printer.removed', printerId: event.printerId }, event.tenantId)
+  const handlePrinterRemoved = (event: { printerId: string; workspaceId: string }) => {
+    wsBroadcaster.broadcast({ type: 'printer.removed', printerId: event.printerId }, event.workspaceId)
   }
   const handlePrinterDiscovered = () => {
     broadcastDiscoveredPrinters()
   }
   const handleJobStarted = (event: { printer: { id: string } }) => {
-    void readPrinterTenantId(event.printer.id).then((tenantId) => {
-      if (tenantId) broadcastJobsChanged(tenantId)
+    void readPrinterWorkspaceId(event.printer.id).then((workspaceId) => {
+      if (workspaceId) broadcastJobsChanged(workspaceId)
     })
   }
   const handleJobFinished = (event: { printer: { id: string } }) => {
-    void readPrinterTenantId(event.printer.id).then((tenantId) => {
-      if (tenantId) broadcastJobsChanged(tenantId)
+    void readPrinterWorkspaceId(event.printer.id).then((workspaceId) => {
+      if (workspaceId) broadcastJobsChanged(workspaceId)
     })
   }
 
@@ -354,14 +354,14 @@ async function authorizeCameraAccess(
     return { ok: false, message: PERMISSION_REQUIRED_MESSAGE }
   }
 
-  if (!context.tenant?.id) {
-    return { ok: false, message: 'Tenant context is required for camera access.' }
+  if (!context.workspace?.id) {
+    return { ok: false, message: 'Workspace context is required for camera access.' }
   }
 
   const row = await rootPrisma.printer.findFirst({
     where: {
       id: printerId,
-      tenantId: context.tenant.id
+      workspaceId: context.workspace.id
     },
     select: {
       id: true,
@@ -386,42 +386,42 @@ async function resolveUpgradeAuth(request: IncomingMessage) {
     demoMode: false,
     authEnabled: false
   })
-  const resolved = await withResolvedTenantRequestContext(request as Request, async () => {
+  const resolved = await withResolvedWorkspaceRequestContext(request as Request, async () => {
     const auth = await resolveRequestAuth(prisma, request as Request, anonymous)
-    const requestTenant = getCurrentTenant()
+    const requestWorkspace = getCurrentWorkspace()
     return {
-      auth: applyPublicDemoGuestAuth(auth, requestTenant),
-      requestTenant
+      auth: applyPublicDemoGuestAuth(auth, requestWorkspace),
+      requestWorkspace
     }
   })
-  const requestTenantAuthEnabled = resolved.requestTenant
-    ? await withTenantRequestContext(resolved.requestTenant, async () => await authProviderRegistry.hasEnabledProviders())
+  const requestWorkspaceAuthEnabled = resolved.requestWorkspace
+    ? await withWorkspaceRequestContext(resolved.requestWorkspace, async () => await authProviderRegistry.hasEnabledProviders())
     : false
-  const effectiveTenant = await resolveEffectiveTenantForAuth(resolved.auth, resolved.requestTenant, {
-    requestTenantAuthEnabled
+  const effectiveWorkspace = await resolveEffectiveWorkspaceForAuth(resolved.auth, resolved.requestWorkspace, {
+    requestWorkspaceAuthEnabled
   })
-  const authEnabled = await withTenantRequestContext(effectiveTenant, async () => await authProviderRegistry.hasEnabledProviders())
+  const authEnabled = await withWorkspaceRequestContext(effectiveWorkspace, async () => await authProviderRegistry.hasEnabledProviders())
 
   return {
     auth: {
       ...resolved.auth,
       authEnabled
     },
-    tenant: effectiveTenant
+    workspace: effectiveWorkspace
   }
 }
 
 function broadcastDiscoveredPrinters(): void {
   wsBroadcaster.forEachClient((socket, context) => {
-    void sendDiscoveredPrinters(socket, context.tenant)
+    void sendDiscoveredPrinters(socket, context.workspace)
   })
 }
 
-async function sendDiscoveredPrinters(socket: WebSocket, tenant: RequestTenantSummary | null): Promise<void> {
-  const tenantId = tenant?.id ?? null
-  if (!tenantId) return
+async function sendDiscoveredPrinters(socket: WebSocket, workspace: RequestWorkspaceSummary | null): Promise<void> {
+  const workspaceId = workspace?.id ?? null
+  if (!workspaceId) return
   const bridges = await rootPrisma.bridge.findMany({
-    where: { tenantId },
+    where: { workspaceId },
     select: { id: true }
   })
   const bridgeIds = bridges.map((bridge) => bridge.id)
@@ -431,24 +431,24 @@ async function sendDiscoveredPrinters(socket: WebSocket, tenant: RequestTenantSu
     return
   }
   const adopted = await rootPrisma.printer.findMany({
-    where: { tenantId },
+    where: { workspaceId },
     select: { serial: true }
   })
   const adoptedSerials = new Set(adopted.map((row) => row.serial))
   const printers = printerDiscovery
-    .list({ tenantId, bridgeIds })
+    .list({ workspaceId, bridgeIds })
     .filter((entry) => !adoptedSerials.has(entry.serial))
 
   if (socket.readyState !== WebSocket.OPEN) return
   socket.send(JSON.stringify({ type: 'printer.discovered', printers }))
 }
 
-async function replayStatusesForTenant(socket: WebSocket, tenant: RequestTenantSummary | null): Promise<void> {
-  const visiblePrinterIds = await listTenantPrinterIds(tenant?.id ?? null)
+async function replayStatusesForWorkspace(socket: WebSocket, workspace: RequestWorkspaceSummary | null): Promise<void> {
+  const visiblePrinterIds = await listWorkspacePrinterIds(workspace?.id ?? null)
   if (visiblePrinterIds.size === 0) return
 
-  // Look up each of the tenant's printers by id rather than scanning every
-  // managed printer in the process — keeps replay O(tenant printers) on connect.
+  // Look up each of the workspace's printers by id rather than scanning every
+  // managed printer in the process — keeps replay O(workspace printers) on connect.
   for (const printerId of visiblePrinterIds) {
     const status = printerManager.getStatus(printerId)
     if (!status) continue
@@ -457,8 +457,8 @@ async function replayStatusesForTenant(socket: WebSocket, tenant: RequestTenantS
   }
 }
 
-async function replayPrinterFtpActivityForTenant(socket: WebSocket, tenant: RequestTenantSummary | null): Promise<void> {
-  const visiblePrinterIds = await listTenantPrinterIds(tenant?.id ?? null)
+async function replayPrinterFtpActivityForWorkspace(socket: WebSocket, workspace: RequestWorkspaceSummary | null): Promise<void> {
+  const visiblePrinterIds = await listWorkspacePrinterIds(workspace?.id ?? null)
   if (visiblePrinterIds.size === 0) return
 
   for (const printerId of bridgeSessionManager.listActivePrinterFtpActivity()) {
@@ -469,8 +469,8 @@ async function replayPrinterFtpActivityForTenant(socket: WebSocket, tenant: Requ
 }
 
 async function broadcastStatus(status: PrinterStatus): Promise<void> {
-  const tenantId = await readPrinterTenantId(status.printerId)
-  if (!tenantId) return
+  const workspaceId = await readPrinterWorkspaceId(status.printerId)
+  if (!workspaceId) return
   // The WS contract is compile-time only on this hot path; in non-production
   // validate the payload before sending so the producer fails loudly on drift
   // (a field shape the client schema would silently drop) instead of leaving
@@ -484,7 +484,7 @@ async function broadcastStatus(status: PrinterStatus): Promise<void> {
       })
     }
   }
-  wsBroadcaster.broadcast({ type: 'printer.status', status }, tenantId)
+  wsBroadcaster.broadcast({ type: 'printer.status', status }, workspaceId)
 }
 
 /**
@@ -502,25 +502,25 @@ function sendWsError(socket: WebSocket, message: string): void {
   socket.send(JSON.stringify({ type: 'error', message }))
 }
 
-async function readPrinterTenantId(printerId: string): Promise<string | null> {
+async function readPrinterWorkspaceId(printerId: string): Promise<string | null> {
   // Status/job/snapshot events fan out at MQTT cadence (live deltas plus a 30s
-  // pushall per printer), so resolve the tenant from the manager's in-memory cache
+  // pushall per printer), so resolve the workspace from the manager's in-memory cache
   // first — a Postgres findUnique per event would scale DB load with telemetry rate,
   // not user activity. Fall back to the DB only on a cache miss.
-  const cached = printerManager.getTenantId(printerId)
+  const cached = printerManager.getWorkspaceId(printerId)
   if (cached) return cached
   const row = await rootPrisma.printer.findUnique({
     where: { id: printerId },
-    select: { tenantId: true }
+    select: { workspaceId: true }
   })
-  return row?.tenantId ?? null
+  return row?.workspaceId ?? null
 }
 
-async function listTenantPrinterIds(tenantId: string | null): Promise<Set<string>> {
-  if (!tenantId) return new Set()
+async function listWorkspacePrinterIds(workspaceId: string | null): Promise<Set<string>> {
+  if (!workspaceId) return new Set()
 
   const rows = await rootPrisma.printer.findMany({
-    where: { tenantId },
+    where: { workspaceId },
     select: { id: true }
   })
   return new Set(rows.map((row) => row.id))

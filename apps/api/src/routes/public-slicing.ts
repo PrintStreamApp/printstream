@@ -3,12 +3,12 @@
  *
  * The public 3MF editor runs with no account and no workspace, but it still has to know which
  * machines, processes, and filaments exist — a project's presets are meaningless without the
- * catalogue they name. That data is not tenant data: it is BambuStudio's bundled presets, shipped
+ * catalogue they name. That data is not workspace data: it is BambuStudio's bundled presets, shipped
  * inside the slicer image and identical for everyone.
  *
- * The tenant route (`/api/slicing/profiles`) stays exactly as it was. This is a separate surface
+ * The workspace route (`/api/slicing/profiles`) stays exactly as it was. This is a separate surface
  * rather than a relaxation of that one, so the split is structural: **nothing here ever consults a
- * tenant**, so no custom profile, printer, or workspace value can reach an anonymous caller even by
+ * workspace**, so no custom profile, printer, or workspace value can reach an anonymous caller even by
  * mistake. A user's own presets live in their browser on this surface, never on the server.
  *
  * Cost posture: the catalogue is multi-MB and immutable for the life of a slicer image, so it is
@@ -38,14 +38,14 @@ export const publicSlicingRouter = Router()
 const CATALOGUE_CACHE_SECONDS = 60 * 60
 
 /**
- * The built-in profile catalogue. No tenant customs — those require a workspace by definition, and
+ * The built-in profile catalogue. No workspace customs — those require a workspace by definition, and
  * a caller here has none.
  */
 publicSlicingRouter.get('/profiles', async (request, response) => {
   const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
   const profiles = await slicerClient.profiles(targetId)
   response.setHeader('Cache-Control', `public, max-age=${CATALOGUE_CACHE_SECONDS}`)
-  // Same reasoning as the tenant route: this is the largest JSON the web app loads, and a one-shot
+  // Same reasoning as the workspace route: this is the largest JSON the web app loads, and a one-shot
   // `response.json()` is what the dev proxy intermittently truncates on large bodies.
   await sendModelBuffer(request, response, Buffer.from(JSON.stringify({ profiles }), 'utf8'), 'application/json')
 })
@@ -109,7 +109,7 @@ publicSlicingRouter.post('/resolve-filament', async (request, response) => {
  * come from here. Builtin-only for the same reason as the others: a custom machine preset is
  * workspace data.
  *
- * Unlike the tenant route there is no parent-preset baseline in the response: the browser uses this
+ * Unlike the workspace route there is no parent-preset baseline in the response: the browser uses this
  * to AUTHOR settings, not to diff them, so `baseConfig` would be dead weight on a multi-hundred-key
  * body. Counterpart: `apps/web/src/plugins/model-studio/lib/localMachineRetarget.ts`.
  */
@@ -126,7 +126,7 @@ publicSlicingRouter.post('/resolve-machine', async (request, response) => {
 /**
  * The modelled 3D build plate for a printer, from the slicer's bundled BambuStudio resources. A
  * printer with no bundled bed answers 404 and the editor keeps its millimetre grid, exactly as the
- * tenant route behaves.
+ * workspace route behaves.
  */
 publicSlicingRouter.get('/bed-model', async (request, response) => {
   const printerModel = typeof request.query.printerModel === 'string' ? request.query.printerModel.trim() : ''

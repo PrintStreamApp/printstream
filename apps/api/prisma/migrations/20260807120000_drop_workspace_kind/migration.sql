@@ -1,0 +1,15 @@
+-- Retire the self-hosted workspace kind.
+--
+-- The column held one of two values, and only "selfHosted" changed anything: it
+-- turned a workspace into a shell that carried a licence and a support thread
+-- while the app shell hid printers, bridges, and the library. A licence hangs
+-- off the CUSTOMER, not a workspace -- an account can hold one with no
+-- workspace at all -- so the shell duplicated an account surface and read to
+-- users as a workspace that had lost its hardware. Both halves are gone from
+-- the app; this drops the column behind them.
+--
+-- Dropping is the conversion. A "selfHosted" row becomes an ordinary cloud
+-- workspace, which is the correct end state: it keeps its name, members, and
+-- history, and simply stops hiding surfaces. Nothing referenced the value other
+-- than the removed shell, so no data moves.
+ALTER TABLE "Workspace" DROP COLUMN "kind";

@@ -8,7 +8,7 @@
  *
  * The filament-manager plugin registers a hook (from its `init`, before the
  * React tree mounts, so the hook identity is stable for the whole session);
- * when no plugin registers — or the plugin is disabled for the tenant — the
+ * when no plugin registers — or the plugin is disabled for the workspace — the
  * lookup resolves nothing and callers fall back to tray-derived identity.
  */
 import { useMemo } from 'react'

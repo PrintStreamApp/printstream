@@ -43,6 +43,7 @@ import {
   THREE_MF_PROJECT_SETTINGS_ENTRY,
   THREE_MF_SLICE_INFO_ENTRY as SLICE_INFO_ENTRY
 } from './entries.js'
+import { isEmbeddedFilamentPresetEntry } from './embedded-presets.js'
 import { CUSTOM_GCODE_PER_LAYER_ENTRY, sliceRecordFilamentIds, stringArray } from './index-parser.js'
 import { repairObjectMeshesInModelEntry } from './mesh-repair.js'
 import { applyObjectProcessOverridesXml, rekeyObjectProcessOverrides, type ObjectProcessOverrides } from './object-overrides.js'
@@ -384,6 +385,15 @@ export function planEditedThreeMf(
     }
     // Split-out imported sub-models: write each part file and declare it in the sub-model rels so
     // BambuStudio loads them (transform the existing rels, or add a fresh one if the source had none).
+    // Embedded project presets the user chose to remove. BambuStudio re-embeds every sidecar it
+    // finds on every save (`get_project_embedded_presets`), so one it fabricated once follows the
+    // project forever and keeps appearing in the user's filament dropdown; dropping the entry is
+    // the only way out. Explicit removals only — see `three-mf/embedded-presets.ts` for why an
+    // unreferenced preset is still not ours to delete unasked.
+    for (const entryPath of edit.removedEmbeddedPresets ?? []) {
+      if (isEmbeddedFilamentPresetEntry(entryPath)) transforms.set(entryPath, () => null)
+    }
+
     if (documents.partFileEntries.length > 0) {
       for (const partFile of documents.partFileEntries) extraEntries.push(partFile)
       const updatedModelRels = appendImportPartRelationships(baseModelRelsXml, documents.partFileEntries)

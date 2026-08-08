@@ -23,14 +23,18 @@
  * some slot lacks is skipped whole and reported in `skippedKeys` — padding the gap with `''` is the
  * guess this module exists to refuse, and an empty value is itself what makes BambuStudio mint a
  * defaults-only preset. A scalar broadcasts across the variants; nothing is ever widened past what
- * the project declares.
+ * the project declares. Keys the project already carries at an acceptable width are PRESERVED, not
+ * rewritten: detection is blunt enough to fire on partially-damaged files, and there the missing or
+ * stale keys are the defect — overwriting a healthy key would quietly normalise in-project values
+ * on slots the user never touched.
  *
  * Detection is {@link inspectProjectFilamentPhysics}; see the `repairs/index.ts` contract for why
  * repair is user-invoked and never heals at rest.
  */
-import { FILAMENT_SETTING_KEYS, filamentSettingsCatalog } from '../filament-settings.js'
-import { FILAMENT_PRESET_DEFAULTS, FILAMENT_PRESET_OPTIONS } from '../generated/filament-preset-options.generated.js'
+import { filamentSettingsCatalog } from '../filament-settings.js'
+import { FILAMENT_PRESET_DEFAULTS, FILAMENT_PRESET_OPTIONS } from '../generated/preset-options.generated.js'
 import { filamentVariantsPerSlot, isFilamentVariantOption } from '../variant-options.js'
+import { isAcceptableFilamentValueWidth } from './filament-physics.js'
 import type { ProcessConfig } from '../process-settings.js'
 
 /**
@@ -159,6 +163,18 @@ export function restoreFilamentPhysics(
     // differing key is enough for it to mint a `(<project>.3mf)` copy instead of binding the preset.
     // Default in order of authority: BambuStudio's PrintConfig default for the option, then the tune
     // dialog's catalogue (same source, narrower list, kept as a backstop).
+    //
+    // PRESERVE-PRESENT: a key the project already carries at an acceptable width is left alone.
+    // Detection is blunt (any missing sentinel flags the file), so this runs on PARTIALLY-damaged
+    // projects too — where the missing/stale keys are the defect, and rewriting a healthy key from
+    // the presets would quietly normalise in-project values on slots the user never touched (a
+    // changed slot's present keys are re-authored by `rebindProjectFilamentPhysics`, not here).
+    // The width rule is shared with the inspector, so a key skipped here can never stay flagged.
+    const existing = record[key]
+    const existingLength = Array.isArray(existing)
+      ? existing.length
+      : typeof existing === 'string' && existing !== '' ? 1 : 0
+    if (existingLength > 0 && isAcceptableFilamentValueWidth(key, existingLength, slotCount, variantsPerSlot)) continue
     const perSlotColumns = sources.map((config) => columnsFor(config?.[key]))
     // WIDTH, in two cases:
     //  - VARIANT-scoped keys take the project's variant count. Never the preset's shape: a preset may

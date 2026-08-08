@@ -26,7 +26,7 @@ import {
 import type { CalibrationRun as CalibrationRunRow } from '@prisma/client'
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
-import type { RequestTenantSummary } from '../../lib/tenant-context.js'
+import type { RequestWorkspaceSummary } from '../../lib/workspace-context.js'
 import { persistLibraryFileFromLocalPath } from '../../lib/library-files.js'
 import { resolveLibraryFileToLocalPath } from '../../lib/bridge-library-files.js'
 import { resolveSlicingPresetFiles } from '../../lib/slicing-presets.js'
@@ -76,7 +76,7 @@ const PA_TOWER_PROCESS_OVERRIDES: Record<string, string> = {
 
 export interface CalibrationRunManagerDeps {
   /** Resolve a printer to the fields the run needs; throws `notFound` if missing. */
-  resolvePrinter(db: AnyPrismaClient, tenantId: string, printerId: string): Promise<{
+  resolvePrinter(db: AnyPrismaClient, workspaceId: string, printerId: string): Promise<{
     id: string
     model: string
     bridgeId: string | null
@@ -85,7 +85,7 @@ export interface CalibrationRunManagerDeps {
     currentPlateType: string | null
   }>
   /** Resolve the identity of the filament loaded in an AMS slot (for the result's defaults). */
-  resolveSlotFilament(db: AnyPrismaClient, tenantId: string, printerId: string, amsId: number, slotId: number): Promise<
+  resolveSlotFilament(db: AnyPrismaClient, workspaceId: string, printerId: string, amsId: number, slotId: number): Promise<
     FilamentIdentity & { spoolId: string | null }
   >
   /** Push a pressure-advance K value to the printer's own profile for a tray (optional). */
@@ -125,11 +125,11 @@ export function shouldApplyKValue(saved: number | null, currentK: number | null)
 export async function autoApplyOnLoad(
   deps: CalibrationRunManagerDeps,
   db: AnyPrismaClient,
-  event: { tenantId: string; printerId: string; amsId: number; slotId: number; spoolId: string; brand: string | null; filamentType: string | null; materialSubtype: string | null; colorName: string | null }
+  event: { workspaceId: string; printerId: string; amsId: number; slotId: number; spoolId: string; brand: string | null; filamentType: string | null; materialSubtype: string | null; colorName: string | null }
 ): Promise<void> {
   let printer
   try {
-    printer = await deps.resolvePrinter(db, event.tenantId, event.printerId)
+    printer = await deps.resolvePrinter(db, event.workspaceId, event.printerId)
   } catch {
     return
   }
@@ -139,7 +139,7 @@ export async function autoApplyOnLoad(
   let colorName = event.colorName
   if (colorName == null) {
     try {
-      colorName = (await deps.resolveSlotFilament(db, event.tenantId, event.printerId, event.amsId, event.slotId)).colorName
+      colorName = (await deps.resolveSlotFilament(db, event.workspaceId, event.printerId, event.amsId, event.slotId)).colorName
     } catch {
       // keep null — colour simply doesn't constrain the match
     }
@@ -151,7 +151,7 @@ export async function autoApplyOnLoad(
     materialSubtype: event.materialSubtype,
     colorName
   }
-  const saved = await resolveSavedValue(db, event.tenantId, 'pressureAdvance', printer.model, printer.nozzleDiameter, identity)
+  const saved = await resolveSavedValue(db, event.workspaceId, 'pressureAdvance', printer.model, printer.nozzleDiameter, identity)
   const currentK = deps.getSlotK?.(event.printerId, event.amsId, event.slotId) ?? null
   if (!deps.applyPrinterKValue || !shouldApplyKValue(saved, currentK)) return
   await deps.applyPrinterKValue({
@@ -168,14 +168,14 @@ export async function autoApplyOnLoad(
 export async function startRun(
   deps: CalibrationRunManagerDeps,
   db: AnyPrismaClient,
-  tenantId: string,
-  tenant: RequestTenantSummary,
+  workspaceId: string,
+  workspace: RequestWorkspaceSummary,
   input: CreateCalibrationRun
 ): Promise<CalibrationRunRow> {
-  const printer = await deps.resolvePrinter(db, tenantId, input.printerId)
+  const printer = await deps.resolvePrinter(db, workspaceId, input.printerId)
   if (!printer.bridgeId) throw badRequest('The target printer is not attached to a bridge; a calibration print needs one to store the sliced file.')
   // The web supplies what it knows about the loaded filament; the printer's live AMS status fills gaps.
-  const observed = await deps.resolveSlotFilament(db, tenantId, input.printerId, input.amsId, input.slotId)
+  const observed = await deps.resolveSlotFilament(db, workspaceId, input.printerId, input.amsId, input.slotId)
   const filament = {
     spoolId: input.spoolId ?? observed.spoolId,
     brand: input.brand ?? observed.brand,
@@ -218,7 +218,7 @@ export async function startRun(
 
     const sizeBytes = (await stat(threeMfPath)).size
     const { file: sourceFile } = await persistLibraryFileFromLocalPath({
-      tenantId,
+      workspaceId,
       sourcePath: threeMfPath,
       fileName: `${label}.3mf`,
       sizeBytes,
@@ -245,15 +245,15 @@ export async function startRun(
       // a recognizable per-kind cover as the plate thumbnail (jobs/history/printer card read it).
       plateThumbnails: [{ plateIndex: 1, png: renderCalibrationCover(kind).toString('base64') }]
     }
-    const profileFiles = await resolveSlicingPresetFiles(tenantId, [
+    const profileFiles = await resolveSlicingPresetFiles(workspaceId, [
       { id: input.printerProfileId, kind: 'machine' },
       { id: input.processProfileId, kind: 'process' },
       { id: input.filamentProfileId, kind: 'filament' }
     ])
 
     const job = slicingJobs.enqueue({
-      tenantId,
-      tenant,
+      workspaceId,
+      workspace,
       sourceFileId: sourceFile.id,
       sourceFileName: sourceFile.name,
       sourcePath: await resolveLibraryFileToLocalPath(sourceFile),
@@ -262,7 +262,7 @@ export async function startRun(
       profileFiles
     })
 
-    const run = await createRun(db, tenantId, {
+    const run = await createRun(db, workspaceId, {
       kind,
       printerId: printer.id,
       printerModel: printer.model,
@@ -276,7 +276,7 @@ export async function startRun(
       colorName: filament.colorName,
       parameters: input.parameters
     })
-    await updateRun(db, tenantId, run.id, { slicingJobId: job.id })
+    await updateRun(db, workspaceId, run.id, { slicingJobId: job.id })
     return { ...run, slicingJobId: job.id }
   } finally {
     await rm(workDir, { recursive: true, force: true })
@@ -288,31 +288,31 @@ export async function startRun(
  * advance to `readyToPrint` with the output file id when ready, or `failed`.
  * Returns the possibly-updated row. A no-op for runs not in `slicing`.
  */
-export async function syncSliceStatus(db: AnyPrismaClient, tenantId: string, run: CalibrationRunRow): Promise<CalibrationRunRow> {
+export async function syncSliceStatus(db: AnyPrismaClient, workspaceId: string, run: CalibrationRunRow): Promise<CalibrationRunRow> {
   if (run.status !== 'slicing' || !run.slicingJobId) return run
   let job
   try {
-    job = slicingJobs.get(tenantId, run.slicingJobId)
+    job = slicingJobs.get(workspaceId, run.slicingJobId)
   } catch {
     return run
   }
   if (job.status === 'ready' && job.outputFileId) {
-    await updateRun(db, tenantId, run.id, { status: 'readyToPrint', outputFileId: job.outputFileId })
+    await updateRun(db, workspaceId, run.id, { status: 'readyToPrint', outputFileId: job.outputFileId })
     return { ...run, status: 'readyToPrint', outputFileId: job.outputFileId }
   }
   if (job.status === 'failed' || job.status === 'cancelled') {
     const errorMessage = job.error ?? 'Slicing failed'
-    await updateRun(db, tenantId, run.id, { status: 'failed', errorMessage })
+    await updateRun(db, workspaceId, run.id, { status: 'failed', errorMessage })
     return { ...run, status: 'failed', errorMessage }
   }
   return run
 }
 
 /** Dispatch a sliced calibration run to its printer. */
-export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaClient, tenantId: string, runId: string): Promise<void> {
-  const run = await getRun(db, tenantId, runId)
+export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaClient, workspaceId: string, runId: string): Promise<void> {
+  const run = await getRun(db, workspaceId, runId)
   if (!run) throw notFound('Calibration run not found')
-  const synced = await syncSliceStatus(db, tenantId, run)
+  const synced = await syncSliceStatus(db, workspaceId, run)
   if (synced.status !== 'readyToPrint' || !synced.outputFileId || !synced.printerId) {
     throw conflict('This calibration run is not ready to print yet.')
   }
@@ -342,8 +342,8 @@ export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaCli
     // plate is already deliberate — don't re-block at dispatch. If they overrode to a plate that is
     // not installed, that was their explicit choice.
     allowPlateTypeMismatch: true
-  }, tenantId)
-  await updateRun(db, tenantId, runId, { status: 'printing' })
+  }, workspaceId)
+  await updateRun(db, workspaceId, runId, { status: 'printing' })
 }
 
 /**
@@ -351,23 +351,23 @@ export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaCli
  * finished job to `awaitingResult`. Called from the `print-job.finished` bus
  * listener (best-effort — the user can also enter a result manually).
  */
-export async function handlePrintFinished(db: AnyPrismaClient, tenantId: string, printerId: string, outputFileId: string | null): Promise<void> {
-  const runs = await db.calibrationRun.findMany({ where: { tenantId, printerId, status: 'printing' } })
+export async function handlePrintFinished(db: AnyPrismaClient, workspaceId: string, printerId: string, outputFileId: string | null): Promise<void> {
+  const runs = await db.calibrationRun.findMany({ where: { workspaceId, printerId, status: 'printing' } })
   for (const run of runs) {
     if (outputFileId && run.outputFileId && run.outputFileId !== outputFileId) continue
-    await updateRun(db, tenantId, run.id, { status: 'awaitingResult' })
+    await updateRun(db, workspaceId, run.id, { status: 'awaitingResult' })
   }
 }
 
 /** Compute and store the value from the user's measurement; run stays `awaitingResult`. */
 export async function submitMeasurement(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   runId: string,
   measurement: CalibrationMeasurement,
   parameters: CreateCalibrationRun['parameters']
 ): Promise<number> {
-  const run = await getRun(db, tenantId, runId)
+  const run = await getRun(db, workspaceId, runId)
   if (!run) throw notFound('Calibration run not found')
   if (measurement.kind !== parameters.kind) throw badRequest('Measurement does not match the calibration kind')
 
@@ -379,7 +379,7 @@ export async function submitMeasurement(
   } else {
     throw badRequest('Measurement does not match the calibration kind')
   }
-  await updateRun(db, tenantId, runId, { measurement, resultValue: value })
+  await updateRun(db, workspaceId, runId, { measurement, resultValue: value })
   return value
 }
 
@@ -387,11 +387,11 @@ export async function submitMeasurement(
 export async function saveRunResult(
   deps: CalibrationRunManagerDeps,
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   runId: string,
   options: SaveCalibrationResult
 ): Promise<void> {
-  const run = await getRun(db, tenantId, runId)
+  const run = await getRun(db, workspaceId, runId)
   if (!run) throw notFound('Calibration run not found')
   if (run.resultValue == null) throw conflict('Enter a measurement before saving this calibration.')
 
@@ -401,7 +401,7 @@ export async function saveRunResult(
     materialSubtype: options.scope === 'identity' && options.match?.materialSubtype ? run.materialSubtype : null,
     colorName: options.scope === 'identity' && options.match?.colorName ? run.colorName : null
   }
-  await saveResult(db, tenantId, {
+  await saveResult(db, workspaceId, {
     kind: run.kind as CreateCalibrationRun['parameters']['kind'],
     value: run.resultValue,
     printerModel: run.printerModel,
@@ -430,19 +430,19 @@ export async function saveRunResult(
     }
   }
 
-  await updateRun(db, tenantId, runId, { status: 'saved' })
+  await updateRun(db, workspaceId, runId, { status: 'saved' })
 }
 
 /** Resolve the best saved value for a filament on a printer model + nozzle (auto-apply). */
 export async function resolveSavedValue(
   db: AnyPrismaClient,
-  tenantId: string,
+  workspaceId: string,
   kind: CreateCalibrationRun['parameters']['kind'],
   printerModel: string,
   nozzleDiameter: string,
   filament: FilamentIdentity & { spoolId: string | null }
 ): Promise<number | null> {
-  const candidates = await findResolvableResults(db, tenantId, kind, printerModel, nozzleDiameter)
+  const candidates = await findResolvableResults(db, workspaceId, kind, printerModel, nozzleDiameter)
   const { resolveCalibrationValue } = await import('./resolution.js')
   return resolveCalibrationValue(candidates, filament)?.value ?? null
 }

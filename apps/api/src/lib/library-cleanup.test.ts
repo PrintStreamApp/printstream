@@ -51,7 +51,7 @@ test('pruneHiddenLibraryFiles removes stale hidden library files and rows', asyn
         id: 'row-1',
         storedPath,
         uploadedAt: new Date(Date.now() - (8 * 24 * 60 * 60 * 1000)),
-        tenant: { slug: 'alpha' }
+        workspace: { slug: 'alpha' }
       }],
       delete: async (input: unknown) => {
         deleteCalls.push(input)
@@ -89,14 +89,14 @@ test('pruneHiddenLibraryFiles applies the shorter demo retention window', async 
           ownerBridgeId: null,
           storedPath: staleDemoPath,
           uploadedAt: new Date(Date.now() - (13 * 60 * 60 * 1000)),
-          tenant: { slug: 'demo' }
+          workspace: { slug: 'demo' }
         },
         {
           id: 'default-row',
           ownerBridgeId: null,
           storedPath: freshDefaultPath,
           uploadedAt: new Date(Date.now() - (24 * 60 * 60 * 1000)),
-          tenant: { slug: 'alpha' }
+          workspace: { slug: 'alpha' }
         }
       ],
       delete: async (input: { where: { id: string } }) => {
@@ -274,9 +274,9 @@ test('pruneDormantBridges reaps only never-connected, unpaired, expired registra
   const result = await pruneDormantBridges()
 
   assert.equal(result.removed, 3)
-  // Only anonymous (tenantId null) bridges that never connected (lastSeenAt null)
+  // Only anonymous (workspaceId null) bridges that never connected (lastSeenAt null)
   // and are older than the retention window are eligible.
-  assert.equal(capturedWhere?.tenantId, null)
+  assert.equal(capturedWhere?.workspaceId, null)
   assert.equal(capturedWhere?.lastSeenAt, null)
   assert.ok((capturedWhere?.createdAt as { lt?: Date })?.lt instanceof Date)
 })

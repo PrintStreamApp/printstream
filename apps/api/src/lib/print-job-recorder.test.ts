@@ -126,7 +126,7 @@ test('createPrintJobStartRecord falls back when calibration history columns are 
   let attempts = 0
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'create', {
@@ -180,7 +180,7 @@ test('reserveTrackedPrintJobStart precreates a durable job id and pending source
   }
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findUnique', {
@@ -325,7 +325,7 @@ test('job.finished does not synthesize a history row when the start event was mi
   })
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1', serial: 'SERIAL-1' }),
+    value: async () => ({ workspaceId: 'workspace-1', serial: 'SERIAL-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findFirst', {
@@ -404,7 +404,7 @@ test('finishTrackedPrintJobRecord resolves filament usage when the job ends', as
   const jobState: {
     startedAt: Date
     finishedAt: Date | null
-    tenantId: string
+    workspaceId: string
     printerId: string
     jobName: string
     sourceType: 'library'
@@ -418,7 +418,7 @@ test('finishTrackedPrintJobRecord resolves filament usage when the job ends', as
   } = {
     startedAt: new Date('2026-05-03T10:00:00.000Z'),
     finishedAt: null,
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     printerId: 'printer-1',
     jobName: 'Cube.3mf',
     sourceType: 'library' as const,
@@ -439,7 +439,7 @@ test('finishTrackedPrintJobRecord resolves filament usage when the job ends', as
       return {
         startedAt: jobState.startedAt,
         finishedAt: jobState.finishedAt,
-        tenantId: jobState.tenantId,
+        workspaceId: jobState.workspaceId,
         printerId: jobState.printerId,
         jobName: jobState.jobName,
         sourceType: jobState.sourceType,
@@ -465,10 +465,10 @@ test('finishTrackedPrintJobRecord resolves filament usage when the job ends', as
     value: async () => {
       filamentLookupCount += 1
       return {
-        tenantId: 'tenant-2',
+        workspaceId: 'workspace-2',
         kind: '3mf',
         ownerBridgeId: null,
-        storedPath: 'other-tenant.3mf'
+        storedPath: 'other-workspace.3mf'
       }
     },
     configurable: true
@@ -478,7 +478,7 @@ test('finishTrackedPrintJobRecord resolves filament usage when the job ends', as
     configurable: true
   })
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1', serial: 'SERIAL-1' }),
+    value: async () => ({ workspaceId: 'workspace-1', serial: 'SERIAL-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printerStats, 'upsert', {
@@ -506,7 +506,7 @@ test('finishTrackedPrintJobRecord records filament usage for sliced .gcode.3mf l
   const jobState: {
     startedAt: Date
     finishedAt: Date | null
-    tenantId: string
+    workspaceId: string
     printerId: string
     jobName: string
     sourceType: 'library'
@@ -520,7 +520,7 @@ test('finishTrackedPrintJobRecord records filament usage for sliced .gcode.3mf l
   } = {
     startedAt: new Date('2026-05-03T10:00:00.000Z'),
     finishedAt: null,
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     printerId: 'printer-1',
     jobName: 'Cube.gcode.3mf',
     sourceType: 'library',
@@ -541,7 +541,7 @@ test('finishTrackedPrintJobRecord records filament usage for sliced .gcode.3mf l
       return {
         startedAt: jobState.startedAt,
         finishedAt: jobState.finishedAt,
-        tenantId: jobState.tenantId,
+        workspaceId: jobState.workspaceId,
         printerId: jobState.printerId,
         jobName: jobState.jobName,
         sourceType: jobState.sourceType,
@@ -565,7 +565,7 @@ test('finishTrackedPrintJobRecord records filament usage for sliced .gcode.3mf l
   })
   Object.defineProperty(rootPrisma.libraryFile, 'findUnique', {
     value: async () => ({
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       kind: 'gcode',
       ownerBridgeId: null,
       storedPath: archivePath
@@ -577,7 +577,7 @@ test('finishTrackedPrintJobRecord records filament usage for sliced .gcode.3mf l
     configurable: true
   })
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1', serial: 'SERIAL-1' }),
+    value: async () => ({ workspaceId: 'workspace-1', serial: 'SERIAL-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printerStats, 'upsert', {
@@ -673,7 +673,7 @@ test('status reconciliation closes stale unfinished jobs when a terminal status 
   const unfinishedJobIds = new Set(['job-new', 'job-old'])
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
 
@@ -718,7 +718,7 @@ test('status reconciliation closes stale unfinished jobs when a terminal status 
         printerId: 'printer-1',
         jobName: 'Newest job',
         taskId: 'task-old',
-        tenantId: 'tenant-1',
+        workspaceId: 'workspace-1',
         sourceType: 'external',
         fileId: null,
         plate: null
@@ -772,7 +772,7 @@ test('status reconciliation closes stale unfinished jobs when the terminal task 
   const unfinishedJobIds = new Set(['job-new', 'job-old'])
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
 
@@ -814,7 +814,7 @@ test('status reconciliation closes stale unfinished jobs when the terminal task 
         printerId: 'printer-1',
         jobName: 'Newest job',
         taskId: null,
-        tenantId: 'tenant-1',
+        workspaceId: 'workspace-1',
         sourceType: 'external',
         fileId: null,
         plate: null
@@ -867,7 +867,7 @@ test('status reconciliation closes unrelated stale unfinished jobs after matchin
   const unfinishedJobIds = new Set(['job-current', 'job-old'])
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
 
@@ -909,7 +909,7 @@ test('status reconciliation closes unrelated stale unfinished jobs after matchin
         printerId: 'printer-1',
         jobName: 'Current job',
         taskId: 'task-finished',
-        tenantId: 'tenant-1',
+        workspaceId: 'workspace-1',
         sourceType: 'external',
         fileId: null,
         plate: null
@@ -1423,7 +1423,7 @@ test('concurrent tracked start activation does not fall back to an external row'
     configurable: true
   })
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'create', {
@@ -1474,7 +1474,7 @@ test('job.started creates an external print record keyed by the printer task id'
   const creates: Array<Record<string, unknown>> = []
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findFirst', {
@@ -1514,7 +1514,7 @@ test('job.started infers the external print plate from observed job data when th
   const creates: Array<Record<string, unknown>> = []
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findFirst', {
@@ -1617,7 +1617,7 @@ test('overlapping status starts only create one external print record for the sa
   })
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findMany', {
@@ -1673,7 +1673,7 @@ test('status reconciliation prefers the library-backed unfinished row and closes
   const unfinishedJobIds = new Set(['library-1', 'external-1'])
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findMany', {
@@ -1712,7 +1712,7 @@ test('status reconciliation prefers the library-backed unfinished row and closes
         printerId: 'printer-1',
         jobName: 'Best Shot Golf - plate_4',
         taskId: 'task-idle',
-        tenantId: 'tenant-1',
+        workspaceId: 'workspace-1',
         sourceType: 'library',
         fileId: 'file-1',
         plate: 1
@@ -1763,7 +1763,7 @@ test('upsertTrackedPrintJobRecord creates a persistent unfinished row for a disp
   const creates: Array<Record<string, unknown>> = []
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findUnique', {
@@ -1859,7 +1859,7 @@ test('cancelTrackedPrintJobRecord creates and closes a cancelled history row whe
   let findUniqueCalls = 0
 
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findUnique', {

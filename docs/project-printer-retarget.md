@@ -58,7 +58,7 @@ differs:
 | What a retarget rewrites, and in what order | `applyMachineRetargetToProjectSettings` (`packages/shared/src/machine-retarget.ts`) | — | — |
 | Which preset each filament slot rebinds to | `selectFilamentRebindTargets` (`packages/shared/src/filament-rebind.ts`) | — | — |
 | Dropping the stale slice identity | `stripSliceInfoPrinterModelId` | — | — |
-| Resolving the machine / process / filament presets | — | `slicerClient` + the tenant's preset files (`save-retarget.ts`) | `POST /api/public/slicing/resolve-{machine,process,filament}` (`lib/localMachineRetarget.ts`) |
+| Resolving the machine / process / filament presets | — | `slicerClient` + the workspace's preset files (`save-retarget.ts`) | `POST /api/public/slicing/resolve-{machine,process,filament}` (`lib/localMachineRetarget.ts`) |
 | Applying it to the 3MF | — | post-bake ZIP rewrite (`rewriteThreeMfEntries`) | post-bake entry rewrite in the tab (`lib/clientThreeMfBake.ts`) |
 
 Both run the rewrite in the **same position**: after the bake, before the archive is written. The one

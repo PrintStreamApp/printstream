@@ -26,16 +26,19 @@ import { DeviceOverrideNotice, GeneralSettingCard, GeneralSettingSelectRow } fro
 import { ThemeSettingCard } from '../components/settings/ThemeSettingCard'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
-import { buildTenantWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
+import { buildWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { LicenseSettingsSection } from './LicenseSettingsSection'
+import { SlicingPresetsSettingsSection } from '../components/settings/slicing-presets/SlicingPresetsSection'
+import { SlicerEngineVisibilityCard } from './SlicerEngineVisibilityCard'
+import { SlicerEnginesSection } from './SlicerEnginesSection'
 import { LogsPanel } from './LogsView'
 
 type LandingPageSettingSelectValue = AppLandingPageSetting
 type DeviceLandingPageSettingSelectValue = 'follow-default' | LandingPageSettingSelectValue
 type WidthSettingSelectValue = 'centered' | 'full-width'
 type DeviceWidthSettingSelectValue = 'follow-default' | WidthSettingSelectValue
-type SettingsSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'bridges' | 'auth-users' | 'auth-roles'
+type SettingsSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'bridges' | 'slicing' | 'auth-users' | 'auth-roles'
 
 /**
  * Settings shell. Uses a card index on the root route and dedicated
@@ -98,7 +101,7 @@ export function SettingsView({
   const location = useLocation()
   const navigate = useNavigate()
   const authBootstrapQuery = useAuthBootstrapQuery()
-  const { authTenantId, authScopeKey } = resolveAuthScope(authBootstrapQuery.data)
+  const { authWorkspaceId, authScopeKey } = resolveAuthScope(authBootstrapQuery.data)
   const authState = authBootstrapQuery.data
     ? resolveSettingsAuthState(authBootstrapQuery.data)
     : null
@@ -110,31 +113,39 @@ export function SettingsView({
   const canManageSettings = bootstrapCapabilities?.canManageSettings ?? false
   const canManageSupportAccess = bootstrapCapabilities?.canManageSupportAccess ?? false
   const showsAuthenticationSection = authState?.showsAuthenticationSection ?? false
-  const hasTenantContext = authBootstrapQuery.data?.tenant != null
+  const hasWorkspaceContext = authBootstrapQuery.data?.workspace != null
   const platformAuthEnabled = authBootstrapQuery.data?.platformAuthEnabled ?? false
-  const demoSettingsLocked = authBootstrapQuery.data?.tenant?.slug === 'demo'
+  const demoSettingsLocked = authBootstrapQuery.data?.workspace?.slug === 'demo'
   // Managed-bridge installs own a single bundled bridge the operator never
   // manages, so the entire Bridges surface is hidden.
   const { managedBridge, selfHosted } = useRuntimePolicy()
   // Self-hosted (OSS) is a single-workspace install with no platform auth step,
   // so the workspace configures its own sign-in directly; the cloud gates the
   // workspace section on platform auth existing first.
-  const showsTenantAuthenticationSection = hasTenantContext && showsAuthenticationSection && (platformAuthEnabled || selfHosted)
-  const showsTenantPluginManager = hasTenantContext && canManageSettings
-  const showsTenantNotifications = hasTenantContext && canManageSettings
-  const showsTenantLogs = hasTenantContext && canManageSettings
-  const showsTenantBridges = hasTenantContext && canManageSettings && !managedBridge
+  const showsWorkspaceAuthenticationSection = hasWorkspaceContext
+    && showsAuthenticationSection && (platformAuthEnabled || selfHosted)
+  const showsWorkspacePluginManager = hasWorkspaceContext && canManageSettings
+  const showsWorkspaceNotifications = hasWorkspaceContext && canManageSettings
+  const showsWorkspaceLogs = hasWorkspaceContext && canManageSettings
+  const showsWorkspaceBridges = hasWorkspaceContext && canManageSettings && !managedBridge
+  // Shown everywhere, unlike before. INSTALLING an engine is still self-hosted
+  // only — the slicer is shared, so one tenant's removal would break another's
+  // slicing, and the API refuses it there. But choosing which engines this
+  // workspace SHOWS is a per-workspace preference that matters most on the
+  // hosted plan, where every version is installed and most workspaces want one.
+  const showsSlicerEngines = hasWorkspaceContext && canManageSettings
   const workspacePath = parseWorkspacePathname(location.pathname)
   const currentSubview = resolveSettingsSubview(workspacePath.appPathname)
-  const settingsPath = (path = '/settings') => workspacePath.tenantSlug
-    ? buildTenantWorkspacePath(workspacePath.tenantSlug, path)
+  const settingsPath = (path = '/settings') => workspacePath.workspaceSlug
+    ? buildWorkspacePath(workspacePath.workspaceSlug, path)
     : path
-  const visibleSubview = resolveVisibleTenantSettingsSubview(currentSubview, {
-    showsTenantAuthenticationSection,
-    showsTenantPluginManager,
-    showsTenantNotifications,
-    showsTenantLogs,
-    showsTenantBridges,
+  const visibleSubview = resolveVisibleWorkspaceSettingsSubview(currentSubview, {
+    showsWorkspaceAuthenticationSection,
+    showsWorkspacePluginManager,
+    showsWorkspaceNotifications,
+    showsWorkspaceLogs,
+    showsWorkspaceBridges,
+    showsSlicerEngines,
     canViewAuth
   })
   const authManagementStatusQuery = useQuery({
@@ -176,7 +187,7 @@ export function SettingsView({
 
           {selfHosted && <LicenseSettingsSection canManage={canManageSettings} />}
 
-          {showsTenantAuthenticationSection && (
+          {showsWorkspaceAuthenticationSection && (
             <SettingsOverviewCard
               title="Authentication"
               description={selfHosted
@@ -186,7 +197,7 @@ export function SettingsView({
             />
           )}
 
-          {showsTenantPluginManager && (
+          {showsWorkspacePluginManager && (
             <SettingsOverviewCard
               title="Plugins"
               description="Plugins available for printers, notifications, integrations, and workflow tools."
@@ -194,7 +205,7 @@ export function SettingsView({
             />
           )}
 
-          {showsTenantNotifications && (
+          {showsWorkspaceNotifications && (
             <SettingsOverviewCard
               title="Notifications"
               description="Notification channels and message templates for print activity."
@@ -202,7 +213,7 @@ export function SettingsView({
             />
           )}
 
-          {showsTenantBridges && (
+          {showsWorkspaceBridges && (
             <SettingsOverviewCard
               title="Bridges"
               description="Set up bridges, rename them, and review which bridge owns active printers."
@@ -210,7 +221,15 @@ export function SettingsView({
             />
           )}
 
-          {showsTenantLogs && (
+          {showsSlicerEngines && (
+            <SettingsOverviewCard
+              title="Slicing"
+              description="Bambu Studio versions this workspace slices with, and the printer, process and material presets it has uploaded."
+              onAction={() => navigate(settingsPath('/settings/slicing'))}
+            />
+          )}
+
+          {showsWorkspaceLogs && (
             <SettingsOverviewCard
               title="Logs"
               description="Diagnostic output for bridges, printers, plugins, and background work."
@@ -261,6 +280,7 @@ export function SettingsView({
           )}
 
           <ThemeSettingCard
+            sharedScopeLabel="everyone in this workspace"
             sharedAppTheme={sharedAppTheme}
             deviceAppThemeOverride={deviceAppThemeOverride}
             canManageSettings={canManageSettings}
@@ -270,6 +290,14 @@ export function SettingsView({
             onClearDeviceAppThemeOverride={onClearDeviceAppThemeOverride}
           />
 
+          {/*
+            Hidden where there is nothing to choose between. A self-hosted
+            workspace has exactly one destination, and the shell forces it — a
+            picker that silently loses every time is worse than no picker. The
+            nav-order card below hides itself the same way, via its own empty
+            option list.
+          */}
+          {landingPageOptions.length > 0 && (
           <GeneralSettingCard
             title="Default page"
             description="Choose which page opens first, including enabled plugin pages."
@@ -279,7 +307,10 @@ export function SettingsView({
               onClearDeviceLandingPageOverride()
             }}
           >
-            <GeneralSettingSelectRow label="Default setting" helper="Shared default applied to devices that do not have their own override.">
+            <GeneralSettingSelectRow
+              label="Default setting"
+              helper="Shared with everyone in this workspace, and applied to devices that do not have their own override."
+            >
               <Select<LandingPageSettingSelectValue>
                 value={sharedLandingPageSelectValue}
                 disabled={sharedSettingsSaving}
@@ -292,7 +323,10 @@ export function SettingsView({
               </Select>
             </GeneralSettingSelectRow>
 
-            <GeneralSettingSelectRow label="This device" helper="Saved in this browser only. Choose follow default to inherit the shared setting.">
+            <GeneralSettingSelectRow
+              label="This device"
+              helper="Saved in this browser, for this workspace only. Other workspaces keep their own. Choose follow default to inherit the shared setting."
+            >
               <Select<DeviceLandingPageSettingSelectValue>
                 value={deviceLandingPageSelectValue}
                 onChange={(_event, value) => {
@@ -318,6 +352,7 @@ export function SettingsView({
               />
             )}
           </GeneralSettingCard>
+          )}
 
           <GeneralSettingCard
             title="Full-width layout"
@@ -328,7 +363,10 @@ export function SettingsView({
               onClearDeviceUnconstrainedWidthOverride()
             }}
           >
-            <GeneralSettingSelectRow label="Default setting" helper="Shared default applied to devices that do not have their own override.">
+            <GeneralSettingSelectRow
+              label="Default setting"
+              helper="Shared with everyone in this workspace, and applied to devices that do not have their own override."
+            >
               <Select<WidthSettingSelectValue>
                 value={sharedWidthSelectValue}
                 disabled={sharedSettingsSaving}
@@ -342,7 +380,10 @@ export function SettingsView({
               </Select>
             </GeneralSettingSelectRow>
 
-            <GeneralSettingSelectRow label="This device" helper="Saved in this browser only. Choose follow default to inherit the shared setting.">
+            <GeneralSettingSelectRow
+              label="This device"
+              helper="Saved in this browser and applied in every workspace on it, unlike the page and tab-order choices above. Choose follow default to inherit the shared setting."
+            >
               <Select<DeviceWidthSettingSelectValue>
                 value={deviceWidthSelectValue}
                 onChange={(_event, value) => {
@@ -382,7 +423,7 @@ export function SettingsView({
                 <FormLabel>Default order</FormLabel>
                 <Typography level="body-xs" textColor="text.tertiary">
                   {canManageSettings
-                    ? 'Shared default applied to devices that do not set their own order.'
+                    ? 'Shared with everyone in this workspace, and applied to devices that do not set their own order.'
                     : 'Set by a workspace admin. You can still set a per-device order below.'}
                 </Typography>
                 <NavTabOrderEditor
@@ -396,7 +437,7 @@ export function SettingsView({
               <Stack spacing={0.5}>
                 <FormLabel>This device</FormLabel>
                 <Typography level="body-xs" textColor="text.tertiary">
-                  Saved in this browser only. Reordering here overrides the default order on this device.
+                  Saved in this browser, for this workspace only. Other workspaces keep their own order.
                 </Typography>
                 <NavTabOrderEditor
                   options={navTabOptions}
@@ -441,14 +482,14 @@ export function SettingsView({
               }}
             />
 
-            {showsAuthSetup && (!hasTenantContext || selfHosted) && (
+            {showsAuthSetup && (!hasWorkspaceContext || selfHosted) && (
               <StaticPluginSlot
                 name="settings.authenticationSetup"
                 context={{
                   authProviders,
                   authSetupRequired: authBootstrapQuery.data?.setupRequired ?? false,
                   authBootstrapReady: authBootstrapQuery.isSuccess,
-                  authTenantId,
+                  authWorkspaceId,
                   authScopeKey,
                   authHost: 'settings',
                   actorType: authBootstrapQuery.data?.actor.type ?? 'anonymous',
@@ -482,7 +523,7 @@ export function SettingsView({
             ]}
             description="Plugins available for printers, notifications, integrations, and workflow tools."
           />
-          <PluginManagerSection surface="tenant" />
+          <PluginManagerSection surface="workspace" />
         </Stack>
       ) : visibleSubview === 'bridges' ? (
         <Stack spacing={1.5}>
@@ -495,6 +536,32 @@ export function SettingsView({
           />
           <BridgeSettingsSection />
         </Stack>
+      ) : visibleSubview === 'slicing' ? (
+        <Stack spacing={1.5}>
+          <NestedViewHeader
+            crumbs={[
+              { label: 'Settings', onClick: () => navigate(settingsPath()) },
+              { label: 'Slicing' }
+            ]}
+            description="Bambu Studio versions and presets used for server-side slicing."
+          />
+          <SlicerEngineVisibilityCard canManage={canManageSettings} />
+          {/* Installing and removing stays self-hosted: the slicer is shared by
+              every workspace, so on the hosted plan one admin's removal would
+              break slicing for the rest. */}
+          {selfHosted && <SlicerEnginesSection canManage={canManageSettings} />}
+
+          {/* The SAME manager the editor opens from its gear, not a second one.
+              Presets were reachable only from inside the editor, which meant
+              curating a workspace's shared presets required opening a model
+              first. Mirrored rather than moved: picking a preset mid-edit and
+              curating the library are different jobs, and the editor's dialog
+              is the right surface for the first. */}
+          {/* Heading only: the section carries its own explanation, and two
+              descriptions stacked read as a rendering fault. */}
+          <Typography level="title-sm">Slicing presets</Typography>
+          <SlicingPresetsSettingsSection />
+        </Stack>
       ) : visibleSubview === 'notifications' ? (
         <Stack spacing={1.5}>
           <NestedViewHeader
@@ -504,7 +571,10 @@ export function SettingsView({
             ]}
             description="Notification channels and message templates for print activity."
           />
-          <NotificationChannelsPanel />
+          {/* Says the scope, as the platform side already does. The same panel
+              configures two different stores depending on where it is opened,
+              and only one of them said which. */}
+          <NotificationChannelsPanel description="Configure how this workspace's print alerts reach you. Each channel delivers through this workspace's own configuration, separate from other workspaces and from the platform's." />
           <NotificationTemplatesPanel />
         </Stack>
       ) : (
@@ -516,7 +586,7 @@ export function SettingsView({
             ]}
             description="Diagnostic output for bridges, printers, plugins, and background work."
           />
-          <LogsPanel embedded surface="tenant" />
+          <LogsPanel embedded surface="workspace" />
         </Stack>
       )}
     </Stack>
@@ -530,30 +600,33 @@ function resolveSettingsSubview(pathname: string): SettingsSubview {
   if (pathname === '/settings/notifications') return 'notifications'
   if (pathname === '/settings/logs') return 'logs'
   if (pathname === '/settings/bridges') return 'bridges'
+  if (pathname === '/settings/slicing') return 'slicing'
   if (pathname === '/settings/auth/users') return 'auth-users'
   if (pathname === '/settings/auth/roles') return 'auth-roles'
   if (pathname === '/settings/general') return 'general'
   return 'root'
 }
 
-function resolveVisibleTenantSettingsSubview(
+function resolveVisibleWorkspaceSettingsSubview(
   subview: SettingsSubview,
   options: {
-    showsTenantAuthenticationSection: boolean
-    showsTenantPluginManager: boolean
-    showsTenantNotifications: boolean
-    showsTenantLogs: boolean
-    showsTenantBridges: boolean
+    showsWorkspaceAuthenticationSection: boolean
+    showsWorkspacePluginManager: boolean
+    showsWorkspaceNotifications: boolean
+    showsWorkspaceLogs: boolean
+    showsWorkspaceBridges: boolean
+    showsSlicerEngines: boolean
     canViewAuth: boolean
   }
 ) {
-  if (subview === 'authentication' && !options.showsTenantAuthenticationSection) return 'root'
-  if ((subview === 'auth-users' || subview === 'auth-roles') && !options.showsTenantAuthenticationSection) return 'root'
+  if (subview === 'authentication' && !options.showsWorkspaceAuthenticationSection) return 'root'
+  if ((subview === 'auth-users' || subview === 'auth-roles') && !options.showsWorkspaceAuthenticationSection) return 'root'
   if ((subview === 'auth-users' || subview === 'auth-roles') && !options.canViewAuth) return 'authentication'
-  if (subview === 'plugins' && !options.showsTenantPluginManager) return 'root'
-  if (subview === 'notifications' && !options.showsTenantNotifications) return 'root'
-  if (subview === 'logs' && !options.showsTenantLogs) return 'root'
-  if (subview === 'bridges' && !options.showsTenantBridges) return 'root'
+  if (subview === 'plugins' && !options.showsWorkspacePluginManager) return 'root'
+  if (subview === 'notifications' && !options.showsWorkspaceNotifications) return 'root'
+  if (subview === 'logs' && !options.showsWorkspaceLogs) return 'root'
+  if (subview === 'bridges' && !options.showsWorkspaceBridges) return 'root'
+  if (subview === 'slicing' && !options.showsSlicerEngines) return 'root'
   return subview
 }
 

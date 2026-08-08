@@ -126,7 +126,7 @@ export async function projectHasCompleteMachine(arrangedPath: string, targetMode
 }
 
 export interface RetargetSavedProjectInput {
-  tenantId: string
+  workspaceId: string
   /** Path to the freshly-baked arranged 3MF (still carries the project's embedded machine). */
   arrangedPath: string
   /** Final file name; also the retargeted-project file name. */
@@ -141,7 +141,7 @@ export interface RetargetSavedProjectInput {
  * settings are unreadable. A project with NO embedded settings retargets from scratch.
  */
 export async function retargetSavedProjectMachine(input: RetargetSavedProjectInput): Promise<string> {
-  const [machineFile] = await resolveSlicingPresetFiles(input.tenantId, [
+  const [machineFile] = await resolveSlicingPresetFiles(input.workspaceId, [
     { id: input.retarget.printerProfileId, kind: 'machine' }
   ])
   if (!machineFile) {
@@ -194,7 +194,7 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
   // vs preset" markers forever (X1C's `pre_start_fan_time` 0 vs H2D's stock 2). Best-effort per
   // slot: an unresolvable slot keeps its current values rather than blocking the save.
   const filamentRebinds = await resolveFilamentSlotRebinds({
-    tenantId: input.tenantId,
+    workspaceId: input.workspaceId,
     slicerTargetId: input.slicerTargetId,
     record: machineRetargeted,
     targetModel: printerModel,
@@ -244,7 +244,7 @@ export async function retargetSavedProjectMachine(input: RetargetSavedProjectInp
  * the save proceeds with the un-healed bake (which still slices via the slicer-side heal).
  */
 export async function healSavedProjectMachineTopology(input: {
-  tenantId: string
+  workspaceId: string
   arrangedPath: string
   fileName: string
   slicerTargetId: string | null | undefined
@@ -312,7 +312,7 @@ export async function healSavedProjectMachineTopology(input: {
  * fill non-overridden slots' columns.
  */
 export async function resolveFilamentSlotRebinds(input: {
-  tenantId: string
+  workspaceId: string
   slicerTargetId: string | null | undefined
   record: Record<string, unknown>
   targetModel: string
@@ -324,7 +324,7 @@ export async function resolveFilamentSlotRebinds(input: {
   let candidates: SlicingPresetSummary[]
   try {
     const builtins = await slicerClient.profiles(input.slicerTargetId)
-    const customs = await listCustomSlicingPresets(input.tenantId, builtins)
+    const customs = await listCustomSlicingPresets(input.workspaceId, builtins)
     // Customs first: they outrank a builtin of the same name, matching the profile list.
     candidates = [...customs, ...builtins].filter((profile) => profile.kind === 'filament')
   } catch {
@@ -351,7 +351,7 @@ export async function resolveFilamentSlotRebinds(input: {
       // Workspace custom presets resolve through their stored file (a diff over a system base);
       // builtins resolve by name from the slicer's own catalogue.
       if (slicingPresetProvenance(target.id) === 'workspace') {
-        const [file] = await resolveSlicingPresetFiles(input.tenantId, [{ id: target.id, kind: 'filament' }])
+        const [file] = await resolveSlicingPresetFiles(input.workspaceId, [{ id: target.id, kind: 'filament' }])
         config = file ? await slicerClient.resolveFilamentConfig(input.slicerTargetId, { source: file.source, name: file.name, content: file.content }) : null
       } else {
         config = await slicerClient.resolveFilamentConfig(input.slicerTargetId, { source: 'builtin', name: target.name })
@@ -369,7 +369,7 @@ async function resolveTargetProcessConfig(input: RetargetSavedProjectInput): Pro
   // resolveSlicingPresetFiles skips project-embedded ("project:") presets, so those fall through
   // to null and the project keeps its embedded process — intended (a project preset has no separate
   // file to resolve, and cross-family targets hide project presets anyway).
-  const [processFile] = await resolveSlicingPresetFiles(input.tenantId, [
+  const [processFile] = await resolveSlicingPresetFiles(input.workspaceId, [
     { id: input.retarget.processProfileId, kind: 'process' }
   ])
   if (!processFile) return null

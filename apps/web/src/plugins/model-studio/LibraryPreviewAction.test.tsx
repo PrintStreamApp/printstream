@@ -55,7 +55,7 @@ function renderAction(kind: string, onAction?: () => void, onPreview?: () => voi
       <MemoryRouter initialEntries={['/workspaces/acme/library']}>
         <Routes>
           <Route
-            path="/workspaces/:tenantSlug/*"
+            path="/workspaces/:workspaceSlug/*"
             element={(
               <>
                 <Menu open>

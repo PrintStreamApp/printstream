@@ -77,12 +77,12 @@ class WebPluginRegistry {
 export const webPluginRegistry = new WebPluginRegistry()
 
 function normalizePluginSurfaces(input: PluginSurface[] | undefined): PluginSurface[] {
-  return input && input.length > 0 ? Array.from(new Set(input)) : ['tenant']
+  return input && input.length > 0 ? Array.from(new Set(input)) : ['workspace']
 }
 
 function normalizeManagerSurfaces(input: PluginSurface[] | undefined, runtimeSurfaces: PluginSurface[]): PluginSurface[] {
   if (input && input.length > 0) {
     return Array.from(new Set(input))
   }
-  return runtimeSurfaces.includes('tenant') ? ['platform', 'tenant'] : ['platform']
+  return runtimeSurfaces.includes('workspace') ? ['platform', 'workspace'] : ['platform']
 }

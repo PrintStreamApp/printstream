@@ -52,7 +52,7 @@ export function parseStoredPrintStartOptions(raw: string): StoredPrintStartOptio
 }
 
 export function buildPrintStartPreferenceKey(
-  authBootstrap: Pick<AuthBootstrap, 'actor' | 'tenant'> | null | undefined,
+  authBootstrap: Pick<AuthBootstrap, 'actor' | 'workspace'> | null | undefined,
   printerModels: PrinterModel[]
 ): string {
   const { authScopeKey } = resolveAuthScope(authBootstrap)

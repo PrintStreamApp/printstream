@@ -1,7 +1,7 @@
 /**
  * Self-hosted license settings (core/public). Shows the installed license, what
  * it permits, and (with settings.manage) lets an operator paste or remove a key.
- * Rendered only in self-hosted mode; the multi-tenant cloud licenses via
+ * Rendered only in self-hosted mode; the multi-workspace cloud licenses via
  * subscriptions and has no key.
  *
  * Three keys can be installed and the copy must not conflate them:
@@ -19,11 +19,12 @@
  */
 import { Alert, Box, Button, Card, CardContent, Chip, Input, Stack, Typography } from '@mui/joy'
 import { extractErrorMessage } from '@printstream/shared'
-import type { LicenseStatus, LicenseStatusResponse } from '@printstream/shared'
+import type { LicenseCheckResponse, LicenseStatus, LicenseStatusResponse } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { apiFetch } from '../lib/apiClient'
-import { COMMUNITY_LICENSE_URL } from '../lib/licenseUrls'
+import { CommunityKeyRequestForm } from '../components/CommunityKeyRequestForm'
+import { COMMUNITY_LICENSE_URL, LICENSE_RENEWAL_URL } from '../lib/licenseUrls'
 
 /** A subscription-backed key is the one that carries a run window. */
 function isSubscriptionKey(status: LicenseStatus): boolean {
@@ -53,6 +54,14 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
     mutationFn: () => apiFetch('/api/license', { method: 'DELETE' }),
     onSuccess: () => { setError(null); void queryClient.invalidateQueries({ queryKey: ['license'] }) },
     onError: (mutationError) => setError(extractErrorMessage(mutationError, 'Could not remove the license.'))
+  })
+  // The manual pull. The daily timer covers the ordinary case; this is for the
+  // minutes right after someone changes their subscription, when "it sorts
+  // itself out within a day" is not an acceptable answer.
+  const checkMutation = useMutation({
+    mutationFn: () => apiFetch<LicenseCheckResponse>('/api/license/check', { method: 'POST' }),
+    onSuccess: () => { setError(null); void queryClient.invalidateQueries({ queryKey: ['license'] }) },
+    onError: (mutationError) => setError(extractErrorMessage(mutationError, 'Could not check for license updates.'))
   })
 
   const status = licenseQuery.data?.status
@@ -118,11 +127,28 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
                   {`Renews automatically — this key is valid through ${formatDate(status.expiresAt)} and refreshes itself daily. Nothing to re-enter.`}
                 </Typography>
               ) : null}
+              {subscription && status?.metered ? (
+                <Typography level="body-xs" textColor="text.tertiary">
+                  Add or remove printers whenever you like — your subscription follows, charged or
+                  credited prorated for the current billing period.
+                </Typography>
+              ) : null}
               {!subscription && status?.updatesUntil != null ? (
                 <Typography level="body-xs" textColor="text.tertiary">
                   {status.updatesExpired
                     ? `Updates & priority support ended ${formatDate(status.updatesUntil)}. This build keeps running; renew to install newer releases.`
                     : `Updates & priority support until ${formatDate(status.updatesUntil)}.`}
+                  {' '}
+                  <Typography
+                    component="a"
+                    href={LICENSE_RENEWAL_URL}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    level="body-xs"
+                    sx={{ textDecoration: 'underline' }}
+                  >
+                    Renew
+                  </Typography>
                 </Typography>
               ) : null}
             </Stack>
@@ -145,6 +171,16 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
               >
                 Save
               </Button>
+              {/* "Refresh license", not "check for updates" -- beside the
+                  updates-and-support copy that phrase reads as SOFTWARE
+                  updates. Only a subscription key has anything to pull: a
+                  Lifetime or community key never phones home, so the button
+                  would always report "nothing to check". */}
+              {subscription ? (
+                <Button variant="outlined" color="neutral" onClick={() => checkMutation.mutate()} loading={checkMutation.isPending}>
+                  Refresh license
+                </Button>
+              ) : null}
               {status?.valid || isExpired ? (
                 <Button variant="outlined" color="danger" onClick={() => removeMutation.mutate()} loading={removeMutation.isPending}>
                   Remove
@@ -152,6 +188,11 @@ export function LicenseSettingsSection({ canManage }: { canManage: boolean }) {
               ) : null}
             </Stack>
           ) : null}
+
+          {/* Under the paste box, not instead of it: the box is the route for
+              an install with no egress, this is the route for someone who does
+              not have a key at all. Nothing to offer once one is installed. */}
+          {canManage && !status?.valid ? <CommunityKeyRequestForm /> : null}
         </Stack>
       </CardContent>
     </Card>

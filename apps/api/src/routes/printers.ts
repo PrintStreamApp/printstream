@@ -71,7 +71,7 @@ import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
 import { serializePrinterNozzleDiameters, toPrinterDto, toPublicPrinterDto } from '../lib/printer-record.js'
 import { printerManager } from '../lib/printer-manager.js'
-import { assertTenantOwnsPrinter, requireTenantOwnedConnectedPrinter } from '../lib/printer-access.js'
+import { assertWorkspaceOwnsPrinter, requireWorkspaceOwnedConnectedPrinter } from '../lib/printer-access.js'
 import { buildPlateGcodeFileHint, extractObservedPrintPlateIndex } from '@printstream/shared'
 import { syncBridgePrinterConfig } from '../lib/bridge-printer-config.js'
 import { printerDiscovery } from '../lib/printer-discovery.js'
@@ -148,7 +148,7 @@ import { readPrintJobThumbnail } from '../lib/print-job-thumbnails.js'
 import {
   parsePositiveIntQuery,
   requestAbortSignal,
-  requireRequestTenantId,
+  requireRequestWorkspaceId,
   requireRouteParam,
   singleUploadWithLimit
 } from '../lib/request-helpers.js'
@@ -270,14 +270,14 @@ function logCoverLoad(printer: Printer, details: {
 }
 
 printersRouter.get('/', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
-  response.json({ printers: await listPrinters(prisma, tenantId) })
+  const workspaceId = requireRequestWorkspaceId(request)
+  response.json({ printers: await listPrinters(prisma, workspaceId) })
 })
 
 printersRouter.get('/status', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const visiblePrinterIds = new Set((await prisma.printer.findMany({
-    where: { tenantId },
+    where: { workspaceId },
     select: { id: true }
   })).map((printer) => printer.id))
 
@@ -306,9 +306,9 @@ printersRouter.get('/:id/stats', requireRequestPermission(PRINTERS_VIEW_PERMISSI
  * received a packet (e.g. host without UDP multicast).
  */
 printersRouter.get('/discovered', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const bridges = await rootPrisma.bridge.findMany({
-    where: { tenantId },
+    where: { workspaceId },
     select: { id: true }
   })
   const bridgeIds = bridges.map((bridge) => bridge.id)
@@ -317,12 +317,12 @@ printersRouter.get('/discovered', requireRequestPermission(PRINTERS_MANAGE_PERMI
     return
   }
   const adopted = await prisma.printer.findMany({
-    where: { tenantId },
+    where: { workspaceId },
     select: { serial: true }
   })
   const adoptedSerials = new Set(adopted.map((row) => row.serial))
   const printers = printerDiscovery
-    .list({ tenantId, bridgeIds })
+    .list({ workspaceId, bridgeIds })
     .filter((entry) => !adoptedSerials.has(entry.serial))
   response.json({ printers })
 })
@@ -330,7 +330,7 @@ printersRouter.get('/discovered', requireRequestPermission(PRINTERS_MANAGE_PERMI
 /** Forget a discovered entry (e.g. user dismissed it from the UI). */
 printersRouter.delete('/discovered/:serial', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), (request, response) => {
   const serial = requireRouteParam(request.params.serial, 'Printer serial')
-  printerDiscovery.dismiss(serial, requireRequestTenantId(request))
+  printerDiscovery.dismiss(serial, requireRequestWorkspaceId(request))
   annotateRequestAuditLog(request, {
     action: 'dismiss-discovered-printer',
     resource: 'printer',
@@ -343,7 +343,7 @@ printersRouter.delete('/discovered/:serial', requireRequestPermission(PRINTERS_M
 })
 
 printersRouter.post('/validate', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
-  requireRequestTenantId(request)
+  requireRequestWorkspaceId(request)
   const parsed = printerConnectionValidationRequestSchema.safeParse(request.body)
   if (!parsed.success) {
     throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid printer validation payload')
@@ -365,13 +365,16 @@ printersRouter.post('/', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), a
     throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid printer payload')
   }
   await assertBridgeAssignmentExists(parsed.data.bridgeId)
-  const tenantId = requireRequestTenantId(request)
-  await assertPrinterQuotaOrThrow(tenantId)
+  const workspaceId = requireRequestWorkspaceId(request)
+  // Licence mode first: it is free to check and refuses outright, while the
+  // quota check may BUY capacity (`raiseLimit` on a metered licence charges the
+  // card). Money must be the last gate the request passes.
   await assertLicenseAllowsPrinterAdd()
+  await assertPrinterQuotaOrThrow(workspaceId)
   const last = await prisma.printer.findFirst({ orderBy: { position: 'desc' } })
   const created = await prisma.printer.create({
     data: {
-      tenantId,
+      workspaceId,
       name: parsed.data.name,
       host: parsed.data.host,
       serial: parsed.data.serial,
@@ -384,13 +387,13 @@ printersRouter.post('/', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), a
     }
   })
   const dto = toPrinterDto(created)
-  printerManager.add(dto, created.tenantId, created.bridgeId)
+  printerManager.add(dto, created.workspaceId, created.bridgeId)
   await syncBridgePrinterConfig(created.bridgeId)
-  // Hide the discovery entry only for the adopting tenant so the same
+  // Hide the discovery entry only for the adopting workspace so the same
   // serial can still be adopted elsewhere if printers are shared or
-  // migrated between tenants.
-  printerDiscovery.dismiss(dto.serial, created.tenantId)
-  notifyPrinterCountChanged(created.tenantId)
+  // migrated between workspaces.
+  printerDiscovery.dismiss(dto.serial, created.workspaceId)
+  notifyPrinterCountChanged(created.workspaceId)
   // Never record the LAN access code in the audit trail.
   annotateRequestAuditLog(request, {
     action: 'add-printer',
@@ -435,14 +438,14 @@ printersRouter.patch('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSION
   })
   if (request.body.manualPrints !== undefined || request.body.manualPrintHours !== undefined) {
     await setManualPrinterStats({
-      tenantId: updated.tenantId,
+      workspaceId: updated.workspaceId,
       printerSerial: updated.serial,
       manualPrints: parsed.data.manualPrints,
       manualPrintHours: parsed.data.manualPrintHours
     })
   }
   const dto = toPrinterDto(updated)
-  printerManager.update(dto, updated.tenantId, updated.bridgeId)
+  printerManager.update(dto, updated.workspaceId, updated.bridgeId)
   await Promise.all(Array.from(new Set([existing.bridgeId, updated.bridgeId].filter((bridgeId): bridgeId is string => Boolean(bridgeId)))).map(syncBridgePrinterConfig))
   // Record which fields were edited. The LAN access code is a secret: never
   // record its value — only note that it changed.
@@ -479,7 +482,7 @@ printersRouter.delete('/:id', requireRequestPermission(PRINTERS_MANAGE_PERMISSIO
   })
   await prisma.printer.delete({ where: { id: existing.id } })
   printerManager.remove(existing.id)
-  notifyPrinterCountChanged(existing.tenantId)
+  notifyPrinterCountChanged(existing.workspaceId)
   await syncBridgePrinterConfig(existing.bridgeId)
   response.status(204).end()
 })
@@ -601,7 +604,7 @@ printersRouter.get('/:id/pressure-advance-profiles', requireRequestPermission(PR
 })
 
 printersRouter.get('/:id/active-print-objects', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
 
   const status = printerManager.getStatus(printer.id)
@@ -1011,12 +1014,12 @@ function lightNodeLabel(node: Extract<ReturnType<typeof printerCommandSchema.par
  */
 printersRouter.get('/:id/cover/status', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
   const printerId = requireRouteParam(request.params.id, 'Printer id')
-  await assertTenantOwnsPrinter(printerId)
+  await assertWorkspaceOwnsPrinter(printerId)
   response.json(getCoverLoadState(printerId))
 })
 
 printersRouter.get('/:id/cover', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found')
   const requestStartedAt = Date.now()
   let resolveDurationMs: number | null = null
@@ -1298,7 +1301,7 @@ const RECURSIVE_SKIP_DIRS: ReadonlySet<string> = new Set([
 
 /** GET /api/printers/:id/storage?path=/&recursive=1 — list files+folders. */
 printersRouter.get('/:id/storage', requireRequestPermission(PRINTER_STORAGE_VIEW_PERMISSION), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const dirPath = normalizePrinterPath(request.query.path)
   const recursive = request.query.recursive === '1' || request.query.recursive === 'true'
@@ -1323,7 +1326,7 @@ printersRouter.post(
   assertPrinterMutationsAllowed(request)
   const printerId = typeof request.params.id === 'string' ? request.params.id : request.params.id?.[0]
   if (!printerId) throw badRequest('Printer id is required')
-  const printer = await requireTenantOwnedConnectedPrinter(printerId)
+  const printer = await requireWorkspaceOwnedConnectedPrinter(printerId)
   if (!request.file) throw badRequest('File is required')
 
   const dirPath = normalizePrinterPath(request.query.path)
@@ -1356,7 +1359,7 @@ printersRouter.post(
 
 /** Best-effort preview image for a printer-stored model or timelapse file. */
 printersRouter.get('/:id/storage/thumbnail', async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const filePath = normalizePrinterPath(request.query.path)
   const extension = path.extname(filePath).toLowerCase()
@@ -1401,7 +1404,7 @@ printersRouter.get('/:id/storage/thumbnail', async (request, response) => {
 
 /** Download a printer-stored file without copying it into the library first. */
 printersRouter.get('/:id/storage/download', requireRequestPermission(PRINTER_STORAGE_DOWNLOAD_PERMISSION), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const filePath = normalizePrinterPath(request.query.path)
   if (filePath === '/') throw badRequest('Invalid path')
@@ -1461,7 +1464,7 @@ function resolvePrinterStorageDownloadContentType(filePath: string): string {
 
 /** Plate index for a 3MF already stored on the printer. */
 printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORAGE_VIEW_MODELS_SCOPE), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const filePath = normalizePrinterPath(request.query.path)
   const signal = requestAbortSignal(request, response)
@@ -1500,7 +1503,7 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
 
 /** DELETE /api/printers/:id/storage?path=/x.3mf&type=file — remove a file or empty directory. */
 printersRouter.delete('/:id/storage', requireRequestPermission(PRINTERS_MANAGE_STORAGE_EDIT_SCOPE), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const targetPath = normalizePrinterPath(request.query.path)
   if (targetPath === '/') throw badRequest('Cannot delete root')
@@ -1531,7 +1534,7 @@ printersRouter.delete('/:id/storage', requireRequestPermission(PRINTERS_MANAGE_S
 })
 
 printersRouter.post('/:id/storage/delete-jobs', requireRequestPermission(PRINTERS_MANAGE_STORAGE_EDIT_SCOPE), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const parsed = startPrinterStorageDeleteJobSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid delete payload')
@@ -1542,7 +1545,7 @@ printersRouter.post('/:id/storage/delete-jobs', requireRequestPermission(PRINTER
   }))
   if (entries.some((entry) => entry.path === '/')) throw badRequest('Cannot delete root')
 
-  const job = deleteOperationDispatcher.enqueuePrinterStorageDelete(printer.id, printer.name, entries, request.tenant?.id ?? null)
+  const job = deleteOperationDispatcher.enqueuePrinterStorageDelete(printer.id, printer.name, entries, request.workspace?.id ?? null)
   annotateRequestAuditLog(request, {
     action: 'delete',
     resource: 'printer storage entry',
@@ -1563,7 +1566,7 @@ printersRouter.post('/:id/storage/delete-jobs', requireRequestPermission(PRINTER
 
 /** POST /api/printers/:id/storage/rename — rename or move a file/folder. */
 printersRouter.post('/:id/storage/rename', requireRequestPermission(PRINTERS_MANAGE_STORAGE_EDIT_SCOPE), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const fromPath = normalizePrinterPath((request.body as { from?: unknown })?.from)
   const toPath = normalizePrinterPath((request.body as { to?: unknown })?.to)
@@ -1595,7 +1598,7 @@ printersRouter.post('/:id/storage/rename', requireRequestPermission(PRINTERS_MAN
  * the `project_file` MQTT command pointing at the existing path.
  */
 printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPATCH_PRINTER_STORAGE_SCOPE), async (request, response) => {
-  const printer = await requireTenantOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
+  const printer = await requireWorkspaceOwnedConnectedPrinter(requireRouteParam(request.params.id, 'Printer id'))
   if (!printer) throw notFound('Printer not found or not connected')
   const parsed = printerStoragePrintSchema.safeParse(request.body)
   if (!parsed.success) {

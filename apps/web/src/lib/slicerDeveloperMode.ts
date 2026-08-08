@@ -5,7 +5,7 @@
  *
  * Mirrors the general-settings shape (theme, landing page): a **workspace-wide
  * shared default** persisted server-side in `GeneralSettings.slicerDeveloperMode`
- * (via `/api/settings`, tenant-scoped) plus an optional **per-device override**
+ * (via `/api/settings`, workspace-scoped) plus an optional **per-device override**
  * in browser localStorage. The effective value is `override ?? sharedDefault`.
  *
  * Read consumers (the process-settings editor `ProcessSettingsDialog`) use
@@ -22,6 +22,7 @@ import type { GeneralSettings } from '@printstream/shared'
 import { DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY } from '../appShellHelpers'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { apiFetch } from './apiClient'
+import { useViewportSettingsDeviceOnly } from './editorViewportSettings'
 
 function parseNullableBoolean(raw: string): boolean | null {
   if (raw === 'true') return true
@@ -47,10 +48,20 @@ export function useSlicerDeveloperModeOverride(): [boolean | null, (value: boole
   return [value, setValue]
 }
 
-/** The workspace-wide shared default from cached general settings (false until loaded). */
+/**
+ * The workspace-wide shared default from cached general settings (false until loaded).
+ *
+ * Skipped entirely on a host with no workspace. This is the same two-tier setting the viewport
+ * preferences use, and it had missed the rule they follow: `/api/settings` needs a workspace, so the
+ * public editor was requesting it on every open and taking a 401 for a value that can only ever be
+ * the device override there. (It reads 200 in a tab that happens to be signed in, which is why the
+ * request survived a network review — an anonymous visitor, the only kind this host has, gets 401.)
+ */
 export function useSharedSlicerDeveloperMode(): boolean {
+  const deviceOnly = useViewportSettingsDeviceOnly()
   const { data } = useQuery({
     queryKey: ['general-settings'],
+    enabled: !deviceOnly,
     queryFn: ({ signal }) => apiFetch<GeneralSettings>('/api/settings', { signal })
   })
   return data?.slicerDeveloperMode ?? false

@@ -7,8 +7,8 @@
  * visible in the web app regardless of packaging, we mirror console output into
  * a bounded buffer that the `system.logs` RPC serves back to the API.
  *
- * Mirrors the API's `apps/api/src/lib/logs.ts`, minus tenant scoping — the
- * bridge process is single-tenant.
+ * Mirrors the API's `apps/api/src/lib/logs.ts`, minus workspace scoping — the
+ * bridge process is single-workspace.
  */
 import type { BridgeSystemLogEntry } from '@printstream/shared'
 

@@ -28,7 +28,7 @@ import { ensureLibrarySnapshotFromLocalPath } from './print-file-snapshots.js'
 import { prisma } from './prisma.js'
 
 export interface PreserveSlicedProjectInput {
-  tenantId: string
+  workspaceId: string
   /** Display name for the preserved project — the source project's name, not the output's. */
   fileName: string
   /** Local path to the prepared project. Must still exist; the caller owns deleting it. */
@@ -51,7 +51,7 @@ export async function preserveSlicedProject(input: PreserveSlicedProjectInput): 
 
   const info = await stat(input.preparedProjectPath)
   const snapshot = await ensureLibrarySnapshotFromLocalPath({
-    tenantId: input.tenantId,
+    workspaceId: input.workspaceId,
     ownerBridgeId: input.output.ownerBridgeId,
     fileName: input.fileName,
     sourcePath: input.preparedProjectPath,

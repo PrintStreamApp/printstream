@@ -29,12 +29,12 @@ export interface MetricsProviders {
 
 /**
  * Latest metrics snapshot a connected bridge pushed over its session, plus the
- * tenant it is paired to. Re-exported on this process's Prometheus endpoint via
- * observable instruments, labelled by bridge/tenant. Entries are cleared when
+ * workspace it is paired to. Re-exported on this process's Prometheus endpoint via
+ * observable instruments, labelled by bridge/workspace. Entries are cleared when
  * the bridge disconnects, and a staleness guard drops any that stopped updating.
  */
 interface StoredBridgeSnapshot {
-  tenantId: string | null
+  workspaceId: string | null
   snapshot: BridgeMetricsSnapshot
   updatedAtMs: number
 }
@@ -135,9 +135,9 @@ export async function initMetrics(providers: MetricsProviders): Promise<boolean>
     })
 
     // Bridge-reported metrics, pushed over each bridge's session and re-exposed
-    // here labelled by bridge/tenant. Each callback iterates the fresh snapshots.
+    // here labelled by bridge/workspace. Each callback iterates the fresh snapshots.
     const forEachFreshBridge = (
-      visit: (labels: { bridge_id: string; tenant_id: string }, snapshot: BridgeMetricsSnapshot) => void
+      visit: (labels: { bridge_id: string; workspace_id: string }, snapshot: BridgeMetricsSnapshot) => void
     ): void => {
       const cutoff = Date.now() - BRIDGE_SNAPSHOT_STALE_MS
       for (const [bridgeId, entry] of bridgeSnapshots) {
@@ -145,7 +145,7 @@ export async function initMetrics(providers: MetricsProviders): Promise<boolean>
           bridgeSnapshots.delete(bridgeId)
           continue
         }
-        visit({ bridge_id: bridgeId, tenant_id: entry.tenantId ?? 'none' }, entry.snapshot)
+        visit({ bridge_id: bridgeId, workspace_id: entry.workspaceId ?? 'none' }, entry.snapshot)
       }
     }
 
@@ -224,9 +224,9 @@ export function recordBridgeMessageDropped(reason: string): void {
 }
 
 /** Store a bridge's latest pushed metrics snapshot (no-op when metrics are off). */
-export function recordBridgeMetricsSnapshot(bridgeId: string, tenantId: string | null, snapshot: BridgeMetricsSnapshot): void {
+export function recordBridgeMetricsSnapshot(bridgeId: string, workspaceId: string | null, snapshot: BridgeMetricsSnapshot): void {
   if (!enabled) return
-  bridgeSnapshots.set(bridgeId, { tenantId, snapshot, updatedAtMs: Date.now() })
+  bridgeSnapshots.set(bridgeId, { workspaceId, snapshot, updatedAtMs: Date.now() })
 }
 
 /** Drop a bridge's metrics when its session ends, so its series stop reporting. */

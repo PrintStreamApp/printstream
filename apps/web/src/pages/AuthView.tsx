@@ -4,6 +4,7 @@ import React from 'react'
 import { useLocation } from 'react-router-dom'
 import { resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
+import { BrandMark } from '../components/BrandMark'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 
 /**
@@ -21,15 +22,15 @@ export function AuthView({ redirectPath }: { redirectPath?: string } = {}) {
   const canManageAuthProviders = authState?.canManageAuthProviders ?? false
   const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
   const authSetupRequired = authBootstrapQuery.data?.setupRequired ?? false
-  const hasTenantContext = authBootstrapQuery.data?.tenant != null
-  const showsInlineSetup = authSetupRequired && !hasTenantContext
-  const showsProviderControls = !hasTenantContext && !authEnabled && canManageAuthProviders && authProviders.length > 0
+  const hasWorkspaceContext = authBootstrapQuery.data?.workspace != null
+  const showsInlineSetup = authSetupRequired && !hasWorkspaceContext
+  const showsProviderControls = !hasWorkspaceContext && !authEnabled && canManageAuthProviders && authProviders.length > 0
   const authTitle = showsInlineSetup || showsProviderControls
     ? 'Set up sign in'
     : 'Sign In'
   const enabledSignInProviderCount = authProviders.filter((provider) => provider.enabled && provider.capabilities.signIn).length
   const showsInlineSignInTitle = !showsInlineSetup && !showsProviderControls && enabledSignInProviderCount === 1
-  const { authTenantId, authScopeKey } = resolveAuthScope(authBootstrapQuery.data)
+  const { authWorkspaceId, authScopeKey } = resolveAuthScope(authBootstrapQuery.data)
 
   return (
     <Stack
@@ -43,6 +44,9 @@ export function AuthView({ redirectPath }: { redirectPath?: string } = {}) {
       }}
     >
       <Stack spacing={2} sx={{ width: '100%', maxWidth: 420, mx: 'auto' }}>
+        {/* This screen renders outside the shell's chrome, so without this it
+            carries no brand mark at all. */}
+        <BrandMark />
         {!showsInlineSignInTitle && <Typography level="h2">{authTitle}</Typography>}
         {authError && (
           <Alert color="danger" variant="soft" startDecorator={<ErrorOutlineRoundedIcon />}>
@@ -67,7 +71,7 @@ export function AuthView({ redirectPath }: { redirectPath?: string } = {}) {
               authProviders,
               authSetupRequired,
               authBootstrapReady: authBootstrapQuery.isSuccess,
-              authTenantId,
+              authWorkspaceId,
               authScopeKey,
               authHost: 'auth',
               actorType,

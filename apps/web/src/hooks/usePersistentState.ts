@@ -16,11 +16,16 @@ import { useLocalStorageState } from './useLocalStorageState'
  * The returned setter is React's `useState` dispatch, so functional updates
  * (`setValue(prev => ...)`) work, which is what per-field setters built on top of
  * a combined preferences object rely on.
+ *
+ * `legacyKeys` migrates a RENAMED preference: a storage key is a persisted
+ * identifier, so renaming one without a read-through silently resets everyone's
+ * saved value on the first load after a deploy.
  */
 export function usePersistentState<T>(
   key: string,
   fallback: T,
-  sanitize: (value: unknown) => T
+  sanitize: (value: unknown) => T,
+  legacyKeys: ReadonlyArray<string> = []
 ): [T, React.Dispatch<React.SetStateAction<T>>] {
   const parse = useCallback((raw: string): T | null => {
     try {
@@ -29,7 +34,7 @@ export function usePersistentState<T>(
       return null
     }
   }, [sanitize])
-  const [value, setValue] = useLocalStorageState<T>(key, fallback, parse)
+  const [value, setValue] = useLocalStorageState<T>(key, fallback, parse, undefined, legacyKeys)
   // useLocalStorageState's setter is the underlying useState dispatch, so it
   // genuinely supports functional updaters even though its type narrows that away.
   return [value, setValue as React.Dispatch<React.SetStateAction<T>>]

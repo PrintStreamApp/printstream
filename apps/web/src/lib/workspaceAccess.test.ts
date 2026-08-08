@@ -1,27 +1,27 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { countAccessibleWorkspaceChoices, countSwitchableWorkspaceChoices, listAccessibleTenantWorkspaces } from './workspaceAccess'
+import { countAccessibleWorkspaceChoices, countSwitchableWorkspaceChoices, listAccessibleWorkspaces } from './workspaceAccess'
 
-test('listAccessibleTenantWorkspaces removes duplicate workspace entries and sorts them by name', () => {
+test('listAccessibleWorkspaces removes duplicate workspace entries and sorts them by name', () => {
   assert.deepEqual(
-    listAccessibleTenantWorkspaces([
-      { id: 'tenant-2', slug: 'beta', name: 'Beta' },
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+    listAccessibleWorkspaces([
+      { id: 'workspace-2', slug: 'beta', name: 'Beta' },
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     ]),
     [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta' }
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta' }
     ]
   )
 })
 
 test('countAccessibleWorkspaceChoices includes platform access as a separate choice', () => {
   assert.equal(countAccessibleWorkspaceChoices({
-    tenants: [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta' },
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+    workspaces: [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta' },
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     ],
     includePlatform: true
   }), 3)
@@ -29,19 +29,41 @@ test('countAccessibleWorkspaceChoices includes platform access as a separate cho
 
 test('countSwitchableWorkspaceChoices includes returning to platform from a support-access workspace', () => {
   assert.equal(countSwitchableWorkspaceChoices({
-    tenants: [],
+    workspaces: [],
     includePlatform: true,
-    activeTenantId: 'tenant-support-only'
+    activeWorkspaceId: 'workspace-support-only'
   }), 1)
 })
 
-test('countSwitchableWorkspaceChoices excludes the current tenant from personal workspace options', () => {
+test('countSwitchableWorkspaceChoices excludes the current workspace from personal workspace options', () => {
   assert.equal(countSwitchableWorkspaceChoices({
-    tenants: [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta' }
+    workspaces: [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta' }
     ],
     includePlatform: true,
-    activeTenantId: 'tenant-1'
+    activeWorkspaceId: 'workspace-1'
   }), 2)
+})
+test('countSwitchableWorkspaceChoices counts a billing account for a user with no workspace', () => {
+  // Registering for a self-hosted licence creates an account and no workspace.
+  // Counting workspaces alone made the chooser unreachable for that user, so
+  // their one scope had no route to it and the page rendered empty.
+  assert.equal(countSwitchableWorkspaceChoices({
+    workspaces: [],
+    includePlatform: false,
+    activeWorkspaceId: null,
+    customerCount: 1
+  }), 1)
+})
+
+test('countSwitchableWorkspaceChoices ignores accounts the chooser cannot render', () => {
+  // The control: a public build registers no billing view, so App passes 0 and
+  // nothing changes for a user with nowhere to go.
+  assert.equal(countSwitchableWorkspaceChoices({
+    workspaces: [],
+    includePlatform: false,
+    activeWorkspaceId: null,
+    customerCount: 0
+  }), 0)
 })

@@ -3,7 +3,7 @@
  *
  * When a bridge is replaced, printers may still point at the old bridge row.
  * Recovery is deliberately conservative: it only moves orphaned printers when
- * the tenant has a single bridge, or printers currently rediscovered by the
+ * the workspace has a single bridge, or printers currently rediscovered by the
  * connected bridge from disconnected bridge assignments.
  *
  * When that reassignment *fully drains* a disconnected sibling bridge (every one
@@ -22,7 +22,7 @@ import { broadcastLibraryChanged } from './ws-resource-events.js'
 
 interface RecoverablePrinterRow {
   id: string
-  tenantId: string
+  workspaceId: string
   bridgeId: string | null
   name: string
   host: string
@@ -37,17 +37,17 @@ interface RecoverablePrinterRow {
 }
 
 export async function recoverBridgePrinterAssignments(input: {
-  tenantId: string
+  workspaceId: string
   bridgeId: string
 }): Promise<RecoverablePrinterRow[]> {
-  const [tenantBridges, candidatePrinters] = await Promise.all([
+  const [workspaceBridges, candidatePrinters] = await Promise.all([
     rootPrisma.bridge.findMany({
-      where: { tenantId: input.tenantId },
+      where: { workspaceId: input.workspaceId },
       select: { id: true }
     }),
     rootPrisma.printer.findMany({
       where: {
-        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
         OR: [
           { bridgeId: null },
           { bridgeId: { not: input.bridgeId } }
@@ -63,14 +63,14 @@ export async function recoverBridgePrinterAssignments(input: {
     printerDiscovery.list({ bridgeIds: [input.bridgeId] }).map((printer) => printer.serial)
   )
   const disconnectedBridgeIds = new Set(
-    tenantBridges
+    workspaceBridges
       .map((bridge) => bridge.id)
       .filter((bridgeId) => bridgeId !== input.bridgeId && !bridgeSessionManager.isConnected(bridgeId))
   )
-  const onlyTenantBridge = tenantBridges.length === 1
+  const onlyWorkspaceBridge = workspaceBridges.length === 1
   const recoveredPrinters = candidatePrinters.filter((printer) => {
     if (printer.bridgeId === input.bridgeId) return false
-    if (printer.bridgeId === null) return onlyTenantBridge || discoveredSerials.has(printer.serial)
+    if (printer.bridgeId === null) return onlyWorkspaceBridge || discoveredSerials.has(printer.serial)
     return disconnectedBridgeIds.has(printer.bridgeId) && discoveredSerials.has(printer.serial)
   })
 
@@ -78,7 +78,7 @@ export async function recoverBridgePrinterAssignments(input: {
 
   await rootPrisma.printer.updateMany({
     where: {
-      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
       id: { in: recoveredPrinters.map((printer) => printer.id) }
     },
     data: { bridgeId: input.bridgeId }
@@ -95,11 +95,11 @@ export async function recoverBridgePrinterAssignments(input: {
       supersededBridgeIds.add(printer.bridgeId)
       console.warn(`[bridge-recovery] reassigned printer ${printer.id} (serial ${printer.serial}) from bridge ${printer.bridgeId} to ${input.bridgeId} after rediscovery`)
     }
-    printerManager.update(toPrinterDto({ ...printer, bridgeId: input.bridgeId }), input.tenantId, input.bridgeId)
+    printerManager.update(toPrinterDto({ ...printer, bridgeId: input.bridgeId }), input.workspaceId, input.bridgeId)
   }
 
   await reAdoptLibraryFromDrainedBridges({
-    tenantId: input.tenantId,
+    workspaceId: input.workspaceId,
     bridgeId: input.bridgeId,
     sourceBridgeIds: supersededBridgeIds
   })
@@ -118,17 +118,17 @@ export async function recoverBridgePrinterAssignments(input: {
  * between two live machines never drags an unrelated library with it.
  */
 async function reAdoptLibraryFromDrainedBridges(input: {
-  tenantId: string
+  workspaceId: string
   bridgeId: string
   sourceBridgeIds: Set<string>
 }): Promise<void> {
   for (const sourceBridgeId of input.sourceBridgeIds) {
     const remainingPrinters = await rootPrisma.printer.count({
-      where: { tenantId: input.tenantId, bridgeId: sourceBridgeId }
+      where: { workspaceId: input.workspaceId, bridgeId: sourceBridgeId }
     })
     if (remainingPrinters > 0) continue
 
-    const scope = { tenantId: input.tenantId, ownerBridgeId: sourceBridgeId }
+    const scope = { workspaceId: input.workspaceId, ownerBridgeId: sourceBridgeId }
     const data = { ownerBridgeId: input.bridgeId }
     const [files, folders, versions] = await rootPrisma.$transaction([
       rootPrisma.libraryFile.updateMany({ where: scope, data }),
@@ -138,7 +138,7 @@ async function reAdoptLibraryFromDrainedBridges(input: {
 
     if (files.count + folders.count + versions.count > 0) {
       console.warn(`[bridge-recovery] re-homed library (${files.count} files, ${folders.count} folders, ${versions.count} versions) from drained bridge ${sourceBridgeId} to ${input.bridgeId} after rediscovery`)
-      broadcastLibraryChanged(input.tenantId)
+      broadcastLibraryChanged(input.workspaceId)
     }
   }
 }

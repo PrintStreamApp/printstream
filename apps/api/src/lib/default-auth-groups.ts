@@ -7,6 +7,13 @@
  * role available even if the editable defaults are customized.
  */
 import {
+  ACCOUNTS_CREATE_PERMISSION,
+  ACCOUNTS_PEOPLE_MANAGE_PERMISSION,
+  ACCOUNTS_VIEW_PERMISSION,
+  LICENSES_ISSUE_PERMISSION,
+  LICENSES_REVEAL_KEY_PERMISSION,
+  LICENSES_REVOKE_PERMISSION,
+  LICENSES_VIEW_PERMISSION,
   AUTH_ACCESS_VIEW_PERMISSION,
   AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION,
   AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION,
@@ -48,20 +55,20 @@ import {
   PRINTERS_CONTROL_PERMISSION,
   PRINTERS_VIEW_PERMISSION,
   PRINTS_DISPATCH_PERMISSION,
-  TENANTS_MANAGE_PERMISSION,
+  WORKSPACES_MANAGE_PERMISSION,
   PRINTERS_CLEAR_PLATE_PERMISSION,
   SETTINGS_MANAGE_PERMISSION,
-  TENANTS_DISABLE_PERMISSION,
-  filterPermissionsForTenantContext,
+  WORKSPACES_DISABLE_PERMISSION,
+  filterPermissionsForWorkspaceContext,
   permissionValues,
   type Permission
 } from '@printstream/shared'
 import { badRequest } from './http-error.js'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 
 interface BuiltInAuthGroupSeed {
   id?: string
-  tenantId?: string | null
+  workspaceId?: string | null
   key: string
   name: string
   description: string
@@ -100,6 +107,17 @@ export interface BuiltInAuthGroupClient {
 }
 
 export const PLATFORM_ADMIN_GROUP_KEY = 'admin'
+
+/**
+ * The least-privileged built-in workspace role: read-only visibility.
+ *
+ * Named because it is what a surface OUTSIDE the workspace grants when it adds
+ * someone to one (the customer's People list). Granting nothing left them inside
+ * with no permissions and no explanation; granting more than read-only from a
+ * billing screen would let whoever pays hand out operational access without the
+ * workspace's admin ever seeing it.
+ */
+export const WORKSPACE_VIEWER_GROUP_KEY = 'viewer'
 
 const authPasskeyManagementPermissions = [
   AUTH_PASSKEYS_EDIT_PERMISSION,
@@ -151,7 +169,7 @@ const platformAuthManagerPermissions = [
   ...authUserManagementPermissions
 ] satisfies Permission[]
 
-const tenantAuthManagementPermissions = [
+const workspaceAuthManagementPermissions = [
   AUTH_ACCESS_VIEW_PERMISSION,
   AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION,
   ...authPasskeyManagementPermissions,
@@ -160,14 +178,14 @@ const tenantAuthManagementPermissions = [
   ...authUserManagementPermissions
 ] satisfies Permission[]
 
-const tenantViewerPermissions = [
+const workspaceViewerPermissions = [
   PRINTERS_VIEW_PERMISSION,
   CAMERA_VIEW_PERMISSION,
   JOBS_VIEW_PERMISSION
 ] satisfies Permission[]
 
-const tenantOperatorPermissions = [
-  ...tenantViewerPermissions,
+const workspaceOperatorPermissions = [
+  ...workspaceViewerPermissions,
   PRINTERS_CONTROL_PERMISSION,
   PRINTERS_CLEAR_PLATE_PERMISSION,
   PRINTER_STORAGE_VIEW_PERMISSION,
@@ -175,7 +193,7 @@ const tenantOperatorPermissions = [
   PRINTS_DISPATCH_PERMISSION
 ] satisfies Permission[]
 
-const tenantManagerOperationsPermissions = [
+const workspaceManagerOperationsPermissions = [
   PRINTERS_VIEW_PERMISSION,
   CAMERA_VIEW_PERMISSION,
   JOBS_DELETE_PERMISSION,
@@ -192,42 +210,74 @@ const tenantManagerOperationsPermissions = [
   PRINTS_DISPATCH_PERMISSION
 ] satisfies Permission[]
 
+/**
+ * Operator authority over customer accounts and licences, split three ways.
+ *
+ * Read-only for Support so they can answer "what does this customer have"
+ * without being able to change it; the write half sits with Manager, who
+ * already provisions customer workspaces. Comping is deliberately NOT here —
+ * it rides `billing.manage`, which only Admin holds, because a comp gives away
+ * revenue indefinitely and the schema has no expiry on it.
+ *
+ * Revealing a key is separated from listing licences: the key is a credential,
+ * so seeing that a licence exists and reading it are different acts.
+ */
+const platformAccountReadPermissions = [
+  ACCOUNTS_VIEW_PERMISSION,
+  LICENSES_VIEW_PERMISSION
+] satisfies Permission[]
+
+const platformAccountManagePermissions = [
+  ...platformAccountReadPermissions,
+  ACCOUNTS_CREATE_PERMISSION,
+  ACCOUNTS_PEOPLE_MANAGE_PERMISSION,
+  LICENSES_ISSUE_PERMISSION,
+  LICENSES_REVEAL_KEY_PERMISSION,
+  LICENSES_REVOKE_PERMISSION
+] satisfies Permission[]
+
 export const builtInPlatformAuthGroupSeeds: BuiltInAuthGroupSeed[] = [
   {
     id: 'platform-group-admin',
-    tenantId: null,
+    workspaceId: null,
     key: PLATFORM_ADMIN_GROUP_KEY,
     name: 'Admin',
-    description: 'Full platform access including billing, settings, plugins, tenants, auth management, and support-access bypass.',
+    description: 'Full platform access including billing, settings, plugins, workspaces, auth management, and support-access bypass.',
     permissions: [
       AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION,
       ...platformAuthAdminPermissions,
+      ...platformAccountManagePermissions,
       BILLING_MANAGE_PERMISSION,
       PLUGINS_MANAGE_PERMISSION,
       SETTINGS_MANAGE_PERMISSION,
-      TENANTS_DISABLE_PERMISSION,
-      TENANTS_MANAGE_PERMISSION
+      WORKSPACES_DISABLE_PERMISSION,
+      WORKSPACES_MANAGE_PERMISSION
     ],
     isEditable: false,
     isRemovable: false
   },
   {
     id: 'platform-group-manager',
-    tenantId: null,
+    workspaceId: null,
     key: 'platform_manager',
     name: 'Manager',
-    description: 'Lead support users and manage customer workspaces without overriding workspace support-access policy.',
-    permissions: [...platformAuthManagerPermissions, TENANTS_DISABLE_PERMISSION, TENANTS_MANAGE_PERMISSION],
+    description: 'Lead support users, manage customer accounts, workspaces and licenses, without overriding workspace support-access policy or comping plans.',
+    permissions: [
+      ...platformAuthManagerPermissions,
+      ...platformAccountManagePermissions,
+      WORKSPACES_DISABLE_PERMISSION,
+      WORKSPACES_MANAGE_PERMISSION
+    ],
     isEditable: false,
     isRemovable: false
   },
   {
     id: 'platform-group-support',
-    tenantId: null,
+    workspaceId: null,
     key: 'platform_support',
     name: 'Support',
-    description: 'Help customers inside workspaces that allow support access, using the workspace support-access policy.',
-    permissions: [],
+    description: 'Help customers inside workspaces that allow support access, and look up what an account holds without changing it.',
+    permissions: [...platformAccountReadPermissions],
     isEditable: false,
     isRemovable: false
   }
@@ -238,17 +288,17 @@ export const builtInAuthGroupSeeds: BuiltInAuthGroupSeed[] = [
     key: 'admin',
     name: 'Admin',
     description: 'Full access to all current permissions.',
-    permissions: filterPermissionsForTenantContext(permissionValues.filter((permission) => permission !== TENANTS_MANAGE_PERMISSION)),
+    permissions: filterPermissionsForWorkspaceContext(permissionValues.filter((permission) => permission !== WORKSPACES_MANAGE_PERMISSION)),
     isEditable: false,
     isRemovable: false
   },
   {
     key: 'technician',
     name: 'Manager',
-    description: 'Coordinate day-to-day operations and tenant auth management, including print dispatch, plate clearing, printer management, storage downloads, library management, workspace access control, user management, and service accounts.',
+    description: 'Coordinate day-to-day operations and workspace auth management, including print dispatch, plate clearing, printer management, storage downloads, library management, workspace access control, user management, and service accounts.',
     permissions: [
-      ...tenantAuthManagementPermissions,
-      ...tenantManagerOperationsPermissions
+      ...workspaceAuthManagementPermissions,
+      ...workspaceManagerOperationsPermissions
     ],
     isEditable: true,
     isRemovable: false
@@ -257,7 +307,7 @@ export const builtInAuthGroupSeeds: BuiltInAuthGroupSeed[] = [
     key: 'operator',
     name: 'Operator',
     description: 'Run day-to-day print operations, including library browsing, print dispatch, plate clearing, and live printer control.',
-    permissions: tenantOperatorPermissions,
+    permissions: workspaceOperatorPermissions,
     isEditable: true,
     isRemovable: false
   },
@@ -265,7 +315,7 @@ export const builtInAuthGroupSeeds: BuiltInAuthGroupSeed[] = [
     key: 'viewer',
     name: 'Viewer',
     description: 'Read-only visibility into printers, camera feeds, and jobs.',
-    permissions: tenantViewerPermissions,
+    permissions: workspaceViewerPermissions,
     isEditable: true,
     isRemovable: false
   }
@@ -332,16 +382,16 @@ const previousBuiltInAuthGroupSnapshots: Partial<Record<string, PreviousBuiltInA
   ]
 }
 
-export async function ensureBuiltInAuthGroups(prisma: BuiltInAuthGroupClient, tenantId = getCurrentTenant()?.id): Promise<void> {
-  if (!tenantId) {
-    throw badRequest('Tenant context is required to initialize auth groups.')
+export async function ensureBuiltInAuthGroups(prisma: BuiltInAuthGroupClient, workspaceId = getCurrentWorkspace()?.id): Promise<void> {
+  if (!workspaceId) {
+    throw badRequest('Workspace context is required to initialize auth groups.')
   }
 
   for (const seed of builtInAuthGroupSeeds) {
     const existing = await prisma.authGroup.findUnique({
       where: {
-        tenantId_key: {
-          tenantId,
+        workspaceId_key: {
+          workspaceId,
           key: seed.key
         }
       }
@@ -350,7 +400,7 @@ export async function ensureBuiltInAuthGroups(prisma: BuiltInAuthGroupClient, te
     if (!existing) {
       await prisma.authGroup.create({
         data: {
-          tenantId,
+          workspaceId,
           key: seed.key,
           name: seed.name,
           description: seed.description,
@@ -410,7 +460,7 @@ export async function ensureBuiltInPlatformAuthGroups(prisma: BuiltInAuthGroupCl
   for (const seed of builtInPlatformAuthGroupSeeds) {
     const existing = await prisma.authGroup.findFirst({
       where: {
-        tenantId: null,
+        workspaceId: null,
         key: seed.key
       }
     })
@@ -419,7 +469,7 @@ export async function ensureBuiltInPlatformAuthGroups(prisma: BuiltInAuthGroupCl
       await prisma.authGroup.create({
         data: {
           id: seed.id,
-          tenantId: null,
+          workspaceId: null,
           key: seed.key,
           name: seed.name,
           description: seed.description,

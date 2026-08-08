@@ -7,7 +7,7 @@ import RouterRoundedIcon from '@mui/icons-material/RouterRounded'
 import SupportAgentRoundedIcon from '@mui/icons-material/SupportAgentRounded'
 import TipsAndUpdatesRoundedIcon from '@mui/icons-material/TipsAndUpdatesRounded'
 import VisibilityOffRoundedIcon from '@mui/icons-material/VisibilityOffRounded'
-import type { GeneralSettings, TenantStatsResponse } from '@printstream/shared'
+import type { GeneralSettings, WorkspaceStatsResponse } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { Alert, Button, Card, CardContent, Stack, Typography } from '@mui/joy'
@@ -18,7 +18,8 @@ import { usePromptDialog } from '../components/PromptDialogProvider'
 import { apiFetch } from '../lib/apiClient'
 import { PRINTER_CONNECTIVITY_INTRO } from '../lib/printerConnectivityGuide'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
-import { buildTenantWorkspacePath, buildWorkspaceSelectionPath, parseWorkspacePathname } from '../lib/workspaceRoute'
+import { buildWorkspacePath, buildWorkspaceSelectionPath, parseWorkspacePathname } from '../lib/workspaceRoute'
+import { ListSkeleton } from '../components/ListSkeleton'
 
 /**
  * Workspace onboarding page. Shows the quick-start checklist for a fresh
@@ -41,12 +42,12 @@ export function GetStartedView({
   // Support access is a cloud-only concept; self-hosted installs have no
   // support users who could enter the workspace, so the tip is dropped there.
   const { selfHosted } = useRuntimePolicy()
-  const tenantSlug = parseWorkspacePathname(location.pathname).tenantSlug
+  const workspaceSlug = parseWorkspacePathname(location.pathname).workspaceSlug
   const statsQuery = useQuery({
-    queryKey: ['tenant-stats'],
-    queryFn: ({ signal }) => apiFetch<TenantStatsResponse>('/api/stats', { signal })
+    queryKey: ['workspace-stats'],
+    queryFn: ({ signal }) => apiFetch<WorkspaceStatsResponse>('/api/stats', { signal })
   })
-  const workspacePath = (path: string) => tenantSlug ? buildTenantWorkspacePath(tenantSlug, path) : buildWorkspaceSelectionPath()
+  const workspacePath = (path: string) => workspaceSlug ? buildWorkspacePath(workspaceSlug, path) : buildWorkspaceSelectionPath()
   const dismissQuickStart = useMutation({
     mutationFn: () => apiFetch<GeneralSettings>('/api/settings', {
       method: 'PUT',
@@ -100,7 +101,7 @@ export function GetStartedView({
           Setup progress could not be loaded right now.
         </Alert>
       ) : stats == null ? (
-        <Typography>Loading…</Typography>
+        <ListSkeleton rows={2} />
       ) : (
         <Stack spacing={1.5}>
           {allComplete && (
@@ -156,7 +157,7 @@ export function GetStartedView({
   )
 }
 
-function resolveQuickStartHref(id: TenantStatsResponse['quickStartItems'][number]['id'], canOpenSettings: boolean, complete: boolean, workspacePath: (path: string) => string): string | undefined {
+function resolveQuickStartHref(id: WorkspaceStatsResponse['quickStartItems'][number]['id'], canOpenSettings: boolean, complete: boolean, workspacePath: (path: string) => string): string | undefined {
   if (complete) return undefined
   if (id === 'connect-bridge') return canOpenSettings ? workspacePath('/settings/bridges') : undefined
   if (id === 'add-printer') return workspacePath('/printers')

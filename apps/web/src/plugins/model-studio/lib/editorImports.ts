@@ -25,16 +25,16 @@ import { fetchModelBytes } from './modelFetch'
 export function importMeshUrl(importId: string, partIndex?: number): string {
   const base = buildApiUrl(`/api/editor/imports/${encodeURIComponent(importId)}/mesh`)
   if (partIndex == null) return base
-  // buildApiUrl may already have added a query (e.g. ?tenant=…), so use the right separator —
-  // a second `?` makes the server read `part` as part of the tenant value, so every solid would
+  // buildApiUrl may already have added a query (e.g. ?workspace=…), so use the right separator —
+  // a second `?` makes the server read `part` as part of the workspace value, so every solid would
   // wrongly fetch the full merged mesh (7× the bytes → the "model download stalled" the user hit).
   const separator = base.includes('?') ? '&' : '?'
   return `${base}${separator}part=${encodeURIComponent(String(partIndex))}`
 }
 
-function tenantHeaders(): Record<string, string> {
+function workspaceHeaders(): Record<string, string> {
   const workspaceContext = readWorkspaceContextHeader()
-  return workspaceContext ? { 'X-PrintStream-Tenant': workspaceContext } : {}
+  return workspaceContext ? { 'X-PrintStream-Workspace': workspaceContext } : {}
 }
 
 async function readImportResponse(response: Response): Promise<StagedImport> {
@@ -55,7 +55,7 @@ export async function stageImportFromFile(file: File, signal?: AbortSignal): Pro
   const response = await fetch(buildApiUrl('/api/editor/imports'), {
     method: 'POST',
     credentials: 'include',
-    headers: { Accept: 'application/json', ...tenantHeaders() },
+    headers: { Accept: 'application/json', ...workspaceHeaders() },
     body: form,
     signal
   })
@@ -71,7 +71,7 @@ export async function stageImportFromLibrary(
   const response = await fetch(buildApiUrl('/api/editor/imports/from-library'), {
     method: 'POST',
     credentials: 'include',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...tenantHeaders() },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...workspaceHeaders() },
     body: JSON.stringify(objectId == null ? { libraryFileId } : { libraryFileId, objectId }),
     signal
   })
@@ -88,7 +88,7 @@ export async function fetchImportMesh(importId: string, partIndex?: number, sign
   const bytes = await fetchModelBytes(importMeshUrl(importId, partIndex), {
     method: 'GET',
     credentials: 'include',
-    headers: tenantHeaders(),
+    headers: workspaceHeaders(),
     signal
   })
   // `fetchModelBytes` returns a tightly-sized Uint8Array backed by a fresh ArrayBuffer.
@@ -97,7 +97,7 @@ export async function fetchImportMesh(importId: string, partIndex?: number, sign
 
 /**
  * The api-backed {@link EditorImportStore}: geometry is uploaded, parsed server-side, and held in a
- * tenant-keyed LRU that the bake resolves `importId`s from — which is why `importsForBake` is empty
+ * workspace-keyed LRU that the bake resolves `importId`s from — which is why `importsForBake` is empty
  * and `dispose` has nothing to release. Stateless, so one shared instance is fine.
  */
 export const apiImportStore: EditorImportStore = {

@@ -22,11 +22,11 @@
  * capability URLs (effectively secrets) and must never appear in audit
  * metadata or logs.
  *
- * ## Tenant scoping
+ * ## Workspace scoping
  *
- * VAPID keys are server-wide (one keypair shared by all tenants).
- * Push subscriptions are scoped: each tenant has its own list stored via
- * `context.settings.forTenant(tenantId)`, and the platform workspace keeps
+ * VAPID keys are server-wide (one keypair shared by all workspaces).
+ * Push subscriptions are scoped: each workspace has its own list stored via
+ * `context.settings.forWorkspace(workspaceId)`, and the platform workspace keeps
  * its own list in the plugin's base store for platform-scope events (bridge
  * crashes, operator events). Notifications are only delivered to the
  * subscriptions belonging to the scope the event originated from.
@@ -39,7 +39,7 @@
  *
  * Messages carrying `targetUserIds` are personal rather than scope-wide and
  * route through `targeted-push.ts` (actor-key matching; cross-scope with
- * endpoint dedupe when the message has no tenant).
+ * endpoint dedupe when the message has no workspace).
  *
  * Besides the HTTP dismissal sync above, the plugin listens for
  * `notification.dismiss` bus events (read-state dismissal: the notification's
@@ -56,7 +56,7 @@ import { annotateRequestAuditLog, skipRequestAuditLog } from '../../lib/audit-lo
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { badRequest } from '../../lib/http-error.js'
 import { subscribePrinterNotifications } from '../../lib/notification-format.js'
-import { listTenantScopesWithPluginSetting } from '../../lib/notification-scope.js'
+import { listWorkspaceScopesWithPluginSetting } from '../../lib/notification-scope.js'
 import { WebPushDelivery, type StoredSubscription } from './push.js'
 import { deliverTargetedPush } from './targeted-push.js'
 
@@ -90,67 +90,67 @@ export const notificationsBrowserPlugin: ApiPlugin = {
   description: 'Background OS notifications via Web Push (works when the app is closed).',
   async register(context) {
     // VAPID keys are global (per-server), stored in the base plugin store.
-    // Subscriptions are tenant-scoped: each tenant's browsers only receive
-    // notifications for that tenant's printers.
+    // Subscriptions are workspace-scoped: each workspace's browsers only receive
+    // notifications for that workspace's printers.
     const delivery = new WebPushDelivery(context.settings, context.logger)
     await delivery.load()
 
-    // Per-scope delivery instances, keyed by tenantId; the platform scope
+    // Per-scope delivery instances, keyed by workspaceId; the platform scope
     // (null) uses the base instance, whose store also owns the VAPID keys.
-    const tenantDeliveries = new Map<string, WebPushDelivery>()
-    const getOrCreateScopedDelivery = async (tenantId: string | null): Promise<WebPushDelivery> => {
-      if (!tenantId) return delivery
-      let d = tenantDeliveries.get(tenantId)
+    const workspaceDeliveries = new Map<string, WebPushDelivery>()
+    const getOrCreateScopedDelivery = async (workspaceId: string | null): Promise<WebPushDelivery> => {
+      if (!workspaceId) return delivery
+      let d = workspaceDeliveries.get(workspaceId)
       if (!d) {
-        d = new WebPushDelivery(context.settings.forTenant(tenantId), context.logger)
+        d = new WebPushDelivery(context.settings.forWorkspace(workspaceId), context.logger)
         await d.load({ includeVapid: false })
-        // Tenant deliveries share the server-wide VAPID identity; they only
-        // own the per-tenant subscription list.
+        // Workspace deliveries share the server-wide VAPID identity; they only
+        // own the per-workspace subscription list.
         d.setVapidKeys(delivery.getPublicKey(), delivery.getPrivateKey(), delivery.getSubject())
-        tenantDeliveries.set(tenantId, d)
+        workspaceDeliveries.set(workspaceId, d)
       }
       return d
     }
 
     context.router.get('/', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const tenantId = request.tenant?.id ?? null
-      const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
+      const workspaceId = request.workspace?.id ?? null
+      const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       response.json({
         publicKey: delivery.getPublicKey(),
-        subscriptions: tenantDelivery.size()
+        subscriptions: workspaceDelivery.size()
       })
     })
 
     context.router.post('/subscriptions', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const tenantId = request.tenant?.id ?? null
+      const workspaceId = request.workspace?.id ?? null
       // The push endpoint is a capability URL; deliberately no metadata here.
       annotateRequestAuditLog(request, {
         action: 'subscribe-browser-push',
         resource: 'notifications',
         summary: 'Registered this browser for push notifications.'
       })
-      const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
+      const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       const parsed = subscribeBodySchema.safeParse(request.body)
       if (!parsed.success) {
         throw badRequest('Invalid subscription payload')
       }
       // Platform users browsing a workspace via support access hold
-      // `settings.manage` for that tenant but are not real members, so they
-      // must not receive its push notifications. Only genuine tenant members
-      // (and the tenant's own service accounts) may register a device. If a
+      // `settings.manage` for that workspace but are not real members, so they
+      // must not receive its push notifications. Only genuine workspace members
+      // (and the workspace's own service accounts) may register a device. If a
       // non-member's browser re-registers an endpoint stored before this
       // guard existed, drop it so the stale subscription self-heals.
-      if (!(await requesterBelongsToScope(context, request.auth, tenantId))) {
-        await tenantDelivery.removeSubscription(parsed.data.subscription.endpoint)
+      if (!(await requesterBelongsToScope(context, request.auth, workspaceId))) {
+        await workspaceDelivery.removeSubscription(parsed.data.subscription.endpoint)
         response.status(403).json({ error: 'Browser notifications are only available to workspace members.' })
         return
       }
-      await tenantDelivery.addSubscription({
+      await workspaceDelivery.addSubscription({
         subscription: parsed.data.subscription,
         userAgent: extractUserAgent(request),
         actorKey: buildNotificationActorKey(request.auth)
       })
-      response.status(201).json({ subscriptions: tenantDelivery.size() })
+      response.status(201).json({ subscriptions: workspaceDelivery.size() })
     })
 
     context.router.post('/subscriptions/lookup', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
@@ -158,30 +158,30 @@ export const notificationsBrowserPlugin: ApiPlugin = {
       // only because the endpoint is a capability URL that must stay out of
       // query strings — no state changes, so no audit row.
       skipRequestAuditLog(request)
-      const tenantId = request.tenant?.id ?? null
-      const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
+      const workspaceId = request.workspace?.id ?? null
+      const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       const parsed = endpointBodySchema.safeParse(request.body)
       if (!parsed.success) {
         throw badRequest('Invalid lookup payload')
       }
-      response.json({ registered: tenantDelivery.hasSubscription(parsed.data.endpoint) })
+      response.json({ registered: workspaceDelivery.hasSubscription(parsed.data.endpoint) })
     })
 
     context.router.delete('/subscriptions', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-      const tenantId = request.tenant?.id ?? null
+      const workspaceId = request.workspace?.id ?? null
       annotateRequestAuditLog(request, {
         action: 'unsubscribe-browser-push',
         resource: 'notifications',
         summary: 'Unregistered a browser push notification subscription.'
       })
-      const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
+      const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       const parsed = endpointBodySchema.safeParse(request.body)
       if (!parsed.success) {
         throw badRequest('Invalid unsubscribe payload')
       }
-      const removed = await tenantDelivery.removeSubscription(parsed.data.endpoint)
+      const removed = await workspaceDelivery.removeSubscription(parsed.data.endpoint)
       annotateRequestAuditLog(request, { metadata: { removed } })
-      response.json({ removed, subscriptions: tenantDelivery.size() })
+      response.json({ removed, subscriptions: workspaceDelivery.size() })
     })
 
     context.router.post('/dismissals', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
@@ -189,8 +189,8 @@ export const notificationsBrowserPlugin: ApiPlugin = {
       // the actor's other devices — no durable state changes, so a row per
       // dismissal would only be audit noise.
       skipRequestAuditLog(request)
-      const tenantId = request.tenant?.id ?? null
-      const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
+      const workspaceId = request.workspace?.id ?? null
+      const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
       const parsed = dismissalBodySchema.safeParse(request.body)
       if (!parsed.success) {
         throw badRequest('Invalid dismissal payload')
@@ -201,7 +201,7 @@ export const notificationsBrowserPlugin: ApiPlugin = {
         throw badRequest('Notification dismissals require an authenticated actor.')
       }
 
-      await tenantDelivery.sendToActor(actorKey, {
+      await workspaceDelivery.sendToActor(actorKey, {
         type: 'dismiss',
         notificationId: parsed.data.notificationId,
         tag: parsed.data.tag
@@ -212,35 +212,35 @@ export const notificationsBrowserPlugin: ApiPlugin = {
     const off = subscribePrinterNotifications(
       context.printerEvents,
       async (message) => {
-        const tenantId = message.tenantId ?? null
+        const workspaceId = message.workspaceId ?? null
         if (message.targetUserIds && message.targetUserIds.length > 0) {
-          const scopedDelivery = await getOrCreateScopedDelivery(tenantId)
-          const deliverable = message.tenantId
-            ? await resolveDeliverableEndpoints(context, tenantId, scopedDelivery.listSubscriptions())
+          const scopedDelivery = await getOrCreateScopedDelivery(workspaceId)
+          const deliverable = message.workspaceId
+            ? await resolveDeliverableEndpoints(context, workspaceId, scopedDelivery.listSubscriptions())
             : null
           await deliverTargetedPush({
-            tenantId,
+            workspaceId,
             payload: message,
             targetUserIds: message.targetUserIds,
             getScopedDelivery: getOrCreateScopedDelivery,
-            listSubscriptionTenantScopes: () =>
-              listTenantScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions'),
-            isEnabledForTenant: (scope) => context.isEnabledForTenant?.(scope) ?? true,
+            listSubscriptionWorkspaceScopes: () =>
+              listWorkspaceScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions'),
+            isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true,
             isDeliverableInScope: deliverable ? (entry) => deliverable.has(entry.endpoint) : undefined
           })
           return
         }
-        const tenantDelivery = await getOrCreateScopedDelivery(tenantId)
+        const workspaceDelivery = await getOrCreateScopedDelivery(workspaceId)
         // Filter out subscriptions whose owning user no longer belongs to the
-        // scope (membership for tenants, the platform flag at the platform
+        // scope (membership for workspaces, the platform flag at the platform
         // scope). This also clears any stale cross-scope subscriptions that
         // predate the registration guard above without manual cleanup.
-        const deliverable = await resolveDeliverableEndpoints(context, tenantId, tenantDelivery.listSubscriptions())
-        await tenantDelivery.sendMatching(message, (entry) => deliverable.has(entry.endpoint))
+        const deliverable = await resolveDeliverableEndpoints(context, workspaceId, workspaceDelivery.listSubscriptions())
+        await workspaceDelivery.sendMatching(message, (entry) => deliverable.has(entry.endpoint))
       },
       {
         onError: (error) => context.logger.warn('web-push fanout failed', error),
-        shouldHandleTenantId: (tenantId) => context.isEnabledForTenant?.(tenantId) ?? true
+        shouldHandleWorkspaceId: (workspaceId) => context.isEnabledForWorkspace?.(workspaceId) ?? true
       }
     )
     context.onShutdown(off)
@@ -249,25 +249,25 @@ export const notificationsBrowserPlugin: ApiPlugin = {
     // (e.g. a support thread was read), retract the delivered notification by
     // its tag — targeted at specific users' devices, or across the whole
     // originating scope when the event carries no targets.
-    const handleDismiss = async (event: { tag: string; tenantId: string | null; targetUserIds?: string[] }) => {
+    const handleDismiss = async (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => {
       const dismissPayload = { type: 'dismiss', tag: event.tag }
       if (event.targetUserIds && event.targetUserIds.length > 0) {
         await deliverTargetedPush({
-          tenantId: event.tenantId,
+          workspaceId: event.workspaceId,
           payload: dismissPayload,
           targetUserIds: event.targetUserIds,
           getScopedDelivery: getOrCreateScopedDelivery,
-          listSubscriptionTenantScopes: () =>
-            listTenantScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions'),
-          isEnabledForTenant: (scope) => context.isEnabledForTenant?.(scope) ?? true
+          listSubscriptionWorkspaceScopes: () =>
+            listWorkspaceScopesWithPluginSetting(context.prisma, context.pluginName, 'subscriptions'),
+          isEnabledForWorkspace: (scope) => context.isEnabledForWorkspace?.(scope) ?? true
         })
         return
       }
-      if (!(context.isEnabledForTenant?.(event.tenantId) ?? true)) return
-      const scopedDelivery = await getOrCreateScopedDelivery(event.tenantId)
+      if (!(context.isEnabledForWorkspace?.(event.workspaceId) ?? true)) return
+      const scopedDelivery = await getOrCreateScopedDelivery(event.workspaceId)
       await scopedDelivery.sendToAll(dismissPayload)
     }
-    const onDismiss = (event: { tag: string; tenantId: string | null; targetUserIds?: string[] }) => {
+    const onDismiss = (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => {
       handleDismiss(event).catch((error) => context.logger.warn('web-push dismissal fanout failed', error))
     }
     context.printerEvents.on('notification.dismiss', onDismiss)
@@ -289,13 +289,13 @@ function parseUserActorId(actorKey: string | undefined): string | null {
 /**
  * Resolve the set of subscription endpoints eligible to receive a scope's
  * notifications. Subscriptions tied to a user actor are only deliverable when
- * that user currently belongs to the scope (tenant membership, or the
+ * that user currently belongs to the scope (workspace membership, or the
  * platform-user flag for the platform scope). Service-account and legacy
  * (actor-less) subscriptions are always deliverable.
  */
 async function resolveDeliverableEndpoints(
   context: ApiPluginContext,
-  tenantId: string | null,
+  workspaceId: string | null,
   subscriptions: readonly StoredSubscription[]
 ): Promise<Set<string>> {
   const userEndpoints = new Map<string, string[]>()
@@ -312,9 +312,9 @@ async function resolveDeliverableEndpoints(
   }
 
   if (userEndpoints.size > 0) {
-    const memberIds = tenantId
-      ? new Set((await context.prisma.authTenantMembership.findMany({
-          where: { tenantId, userId: { in: [...userEndpoints.keys()] } },
+    const memberIds = workspaceId
+      ? new Set((await context.prisma.authWorkspaceMembership.findMany({
+          where: { workspaceId, userId: { in: [...userEndpoints.keys()] } },
           select: { userId: true }
         })).map((member) => member.userId))
       : new Set((await context.prisma.authUser.findMany({
@@ -332,24 +332,24 @@ async function resolveDeliverableEndpoints(
 
 /**
  * Whether the requester may register a push subscription for the scope.
- * Tenant scope: genuine tenant members and the tenant's own service accounts
+ * Workspace scope: genuine workspace members and the workspace's own service accounts
  * qualify; platform users with support access (but no membership) do not.
  * Platform scope: platform users only.
  */
 async function requesterBelongsToScope(
   context: ApiPluginContext,
   auth: RequestAuthContext,
-  tenantId: string | null
+  workspaceId: string | null
 ): Promise<boolean> {
-  if (!tenantId) {
+  if (!workspaceId) {
     return auth.actor.type === 'user' && Boolean(auth.actor.isPlatformUser)
   }
   if (auth.actor.type === 'service-account') {
-    return auth.actor.tenant?.id === tenantId
+    return auth.actor.workspace?.id === workspaceId
   }
   if (auth.actor.type === 'user') {
-    const membership = await context.prisma.authTenantMembership.findFirst({
-      where: { tenantId, userId: auth.actor.userId },
+    const membership = await context.prisma.authWorkspaceMembership.findFirst({
+      where: { workspaceId, userId: auth.actor.userId },
       select: { userId: true }
     })
     return membership !== null

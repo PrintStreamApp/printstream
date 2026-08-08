@@ -22,7 +22,7 @@ export function createPrintQueuePlugin(): ApiPlugin {
       registerQueueRoutes(context)
 
       const handlers = createQueueCompletionHandlers({
-        isEnabledForTenant: (tenantId) => context.isEnabledForTenant?.(tenantId) ?? true,
+        isEnabledForWorkspace: (workspaceId) => context.isEnabledForWorkspace?.(workspaceId) ?? true,
         logger: context.logger
       })
       context.printerEvents.on('print-job.started', handlers.onStarted)

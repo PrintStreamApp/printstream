@@ -20,7 +20,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { SlicingPresetKind } from '@printstream/shared'
+import { ensureCliSupportedPresetFrom, type SlicingPresetKind } from '@printstream/shared'
 import { sanitizeProfileFileName } from './profile-file-name.js'
 
 type ProfileRecord = Record<string, unknown>
@@ -56,6 +56,11 @@ export async function resolveCustomProfileConfigWith(
   const custom = JSON.parse(content) as ProfileRecord
   const merged = await mergeInheritedBase(custom, kind, readSystemPreset, new Set())
   merged.type = kind
+  // A custom preset is a User preset, and the CLI refuses to load one whose `from` says otherwise —
+  // it fails the ENTIRE run with exit 251, naming only the file path. Stamped here rather than at
+  // the write site because the sparse diff may carry no `from` AND resolve no base to inherit one
+  // from, and because presets already stored without it must slice without a data migration.
+  ensureCliSupportedPresetFrom(merged, 'User')
   return merged
 }
 

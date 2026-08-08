@@ -302,7 +302,7 @@ export function useEditorSave({
         setSaving(false)
       }
     },
-    [onSaved, queryClient, markSaved, sliceConfigRef, saveTarget, hasMaterials, onFilamentsRenumbered, onFilamentSourcesRemapped]
+    [onSaved, queryClient, markSaved, sliceConfigRef, saveTarget, hasMaterials, onFilamentsRenumbered, onFilamentSourcesRemapped, adoptArchivedVersion]
   )
 
   // Closing the editor warns first if there are unsaved edits (drags, imports, etc.).
@@ -393,7 +393,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, saveTarget, confirmOverwritingConcurrentSave, contentBase])
 
   const handleSaveAs = useCallback((name: string, destinationFolderId: string | null) => {
     const current = stateRef.current
@@ -442,7 +442,7 @@ export function useEditorSave({
         setSaving(false)
       }
     })()
-  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs])
+  }, [effectiveBaseFileId, effectiveBaseVersionId, editorBorn, savedFile, saveAsBridgeId, runSave, buildSceneEditOut, authorEdit, captureAllPlateThumbnails, collectObjectProcessOverrides, collectProcessSettingOverrides, collectFilamentSettingOverrides, stateRef, sliceConfigRef, onSavedAs, contentBase])
 
   /**
    * "Export object as 3MF": bake ONLY the given object into a new single-plate 3MF library

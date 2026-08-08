@@ -20,7 +20,7 @@ import {
   serializePrinterViewPlateTypeFilter,
   toPrinterViewDto
 } from '../lib/printer-view-record.js'
-import { requireRequestTenantId } from '../lib/request-helpers.js'
+import { requireRequestWorkspaceId } from '../lib/request-helpers.js'
 import { broadcastPrinterViewsChanged } from '../lib/ws-resource-events.js'
 
 export const printerViewsRouter = Router()
@@ -37,14 +37,14 @@ printerViewsRouter.post('/', async (request, response) => {
   if (!parsed.success) {
     throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid printer view payload')
   }
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
 
   await assertKnownPrinterIds(parsed.data.printerIds)
 
   try {
     const created = await prisma.printerView.create({
       data: {
-        tenantId,
+        workspaceId,
         name: parsed.data.name,
         printerIds: serializePrinterViewIds(parsed.data.printerIds),
         cardsPerRow: parsed.data.cardsPerRow,
@@ -67,7 +67,7 @@ printerViewsRouter.post('/', async (request, response) => {
         viewName: created.name
       }
     })
-    broadcastPrinterViewsChanged(tenantId)
+    broadcastPrinterViewsChanged(workspaceId)
     response.status(201).json({ view: toPrinterViewDto(created) })
   } catch (error) {
     if (isUniqueConstraintError(error)) throw conflict('A printer view with that name already exists')
@@ -80,7 +80,7 @@ printerViewsRouter.patch('/:id', async (request, response) => {
   if (!parsed.success) {
     throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid printer view payload')
   }
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
 
   const existing = await prisma.printerView.findUnique({ where: { id: request.params.id } })
   if (!existing) throw notFound('Printer view not found')
@@ -116,7 +116,7 @@ printerViewsRouter.patch('/:id', async (request, response) => {
         viewName: updated.name
       }
     })
-    broadcastPrinterViewsChanged(tenantId)
+    broadcastPrinterViewsChanged(workspaceId)
     response.json({ view: toPrinterViewDto(updated) })
   } catch (error) {
     if (isUniqueConstraintError(error)) throw conflict('A printer view with that name already exists')
@@ -125,7 +125,7 @@ printerViewsRouter.patch('/:id', async (request, response) => {
 })
 
 printerViewsRouter.delete('/:id', async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const existing = await prisma.printerView.findUnique({ where: { id: request.params.id } })
   if (!existing) throw notFound('Printer view not found')
   annotateRequestAuditLog(request, {
@@ -138,7 +138,7 @@ printerViewsRouter.delete('/:id', async (request, response) => {
     }
   })
   await prisma.printerView.delete({ where: { id: existing.id } })
-  broadcastPrinterViewsChanged(tenantId)
+  broadcastPrinterViewsChanged(workspaceId)
   response.status(204).end()
 })
 

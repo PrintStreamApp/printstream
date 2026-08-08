@@ -31,6 +31,7 @@ import { spawn } from 'node:child_process'
 import { closeSync, existsSync, mkdtempSync, openSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { trayIconIcoBuffer } from './tray/icons.js'
 
 export interface SetupGuiOptions {
   /** App id (kebab) — names the temp dir and the diagnostic log file. */
@@ -39,6 +40,15 @@ export interface SetupGuiOptions {
   appName: string
   /** PNG logo bytes shown top-left (each app passes its own icon). */
   logoPng: Buffer
+  /**
+   * ICO bytes for the window/taskbar icon, defaulting to the shared brand icon.
+   *
+   * Separate from `logoPng` because Windows will not take a PNG here: GDI+
+   * `Icon()` wants a real ICO, with the AND mask each entry carries. Left
+   * optional so an app that has no ICO of its own still gets a branded window
+   * instead of the host process's.
+   */
+  logoIco?: Buffer
   /** Service log directory opened by the "View logs" button on failure. */
   logsDir: string
   /** Window + header title, e.g. "Setting up PrintStream". */
@@ -123,6 +133,7 @@ export function startSetupGui(options: SetupGuiOptions): SetupGui | null {
   }
   const progressFile = path.join(workDir, 'progress.json')
   const logoPath = path.join(workDir, 'logo.png')
+  const iconPath = path.join(workDir, 'app.ico')
   const scriptPath = path.join(workDir, 'setup-gui.ps1')
   // The window touches this once it has painted its first phase; whenVisible()
   // waits for it so a UAC prompt never beats the window onto the screen.
@@ -151,12 +162,19 @@ export function startSetupGui(options: SetupGuiOptions): SetupGui | null {
   let closed: Promise<void>
   try {
     writeFileSync(logoPath, options.logoPng)
+    // The window is hosted by powershell.exe, so without an explicit Form.Icon
+    // the taskbar and title bar show PowerShell's icon -- our installer looks
+    // like a stray script. A real multi-size ICO, not the PNG: GDI+ Icon()
+    // needs the AND mask that `trayIconIcoBuffer` hand-assembles.
+    writeFileSync(iconPath, options.logoIco ?? trayIconIcoBuffer())
     // Lead with a UTF-8 BOM (U+FEFF) so Windows PowerShell 5.1 decodes the
     // script's non-ASCII (… —) as UTF-8 instead of the ANSI codepage.
     writeFileSync(scriptPath, `${'\ufeff'}${generateSetupGuiScript({
       ...options,
       progressFile,
       logoPath,
+      iconPath,
+      appUserModelId: `PrintStream.${options.appId}`,
       readyFile,
       openLabel: options.openLabel ?? `Open ${options.appName}`,
       showCopy: options.showCopy ?? false,
@@ -223,11 +241,22 @@ export function startSetupGui(options: SetupGuiOptions): SetupGui | null {
   }
 }
 
-/** WinForms window driven by the progress file; mirrors the tray's PS approach. */
-function generateSetupGuiScript(input: {
+/**
+ * WinForms window driven by the progress file; mirrors the tray's PS approach.
+ *
+ * Exported so CI can render and PARSE it on a Windows runner. This is a
+ * PowerShell program living inside a TypeScript template literal, which nothing
+ * in the normal build can check: a syntax error here reaches a user as a window
+ * that never appears, and `\s` written without escaping its backslash silently
+ * becomes `s` (that one shipped, and would have replaced the letter in every
+ * message it rendered).
+ */
+export function generateSetupGuiScript(input: {
   progressFile: string
   logoPath: string
+  iconPath: string
   readyFile: string
+  appUserModelId: string
   appName: string
   title: string
   showOpen: boolean
@@ -237,6 +266,7 @@ function generateSetupGuiScript(input: {
 }): string {
   const q = (value: string): string => value.replaceAll("'", "''")
   return `$ErrorActionPreference = 'Stop'
+$appUserModelId = '${q(input.appUserModelId)}'
 # Win32 surface: System DPI awareness (which WinForms scales against) and
 # ShowWindow/SetForegroundWindow to force the form visible. The host launches us
 # with windowsHide (so no console pops), but that sets our process show state to
@@ -246,8 +276,15 @@ Add-Type -Name Win32 -Namespace SetupUi -MemberDefinition '
   [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
   [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
   [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [System.Runtime.InteropServices.DllImport("shell32.dll")] public static extern int SetCurrentProcessExplicitAppUserModelID([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string AppID);
 '
 try { [void][SetupUi.Win32]::SetProcessDPIAware() } catch {}
+# Claim our own taskbar identity BEFORE any window exists. Form.Icon alone is not
+# enough here: the taskbar groups and icons a button by the process's
+# AppUserModelID, which for a PowerShell-hosted window resolves to PowerShell —
+# so the installer shows up as, and groups under, a stray PowerShell script.
+# Must run before the first window is created; Windows caches the id per process.
+try { [void][SetupUi.Win32]::SetCurrentProcessExplicitAppUserModelID($appUserModelId) } catch {}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -259,6 +296,7 @@ try {
 $progressFile = '${q(input.progressFile)}'
 $readyFile = '${q(input.readyFile)}'
 $logoPath = '${q(input.logoPath)}'
+$iconPath = '${q(input.iconPath)}'
 $appName = '${q(input.appName)}'
 $title = '${q(input.title)}'
 $openLabel = '${q(input.openLabel)}'
@@ -277,6 +315,7 @@ $form = New-Object System.Windows.Forms.Form
 $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
 $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.Text = $title
+try { $form.Icon = New-Object System.Drawing.Icon($iconPath) } catch {}
 $form.ClientSize = New-Object System.Drawing.Size(600, 470)
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
@@ -313,14 +352,28 @@ $bar.Location = New-Object System.Drawing.Point(20, 90)
 $bar.Size = New-Object System.Drawing.Size(560, 14)
 $form.Controls.Add($bar)
 
-$output = New-Object System.Windows.Forms.TextBox
-$output.Multiline = $true
+# A RichTextBox, not a TextBox, for one reason: SelectionHangingIndent.
+#
+# Message boundaries have to be visible — a wrapped line that starts at column
+# zero looks exactly like a new message. A TextBox cannot indent a continuation,
+# so the alternative was wrapping the text ourselves, which means predicting the
+# control's usable width in characters. That prediction was wrong (MeasureText
+# pads by default, and a fixed scrollbar margin does not survive DPI scaling)
+# and it wrapped visibly early. Here WinForms does the wrapping it already knows
+# how to do, and the indent is a property of the paragraph.
+$output = New-Object System.Windows.Forms.RichTextBox
 $output.ReadOnly = $true
 $output.ScrollBars = 'Vertical'
+$output.WordWrap = $true
+$output.BorderStyle = 'Fixed3D'
 $output.BackColor = [System.Drawing.Color]::White
 $output.Font = New-Object System.Drawing.Font('Consolas', 9)
 $output.Location = New-Object System.Drawing.Point(20, 114)
 $output.Size = New-Object System.Drawing.Size(560, 232)
+# Indent in pixels, measured from the font so it tracks DPI: the font scales with
+# the form, so three characters' worth stays three characters' worth.
+$script:hangIndent = 21
+try { $script:hangIndent = [System.Windows.Forms.TextRenderer]::MeasureText('000', $output.Font).Width } catch {}
 $form.Controls.Add($output)
 
 # Prominent connect code / app URL, placed AFTER the log so it is at the end of
@@ -408,7 +461,22 @@ $timer.add_Tick({
   if ($showCopy -and $script:copyText) { $copy.Enabled = $true }
   $script:logsDir = [string]$p.logsDir
   if ($p.lines -and $p.lines.Count -gt $script:seen) {
-    for ($i = $script:seen; $i -lt $p.lines.Count; $i++) { $output.AppendText([string]$p.lines[$i] + [Environment]::NewLine) }
+    for ($i = $script:seen; $i -lt $p.lines.Count; $i++) {
+      # An empty entry is dropped rather than rendered: message boundaries come
+      # from the hanging indent now, so a spacer line is just a gap in the middle
+      # of the log — which is what it looked like.
+      $entry = ([string]$p.lines[$i]).Trim()
+      if (-not $entry) { continue }
+      # Applied per append rather than once at construction: the indent is a
+      # PARAGRAPH property, and relying on a new paragraph to inherit it from the
+      # previous one is a quirk to depend on, not a contract.
+      $output.SelectionStart = $output.TextLength
+      $output.SelectionHangingIndent = $script:hangIndent
+      $output.AppendText($entry + [Environment]::NewLine)
+    }
+    # RichTextBox does not follow the caret on its own unless focused, and this
+    # window never takes focus from the buttons.
+    try { $output.SelectionStart = $output.TextLength; $output.ScrollToCaret() } catch {}
     $script:seen = $p.lines.Count
   }
   if (-not $script:marked) {

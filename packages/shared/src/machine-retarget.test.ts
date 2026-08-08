@@ -327,3 +327,64 @@ test('extruder_nozzle_stats survives a retarget that cannot derive it', () => {
   )
   assert.deepEqual(next.extruder_nozzle_stats, ['Standard#2', 'Standard#1'])
 })
+
+/**
+ * A resolved machine profile carries LEGACY keys BambuStudio has since renamed or dropped, and the
+ * retarget used to copy every key it found. That wrote four keys into every retargeted project that
+ * neither the source file nor a BambuStudio save of the same project contains — measured on a real
+ * repaired project. One of them, `deretract_speed_extruder_change`, arrived as a 5-entry array on a
+ * 2-extruder machine: a per-extruder vector at the wrong length is the shape that makes BambuStudio
+ * read out of bounds mid-slice.
+ */
+test('legacy machine keys BambuStudio does not carry never reach the project', () => {
+  const withLegacy = {
+    ...h2dMachine,
+    z_lift_type: 'NormalLift',
+    extruder_height_gap: '5',
+    extruder_clearance_radius: '49',
+    deretract_speed_extruder_change: ['15', '15', '15', '15', '15']
+  }
+  const out = retargetProjectSettingsToMachine(a1Project, withLegacy, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+
+  for (const key of ['z_lift_type', 'extruder_height_gap', 'extruder_clearance_radius', 'deretract_speed_extruder_change']) {
+    assert.equal(out[key], undefined, `${key} is not a BambuStudio printer option and must not be authored`)
+  }
+  // ...while the real machine keys still land. `nozzle_diameter` in particular reaches the allow-list
+  // only through the EXTRUDER vector of `Preset::printer_options()`, so a list built from the literal
+  // `s_Preset_printer_options` alone would silently drop the target machine's nozzle.
+  assert.deepEqual(out.nozzle_diameter, ['0.4', '0.4'])
+  assert.deepEqual(out.physical_extruder_map, ['1', '0'])
+  assert.deepEqual(out.printable_area, ['0x0', '325x0', '325x320', '0x320'])
+})
+
+/**
+ * `filament_volume_map` is indexed by FILAMENT, exactly like `filament_nozzle_map`. It was written
+ * from the machine's `default_nozzle_volume_type`, which is indexed by EXTRUDER — so a 3-filament
+ * project on a 2-extruder machine got a 2-entry map, and BambuStudio reads the third filament's
+ * entry past the end. Same defect `filament_nozzle_map` already carried a fix for.
+ */
+test('filament_volume_map is one entry per filament, valued by that filament\'s nozzle', () => {
+  const threeOnDual = {
+    ...a1Project,
+    filament_type: ['PLA', 'PLA', 'PETG'],
+    filament_settings_id: ['a', 'b', 'c'],
+    filament_colour: ['#1', '#2', '#3'],
+    // Slots 1+3 print on nozzle 0, slot 2 on nozzle 1.
+    filament_nozzle_map: ['0', '1', '0']
+  }
+  const machine = { ...h2dMachine, default_nozzle_volume_type: ['Standard', 'High Flow'] }
+  const out = retargetProjectSettingsToMachine(threeOnDual, machine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+
+  const volumeMap = out.filament_volume_map as string[]
+  assert.equal(volumeMap.length, 3, 'one entry per filament, not per extruder')
+  // `physical_extruder_map` is ['1','0'], so nozzle 0 is extruder INDEX 1 ("High Flow" = 1) and
+  // nozzle 1 is extruder index 0 ("Standard" = 0). Reading the volume types positionally by nozzle
+  // id would invert this, which is why the lookup goes through the map.
+  assert.deepEqual(volumeMap, ['1', '0', '1'])
+})

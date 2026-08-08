@@ -66,7 +66,6 @@ import {
   threeMfPartSubtypeCarriesFilament,
   FILAMENT_SETTING_KEYS,
   isFilamentIdentitySettingKey,
-  type ProcessConfig,
   type ThreeMfSettingsRepairReason
 } from '@printstream/shared'
 import { afterNextPaint } from '../../lib/afterNextPaint'
@@ -326,12 +325,12 @@ interface EditorViewProps {
   /** Target printer model selected in the slice dialog; overrides the bed + zones. */
   targetPrinterModel?: string
   /**
-   * Endpoint the modelled 3D bed mesh is fetched from. Defaults to the tenant route; the public 3MF
+   * Endpoint the modelled 3D bed mesh is fetched from. Defaults to the workspace route; the public 3MF
    * editor passes the anonymous catalogue route so the plate model loads with no workspace.
    */
   bedModelPath?: string
   /**
-   * How the per-object/part process dialogs resolve a preset's base config. Defaults to the tenant
+   * How the per-object/part process dialogs resolve a preset's base config. Defaults to the workspace
    * route (inside `ProcessSettingsDialog`); the public editor passes an anonymous resolver. Must be
    * a stable reference. The GLOBAL process dialog is rendered by the host, which passes this itself.
    */
@@ -339,7 +338,7 @@ interface EditorViewProps {
   /**
    * Resolves a filament preset's config, so a save can author the material's own physics into the
    * project instead of only its name (see `lib/filamentConfigAuthoring.ts`). Host-supplied and
-   * un-defaulted like `resolveProcessConfig`: the workspace host passes the tenant route's resolver,
+   * un-defaulted like `resolveProcessConfig`: the workspace host passes the workspace route's resolver,
    * the public editor its in-tab one. Without it a save keeps the previous drop behaviour.
    */
   resolveFilamentConfig?: FilamentConfigResolver
@@ -356,7 +355,7 @@ interface EditorViewProps {
   /**
    * The host's slicing-preset manager, opened by the sidebar's "Manage" action.
    *
-   * Deliberately un-defaulted: the workspace manager is a tenant surface, and quietly defaulting to
+   * Deliberately un-defaulted: the workspace manager is a workspace surface, and quietly defaulting to
    * it is exactly what made the public editor open a dialog whose every request 403s. A host with
    * no manager passes nothing and the button does not render at all.
    */
@@ -621,6 +620,16 @@ function EditorView({
     enabled: !hasNoBaseFile,
     queryFn: ({ signal }) => projectSource.loadIndex(signal),
     staleTime: 60_000
+  })
+
+  // The presets the project carries inside itself. `staleTime: Infinity` because they come from the
+  // archive this session already holds and nothing outside the session can change them — the file
+  // on disk is not re-read until the next open (see `in-memory-after-open`).
+  const embeddedPresetsQuery = useQuery({
+    queryKey: ['library-editor-embedded-presets', baseFileId, baseVersionId ?? 'current'],
+    enabled: !hasNoBaseFile && typeof projectSource.loadEmbeddedPresets === 'function',
+    queryFn: () => projectSource.loadEmbeddedPresets?.() ?? Promise.resolve([]),
+    staleTime: Infinity
   })
 
   // BambuStudio parity: a project must have a material, and a material in use can't be removed.
@@ -1083,18 +1092,27 @@ function EditorView({
     && baseFileQuery.data?.file.needsSettingsRepair === true
     ? baseFileId
     : null
-  // The defects to warn about, from whichever source this host has: the library DTO, or the host's
-  // own parse. Kept separate from the file id above because a host can have reasons and NO file
-  // (the public editor) — conflating the two is what made the notice workspace-only.
+  // The defects to warn about, from whichever source this host has: the library DTO, the OPENED
+  // VERSION's own parse for an archived open, or the host's own parse. Kept separate from the file
+  // id above because a host can have reasons and NO file (the public editor) — conflating the two
+  // is what made the notice workspace-only. An archived version reads its OWN parsed index, never
+  // the library DTO: the DTO describes the file's head, which may already be repaired — that
+  // mismatch is how defective old versions opened with no warning at all while the head was clean.
+  const openedArchivedVersion = baseFileId !== null && !isNewProject && baseVersionId != null
   const rawSettingsRepairReasons: readonly ThreeMfSettingsRepairReason[] =
-    (needsSettingsRepairFileId ? baseFileQuery.data?.file.settingsRepairReasons : repairReasons) ?? []
-  // A repair the user ran THIS SESSION drops its reason immediately, before any save: the session is
-  // authoritative once the project is open, and leaving a warning up after the action that fixes it
-  // reads as the action having failed. It comes back on undo for free, because the pin it reads
-  // lives in the undo-cloned editor state.
-  const settingsRepairReasons = state?.repairedFilamentConfigs
-    ? rawSettingsRepairReasons.filter((reason) => reason !== 'filamentPhysics')
-    : rawSettingsRepairReasons
+    (needsSettingsRepairFileId
+      ? baseFileQuery.data?.file.settingsRepairReasons
+      : openedArchivedVersion
+        ? platesQuery.data?.settingsRepairReasons
+        : repairReasons) ?? []
+  // A repair the user ran THIS SESSION drops its reasons immediately, before any save: the session
+  // is authoritative once the project is open, and leaving a warning up after the action that fixes
+  // it reads as the action having failed. Both come back on undo for free, because the pins they
+  // read live in the undo-cloned editor state.
+  const settingsRepairReasons = rawSettingsRepairReasons.filter((reason) => {
+    if (reason === 'filamentPhysics') return !state?.repairedFilamentConfigs
+    return !state?.settingsRepairStaged
+  })
   const editorFoldersQuery = useQuery({
     queryKey: ['library-folders', saveAsBridgeId ?? 'none'],
     enabled: saveAsBridgeId !== null,
@@ -5028,6 +5046,17 @@ function EditorView({
   const [repairingPhysics, setRepairingPhysics] = useState(false)
   const [physicsRepairError, setPhysicsRepairError] = useState<string | null>(null)
   /**
+   * The repair error describes the LAST attempt against the state it ran on. Any later change to
+   * the session — an edit, an undo, a redo — invalidates that context, and a lingering
+   * "couldn't repair" over a state it no longer describes reads as a fresh failure (observed: an
+   * undo of a mixed repair left the error title up over a state whose staged half was gone). The
+   * ordering keeps the message alive through its own attempt: a mixed attempt's staging setState
+   * commits (this clears nothing — the error isn't set yet) before the async physics miss sets it.
+   */
+  useEffect(() => {
+    setPhysicsRepairError(null)
+  }, [state])
+  /**
    * A repair belongs to the PROJECT it was run against. This editor is not remounted when the host
    * opens a different file (the public editor's close-and-choose flow reuses it), so without this the
    * pin — and the banner suppression that reads it — carried into the next project: a still-defective
@@ -5036,7 +5065,9 @@ function EditorView({
    */
   useEffect(() => {
     setPhysicsRepairError(null)
-    setState((prev) => (prev?.repairedFilamentConfigs ? { ...prev, repairedFilamentConfigs: undefined } : prev))
+    setState((prev) => (prev?.repairedFilamentConfigs || prev?.settingsRepairStaged
+      ? { ...prev, repairedFilamentConfigs: undefined, settingsRepairStaged: undefined }
+      : prev))
   }, [projectSource, baseFileId])
   /**
    * Recover the project's dropped filament physics as an UNDOABLE EDIT.
@@ -5051,7 +5082,33 @@ function EditorView({
    * reopened with 6 (see `repairs/restore-filament-physics.ts`). An unresolvable slot is reported
    * instead, naming the slots, because the user can fix that by picking those materials explicitly.
    */
-  const handleRepairFilamentPhysics = useCallback(async () => {
+  /**
+   * The project's embedded presets, minus the ones removed this session.
+   *
+   * Filtered HERE rather than re-reading the archive: the removal is a session edit that undo can
+   * take back, and the archive still contains the entry until the next save writes without it.
+   */
+  const embeddedPresets = useMemo(
+    () => {
+      const all = embeddedPresetsQuery.data ?? []
+      const removed = new Set(state?.removedEmbeddedPresets ?? [])
+      return removed.size === 0 ? all : all.filter((preset) => !removed.has(preset.entryPath))
+    },
+    [embeddedPresetsQuery.data, state?.removedEmbeddedPresets]
+  )
+
+  /**
+   * Remove one embedded preset. Checkpointed like every other scene edit, so it is undoable and
+   * marks the project dirty; nothing touches the stored file until the user saves.
+   */
+  const handleRemoveEmbeddedPreset = useCallback((entryPath: string) => {
+    recordHistoryRef.current?.()
+    setState((prev) => prev
+      ? { ...prev, removedEmbeddedPresets: [...(prev.removedEmbeddedPresets ?? []), entryPath] }
+      : prev)
+  }, [recordHistoryRef])
+
+  const handleRepairFilamentPhysics = useCallback(async (otherRepairsStaged = false) => {
     const controller = sliceConfigRef.current
     if (!resolveFilamentConfig || !controller) return
     setRepairingPhysics(true)
@@ -5100,10 +5157,13 @@ function EditorView({
       }
       if (unresolved.length > 0 || Object.keys(resolved).length === 0) {
         const slots = unresolved.length === 1 ? `material ${unresolved[0]}` : `materials ${unresolved.join(', ')}`
+        // When the byte-level settings repairs staged in the same click, "nothing was changed"
+        // would be a lie — say which half missed and that the staged half survives a save.
+        const stagedNote = otherRepairsStaged ? ' The other repairs were staged and save will keep them.' : ''
         setPhysicsRepairError(
           unresolved.length > 0
-            ? `We couldn’t match ${slots} to a known preset, so nothing was changed. Pick those materials again, then repair.`
-            : 'No materials could be matched to a preset, so nothing was changed.'
+            ? `We couldn’t match ${slots} to a known preset, so the material settings weren’t restored.${stagedNote} Pick those materials again, then repair.`
+            : `No materials could be matched to a preset, so the material settings weren’t restored.${stagedNote}`
         )
         return
       }
@@ -5115,6 +5175,34 @@ function EditorView({
       setRepairingPhysics(false)
     }
   }, [resolveFilamentConfig, sliceConfigRef, baseFileId, recordHistoryRef])
+
+  /**
+   * Stage the byte-level settings repairs (flush matrix, variant index, filament ids,
+   * inherits_group, object extruders) as an UNDOABLE EDIT — the in-editor twin of the API repair
+   * route, for hosts with no stored file to POST to (the public editor). Marking is the whole
+   * client-side action: the pin rides the edit as `SceneEdit.repairSettings` and the bake applies
+   * the shared repair implementations while saving, so a repaired file cannot differ by which
+   * surface repaired it.
+   */
+  const handleStageSettingsRepair = useCallback(() => {
+    recordHistoryRef.current?.()
+    setState((prev) => (prev ? { ...prev, settingsRepairStaged: true } : prev))
+  }, [recordHistoryRef])
+
+  /**
+   * The one in-editor Repair action the notice offers: stages whichever repairs the flagged
+   * reasons call for. Byte-level repairs stage synchronously and cannot fail; the physics restore
+   * resolves presets and reports its own miss (staging the byte repairs first keeps a physics
+   * failure from discarding them — the error then honestly describes the HALF that failed).
+   */
+  const handleRepairInEditor = useCallback(async () => {
+    // "Try again" after a physics miss must not re-stage (and burn another undo step) when the
+    // byte repairs are already pinned from the first attempt.
+    const stagedSettings = !stateRef.current?.settingsRepairStaged
+      && settingsRepairReasons.some((reason) => reason !== 'filamentPhysics')
+    if (stagedSettings) handleStageSettingsRepair()
+    if (settingsRepairReasons.includes('filamentPhysics')) await handleRepairFilamentPhysics(stagedSettings)
+  }, [settingsRepairReasons, handleStageSettingsRepair, handleRepairFilamentPhysics, stateRef])
   /**
    * Whether "Save" has somewhere to land WITHOUT asking the user for a destination — an opened
    * library file, an opened local file, or a scaffold already saved once this session. Shared by the
@@ -5194,19 +5282,16 @@ function EditorView({
         {/*
           The opened project's saved settings contradict its own machine topology, which kills a
           library slice inside BambuStudio with an opaque exit 139. Surfaced here (rather than
-          repaired behind the user's back) so they can fix the stored file with one click; the
-          editor's own save/slice bake already rewrites the settings correctly either way.
+          repaired behind the user's back) so they can stage the repair with one click and save;
+          the editor's own save/slice bake already rewrites the settings correctly either way.
         */}
         {showEditorChrome && settingsRepairReasons.length > 0 && (
           <RepairProjectSettingsAlert
-            // Undefined for a host with no stored file: the notice still renders, minus the
-            // route-backed Repair button it could not honour.
-            fileId={needsSettingsRepairFileId ?? undefined}
             reasons={settingsRepairReasons}
-            // Repair rewrites the project's settings, so its result must reach this editor even
-            // though the editor otherwise renders from a snapshot taken at open. The user asked
-            // for it from in here, which is exactly the carve-out.
-            onRepaired={() => sliceConfigRef.current?.refreshProjectIndex?.()}
+            // Repairing an archived version means restoring it first — a knowing decision — so it
+            // gets the advisory with restore-first wording instead of a Repair button that would
+            // mint a new head from old bytes.
+            archivedVersion={openedArchivedVersion}
             // `filamentPhysics` is repaired by the save path, not the route — and Save is greyed out
             // on a project with no unsaved edits, so without this the notice named a remedy the user
             // could not reach.
@@ -5220,9 +5305,12 @@ function EditorView({
             // every slot resolves to no preset id and the repair fails with "couldn't match materials
             // 1, 2" on a project whose materials are perfectly fine. Reproduced by clicking the moment
             // the button appears, which is exactly what an eager user does.
-            onRepairInEditor={resolveFilamentConfig && sliceConfig?.slicerStatus.slicerDataReady
-              ? handleRepairFilamentPhysics
-              : undefined}
+            // The resolver/catalogue gate applies only when the PHYSICS restore is among the
+            // flagged reasons — the byte-level repairs stage synchronously from the shared
+            // implementations and need neither.
+            onRepairInEditor={settingsRepairReasons.includes('filamentPhysics')
+              ? (resolveFilamentConfig && sliceConfig?.slicerStatus.slicerDataReady ? handleRepairInEditor : undefined)
+              : handleRepairInEditor}
             repairingInEditor={repairingPhysics}
             repairInEditorError={physicsRepairError}
             sx={{ mb: 1 }}
@@ -5791,7 +5879,14 @@ function EditorView({
               </>
             ) : null
             const settingsPanel = sliceConfigForPanel
-              ? <SliceSettingsPanel controller={sliceConfigForPanel} mode="editor" activePlateIndex={activePlateIndex} onManagePresets={presetManager ? openSlicingPresets : undefined} />
+              ? <SliceSettingsPanel
+                  controller={sliceConfigForPanel}
+                  mode="editor"
+                  activePlateIndex={activePlateIndex}
+                  onManagePresets={presetManager ? openSlicingPresets : undefined}
+                  embeddedPresets={embeddedPresets}
+                  onRemoveEmbeddedPreset={handleRemoveEmbeddedPreset}
+                />
               : null
 
             // The sidebar's contents, shared by the desktop panel column and the mobile tab, so the

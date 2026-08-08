@@ -94,10 +94,10 @@ export function parseAmsMapping(value: string | null): number[] | null {
 export async function reprintJobFromRow(input: {
   row: ReprintJobRow
   overrides: ReprintJobInput
-  tenantId: string
+  workspaceId: string
   assertPermission: (kind: ReprintJobKind) => void
 }): Promise<ReprintResult> {
-  const { row, overrides, tenantId, assertPermission } = input
+  const { row, overrides, workspaceId, assertPermission } = input
   const jobKind = toPrintJobKind(row.sourceType, row.fileId)
 
   if (jobKind === 'calibration') {
@@ -105,7 +105,7 @@ export async function reprintJobFromRow(input: {
     if (row.calibrationOption == null) throw badRequest('Calibration details are missing for this job')
 
     const targetPrinterId = overrides.printerId ?? row.printerId
-    const printer = await prisma.printer.findFirst({ where: { id: targetPrinterId, tenantId } })
+    const printer = await prisma.printer.findFirst({ where: { id: targetPrinterId, workspaceId } })
     if (!printer) throw notFound('Printer not found')
     if (!printerManager.getPrinter(printer.id)) throw badRequest('Printer is not connected — command was not delivered')
 
@@ -153,7 +153,7 @@ export async function reprintJobFromRow(input: {
     const job = await enqueueLibraryPrint({
       fileId: row.fileId,
       ...restartOptions
-    }, tenantId)
+    }, workspaceId)
 
     return { kind: 'file', job }
   }

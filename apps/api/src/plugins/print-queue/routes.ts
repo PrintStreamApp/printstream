@@ -3,7 +3,7 @@
  *
  * The shared backlog: list/add/edit/reorder/remove queued items, manual single and
  * "start all idle" dispatch (which never bypasses `enqueueLibraryPrint`, so print
- * guards and the dispatcher still run), manual re-queue of failures, and per-tenant
+ * guards and the dispatcher still run), manual re-queue of failures, and per-workspace
  * settings. Dispatch claims an item (`queued -> dispatching`) atomically before
  * enqueuing so concurrent bulk-starts can't hand the same item or printer two jobs.
  */
@@ -31,7 +31,7 @@ import { getPrintSourceKind } from '../../lib/print-dispatcher.js'
 import { printerEvents } from '../../lib/printer-events.js'
 import { printerManager } from '../../lib/printer-manager.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
-import { requireRequestTenantId, requireRouteParam } from '../../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam } from '../../lib/request-helpers.js'
 import { broadcastPluginSettingsChanged, broadcastPrintDispatchChanged, broadcastQueueChanged } from '../../lib/ws-resource-events.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import {
@@ -71,7 +71,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
   router.post('/items', requireRequestPermission(PRINTS_DISPATCH_PERMISSION), async (request, response) => {
     const parsed = queueItemCreateSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid queue item payload')
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
 
     // Resolves the file by id, keeping (un-hiding) a slice-to-queue output so it
     // persists past the unreferenced-slice cleanup; rejects recycled/non-printable files.
@@ -92,7 +92,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     const orderLink = parsed.data.orderLink ?? null
     const created = await prisma.queueItem.create({
       data: {
-        tenantId,
+        workspaceId,
         libraryFileId: file.id,
         fileName: file.name,
         kind: getPrintSourceKind(file.name),
@@ -125,9 +125,9 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     })
     // Mirror the queued state onto the order print (shows "queued", blocks a double start).
     if (orderLink) {
-      context.printerEvents.emit('order-print.queued', { tenantId, orderPrintId: orderLink.orderPrintId })
+      context.printerEvents.emit('order-print.queued', { workspaceId, orderPrintId: orderLink.orderPrintId })
     }
-    broadcastQueueChanged(tenantId)
+    broadcastQueueChanged(workspaceId)
     response.status(201).json({ item: toQueueItemDto(created) })
   })
 
@@ -210,7 +210,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       }
     })
 
-    broadcastQueueChanged(requireRequestTenantId(request))
+    broadcastQueueChanged(requireRequestWorkspaceId(request))
     response.json({ item: await readQueueItem(prisma, existing.id) })
   })
 
@@ -218,13 +218,13 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     const parsed = queueReorderSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid reorder payload')
 
-    // updateMany is tenant-scoped (foreign/unknown ids no-op), so a fractional rank
+    // updateMany is workspace-scoped (foreign/unknown ids no-op), so a fractional rank
     // is unnecessary — small backlogs renumber cheaply and unambiguously.
     await Promise.all(parsed.data.orderedIds.map((id, index) => (
       prisma.queueItem.updateMany({ where: { id }, data: { sortKey: index } })
     )))
 
-    broadcastQueueChanged(requireRequestTenantId(request))
+    broadcastQueueChanged(requireRequestWorkspaceId(request))
     response.json({ items: await listQueueItems(prisma) })
   })
 
@@ -232,13 +232,13 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     const id = requireRouteParam(request.params.id, 'id')
     const parsed = queueDispatchSchema.safeParse(request.body ?? {})
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid dispatch payload')
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
 
     const item = await prisma.queueItem.findUnique({ where: { id }, include: queueItemInclude })
     if (!item) throw notFound('Queue item not found')
     assertDispatchable(item)
 
-    const queueSettings = await loadQueueSettings(settings, tenantId)
+    const queueSettings = await loadQueueSettings(settings, workspaceId)
     const contexts = await buildOrderedPrinterContexts(prisma, queueSettings)
     const target = resolveDispatchTarget(
       toQueueItemPlacement(item),
@@ -250,7 +250,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
 
     // Dry run ("Check"): report what a real Start would do — without uploading or starting.
     if (parsed.data.dryRun) {
-      response.json(await buildQueueDryRunResult(item, target, contexts, parsed.data.amsMapping, tenantId))
+      response.json(await buildQueueDryRunResult(item, target, contexts, parsed.data.amsMapping, workspaceId))
       return
     }
 
@@ -258,7 +258,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
 
     // An explicit mapping is the user's per-start material choice and wins outright; the auto path still
     // merges the item's stored slot overrides with the matcher's result.
-    const job = await applyDispatch(prisma, item, target.printerId, target.amsMapping, tenantId, parsed.data.amsMapping)
+    const job = await applyDispatch(prisma, item, target.printerId, target.amsMapping, workspaceId, parsed.data.amsMapping)
 
     annotateRequestAuditLog(request, {
       action: 'queue-item-dispatch',
@@ -266,14 +266,14 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       summary: `Dispatched a queued print to ${job.printerName}.`,
       metadata: { queueItemId: item.id, printerId: target.printerId, jobId: job.printJobId }
     })
-    broadcastQueueChanged(tenantId)
-    broadcastPrintDispatchChanged(tenantId)
+    broadcastQueueChanged(workspaceId)
+    broadcastPrintDispatchChanged(workspaceId)
     response.status(202).json({ item: await readQueueItem(prisma, item.id), job })
   })
 
   router.post('/items/dispatch-all', requireRequestPermission(PRINTS_DISPATCH_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
-    const queueSettings = await loadQueueSettings(settings, tenantId)
+    const workspaceId = requireRequestWorkspaceId(request)
+    const queueSettings = await loadQueueSettings(settings, workspaceId)
     const matchOptions = toMatchOptions(queueSettings)
     const contexts = await buildOrderedPrinterContexts(prisma, queueSettings)
     const idleContexts = contexts.filter((entry) => entry.status.online && !isPrinterActiveJobStage(entry.status.stage))
@@ -299,7 +299,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         if (claimResult.count !== 1) break
 
         try {
-          const job = await applyDispatch(prisma, item, printer.printerId, evaluation.amsMapping, tenantId)
+          const job = await applyDispatch(prisma, item, printer.printerId, evaluation.amsMapping, workspaceId)
           dispatched.push({ itemId: item.id, printerId: printer.printerId, jobId: job.printJobId })
         } catch (error) {
           await prisma.queueItem.updateMany({ where: { id: item.id, status: 'dispatching' }, data: { status: 'queued' } }).catch(() => undefined)
@@ -316,8 +316,8 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         summary: `Started ${dispatched.length} queued print${dispatched.length === 1 ? '' : 's'} across idle printers.`,
         metadata: { dispatchedCount: dispatched.length }
       })
-      broadcastQueueChanged(tenantId)
-      broadcastPrintDispatchChanged(tenantId)
+      broadcastQueueChanged(workspaceId)
+      broadcastPrintDispatchChanged(workspaceId)
     }
     response.json({ dispatched, items: await listQueueItems(prisma) })
   })
@@ -332,7 +332,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
       where: { id: existing.id },
       data: { status: 'queued', lastPrintJobId: null, lastDispatchJobId: null }
     })
-    broadcastQueueChanged(requireRequestTenantId(request))
+    broadcastQueueChanged(requireRequestWorkspaceId(request))
     response.json({ item: await readQueueItem(prisma, existing.id) })
   })
 
@@ -352,24 +352,24 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     // (A dispatched/printing/done item has already advanced the order — leave it.)
     if (existing.orderPrintId && (existing.status === 'queued' || existing.status === 'held')) {
       printerEvents.emit('order-print.unqueued', {
-        tenantId: requireRequestTenantId(request),
+        workspaceId: requireRequestWorkspaceId(request),
         orderPrintId: existing.orderPrintId
       })
     }
-    broadcastQueueChanged(requireRequestTenantId(request))
+    broadcastQueueChanged(requireRequestWorkspaceId(request))
     response.status(204).end()
   })
 
   router.get('/settings', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
-    response.json({ settings: await loadQueueSettings(settings, requireRequestTenantId(request)) })
+    response.json({ settings: await loadQueueSettings(settings, requireRequestWorkspaceId(request)) })
   })
 
   router.put('/settings', requireRequestPermission(PRINTS_DISPATCH_PERMISSION), async (request, response) => {
     const parsed = queueSettingsSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid settings payload')
-    const tenantId = requireRequestTenantId(request)
-    await saveQueueSettings(settings, tenantId, parsed.data)
-    broadcastPluginSettingsChanged(context.pluginName, tenantId)
+    const workspaceId = requireRequestWorkspaceId(request)
+    await saveQueueSettings(settings, workspaceId, parsed.data)
+    broadcastPluginSettingsChanged(context.pluginName, workspaceId)
     response.json({ settings: parsed.data })
   })
 }
@@ -411,7 +411,7 @@ async function applyDispatch(
   item: QueueItemRow,
   printerId: string,
   computedAmsMapping: number[] | null,
-  tenantId: string,
+  workspaceId: string,
   explicitAmsMapping?: number[]
 ) {
   if (!item.libraryFileId) throw notFound('The library file for this queued item is no longer available')
@@ -421,7 +421,7 @@ async function applyDispatch(
   // library / custom material) resolve from the matcher's computed mapping for this printer.
   const amsMapping = explicitAmsMapping ?? mergeAmsMapping(parseAmsMapping(item.amsMappingJson), computedAmsMapping ?? undefined)
 
-  const job = await enqueueLibraryPrint(buildQueueDispatchInput(item, item.libraryFileId, printerId, amsMapping), tenantId)
+  const job = await enqueueLibraryPrint(buildQueueDispatchInput(item, item.libraryFileId, printerId, amsMapping), workspaceId)
 
   await prisma.queueItem.update({
     where: { id: item.id },
@@ -440,7 +440,7 @@ async function applyDispatch(
   // it marks the print started so its existing PrintJob poll-sync tracks the result.
   if (item.orderPrintId) {
     printerEvents.emit('order-print.dispatched', {
-      tenantId,
+      workspaceId,
       orderPrintId: item.orderPrintId,
       printerId,
       fileName: item.fileName,
@@ -461,7 +461,7 @@ async function buildQueueDryRunResult(
   target: DispatchTarget,
   contexts: ServerPrinterContext[],
   explicitAmsMapping: number[] | undefined,
-  tenantId: string
+  workspaceId: string
 ): Promise<QueueDryRunResult> {
   if (!item.libraryFileId) {
     return { ok: false, reason: 'The library file for this queued item is no longer available', printerId: null, printerName: null }
@@ -473,7 +473,7 @@ async function buildQueueDryRunResult(
   const amsMapping = explicitAmsMapping ?? mergeAmsMapping(parseAmsMapping(item.amsMappingJson), target.amsMapping ?? undefined)
   const input = buildQueueDispatchInput(item, item.libraryFileId, target.printerId, amsMapping)
   try {
-    await validateLibraryPrint(input, tenantId)
+    await validateLibraryPrint(input, workspaceId)
     return { ok: true, reason: null, printerId: target.printerId, printerName }
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : 'A real Start would fail', printerId: target.printerId, printerName }

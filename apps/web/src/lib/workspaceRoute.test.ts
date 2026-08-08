@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   buildPlatformWorkspacePath,
-  buildTenantWorkspacePath,
+  buildWorkspacePath,
   buildWorkspaceSelectionPath,
   isPlatformWorkspacePath,
-  isTenantWorkspaceCandidatePath,
+  isWorkspaceCandidatePath,
   parseWorkspacePathname
 } from './workspaceRoute'
 
@@ -17,35 +17,35 @@ test('buildPlatformWorkspacePath returns the explicit platform route', () => {
   assert.equal(buildPlatformWorkspacePath(), '/platform')
 })
 
-test('buildTenantWorkspacePath prefixes tenant routes with the workspace slug', () => {
-  assert.equal(buildTenantWorkspacePath('Alpha', '/printers'), '/workspaces/alpha/printers')
-  assert.equal(buildTenantWorkspacePath('alpha', '/'), '/workspaces/alpha')
-  assert.equal(buildTenantWorkspacePath('alpha', '/jobs?filter=mine'), '/workspaces/alpha/jobs?filter=mine')
+test('buildWorkspacePath prefixes workspace routes with the workspace slug', () => {
+  assert.equal(buildWorkspacePath('Alpha', '/printers'), '/workspaces/alpha/printers')
+  assert.equal(buildWorkspacePath('alpha', '/'), '/workspaces/alpha')
+  assert.equal(buildWorkspacePath('alpha', '/jobs?filter=mine'), '/workspaces/alpha/jobs?filter=mine')
 })
 
-test('parseWorkspacePathname strips the tenant slug from scoped routes', () => {
+test('parseWorkspacePathname strips the workspace slug from scoped routes', () => {
   assert.deepEqual(parseWorkspacePathname('/workspaces/alpha'), {
-    tenantSlug: 'alpha',
+    workspaceSlug: 'alpha',
     appPathname: '/'
   })
   assert.deepEqual(parseWorkspacePathname('/workspaces/alpha/settings/notifications'), {
-    tenantSlug: 'alpha',
+    workspaceSlug: 'alpha',
     appPathname: '/settings/notifications'
   })
   assert.deepEqual(parseWorkspacePathname('/printers'), {
-    tenantSlug: null,
+    workspaceSlug: null,
     appPathname: '/printers'
   })
 })
 
-test('isTenantWorkspaceCandidatePath excludes global routes and includes tenant content routes', () => {
-  assert.equal(isTenantWorkspaceCandidatePath('/'), true)
-  assert.equal(isTenantWorkspaceCandidatePath('/jobs'), true)
-  assert.equal(isTenantWorkspaceCandidatePath('/orders/templates'), true)
-  assert.equal(isTenantWorkspaceCandidatePath('/account'), true)
-  assert.equal(isTenantWorkspaceCandidatePath('/auth'), false)
-  assert.equal(isTenantWorkspaceCandidatePath('/platform/settings'), false)
-  assert.equal(isTenantWorkspaceCandidatePath('/workspaces'), false)
+test('isWorkspaceCandidatePath excludes global routes and includes workspace content routes', () => {
+  assert.equal(isWorkspaceCandidatePath('/'), true)
+  assert.equal(isWorkspaceCandidatePath('/jobs'), true)
+  assert.equal(isWorkspaceCandidatePath('/orders/templates'), true)
+  assert.equal(isWorkspaceCandidatePath('/account'), true)
+  assert.equal(isWorkspaceCandidatePath('/auth'), false)
+  assert.equal(isWorkspaceCandidatePath('/platform/settings'), false)
+  assert.equal(isWorkspaceCandidatePath('/workspaces'), false)
 })
 
 test('isPlatformWorkspacePath detects platform-owned routes', () => {

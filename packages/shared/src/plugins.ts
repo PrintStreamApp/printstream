@@ -1,25 +1,25 @@
 /**
  * Shared contract for the plugin catalog and management surfaces: the runtime/
- * manager surfaces a plugin runs on, its tenant-access mode, and the catalog +
+ * manager surfaces a plugin runs on, its workspace-access mode, and the catalog +
  * management entry shapes the API serves and the plugin-manager UI consumes.
  */
 import { z } from 'zod'
 
-export const pluginSurfaceSchema = z.enum(['platform', 'tenant'])
+export const pluginSurfaceSchema = z.enum(['platform', 'workspace'])
 export type PluginSurface = z.infer<typeof pluginSurfaceSchema>
 
-export const pluginTenantAccessSchema = z.enum(['none', 'always', 'controlled'])
-export type PluginTenantAccess = z.infer<typeof pluginTenantAccessSchema>
+export const pluginWorkspaceAccessSchema = z.enum(['none', 'always', 'controlled'])
+export type PluginWorkspaceAccess = z.infer<typeof pluginWorkspaceAccessSchema>
 
 export const pluginSourceSchema = z.enum(['builtin', 'upload', 'store'])
 export type PluginSource = z.infer<typeof pluginSourceSchema>
 
-export const tenantPluginAvailabilitySchema = z.object({
+export const workspacePluginAvailabilitySchema = z.object({
   allowed: z.boolean(),
   enabledByDefault: z.boolean()
 })
 
-export type TenantPluginAvailability = z.infer<typeof tenantPluginAvailabilitySchema>
+export type WorkspacePluginAvailability = z.infer<typeof workspacePluginAvailabilitySchema>
 
 export const pluginCatalogEntrySchema = z.object({
   name: z.string().min(1),
@@ -32,7 +32,7 @@ export const pluginCatalogEntrySchema = z.object({
   platformEnabled: z.boolean().nullable().optional(),
   runtimeSurfaces: z.array(pluginSurfaceSchema).min(1),
   managerSurfaces: z.array(pluginSurfaceSchema).min(1),
-  tenantAccess: pluginTenantAccessSchema,
+  workspaceAccess: pluginWorkspaceAccessSchema,
   availableInCurrentContext: z.boolean(),
   /** True when the deployment's plan gate blocks this plugin for the current workspace (e.g. a Pro plugin on a Free plan). */
   planBlocked: z.boolean().optional()
@@ -47,7 +47,7 @@ export const pluginCatalogResponseSchema = z.object({
 export type PluginCatalogResponse = z.infer<typeof pluginCatalogResponseSchema>
 
 export const pluginManagementEntrySchema = pluginCatalogEntrySchema.extend({
-  tenantAvailability: tenantPluginAvailabilitySchema.nullable()
+  workspaceAvailability: workspacePluginAvailabilitySchema.nullable()
 })
 
 export type PluginManagementEntry = z.infer<typeof pluginManagementEntrySchema>
@@ -58,5 +58,5 @@ export const pluginManagementResponseSchema = z.object({
 
 export type PluginManagementResponse = z.infer<typeof pluginManagementResponseSchema>
 
-export const updateTenantPluginAvailabilitySchema = tenantPluginAvailabilitySchema
-export type UpdateTenantPluginAvailabilityInput = z.infer<typeof updateTenantPluginAvailabilitySchema>
+export const updateWorkspacePluginAvailabilitySchema = workspacePluginAvailabilitySchema
+export type UpdateWorkspacePluginAvailabilityInput = z.infer<typeof updateWorkspacePluginAvailabilitySchema>

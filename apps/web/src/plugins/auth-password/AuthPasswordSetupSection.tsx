@@ -33,7 +33,7 @@ export function AuthPasswordSetupSection({
   authProviders?: AuthBootstrap['providers']
   authSetupRequired?: boolean
   authBootstrapReady?: boolean
-  authTenantId?: string
+  authWorkspaceId?: string
   authScopeKey?: string
   actorType?: string
   canManageAuthProviders?: boolean

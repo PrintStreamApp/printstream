@@ -15,9 +15,24 @@ import {
 export const DEVICE_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override'
 /**
  * Platform surfaces keep their own device override so a theme chosen inside
- * a tenant workspace never restyles the platform workspace (and vice versa).
+ * a workspace never restyles the platform workspace (and vice versa).
  */
 export const DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override.platform'
+/**
+ * The billing scope's own theme, per device.
+ *
+ * It needs a third key because it is neither of the other two. The scope has no
+ * workspace context, so it used to fall through to the WORKSPACE device
+ * override paired with the shared setting — and a shared setting read without a
+ * workspace resolves to the `platform:` scope, which is the OPERATOR's. A
+ * customer's billing pages were therefore styled by whatever theme the operator
+ * had chosen for the platform.
+ *
+ * Device-only, deliberately: a per-account shared theme would need a new server
+ * scope, and the thing a customer actually wants here is for their own screen
+ * to match the workspace they just came from.
+ */
+export const DEVICE_BILLING_APP_THEME_OVERRIDE_KEY = 'printstream.general.appTheme.override.billing'
 /**
  * Cache of the last theme background the app painted ({ background, color }
  * JSON). The index.html pre-bundle script applies it before first paint so
@@ -35,7 +50,7 @@ export const DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY = 'bambu.general.unconstrai
  */
 export const DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY = 'printstream.slicer.developerMode.override'
 /**
- * Model studio viewport overrides. Tenant-scoped (like the nav-order and landing-page overrides,
+ * Model studio viewport overrides. Workspace-scoped (like the nav-order and landing-page overrides,
  * and unlike the device-global theme/developer-mode ones): each workspace sets its own shared
  * default, so a device override that leaked across workspaces would silently shadow a default it
  * was never chosen against. The suffix is the workspace slug — see `lib/editorViewportSettings.ts`.
@@ -43,8 +58,8 @@ export const DEVICE_SLICER_DEVELOPER_MODE_OVERRIDE_KEY = 'printstream.slicer.dev
 export const DEVICE_EDITOR_SHOW_BED_MODEL_OVERRIDE_KEY_PREFIX = 'printstream.editor.bedModel3d.override'
 export const DEVICE_EDITOR_SIDEBAR_SIDE_OVERRIDE_KEY_PREFIX = 'printstream.editor.sidebarSide.override'
 
-export function tenantScopedRoutePath(path: string): string {
-  return path === '/' ? '/workspaces/:tenantSlug' : `/workspaces/:tenantSlug${path}`
+export function workspaceScopedRoutePath(path: string): string {
+  return path === '/' ? '/workspaces/:workspaceSlug' : `/workspaces/:workspaceSlug${path}`
 }
 
 export type CatchAllRouteDecision = 'wait' | 'defer-to-plugin-handling' | 'redirect-home'
@@ -77,7 +92,7 @@ export function catchAllRouteDecision(input: {
  * Resolve which nav tab owns the current route: the tab whose value equals the
  * path or is an ancestor segment of it (longest match wins, so nested tab
  * values beat their parents). Views outside every tab's subtree (e.g.
- * `/suggestions` in a tenant workspace) resolve to null so no tab is
+ * `/suggestions` in a workspace) resolve to null so no tab is
  * highlighted, rather than falling back to a default tab.
  */
 export function resolveActiveNavTab(tabValues: ReadonlyArray<string>, appPathname: string): string | null {

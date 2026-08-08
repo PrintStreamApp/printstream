@@ -2,22 +2,22 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildApiUrl, buildApiUrlWithContext } from './apiUrl.js'
 
-test('buildApiUrl appends tenant context to relative API URLs', () => {
+test('buildApiUrl appends workspace context to relative API URLs', () => {
   withBrowserPath('/workspaces/alpha/printers', () => {
-    assert.equal(buildApiUrl('/api/camera/printer-1/snapshot?t=12'), '/api/camera/printer-1/snapshot?t=12&tenant=alpha')
+    assert.equal(buildApiUrl('/api/camera/printer-1/snapshot?t=12'), '/api/camera/printer-1/snapshot?t=12&workspace=alpha')
   })
 })
 
-test('buildApiUrl appends tenant context to absolute API URLs', () => {
+test('buildApiUrl appends workspace context to absolute API URLs', () => {
   assert.equal(
     buildApiUrlWithContext('/api/camera/printer-1/snapshot?t=12', 'http://localhost:4000', 'alpha'),
-    'http://localhost:4000/api/camera/printer-1/snapshot?t=12&tenant=alpha'
+    'http://localhost:4000/api/camera/printer-1/snapshot?t=12&workspace=alpha'
   )
 })
 
 test('buildApiUrl appends explicit no-workspace context outside workspace routes', () => {
   withBrowserPath('/auth', () => {
-    assert.equal(buildApiUrl('/api/camera/printer-1/snapshot'), '/api/camera/printer-1/snapshot?tenant=none')
+    assert.equal(buildApiUrl('/api/camera/printer-1/snapshot'), '/api/camera/printer-1/snapshot?workspace=none')
   })
 })
 

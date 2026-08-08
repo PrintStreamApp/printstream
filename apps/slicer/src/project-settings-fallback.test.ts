@@ -537,3 +537,41 @@ test('an unresolvable filament name is PADDED, never dropped, so --load-filament
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('names the missing sentinel keys when it completes a partial config', async () => {
+  // Without this the job log said only "Completing partial embedded project settings", which is
+  // not enough to diagnose a project that reached this path despite embedding complete settings —
+  // and this step REPLACES the settings, so the following slice inherits whatever it produced.
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    await writeFile(
+      fakeCli,
+      `#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  if [ "$1" = "--export-settings" ]; then printf '%s' '${COMPLETE_SETTINGS_JSON}' > "$2"; fi\n  shift\ndone\nexit 0\n`,
+      { mode: 0o755 }
+    )
+    // Carries `printable_area` but neither `layer_height` nor `nozzle_temperature`.
+    const input = await writeThreeMf(dir, 'partial.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': '{"printable_area":["0x0"],"filament_colour":["#001489"]}'
+    })
+    const logged: string[] = []
+    await ensureEmbeddedProjectSettings({
+      inputPath: input,
+      cliPath: fakeCli,
+      appDir: null,
+      profileArgs: ['--load-settings', 'machine.json;process.json'],
+      workDir: dir,
+      env: {},
+      log: (message) => logged.push(message)
+    })
+
+    const line = logged.find((message) => message.startsWith('Completing partial'))
+    assert.ok(line, `expected a completion log line, got ${JSON.stringify(logged)}`)
+    assert.match(line, /missing layer_height, nozzle_temperature/)
+    assert.doesNotMatch(line, /printable_area/)
+    assert.match(line, /2 profile args/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

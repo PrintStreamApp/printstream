@@ -50,7 +50,7 @@ const ALL_DOWNLOADS = [
 test('flags the package matching the machine and opens its dialog with a Download button', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" />
+      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" serverUrlOverride={null} unavailableReason={null} />
     </CssVarsProvider>
   )
 
@@ -72,7 +72,7 @@ test('flags the package matching the machine and opens its dialog with a Downloa
 test('a Linux package shows the chmod + sudo install command', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" />
+      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" serverUrlOverride={null} unavailableReason={null} />
     </CssVarsProvider>
   )
 
@@ -87,7 +87,7 @@ test('a Linux package shows the chmod + sudo install command', async () => {
 test('without a detected platform nothing is flagged, and each package opens the dialog', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey={null} serverUrl="https://printstream.example.com" />
+      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey={null} serverUrl="https://printstream.example.com" serverUrlOverride={null} unavailableReason={null} />
     </CssVarsProvider>
   )
 
@@ -105,7 +105,7 @@ test('without a detected platform nothing is flagged, and each package opens the
 test('the Docker entry opens a compose quick-start with the server origin filled in', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" />
+      <BridgeInstallCard downloads={ALL_DOWNLOADS} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" serverUrlOverride={null} unavailableReason={null} />
     </CssVarsProvider>
   )
 
@@ -122,7 +122,7 @@ test('the Docker entry opens a compose quick-start with the server origin filled
 test('without published native packages the Install button still offers Docker', async () => {
   const view = render(
     <CssVarsProvider>
-      <BridgeInstallCard downloads={[]} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" />
+      <BridgeInstallCard downloads={[]} detectedPlatformKey="win32-x64" serverUrl="https://printstream.example.com" serverUrlOverride={null} unavailableReason={null} />
     </CssVarsProvider>
   )
 

@@ -86,7 +86,7 @@ import { isPreviewFirstLibraryFile, isUnslicedThreeMfFile } from '../lib/library
 import { LIBRARY_GROUP_OPTIONS, type LibraryGroupBy } from '../lib/libraryDirectory'
 import { getMeshThumbnailProvider } from '../lib/modelThumbnailRegistry'
 import { buildLibraryBreadcrumb, buildLibraryFavoritesRoute, buildLibraryFolderRoute, fromBridgeFolderId, isBridgeFolderId, isLibraryFavoritesPath, toBridgeFolderId } from '../lib/libraryNavigation'
-import { buildTenantWorkspacePath } from '../lib/workspaceRoute'
+import { buildWorkspacePath } from '../lib/workspaceRoute'
 import { enqueueLibraryUploads, type LibraryUploadDestination } from '../lib/libraryUploadQueue'
 import {
   collectUploadTreeFromDataTransfer,
@@ -118,6 +118,7 @@ import {
 import { PrintModal } from '../components/library/PrintModal'
 import { SliceFileModal } from '../components/library/SliceFileModal'
 import { SliceResultModal, SliceThenPrintModal } from '../components/library/SliceThenPrintModal'
+import { ListSkeleton } from '../components/ListSkeleton'
 
 type LibraryContextMenuState =
   | { kind: 'file'; file: LibraryFile; x: number; y: number }
@@ -152,7 +153,7 @@ export function LibraryView() {
   const navigate = useNavigate()
   const location = useLocation()
   const { demoMode } = useRuntimePolicy()
-  const { tenantSlug, folderId: currentFolderIdParam } = useParams<{ tenantSlug: string; folderId?: string }>()
+  const { workspaceSlug, folderId: currentFolderIdParam } = useParams<{ workspaceSlug: string; folderId?: string }>()
   const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const authBootstrapQuery = useAuthBootstrapQuery()
@@ -207,8 +208,8 @@ export function LibraryView() {
   const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
   const canOpenBridgesSettings = authBootstrapQuery.data?.capabilities.canManageSettings ?? false
   const showNoConnectedBridgesPlaceholder = authBootstrapQuery.isSuccess
-    && authBootstrapQuery.data?.tenant != null
-    && !authBootstrapQuery.data.tenantHasConnectedBridges
+    && authBootstrapQuery.data?.workspace != null
+    && !authBootstrapQuery.data.workspaceHasConnectedBridges
   const hasPermission = (permission: Permission) => !authEnabled || grantedPermissions.has(permission)
   const canViewLibrary = hasPermission(LIBRARY_VIEW_PERMISSION)
   const canUploadLibrary = hasPermission(LIBRARY_UPLOAD_PERMISSION)
@@ -372,14 +373,14 @@ export function LibraryView() {
   useEffect(() => {
     if (!currentFolderId || !foldersQuery.isSuccess) return
     if (allFolders.some((folder) => folder.id === currentFolderId)) return
-    if (!tenantSlug) return
-    navigate(buildLibraryFolderRoute(tenantSlug, null, activeBridgeId), { replace: true })
-  }, [activeBridgeId, allFolders, currentFolderId, foldersQuery.isSuccess, navigate, tenantSlug])
+    if (!workspaceSlug) return
+    navigate(buildLibraryFolderRoute(workspaceSlug, null, activeBridgeId), { replace: true })
+  }, [activeBridgeId, allFolders, currentFolderId, foldersQuery.isSuccess, navigate, workspaceSlug])
 
   const invalidateAll = () => void invalidateLibraryQueries(queryClient)
 
   const navigateToFolder = (folderId: string | null) => {
-    if (!tenantSlug) return
+    if (!workspaceSlug) return
     // Drop the search term on every folder move. A term left standing makes the
     // destination unreachable: in "All folders" scope the API ignores `folderId`
     // while `search` is set and re-returns the same flat whole-bridge list (so the
@@ -388,14 +389,14 @@ export function LibraryView() {
     // deliberately left as the user set it.
     setSearch('')
     if (folderId && isBridgeFolderId(folderId)) {
-      navigate(buildLibraryFolderRoute(tenantSlug, null, fromBridgeFolderId(folderId)))
+      navigate(buildLibraryFolderRoute(workspaceSlug, null, fromBridgeFolderId(folderId)))
       return
     }
     if (folderId === null && showGlobalRootBreadcrumb) {
-      navigate(buildLibraryFolderRoute(tenantSlug, null, null))
+      navigate(buildLibraryFolderRoute(workspaceSlug, null, null))
       return
     }
-    navigate(buildLibraryFolderRoute(tenantSlug, folderId, activeBridgeId))
+    navigate(buildLibraryFolderRoute(workspaceSlug, folderId, activeBridgeId))
   }
 
   const isDefaultOpenableFile = (file: LibraryFile) => {
@@ -721,7 +722,7 @@ export function LibraryView() {
                 size="sm"
                 variant="soft"
                 startDecorator={<FolderOpenRoundedIcon />}
-                onClick={() => navigate(buildLibraryFolderRoute(tenantSlug ?? '', null, activeBridgeId))}
+                onClick={() => navigate(buildLibraryFolderRoute(workspaceSlug ?? '', null, activeBridgeId))}
               >
                 Browse library
               </Button>
@@ -1012,7 +1013,7 @@ export function LibraryView() {
         void collectUploadTreeFromDataTransfer(transfer).then((items) => uploadItems(items, destination))
       }}
     >
-      {authBootstrapQuery.isLoading && <Typography>Loading…</Typography>}
+      {authBootstrapQuery.isLoading && <ListSkeleton rows={3} />}
       {authBootstrapQuery.isSuccess && !canViewLibrary && (
         <EmptyState
           icon={<FolderOpenRoundedIcon />}
@@ -1173,7 +1174,7 @@ export function LibraryView() {
           managedTitle="Your library is starting up"
           managedDescription="Your library will be available once PrintStream's services are running."
           canOpenBridgesSettings={canOpenBridgesSettings}
-          onOpenBridgesSettings={() => tenantSlug && navigate(buildTenantWorkspacePath(tenantSlug, '/settings/bridges'))}
+          onOpenBridgesSettings={() => workspaceSlug && navigate(buildWorkspacePath(workspaceSlug, '/settings/bridges'))}
         />
       ) : (
         <>
@@ -1205,8 +1206,8 @@ export function LibraryView() {
               aria-label="Show favorites only"
               aria-pressed={favoritesOnly}
               onClick={() => navigate(favoritesOnly
-                ? buildLibraryFolderRoute(tenantSlug ?? '', null, activeBridgeId)
-                : buildLibraryFavoritesRoute(tenantSlug ?? '', activeBridgeId))}
+                ? buildLibraryFolderRoute(workspaceSlug ?? '', null, activeBridgeId)
+                : buildLibraryFavoritesRoute(workspaceSlug ?? '', activeBridgeId))}
               sx={{ flexShrink: 0 }}
             >
               {favoritesOnly ? <StarRoundedIcon /> : <StarBorderRoundedIcon />}

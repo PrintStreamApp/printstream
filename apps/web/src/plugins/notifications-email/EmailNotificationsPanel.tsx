@@ -21,9 +21,9 @@ const QUERY_KEY = ['plugin-settings', 'notifications-email']
 
 export function EmailNotificationsPanel() {
   const queryClient = useQueryClient()
-  // The panel renders on both surfaces; the platform workspace (no tenant
+  // The panel renders on both surfaces; the platform workspace (no workspace
   // context) opts into platform events rather than a workspace's print events.
-  const isPlatformScope = useAuthBootstrapQuery().data?.tenant == null
+  const isPlatformScope = useAuthBootstrapQuery().data?.workspace == null
   const query = useQuery({
     queryKey: QUERY_KEY,
     queryFn: () => apiFetch<EmailNotificationsStatus>('/api/plugins/notifications-email')

@@ -26,7 +26,7 @@ import { readEntry, rewriteThreeMfEntries } from './three-mf-internal.js'
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
 
 export async function persistFilamentSettingOverrides(input: {
-  tenantId: string
+  workspaceId: string
   arrangedPath: string
   fileName: string
   slicerTargetId: string | null | undefined
@@ -55,7 +55,7 @@ export async function persistFilamentSettingOverrides(input: {
   const targetModel = firstString(record.printer_model) ?? firstString(record.printer_settings_id) ?? ''
   const rebinds = targetModel
     ? await resolveFilamentSlotRebinds({
-        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
         slicerTargetId: input.slicerTargetId,
         record,
         targetModel,

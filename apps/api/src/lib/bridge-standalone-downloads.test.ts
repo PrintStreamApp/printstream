@@ -60,7 +60,7 @@ test('listBridgeStandaloneDownloads maps the promoted build to browser downloads
     await promote(releasesDir)
     await writeFile(path.join(releasesDir, 'standalone.release.json'), JSON.stringify(standaloneFragment()), 'utf8')
 
-    const downloads = listBridgeStandaloneDownloads({ releasesDir })
+    const { downloads } = listBridgeStandaloneDownloads({ releasesDir })
     assert.deepEqual(downloads.map((entry) => entry.platformKey), ['linux-x64', 'win32-x64'])
     const windows = downloads.find((entry) => entry.platformKey === 'win32-x64')
     assert.equal(windows?.buildRevision, 'abc123def456')
@@ -75,11 +75,11 @@ test('listBridgeStandaloneDownloads is empty without a promoted standalone build
   const releasesDir = await mkdtemp(path.join(tmpdir(), 'bridge-downloads-'))
   try {
     // No pointer at all.
-    assert.deepEqual(listBridgeStandaloneDownloads({ releasesDir }), [])
+    assert.deepEqual(listBridgeStandaloneDownloads({ releasesDir }).downloads, [])
 
     // Fragment present but unpromoted.
     await writeFile(path.join(releasesDir, 'standalone.release.json'), JSON.stringify(standaloneFragment()), 'utf8')
-    assert.deepEqual(listBridgeStandaloneDownloads({ releasesDir }), [])
+    assert.deepEqual(listBridgeStandaloneDownloads({ releasesDir }).downloads, [])
   } finally {
     await rm(releasesDir, { recursive: true, force: true })
   }
@@ -94,7 +94,7 @@ test('listBridgeStandaloneDownloads skips gzip-only entries without a browser do
     delete binaries['linux-x64']?.downloadUrl
     await writeFile(path.join(releasesDir, 'standalone.release.json'), JSON.stringify(fragment), 'utf8')
 
-    const downloads = listBridgeStandaloneDownloads({ releasesDir })
+    const { downloads } = listBridgeStandaloneDownloads({ releasesDir })
     assert.deepEqual(downloads.map((entry) => entry.platformKey), ['win32-x64'])
   } finally {
     await rm(releasesDir, { recursive: true, force: true })

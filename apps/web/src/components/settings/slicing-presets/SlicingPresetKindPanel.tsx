@@ -10,7 +10,7 @@
 import React, { lazy, Suspense } from 'react'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
-import { Alert, Button, Chip, FormControl, FormLabel, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Chip, FormControl, FormLabel, Select, Sheet, Stack, Typography } from '@mui/joy'
 import { extractErrorMessage, type SlicingCapabilities, type SlicingPresetSummary } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../../../lib/apiClient'
@@ -48,6 +48,19 @@ import { SlicingPresetRow } from './SlicingPresetRow'
 
 const SLICING_PRESET_PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 type SlicingPresetPageSize = (typeof SLICING_PRESET_PAGE_SIZE_OPTIONS)[number]
+
+type SlicingPresetSource = 'custom' | 'builtin'
+
+/**
+ * What the panel opens on: the workspace's own presets. Built-ins outnumber them by orders of
+ * magnitude, so showing everything by default would bury the presets someone came here to manage.
+ */
+const DEFAULT_SOURCES: ReadonlyArray<SlicingPresetSource> = ['custom']
+
+/** Whether the source filter is untouched — order-insensitive, since the Select returns its own. */
+function sourcesAreDefault(sources: ReadonlyArray<SlicingPresetSource>): boolean {
+  return sources.length === DEFAULT_SOURCES.length && DEFAULT_SOURCES.every((source) => sources.includes(source))
+}
 
 // 'kind' is gone from the sort options: every row in a panel is the same kind now.
 const SLICING_PRESET_SORT_OPTIONS: ReadonlyArray<DirectorySortOption<SlicingPresetSortValue>> = [
@@ -100,7 +113,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   // profiles), so the manager opens on YOUR presets and browsing the built-ins is one filter away.
   // Kept as a filter rather than a tab or section so the toolbar's search/sort/grouping/paging
   // serves both without being duplicated.
-  const [sources, setSources] = React.useState<Array<'custom' | 'builtin'>>(['custom'])
+  const [sources, setSources] = React.useState<SlicingPresetSource[]>([...DEFAULT_SOURCES])
   const [openProfile, setOpenProfile] = React.useState<SlicingPresetSummary | null>(null)
   // A preset's values are resolved against a slicer engine, so the editor needs a target. The
   // manager has no project to take one from, so it uses the capabilities' default.
@@ -136,8 +149,11 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   const facets = SLICING_PRESET_FACETS[kind]
   // Options come from the unfiltered list so picking one filter never empties the other's menu.
   const facetOptions = React.useMemo(() => collectSlicingPresetFacetOptions(profiles, facets), [facets, profiles])
-  // The source filter counts as active whenever it is not showing everything.
-  const activeFilterCount = countActiveSlicingPresetFacets(facetSelections) + (sources.length === 2 || sources.length === 0 ? 0 : 1)
+  // Counted against the DEFAULT, not against "showing everything". The panel opens on the
+  // workspace's own presets, so counting that as an active filter lit up "Filters (1)" on a
+  // list nobody had filtered yet — and since Clear returns to that same default, clearing
+  // left the badge at 1 and read as a button that does nothing.
+  const activeFilterCount = countActiveSlicingPresetFacets(facetSelections) + (sourcesAreDefault(sources) ? 0 : 1)
   const selectedProfileIdSet = React.useMemo(() => new Set(selectedProfileIds), [selectedProfileIds])
 
   const filteredProfiles = React.useMemo(
@@ -199,7 +215,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
     setFacetSelections({})
     // Back to the default view (your own presets), not to "everything" — clearing should return
     // the manager to what it opens as.
-    setSources(['custom'])
+    setSources([...DEFAULT_SOURCES])
   }
 
   function resetSearchAndFilters() {
@@ -350,7 +366,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
                 multiple
                 size="sm"
                 value={sources}
-                onChange={(_event, value) => { setPage(0); setSources((value ?? []) as Array<'custom' | 'builtin'>) }}
+                onChange={(_event, value) => { setPage(0); setSources((value ?? []) as SlicingPresetSource[]) }}
                 placeholder="All sources"
                 renderValue={() => sources.length === 0 ? null : sources.map((source) => source === 'custom' ? 'User presets' : 'Built-in presets').join(', ')}
                 slotProps={{ listbox: { disablePortal: true } }}
@@ -437,7 +453,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
           {groups.map((group) => (
             <Stack key={group.key} spacing={0.75}>
               <Typography level="title-sm" textColor="text.tertiary">{group.label} · {group.profiles.length}</Typography>
-              <Stack spacing={0}>{group.profiles.map(renderProfileRow)}</Stack>
+              <PresetRowList>{group.profiles.map(renderProfileRow)}</PresetRowList>
             </Stack>
           ))}
         </Stack>
@@ -450,10 +466,31 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
           onNext={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
           spacing={1.25}
         >
-          <Stack spacing={0}>{visibleProfiles.map(renderProfileRow)}</Stack>
+          <PresetRowList>{visibleProfiles.map(renderProfileRow)}</PresetRowList>
         </PaginatedSection>
       )}
       {editor}
     </Stack>
+  )
+}
+
+/**
+ * The frame around a run of preset rows.
+ *
+ * The rows are hairline-separated with no surface of their own, which reads correctly only when
+ * something is already painted behind them. That held while this manager lived solely in a dialog
+ * (`ScrollableModalDialog` supplies `background.surface`), but Settings, then Slicing puts it on
+ * the page, where the rows landed straight on the app's background gradient with nothing framing
+ * them — an unbounded list beside sibling blocks that are all outlined cards.
+ *
+ * Framed here rather than by the settings host so both hosts get one list, and so the frame cannot
+ * drift from the rows it belongs to. `overflow: hidden` is what keeps the first and last row's
+ * hover fill inside the rounded corners.
+ */
+function PresetRowList({ children }: { children: React.ReactNode }): JSX.Element {
+  return (
+    <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'hidden' }}>
+      <Stack spacing={0}>{children}</Stack>
+    </Sheet>
   )
 }

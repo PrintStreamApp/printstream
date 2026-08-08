@@ -22,10 +22,10 @@ import { createUserSession, setAuthSessionCookie } from '../../lib/auth-session.
 import { readAuthSessionMaxAgeSeconds } from '../../lib/auth-policy.js'
 import { isEmailDeliveryConfigured, sendEmail } from '../../lib/email-delivery.js'
 import { badRequest, unauthorized } from '../../lib/http-error.js'
-import { clearTenantContextCookie, setTenantContextCookie } from '../../lib/tenant-context.js'
+import { clearWorkspaceContextCookie, setWorkspaceContextCookie } from '../../lib/workspace-context.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { hashPassword } from './password-hash.js'
-import { resolvePostSignInTenantId } from './sign-in.js'
+import { resolvePostSignInWorkspaceId } from './sign-in.js'
 
 const RESET_CODE_TTL_MS = 15 * 60_000
 const RESET_FAILED_MESSAGE = 'Reset code is invalid or expired.'
@@ -48,7 +48,7 @@ export function registerAuthPasswordResetRoutes(context: ApiPluginContext): void
       action: 'request-password-reset',
       resource: 'account password',
       summary: 'Requested a password reset code.',
-      metadata: { tenantId: parsed.data.tenantId ?? null }
+      metadata: { workspaceId: parsed.data.workspaceId ?? null }
     })
 
     // Only act when email can actually deliver; respond generically regardless so
@@ -62,16 +62,16 @@ export function registerAuthPasswordResetRoutes(context: ApiPluginContext): void
           email: true,
           isPlatformUser: true,
           passwordCredential: { select: { userId: true } },
-          tenantMemberships: {
-            where: parsed.data.tenantId
-              ? { tenantId: parsed.data.tenantId, loginDisabled: false }
+          workspaceMemberships: {
+            where: parsed.data.workspaceId
+              ? { workspaceId: parsed.data.workspaceId, loginDisabled: false }
               : { loginDisabled: false },
-            select: { tenantId: true }
+            select: { workspaceId: true }
           }
         }
       })
 
-      const eligible = user?.passwordCredential && (user.isPlatformUser || user.tenantMemberships.length > 0)
+      const eligible = user?.passwordCredential && (user.isPlatformUser || user.workspaceMemberships.length > 0)
       if (user && eligible) {
         const code = crypto.randomBytes(9).toString('base64url')
         const expiresAt = new Date(Date.now() + RESET_CODE_TTL_MS)
@@ -106,11 +106,11 @@ export function registerAuthPasswordResetRoutes(context: ApiPluginContext): void
         id: true,
         isPlatformUser: true,
         passwordCredential: { select: { resetTokenHash: true, resetTokenExpiresAt: true } },
-        tenantMemberships: {
-          where: parsed.data.tenantId
-            ? { tenantId: parsed.data.tenantId, loginDisabled: false }
+        workspaceMemberships: {
+          where: parsed.data.workspaceId
+            ? { workspaceId: parsed.data.workspaceId, loginDisabled: false }
             : { loginDisabled: false },
-          select: { tenantId: true }
+          select: { workspaceId: true }
         }
       }
     })
@@ -122,7 +122,7 @@ export function registerAuthPasswordResetRoutes(context: ApiPluginContext): void
       credential.resetTokenExpiresAt.getTime() > Date.now() &&
       crypto.timingSafeEqual(Buffer.from(credential.resetTokenHash), Buffer.from(hashResetCode(parsed.data.code)))
     )
-    const eligible = user && (user.isPlatformUser || user.tenantMemberships.length > 0)
+    const eligible = user && (user.isPlatformUser || user.workspaceMemberships.length > 0)
     if (!user || !eligible || !tokenValid) {
       throw unauthorized(RESET_FAILED_MESSAGE)
     }
@@ -151,11 +151,11 @@ export function registerAuthPasswordResetRoutes(context: ApiPluginContext): void
       maxAgeSeconds: await readAuthSessionMaxAgeSeconds(context.prisma)
     })
     setAuthSessionCookie(response, session.secret, session.expiresAt)
-    const nextTenantId = resolvePostSignInTenantId(user, parsed.data.tenantId)
-    if (nextTenantId) {
-      setTenantContextCookie(response, nextTenantId)
+    const nextWorkspaceId = resolvePostSignInWorkspaceId(user, parsed.data.workspaceId)
+    if (nextWorkspaceId) {
+      setWorkspaceContextCookie(response, nextWorkspaceId)
     } else {
-      clearTenantContextCookie(response)
+      clearWorkspaceContextCookie(response)
     }
 
     response.json(passwordSignInResponseSchema.parse({

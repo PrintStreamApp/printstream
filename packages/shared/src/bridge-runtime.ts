@@ -85,7 +85,7 @@ export const bridgeRuntimeWelcomeMessageSchema = z.object({
   type: z.literal('bridge.welcome'),
   bridgeId: z.string().min(1),
   connected: z.boolean(),
-  tenantId: z.string().min(1).nullable(),
+  workspaceId: z.string().min(1).nullable(),
   heartbeatIntervalSeconds: z.number().int().positive()
 })
 
@@ -138,7 +138,7 @@ export const bridgeHeartbeatMessageSchema = z.object({
 /**
  * A point-in-time reading of bridge-local metrics. The bridge ships plain
  * numbers (no telemetry runtime of its own); the API re-exposes them on its
- * Prometheus endpoint labelled by bridge/tenant. Gauges are instantaneous;
+ * Prometheus endpoint labelled by bridge/workspace. Gauges are instantaneous;
  * `apiReconnectsTotal` is cumulative since the bridge process started (it may
  * reset to 0 on bridge restart — Prometheus handles counter resets).
  */

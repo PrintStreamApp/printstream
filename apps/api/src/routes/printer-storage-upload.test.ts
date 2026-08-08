@@ -12,7 +12,7 @@ import { HttpError } from '../lib/http-error.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
 
-const TEST_TENANT = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
 const originalPrinterFindUnique = rootPrisma.printer.findUnique
 const originalScopedPrinterFindUnique = prisma.printer.findUnique
 const originalBridgeIsConnected = bridgeSessionManager.isConnected
@@ -67,7 +67,7 @@ test('printer storage upload stores the file in the requested printer directory'
 async function withPrintersApp(run: (baseUrl: string) => Promise<void>): Promise<void> {
   const app = express()
   app.use((request, _response, next) => {
-    request.tenant = TEST_TENANT
+    request.workspace = TEST_WORKSPACE
     request.auth = {
       authEnabled: false,
       actor: { type: 'user', userId: 'user-1' },

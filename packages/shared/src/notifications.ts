@@ -119,11 +119,11 @@ export const notificationMessageSchema = z.object({
   printerId: z.string().optional(),
   printerName: z.string().optional(),
   /**
-   * Tenant that owns the printer/resource this notification is about.
+   * Workspace that owns the printer/resource this notification is about.
    * Used by notification plugins to scope delivery to the correct
-   * tenant's configuration (webhook URL, push subscriptions, etc.).
+   * workspace's configuration (webhook URL, push subscriptions, etc.).
    */
-  tenantId: z.string().optional(),
+  workspaceId: z.string().optional(),
   /** Optional tag used by clients to group/replace notifications. */
   tag: z.string().optional(),
   /** Optional app route the browser should open when the user clicks the notification. */
@@ -142,7 +142,7 @@ export const notificationMessageSchema = z.object({
    * broadcast to a scope: channels that can address an individual (browser
    * push actor matching, account email, user-bound webhook recipients)
    * deliver only to these users, and shared broadcast destinations must NOT
-   * receive it. With no `tenantId`, targeted delivery may span every scope
+   * receive it. With no `workspaceId`, targeted delivery may span every scope
    * the user is registered in (platform-wide personal events).
    */
   targetUserIds: z.array(z.string()).optional(),

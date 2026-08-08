@@ -8,9 +8,9 @@
  * stays centralized in one place.
  *
  * Scoping the update to the reporting `bridgeId` is a security boundary, not just
- * a nicety: printer serials are only unique per tenant (`@@unique([tenantId,
+ * a nicety: printer serials are only unique per workspace (`@@unique([workspaceId,
  * serial])`), so a serial-only match would let one bridge's discovery rewrite the
- * host of a same-serial printer in another tenant — pointing its MQTT/FTPS
+ * host of a same-serial printer in another workspace — pointing its MQTT/FTPS
  * traffic at an attacker-chosen address while it still carries its access code. A
  * bridge may only ever refresh the host of printers assigned to it.
  */

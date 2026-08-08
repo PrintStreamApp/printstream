@@ -27,7 +27,7 @@ test('readFilamentUsageStats sums net-minus-remaining and sorts slices desc', as
       { brand: 'Polymaker', _sum: { netWeightGrams: 1000, remainingGrams: 700 } } // 300
     ]
   )
-  const stats = await readFilamentUsageStats(db, 'tenant-1')
+  const stats = await readFilamentUsageStats(db, 'workspace-1')
   assert.equal(stats.totalGramsUsed, 1800)
   assert.deepEqual(stats.byType, [
     { label: 'PLA', gramsUsed: 1500 },
@@ -47,12 +47,12 @@ test('readFilamentUsageStats clamps negatives, drops zero usage, and labels miss
       { brand: '  ', _sum: { netWeightGrams: 500, remainingGrams: 0 } } // 500, blank brand -> merges with Unbranded
     ]
   )
-  const stats = await readFilamentUsageStats(db, 'tenant-1')
+  const stats = await readFilamentUsageStats(db, 'workspace-1')
   assert.deepEqual(stats.byType, [])
   assert.deepEqual(stats.byBrand, [{ label: 'Unbranded', gramsUsed: 1250 }])
 })
 
 test('readFilamentUsageStats handles an empty inventory', async () => {
-  const stats = await readFilamentUsageStats(fakeDb([], []), 'tenant-1')
+  const stats = await readFilamentUsageStats(fakeDb([], []), 'workspace-1')
   assert.deepEqual(stats, { totalGramsUsed: 0, byType: [], byBrand: [] })
 })

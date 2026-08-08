@@ -969,7 +969,7 @@ export type PrintJob = z.infer<typeof printJobSchema>
  * cannot be added to the type and forgotten in a schema — every wire schema derives from this.
  * The checks themselves live in `repairs/` (see `collectSettingsRepairReasons`).
  */
-export const threeMfSettingsRepairReasons = ['flushMatrix', 'variantIndex', 'filamentIds', 'filamentPhysics'] as const
+export const threeMfSettingsRepairReasons = ['flushMatrix', 'variantIndex', 'filamentIds', 'filamentPhysics', 'inheritsGroup', 'objectExtruder'] as const
 export const threeMfSettingsRepairReasonSchema = z.enum(threeMfSettingsRepairReasons)
 export type ThreeMfSettingsRepairReason = z.infer<typeof threeMfSettingsRepairReasonSchema>
 
@@ -1004,8 +1004,9 @@ export const libraryFileSchema = z.object({
    * The project's embedded settings contradict its own machine topology — today a
    * `flush_volumes_matrix` that is not `filaments^2 x extruders`, which a machine retarget to a
    * dual-nozzle printer leaves behind and which BambuStudio reads out of bounds, killing the
-   * slice. Advisory: nothing is repaired automatically, and the file is rewritten only when the
-   * user takes the explicit Repair action (`POST /api/library/:id/repair-settings`).
+   * slice. Advisory: nothing is repaired automatically — the user repairs IN THE EDITOR, where
+   * Repair stages the fix as an undoable edit (`SceneEdit.repairSettings`) that a save persists;
+   * the print-prep dialog blocks printing a flagged file and points there.
    */
   needsSettingsRepair: z.boolean().optional(),
   /**
@@ -1015,6 +1016,10 @@ export const libraryFileSchema = z.object({
    *   reads it out of bounds and the SLICE dies (exit 139).
    * - `variantIndex`: `filament_self_index` does not match the variant rows; Bambu Studio refuses
    *   to OPEN the project ("Invalid configuration file"), while our own slices work fine.
+   * - `inheritsGroup`: `inherits_group` is not `filaments + 2` long, left behind by a save that
+   *   changed the filament count. The CLI sizes its filament-name vector from that array and then
+   *   indexes `filament_settings_id` with it unguarded, so it reads past the end and SIGSEGVs while
+   *   LOADING the project — exit 139 before slicing starts.
    * Absent/empty on a healthy project. `needsSettingsRepair` stays the gate.
    */
   settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
@@ -1544,7 +1549,15 @@ export const threeMfIndexSchema = z.object({
   /** Project filaments designated as support material; used as "in use" for the remove-guard even when no object references them directly. */
   supportFilamentIds: z.array(z.number().int().positive()).default([]),
   printerProfileName: z.string().nullable().default(null),
-  processProfileName: z.string().nullable().default(null)
+  processProfileName: z.string().nullable().default(null),
+  /**
+   * Repair flags for the VERSION whose bytes this index was parsed from (same semantics as the
+   * `LibraryFile` DTO's, which describe the file's HEAD). This is how an editor opened on an
+   * archived version learns that the version on screen is defective even when the head has
+   * already been repaired. Optional: absent from an older server.
+   */
+  needsSettingsRepair: z.boolean().optional(),
+  settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional()
 })
 export type ThreeMfIndex = z.infer<typeof threeMfIndexSchema>
 

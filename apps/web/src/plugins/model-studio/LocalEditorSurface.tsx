@@ -12,7 +12,7 @@
  *
  * This host renders the three surfaces that have no still-mounted slice dialog to render them from:
  * the global process tune dialog, the per-material tune dialog, and the slicing-preset manager. The
- * manager is the BROWSER-STORAGE one — the workspace manager's every request needs a tenant, so
+ * manager is the BROWSER-STORAGE one — the workspace manager's every request needs a workspace, so
  * handing the editor that one is what made "Manage" report a permission error here.
  */
 import { Suspense, lazy, useCallback, useMemo, useRef } from 'react'

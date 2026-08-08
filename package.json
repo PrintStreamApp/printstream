@@ -15,6 +15,7 @@
     "db:migrate": "npm run prisma:migrate:dev --workspace @printstream/api --",
     "db:migrate:deploy": "npm run prisma:migrate:deploy --workspace @printstream/api",
     "db:reset-auth": "npm run db:reset-auth --workspace @printstream/api",
+    "db:seed:dev": "npm run db:seed:dev --workspace @printstream/api --",
     "db:wait": "node --env-file=.env scripts/dev/wait-for-db.mjs",
     "dev": "node scripts/dev/run-dev.mjs",
     "dev:db": "npm run db:wait && node scripts/bootstrap-prisma-migrations.mjs",
@@ -22,8 +23,9 @@
     "lint": "eslint .",
     "notices": "node scripts/dev/generate-third-party-notices.mjs",
     "test": "NODE_ENV=test node scripts/dev/run-tests.mjs",
+    "test:source-hygiene": "node --test scripts/source-hygiene.test.mjs",
     "typecheck": "npm run typecheck --workspace @printstream/shared && npm run build --workspace @printstream/shared && npm run typecheck --workspace @printstream/bridge-runtime && npm run build --workspace @printstream/bridge-runtime && npm run typecheck --workspace @printstream/sea-runtime && npm run build --workspace @printstream/sea-runtime && npm run typecheck --workspace @printstream/api && npm run build --workspace @printstream/api && npm run typecheck --workspace @printstream/bridge && npm run typecheck --workspace @printstream/slicer && npm run typecheck --workspace @printstream/web",
-    "validate": "npm run lint && npm run test && npm run typecheck && npm run prisma:validate --workspace @printstream/api"
+    "validate": "npm run lint && npm run test && npm run test:source-hygiene && npm run typecheck && npm run prisma:validate --workspace @printstream/api"
   },
   "devDependencies": {
     "@eslint/js": "^9.24.0",

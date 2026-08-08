@@ -9,7 +9,7 @@ const stub = usePrismaStubs()
 
 test('ensureLibraryFolderPath returns the base folder unchanged for an empty segment list', async () => {
   const folderId = await ensureLibraryFolderPath({
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     bridgeId: 'bridge-1',
     baseFolderId: 'base-folder',
     segments: []
@@ -27,7 +27,7 @@ test('ensureLibraryFolderPath creates the missing chain under the base folder an
   })
 
   const folderId = await ensureLibraryFolderPath({
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     bridgeId: null,
     baseFolderId: 'base-folder',
     segments: ['Widgets', 'Brackets']
@@ -51,7 +51,7 @@ test('ensureLibraryFolderPath reuses existing folders instead of recreating them
   })
 
   const folderId = await ensureLibraryFolderPath({
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     bridgeId: 'bridge-1',
     baseFolderId: null,
     segments: ['Existing', 'Fresh']
@@ -73,7 +73,7 @@ test('ensureLibraryFolderPath recovers a unique-violation race by re-reading the
   })
 
   const folderId = await ensureLibraryFolderPath({
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     bridgeId: 'bridge-1',
     baseFolderId: null,
     segments: ['Raced']
@@ -83,14 +83,14 @@ test('ensureLibraryFolderPath recovers a unique-violation race by re-reading the
 
 test('ensureLibraryFolderPath rejects traversal-style segments', async () => {
   await assert.rejects(
-    ensureLibraryFolderPath({ tenantId: 'tenant-1', bridgeId: 'bridge-1', baseFolderId: null, segments: ['..'] }),
+    ensureLibraryFolderPath({ workspaceId: 'workspace-1', bridgeId: 'bridge-1', baseFolderId: null, segments: ['..'] }),
     /invalid folder name/i
   )
 })
 
 test('ensureLibraryFolderPath requires a bridge when creating from the root', async () => {
   await assert.rejects(
-    ensureLibraryFolderPath({ tenantId: 'tenant-1', bridgeId: null, baseFolderId: null, segments: ['Widgets'] }),
+    ensureLibraryFolderPath({ workspaceId: 'workspace-1', bridgeId: null, baseFolderId: null, segments: ['Widgets'] }),
     /select a bridge/i
   )
 })
@@ -173,7 +173,7 @@ test('unhideSlicedOutput replaces an existing same-name file with version archiv
 
   stub(prisma.libraryFile, 'findUnique', async () => ({
     id: 'output-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     name: 'widget.gcode.3mf',
     storedPath: 'output-1.gcode.3mf',
@@ -187,7 +187,7 @@ test('unhideSlicedOutput replaces an existing same-name file with version archiv
   }))
   stub(prisma.libraryFile, 'findFirst', async () => ({
     id: 'existing-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     name: 'widget.gcode.3mf',
     storedPath: 'existing-1.gcode.3mf',
@@ -236,7 +236,7 @@ test('unhideSlicedOutput moves the re-slice link onto the file it merged into', 
   let updateArgs: { where: { id: string }; data: Record<string, unknown> } | null = null
   stub(prisma.libraryFile, 'findUnique', async () => ({
     id: 'output-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     name: 'widget.gcode.3mf',
     storedPath: 'output-1.gcode.3mf',
@@ -252,7 +252,7 @@ test('unhideSlicedOutput moves the re-slice link onto the file it merged into', 
   }))
   stub(prisma.libraryFile, 'findFirst', async () => ({
     id: 'existing-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     name: 'widget.gcode.3mf',
     storedPath: 'existing-1.gcode.3mf',
@@ -287,7 +287,7 @@ test('unhideSlicedOutput simply unhides when no same-name file exists', async ()
   let updateArgs: { where: { id: string }; data: Record<string, unknown> } | null = null
   stub(prisma.libraryFile, 'findUnique', async () => ({
     id: 'output-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     name: 'widget.gcode.3mf',
     storedPath: 'output-1.gcode.3mf',
@@ -319,7 +319,7 @@ test('unhideSlicedOutput appends .gcode.3mf unless the full compound extension i
   // preview even when the typed name ends in a bare `.3mf`.
   stub(prisma.libraryFile, 'findUnique', async () => ({
     id: 'output-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     ownerBridgeId: 'bridge-1',
     name: 'widget.gcode.3mf',
     storedPath: 'output-1.gcode.3mf',

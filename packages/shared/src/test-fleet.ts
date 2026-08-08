@@ -1,15 +1,15 @@
 /**
  * Test fleet roster: a dev-only fleet of synthetic printers, each pinned to one
  * printer-card state so the whole UI matrix can be exercised at once without
- * hardware. Separate from the public demo (its own tenant + bridge). The bridge
+ * hardware. Separate from the public demo (its own workspace + bridge). The bridge
  * simulator builds each printer's status from its `scenario` tag
  * (see apps/bridge/src/test-fleet-states.ts); the API bootstrap seeds the DB rows.
  */
 import type { Printer } from './printer-contracts.js'
 import type { PrinterNozzleDiameterSelection } from './print-compatibility.js'
 
-export const TEST_FLEET_TENANT_SLUG = 'test'
-export const TEST_FLEET_TENANT_NAME = 'PrintStream Test Fleet'
+export const TEST_FLEET_WORKSPACE_SLUG = 'test'
+export const TEST_FLEET_WORKSPACE_NAME = 'PrintStream Test Fleet'
 export const TEST_FLEET_BRIDGE_ID = 'test-fleet-bridge'
 export const TEST_FLEET_BRIDGE_NAME = 'PrintStream Test Fleet Bridge'
 

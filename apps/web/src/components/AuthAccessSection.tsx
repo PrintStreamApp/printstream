@@ -209,7 +209,7 @@ export function AuthAccessSection({
   // concept; self-hosted (OSS) is single-workspace with no such users.
   const { selfHosted } = useRuntimePolicy()
   const hasEnabledAuthProvider = authProviders.some((provider) => provider.enabled)
-  const hasTenantScopedSettings = authScopeKey !== platformAuthScopeKey
+  const hasWorkspaceScopedSettings = authScopeKey !== platformAuthScopeKey
   const capabilities = status?.capabilities
   const canViewUsers = capabilities?.canViewUsers ?? false
   const canCreateUsers = capabilities?.canCreateUsers ?? false
@@ -317,12 +317,12 @@ export function AuthAccessSection({
   const serviceAccountsQuery = useQuery({
     queryKey: serviceAccountsQueryKey,
     queryFn: ({ signal }) => apiFetch<AuthServiceAccountListResponse>('/api/auth/service-accounts', { signal }),
-    enabled: hasEnabledAuthProvider && hasTenantScopedSettings && canViewServiceAccounts
+    enabled: hasEnabledAuthProvider && hasWorkspaceScopedSettings && canViewServiceAccounts
   })
   const generalSettingsQuery = useQuery({
     queryKey: ['general-settings'],
     queryFn: ({ signal }) => apiFetch<GeneralSettings>('/api/settings', { signal }),
-    enabled: hasEnabledAuthProvider && hasTenantScopedSettings && (mode === 'full' || mode === 'overview')
+    enabled: hasEnabledAuthProvider && hasWorkspaceScopedSettings && (mode === 'full' || mode === 'overview')
   })
 
   function isRecentAuthError(error: unknown): boolean {
@@ -672,21 +672,21 @@ export function AuthAccessSection({
   const supportAccessDisableWaitingForUsers = hasEnabledAuthProvider
     && supportAccessEnabled
     && usersQuery.isLoading
-  const showSupportControls = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview') && hasTenantScopedSettings && !selfHosted
+  const showSupportControls = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview') && hasWorkspaceScopedSettings && !selfHosted
   const showSessionSecurity = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview')
   const showSessionDuration = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview')
   const showAuthHealth = hasEnabledAuthProvider && (mode === 'full' || mode === 'overview') && authHealthSignals.length > 0
   const showManagementOverview = mode === 'overview'
   const showUsers = hasEnabledAuthProvider && (mode === 'full' || mode === 'users') && (canViewUsers || canCreateUsers)
   const showRoles = (mode === 'roles' || (hasEnabledAuthProvider && mode === 'full')) && (canViewRoles || canCreateRoles)
-  const showServiceAccounts = (mode === 'full' || mode === 'overview') && hasTenantScopedSettings && (canViewServiceAccounts || canCreateServiceAccounts)
+  const showServiceAccounts = (mode === 'full' || mode === 'overview') && hasWorkspaceScopedSettings && (canViewServiceAccounts || canCreateServiceAccounts)
   const sections = [
     ...(showSessionSecurity ? [{ id: 'session-security', label: 'Session security' }] : []),
     ...(showSessionDuration ? [{ id: 'session-duration', label: 'Session duration' }] : []),
     ...(showUsers ? [{ id: 'users', label: 'Users' }] : []),
     ...(showRoles ? [{ id: 'roles', label: mode === 'roles' ? 'Role permissions' : 'Access control' }] : []),
     ...(showServiceAccounts ? [{ id: 'service-accounts', label: 'Service accounts' }] : []),
-    ...(showSupportControls && hasTenantScopedSettings ? [{ id: 'support-access', label: 'Support access' }] : [])
+    ...(showSupportControls && hasWorkspaceScopedSettings ? [{ id: 'support-access', label: 'Support access' }] : [])
   ]
   const showSectionNav = sections.length > 1
   const rolesSectionTitle = mode === 'roles' ? 'Role permissions' : 'Access control'
@@ -1595,7 +1595,7 @@ export function AuthAccessSection({
             </Box>
           )}
 
-          {showSupportControls && hasTenantScopedSettings && (
+          {showSupportControls && hasWorkspaceScopedSettings && (
             <Box id="support-access" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
               <Stack spacing={1.25}>
                 <PageSectionHeading

@@ -77,7 +77,7 @@ test('heals a damaged H2D project: re-authors the machine block and re-applies t
   ]
 
   const healedPath = await healSavedProjectMachineTopology({
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     arrangedPath,
     fileName: 'project.3mf',
     slicerTargetId: null,
@@ -114,7 +114,7 @@ test('returns null for an intact H2D project and for non-H2 machines', async () 
     })
   })
   assert.equal(await healSavedProjectMachineTopology({
-    tenantId: 'tenant-1', arrangedPath: intactPath, fileName: 'a.3mf', slicerTargetId: null, filaments: null
+    workspaceId: 'workspace-1', arrangedPath: intactPath, fileName: 'a.3mf', slicerTargetId: null, filaments: null
   }), null)
 
   const p1sPath = await writeThreeMf({
@@ -125,7 +125,7 @@ test('returns null for an intact H2D project and for non-H2 machines', async () 
     })
   })
   assert.equal(await healSavedProjectMachineTopology({
-    tenantId: 'tenant-1', arrangedPath: p1sPath, fileName: 'b.3mf', slicerTargetId: null, filaments: null
+    workspaceId: 'workspace-1', arrangedPath: p1sPath, fileName: 'b.3mf', slicerTargetId: null, filaments: null
   }), null)
 })
 
@@ -135,7 +135,7 @@ test('returns null (never throws) when the machine preset cannot be resolved', a
     'Metadata/project_settings.config': JSON.stringify(DAMAGED_H2D_SETTINGS)
   })
   assert.equal(await healSavedProjectMachineTopology({
-    tenantId: 'tenant-1', arrangedPath, fileName: 'c.3mf', slicerTargetId: null, filaments: null
+    workspaceId: 'workspace-1', arrangedPath, fileName: 'c.3mf', slicerTargetId: null, filaments: null
   }), null)
 })
 

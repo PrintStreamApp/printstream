@@ -6,7 +6,7 @@
  * **Who is enforced.** Every self-hosted build: the native (paid) app and the
  * Docker/OSS build alike. The latter is enforced because `LICENSE` (PolyForm
  * Noncommercial) already forbids the commercial use being gated, so requiring a
- * key states the existing terms rather than adding new ones. The multi-tenant
+ * key states the existing terms rather than adding new ones. The multi-workspace
  * cloud licenses through subscriptions instead and is never enforced here.
  *
  * **What satisfies it** differs by build, and only here:
@@ -34,13 +34,13 @@
  */
 import type { LicenseEnforcement, LicenseStatus } from '@printstream/shared'
 import { conflict } from './http-error.js'
-import { isSelfHostedDeployment } from './deployment-mode.js'
-import { env } from './env.js'
+import { isNativeDeployment, isSelfHostedDeployment } from './deployment-mode.js'
+import { requestLicensedPrinters } from './license-entitlement-client.js'
 import { getInstalledLicenseStatus } from './license-state.js'
 import { printGuards } from './print-guards.js'
 import { registerPrinterQuota } from './printer-quota.js'
 import { rootPrisma } from './prisma.js'
-import { scopeSettingKeyForTenant } from './tenant-settings.js'
+import { scopeSettingKeyForWorkspace } from './workspace-settings.js'
 
 /** Fresh native installs get this many days of full-featured evaluation. */
 export const NATIVE_EVALUATION_DAYS = 14
@@ -52,13 +52,13 @@ export const NATIVE_EVALUATION_DAYS = 14
  */
 export const SELF_HOSTED_GRACE_DAYS = 30
 
-const FIRST_RUN_KEY = scopeSettingKeyForTenant(null, 'license.firstRunAt')
+const FIRST_RUN_KEY = scopeSettingKeyForWorkspace(null, 'license.firstRunAt')
 /**
  * The pre-1.0 key, written when enforcement was native-only. Read as a fallback
  * and adopted forward so a native install that has been running for months is
  * not handed a fresh evaluation window by the rename.
  */
-const LEGACY_NATIVE_FIRST_RUN_KEY = scopeSettingKeyForTenant(null, 'license.nativeFirstRunAt')
+const LEGACY_NATIVE_FIRST_RUN_KEY = scopeSettingKeyForWorkspace(null, 'license.nativeFirstRunAt')
 const CACHE_TTL_MS = 60_000
 
 export const NATIVE_LIMITED_MESSAGE =
@@ -69,12 +69,12 @@ export const SELF_HOSTED_LIMITED_MESSAGE =
 
 /** True when this build enforces a license at all. */
 export function isLicenseEnforced(): boolean {
-  return env.PRINTSTREAM_NATIVE || isSelfHostedDeployment()
+  return isSelfHostedDeployment()
 }
 
 /** The message shown when this build drops to `limited`. */
 export function licenseLimitedMessage(): string {
-  return env.PRINTSTREAM_NATIVE ? NATIVE_LIMITED_MESSAGE : SELF_HOSTED_LIMITED_MESSAGE
+  return isNativeDeployment() ? NATIVE_LIMITED_MESSAGE : SELF_HOSTED_LIMITED_MESSAGE
 }
 
 /**
@@ -106,8 +106,14 @@ export function computeLicenseMode(input: {
  * Read (or stamp on first read) when this install first booted into an
  * enforcing build. Adopts the legacy native-only key when present so the clock
  * is not silently restarted by the rename.
+ *
+ * Exported for tests, because this decides what happens to installs that ALREADY
+ * EXIST when enforcement ships. Only reached when `isLicenseEnforced()` is true,
+ * which was native-only before — so a Docker/OSS install carries no stamp and is
+ * dated from the upgrade, giving it the full grace window rather than a window
+ * that expired before it was ever told about.
  */
-async function getFirstRunAt(): Promise<Date> {
+export async function getFirstRunAt(): Promise<Date> {
   const [current, legacy] = await Promise.all([
     rootPrisma.setting.findUnique({ where: { key: FIRST_RUN_KEY } }),
     rootPrisma.setting.findUnique({ where: { key: LEGACY_NATIVE_FIRST_RUN_KEY } })
@@ -137,7 +143,7 @@ async function getFirstRunAt(): Promise<Date> {
 }
 
 export async function getLicenseEnforcement(): Promise<LicenseEnforcement> {
-  const native = env.PRINTSTREAM_NATIVE
+  const native = isNativeDeployment()
   if (!isLicenseEnforced()) {
     return { enforced: false, native, mode: 'unrestricted', graceEndsAt: null }
   }
@@ -199,10 +205,16 @@ export async function assertLicenseAllowsPrinterAdd(): Promise<void> {
  * a minute rather than blocking the dispatch hot path on a DB read.
  *
  * The printer allowance is counted **install-wide, not per workspace**: the
- * cap is a property of the key, and counting per tenant would let anyone lift
+ * cap is a property of the key, and counting per workspace would let anyone lift
  * it by creating a second workspace. Registering here is safe because the cloud
  * billing module — the only other `registerPrinterQuota` caller — is absent
  * from exactly the builds this runs in.
+ *
+ * On a **metered** key (self-hosted Pro) the allowance is not a wall: adding a
+ * printer past it buys the capacity inline and removing one credits it back, so
+ * the install meters like a cloud workspace. Every other key keeps the old
+ * behaviour — a fixed allowance and a refusal — because there is no
+ * subscription behind it to grow.
  */
 export function registerLicenseEnforcement(): void {
   if (!isLicenseEnforced()) return
@@ -218,7 +230,43 @@ export function registerLicenseEnforcement(): void {
   registerPrinterQuota({
     getLimit: async () => (await getInstalledLicenseStatus()).maxPrinters,
     countPrinters: () => rootPrisma.printer.count(),
+    // Buy the capacity rather than refusing, for a key that has a subscription
+    // behind it. This is what makes a self-hosted install feel like a cloud
+    // workspace: the operator adds a printer, the cloud bills the difference,
+    // and the add goes through in the same request. Everything else — Lifetime,
+    // community, a cancelled subscription — refuses with its own reason.
+    raiseLimit: async (needed) => {
+      // A fixed key (Lifetime, community) has no subscription to grow. Falling
+      // through to `describeLimit` is right here: "upgrade your license" is the
+      // operator's actual next step, where reporting that a metered change was
+      // refused describes a mechanism they were never using.
+      if (!(await getInstalledLicenseStatus()).metered) return null
+      const result = await requestLicensedPrinters(needed)
+      if (result.outcome === 'applied') invalidateLicenseCache()
+      if (result.outcome === 'applied' || result.outcome === 'unchanged') return result.maxPrinters
+      // The far end's reason is more useful than the generic cap message: it
+      // names the actual obstacle (declined card, no subscription, key bound to
+      // another install) and therefore where to go to fix it.
+      throw conflict(result.message ?? licenseLimitedMessage())
+    },
     describeLimit: (limit) =>
-      `Your license covers ${limit} printer${limit === 1 ? '' : 's'}. Add printers to your plan, or upgrade your license, to connect more.`
+      `Your license covers ${limit} printer${limit === 1 ? '' : 's'}. Add printers to your plan, or upgrade your license, to connect more.`,
+    // The other half of metering: removing a printer credits it back, so a
+    // self-hosted fleet costs what it currently is rather than its high-water
+    // mark. Idempotent on the total, so the fire after an ADD (where
+    // `raiseLimit` already bought the capacity) is a no-op rather than a second
+    // charge. Best-effort like every `onCountChanged`: a missed credit is a
+    // billing correction, never a reason to fail the removal the operator asked
+    // for.
+    onCountChanged: async () => {
+      // Nothing to meter on a community or Lifetime key, and this fires on every
+      // printer add and remove — so the cheap local check comes before the count
+      // and the request. `requestLicensedPrinters` refuses those keys anyway;
+      // this just keeps the common case free.
+      if (!(await getInstalledLicenseStatus()).metered) return
+      const count = await rootPrisma.printer.count()
+      const result = await requestLicensedPrinters(count)
+      if (result.outcome === 'applied') invalidateLicenseCache()
+    }
   })
 }

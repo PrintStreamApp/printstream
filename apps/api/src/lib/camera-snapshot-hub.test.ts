@@ -209,7 +209,7 @@ test('printer.removed stops background polling', async () => {
     hub.unwatch(client, 'p1')
     await waitFor(() => (refreshCounts.get('p1') ?? 0) >= 2)
 
-    events.emit('printer.removed', { printerId: 'p1', tenantId: 't1' })
+    events.emit('printer.removed', { printerId: 'p1', workspaceId: 't1' })
     const countAtRemoval = refreshCounts.get('p1') ?? 0
     await delay(80)
     assert.equal(refreshCounts.get('p1'), countAtRemoval)

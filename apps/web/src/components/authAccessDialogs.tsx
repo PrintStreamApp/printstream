@@ -22,6 +22,8 @@ import {
   FormLabel,
   Input,
   ModalClose,
+  Option,
+  Select,
   Sheet,
   Stack,
   Textarea,
@@ -41,11 +43,14 @@ import {
   type CreateManagedAuthUserRequest,
   type CreateAuthServiceAccountRequest,
   type CreateAuthGroupRequest,
+  type OrganisationCandidateListResponse,
   type Permission,
   type UpdateAuthServiceAccountRequest,
   type UpdateAuthGroupRequest
 } from '@printstream/shared'
+import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
+import { apiFetch } from '../lib/apiClient'
 import {
   formatCount,
   orderGroupsForDisplay,
@@ -275,6 +280,18 @@ export function CreateAuthUserDialog({
   onClose: () => void
   onCreate: (body: CreateManagedAuthUserRequest) => void
 }) {
+  // Fetched here rather than passed in: this is the only place that needs it,
+  // and threading it through every caller of the dialog would make the picker a
+  // concern of screens that do not have one.
+  const candidatesQuery = useQuery({
+    queryKey: ['auth-organisation-candidates'],
+    queryFn: ({ signal }) => apiFetch<OrganisationCandidateListResponse>(
+      '/api/auth/users/organisation-candidates',
+      { signal }
+    ),
+    meta: { suppressGlobalErrorToast: true }
+  })
+  const candidates = candidatesQuery.data?.candidates ?? []
   const [email, setEmail] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
@@ -322,8 +339,33 @@ export function CreateAuthUserDialog({
           <Stack spacing={2}>
             <DialogSection title="User details">
               <Stack spacing={1.25}>
+                {/*
+                  People already in this organisation come first, because that
+                  is the common case and picking one cannot typo into a stranger
+                  — which is the mistake the email field invites. Absent
+                  entirely when there is nobody to offer, so a workspace with no
+                  organisation behind it sees exactly the form it always had.
+                */}
+                {candidates.length > 0 ? (
+                  <FormControl>
+                    <FormLabel>Someone in your organisation</FormLabel>
+                    <Select
+                      value={email}
+                      placeholder="Pick a person, or type an address below"
+                      disabled={saving}
+                      onChange={(_event, value) => setEmail(value ?? '')}
+                    >
+                      {candidates.map((candidate) => (
+                        <Option key={candidate.userId} value={candidate.email}>
+                          {candidate.displayName ? `${candidate.displayName} (${candidate.email})` : candidate.email}
+                        </Option>
+                      ))}
+                    </Select>
+                  </FormControl>
+                ) : null}
+
                 <FormControl required>
-                  <FormLabel>Email</FormLabel>
+                  <FormLabel>{candidates.length > 0 ? 'Or an email address' : 'Email'}</FormLabel>
                   <Input
                     type="email"
                     value={email}

@@ -33,7 +33,7 @@ import { bridgeUnavailableMessage } from './managed-bridge.js'
 
 interface BridgeConnection {
   bridgeId: string
-  tenantId: string | null
+  workspaceId: string | null
   send(message: BridgeRuntimeOutboundMessage): void
   close(code?: number, reason?: string): void
 }
@@ -116,10 +116,10 @@ class BridgeSessionManager {
     return this.connections.size
   }
 
-  setTenantId(bridgeId: string, tenantId: string | null): boolean {
+  setWorkspaceId(bridgeId: string, workspaceId: string | null): boolean {
     const activeConnection = this.connections.get(bridgeId)
     if (!activeConnection) return false
-    activeConnection.connection.tenantId = tenantId
+    activeConnection.connection.workspaceId = workspaceId
     return true
   }
 

@@ -5,7 +5,7 @@
  */
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises'
 import { commandSucceeds, runCommand } from './exec.js'
-import type { ServiceSpec } from './spec.js'
+import { SERVICE_RESTART_EXIT_CODE, type ServiceSpec } from './spec.js'
 
 export function systemdUnitPath(spec: ServiceSpec): string {
   return `/etc/systemd/system/${spec.id}.service`
@@ -27,6 +27,8 @@ ExecStart=${systemdQuote(spec.exePath)}${spec.args.map((arg) => ` ${systemdQuote
 WorkingDirectory=${spec.dataDir}
 Restart=always
 RestartSec=5
+# An intentional restart (self-update, rollback) is not a failure.
+SuccessExitStatus=${SERVICE_RESTART_EXIT_CODE}
 ${spec.serviceUser ? `User=${spec.serviceUser}\nGroup=${spec.serviceUser}\n` : ''}${environmentLines}
 ${spec.configFile ? `EnvironmentFile=-${spec.configFile}` : ''}
 NoNewPrivileges=true

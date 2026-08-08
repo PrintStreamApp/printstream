@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { DEFAULT_APP_LANDING_PAGE } from '@printstream/shared'
 import { getGeneralSettings, updateGeneralSettings } from './general-settings.js'
 import { listAllWorkspaceSupportPermissions } from './support-access.js'
-import { withTenantRequestContext } from './tenant-context.js'
+import { withWorkspaceRequestContext } from './workspace-context.js'
 
 test('getGeneralSettings defaults unconstrained width off when unset', async () => {
   const settings = await getGeneralSettings({
@@ -90,7 +90,7 @@ test('updateGeneralSettings upserts the shared unconstrained width flag', async 
 test('updateGeneralSettings writes support access policy in workspace scope without resetting other values', async () => {
   const upserts: unknown[] = []
 
-  const settings = await withTenantRequestContext({ id: 'tenant-1', slug: 'alpha', name: 'Alpha' }, async () => {
+  const settings = await withWorkspaceRequestContext({ id: 'workspace-1', slug: 'alpha', name: 'Alpha' }, async () => {
     return await updateGeneralSettings({
       supportAccessEnabled: false,
       supportAccessPermissions: ['printers.view', 'jobs.view'],
@@ -98,7 +98,7 @@ test('updateGeneralSettings writes support access policy in workspace scope with
       editorSidebarSide: 'right'
     }, {
       async findUnique(args) {
-        if (args.where.key === 'tenant:tenant-1:app:general:unconstrainedWidth') {
+        if (args.where.key === 'workspace:workspace-1:app:general:unconstrainedWidth') {
           return { value: 'true' }
         }
         return null
@@ -124,13 +124,13 @@ test('updateGeneralSettings writes support access policy in workspace scope with
   })
   assert.deepEqual(upserts, [
     {
-      where: { key: 'tenant:tenant-1:auth:supportAccessEnabled' },
-      create: { key: 'tenant:tenant-1:auth:supportAccessEnabled', value: 'false' },
+      where: { key: 'workspace:workspace-1:auth:supportAccessEnabled' },
+      create: { key: 'workspace:workspace-1:auth:supportAccessEnabled', value: 'false' },
       update: { value: 'false' }
     },
     {
-      where: { key: 'tenant:tenant-1:auth:supportAccessPermissions' },
-      create: { key: 'tenant:tenant-1:auth:supportAccessPermissions', value: '["printers.view","jobs.view"]' },
+      where: { key: 'workspace:workspace-1:auth:supportAccessPermissions' },
+      create: { key: 'workspace:workspace-1:auth:supportAccessPermissions', value: '["printers.view","jobs.view"]' },
       update: { value: '["printers.view","jobs.view"]' }
     }
   ])

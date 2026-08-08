@@ -57,12 +57,31 @@ export const licensePayloadSchema = z.object({
    */
   expiresAt: z.number().int().nonnegative().nullable().default(null),
   /**
-   * Printer allowance this key grants; `null` = unlimited. Self-hosted Pro is
-   * metered on a count declared at checkout and signed in here, because the
-   * vendor cannot see a self-hosted install's fleet and deliberately does not
-   * ask it to report one.
+   * Printer allowance this key grants; `null` = unlimited.
+   *
+   * For self-hosted Pro this is the metered count, and it moves: the install
+   * ASKS for a new total (`/api/license/entitlement`), the cloud bills the
+   * difference, and the answer comes back as a re-signed key carrying the new
+   * value. The install never reports its fleet and is never trusted to — the
+   * number is only ever what someone paid for.
    */
-  maxPrinters: z.number().int().positive().nullable().default(null)
+  maxPrinters: z.number().int().positive().nullable().default(null),
+  /**
+   * Which deployment issued this key, and therefore where the install refreshes
+   * it. Absent on keys issued before this field existed, and on any key whose
+   * issuer did not know its own public URL; callers fall back to the vendor
+   * cloud, which is what those keys have always used.
+   *
+   * Signed rather than configured because the alternative is an install pointed
+   * at the wrong deployment by a local setting — a refresh that fails silently
+   * and only surfaces weeks later, when the run window lapses on a key that was
+   * never actually renewable. A key knowing its own home cannot drift from it.
+   *
+   * NOT a trust decision: the origin is only readable once the signature has
+   * already been verified against the embedded vendor key, so it selects where
+   * to talk, never whether to believe. A build trusts exactly one signer.
+   */
+  refreshOrigin: z.string().url().optional()
 })
 export type LicensePayload = z.infer<typeof licensePayloadSchema>
 
@@ -84,14 +103,25 @@ export const licenseStatusSchema = z.object({
   updatesExpired: z.boolean(),
   updatesUntil: z.number().int().nullable(),
   /** Printer allowance granted by the key; null = unlimited. */
-  maxPrinters: z.number().int().nullable()
+  maxPrinters: z.number().int().nullable(),
+  /**
+   * True when a live self-hosted subscription meters this key, so adding a
+   * printer past `maxPrinters` raises the entitlement and CHARGES rather than
+   * being refused.
+   *
+   * Surfaced because a silent price increase is a trust (and chargeback)
+   * problem: the add dialog has to be able to say what the add will cost before
+   * the form is filled in. Derived from the installed token, not from a cloud
+   * round-trip, so it is still right on an install that cannot reach us.
+   */
+  metered: z.boolean()
 })
 export type LicenseStatus = z.infer<typeof licenseStatusSchema>
 
 /**
  * Self-hosted license enforcement state. Applies to every self-hosted build —
  * native *and* Docker/OSS — since PolyForm Noncommercial already forbids the
- * commercial use being gated; the multi-tenant cloud licenses via subscriptions
+ * commercial use being gated; the multi-workspace cloud licenses via subscriptions
  * instead and is always `unrestricted`.
  *
  * A fresh (or newly-upgraded) install gets an evaluation window, after which
@@ -120,9 +150,29 @@ export type LicenseEnforcement = z.infer<typeof licenseEnforcementSchema>
 
 export const licenseStatusResponseSchema = z.object({
   status: licenseStatusSchema,
-  enforcement: licenseEnforcementSchema
+  enforcement: licenseEnforcementSchema,
+  /**
+   * Printers on this INSTALL, across every workspace — the same count the cap is
+   * enforced against (`printer-quota.ts` counts install-wide, because counting
+   * per workspace would let anyone lift the cap by making a second one).
+   *
+   * Reported so the add-printer notice can say whether the next add will bill,
+   * without the browser re-deriving a number from a workspace-scoped list that
+   * would be wrong on a multi-workspace install.
+   */
+  printerCount: z.number().int().nonnegative()
 })
 export type LicenseStatusResponse = z.infer<typeof licenseStatusResponseSchema>
+
+/**
+ * Result of an operator-triggered "check for license updates" (`POST
+ * /api/license/check`). `skipped` means there was nothing to check — no key
+ * installed, or a perpetual one that never phones home.
+ */
+export const licenseCheckResponseSchema = licenseStatusResponseSchema.extend({
+  outcome: z.enum(['skipped', 'unchanged', 'renewed', 'revoked', 'failed'])
+})
+export type LicenseCheckResponse = z.infer<typeof licenseCheckResponseSchema>
 
 /** Install a license key on a self-hosted deployment. */
 export const setLicenseRequestSchema = z.object({
@@ -138,7 +188,17 @@ export type SetLicenseRequest = z.infer<typeof setLicenseRequestSchema>
  * `apps/api/src/private/cloud/license-refresh.ts`.
  */
 export const licenseRefreshRequestSchema = z.object({
-  key: z.string().trim().min(1).max(4000)
+  key: z.string().trim().min(1).max(4000),
+  /**
+   * The install asking. A licence covers ONE installation, so the first refresh
+   * to present a key claims it and later ones from a DIFFERENT install are
+   * refused — without this, each install counted only its own printers against
+   * the same entitlement, so a 3-printer licence quietly became 3 per install.
+   *
+   * Optional: an install that predates this still refreshes, it simply does not
+   * claim the binding. Treat it as a secret like the key itself — never log it.
+   */
+  installationId: z.string().trim().min(1).max(200).optional()
 })
 export type LicenseRefreshRequest = z.infer<typeof licenseRefreshRequestSchema>
 
@@ -154,3 +214,78 @@ export const licenseRefreshResponseSchema = z.object({
   message: z.string().nullable()
 })
 export type LicenseRefreshResponse = z.infer<typeof licenseRefreshResponseSchema>
+
+/**
+ * Self-hosted → cloud request to change how many printers a licence covers.
+ *
+ * The install does not decide its own entitlement — it asks, the cloud bills the
+ * difference, and the answer comes back signed into a new key. That is the whole
+ * reason this is a network call rather than a local setting: the enforcement
+ * code that reads `maxPrinters` ships in the open-source build, so a locally
+ * chosen number would mean nothing.
+ *
+ * Same credential model as refresh: the installed key IS the credential.
+ * Counterpart: `apps/api/src/private/cloud/license-entitlement.ts`.
+ */
+export const licenseEntitlementRequestSchema = z.object({
+  key: z.string().trim().min(1).max(4000),
+  /** Required here, unlike refresh: a billing change must name the install it is for. */
+  installationId: z.string().trim().min(1).max(200),
+  /**
+   * The TOTAL the install wants to be entitled to, never a delta — a retried
+   * request after a lost response must not bill a second time.
+   */
+  printers: z.number().int().min(1).max(1000)
+})
+export type LicenseEntitlementRequest = z.infer<typeof licenseEntitlementRequestSchema>
+
+export const licenseEntitlementResponseSchema = z.object({
+  /**
+   * `applied` — billing changed and `key` carries the new allowance.
+   * `unchanged` — the subscription already covered this many.
+   * `refused` — `message` says why (no subscription, not this install's key,
+   * payment declined); the install keeps the entitlement it had.
+   */
+  outcome: z.enum(['applied', 'unchanged', 'refused']),
+  key: z.string().nullable(),
+  /** The allowance now in force, so the install can report it without re-parsing the key. */
+  maxPrinters: z.number().int().nullable(),
+  message: z.string().nullable()
+})
+export type LicenseEntitlementResponse = z.infer<typeof licenseEntitlementResponseSchema>
+
+/**
+ * A self-hosted install asking the vendor for a free community key, with no
+ * account and nothing but an address to send it to.
+ *
+ * CORE, not private-cloud: the OSS build is the CALLER, so the public snapshot
+ * has to speak this shape. The cloud side that answers it is private.
+ *
+ * The email is the whole identity. It is never verified before the key is
+ * issued, because the key is DELIVERED to it — possession of the inbox is the
+ * proof, and a confirmation round trip would only add a step to the same
+ * outcome.
+ */
+export const communityLicenseRequestSchema = z.object({
+  email: z.string().trim().email('Enter the email address to send the key to.').max(320),
+  /** Who the licence is made out to. Defaults to the address when omitted. */
+  licensee: z.string().trim().min(1).max(120).optional(),
+  /**
+   * The non-commercial terms. A literal `true` rather than a boolean: a client
+   * that forgets the field must fail, not silently request on someone's behalf.
+   */
+  agreedToTerms: z.literal(true)
+})
+export type CommunityLicenseRequest = z.infer<typeof communityLicenseRequestSchema>
+
+/**
+ * Deliberately says only that a delivery was attempted.
+ *
+ * Never reports whether the address already had a key, or an account: this
+ * endpoint is unauthenticated, so a caller-visible difference would turn it
+ * into an oracle for which addresses are registered.
+ */
+export const communityLicenseResponseSchema = z.object({
+  delivered: z.literal(true)
+})
+export type CommunityLicenseResponse = z.infer<typeof communityLicenseResponseSchema>

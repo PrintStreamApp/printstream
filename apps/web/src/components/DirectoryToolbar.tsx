@@ -265,12 +265,21 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   onPageSizeChange: (value: TPageSize) => void
   pageSizeAriaLabel: string
   pageSizeRenderValue: (value: TPageSize) => string
-  sortValue: TSort
-  sortOptions: ReadonlyArray<DirectorySortOption<TSort>>
-  onSortValueChange: (value: TSort) => void
-  sortDirection: DirectorySortDirection
-  onSortDirectionChange: (direction: DirectorySortDirection) => void
-  sortAriaLabel: string
+  /**
+   * Sort is optional AS A GROUP, like `filters` and `grouping`.
+   *
+   * A directory whose listing has nothing to order by (the platform licences
+   * table, which the API returns newest-first) previously had to satisfy these
+   * anyway, and did it with a one-option list and two no-op handlers — a
+   * control the operator can open and change that does nothing at all. Omit
+   * them and the sort button is not rendered.
+   */
+  sortValue?: TSort
+  sortOptions?: ReadonlyArray<DirectorySortOption<TSort>>
+  onSortValueChange?: (value: TSort) => void
+  sortDirection?: DirectorySortDirection
+  onSortDirectionChange?: (direction: DirectorySortDirection) => void
+  sortAriaLabel?: string
   viewMode?: DirectoryViewMode
   onViewModeChange?: (mode: DirectoryViewMode) => void
   disableIconModeOnMobile?: boolean
@@ -299,14 +308,18 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   )
   const isPinned = pinnable && pinned
   const showViewModeToggle = viewMode != null && onViewModeChange != null && (!disableIconModeOnMobile || !isMobile)
-  const sortConfig = {
-    value: sortValue,
-    options: sortOptions,
-    onChange: onSortValueChange,
-    direction: sortDirection,
-    onDirectionChange: onSortDirectionChange,
-    ariaLabel: sortAriaLabel
-  }
+  // Present only when the caller gave a real one to offer.
+  const sortConfig = sortValue != null && sortOptions != null && onSortValueChange != null
+    && sortDirection != null && onSortDirectionChange != null
+    ? {
+        value: sortValue,
+        options: sortOptions,
+        onChange: onSortValueChange,
+        direction: sortDirection,
+        onDirectionChange: onSortDirectionChange,
+        ariaLabel: sortAriaLabel ?? 'Sort'
+      }
+    : null
 
   // Sort + grouping + filters collapse into one combined dropdown only when the row
   // is too narrow to show them as separate buttons (e.g. a tight modal); when there
@@ -326,7 +339,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
     return () => observer.disconnect()
   }, [])
 
-  const dropdownControlCount = 1 /* sort */ + (grouping != null ? 1 : 0) + (filters != null ? 1 : 0) + 1 /* page size */
+  const dropdownControlCount = (sortConfig != null ? 1 : 0) + (grouping != null ? 1 : 0) + (filters != null ? 1 : 0) + 1 /* page size */
   const controlCount = dropdownControlCount + (showViewModeToggle ? 1 : 0)
   // Estimated width the separate controls need on one row (dropdowns ~150, view-mode
   // toggle ~84, 8px gaps, plus a small buffer so labels don't truncate).
@@ -379,7 +392,7 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
           <DirectoryControlsMenu sort={sortConfig} grouping={grouping} filters={filters} />
         ) : (
           <>
-            <DirectorySortMenu {...sortConfig} />
+            {sortConfig ? <DirectorySortMenu {...sortConfig} /> : null}
             {grouping && (
               <DirectoryGroupingMenu value={grouping.value} options={grouping.options} onChange={grouping.onChange} />
             )}
@@ -443,7 +456,8 @@ function DirectoryControlsMenu<TSort extends string, TGroup extends string>({
   grouping,
   filters
 }: {
-  sort: DirectorySortConfig<TSort>
+  /** Absent when the directory has nothing to order by. */
+  sort?: DirectorySortConfig<TSort> | null
   grouping?: DirectoryGroupingConfig<TGroup>
   filters?: DirectoryFiltersConfig
 }) {
@@ -475,31 +489,33 @@ function DirectoryControlsMenu<TSort extends string, TGroup extends string>({
         sx={{ p: 1.5, minWidth: 260, maxWidth: 'min(340px, 92vw)', overflow: 'visible', maxHeight: 'none', zIndex: (theme) => theme.zIndex.tooltip }}
       >
         <Stack spacing={1.25} sx={{ minWidth: 0 }}>
-          <Stack spacing={0.5}>
-            <Typography level="title-sm">Sort</Typography>
-            <Stack direction="row" spacing={1}>
-              <Select<TSort>
-                size="sm"
-                value={sort.value}
-                onChange={(_event, value) => value && sort.onChange(value)}
-                slotProps={{ listbox: { disablePortal: true } }}
-                sx={{ flex: 1, minWidth: 0 }}
-              >
-                {sort.options.map((option) => <Option key={option.value} value={option.value}>{option.label}</Option>)}
-              </Select>
-              <Tooltip title={sort.direction === 'asc' ? 'Ascending' : 'Descending'}>
-                <IconButton
+          {sort && (
+            <Stack spacing={0.5}>
+              <Typography level="title-sm">Sort</Typography>
+              <Stack direction="row" spacing={1}>
+                <Select<TSort>
                   size="sm"
-                  variant="outlined"
-                  color="neutral"
-                  aria-label={`Sort ${sort.direction === 'asc' ? 'ascending' : 'descending'}`}
-                  onClick={() => sort.onDirectionChange(sort.direction === 'asc' ? 'desc' : 'asc')}
+                  value={sort.value}
+                  onChange={(_event, value) => value && sort.onChange(value)}
+                  slotProps={{ listbox: { disablePortal: true } }}
+                  sx={{ flex: 1, minWidth: 0 }}
                 >
-                  <SortRoundedIcon style={{ transform: sort.direction === 'asc' ? 'scaleY(-1)' : undefined }} />
-                </IconButton>
-              </Tooltip>
+                  {sort.options.map((option) => <Option key={option.value} value={option.value}>{option.label}</Option>)}
+                </Select>
+                <Tooltip title={sort.direction === 'asc' ? 'Ascending' : 'Descending'}>
+                  <IconButton
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    aria-label={`Sort ${sort.direction === 'asc' ? 'ascending' : 'descending'}`}
+                    onClick={() => sort.onDirectionChange(sort.direction === 'asc' ? 'desc' : 'asc')}
+                  >
+                    <SortRoundedIcon style={{ transform: sort.direction === 'asc' ? 'scaleY(-1)' : undefined }} />
+                  </IconButton>
+                </Tooltip>
+              </Stack>
             </Stack>
-          </Stack>
+          )}
           {grouping && (
             <>
               <ListDivider sx={{ my: 0.25 }} />

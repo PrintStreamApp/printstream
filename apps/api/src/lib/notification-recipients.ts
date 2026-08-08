@@ -2,7 +2,7 @@
  * Multi-recipient destination lists for broadcast-style notification
  * channels (Discord webhooks, ntfy topics).
  *
- * Each scope (tenant workspace, or the plugin's base store at the platform
+ * Each scope (workspace, or the plugin's base store at the platform
  * scope) keeps a list of destination entries. An entry is either:
  *
  * - shared (`userId` unset): receives the scope's broadcast notifications —
@@ -22,7 +22,7 @@
 import { randomUUID } from 'node:crypto'
 import type { NotificationMessage } from '@printstream/shared'
 import type { PluginSettingStore } from '../plugin/types.js'
-import { listTenantScopesWithPluginSetting } from './notification-scope.js'
+import { listWorkspaceScopesWithPluginSetting } from './notification-scope.js'
 
 const RECIPIENTS_KEY = 'recipients'
 
@@ -111,11 +111,11 @@ export interface ResolveChannelDeliveryOptions extends LegacyKeyOptions {
   message: NotificationMessage
   pluginName: string
   /** Prisma slice for cross-scope enumeration (see notification-scope.ts). */
-  prisma: Parameters<typeof listTenantScopesWithPluginSetting>[0]
+  prisma: Parameters<typeof listWorkspaceScopesWithPluginSetting>[0]
   /** Scoped settings accessor (`null` = the plugin's base/platform store). */
-  settingsForScope: (tenantId: string | null) => PluginSettingStore
+  settingsForScope: (workspaceId: string | null) => PluginSettingStore
   /** Plugin enablement per scope; disabled scopes are skipped. */
-  isEnabledForTenant: (tenantId: string | null) => boolean
+  isEnabledForWorkspace: (workspaceId: string | null) => boolean
   /**
    * Channel-level fallback URL used ONLY for broadcast messages when the
    * scope has no configured recipients (ntfy's managed-bridge env topic).
@@ -129,7 +129,7 @@ export interface ResolveChannelDeliveryOptions extends LegacyKeyOptions {
  * Broadcast messages go to the shared entries of their own scope (or the
  * channel fallback when the scope has none). Targeted messages go to
  * entries bound to a targeted user — within the message's scope when it has
- * a tenant, across every scope holding recipients when it does not
+ * a workspace, across every scope holding recipients when it does not
  * (platform-wide personal events) — deduplicated by URL.
  */
 export async function resolveChannelDeliveryUrls(options: ResolveChannelDeliveryOptions): Promise<string[]> {
@@ -137,9 +137,9 @@ export async function resolveChannelDeliveryUrls(options: ResolveChannelDelivery
   const targets = message.targetUserIds
 
   if (!targets || targets.length === 0) {
-    const scopeTenantId = message.tenantId ?? null
-    if (!options.isEnabledForTenant(scopeTenantId)) return []
-    const recipients = await readChannelRecipients(options.settingsForScope(scopeTenantId), options)
+    const scopeWorkspaceId = message.workspaceId ?? null
+    if (!options.isEnabledForWorkspace(scopeWorkspaceId)) return []
+    const recipients = await readChannelRecipients(options.settingsForScope(scopeWorkspaceId), options)
     const shared = recipients.filter((entry) => !entry.userId).map((entry) => entry.url)
     if (shared.length === 0 && recipients.length === 0 && options.fallbackUrl) {
       return [options.fallbackUrl]
@@ -148,14 +148,14 @@ export async function resolveChannelDeliveryUrls(options: ResolveChannelDelivery
   }
 
   const targetIds = new Set(targets)
-  const scopes: Array<string | null> = message.tenantId
-    ? [message.tenantId]
-    : [null, ...await listTenantScopesWithPluginSetting(options.prisma, options.pluginName, RECIPIENTS_KEY)]
+  const scopes: Array<string | null> = message.workspaceId
+    ? [message.workspaceId]
+    : [null, ...await listWorkspaceScopesWithPluginSetting(options.prisma, options.pluginName, RECIPIENTS_KEY)]
 
   const urls = new Set<string>()
-  for (const tenantId of scopes) {
-    if (!options.isEnabledForTenant(tenantId)) continue
-    const recipients = await readChannelRecipients(options.settingsForScope(tenantId), options)
+  for (const workspaceId of scopes) {
+    if (!options.isEnabledForWorkspace(workspaceId)) continue
+    const recipients = await readChannelRecipients(options.settingsForScope(workspaceId), options)
     for (const entry of recipients) {
       if (entry.userId && targetIds.has(entry.userId)) urls.add(entry.url)
     }

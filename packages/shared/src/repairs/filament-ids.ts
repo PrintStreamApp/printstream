@@ -16,7 +16,7 @@
  *
  * The save path no longer produces this (the bake authors `filament_ids` from the chosen presets).
  * This module exists for files ALREADY saved with it, which do not heal at rest — see the contract
- * in `apps/api/src/lib/library-settings-repair.ts`: repairing is an explicit user action.
+ * in `repairs/index.ts`: repairing is an explicit user action, staged in the editor.
  *
  * CONSERVATIVE BY CONSTRUCTION, and this is the point: a slot is only corrected when its preset name
  * resolves to a catalogue id EXACTLY. An unresolvable name (a custom or third-party preset) is left

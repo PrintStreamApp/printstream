@@ -8,7 +8,7 @@
 import {
   authManagementStatusSchema,
   filterPermissionDefinitionsForPlatformContext,
-  filterPermissionDefinitionsForTenantContext,
+  filterPermissionDefinitionsForWorkspaceContext,
   permissionDefinitions,
   type AuthManagementStatus
 } from '@printstream/shared'
@@ -16,15 +16,15 @@ import type { RequestAuthContext } from './auth-context.js'
 import { buildAuthManagementCapabilities, readAssignablePermissions } from './auth-capabilities.js'
 import { readAuthSessionDuration } from './auth-policy.js'
 import type { AnyPrismaClient } from './prisma.js'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 
 export async function buildAuthManagementStatus(prisma: AnyPrismaClient, auth: RequestAuthContext): Promise<AuthManagementStatus> {
-  const tenant = getCurrentTenant()
+  const workspace = getCurrentWorkspace()
   const [users, groups, serviceAccounts, sessionDuration] = await Promise.all([
-    tenant
-      ? prisma.authTenantMembership.count({
+    workspace
+      ? prisma.authWorkspaceMembership.count({
           where: {
-            tenantId: tenant.id
+            workspaceId: workspace.id
           }
         })
       : prisma.authUser.count({
@@ -32,15 +32,15 @@ export async function buildAuthManagementStatus(prisma: AnyPrismaClient, auth: R
             isPlatformUser: true
           }
         }),
-    prisma.authGroup.count({ where: { tenantId: tenant?.id ?? null } }),
-    tenant ? prisma.authServiceAccount.count({ where: { tenantId: tenant.id } }) : Promise.resolve(0),
+    prisma.authGroup.count({ where: { workspaceId: workspace?.id ?? null } }),
+    workspace ? prisma.authServiceAccount.count({ where: { workspaceId: workspace.id } }) : Promise.resolve(0),
     readAuthSessionDuration(prisma)
   ])
 
   return authManagementStatusSchema.parse({
     sessionDuration,
-    permissionDefinitions: tenant
-      ? filterPermissionDefinitionsForTenantContext(permissionDefinitions)
+    permissionDefinitions: workspace
+      ? filterPermissionDefinitionsForWorkspaceContext(permissionDefinitions)
       : filterPermissionDefinitionsForPlatformContext(permissionDefinitions),
     assignablePermissions: readAssignablePermissions(auth),
     capabilities: buildAuthManagementCapabilities(auth),

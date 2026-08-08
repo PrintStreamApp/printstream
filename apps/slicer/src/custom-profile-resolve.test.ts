@@ -95,3 +95,52 @@ test('does not loop on a self-referential inherits chain', async () => {
   assert.equal(merged.name, 'Custom')
   assert.equal(merged.type, 'process')
 })
+
+test('stamps a CLI-loadable `from` on a preset that carries none', async () => {
+  // The shape our own settings dialogs save: name + type and nothing else. The CLI rejects it with
+  // CLI_CONFIG_FILE_ERROR (exit 251) and takes the whole slice down, naming only the file path.
+  const reader: SystemPresetReader = async () => null
+
+  const merged = await resolveCustomProfileConfigWith(JSON.stringify({
+    name: '0.20mm @BBL P1P - OMADA STAND (custom)',
+    type: 'process',
+    layer_height: '0.2'
+  }), 'process', reader)
+
+  assert.equal(merged.from, 'User')
+})
+
+test('replaces an EMPTY `from` — the value BambuStudio\'s own create-preset dialog writes', async () => {
+  const reader: SystemPresetReader = async () => null
+
+  const merged = await resolveCustomProfileConfigWith(JSON.stringify({
+    name: 'Custom',
+    type: 'filament',
+    from: ''
+  }), 'filament', reader)
+
+  assert.equal(merged.from, 'User')
+})
+
+test('keeps a `from` the CLI already accepts', async () => {
+  const reader: SystemPresetReader = async () => null
+
+  for (const from of ['system', 'User', 'user']) {
+    const merged = await resolveCustomProfileConfigWith(
+      JSON.stringify({ name: 'Custom', type: 'process', from }), 'process', reader
+    )
+    assert.equal(merged.from, from)
+  }
+})
+
+test('a sparse diff does not inherit an unsupported `from` from its base', async () => {
+  // `Project` is a value BambuStudio itself writes but its CLI will not load.
+  const reader: SystemPresetReader = async (_kind, name) => ({ type: 'process', name, from: 'Project' })
+
+  const merged = await resolveCustomProfileConfigWith(JSON.stringify({
+    name: 'Custom',
+    inherits: 'Some Base'
+  }), 'process', reader)
+
+  assert.equal(merged.from, 'User')
+})

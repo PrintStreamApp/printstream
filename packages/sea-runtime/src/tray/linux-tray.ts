@@ -71,6 +71,7 @@ def bridge_status():
 class Tray:
     def __init__(self):
         self.connect_url = ""
+        self.workspace_url = ""
         self.connect_code = ""
         self.app_url = ""
         self.menu = Gtk.Menu()
@@ -89,6 +90,11 @@ class Tray:
         self.connect_item = Gtk.MenuItem(label="Open connect page")
         self.connect_item.connect("activate", self.open_connect_page)
         self.menu.append(self.connect_item)
+        # The paired counterpart of "Open connect page": once there is a
+        # workspace, that is what the tray is asked for, not a pairing code.
+        self.workspace_item = Gtk.MenuItem(label="Open workspace")
+        self.workspace_item.connect("activate", self.open_workspace)
+        self.menu.append(self.workspace_item)
         self.copy_code_item = Gtk.MenuItem(label="Copy connect code")
         self.copy_code_item.connect("activate", self.copy_connect_code)
         self.menu.append(self.copy_code_item)
@@ -165,6 +171,13 @@ class Tray:
             except Exception:
                 pass
 
+    def open_workspace(self, *_args):
+        if self.workspace_url:
+            try:
+                subprocess.Popen(["xdg-open", self.workspace_url])
+            except Exception:
+                pass
+
     def copy_connect_code(self, *_args):
         if self.connect_code:
             clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
@@ -229,6 +242,11 @@ class Tray:
             self.code_item.hide()
             self.connect_item.hide()
             self.copy_code_item.hide()
+        self.workspace_url = status.get("workspaceUrl") or ""
+        if self.workspace_url:
+            self.workspace_item.show()
+        else:
+            self.workspace_item.hide()
             self.update_item.hide()
             self.start_service_item.show()
             self.stop_service_item.hide()

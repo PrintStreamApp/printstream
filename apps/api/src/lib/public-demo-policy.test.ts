@@ -21,7 +21,7 @@ import { assertRequestPermission, PERMISSION_REQUIRED_MESSAGE } from './authoriz
 import { HttpError } from './http-error.js'
 import { PUBLIC_DEMO_GUEST_PERMISSIONS } from './public-demo-policy.js'
 
-const PUBLIC_DEMO_TENANT = { id: 'tenant-demo', slug: 'demo', name: 'Demo' }
+const PUBLIC_DEMO_WORKSPACE = { id: 'workspace-demo', slug: 'demo', name: 'Demo' }
 const allowedReadPermissions: readonly Permission[] = [
   AUTH_ACCESS_VIEW_PERMISSION,
   AUTH_ROLES_VIEW_PERMISSION,
@@ -82,6 +82,6 @@ function makePublicDemoGuestRequest(): Request {
       permissions: [...PUBLIC_DEMO_GUEST_PERMISSIONS],
       runtimePolicy: { demoMode: true }
     },
-    tenant: PUBLIC_DEMO_TENANT
+    workspace: PUBLIC_DEMO_WORKSPACE
   } as Request
 }

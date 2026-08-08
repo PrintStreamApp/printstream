@@ -1,3 +1,6 @@
+import CreditCardRoundedIcon from '@mui/icons-material/CreditCardRounded'
+import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded'
+import ApartmentRoundedIcon from '@mui/icons-material/ApartmentRounded'
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy'
 import CssBaseline from '@mui/joy/CssBaseline'
 import { CssVarsProvider } from '@mui/joy/styles'
@@ -20,13 +23,14 @@ import {
   PRINTERS_MANAGE_PERMISSION,
   PRINTERS_VIEW_PERMISSION,
   SETTINGS_MANAGE_PERMISSION,
-  TENANTS_DISABLE_PERMISSION,
-  TENANTS_MANAGE_PERMISSION,
-  PUBLIC_DEMO_TENANT_SLUG,
+  WORKSPACES_DISABLE_PERMISSION,
+  WORKSPACES_MANAGE_PERMISSION,
+  PUBLIC_DEMO_WORKSPACE_SLUG,
   DEFAULT_APP_LANDING_PAGE,
   extractErrorMessage,
   type AppLandingPageSetting,
   type AppThemeSetting,
+  type CustomerSummary,
   type GeneralSettings,
   type Permission,
   type UpdateGeneralSettingsInput
@@ -35,8 +39,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AppShell, type ShellTab } from './components/AppShell'
+import { ScrollReset } from './components/ScrollReset'
 import {
   DEVICE_APP_THEME_OVERRIDE_KEY,
+  DEVICE_BILLING_APP_THEME_OVERRIDE_KEY,
   DEVICE_PLATFORM_APP_THEME_OVERRIDE_KEY,
   BOOT_BACKGROUND_CACHE_KEY,
   DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX,
@@ -48,7 +54,7 @@ import {
   parseNullableBoolean,
   parseNullableNavTabOrder,
   resolveActiveNavTab,
-  tenantScopedRoutePath
+  workspaceScopedRoutePath
 } from './appShellHelpers'
 import { orderNavTabs } from './lib/navTabOrder'
 import { marketingModule, platformAdminModule } from './lib/privateModules'
@@ -59,11 +65,13 @@ import { BridgeDebugCaptureBanner } from './components/BridgeDebugCaptureBanner'
 import { LibraryUploadPanel } from './components/LibraryUploadPanel'
 import { DevRuntimeStatus } from './components/DevRuntimeStatus'
 import { AppVersionFooter } from './components/AppVersionFooter'
+import { BILLING_SCOPE_SECTION_ICONS } from './components/billingScopeSectionIcons'
 import { HelpFeedbackButton } from './components/HelpFeedbackButton'
 import { PluginSlot } from './plugin/PluginSlot'
 import { StaticPluginSlot } from './plugin/StaticPluginSlot'
 import { DeleteOperationToasts } from './components/DeleteOperationToasts'
 import { DispatchToasts } from './components/DispatchToasts'
+import { EngineInstallToast } from './components/EngineInstallToast'
 import { SlicingToasts } from './components/SlicingToasts'
 import { Printer3dRoundedIcon } from './components/Printer3dRoundedIcon'
 import { StatusToastStack } from './components/StatusToast'
@@ -78,8 +86,9 @@ import { getBrowserEnv } from './lib/browserEnv'
 import { buildDocumentTitle, getDeploymentEnvironment } from './lib/deploymentEnvironment'
 import { publishAuthBootstrapData, publishPluginCatalogData } from './lib/appShellQueryData'
 import { PluginCatalogQueryProvider, usePluginCatalogQuery } from './lib/pluginCatalogQuery'
-import { isTenantWorkspaceLandingReady, pluginBasePath, resolveDefaultWorkspaceRoute, resolveTenantRouteRedirect, resolveTenantWorkspaceLandingPath, resolveWorkspaceSwitchDestination, shouldClearPendingWorkspaceRoute } from './lib/workspaceSwitch'
-import { buildPlatformWorkspacePath, buildTenantWorkspacePath, buildWorkspaceSelectionPath, isPlatformWorkspacePath, isTenantWorkspaceCandidatePath, parseWorkspacePathname } from './lib/workspaceRoute'
+import { isWorkspaceLandingReady, pluginBasePath, resolveDefaultWorkspaceRoute, resolveWorkspaceRouteRedirect, resolveWorkspaceLandingPath, resolveWorkspaceSwitchDestination, shouldClearPendingWorkspaceRoute } from './lib/workspaceSwitch'
+import {
+  CONTEXT_CHOOSER_LABEL, buildPlatformWorkspacePath, buildWorkspacePath, buildWorkspaceSelectionPath, isPlatformWorkspacePath, isWorkspaceCandidatePath, parseWorkspacePathname } from './lib/workspaceRoute'
 import {
   isPluginActiveByName,
   pluginSupportsRuntimeSurface
@@ -88,7 +97,7 @@ import { runtimePolicyContext } from './lib/runtimePolicy'
 import { completeSplashScreen } from './lib/splashScreen'
 import { toast } from './lib/toast'
 import { resolveShellIdentity } from './lib/authUi'
-import { countAccessibleWorkspaceChoices, countSwitchableWorkspaceChoices, listAccessibleTenantWorkspaces } from './lib/workspaceAccess'
+import { countAccessibleWorkspaceChoices, countSwitchableWorkspaceChoices, listAccessibleWorkspaces } from './lib/workspaceAccess'
 import { readWorkspaceContextHint } from './lib/workspaceContext'
 import { JobsView } from './pages/JobsView'
 import { LibraryView } from './pages/LibraryView'
@@ -98,24 +107,68 @@ import { AuthView } from './pages/AuthView'
 import { PlatformView } from './pages/PlatformView'
 import { SettingsView } from './pages/SettingsView'
 import { GetStartedView } from './pages/GetStartedView'
-import { TenantStatsView } from './pages/TenantStatsView'
+import { WorkspaceStatsView } from './pages/WorkspaceStatsView'
 import { WorkspaceSelectionView } from './pages/WorkspaceSelectionView'
 import { ConnectBridgeView } from './pages/ConnectBridgeView'
 import { stashPendingBridgeConnectCode } from './lib/pendingBridgeConnect'
 import { CORE_LANDING_PAGE_OPTIONS } from './lib/landingPageOptions'
+import { AccountSlotView } from './pages/AccountSlotView'
+import {
+  accountSlotHasContent,
+  ACCOUNT_MESSAGES_SLOT
+} from './lib/accountSlots'
+import {
+  BILLING_SCOPE_LABEL,
+  BILLING_SCOPE_ROUTE,
+  billingScopeSections,
+  BILLING_SCOPE_SECTION_ROUTE,
+  BILLING_SCOPE_SLOT,
+  buildBillingScopePath,
+  parseBillingScopePath
+} from './lib/billingScope'
+import { BillingScopeView } from './pages/BillingScopeView'
 import { webPluginRegistry } from './plugin/registry'
 import { registerBuiltinPlugins } from './plugin/builtin'
 import { buildChromeCssVars } from './theme/buildTheme'
 import { auroraChrome, auroraTheme, defaultChrome, theme } from './theme/theme'
 import { flatThemeVariants, isFlatAppTheme } from './theme/flatThemes'
 import { platformAuroraChrome, platformAuroraTheme, platformChrome, platformFlatThemeVariants, platformTheme } from './theme/platformTheme'
+import { customerApiBase } from './lib/customerRoutes'
 
+// Descriptions say what the page is FOR. A tooltip only appears on a tab whose
+// label is already readable, so one that restates the label would be pure noise
+// -- each of these has to tell you something the single word cannot.
 const baseCoreTabs: ReadonlyArray<ShellTab> = [
-  { value: '/get-started', label: 'Get started', mobileIcon: <ChecklistRoundedIcon /> },
-  { value: '/printers', label: 'Printers', mobileIcon: <Printer3dRoundedIcon /> },
-  { value: '/library', label: 'Library', mobileIcon: <FolderCopyRoundedIcon /> },
-  { value: '/jobs', label: 'Jobs', mobileIcon: <HistoryRoundedIcon /> },
-  { value: '/stats', label: 'Stats', mobileIcon: <QueryStatsRoundedIcon /> },
+  {
+    value: '/get-started',
+    label: 'Get started',
+    description: 'The steps left before this workspace can print.',
+    mobileIcon: <ChecklistRoundedIcon />
+  },
+  {
+    value: '/printers',
+    label: 'Printers',
+    description: 'Live status for every printer, and where you add or control one.',
+    mobileIcon: <Printer3dRoundedIcon />
+  },
+  {
+    value: '/library',
+    label: 'Library',
+    description: 'Your models and sliced files, ready to send to a printer.',
+    mobileIcon: <FolderCopyRoundedIcon />
+  },
+  {
+    value: '/jobs',
+    label: 'Jobs',
+    description: 'What is printing now, and everything that has printed before.',
+    mobileIcon: <HistoryRoundedIcon />
+  },
+  {
+    value: '/stats',
+    label: 'Stats',
+    description: 'Print time, filament used, and success rates over time.',
+    mobileIcon: <QueryStatsRoundedIcon />
+  },
   {
     value: '/settings',
     label: 'Settings',
@@ -137,6 +190,8 @@ const PLUGIN_TAB_DEFAULT_ORDER: readonly string[] = ['/orders', '/filament', '/c
 // import, before <App> first renders (which reads webPluginRegistry.routes()).
 registerBuiltinPlugins()
 
+const NO_CUSTOMERS: CustomerSummary[] = []
+
 const webRuntimeStartedAt = new Date().toISOString()
 
 export function App() {
@@ -151,14 +206,14 @@ export function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const workspacePath = parseWorkspacePathname(location.pathname)
-  const routeTenantSlug = workspacePath.tenantSlug
+  const routeWorkspaceSlug = workspacePath.workspaceSlug
   const appPathname = workspacePath.appPathname
   const routePlatformWorkspace = isPlatformWorkspacePath(location.pathname)
-  const authBootstrapScopeKey = routeTenantSlug ? `tenant:${routeTenantSlug}` : routePlatformWorkspace ? 'platform' : 'ambient'
+  const authBootstrapScopeKey = routeWorkspaceSlug ? `workspace:${routeWorkspaceSlug}` : routePlatformWorkspace ? 'platform' : 'ambient'
   const previousWorkspaceScopeKey = useRef(authBootstrapScopeKey)
   const [pendingWorkspaceRoute, setPendingWorkspaceRoute] = useState<{
     routePath: string
-    targetTenantId: string | null
+    targetWorkspaceId: string | null
     sourcePathname: string
   } | null>(null)
   const invalidateWorkspaceShellQueries = useMemo(() => async () => {
@@ -187,7 +242,17 @@ export function App() {
   const authEnabled = authBootstrapQuery.data?.authEnabled ?? false
   const authBootstrapReady = authBootstrapQuery.isSuccess
   const authSetupRequired = authBootstrapQuery.data?.setupRequired ?? false
-  const hasTenantContext = authBootstrapQuery.data?.tenant != null
+  const hasWorkspaceContext = authBootstrapQuery.data?.workspace != null
+  // Read from the registry, not from a build flag: the plugins are registered at
+  // module load, so this is settled before the first render and is the same
+  // answer the route and the nav tab need.
+  // Billing scopes this user was explicitly granted. Empty for everyone until an
+  // account owner grants access, and in a public build.
+  // A stable fallback, not `?? []`: this feeds a `useMemo` dependency, and a
+  // fresh array each render would re-run it on every render.
+  const customerOptions = authBootstrapQuery.data?.customers ?? NO_CUSTOMERS
+  const hasBillingScopeView = accountSlotHasContent(BILLING_SCOPE_SLOT)
+  const hasMessagesSlot = accountSlotHasContent(ACCOUNT_MESSAGES_SLOT)
   const actorType = authBootstrapQuery.data?.actor.type ?? 'anonymous'
   const isPlatformUser = authBootstrapQuery.data?.actor.type === 'user' && (authBootstrapQuery.data.actor.isPlatformUser ?? false)
   // Self-hosted (OSS) deployments hide the cloud-only platform-admin and
@@ -198,68 +263,72 @@ export function App() {
   const platformAdmin = selfHostedDeployment ? null : platformAdminModule
   const marketing = selfHostedDeployment ? null : marketingModule
   const canUsePlatformWorkspace = isPlatformUser
-  const inPlatformMode = canUsePlatformWorkspace && !hasTenantContext
+  const inPlatformMode = canUsePlatformWorkspace && !hasWorkspaceContext
   const isAuthenticated = actorType !== 'anonymous'
   const authProviderSetupAvailable = authBootstrapReady
-    && !hasTenantContext
+    && !hasWorkspaceContext
     && !authEnabled
     && !isAuthenticated
     && (authBootstrapQuery.data?.providers.length ?? 0) > 0
   const grantedPermissions = authBootstrapQuery.data?.permissions ?? []
-  const memberTenantOptions = useMemo(
-    () => listAccessibleTenantWorkspaces(authBootstrapQuery.data?.memberTenants ?? []),
-    [authBootstrapQuery.data?.memberTenants]
+  const memberWorkspaceOptions = useMemo(
+    () => listAccessibleWorkspaces(authBootstrapQuery.data?.memberWorkspaces ?? []),
+    [authBootstrapQuery.data?.memberWorkspaces]
   )
-  const availableTenantOptions = useMemo(
-    () => listAccessibleTenantWorkspaces(authBootstrapQuery.data?.availableTenants ?? []),
-    [authBootstrapQuery.data?.availableTenants]
+  const availableWorkspaceOptions = useMemo(
+    () => listAccessibleWorkspaces(authBootstrapQuery.data?.availableWorkspaces ?? []),
+    [authBootstrapQuery.data?.availableWorkspaces]
   )
-  const memberTenantIds = useMemo(
-    () => new Set(memberTenantOptions.map((tenant) => tenant.id)),
-    [memberTenantOptions]
+  const memberWorkspaceIds = useMemo(
+    () => new Set(memberWorkspaceOptions.map((workspace) => workspace.id)),
+    [memberWorkspaceOptions]
   )
-  const switchableTenantOptions = memberTenantOptions
-  const tenantDirectoryAccessibleTenantIds = useMemo(
-    () => new Set(availableTenantOptions.map((tenant) => tenant.id)),
-    [availableTenantOptions]
+  const switchableWorkspaceOptions = memberWorkspaceOptions
+  const workspaceDirectoryAccessibleWorkspaceIds = useMemo(
+    () => new Set(availableWorkspaceOptions.map((workspace) => workspace.id)),
+    [availableWorkspaceOptions]
   )
   const workspaceChoiceCount = useMemo(
     () => countAccessibleWorkspaceChoices({
-      tenants: switchableTenantOptions,
+      workspaces: switchableWorkspaceOptions,
       includePlatform: canUsePlatformWorkspace
     }),
-    [switchableTenantOptions, canUsePlatformWorkspace]
+    [switchableWorkspaceOptions, canUsePlatformWorkspace]
   )
-  const activeTenantId = authBootstrapQuery.data?.tenant?.id ?? null
-  const activeTenantSlug = authBootstrapQuery.data?.tenant?.slug ?? null
+  const activeWorkspaceId = authBootstrapQuery.data?.workspace?.id ?? null
+  const activeWorkspaceSlug = authBootstrapQuery.data?.workspace?.slug ?? null
   const switchableWorkspaceChoiceCount = useMemo(
     () => countSwitchableWorkspaceChoices({
-      tenants: switchableTenantOptions,
+      workspaces: switchableWorkspaceOptions,
       includePlatform: canUsePlatformWorkspace,
-      activeTenantId
+      activeWorkspaceId,
+      // Only the ones the chooser will actually render: without the billing
+      // view registered there is no card to click, and counting them would
+      // offer a chooser with nothing in it.
+      customerCount: hasBillingScopeView ? customerOptions.length : 0
     }),
-    [activeTenantId, switchableTenantOptions, canUsePlatformWorkspace]
+    [activeWorkspaceId, switchableWorkspaceOptions, canUsePlatformWorkspace, customerOptions, hasBillingScopeView]
   )
-  const tenantSlugById = useMemo(
-    () => new Map([...availableTenantOptions, ...switchableTenantOptions].map((tenant) => [tenant.id, tenant.slug] as const)),
-    [availableTenantOptions, switchableTenantOptions]
+  const workspaceSlugById = useMemo(
+    () => new Map([...availableWorkspaceOptions, ...switchableWorkspaceOptions].map((workspace) => [workspace.id, workspace.slug] as const)),
+    [availableWorkspaceOptions, switchableWorkspaceOptions]
   )
   const hasPermission = (permission: Permission) => grantedPermissions.includes(permission)
   const canViewAuth = hasPermission(AUTH_ACCESS_VIEW_PERMISSION)
   const canManageSettings = hasPermission(SETTINGS_MANAGE_PERMISSION)
-  const canDisableTenants = hasPermission(TENANTS_DISABLE_PERMISSION)
-  const canManageTenants = hasPermission(TENANTS_MANAGE_PERMISSION)
-  const isTenantAuthSettingsRoute = appPathname === '/settings/authentication' || appPathname.startsWith('/settings/auth/')
-  const canOpenTenantAuthSettings = hasTenantContext && canViewAuth
-  const canOpenTenantSettings = canManageSettings || canManageTenants || canOpenTenantAuthSettings
+  const canDisableWorkspaces = hasPermission(WORKSPACES_DISABLE_PERMISSION)
+  const canManageWorkspaces = hasPermission(WORKSPACES_MANAGE_PERMISSION)
+  const isWorkspaceAuthSettingsRoute = appPathname === '/settings/authentication' || appPathname.startsWith('/settings/auth/')
+  const canOpenWorkspaceAuthSettings = hasWorkspaceContext && canViewAuth
+  const canOpenWorkspaceSettings = canManageSettings || canManageWorkspaces || canOpenWorkspaceAuthSettings
   const canManageLibrary = hasPermission(LIBRARY_MANAGE_PERMISSION)
   const canUploadLibrary = hasPermission(LIBRARY_UPLOAD_PERMISSION)
   const canManagePrinters = hasPermission(PRINTERS_MANAGE_PERMISSION)
   usePrinterWebSocket(
     authBootstrapReady
-      && (isAuthenticated || (hasTenantContext && !authEnabled))
-      && (routeTenantSlug != null || routePlatformWorkspace),
-    routeTenantSlug ? `tenant:${routeTenantSlug}` : 'platform'
+      && (isAuthenticated || (hasWorkspaceContext && !authEnabled))
+      && (routeWorkspaceSlug != null || routePlatformWorkspace),
+    routeWorkspaceSlug ? `workspace:${routeWorkspaceSlug}` : 'platform'
   )
   const [deviceUnconstrainedWidthOverride, setDeviceUnconstrainedWidthOverride] = useLocalStorageState<boolean | null>(
     DEVICE_UNCONSTRAINED_WIDTH_OVERRIDE_KEY,
@@ -276,20 +345,27 @@ export function App() {
     null,
     parseNullableAppThemeSetting
   )
-  const deviceLandingPageOverrideKey = `${DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX}.${activeTenantSlug ?? routeTenantSlug ?? 'ambient'}`
+  // Read-only here: the billing Settings panel owns the writes, and this hook
+  // is notified of them because they share the key.
+  const [deviceBillingAppThemeOverride] = useLocalStorageState<AppThemeSetting | null>(
+    DEVICE_BILLING_APP_THEME_OVERRIDE_KEY,
+    null,
+    parseNullableAppThemeSetting
+  )
+  const deviceLandingPageOverrideKey = `${DEVICE_LANDING_PAGE_OVERRIDE_KEY_PREFIX}.${activeWorkspaceSlug ?? routeWorkspaceSlug ?? 'ambient'}`
   const [deviceLandingPageOverride, setDeviceLandingPageOverride, deviceLandingPageOverrideLoaded] = useLocalStorageState<AppLandingPageSetting | null>(
     deviceLandingPageOverrideKey,
     null,
     parseNullableAppLandingPageSetting
   )
-  const deviceNavTabOrderOverrideKey = `${DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX}.${activeTenantSlug ?? routeTenantSlug ?? 'ambient'}`
+  const deviceNavTabOrderOverrideKey = `${DEVICE_NAV_TAB_ORDER_OVERRIDE_KEY_PREFIX}.${activeWorkspaceSlug ?? routeWorkspaceSlug ?? 'ambient'}`
   const [deviceNavTabOrderOverride, setDeviceNavTabOrderOverride] = useLocalStorageState<string[] | null>(
     deviceNavTabOrderOverrideKey,
     null,
     parseNullableNavTabOrder
   )
   const pluginStateQuery = usePluginCatalogQuery({
-    enabled: authBootstrapQuery.isSuccess ? (isAuthenticated || (hasTenantContext && !authEnabled)) : false,
+    enabled: authBootstrapQuery.isSuccess ? (isAuthenticated || (hasWorkspaceContext && !authEnabled)) : false,
     suppressGlobalErrorToast: true
   })
   useEffect(() => {
@@ -315,32 +391,32 @@ export function App() {
       queryClient.setQueryData(['general-settings'], data)
     }
   })
-  const switchTenant = useMutation({
-    mutationFn: ({ tenantId }: { tenantId: string; tenantSlug: string; routePath: string }) => apiFetch<void>('/api/auth/switch-tenant', {
+  const switchWorkspace = useMutation({
+    mutationFn: ({ workspaceId }: { workspaceId: string; workspaceSlug: string; routePath: string }) => apiFetch<void>('/api/auth/switch-workspace', {
       method: 'POST',
-      body: { tenantId }
+      body: { workspaceId }
     }),
     onSuccess: async (_data, variables) => {
-      const nextRoute = buildTenantWorkspacePath(variables.tenantSlug, variables.routePath)
+      const nextRoute = buildWorkspacePath(variables.workspaceSlug, variables.routePath)
       if (nextRoute !== currentRoute) {
         navigate(nextRoute, { replace: true })
       }
       await invalidateWorkspaceShellQueries()
     }
   })
-  const selectTenantContext = useMutation({
-    mutationFn: ({ tenantId }: { tenantId: string | null; tenantSlug?: string; routePath: string }) => apiFetch<void>('/api/auth/tenant-context', {
+  const selectWorkspaceContext = useMutation({
+    mutationFn: ({ workspaceId }: { workspaceId: string | null; workspaceSlug?: string; routePath: string }) => apiFetch<void>('/api/auth/workspace-context', {
       method: 'POST',
-      body: { tenantId }
+      body: { workspaceId }
     }),
     onSuccess: async (_data, variables) => {
-      if (variables.tenantId == null) {
+      if (variables.workspaceId == null) {
         if (variables.routePath !== currentRoute) {
           navigate(variables.routePath, { replace: true })
         }
         await invalidateWorkspaceShellQueries()
-      } else if (variables.tenantSlug) {
-        const nextRoute = buildTenantWorkspacePath(variables.tenantSlug, variables.routePath)
+      } else if (variables.workspaceSlug) {
+        const nextRoute = buildWorkspacePath(variables.workspaceSlug, variables.routePath)
         if (nextRoute !== currentRoute) {
           navigate(nextRoute, { replace: true })
         }
@@ -352,7 +428,7 @@ export function App() {
   // a fresh array of fresh objects each call. Memoize it so the downstream tab
   // memo chain (pluginRoutes -> pluginTabs -> tabs) isn't invalidated every render.
   const allPluginRoutes = useMemo(() => webPluginRegistry.routes(), [])
-  const currentPluginSurface = inPlatformMode ? 'platform' : 'tenant'
+  const currentPluginSurface = inPlatformMode ? 'platform' : 'workspace'
   const apiPluginsByName = useMemo(
     () => new Map((pluginStateQuery.data?.plugins ?? []).map((plugin) => [plugin.name, plugin] as const)),
     [pluginStateQuery.data?.plugins]
@@ -370,7 +446,12 @@ export function App() {
         const tabValue = pluginBasePath(route.path)
         const mobileIcon = route.navMobileIcon
           ?? (tabValue === '/orders' ? <ChecklistRoundedIcon /> : <ExtensionRoundedIcon />)
-        return { value: tabValue, label: route.navLabel ?? tabValue, mobileIcon }
+        return {
+          value: tabValue,
+          label: route.navLabel ?? tabValue,
+          description: route.navDescription,
+          mobileIcon
+        }
       })
       .sort((left, right) => {
         // Pinned default order for the first plugin tabs; everything else alphabetical.
@@ -389,15 +470,15 @@ export function App() {
   const canViewLibrary = hasPermission(LIBRARY_VIEW_PERMISSION)
   const canViewJobs = hasPermission(JOBS_VIEW_PERMISSION)
   const shellDispatchQuery = usePrintDispatchJobs({
-    enabled: authBootstrapReady && hasTenantContext && isAuthenticated && canViewJobs,
+    enabled: authBootstrapReady && hasWorkspaceContext && isAuthenticated && canViewJobs,
     idleRefetchInterval: 10_000,
     suppressGlobalErrorToast: true
   })
   const showsAccountTab = shouldShowAccountTab({
     authBootstrapReady,
     actorType,
-    activeTenantId,
-    memberTenantIds
+    activeWorkspaceId,
+    memberWorkspaceIds
   })
   const enabledPluginBasePaths = useMemo(
     () => pluginRoutes.map((route) => pluginBasePath(route.path)),
@@ -425,7 +506,7 @@ export function App() {
     [allPluginRoutes, appPathname, currentPluginSurface]
   )
   const hasPluginState = pluginStateQuery.data?.plugins != null
-  const pluginCatalogEnabled = authBootstrapReady && (isAuthenticated || (hasTenantContext && !authEnabled))
+  const pluginCatalogEnabled = authBootstrapReady && (isAuthenticated || (hasWorkspaceContext && !authEnabled))
   const pluginCatalogResolving = !hasPluginState && !pluginStateQuery.isError
     && (authBootstrapQuery.isPending || pluginCatalogEnabled)
   const catchAllDecision = catchAllRouteDecision({
@@ -438,15 +519,15 @@ export function App() {
       if (!authBootstrapReady) return []
       if (inPlatformMode) return []
       return baseCoreTabs.filter((tab) => {
-        if (tab.value === '/get-started') return hasTenantContext && !quickStartDismissed
-        if (tab.value === '/printers') return hasTenantContext && canViewPrinters
-        if (tab.value === '/library') return hasTenantContext && canViewLibrary
-        if (tab.value === '/jobs') return hasTenantContext && canViewJobs
-        if (tab.value === '/settings') return canManageSettings || canManageTenants
+        if (tab.value === '/get-started') return hasWorkspaceContext && !quickStartDismissed
+        if (tab.value === '/printers') return hasWorkspaceContext && canViewPrinters
+        if (tab.value === '/library') return hasWorkspaceContext && canViewLibrary
+        if (tab.value === '/jobs') return hasWorkspaceContext && canViewJobs
+        if (tab.value === '/settings') return canManageSettings || canManageWorkspaces
         return true
       })
     },
-    [authBootstrapReady, canManageSettings, canManageTenants, canViewJobs, canViewLibrary, canViewPrinters, hasTenantContext, inPlatformMode, quickStartDismissed]
+    [authBootstrapReady, canManageSettings, canManageWorkspaces, canViewJobs, canViewLibrary, canViewPrinters, hasWorkspaceContext, inPlatformMode, quickStartDismissed]
   )
   const platformTabs = useMemo<ReadonlyArray<ShellTab>>(
     () => inPlatformMode
@@ -480,7 +561,7 @@ export function App() {
   const canUseWorkspaceChooser = authBootstrapReady && isAuthenticated && switchableWorkspaceChoiceCount > 0
   const requiresWorkspaceSelection = authBootstrapReady
     && isAuthenticated
-    && !hasTenantContext
+    && !hasWorkspaceContext
     && workspaceChoiceCount > 1
     && !(workspaceContextHint?.type === 'platform' && canUsePlatformWorkspace)
   const sharedLandingPage = generalSettingsQuery.data?.landingPage ?? DEFAULT_APP_LANDING_PAGE
@@ -502,20 +583,20 @@ export function App() {
   )
   // A workspace that has not finished onboarding lands on Get started; the
   // configured landing page takes over once the page is dismissed.
-  const tenantWorkspaceLandingRoute = !quickStartDismissed
+  const workspaceLandingRoute = !quickStartDismissed
     ? '/get-started'
-    : resolveTenantWorkspaceLandingPath({
+    : resolveWorkspaceLandingPath({
         preferredPage: effectiveLandingPage,
         canViewPrinters,
         canViewLibrary,
         canViewJobs,
-        canOpenSettings: canOpenTenantSettings,
+        canOpenSettings: canOpenWorkspaceSettings,
         enabledPluginBasePaths
       })
-  const tenantWorkspaceEntryRoute = '/'
-  const defaultTab = requiresWorkspaceSelection ? buildWorkspaceSelectionPath() : inPlatformMode ? buildPlatformWorkspacePath() : tenantWorkspaceLandingRoute
+  const workspaceEntryRoute = '/'
+  const defaultTab = requiresWorkspaceSelection ? buildWorkspaceSelectionPath() : inPlatformMode ? buildPlatformWorkspacePath() : workspaceLandingRoute
   const defaultRoute = resolveDefaultWorkspaceRoute({
-    activeTenantSlug,
+    activeWorkspaceSlug,
     defaultPath: defaultTab
   })
   const runtimePolicy = useMemo(
@@ -534,36 +615,36 @@ export function App() {
     () => authBootstrapQuery.data ? resolveShellIdentity(authBootstrapQuery.data.actor) : null,
     [authBootstrapQuery.data]
   )
-  const currentWorkspaceChooserLabel = authBootstrapQuery.data?.tenant?.name ?? (inPlatformMode ? 'Platform' : undefined)
+  const currentWorkspaceChooserLabel = authBootstrapQuery.data?.workspace?.name ?? (inPlatformMode ? 'Platform' : undefined)
   const currentRoute = `${location.pathname}${location.search}${location.hash}`
   // Connect-bridge deep link (`/connect-bridge?code=…`): workspace-agnostic, so
-  // the bridge can build it without knowing the tenant slug.
+  // the bridge can build it without knowing the workspace slug.
   const connectBridgeCode = appPathname === '/connect-bridge'
     ? new URLSearchParams(location.search).get('code')
     : null
-  const tenantlessRedirect = buildWorkspaceSelectionPath()
-  const workspaceSwitchPending = switchTenant.isPending || selectTenantContext.isPending
+  const workspacelessRedirect = buildWorkspaceSelectionPath()
+  const workspaceSwitchPending = switchWorkspace.isPending || selectWorkspaceContext.isPending
   const platformWorkspaceLandingRoute = buildPlatformWorkspacePath()
-  const publicDemoLandingRoute = buildTenantWorkspacePath(PUBLIC_DEMO_TENANT_SLUG, '/printers')
-  const isWorkspaceSelectionRoute = routeTenantSlug == null && appPathname === buildWorkspaceSelectionPath()
+  const publicDemoLandingRoute = buildWorkspacePath(PUBLIC_DEMO_WORKSPACE_SLUG, '/printers')
+  const isWorkspaceSelectionRoute = routeWorkspaceSlug == null && appPathname === buildWorkspaceSelectionPath()
   // The connect-bridge deep link is a focused, workspace-agnostic landing — show
   // it with the same clean chrome as the workspace chooser (no tabs/workspace
-  // label), not wrapped in the tenant or platform shell.
-  const isConnectBridgeRoute = routeTenantSlug == null && appPathname === '/connect-bridge'
+  // label), not wrapped in the workspace or platform shell.
+  const isConnectBridgeRoute = routeWorkspaceSlug == null && appPathname === '/connect-bridge'
   // Marketing/public routes come from the optional private marketing module.
   // Without it (public open-source builds) none of these flags fire and `/`
   // falls through to the in-app landing redirect.
   const marketingRoutes = marketing?.routes ?? []
-  const isMarketingRoute = routeTenantSlug == null && appPathname === '/' && marketing != null
-  const isPublicInfoRoute = routeTenantSlug == null
+  const isMarketingRoute = routeWorkspaceSlug == null && appPathname === '/' && marketing != null
+  const isPublicInfoRoute = routeWorkspaceSlug == null
     && marketingRoutes.some((route) => route.publicChrome && route.path !== '/' && route.path === appPathname)
   // Marketing-module routes must skip the top-level auth gate: a cached ambient
   // bootstrap reports global auth enabled, which would otherwise render the
   // sign-in wall synchronously before the route element can run.
-  const isPrivatePublicRoute = routeTenantSlug == null && marketingRoutes.some((route) => route.path === appPathname)
-  const tenantLandingRouteReady = isTenantWorkspaceLandingReady({
-    routeTenantSlug,
-    activeTenantSlug,
+  const isPrivatePublicRoute = routeWorkspaceSlug == null && marketingRoutes.some((route) => route.path === appPathname)
+  const workspaceLandingRouteReady = isWorkspaceLandingReady({
+    routeWorkspaceSlug,
+    activeWorkspaceSlug,
     authBootstrapReady,
     sharedSettingsReady: generalSettingsQuery.data != null,
     deviceLandingPageOverrideLoaded
@@ -573,30 +654,30 @@ export function App() {
     authEnabled,
     authSetupRequired,
     authProviderSetupAvailable,
-    allowSetup: !hasTenantContext,
+    allowSetup: !hasWorkspaceContext,
     isAuthenticated
   })
-  const tenantRouteRedirect = routeTenantSlug != null
+  const workspaceRouteRedirect = routeWorkspaceSlug != null
     && authBootstrapReady
     && authRouteState !== 'auth'
-    && (activeTenantSlug == null || activeTenantSlug !== routeTenantSlug)
-    ? tenantlessRedirect
-    : resolveTenantRouteRedirect({
+    && (activeWorkspaceSlug == null || activeWorkspaceSlug !== routeWorkspaceSlug)
+    ? workspacelessRedirect
+    : resolveWorkspaceRouteRedirect({
         authBootstrapReady,
-        hasTenantContext,
-        tenantlessRedirect
+        hasWorkspaceContext,
+        workspacelessRedirect
       })
   const showsWorkspaceSwitcher = shouldShowWorkspaceSwitcher({
     authRouteState,
-    requestedTenantSlug: routeTenantSlug,
-    activeTenantSlug
+    requestedWorkspaceSlug: routeWorkspaceSlug,
+    activeWorkspaceSlug
   })
   const workspaceChooserTab = useMemo<ShellTab | null>(
     () => (canUseWorkspaceChooser && showsWorkspaceSwitcher)
       ? {
           value: '/workspaces',
           label: 'Workspaces',
-          ariaLabel: 'Switch workspace',
+          ariaLabel: CONTEXT_CHOOSER_LABEL,
           icon: <SwapHorizRoundedIcon />,
           iconOnly: true
         }
@@ -634,22 +715,31 @@ export function App() {
     [accountTab, navContentTabs, platformTabs, settingsTab, workspaceChooserTab]
   )
 
-  const openPlatformWorkspace = (routePath: string) => {
-    setPendingWorkspaceRoute({ routePath, targetTenantId: null, sourcePathname: appPathname })
-    selectTenantContext.mutate({ tenantId: null, routePath })
+  /**
+   * The billing scope is a plain route, not a workspace context switch: the
+   * account is named in the URL and the API scopes on membership, so there is
+   * no workspace to select and none of the context machinery applies.
+   */
+  const openCustomer = (customerId: string) => {
+    navigate(buildBillingScopePath(customerId))
   }
 
-  const openTenantWorkspace = (tenantId: string, routePath: string) => {
-    const tenantSlug = tenantSlugById.get(tenantId)
-    if (!tenantSlug) return
+  const openPlatformWorkspace = (routePath: string) => {
+    setPendingWorkspaceRoute({ routePath, targetWorkspaceId: null, sourcePathname: appPathname })
+    selectWorkspaceContext.mutate({ workspaceId: null, routePath })
+  }
 
-    setPendingWorkspaceRoute({ routePath, targetTenantId: tenantId, sourcePathname: appPathname })
+  const openWorkspace = (workspaceId: string, routePath: string) => {
+    const workspaceSlug = workspaceSlugById.get(workspaceId)
+    if (!workspaceSlug) return
+
+    setPendingWorkspaceRoute({ routePath, targetWorkspaceId: workspaceId, sourcePathname: appPathname })
     if (isPlatformUser) {
-      selectTenantContext.mutate({ tenantId, tenantSlug, routePath })
+      selectWorkspaceContext.mutate({ workspaceId, workspaceSlug, routePath })
       return
     }
 
-    switchTenant.mutate({ tenantId, tenantSlug, routePath })
+    switchWorkspace.mutate({ workspaceId, workspaceSlug, routePath })
   }
 
   const openWorkspaceChooser = () => {
@@ -657,29 +747,29 @@ export function App() {
   }
 
   // Land a connect-bridge deep link on the chosen workspace's Bridges page with
-  // the code stashed for pre-fill. The connect API is bound to the active tenant
+  // the code stashed for pre-fill. The connect API is bound to the active workspace
   // context, so a non-active workspace is switched into first (the switch
   // mutation then navigates straight to the Bridges page via its routePath).
-  const connectBridgeToWorkspace = (tenantId: string) => {
+  const connectBridgeToWorkspace = (workspaceId: string) => {
     if (!connectBridgeCode) return
-    const tenantSlug = tenantId === activeTenantId
-      ? (activeTenantSlug ?? tenantSlugById.get(tenantId))
-      : tenantSlugById.get(tenantId)
-    if (!tenantSlug) return
+    const workspaceSlug = workspaceId === activeWorkspaceId
+      ? (activeWorkspaceSlug ?? workspaceSlugById.get(workspaceId))
+      : workspaceSlugById.get(workspaceId)
+    if (!workspaceSlug) return
     stashPendingBridgeConnectCode(connectBridgeCode)
     const bridgesRoutePath = '/settings/bridges'
-    if (tenantId === activeTenantId) {
-      navigate(buildTenantWorkspacePath(tenantSlug, bridgesRoutePath))
+    if (workspaceId === activeWorkspaceId) {
+      navigate(buildWorkspacePath(workspaceSlug, bridgesRoutePath))
       return
     }
     if (isPlatformUser) {
-      selectTenantContext.mutate({ tenantId, tenantSlug, routePath: bridgesRoutePath })
+      selectWorkspaceContext.mutate({ workspaceId, workspaceSlug, routePath: bridgesRoutePath })
       return
     }
-    switchTenant.mutate({ tenantId, tenantSlug, routePath: bridgesRoutePath })
+    switchWorkspace.mutate({ workspaceId, workspaceSlug, routePath: bridgesRoutePath })
   }
 
-  const renderTenantContextElement = (element: ReactNode) => {
+  const renderWorkspaceContextElement = (element: ReactNode) => {
     if (!authBootstrapReady) {
       return <Typography>Loading…</Typography>
     }
@@ -688,11 +778,14 @@ export function App() {
       return <AuthView redirectPath={currentRoute} />
     }
 
-    if (tenantRouteRedirect == null) {
-      return hasTenantContext ? renderProtectedElement(element) : <Typography>Loading…</Typography>
+    if (workspaceRouteRedirect == null) {
+      if (!hasWorkspaceContext) {
+        return <Typography>Loading…</Typography>
+      }
+      return renderProtectedElement(element)
     }
 
-    return <Navigate to={tenantRouteRedirect} replace />
+    return <Navigate to={workspaceRouteRedirect} replace />
   }
 
   const renderProtectedElement = (element: ReactNode) => {
@@ -701,7 +794,7 @@ export function App() {
       authEnabled,
       authSetupRequired,
       authProviderSetupAvailable,
-      allowSetup: !hasTenantContext,
+      allowSetup: !hasWorkspaceContext,
       isAuthenticated
     })
 
@@ -722,7 +815,7 @@ export function App() {
 
     return showsAccountTab
       ? renderProtectedElement(<AccountView />)
-      : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+      : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
   }
 
   useEffect(() => {
@@ -732,20 +825,29 @@ export function App() {
   const sharedUnconstrainedWidth = generalSettingsQuery.data?.unconstrainedWidth ?? false
   const sharedAppTheme = generalSettingsQuery.data?.appTheme ?? 'default'
   const effectiveUnconstrainedWidth = deviceUnconstrainedWidthOverride ?? sharedUnconstrainedWidth
-  const activeTab = resolveActiveNavTab(tabs.map((tab) => tab.value), appPathname)
+  // Computed from the workspace tabs; the billing scope overrides it below,
+  // once its own tab set exists.
+  const workspaceActiveTab = resolveActiveNavTab(tabs.map((tab) => tab.value), appPathname)
   const usesPlatformTheme = shouldUsePlatformAuthTheme({
-    hasTenantContext,
+    hasWorkspaceContext,
     canUsePlatformWorkspace,
     authRouteState
   })
   // Marketing and public info pages are brand surfaces with no theme
   // setting, so they always render the default theme. Platform surfaces use
   // their own device override paired with the platform-scoped shared setting
-  // (`/api/settings` resolves the `platform:` scope there); tenant surfaces
+  // (`/api/settings` resolves the `platform:` scope there); workspace surfaces
   // keep the workspace override.
+  // The billing scope is its own case: it has no workspace context, so it used
+  // to read the shared setting -- which, asked without a workspace, answers with
+  // the PLATFORM's. A customer's billing pages were styled by the operator's
+  // choice. It now uses its own device override and falls back to the default.
+  const themeInBillingScope = location.pathname.startsWith('/billing/')
   const effectiveAppTheme: AppThemeSetting = (isMarketingRoute || isPublicInfoRoute)
     ? 'default'
-    : (usesPlatformTheme ? devicePlatformAppThemeOverride : deviceAppThemeOverride) ?? sharedAppTheme
+    : themeInBillingScope
+      ? (deviceBillingAppThemeOverride ?? (usesPlatformTheme ? sharedAppTheme : 'default'))
+      : (usesPlatformTheme ? devicePlatformAppThemeOverride : deviceAppThemeOverride) ?? sharedAppTheme
   const flatThemeVariant = isFlatAppTheme(effectiveAppTheme)
     ? (usesPlatformTheme ? platformFlatThemeVariants : flatThemeVariants)[effectiveAppTheme]
     : null
@@ -764,9 +866,70 @@ export function App() {
       ? (usesPlatformTheme ? platformAuroraTheme : auroraTheme)
       : (usesPlatformTheme ? platformTheme : theme)
   const usesPublicChrome = isWorkspaceSelectionRoute || isConnectBridgeRoute || isMarketingRoute || isPublicInfoRoute
-  const shellTabs = usesPublicChrome ? [] : tabs
-  const shellWorkspaceLabel = usesPublicChrome ? undefined : (inPlatformMode ? 'Platform' : undefined)
-  const shellWorkspaceChooserLabel = usesPublicChrome ? undefined : currentWorkspaceChooserLabel
+  /**
+   * The billing scope carries no content tabs of its own.
+   *
+   * It is neither a workspace nor the platform, so it must not inherit either
+   * one's navigation — which it otherwise does, because the shell keeps showing
+   * whichever context the browser was last in. Landing on a customer's licences
+   * under a row of Printers/Library/Jobs tabs (or the platform's Workspaces and
+   * Suggestions) invites a click that leaves the page it was meant to be.
+   */
+  const inBillingScope = location.pathname.startsWith('/billing/')
+  const billingScopeAccountId = parseBillingScopePath(location.pathname)?.customerId ?? null
+  /**
+   * The billing scope's own tabs.
+   *
+   * Its sections ARE the scope's navigation, so they take the shell's main tab
+   * row exactly as a workspace's pages do — the workspace content tabs are what
+   * belonged to a scope this is not, and they are the ones dropped. The
+   * switcher and account tabs stay: dropping every tab once took the switcher
+   * with it and left the scope with no exit but the browser's back button.
+   */
+  const billingScopeTabs = useMemo<ReadonlyArray<ShellTab>>(
+    () => [
+      ...(billingScopeAccountId
+        ? billingScopeSections.map((entry) => ({
+            value: buildBillingScopePath(billingScopeAccountId, entry.id),
+            label: entry.label,
+            ...(entry.description ? { description: entry.description } : {}),
+            icon: BILLING_SCOPE_SECTION_ICONS[entry.id],
+            // Settings is a gear everywhere else in the app, so it is a gear
+            // here. It also stops the one utility tab competing for width with
+            // the six that are the actual content of this scope.
+            ...(entry.id === 'settings' ? { iconOnly: true } : {})
+          }))
+        : []),
+      ...(accountTab ? [accountTab] : []),
+      ...(workspaceChooserTab ? [workspaceChooserTab] : [])
+    ],
+    [accountTab, billingScopeAccountId, workspaceChooserTab]
+  )
+  const shellTabs = usesPublicChrome ? [] : inBillingScope ? billingScopeTabs : tabs
+  const activeTab = inBillingScope
+    ? resolveActiveNavTab(billingScopeTabs.map((tab) => tab.value), location.pathname)
+    : workspaceActiveTab
+  const shellWorkspaceLabel = usesPublicChrome
+    ? undefined
+    : inBillingScope ? BILLING_SCOPE_LABEL : (inPlatformMode ? 'Platform' : undefined)
+  // In the billing scope the chooser must name the ACCOUNT. Without this branch
+  // it fell through to the platform fallback and a customer's own billing pages
+  // announced "Platform" as the current context.
+  const billingScopeAccountName = billingScopeAccountId
+    ? customerOptions.find((customer) => customer.id === billingScopeAccountId)?.name
+    : undefined
+  const shellWorkspaceChooserLabel = usesPublicChrome
+    ? undefined
+    : inBillingScope
+      ? (billingScopeAccountName ?? BILLING_SCOPE_LABEL)
+      : currentWorkspaceChooserLabel
+  // The same icons the chooser page uses for each kind, so the thing you picked
+  // there is recognisable in the chrome afterwards.
+  const shellWorkspaceChooserIcon = usesPublicChrome
+    ? undefined
+    : inBillingScope
+      ? <CreditCardRoundedIcon />
+      : inPlatformMode ? <ApartmentRoundedIcon /> : <BusinessRoundedIcon />
   const shellWorkspaceChooserAvailable = !usesPublicChrome && canUseWorkspaceChooser
   // The badge owns its own 5s poll: hoisting it here re-rendered the whole tree every tick.
   const devRuntimeIndicator = browserEnv.devMode ? (
@@ -787,33 +950,33 @@ export function App() {
       <AppVersionFooter />
     </Stack>
   )
-  const shouldAutoSelectOnlyTenantWorkspace = authBootstrapReady
+  const shouldAutoSelectOnlyWorkspace = authBootstrapReady
     && isAuthenticated
     && !isMarketingRoute
     && !isPublicInfoRoute
-    && !hasTenantContext
+    && !hasWorkspaceContext
     && !canUsePlatformWorkspace
-    && memberTenantOptions.length === 1
-  const tenantStatsRouteElement = renderTenantContextElement(
-    <TenantStatsView />
+    && memberWorkspaceOptions.length === 1
+  const workspaceStatsRouteElement = renderWorkspaceContextElement(
+    <WorkspaceStatsView />
   )
-  const tenantGetStartedRouteElement = renderTenantContextElement(
+  const workspaceGetStartedRouteElement = renderWorkspaceContextElement(
     generalSettingsQuery.data == null
       ? <Typography>Loading…</Typography>
       : quickStartDismissed
         ? <Navigate to={defaultRoute} replace />
         : (
             <GetStartedView
-              canOpenSettings={canOpenTenantSettings}
+              canOpenSettings={canOpenWorkspaceSettings}
               canManageSettings={canManageSettings}
             />
           )
   )
-  const tenantSettingsPath = activeTenantSlug ? buildTenantWorkspacePath(activeTenantSlug, '/settings') : buildWorkspaceSelectionPath()
+  const workspaceSettingsPath = activeWorkspaceSlug ? buildWorkspacePath(activeWorkspaceSlug, '/settings') : buildWorkspaceSelectionPath()
   const accountPath = inPlatformMode
     ? '/platform/account'
-    : activeTenantSlug
-      ? buildTenantWorkspacePath(activeTenantSlug, '/account')
+    : activeWorkspaceSlug
+      ? buildWorkspacePath(activeWorkspaceSlug, '/account')
       : buildWorkspaceSelectionPath()
   const platformOverviewRouteElement = renderProtectedElement(
     canUsePlatformWorkspace
@@ -821,24 +984,31 @@ export function App() {
           ? platformAdmin
             ? <platformAdmin.OverviewView />
             : <Navigate to="/platform/settings" replace />
-          : pendingWorkspaceRoute != null && pendingWorkspaceRoute.targetTenantId == null
+          : pendingWorkspaceRoute != null && pendingWorkspaceRoute.targetWorkspaceId == null
             ? <Typography>Opening workspace…</Typography>
             : <Navigate to={buildWorkspaceSelectionPath()} replace />)
-      : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+      : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
   )
   const publicRouteContext = {
     isAuthenticated,
+    authPending: !authBootstrapReady,
     appHref: defaultRoute,
     // Billing/upgrade CTAs land on the account page (its Billing section), not
-    // the workspace landing; without an active tenant fall back to the app entry.
-    accountHref: activeTenantSlug ? buildTenantWorkspacePath(activeTenantSlug, '/account') : defaultRoute,
+    // the workspace landing; without an active workspace fall back to the app entry.
+    accountHref: activeWorkspaceSlug ? buildWorkspacePath(activeWorkspaceSlug, '/account') : defaultRoute,
+    // The first account, which is the only one for everyone who is not an
+    // operator; a purchase CTA has no way to ask which, and the buyer can move
+    // it afterwards. Null leaves the CTA on its signed-out path.
+    customerBasePath: customerOptions[0]
+      ? customerApiBase(customerOptions[0].id)
+      : null,
     demoLandingRoute: publicDemoLandingRoute
   }
   const marketingRootRoute = marketingRoutes.find((route) => route.path === '/')
   // Without a marketing module, `/` routes straight into the app.
   const rootRouteElement = marketingRootRoute
     ? marketingRootRoute.render(publicRouteContext)
-    : tenantLandingRouteReady
+    : workspaceLandingRouteReady
       ? <Navigate to={defaultRoute} replace />
       : <Typography>Loading…</Typography>
 
@@ -870,44 +1040,44 @@ export function App() {
   }, [workspaceChrome, workspaceTheme, isMarketingRoute, isPublicInfoRoute])
 
   useEffect(() => {
-    if (!shouldAutoSelectOnlyTenantWorkspace) {
+    if (!shouldAutoSelectOnlyWorkspace) {
       return
     }
-    if (appPathname !== tenantWorkspaceEntryRoute) {
+    if (appPathname !== workspaceEntryRoute) {
       return
     }
     if (workspaceSwitchPending || pendingWorkspaceRoute) {
       return
     }
 
-    const onlyTenantOption = memberTenantOptions[0]
-    if (!onlyTenantOption) {
+    const onlyWorkspaceOption = memberWorkspaceOptions[0]
+    if (!onlyWorkspaceOption) {
       return
     }
 
-    const onlyTenantSlug = tenantSlugById.get(onlyTenantOption.id)
-    if (!onlyTenantSlug) {
+    const onlyWorkspaceSlug = workspaceSlugById.get(onlyWorkspaceOption.id)
+    if (!onlyWorkspaceSlug) {
       return
     }
 
     setPendingWorkspaceRoute({
-      routePath: tenantWorkspaceEntryRoute,
-      targetTenantId: onlyTenantOption.id,
+      routePath: workspaceEntryRoute,
+      targetWorkspaceId: onlyWorkspaceOption.id,
       sourcePathname: appPathname
     })
-    switchTenant.mutate({
-      tenantId: onlyTenantOption.id,
-      tenantSlug: onlyTenantSlug,
-      routePath: tenantWorkspaceEntryRoute
+    switchWorkspace.mutate({
+      workspaceId: onlyWorkspaceOption.id,
+      workspaceSlug: onlyWorkspaceSlug,
+      routePath: workspaceEntryRoute
     })
   }, [
     appPathname,
-    memberTenantOptions,
+    memberWorkspaceOptions,
     pendingWorkspaceRoute,
-    shouldAutoSelectOnlyTenantWorkspace,
-    switchTenant,
-    tenantWorkspaceEntryRoute,
-    tenantSlugById,
+    shouldAutoSelectOnlyWorkspace,
+    switchWorkspace,
+    workspaceEntryRoute,
+    workspaceSlugById,
     workspaceSwitchPending
   ])
 
@@ -918,11 +1088,11 @@ export function App() {
     if (!authBootstrapReady) {
       return
     }
-    if (pendingWorkspaceRoute.targetTenantId == null) {
-      if (hasTenantContext) {
+    if (pendingWorkspaceRoute.targetWorkspaceId == null) {
+      if (hasWorkspaceContext) {
         return
       }
-    } else if (activeTenantId !== pendingWorkspaceRoute.targetTenantId) {
+    } else if (activeWorkspaceId !== pendingWorkspaceRoute.targetWorkspaceId) {
       return
     }
 
@@ -931,11 +1101,11 @@ export function App() {
       defaultPath: defaultTab,
       inPlatformMode,
       canUsePlatformWorkspace,
-      hasTenantContext,
+      hasWorkspaceContext,
       canViewPrinters,
       canViewLibrary,
       canViewJobs,
-      canOpenSettings: canOpenTenantSettings,
+      canOpenSettings: canOpenWorkspaceSettings,
       canViewAccount: showsAccountTab,
       enabledPluginBasePaths,
       pluginStateReady: pluginStateQuery.data?.plugins != null
@@ -945,8 +1115,8 @@ export function App() {
       return
     }
 
-    const nextRoute = pendingWorkspaceRoute.targetTenantId != null && activeTenantSlug && isTenantWorkspaceCandidatePath(resolvedDestination)
-      ? buildTenantWorkspacePath(activeTenantSlug, resolvedDestination)
+    const nextRoute = pendingWorkspaceRoute.targetWorkspaceId != null && activeWorkspaceSlug && isWorkspaceCandidatePath(resolvedDestination)
+      ? buildWorkspacePath(activeWorkspaceSlug, resolvedDestination)
       : resolvedDestination
 
     if (nextRoute !== currentRoute) {
@@ -961,13 +1131,13 @@ export function App() {
     defaultTab,
     inPlatformMode,
     canUsePlatformWorkspace,
-    hasTenantContext,
-    activeTenantId,
-    activeTenantSlug,
+    hasWorkspaceContext,
+    activeWorkspaceId,
+    activeWorkspaceSlug,
     canViewPrinters,
     canViewLibrary,
     canViewJobs,
-    canOpenTenantSettings,
+    canOpenWorkspaceSettings,
     showsAccountTab,
     enabledPluginBasePaths,
     pluginStateQuery.data?.plugins,
@@ -1007,8 +1177,8 @@ export function App() {
                   openWorkspaceChooser()
                   return
                 }
-                if (activeTenantSlug && isTenantWorkspaceCandidatePath(value)) {
-                  navigate(buildTenantWorkspacePath(activeTenantSlug, value))
+                if (activeWorkspaceSlug && isWorkspaceCandidatePath(value)) {
+                  navigate(buildWorkspacePath(activeWorkspaceSlug, value))
                   return
                 }
                 navigate(value)
@@ -1016,6 +1186,7 @@ export function App() {
               onOpenAccount={showsAccountTab ? () => navigate(accountPath) : undefined}
               workspaceLabel={shellWorkspaceLabel}
               workspaceChooserLabel={shellWorkspaceChooserLabel}
+              workspaceChooserIcon={shellWorkspaceChooserIcon}
               showNavigationFrame={false}
               unconstrainedWidth={effectiveUnconstrainedWidth}
               identity={isMarketingRoute || isPublicInfoRoute ? null : shellIdentity}
@@ -1027,7 +1198,7 @@ export function App() {
                 ? (marketing ? <marketing.Footer /> : devRuntimeIndicator)
                 : appFooterTrailing}
             >
-              {disabledActivePluginRoute ? <Navigate to={inPlatformMode ? '/platform/settings/plugins' : `${tenantSettingsPath}/plugins`} replace /> : null}
+              {disabledActivePluginRoute ? <Navigate to={inPlatformMode ? '/platform/settings/plugins' : `${workspaceSettingsPath}/plugins`} replace /> : null}
               <AuthBootstrapQueryProvider value={authBootstrapQuery}>
                 <PluginCatalogQueryProvider value={pluginStateQuery}>
                   <PrintDispatchJobsQueryProvider value={shellDispatchQuery}>
@@ -1038,11 +1209,11 @@ export function App() {
                         passkey setup offer). Static slot: auth surfaces must render without
                         consulting the plugin catalog. */}
                     <StaticPluginSlot name="shell.overlays" />
-                    {hasTenantContext && <LicenseBanner />}
-                    {hasTenantContext && canManageSettings && <BridgeUpdateBanner />}
-                    {hasTenantContext && canManageSettings && <BridgeCrashBanner />}
-                    {hasTenantContext && canManageSettings && <BridgeDebugCaptureBanner />}
-                    {hasTenantContext && <LibraryUploadPanel />}
+                    {hasWorkspaceContext && <LicenseBanner />}
+                    {hasWorkspaceContext && canManageSettings && <BridgeUpdateBanner />}
+                    {hasWorkspaceContext && canManageSettings && <BridgeCrashBanner />}
+                    {hasWorkspaceContext && canManageSettings && <BridgeDebugCaptureBanner />}
+                    {hasWorkspaceContext && <LibraryUploadPanel />}
                     <RouteErrorBoundary resetKey={location.pathname}>
                       <Routes>
                 <Route path="/" element={rootRouteElement} />
@@ -1056,7 +1227,7 @@ export function App() {
                   element={
                     authRouteState === 'loading'
                       ? <Typography>Loading…</Typography>
-                      : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                      : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                   }
                 />
                 <Route
@@ -1064,8 +1235,8 @@ export function App() {
                   element={renderProtectedElement(
                     <ConnectBridgeView
                       code={connectBridgeCode}
-                      workspaces={switchableTenantOptions}
-                      activeTenantId={activeTenantId}
+                      workspaces={switchableWorkspaceOptions}
+                      activeWorkspaceId={activeWorkspaceId}
                       pending={workspaceSwitchPending}
                       onConnect={connectBridgeToWorkspace}
                     />
@@ -1077,19 +1248,21 @@ export function App() {
                     canUseWorkspaceChooser
                       ? (
                           <WorkspaceSelectionView
-                            tenantOptions={switchableTenantOptions}
+                            workspaceOptions={switchableWorkspaceOptions}
+                            customerOptions={customerOptions}
                             allowPlatformSelection={canUsePlatformWorkspace}
                             onPlatformSelect={canUsePlatformWorkspace ? () => openPlatformWorkspace(platformWorkspaceLandingRoute) : undefined}
-                            onTenantSelect={(tenantId) => openTenantWorkspace(tenantId, tenantWorkspaceEntryRoute)}
+                            onCustomerSelect={hasBillingScopeView ? openCustomer : undefined}
+                            onWorkspaceSelect={(workspaceId) => openWorkspace(workspaceId, workspaceEntryRoute)}
                             selectionPending={workspaceSwitchPending}
                           />
                         )
-                      : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                      : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                   )}
                 />
                 <Route
-                  path="/workspaces/:tenantSlug"
-                  element={tenantLandingRouteReady ? <Navigate to={tenantWorkspaceLandingRoute.slice(1)} replace /> : <Typography>Loading…</Typography>}
+                  path="/workspaces/:workspaceSlug"
+                  element={workspaceLandingRouteReady ? <Navigate to={workspaceLandingRoute.slice(1)} replace /> : <Typography>Loading…</Typography>}
                 />
                 <Route
                   path="/platform"
@@ -1112,42 +1285,62 @@ export function App() {
                                 onClearDeviceAppThemeOverride={() => setDevicePlatformAppThemeOverride(null)}
                               />
                             )
-                          : <Navigate to={tenantSettingsPath} replace />)
-                      : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                          : <Navigate to={workspaceSettingsPath} replace />)
+                      : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                   )}
                 />
                 {platformAdmin ? (
                   <Route
-                    path="/platform/tenants"
+                    path="/platform/workspaces"
                     element={renderProtectedElement(
                       canUsePlatformWorkspace
                         ? (
                             inPlatformMode
                               ? (
-                                  <platformAdmin.TenantsView
-                                    canDisableTenants={canDisableTenants}
-                                    canManageTenants={canManageTenants}
-                                    accessibleTenantIds={tenantDirectoryAccessibleTenantIds}
-                                    onOpenWorkspace={(tenantId) => {
-                                      openTenantWorkspace(tenantId, tenantWorkspaceEntryRoute)
+                                  <platformAdmin.WorkspacesView
+                                    canDisableWorkspaces={canDisableWorkspaces}
+                                    canManageWorkspaces={canManageWorkspaces}
+                                    accessibleWorkspaceIds={workspaceDirectoryAccessibleWorkspaceIds}
+                                    onOpenWorkspace={(workspaceId) => {
+                                      openWorkspace(workspaceId, workspaceEntryRoute)
                                     }}
                                   />
                                 )
-                              : pendingWorkspaceRoute?.targetTenantId != null
+                              : pendingWorkspaceRoute?.targetWorkspaceId != null
                                 ? <Typography>Opening workspace…</Typography>
-                                : <Navigate to={tenantSettingsPath} replace />
+                                : <Navigate to={workspaceSettingsPath} replace />
                           )
-                        : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                        : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                     )}
                   />
                 ) : null}
                 {platformAdmin ? (
                   <Route
-                    path="/platform/billing"
+                    path="/platform/licenses"
                     element={renderProtectedElement(
                       canUsePlatformWorkspace && inPlatformMode
-                        ? <platformAdmin.BillingView />
-                        : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                        ? <platformAdmin.LicensesView />
+                        : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                    )}
+                  />
+                ) : null}
+                {platformAdmin ? (
+                  <Route
+                    path="/platform/customers"
+                    element={renderProtectedElement(
+                      canUsePlatformWorkspace && inPlatformMode
+                        ? <platformAdmin.CustomersView />
+                        : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                    )}
+                  />
+                ) : null}
+                {platformAdmin ? (
+                  <Route
+                    path="/platform/customers/:customerId"
+                    element={renderProtectedElement(
+                      canUsePlatformWorkspace && inPlatformMode
+                        ? <platformAdmin.CustomerDetailView />
+                        : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                     )}
                   />
                 ) : null}
@@ -1157,7 +1350,7 @@ export function App() {
                     element={renderProtectedElement(
                       canUsePlatformWorkspace && inPlatformMode
                         ? <platformAdmin.MessagesView />
-                        : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                        : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                     )}
                   />
                 ) : null}
@@ -1167,35 +1360,76 @@ export function App() {
                     element={renderProtectedElement(
                       canUsePlatformWorkspace && inPlatformMode
                         ? <platformAdmin.SuggestionsView />
-                        : tenantLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
+                        : workspaceLandingRouteReady ? <Navigate to={defaultRoute} replace /> : <Typography>Loading…</Typography>
                     )}
                   />
                 ) : null}
-                <Route path="/workspaces/:tenantSlug/printers" element={renderTenantContextElement(<PrintersView />)} />
-                <Route path="/workspaces/:tenantSlug/printers/:printerId" element={renderTenantContextElement(<PrintersView />)} />
-                <Route path="/workspaces/:tenantSlug/library" element={renderTenantContextElement(<LibraryView />)} />
+                <Route path="/workspaces/:workspaceSlug/printers" element={renderWorkspaceContextElement(<PrintersView />)} />
+                <Route path="/workspaces/:workspaceSlug/printers/:printerId" element={renderWorkspaceContextElement(<PrintersView />)} />
+                <Route path="/workspaces/:workspaceSlug/library" element={renderWorkspaceContextElement(<LibraryView />)} />
                 {/* Static `favorites` outranks the `:folderId` route below, giving the favorites view its own bookmarkable URL. */}
-                <Route path="/workspaces/:tenantSlug/library/favorites" element={renderTenantContextElement(<LibraryView />)} />
-                <Route path="/workspaces/:tenantSlug/library/:folderId" element={renderTenantContextElement(<LibraryView />)} />
-                <Route path="/workspaces/:tenantSlug/get-started" element={tenantGetStartedRouteElement} />
-                <Route path="/workspaces/:tenantSlug/stats" element={tenantStatsRouteElement} />
-                <Route path="/workspaces/:tenantSlug/jobs" element={renderTenantContextElement(<JobsView />)} />
+                <Route path="/workspaces/:workspaceSlug/library/favorites" element={renderWorkspaceContextElement(<LibraryView />)} />
+                <Route path="/workspaces/:workspaceSlug/library/:folderId" element={renderWorkspaceContextElement(<LibraryView />)} />
+                <Route path="/workspaces/:workspaceSlug/get-started" element={workspaceGetStartedRouteElement} />
+                <Route path="/workspaces/:workspaceSlug/stats" element={workspaceStatsRouteElement} />
+                <Route path="/workspaces/:workspaceSlug/jobs" element={renderWorkspaceContextElement(<JobsView />)} />
                 <Route
-                  path="/workspaces/:tenantSlug/account"
-                  element={renderTenantContextElement(renderAccountElement())}
+                  path="/workspaces/:workspaceSlug/account"
+                  element={renderWorkspaceContextElement(renderAccountElement())}
                 />
+                {/*
+                  Billing and Messages are their own pages, not sections of
+                  Account. Registered only when a plugin actually fills the
+                  slot, so a public build — where both are empty — has no route
+                  that renders a blank page.
+                */}
+                {/*
+                  The billing scope. Outside the /workspaces tree because it is
+                  not one: it has no workspace context, no printers, and no
+                  workspace slug to hang off.
+                */}
+                {hasBillingScopeView ? (
+                  <Route
+                    path={BILLING_SCOPE_ROUTE}
+                    element={renderProtectedElement(<BillingScopeView />)}
+                  />
+                ) : null}
+                {hasBillingScopeView ? (
+                  <Route
+                    path={BILLING_SCOPE_SECTION_ROUTE}
+                    element={renderProtectedElement(<BillingScopeView />)}
+                  />
+                ) : null}
+                {hasMessagesSlot ? (
+                  <Route
+                    path="/workspaces/:workspaceSlug/account/messages"
+                    element={renderWorkspaceContextElement(<AccountSlotView slot={ACCOUNT_MESSAGES_SLOT} />)}
+                  />
+                ) : null}
                 <Route
                   path="/platform/account"
                   element={renderAccountElement()}
                 />
+                {/* The platform's copy of the workspace route above. An
+                    operator has an account of their own and reaches it with no
+                    workspace selected, so the slot renders unwrapped — its list
+                    is scoped to the user, not to a workspace. Without this the
+                    Account page's own Messages link matched no route and the
+                    catch-all sent the click to the home page. */}
+                {hasMessagesSlot ? (
+                  <Route
+                    path="/platform/account/messages"
+                    element={<AccountSlotView slot={ACCOUNT_MESSAGES_SLOT} />}
+                  />
+                ) : null}
                 <Route
-                  path="/workspaces/:tenantSlug/settings/*"
+                  path="/workspaces/:workspaceSlug/settings/*"
                   element={inPlatformMode
                     ? <Navigate to="/platform/settings" replace />
-                    : renderTenantContextElement(
-                        (canManageSettings || canManageTenants || (canOpenTenantAuthSettings && isTenantAuthSettingsRoute) || (canOpenTenantAuthSettings && appPathname === '/settings')) ? (
-                          canOpenTenantAuthSettings && !canManageSettings && !canManageTenants && appPathname === '/settings'
-                            ? <Navigate to={buildTenantWorkspacePath(routeTenantSlug ?? activeTenantSlug ?? PUBLIC_DEMO_TENANT_SLUG, '/settings/authentication')} replace />
+                    : renderWorkspaceContextElement(
+                        (canManageSettings || canManageWorkspaces || (canOpenWorkspaceAuthSettings && isWorkspaceAuthSettingsRoute) || (canOpenWorkspaceAuthSettings && appPathname === '/settings')) ? (
+                          canOpenWorkspaceAuthSettings && !canManageSettings && !canManageWorkspaces && appPathname === '/settings'
+                            ? <Navigate to={buildWorkspacePath(routeWorkspaceSlug ?? activeWorkspaceSlug ?? PUBLIC_DEMO_WORKSPACE_SLUG, '/settings/authentication')} replace />
                             : (
                           <SettingsView
                             sharedAppTheme={sharedAppTheme}
@@ -1232,7 +1466,7 @@ export function App() {
                 />
                 {pluginRoutes.map((route) => {
                   const Element = route.element
-                  return <Route key={`${route.pluginName}:scoped:${route.path}`} path={tenantScopedRoutePath(route.path)} element={renderTenantContextElement(<Element />)} />
+                  return <Route key={`${route.pluginName}:scoped:${route.path}`} path={workspaceScopedRoutePath(route.path)} element={renderWorkspaceContextElement(<Element />)} />
                 })}
                 {/* A known plugin route (e.g. /orders) on a cold load isn't mounted yet while the plugin
                     catalog resolves — wait rather than redirect home. See catchAllRouteDecision. */}
@@ -1247,9 +1481,13 @@ export function App() {
                       </Routes>
                     </RouteErrorBoundary>
                     <StatusToastStack>
-                      {(authBootstrapReady && hasTenantContext && isAuthenticated && canViewJobs) && <DispatchToasts />}
-                      {(authBootstrapReady && hasTenantContext && isAuthenticated && canUploadLibrary) && <SlicingToasts />}
-                      {(authBootstrapReady && hasTenantContext && isAuthenticated && (canManageLibrary || canManagePrinters)) && <DeleteOperationToasts />}
+                      {(authBootstrapReady && hasWorkspaceContext && isAuthenticated && canViewJobs) && <DispatchToasts />}
+                      {(authBootstrapReady && hasWorkspaceContext && isAuthenticated && canUploadLibrary) && <SlicingToasts />}
+                      {/* Beside the slice toasts, and gated the same way: the
+                          people who need to know the slicer is still coming up
+                          are exactly the people who can slice. */}
+                      {(authBootstrapReady && hasWorkspaceContext && isAuthenticated && canUploadLibrary) && <EngineInstallToast />}
+                      {(authBootstrapReady && hasWorkspaceContext && isAuthenticated && (canManageLibrary || canManagePrinters)) && <DeleteOperationToasts />}
                       <Toaster />
                     </StatusToastStack>
                   </PrintDispatchJobsQueryProvider>
@@ -1309,7 +1547,7 @@ class RouteErrorBoundary extends Component<{ children: ReactNode; resetKey: stri
             </Typography>
             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
               <Button size="sm" variant="solid" color="danger" onClick={this.reset}>Try again</Button>
-              <Button size="sm" variant="soft" color="neutral" onClick={() => window.location.assign('/workspaces')}>Choose workspace</Button>
+              <Button size="sm" variant="soft" color="neutral" onClick={() => window.location.assign('/workspaces')}>{CONTEXT_CHOOSER_LABEL}</Button>
               <Button size="sm" variant="plain" color="neutral" onClick={() => window.location.reload()}>Reload</Button>
             </Stack>
           </Stack>
@@ -1318,18 +1556,3 @@ class RouteErrorBoundary extends Component<{ children: ReactNode; resetKey: stri
     )
   }
 }
-
-function ScrollReset() {
-  const { pathname } = useLocation()
-  const previousPathnameRef = useRef(pathname)
-
-  useEffect(() => {
-    if (previousPathnameRef.current === pathname) return
-
-    previousPathnameRef.current = pathname
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
-  }, [pathname])
-
-  return null
-}
-

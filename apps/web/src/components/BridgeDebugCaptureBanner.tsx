@@ -12,7 +12,7 @@ import { invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
 
 /**
  * Cross-page reminder that a bridge debug traffic capture is running. Mounted
- * once above tenant page content (next to {@link BridgeUpdateBanner}) so the
+ * once above workspace page content (next to {@link BridgeUpdateBanner}) so the
  * operator can't forget a capture is recording — it shows wherever they are, with
  * a live frame counter and inline Stop / Download actions. The capture is started
  * from Settings; this banner is the always-visible half of that control.

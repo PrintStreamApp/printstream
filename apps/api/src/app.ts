@@ -6,10 +6,11 @@ import cors from 'cors'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import helmet from 'helmet'
+import { clientOrigins } from './lib/client-origins.js'
 import { env } from './lib/env.js'
 import { buildContentSecurityPolicy } from './lib/content-security-policy.js'
 import { installAuthContext } from './lib/auth-context.js'
-import { installTenantContext } from './lib/tenant-context.js'
+import { installWorkspaceContext } from './lib/workspace-context.js'
 import { installRequestContext, getCorrelationId } from './lib/request-context.js'
 import { isMetricsEnabled, recordHttpRequest } from './lib/metrics.js'
 import { HttpError } from './lib/http-error.js'
@@ -37,7 +38,7 @@ import { startLicenseRefreshScheduler } from './lib/license-refresh-client.js'
 import { settingsRouter } from './routes/settings.js'
 import { bridgesRouter } from './routes/bridges.js'
 import { bridgeRuntimeRouter } from './routes/bridge-runtime.js'
-import { tenantStatsRouter } from './routes/stats.js'
+import { workspaceStatsRouter } from './routes/stats.js'
 import { pluginRegistry } from './plugin/registry.js'
 import { installAuditLogCapture } from './lib/audit-logs.js'
 import { installLogCapture } from './lib/logs.js'
@@ -67,7 +68,7 @@ if (env.TRUST_PROXY) {
 }
 
 // Establish the per-request correlation id first, so every log line emitted
-// while handling a request (including rate-limit/auth/tenant failures) shares
+// while handling a request (including rate-limit/auth/workspace failures) shares
 // one id and the `X-Request-Id` response header is always set.
 app.use(installRequestContext())
 
@@ -91,9 +92,7 @@ app.use((request: Request, response: Response, next: NextFunction) => {
   next()
 })
 
-const allowedOrigins = new Set(
-  env.CLIENT_ORIGIN.split(',').map((value) => value.trim()).filter(Boolean)
-)
+const allowedOrigins = new Set(clientOrigins())
 
 app.use(
   cors({
@@ -148,7 +147,7 @@ app.use(express.json({
   }
 }))
 app.use(installAuthContext({ demoMode: false }))
-app.use(installTenantContext())
+app.use(installWorkspaceContext())
 app.use(installAuditLogCapture())
 
 app.use('/api/auth', createRateLimitMiddleware({
@@ -219,7 +218,7 @@ registerLicenseEnforcement()
 startLicenseRefreshScheduler()
 app.use('/api/bridges', bridgesRouter)
 app.use('/api/bridge-runtime', bridgeRuntimeRouter)
-app.use('/api/stats', tenantStatsRouter)
+app.use('/api/stats', workspaceStatsRouter)
 app.use('/api/admin/plugins', adminPluginsRouter)
 app.use('/api/plugin-catalog', pluginCatalogRouter)
 app.use('/api/plugins', pluginRegistry.router)

@@ -10,6 +10,8 @@
  * `migrate deploy`.
  */
 import { spawnSync } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PrismaClient } from '@prisma/client'
@@ -94,6 +96,59 @@ async function synchronizeSchemaWithBaseline(message) {
   baselineCheckedInMigrations()
   process.stdout.write('Database schema synchronized with prisma db push and checked-in migrations baselined.\n')
 }
+
+/**
+ * Collapses a pre-squash migration history onto `00000000000000_init`.
+ *
+ * Mirrors `reconcileMigrationHistory` in `apps/api/src/lib/apply-migrations.ts`
+ * — the native (SEA) build has no Prisma CLI and runs that one; the Docker/dev
+ * stack runs this. Must happen BEFORE `migrate deploy`, because a leftover row
+ * for a retired migration makes the CLI refuse to do anything (P3009) rather
+ * than report something this script could recover from.
+ */
+async function collapsePreSquashMigrationHistory() {
+  const onDisk = new Set(listCheckedInMigrationNames(migrationsDir))
+  const [init] = [...onDisk].sort((left, right) => left.localeCompare(right))
+  if (!init) return
+
+  await withPrisma(async (prisma) => {
+    const rows = await prisma.$queryRawUnsafe(
+      'SELECT "migration_name" FROM "_prisma_migrations"'
+    ).catch(() => null)
+    if (!rows || rows.length === 0) return
+
+    const stale = rows.map((row) => row.migration_name).filter((name) => !onDisk.has(name))
+    if (stale.length === 0) return
+
+    // Only collapse a database that already carries the schema those rows built.
+    const [{ present }] = await prisma.$queryRawUnsafe(
+      `SELECT to_regclass('public."Tenant"') IS NOT NULL AS present`
+    )
+    if (!present) return
+
+    const recorded = rows.some((row) => row.migration_name === init)
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "_prisma_migrations" WHERE "migration_name" <> $1`,
+      init
+    )
+    if (!recorded) {
+      const checksum = createHash('sha256')
+        .update(readFileSync(path.join(migrationsDir, init, 'migration.sql')))
+        .digest('hex')
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "_prisma_migrations"
+           ("id", "checksum", "finished_at", "migration_name", "logs", "rolled_back_at", "started_at", "applied_steps_count")
+         VALUES ($1, $2, now(), $3, NULL, NULL, now(), 1)`,
+        randomUUID(),
+        checksum,
+        init
+      )
+    }
+    process.stdout.write(`Collapsed ${stale.length} pre-squash migration row(s) onto ${init}.\n`)
+  })
+}
+
+await collapsePreSquashMigrationHistory()
 
 process.stdout.write('Applying database migrations...\n')
 const migrateResult = runPrisma(['migrate', 'deploy', '--schema', schemaPath], { tolerateFailure: true })

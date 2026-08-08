@@ -2,7 +2,7 @@
  * Bridge library assignment recovery.
  *
  * Bridge-owned library metadata follows the physical bridge when it is
- * detached from one tenant and later connected to another.
+ * detached from one workspace and later connected to another.
  */
 import { rootPrisma } from './prisma.js'
 
@@ -14,37 +14,37 @@ export interface BridgeLibraryAssignmentRecoveryResult {
 }
 
 export async function recoverBridgeLibraryAssignments(input: {
-  tenantId: string
+  workspaceId: string
   bridgeId: string
 }): Promise<BridgeLibraryAssignmentRecoveryResult> {
   const [files, folders, versions, replicas] = await Promise.all([
     rootPrisma.libraryFile.updateMany({
       where: {
         ownerBridgeId: input.bridgeId,
-        tenantId: { not: input.tenantId }
+        workspaceId: { not: input.workspaceId }
       },
-      data: { tenantId: input.tenantId }
+      data: { workspaceId: input.workspaceId }
     }),
     rootPrisma.libraryFolder.updateMany({
       where: {
         ownerBridgeId: input.bridgeId,
-        tenantId: { not: input.tenantId }
+        workspaceId: { not: input.workspaceId }
       },
-      data: { tenantId: input.tenantId }
+      data: { workspaceId: input.workspaceId }
     }),
     rootPrisma.libraryFileVersion.updateMany({
       where: {
         ownerBridgeId: input.bridgeId,
-        tenantId: { not: input.tenantId }
+        workspaceId: { not: input.workspaceId }
       },
-      data: { tenantId: input.tenantId }
+      data: { workspaceId: input.workspaceId }
     }),
     rootPrisma.libraryFileReplica.updateMany({
       where: {
         bridgeId: input.bridgeId,
-        tenantId: { not: input.tenantId }
+        workspaceId: { not: input.workspaceId }
       },
-      data: { tenantId: input.tenantId }
+      data: { workspaceId: input.workspaceId }
     })
   ])
 

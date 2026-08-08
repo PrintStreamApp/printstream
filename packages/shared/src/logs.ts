@@ -16,7 +16,7 @@ export const systemLogEntrySchema = z.object({
   timestamp: z.string().datetime(),
   level: logLevelSchema,
   message: z.string(),
-  tenantId: z.string().nullable(),
+  workspaceId: z.string().nullable(),
   // Correlation (request) id shared by every line emitted while handling one
   // request, so scattered log lines for a single operation can be grouped.
   // Null when the line was emitted outside any request context (startup,
@@ -30,7 +30,7 @@ export const auditLogEntrySchema = z.object({
   kind: z.literal('audit'),
   id: z.string(),
   timestamp: z.string().datetime(),
-  tenantId: z.string().nullable(),
+  workspaceId: z.string().nullable(),
   actorType: auditActorTypeSchema,
   actorUserId: z.string().nullable(),
   actorServiceAccountId: z.string().nullable(),

@@ -1,35 +1,26 @@
-import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Typography } from '@mui/joy'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineRounded'
 import type { SxProps } from '@mui/joy/styles/types'
-import { apiFetch } from '../../lib/apiClient'
-import { extractErrorMessage, type ThreeMfSettingsRepairReason } from '@printstream/shared'
-import { invalidateLibraryQueries } from '../../lib/libraryQueryInvalidation'
+import type { ThreeMfSettingsRepairReason } from '@printstream/shared'
 
 /**
- * Notice + one-click Repair for a project whose embedded settings contradict its own machine
- * topology (`needsSettingsRepair` on the library DTO).
+ * Notice + Repair for a project whose embedded settings contradict its own machine topology
+ * (`needsSettingsRepair` on the library DTO / 3MF index).
  *
- * ADVISORY, never a gate. Slicing is deliberately NOT blocked: a slice that targets a printer
- * re-authors the machine into the temporary copy it hands the engine, and that write sizes the
- * flush matrix correctly, so these projects usually slice fine as they are. What stays wrong is the
- * STORED file — for a download into Bambu Studio, or a slice that re-authors no machine, where it
- * aborts with an opaque `exited with code 139`. So both places a user reaches the project (the
- * editor on open, and the slice dialog) show this, and neither acts on its own: the API rewrites
- * the stored file ONLY on this button, landing the result as a new library version so the previous
- * bytes stay restorable.
- *
- * Counterpart: `POST /api/library/:id/repair-settings` (apps/api `routes/library.ts`), whose
- * `repaired: false` response means the file turned out not to need it — treated as success here,
- * since the flag can be stale on a client that hasn't refreshed.
+ * ONE repair model: repairing happens IN THE EDITOR, staged as an undoable edit
+ * (`SceneEdit.repairSettings` + the physics restore) that the user then saves — the bake applies
+ * the shared `repairs/` implementations, so a repaired file is identical whichever host staged it.
+ * A host with an editor session passes `onRepairInEditor` and gets the Repair button; every other
+ * surface renders the ADVISORY, which names the real remedy (open the editor and repair there).
+ * The print-prep dialog pairs the advisory with a disabled Print: a flagged file is repaired
+ * deliberately, never printed through slice-time fix-ups the user never sees.
  */
 /**
- * What to SAY, per defect. The two failures have nothing in common from the user's side — one makes
- * slicing die, the other stops Bambu Studio opening the project — so a single sentence covering
- * both was simply wrong for whichever file was in front of them. Ryan opened a project whose
- * variant index was broken and read "it was saved for a different printer", which it was not.
+ * What to SAY, per defect. The failures have nothing in common from the user's side — one makes
+ * slicing die, another stops Bambu Studio opening the project — so a single sentence covering
+ * all of them was simply wrong for whichever file was in front of them. Ryan opened a project
+ * whose variant index was broken and read "it was saved for a different printer", which it was not.
  */
 const REPAIR_COPY: Record<ThreeMfSettingsRepairReason, { title: string; body: string }> = {
   flushMatrix: {
@@ -40,8 +31,6 @@ const REPAIR_COPY: Record<ThreeMfSettingsRepairReason, { title: string; body: st
     title: 'This project won’t open in Bambu Studio',
     body: 'Its filament settings are missing a value Bambu Studio needs, so Bambu Studio reports an invalid configuration and refuses to open it. Slicing here is unaffected.'
   },
-  // Body is the SYMPTOM only; its branch appends the remedy, which differs by whether the host can
-  // save (see the `filamentPhysics` branch below).
   filamentPhysics: {
     title: 'This project is missing its material settings',
     body: 'It names its materials but not their temperatures, flow and cooling, so Bambu Studio shows them as unnamed presets with default settings.'
@@ -49,33 +38,46 @@ const REPAIR_COPY: Record<ThreeMfSettingsRepairReason, { title: string; body: st
   filamentIds: {
     title: 'This project’s materials don’t match their presets',
     body: 'One or more materials were changed without their identity being updated, so Bambu Studio shows them as unnamed project presets with default settings instead of the materials you chose. Slicing here is unaffected.'
+  },
+  // The only one of these that kills the slice before it starts, so the copy says "every slice"
+  // rather than "can make slicing fail" — the user has watched it fail repeatedly by the time they
+  // read this, and softer wording would read as guesswork.
+  inheritsGroup: {
+    title: 'This project’s saved settings still list materials it no longer has',
+    body: 'Materials were removed from it but a list of their settings was left behind, which crashes the slicing engine as it loads the project. Every slice of this file fails until it’s repaired.'
+  },
+  // Like inheritsGroup, the consequence is certain rather than possible — the affected objects
+  // slice with the wrong material every time — so the copy states it outright.
+  objectExtruder: {
+    title: 'Some objects in this project aren’t bound to their materials',
+    body: 'Objects that were replaced or imported are missing the material binding the slicing engine reads, so it prints them with the first material instead of the one you assigned.'
   }
 }
 
-/** Both at once: name the worse consequence (unopenable) without hiding the other. */
+/** Several at once: name the worse consequence (unopenable) without hiding the others. */
 const REPAIR_COPY_BOTH = {
   title: 'This project’s saved settings need repairing',
   body: 'Several of its saved settings disagree with each other, which can stop Bambu Studio opening the project or showing the right materials, and can make slicing fail.'
 }
 
-export function RepairProjectSettingsAlert({ fileId, reasons, onRepaired, onRepairInEditor, repairingInEditor, repairInEditorError, sx }: {
-  /**
-   * The stored library file to repair through the route. OMITTED for a host with no library file
-   * behind the project (the public 3MF editor, which opens a file off the user's disk): the notice
-   * still renders, and only the defects that repair WITHOUT the route offer an action.
-   */
-  fileId?: string
+export function RepairProjectSettingsAlert({ reasons, archivedVersion, onRepairInEditor, repairingInEditor, repairInEditorError, sx }: {
   /**
    * Which invariants the project breaks (`settingsRepairReasons` on the library DTO / 3MF index).
    * Empty or omitted falls back to the flush-matrix wording — the only cause that existed before
    * this was surfaced, so an older cached DTO still reads sensibly.
    */
   reasons?: readonly ThreeMfSettingsRepairReason[]
-  /** Called after a successful repair, once library caches have been invalidated. */
-  onRepaired?: () => void
   /**
-   * Repairs `filamentPhysics` as an in-editor EDIT — it stages the recovered values and marks the
-   * project dirty, rather than writing anything. Supplying it is what gives that notice a button.
+   * The project on screen is an ARCHIVED version, not the file's head. Repairing it means
+   * restoring it first — a decision the user should make knowingly — so no Repair button is
+   * offered and the advisory names that remedy.
+   */
+  archivedVersion?: boolean
+  /**
+   * Stages the in-editor repairs as an EDIT — the byte-level settings repairs, which the bake
+   * applies at save time, and the physics restore — and marks the project dirty rather than
+   * writing anything. Supplying it is what gives the notice its button; a surface with no editor
+   * session (the print-prep dialog) omits it and renders the advisory instead.
    *
    * Deliberately not a save: the editor's Save greys out on a project with no unsaved edits, so the
    * notice used to name a remedy the user could not reach; and making the notice itself save would
@@ -86,142 +88,69 @@ export function RepairProjectSettingsAlert({ fileId, reasons, onRepaired, onRepa
   /** Whether that repair is resolving presets, so the button can show it (the caller owns it). */
   repairingInEditor?: boolean
   /**
-   * Why the in-editor repair could not run — shown in place of the body. It is all-or-nothing, so a
-   * slot whose preset does not resolve means nothing was changed, and saying so is the difference
-   * between "it did nothing" and "it silently half-worked".
+   * Why the in-editor repair could not fully run — shown in place of the body. The physics half is
+   * all-or-nothing, so a slot whose preset does not resolve means those values were not restored,
+   * and saying so is the difference between "it did nothing" and "it silently half-worked".
    */
   repairInEditorError?: string | null
   sx?: SxProps
 }): JSX.Element {
-  const queryClient = useQueryClient()
-  const [repairing, setRepairing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  /** Slot numbers a completed repair could not resolve, so the outcome can be reported honestly. */
-  const [partial, setPartial] = useState<number[] | null>(null)
   const copy = reasons && reasons.length > 1
     ? REPAIR_COPY_BOTH
     : REPAIR_COPY[reasons?.[0] ?? 'flushMatrix']
 
-  const repair = async (): Promise<void> => {
-    if (!fileId) return
-    setRepairing(true)
-    setError(null)
-    try {
-      const result = await apiFetch<{ repaired: boolean; unresolvedSlots?: number[] }>(
-        `/api/library/${fileId}/repair-settings`,
-        { method: 'POST' }
-      )
-      await invalidateLibraryQueries(queryClient)
-      // A PARTIAL repair must say so instead of closing silently: a slot whose preset matches no
-      // known material keeps the identity it had, so the project is improved but not clean, and a
-      // user told nothing would reasonably assume it was. Stays on screen rather than handing the
-      // caller `onRepaired` (which typically closes the surface).
-      const unresolved = result.unresolvedSlots ?? []
-      if (unresolved.length > 0) {
-        setPartial(unresolved)
-        return
-      }
-      onRepaired?.()
-    } catch (caught) {
-      setError(extractErrorMessage(caught, 'Could not repair this project.'))
-    } finally {
-      setRepairing(false)
-    }
-  }
-
-  // Repaired IN THE EDITOR rather than by the repair route: the values are recovered from the
-  // resolved presets and staged as an edit, which the user then saves. Only when it is the ONLY
-  // defect — mixed with a route-repairable one, the route's button still has work to do and runs
-  // first.
-  if (reasons?.length === 1 && reasons[0] === 'filamentPhysics') {
+  // THE repair model: stage as an undoable edit, persist on save — identical for every defect and
+  // every host. An archived version is the one deliberate exception: staging + save would mint a
+  // new HEAD from old bytes, which is a restore decision the user should make knowingly, so it
+  // stays advisory below.
+  if (onRepairInEditor && !archivedVersion) {
     // A FAILED attempt changes colour and title, not just the body text. Reported from a real
-    // session: the reason "isn't staying on screen long enough to see, and it's hard to tell the
-    // message even changed" — because a swapped paragraph inside an identically-styled warning is
-    // nearly invisible, especially right after a spinner. Danger + its own title makes the outcome
-    // legible at a glance, and it persists until the next attempt.
+    // session: a swapped paragraph inside an identically-styled warning is nearly invisible,
+    // especially right after a spinner. Danger + its own title makes the outcome legible at a
+    // glance, and it persists until the next attempt (or the next edit, which invalidates it).
     const failed = Boolean(repairInEditorError)
     return (
       <Alert
         variant="soft"
         color={failed ? 'danger' : 'warning'}
         startDecorator={failed ? <ErrorOutlineIcon /> : <WarningAmberIcon />}
-        endDecorator={onRepairInEditor
-          ? (
-            <Button
-              size="sm"
-              variant="solid"
-              color={failed ? 'danger' : 'warning'}
-              loading={repairingInEditor}
-              onClick={onRepairInEditor}
-            >
-              {failed ? 'Try again' : 'Repair'}
-            </Button>
-          )
-          : undefined}
+        endDecorator={
+          <Button
+            size="sm"
+            variant="solid"
+            color={failed ? 'danger' : 'warning'}
+            loading={repairingInEditor}
+            onClick={onRepairInEditor}
+          >
+            {failed ? 'Try again' : 'Repair'}
+          </Button>
+        }
         sx={[{ alignItems: 'flex-start' }, ...(Array.isArray(sx) ? sx : [sx])]}
       >
         <div>
-          <Typography level="title-sm">
-            {failed ? 'Couldn’t repair this project' : REPAIR_COPY.filamentPhysics.title}
-          </Typography>
-          {/* Only promise the button's behaviour when there IS a button; a host without one (the
-              slice dialog) would otherwise point at an action it does not offer. */}
+          <Typography level="title-sm">{failed ? 'Couldn’t repair this project' : copy.title}</Typography>
+          {/* The certainty note is the partial-repair honesty: anything the bake cannot derive
+              with certainty is left alone and re-flagged by the saved file's parse. */}
           <Typography level="body-sm">
-            {repairInEditorError ?? `${REPAIR_COPY.filamentPhysics.body} ${onRepairInEditor
-              ? 'Repairing restores them; save to keep the change.'
-              : 'Saving this project writes them back.'} Slicing here is unaffected.`}
+            {repairInEditorError ?? `${copy.body} Repairing stages the fix as an edit; save to keep it. Anything that can’t be repaired with certainty is flagged again after saving.`}
           </Typography>
         </div>
       </Alert>
     )
   }
 
-  if (partial) {
-    const slots = partial.length === 1 ? `material ${partial[0]}` : `materials ${partial.join(', ')}`
-    return (
-      <Alert variant="soft" color="warning" startDecorator={<WarningAmberIcon />} sx={[{ alignItems: 'flex-start' }, ...(Array.isArray(sx) ? sx : [sx])]}>
-        <div>
-          <Typography level="title-sm">Repaired, but {slots} still need attention</Typography>
-          <Typography level="body-sm">
-            {`Their presets aren’t ones we recognise, so we left them as they were rather than guessing. Pick those materials again and save to finish the repair.`}
-          </Typography>
-        </div>
-      </Alert>
-    )
-  }
-
-  // No stored file to repair (the public editor opens off the user's disk), so the notice is
-  // advisory: still worth telling them the file is broken, but the route's button would have
-  // nothing to POST to. Deliberately not offering the save here — these defects are not the ones
-  // saving fixes, and a button that silently under-delivers is worse than none.
-  if (!fileId) {
-    return (
-      <Alert variant="soft" color="warning" startDecorator={<WarningAmberIcon />} sx={[{ alignItems: 'flex-start' }, ...(Array.isArray(sx) ? sx : [sx])]}>
-        <div>
-          <Typography level="title-sm">{copy.title}</Typography>
-          <Typography level="body-sm">{`${copy.body} Open it from your library to repair it.`}</Typography>
-        </div>
-      </Alert>
-    )
-  }
-
+  // Advisory: no editor session to stage into. The remedy always points at where repairing
+  // actually happens — the editor — rather than offering an action this surface cannot honour.
+  const remedy = archivedVersion
+    ? 'This is an archived version — the file’s current version may already be repaired. Restore this version first if you want to repair and use it.'
+    : reasons?.length && reasons.every((reason) => reason === 'filamentPhysics')
+      ? 'Saving this project from the editor writes them back.'
+      : 'Open it in the editor and press Repair, then save the project.'
   return (
-    <Alert
-      variant="soft"
-      color="warning"
-      startDecorator={<WarningAmberIcon />}
-      endDecorator={
-        <Button size="sm" variant="solid" color="warning" loading={repairing} onClick={repair}>
-          Repair
-        </Button>
-      }
-      sx={[{ alignItems: 'flex-start' }, ...(Array.isArray(sx) ? sx : [sx])]}
-    >
+    <Alert variant="soft" color="warning" startDecorator={<WarningAmberIcon />} sx={[{ alignItems: 'flex-start' }, ...(Array.isArray(sx) ? sx : [sx])]}>
       <div>
         <Typography level="title-sm">{copy.title}</Typography>
-        <Typography level="body-sm">
-          {error ?? `${copy.body} Repairing saves a corrected copy as a new version; the current one stays in the file’s history.`}
-        </Typography>
+        <Typography level="body-sm">{`${copy.body} ${remedy}`}</Typography>
       </div>
     </Alert>
   )

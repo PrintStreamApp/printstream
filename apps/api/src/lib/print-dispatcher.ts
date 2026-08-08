@@ -75,7 +75,7 @@ export const ACTIVE_DISPATCH_CONFLICT_MESSAGE = 'A print is already being dispat
 interface DispatchJobState {
   id: string
   submissionId: string
-  tenantId: string
+  workspaceId: string
   printerId: string
   printerName: string
   fileId: string
@@ -180,18 +180,18 @@ class PrintDispatcher {
    * The web surfaces the same status with an in-place "Update bridge" action; this is
    * the server-side backstop so a stale bridge cannot print even if the UI is bypassed.
    */
-  async assertBridgeAllowsPrinting(bridgeId: string, tenantId: string): Promise<void> {
+  async assertBridgeAllowsPrinting(bridgeId: string, workspaceId: string): Promise<void> {
     // On a self-hosted bundle the bridge ships with the app and is lockstep by
     // construction, so its self-reported `updateStatus` must never gate printing
     // (see `resolveBridgeUpdateStatus`). A stale/blocking value there would
     // otherwise refuse dispatch before the job is even created — the print would
     // never appear in Jobs — for an "update" the operator has no way to apply.
     if (isSelfHostedDeployment()) return
-    // `Bridge` is not in TENANT_SCOPED_MODELS, so we scope explicitly with the
-    // caller's tenantId. rootPrisma is used deliberately (no auto-scoping needed for a
-    // by-id lookup that already carries tenantId).
+    // `Bridge` is not in WORKSPACE_SCOPED_MODELS, so we scope explicitly with the
+    // caller's workspaceId. rootPrisma is used deliberately (no auto-scoping needed for a
+    // by-id lookup that already carries workspaceId).
     const bridge = await rootPrisma.bridge.findFirst({
-      where: { id: bridgeId, tenantId },
+      where: { id: bridgeId, workspaceId },
       select: { name: true, updateStatus: true }
     })
     const status = bridgeUpdateStatusSchema.safeParse(bridge?.updateStatus)
@@ -212,14 +212,14 @@ class PrintDispatcher {
     input: EnqueueSnapshotPrintInput,
     loadedPrinter?: Awaited<ReturnType<typeof prisma.printer.findFirst>> | null
   ): Promise<PrintDispatchJob> {
-    const printer = loadedPrinter ?? await prisma.printer.findFirst({ where: { id: input.printerId, tenantId: input.snapshot.tenantId } })
+    const printer = loadedPrinter ?? await prisma.printer.findFirst({ where: { id: input.printerId, workspaceId: input.snapshot.workspaceId } })
     const fileName = input.fileName
     const snapshot = input.snapshot
     if (!printer) throw new Error('Printer not found')
-    if (printer.tenantId !== snapshot.tenantId) throw new Error('Printer not found')
+    if (printer.workspaceId !== snapshot.workspaceId) throw new Error('Printer not found')
     if (!printerManager.getPrinter(printer.id)) throw new Error('Printer not connected')
     if (!printer.bridgeId) throw new Error('Printer bridge assignment is required')
-    await this.assertBridgeAllowsPrinting(printer.bridgeId, printer.tenantId)
+    await this.assertBridgeAllowsPrinting(printer.bridgeId, printer.workspaceId)
     this.assertNoActiveDispatchForPrinter(printer.id)
     const blocked = printGuards.evaluate({ printerId: printer.id, source: 'dispatch' })
     if (blocked) throw new Error(blocked.reason ?? 'Print blocked by a plugin')
@@ -243,7 +243,7 @@ class PrintDispatcher {
     if (!printer.bridgeId) throw new Error('Printer bridge assignment is required')
     if (!snapshot.ownerBridgeId) throw new Error('Library snapshots must be bridge-backed')
     const bridgeLibraryPath = await ensureLibraryFileReplica({
-      tenantId: snapshot.tenantId,
+      workspaceId: snapshot.workspaceId,
       libraryFileId: snapshot.id,
       fileName: snapshot.name,
       sourceBridgeId: snapshot.ownerBridgeId,
@@ -280,7 +280,7 @@ class PrintDispatcher {
     const job: DispatchJobState = {
       id: randomUUID(),
       submissionId: createDispatchSubmissionId(),
-      tenantId: snapshot.tenantId,
+      workspaceId: snapshot.workspaceId,
       printerId: printer.id,
       printerName: printer.name,
       fileId: snapshot.id,
@@ -334,7 +334,7 @@ class PrintDispatcher {
     // before the print starts. See dispatch-journal.ts.
     void recordDispatchEnqueued({
       id: job.id,
-      tenantId: job.tenantId,
+      workspaceId: job.workspaceId,
       printerId: job.printerId,
       jobName: job.jobName,
       fileName: job.fileName,
@@ -345,16 +345,16 @@ class PrintDispatcher {
     return toDto(job)
   }
 
-  list(tenantId: string): PrintDispatchJob[] {
+  list(workspaceId: string): PrintDispatchJob[] {
     return Array.from(this.jobs.values())
-      .filter((job) => job.tenantId === tenantId)
+      .filter((job) => job.workspaceId === workspaceId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map(toDto)
   }
 
-  async cancel(tenantId: string, jobId: string): Promise<PrintDispatchJob | null> {
+  async cancel(workspaceId: string, jobId: string): Promise<PrintDispatchJob | null> {
     const job = this.jobs.get(jobId)
-    if (!job || job.tenantId !== tenantId) return null
+    if (!job || job.workspaceId !== workspaceId) return null
     if (job.status === 'sent' || job.status === 'cancelled') {
       return toDto(job)
     }
@@ -406,9 +406,9 @@ class PrintDispatcher {
     await Promise.allSettled(Array.from(this.printerQueues.values()))
   }
 
-  retry(tenantId: string, jobId: string): PrintDispatchJob | null {
+  retry(workspaceId: string, jobId: string): PrintDispatchJob | null {
     const job = this.jobs.get(jobId)
-    if (!job || job.tenantId !== tenantId) return null
+    if (!job || job.workspaceId !== workspaceId) return null
     if (job.status !== 'failed') return toDto(job)
     job.status = 'queued'
     job.progressMessage = 'Waiting to retry'

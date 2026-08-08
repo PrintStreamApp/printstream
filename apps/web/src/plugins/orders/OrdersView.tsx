@@ -47,7 +47,7 @@ import { SliceThenPrintModal } from '../../components/library/SliceThenPrintModa
 import { PrintModal } from '../../components/library/PrintModal'
 import { isUnslicedThreeMfFile } from '../../lib/libraryFileTags'
 import { toast } from '../../lib/toast'
-import { buildTenantWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
+import { buildWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
 import {
   LIST_PAGE_SIZE_OPTIONS,
   ORDER_SORT_OPTIONS,
@@ -369,8 +369,8 @@ export function OrdersView() {
 
   const workspacePath = parseWorkspacePathname(location.pathname)
   const ordersPathname = workspacePath.appPathname
-  const ordersRoute = (path: string) => workspacePath.tenantSlug
-    ? buildTenantWorkspacePath(workspacePath.tenantSlug, path)
+  const ordersRoute = (path: string) => workspacePath.workspaceSlug
+    ? buildWorkspacePath(workspacePath.workspaceSlug, path)
     : path
   const currentSection: 'orders' | 'templates' = ordersPathname.includes('/templates') ? 'templates' : 'orders'
   const showingOrderDetail = /^\/orders\/(?!templates\/?$)[^/]+\/?$/.test(ordersPathname)

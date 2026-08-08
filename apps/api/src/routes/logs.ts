@@ -14,10 +14,10 @@ logsRouter.get('/', async (request, response) => {
   assertRequestPermission(request, SETTINGS_MANAGE_PERMISSION)
   const limitRaw = Number(request.query.limit ?? 500)
   const limit = Number.isFinite(limitRaw) ? clampLogLimit(Math.floor(limitRaw)) : 500
-  const tenantFilter = request.tenant ? { tenantId: request.tenant.id } : undefined
+  const workspaceFilter = request.workspace ? { workspaceId: request.workspace.id } : undefined
   const [systemEntries, auditEntries] = await Promise.all([
-    Promise.resolve(getLogs(limit, tenantFilter)),
-    getAuditLogs(limit, tenantFilter)
+    Promise.resolve(getLogs(limit, workspaceFilter)),
+    getAuditLogs(limit, workspaceFilter)
   ])
   const entries = [...auditEntries, ...systemEntries]
     .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
@@ -27,22 +27,22 @@ logsRouter.get('/', async (request, response) => {
 
 logsRouter.delete('/', async (request, response) => {
   assertRequestPermission(request, SETTINGS_MANAGE_PERMISSION)
-  const tenantFilter = request.tenant ? { tenantId: request.tenant.id } : undefined
+  const workspaceFilter = request.workspace ? { workspaceId: request.workspace.id } : undefined
   // Destructive: this clears the durable audit trail itself. Record the
   // scope so the cleared range is auditable even though the entries are gone.
   annotateRequestAuditLog(request, {
     action: 'clear-logs',
     resource: 'logs',
-    summary: request.tenant
+    summary: request.workspace
       ? 'Cleared all system and audit log entries for this workspace.'
       : 'Cleared all system and audit log entries platform-wide.',
     metadata: {
-      scope: request.tenant ? 'tenant' : 'platform',
-      ...(request.tenant ? { tenantId: request.tenant.id } : {})
+      scope: request.workspace ? 'workspace' : 'platform',
+      ...(request.workspace ? { workspaceId: request.workspace.id } : {})
     }
   })
-  clearLogs(tenantFilter)
-  await clearAuditLogs(tenantFilter)
+  clearLogs(workspaceFilter)
+  await clearAuditLogs(workspaceFilter)
   broadcastLogsChanged()
   response.status(204).end()
 })

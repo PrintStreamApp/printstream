@@ -5,7 +5,7 @@ import { apiFetch } from '../lib/apiClient'
 
 /**
  * Cross-page notice for bridges that are actively crash-looping. Mounted once
- * above tenant page content so a persistently-crashing bridge is visible wherever
+ * above workspace page content so a persistently-crashing bridge is visible wherever
  * the operator is, not only in settings — its printers keep disconnecting while it
  * flaps, so this warrants app-wide attention. A one-off crash is deliberately NOT
  * shown here (it is surfaced by a settings chip + a user notification); this banner

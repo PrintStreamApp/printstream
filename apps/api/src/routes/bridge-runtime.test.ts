@@ -18,7 +18,7 @@ import { hashBridgeRuntimeToken } from '../lib/bridge-runtime-auth.js'
 const originalCreate = rootPrisma.bridge.create
 const originalFindUnique = rootPrisma.bridge.findUnique
 const originalUpdate = rootPrisma.bridge.update
-const originalTenantFindMany = rootPrisma.tenant.findMany
+const originalWorkspaceFindMany = rootPrisma.workspace.findMany
 const originalManagedBridge = env.MANAGED_BRIDGE
 const originalManagedBridgeTokenFile = env.MANAGED_BRIDGE_TOKEN_FILE
 
@@ -55,7 +55,7 @@ afterEach(() => {
   rootPrisma.bridge.create = originalCreate
   rootPrisma.bridge.findUnique = originalFindUnique
   rootPrisma.bridge.update = originalUpdate
-  rootPrisma.tenant.findMany = originalTenantFindMany
+  rootPrisma.workspace.findMany = originalWorkspaceFindMany
   env.MANAGED_BRIDGE = originalManagedBridge
   env.MANAGED_BRIDGE_TOKEN_FILE = originalManagedBridgeTokenFile
   if (managedTokenDir) {
@@ -69,7 +69,7 @@ function stubDormantBridgeCreate() {
     id: 'bridge-1',
     name: 'Bench Bridge',
     connectCode: 'connect-123',
-    tenantId: null,
+    workspaceId: null,
     version: '0.1.0',
     lastSeenAt: new Date('2026-05-08T21:30:00.000Z'),
     createdAt: new Date('2026-05-08T21:30:00.000Z'),
@@ -81,14 +81,14 @@ function stubDormantBridgeCreate() {
 test('managed-bridge register consults the sole workspace when the provisioning token matches', async () => {
   enableManagedMode()
   stubDormantBridgeCreate()
-  // Returning no candidates keeps resolveSoleTenant ambiguous, so the route
+  // Returning no candidates keeps resolveSoleWorkspace ambiguous, so the route
   // leaves the bridge unpaired — letting us assert the lookup happened without
   // exercising the full pairing chain.
-  let soleTenantLookups = 0
-  rootPrisma.tenant.findMany = ((async () => {
-    soleTenantLookups += 1
+  let soleWorkspaceLookups = 0
+  rootPrisma.workspace.findMany = ((async () => {
+    soleWorkspaceLookups += 1
     return []
-  }) as unknown) as typeof rootPrisma.tenant.findMany
+  }) as unknown) as typeof rootPrisma.workspace.findMany
 
   await withBridgeRuntimeApp(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/bridge-runtime/register`, {
@@ -98,18 +98,18 @@ test('managed-bridge register consults the sole workspace when the provisioning 
     })
 
     assert.equal(response.status, 201)
-    assert.equal(soleTenantLookups, 1)
+    assert.equal(soleWorkspaceLookups, 1)
   })
 })
 
 test('managed-bridge register ignores a wrong provisioning token', async () => {
   enableManagedMode()
   stubDormantBridgeCreate()
-  let soleTenantLookups = 0
-  rootPrisma.tenant.findMany = ((async () => {
-    soleTenantLookups += 1
+  let soleWorkspaceLookups = 0
+  rootPrisma.workspace.findMany = ((async () => {
+    soleWorkspaceLookups += 1
     return []
-  }) as unknown) as typeof rootPrisma.tenant.findMany
+  }) as unknown) as typeof rootPrisma.workspace.findMany
 
   await withBridgeRuntimeApp(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/bridge-runtime/register`, {
@@ -119,18 +119,18 @@ test('managed-bridge register ignores a wrong provisioning token', async () => {
     })
 
     assert.equal(response.status, 201)
-    assert.equal(soleTenantLookups, 0)
+    assert.equal(soleWorkspaceLookups, 0)
   })
 })
 
 test('register ignores a provisioning token when managed-bridge mode is off', async () => {
   env.MANAGED_BRIDGE = false
   stubDormantBridgeCreate()
-  let soleTenantLookups = 0
-  rootPrisma.tenant.findMany = ((async () => {
-    soleTenantLookups += 1
+  let soleWorkspaceLookups = 0
+  rootPrisma.workspace.findMany = ((async () => {
+    soleWorkspaceLookups += 1
     return []
-  }) as unknown) as typeof rootPrisma.tenant.findMany
+  }) as unknown) as typeof rootPrisma.workspace.findMany
 
   await withBridgeRuntimeApp(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/bridge-runtime/register`, {
@@ -140,7 +140,7 @@ test('register ignores a provisioning token when managed-bridge mode is off', as
     })
 
     assert.equal(response.status, 201)
-    assert.equal(soleTenantLookups, 0)
+    assert.equal(soleWorkspaceLookups, 0)
   })
 })
 
@@ -149,7 +149,7 @@ test('bridge runtime register creates a dormant bridge with runtime credentials'
     id: 'bridge-1',
     name: 'Bench Bridge',
     connectCode: 'connect-123',
-    tenantId: null,
+    workspaceId: null,
     version: '0.1.0',
     lastSeenAt: new Date('2026-05-08T21:30:00.000Z'),
     createdAt: new Date('2026-05-08T21:30:00.000Z'),
@@ -181,7 +181,7 @@ test('bridge runtime register refreshes an existing bridge when credentials matc
     id: 'bridge-1',
     name: 'Bench Bridge',
     connectCode: 'connect-123',
-    tenantId: null,
+    workspaceId: null,
     version: '0.1.0',
     runtimeTokenHash: hashBridgeRuntimeToken(runtimeToken),
     lastSeenAt: new Date('2026-05-08T21:30:00.000Z'),
@@ -193,7 +193,7 @@ test('bridge runtime register refreshes an existing bridge when credentials matc
     id: 'bridge-1',
     name: 'Bench Bridge',
     connectCode: 'connect-123',
-    tenantId: null,
+    workspaceId: null,
     version: '0.2.0',
     releaseFingerprint: RELEASE_FINGERPRINT,
     protocolVersion: 1,
@@ -257,7 +257,7 @@ test('bridge runtime register preserves a connected bridge name on reconnect', a
     id: 'bridge-1',
     name: 'Workshop Bridge',
     connectCode: 'connect-123',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     version: '0.1.0',
     runtimeTokenHash: hashBridgeRuntimeToken(runtimeToken),
     lastSeenAt: new Date('2026-05-08T21:30:00.000Z'),
@@ -273,7 +273,7 @@ test('bridge runtime register preserves a connected bridge name on reconnect', a
       id: 'bridge-1',
       name: 'Workshop Bridge',
       connectCode: 'connect-123',
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       version: '0.2.0',
       releaseFingerprint: RELEASE_FINGERPRINT,
       protocolVersion: 1,
@@ -377,7 +377,7 @@ test('register re-binds a returning bridge by installation id instead of creatin
   let findWhere: Record<string, unknown> | null = null
   rootPrisma.bridge.findUnique = ((async (input: { where: Record<string, unknown> }) => {
     findWhere = input.where
-    return { id: 'bridge-1', tenantId: 'tenant-1' }
+    return { id: 'bridge-1', workspaceId: 'workspace-1' }
   }) as unknown) as typeof rootPrisma.bridge.findUnique
 
   let updateWhere: Record<string, unknown> | null = null
@@ -389,7 +389,7 @@ test('register re-binds a returning bridge by installation id instead of creatin
       id: 'bridge-1',
       name: 'Workshop Bridge',
       connectCode: 'connect-123',
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       version: '0.2.0',
       releaseFingerprint: RELEASE_FINGERPRINT,
       protocolVersion: 1,
@@ -437,7 +437,7 @@ test('register stores the installation id on a brand-new bridge', async () => {
       id: 'bridge-9',
       name: 'Bench Bridge',
       connectCode: 'connect-999',
-      tenantId: null,
+      workspaceId: null,
       version: '0.1.0',
       lastSeenAt: new Date('2026-05-08T21:30:00.000Z'),
       createdAt: new Date('2026-05-08T21:30:00.000Z'),

@@ -8,9 +8,10 @@
  * outside the open-source snapshot; this shared harness stays public.)
  *
  * What stays in each app's build script is what differs: which entry to bundle,
- * which assets to embed (ffmpeg/WinSW vs Prisma/Postgres/web), the release
- * identity, and any post-processing (the bridge's manifest fragment). This
- * module is build tooling, not part of the runtime that gets bundled.
+ * which assets to embed (WinSW vs Prisma/Postgres/web), the release identity,
+ * and any post-processing (the bridge's manifest fragment). ffmpeg is shared
+ * because both builds relay printer cameras through it. This module is build
+ * tooling, not part of the runtime that gets bundled.
  */
 import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync } from 'node:fs'
@@ -18,6 +19,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { Readable } from 'node:stream'
+import { brotliCompressSync, constants as zlibConstants } from 'node:zlib'
 import { pipeline } from 'node:stream/promises'
 import yauzl from 'yauzl'
 import { Data, NtExecutable, NtExecutableResource, Resource } from 'resedit'
@@ -197,6 +199,85 @@ export function runChecked(command, args) {
 
 export function fail(message) {
   throw new Error(message)
+}
+
+/**
+ * Static ffmpeg builds embedded into every standalone executable so camera
+ * streaming works without any system dependency. The eugeneware/ffmpeg-static
+ * b6.1.1 release ships ffmpeg 7.0.x static binaries (GPL) plus per-platform
+ * license files that are extracted alongside the binary at runtime. Targets
+ * without an upstream build set `asset` to borrow another target's binary
+ * (win32-arm64 ships the x64 ffmpeg; Windows 11 ARM64 runs it under x64
+ * emulation).
+ *
+ * Shared by the bridge and the native server builds: `ensureFfmpeg` in
+ * `../src/ffmpeg.ts` is what unpacks these at runtime, and a build that omits
+ * them leaves every RTSP printer (X/H series) with a dead camera while the TLS
+ * ones keep working.
+ */
+export const FFMPEG_BUILD_TAG = 'b6.1.1'
+const FFMPEG_RELEASE_BASE = `https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_BUILD_TAG}`
+const FFMPEG_STATIC = {
+  'linux-x64': {
+    binarySha256: 'e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99',
+    licenseSha256: '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903'
+  },
+  'linux-arm64': {
+    binarySha256: '6bb182d0d75d23028db82e9e4f723ca69b853d055698486e6984ddb2c06fb8ce',
+    licenseSha256: '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903'
+  },
+  'win32-x64': {
+    binarySha256: '04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00',
+    licenseSha256: '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903'
+  },
+  'win32-arm64': {
+    asset: 'win32-x64',
+    binarySha256: '04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00',
+    licenseSha256: '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903'
+  }
+}
+
+/** Downloads (checksum-pinned) and brotli-compresses ffmpeg for one target. */
+export async function ensureFfmpegAssets(targetKey, cacheDir) {
+  const pins = FFMPEG_STATIC[targetKey]
+  if (!pins) fail(`No pinned ffmpeg build for target '${targetKey}'.`)
+
+  // Cache by the upstream asset name so targets borrowing another target's
+  // binary (win32-arm64 -> win32-x64) share one download.
+  const asset = pins.asset ?? targetKey
+  const binaryPath = path.join(cacheDir, `ffmpeg-${asset}-${FFMPEG_BUILD_TAG}`)
+  const licensePath = path.join(cacheDir, `ffmpeg-license-${asset}-${FFMPEG_BUILD_TAG}.txt`)
+  await ensurePinnedDownload(`${FFMPEG_RELEASE_BASE}/ffmpeg-${asset}`, binaryPath, pins.binarySha256, `ffmpeg (${asset})`)
+  await ensurePinnedDownload(`${FFMPEG_RELEASE_BASE}/${asset}.LICENSE`, licensePath, pins.licenseSha256, `ffmpeg license (${asset})`)
+
+  // Embedded brotli-compressed (~76 MB -> ~24 MB of executable size); the
+  // runtime decompresses once while extracting to the data dir.
+  const compressedPath = `${binaryPath}.br`
+  if (!existsSync(compressedPath)) {
+    console.log(`Compressing ffmpeg (${targetKey})…`)
+    const raw = await readFile(binaryPath)
+    await writeFile(compressedPath, brotliCompressSync(raw, {
+      params: {
+        [zlibConstants.BROTLI_PARAM_QUALITY]: 9,
+        [zlibConstants.BROTLI_PARAM_SIZE_HINT]: raw.length
+      }
+    }))
+  }
+  return { compressedBinaryPath: compressedPath, licensePath }
+}
+
+/** Downloads to `cachePath` once and verifies its checksum on every call. */
+export async function ensurePinnedDownload(url, cachePath, expectedSha256, label) {
+  if (!existsSync(cachePath)) {
+    console.log(`Downloading ${label}…`)
+    await downloadToFile(url, cachePath)
+  }
+  const actual = createHash('sha256').update(await readFile(cachePath)).digest('hex')
+  if (actual !== expectedSha256) {
+    await rm(cachePath, { force: true })
+    fail(`Checksum mismatch for ${label}; deleted the cached file — please retry.`)
+  }
+  return cachePath
 }
 
 /** Streams a URL to a file (used for Node, and app assets like ffmpeg/WinSW). */

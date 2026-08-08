@@ -1,7 +1,7 @@
 /**
  * Shared contract for the time-series activity history behind the stats charts
  * (per-day active/total printer counts and print activity). Consumed by both the
- * tenant and platform stats surfaces.
+ * workspace and platform stats surfaces.
  */
 import { z } from 'zod'
 

@@ -28,7 +28,7 @@ import type { ApiPlugin } from '../../plugin/types.js'
 import type { RegisteredAuthProvider } from '../../lib/auth-registry.js'
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { assertAuthProviderCanChangeState, restoreSupportAccessWhenWorkspaceAuthDisabled } from '../../lib/auth-provider-guard.js'
-import { broadcastAuthChangedForTenant } from '../../lib/auth-change-events.js'
+import { broadcastAuthChangedForWorkspace } from '../../lib/auth-change-events.js'
 import {
   readScopedAuthProviderEnabled,
   readScopedAuthProviderSetupComplete,
@@ -38,12 +38,14 @@ import {
 import { readAuthSessionMaxAgeSeconds } from '../../lib/auth-policy.js'
 import { createUserSession, readRequestCookie, setAuthSessionCookie, setCookieHeader } from '../../lib/auth-session.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
+import { joinWorkspaceOrganisation } from '../../lib/workspace-invite-policy.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
+import { primaryClientOrigin } from '../../lib/client-origins.js'
 import { env } from '../../lib/env.js'
 import { encryptSecret, decryptSecret } from '../../lib/secret-encryption.js'
 import { badRequest, conflict, forbidden } from '../../lib/http-error.js'
-import { clearTenantContextCookie, getCurrentTenant, setTenantContextCookie } from '../../lib/tenant-context.js'
-import { getSettingScopePrefix } from '../../lib/tenant-settings.js'
+import { clearWorkspaceContextCookie, getCurrentWorkspace, setWorkspaceContextCookie } from '../../lib/workspace-context.js'
+import { getSettingScopePrefix } from '../../lib/workspace-settings.js'
 import { ensureBuiltInAuthGroups } from '../../lib/default-auth-groups.js'
 
 const DEFAULT_DISPLAY_NAME = 'Single Sign-On'
@@ -136,16 +138,16 @@ export function createAuthOauthPlugin(overrides: Partial<AuthOauthPluginDeps> = 
             providerId: 'auth-oauth',
             currentEnabled,
             nextEnabled: parsed.data.enabled,
-            tenant: request.tenant ?? null,
+            workspace: request.workspace ?? null,
             isPlatformUser: request.auth.actor.type === 'user' && (request.auth.actor.isPlatformUser ?? false)
           })
           await writeScopedAuthProviderEnabled(context.settings, parsed.data.enabled)
           await restoreSupportAccessWhenWorkspaceAuthDisabled({
-            tenant: request.tenant ?? null,
+            workspace: request.workspace ?? null,
             nextEnabled: parsed.data.enabled,
             isPlatformUser: request.auth.actor.type === 'user' && (request.auth.actor.isPlatformUser ?? false)
           })
-          broadcastAuthChangedForTenant(request.tenant?.id)
+          broadcastAuthChangedForWorkspace(request.workspace?.id)
         }
 
         annotateRequestAuditLog(request, {
@@ -172,7 +174,7 @@ export function createAuthOauthPlugin(overrides: Partial<AuthOauthPluginDeps> = 
         }
 
         await writeOauthConfig(context.settings, parsed.data)
-        broadcastAuthChangedForTenant(request.tenant?.id)
+        broadcastAuthChangedForWorkspace(request.workspace?.id)
 
         const dto = toOauthConfigDto(await readOauthConfig(context.settings))
         // Record the non-secret config surface. The clientSecret is never
@@ -282,11 +284,11 @@ export function createAuthOauthPlugin(overrides: Partial<AuthOauthPluginDeps> = 
           })
           await writeScopedAuthProviderSetupComplete(context.settings, true)
           setAuthSessionCookie(response, session.secret, session.expiresAt)
-          const nextTenantId = resolvePostSignInTenantId(user)
-          if (nextTenantId) {
-            setTenantContextCookie(response, nextTenantId)
+          const nextWorkspaceId = resolvePostSignInWorkspaceId(user)
+          if (nextWorkspaceId) {
+            setWorkspaceContextCookie(response, nextWorkspaceId)
           } else {
-            clearTenantContextCookie(response)
+            clearWorkspaceContextCookie(response)
           }
           response.redirect(302, buildClientRedirect(redirectTo))
         } catch (error) {
@@ -356,8 +358,8 @@ async function readScopedOauthSetting(
   }
 
   // Preserve existing platform config written before auth settings became
-  // surface-scoped, while keeping tenant workspaces isolated from that state.
-  if (getCurrentTenant()) {
+  // surface-scoped, while keeping workspaces isolated from that state.
+  if (getCurrentWorkspace()) {
     return null
   }
 
@@ -493,8 +495,8 @@ function extractDisplayName(profile: Record<string, unknown>): string | null {
 async function findOrProvisionOauthUser(
   prisma: AnyPrismaClient,
   input: { email: string; displayName: string | null }
-): Promise<{ id: string; loginDisabled: boolean; isPlatformUser: boolean; tenantMemberships: Array<{ tenantId: string; loginDisabled: boolean }> } | null> {
-  const tenant = getCurrentTenant()
+): Promise<{ id: string; loginDisabled: boolean; isPlatformUser: boolean; workspaceMemberships: Array<{ workspaceId: string; loginDisabled: boolean }> } | null> {
+  const workspace = getCurrentWorkspace()
 
   const existing = await prisma.authUser.findFirst({
     where: {
@@ -506,10 +508,10 @@ async function findOrProvisionOauthUser(
     select: {
       id: true,
       isPlatformUser: true,
-      tenantMemberships: tenant
+      workspaceMemberships: workspace
         ? {
             where: {
-              tenantId: tenant.id
+              workspaceId: workspace.id
             },
             select: {
               loginDisabled: true
@@ -518,27 +520,27 @@ async function findOrProvisionOauthUser(
         : false
     }
   })
-  if (tenant && existing?.tenantMemberships[0]) {
+  if (workspace && existing?.workspaceMemberships[0]) {
     return {
       id: existing.id,
-      loginDisabled: existing.tenantMemberships[0].loginDisabled,
+      loginDisabled: existing.workspaceMemberships[0].loginDisabled,
       isPlatformUser: existing.isPlatformUser,
-      tenantMemberships: existing.tenantMemberships.map((m) => ({ tenantId: tenant.id, loginDisabled: m.loginDisabled }))
+      workspaceMemberships: existing.workspaceMemberships.map((m) => ({ workspaceId: workspace.id, loginDisabled: m.loginDisabled }))
     }
   }
-  if (!tenant && existing?.isPlatformUser) {
+  if (!workspace && existing?.isPlatformUser) {
     return {
       id: existing.id,
       loginDisabled: false,
       isPlatformUser: true,
-      tenantMemberships: []
+      workspaceMemberships: []
     }
   }
 
-  const userCount = tenant
-    ? await prisma.authTenantMembership.count({
+  const userCount = workspace
+    ? await prisma.authWorkspaceMembership.count({
         where: {
-          tenantId: tenant.id
+          workspaceId: workspace.id
         }
       })
     : await prisma.authUser.count({
@@ -550,15 +552,15 @@ async function findOrProvisionOauthUser(
     return null
   }
 
-  if (tenant) {
-    await ensureBuiltInAuthGroups(prisma, tenant.id)
+  if (workspace) {
+    await ensureBuiltInAuthGroups(prisma, workspace.id)
   }
 
-  const adminGroup = tenant
+  const adminGroup = workspace
     ? await prisma.authGroup.findUnique({
       where: {
-        tenantId_key: {
-          tenantId: tenant.id,
+        workspaceId_key: {
+          workspaceId: workspace.id,
           key: 'admin'
         }
       }
@@ -569,14 +571,14 @@ async function findOrProvisionOauthUser(
     data: {
       email: input.email,
       displayName: input.displayName,
-      isPlatformUser: tenant ? false : true
+      isPlatformUser: workspace ? false : true
     },
     select: {
       id: true
     }
   })).id
 
-  if (!tenant) {
+  if (!workspace) {
     if (existing && !existing.isPlatformUser) {
       await prisma.authUser.update({
         where: { id: existing.id },
@@ -590,16 +592,21 @@ async function findOrProvisionOauthUser(
       id: userId,
       loginDisabled: false,
       isPlatformUser: true,
-      tenantMemberships: []
+      workspaceMemberships: []
     }
   }
 
-  await prisma.authTenantMembership.create({
+  await prisma.authWorkspaceMembership.create({
     data: {
       userId,
-      tenantId: tenant.id
+      workspaceId: workspace.id
     }
   })
+  // Auto-provisioned through SSO, but still a workspace member, so still a
+  // member of that workspace's organisation. Same invariant as the managed
+  // add path; missing it here would leave SSO users absent from the People
+  // list they belong in.
+  await joinWorkspaceOrganisation(workspace.id, userId)
 
   if (adminGroup) {
     await prisma.authUserGroupMembership.create({
@@ -614,23 +621,23 @@ async function findOrProvisionOauthUser(
     id: userId,
     loginDisabled: false,
     isPlatformUser: false,
-    tenantMemberships: [{ tenantId: tenant.id, loginDisabled: false }]
+    workspaceMemberships: [{ workspaceId: workspace.id, loginDisabled: false }]
   }
 }
 
-function resolvePostSignInTenantId(user: {
+function resolvePostSignInWorkspaceId(user: {
   isPlatformUser: boolean
-  tenantMemberships: Array<{ tenantId: string; loginDisabled: boolean }>
+  workspaceMemberships: Array<{ workspaceId: string; loginDisabled: boolean }>
 }): string | null {
-  const currentTenantId = getCurrentTenant()?.id ?? null
-  const enabledMemberships = user.tenantMemberships.filter((m) => !m.loginDisabled)
+  const currentWorkspaceId = getCurrentWorkspace()?.id ?? null
+  const enabledMemberships = user.workspaceMemberships.filter((m) => !m.loginDisabled)
 
-  if (currentTenantId && enabledMemberships.some((m) => m.tenantId === currentTenantId)) {
-    return currentTenantId
+  if (currentWorkspaceId && enabledMemberships.some((m) => m.workspaceId === currentWorkspaceId)) {
+    return currentWorkspaceId
   }
 
   if (!user.isPlatformUser && enabledMemberships.length === 1) {
-    return enabledMemberships[0]?.tenantId ?? null
+    return enabledMemberships[0]?.workspaceId ?? null
   }
 
   return null
@@ -649,11 +656,11 @@ function buildCallbackUrl(request: Request): string {
 }
 
 function buildClientRedirect(path: string): string {
-  return new URL(path, env.CLIENT_ORIGIN).toString()
+  return new URL(path, primaryClientOrigin()).toString()
 }
 
 function buildClientAuthErrorUrl(message: string): string {
-  const url = new URL('/auth', env.CLIENT_ORIGIN)
+  const url = new URL('/auth', primaryClientOrigin())
   url.searchParams.set('error', message)
   return url.toString()
 }

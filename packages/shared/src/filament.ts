@@ -189,7 +189,7 @@ export type FilamentUsageStats = z.infer<typeof filamentUsageStatsSchema>
  * Build sorted filament-usage slices from raw per-group totals. "Used" is net
  * weight minus remaining (clamped to >= 0); duplicate labels merge, zero-usage
  * groups drop, and the result sorts by grams used descending. Pure so the
- * per-tenant aggregation and the platform-wide one share one rule.
+ * per-workspace aggregation and the platform-wide one share one rule.
  */
 export function buildFilamentUsageSlices(
   rows: ReadonlyArray<{ label: string | null | undefined; netWeightGrams: number | null; remainingGrams: number | null }>,
@@ -208,7 +208,7 @@ export function buildFilamentUsageSlices(
     .sort((left, right) => right.gramsUsed - left.gramsUsed)
 }
 
-/** Per-tenant plugin settings surfaced to the settings panel. */
+/** Per-workspace plugin settings surfaced to the settings panel. */
 export const filamentManagerSettingsSchema = z.object({
   autoAddBambuSpools: z.boolean()
 })

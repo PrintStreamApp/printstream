@@ -19,7 +19,7 @@ type ResetUser = {
   email: string
   isPlatformUser: boolean
   passwordCredential: { resetTokenHash?: string | null; resetTokenExpiresAt?: Date | null; userId?: string } | null
-  tenantMemberships: Array<{ tenantId: string }>
+  workspaceMemberships: Array<{ workspaceId: string }>
 } | null
 
 function hashCode(code: string): string {
@@ -57,7 +57,7 @@ async function buildApp(options: {
     router,
     settings: {
       async get(key: string) { return key === 'platform:enabled' ? 'true' : null },
-      async set() {}, async delete() {}, forTenant() { return this }
+      async set() {}, async delete() {}, forWorkspace() { return this }
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
@@ -101,7 +101,7 @@ test('reset request stores a token and emails the user (generic response)', asyn
   const credentialUpdates: Array<Record<string, unknown>> = []
   const sentEmails: EmailInput[] = []
   const { baseUrl, server } = await buildApp({
-    user: { id: 'u1', email: 'admin@example.com', isPlatformUser: true, passwordCredential: { userId: 'u1' }, tenantMemberships: [] },
+    user: { id: 'u1', email: 'admin@example.com', isPlatformUser: true, passwordCredential: { userId: 'u1' }, workspaceMemberships: [] },
     emailConfigured: true,
     credentialUpdates,
     sentEmails
@@ -125,7 +125,7 @@ test('reset request is a no-op (still generic) when email delivery is not config
   const credentialUpdates: Array<Record<string, unknown>> = []
   const sentEmails: EmailInput[] = []
   const { baseUrl, server } = await buildApp({
-    user: { id: 'u1', email: 'admin@example.com', isPlatformUser: true, passwordCredential: { userId: 'u1' }, tenantMemberships: [] },
+    user: { id: 'u1', email: 'admin@example.com', isPlatformUser: true, passwordCredential: { userId: 'u1' }, workspaceMemberships: [] },
     emailConfigured: false,
     credentialUpdates,
     sentEmails
@@ -149,7 +149,7 @@ test('reset verify sets a new password and signs in with a valid code', async ()
     user: {
       id: 'u1', email: 'admin@example.com', isPlatformUser: true,
       passwordCredential: { resetTokenHash: hashCode('GOOD-CODE'), resetTokenExpiresAt: new Date(Date.now() + 60_000) },
-      tenantMemberships: []
+      workspaceMemberships: []
     },
     emailConfigured: true,
     credentialUpdates
@@ -173,11 +173,11 @@ test('reset verify sets a new password and signs in with a valid code', async ()
 
 test('reset verify rejects a wrong or expired code', async () => {
   const wrong = await buildApp({
-    user: { id: 'u1', email: 'admin@example.com', isPlatformUser: true, passwordCredential: { resetTokenHash: hashCode('GOOD-CODE'), resetTokenExpiresAt: new Date(Date.now() + 60_000) }, tenantMemberships: [] },
+    user: { id: 'u1', email: 'admin@example.com', isPlatformUser: true, passwordCredential: { resetTokenHash: hashCode('GOOD-CODE'), resetTokenExpiresAt: new Date(Date.now() + 60_000) }, workspaceMemberships: [] },
     emailConfigured: true
   })
   const expired = await buildApp({
-    user: { id: 'u1', email: 'admin@example.com', isPlatformUser: true, passwordCredential: { resetTokenHash: hashCode('GOOD-CODE'), resetTokenExpiresAt: new Date(Date.now() - 1_000) }, tenantMemberships: [] },
+    user: { id: 'u1', email: 'admin@example.com', isPlatformUser: true, passwordCredential: { resetTokenHash: hashCode('GOOD-CODE'), resetTokenExpiresAt: new Date(Date.now() - 1_000) }, workspaceMemberships: [] },
     emailConfigured: true
   })
   try {

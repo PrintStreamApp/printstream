@@ -27,7 +27,7 @@ type ManagedPrinter = NonNullable<ReturnType<typeof printerManager.getPrinter>>
 
 interface LibraryDeleteRow {
   id: string
-  tenantId: string
+  workspaceId: string
   name: string
   ownerBridgeId?: string | null
   storedPath: string
@@ -43,12 +43,12 @@ interface DeleteOperationDispatcherDeps {
   createId(): string
   listLibraryRows(fileIds: string[]): Promise<LibraryDeleteRow[]>
   deleteLibraryRow(fileId: string): Promise<void>
-  onLibraryDeleted(hidden: boolean, tenantId: string | null): void
+  onLibraryDeleted(hidden: boolean, workspaceId: string | null): void
   getPrinter(printerId: string): ManagedPrinter | null
   deletePrinterEntry(printer: ManagedPrinter, entry: PrinterStorageDeleteEntry): Promise<void>
   clearPrinterStorageCache(printerId: string): void
-  onPrinterStorageDeleted(printerId: string, tenantId: string | null): void
-  onJobChanged(tenantId: string | null): void
+  onPrinterStorageDeleted(printerId: string, workspaceId: string | null): void
+  onJobChanged(workspaceId: string | null): void
 }
 
 interface DeleteJobState {
@@ -57,7 +57,7 @@ interface DeleteJobState {
   targetName: string
   summaryLabel: string
   printerId: string | null
-  tenantId: string | null
+  workspaceId: string | null
   queueKey: string
   totalItems: number
   completedItems: number
@@ -91,8 +91,8 @@ export class DeleteOperationDispatcher {
       }
     }),
     deleteLibraryRow: (fileId) => prisma.libraryFile.delete({ where: { id: fileId } }).then(() => undefined),
-    onLibraryDeleted: (hidden, tenantId) => {
-      if (!hidden) broadcastLibraryChanged(tenantId)
+    onLibraryDeleted: (hidden, workspaceId) => {
+      if (!hidden) broadcastLibraryChanged(workspaceId)
     },
     getPrinter: (printerId) => printerManager.getPrinter(printerId) ?? null,
     deletePrinterEntry: async (printer, entry) => {
@@ -108,8 +108,8 @@ export class DeleteOperationDispatcher {
       }
     },
     clearPrinterStorageCache: (printerId) => clearPrinterStorageThreeMfInspectionCache(printerId),
-    onPrinterStorageDeleted: (printerId, tenantId) => broadcastPrinterStorageChanged(printerId, tenantId),
-    onJobChanged: (tenantId) => broadcastDeleteOperationsChanged(tenantId)
+    onPrinterStorageDeleted: (printerId, workspaceId) => broadcastPrinterStorageChanged(printerId, workspaceId),
+    onJobChanged: (workspaceId) => broadcastDeleteOperationsChanged(workspaceId)
   }) {}
 
   async enqueueLibraryDelete(fileIds: string[]): Promise<DeleteOperationJob> {
@@ -126,7 +126,7 @@ export class DeleteOperationDispatcher {
       targetName: 'Library',
       summaryLabel,
       printerId: null,
-      tenantId: firstRow.tenantId,
+      workspaceId: firstRow.workspaceId,
       queueKey: 'library',
       totalItems: orderedRows.length,
       initialMessage: orderedRows.length === 1
@@ -148,7 +148,7 @@ export class DeleteOperationDispatcher {
               console.warn(`[delete-operation] failed to delete bytes for ${row.id} (version)${version.ownerBridgeId ? ` (bridge ${version.ownerBridgeId})` : ''}`, (err as Error).message)
             })
           }))
-          this.deps.onLibraryDeleted(row.hidden, state.tenantId)
+          this.deps.onLibraryDeleted(row.hidden, state.workspaceId)
           state.completedItems = index + 1
           state.progressPercent = Math.round((state.completedItems / state.totalItems) * 100)
           this.touch(state)
@@ -164,7 +164,7 @@ export class DeleteOperationDispatcher {
     printerId: string,
     printerName: string,
     entries: PrinterStorageDeleteEntry[],
-    tenantId: string | null
+    workspaceId: string | null
   ): DeleteOperationJob {
     const firstEntry = entries[0]
     const firstEntryLabel = firstEntry
@@ -178,7 +178,7 @@ export class DeleteOperationDispatcher {
       targetName: printerName,
       summaryLabel,
       printerId,
-      tenantId,
+      workspaceId,
       queueKey: `printer:${printerId}`,
       totalItems: entries.length,
       initialMessage: entries.length === 1
@@ -197,7 +197,7 @@ export class DeleteOperationDispatcher {
 
           await this.deps.deletePrinterEntry(printer, entry)
           this.deps.clearPrinterStorageCache(printerId)
-          this.deps.onPrinterStorageDeleted(printerId, state.tenantId)
+          this.deps.onPrinterStorageDeleted(printerId, state.workspaceId)
           state.completedItems = index + 1
           state.progressPercent = Math.round((state.completedItems / state.totalItems) * 100)
           this.touch(state)
@@ -209,9 +209,9 @@ export class DeleteOperationDispatcher {
     return this.toDto(job)
   }
 
-  list(tenantId: string | null = null): DeleteOperationJob[] {
+  list(workspaceId: string | null = null): DeleteOperationJob[] {
     return Array.from(this.jobs.values())
-      .filter((job) => tenantId == null || job.tenantId === tenantId)
+      .filter((job) => workspaceId == null || job.workspaceId === workspaceId)
       .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
       .map((job) => this.toDto(job))
   }
@@ -225,7 +225,7 @@ export class DeleteOperationDispatcher {
     targetName: string
     summaryLabel: string
     printerId: string | null
-    tenantId: string | null
+    workspaceId: string | null
     queueKey: string
     totalItems: number
     initialMessage: string
@@ -238,7 +238,7 @@ export class DeleteOperationDispatcher {
       targetName: input.targetName,
       summaryLabel: input.summaryLabel,
       printerId: input.printerId,
-      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
       queueKey: input.queueKey,
       totalItems: input.totalItems,
       completedItems: 0,
@@ -296,16 +296,16 @@ export class DeleteOperationDispatcher {
   }
 
   private emitChanged(): void {
-    if (Array.from(this.jobs.values()).some((job) => job.tenantId == null)) {
+    if (Array.from(this.jobs.values()).some((job) => job.workspaceId == null)) {
       this.deps.onJobChanged(null)
     }
-    const tenantIds = new Set(
+    const workspaceIds = new Set(
       Array.from(this.jobs.values())
-        .map((job) => job.tenantId)
-        .filter((tenantId): tenantId is string => Boolean(tenantId))
+        .map((job) => job.workspaceId)
+        .filter((workspaceId): workspaceId is string => Boolean(workspaceId))
     )
-    for (const tenantId of tenantIds) {
-      this.deps.onJobChanged(tenantId)
+    for (const workspaceId of workspaceIds) {
+      this.deps.onJobChanged(workspaceId)
     }
   }
 

@@ -339,7 +339,10 @@ export async function ensureEmbeddedProjectSettings(input: {
   signal?: AbortSignal
 }): Promise<string> {
   const embedded = await readEmbeddedProjectSettings(input.inputPath)
-  if (embedded !== null && COMPLETE_SETTINGS_SENTINEL_KEYS.every((key) => embedded[key] !== undefined)) {
+  const missingSentinels = embedded === null
+    ? [...COMPLETE_SETTINGS_SENTINEL_KEYS]
+    : COMPLETE_SETTINGS_SENTINEL_KEYS.filter((key) => embedded[key] === undefined)
+  if (embedded !== null && missingSentinels.length === 0) {
     return input.inputPath
   }
 
@@ -365,10 +368,9 @@ export async function ensureEmbeddedProjectSettings(input: {
       // retry classifiers (`isLikelyBuiltinProfileCompatibilityExit` /
       // `isTransientSlicerCrashExit` in slicing-jobs) the export-failure branch deliberately does.
       if (embedded !== null) {
-        const missing = COMPLETE_SETTINGS_SENTINEL_KEYS.filter((key) => embedded[key] === undefined)
         const named = describeEmbeddedPresetNames(embedded)
         throw new Error(
-          `This project's embedded settings are incomplete (missing ${missing.join(', ')}) and name no presets this slicer can resolve${named ? ` (${named})` : ''}. `
+          `This project's embedded settings are incomplete (missing ${missingSentinels.join(', ')}) and name no presets this slicer can resolve${named ? ` (${named})` : ''}. `
           + 'Pick a process and filament profile for the slice, or re-save the project so it embeds complete settings.'
         )
       }
@@ -378,9 +380,14 @@ export async function ensureEmbeddedProjectSettings(input: {
   }
   exportArgs = await ensureFilamentCoverage(exportArgs, input.profileDir, embedded)
 
+  // Name the keys and the arg count. This step REPLACES the project's settings with the CLI's
+  // merged export, so when the slice then dies at load, the first question is what made a project
+  // look partial at all — and a bare "completing partial settings" cannot answer it. A real
+  // incident (a project whose STORED settings were complete, yet reached here) could not be
+  // diagnosed from the logs because the missing key was never recorded.
   input.log(embedded === null
     ? 'Synthesizing project settings for scaffold 3MF (no embedded project_settings.config)'
-    : 'Completing partial embedded project settings for scaffold 3MF')
+    : `Completing partial embedded project settings for scaffold 3MF (missing ${missingSentinels.join(', ')}; ${exportArgs.length} profile args)`)
   const exported = await exportMergedProjectSettings({
     cliPath: input.cliPath,
     appDir: input.appDir,

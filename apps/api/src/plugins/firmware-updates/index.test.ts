@@ -20,7 +20,7 @@ import { printerManager } from '../../lib/printer-manager.js'
 import { prisma } from '../../lib/prisma.js'
 import { firmwareUpdatesPlugin, setFirmwareVersionRefreshTimeoutMsForTests } from './index.js'
 
-// The per-printer routes authorize through the tenant-scoped singleton prisma (the
+// The per-printer routes authorize through the workspace-scoped singleton prisma (the
 // fake context.prisma below only covers what the plugin itself queries). Stub it to
 // report the test printer as owned so the gate passes; restore after each test.
 const originalScopedPrinterFindUnique = prisma.printer.findUnique
@@ -117,9 +117,9 @@ test('firmware-updates routes expose installable versions in the update report',
 test('firmware-updates upload status becomes error when a requested version has no downloadable file yet', async () => {
   const realFetch = globalThis.fetch
   mock.method(printerManager, 'getPrinter', () => printer)
-  // Broadcasts are skipped when the printer's tenant can't be resolved, so this test
-  // (which asserts a broadcast fires) must report a tenant for the printer.
-  mock.method(printerManager, 'getTenantId', () => 'tenant-1')
+  // Broadcasts are skipped when the printer's workspace can't be resolved, so this test
+  // (which asserts a broadcast fires) must report a workspace for the printer.
+  mock.method(printerManager, 'getWorkspaceId', () => 'workspace-1')
   mock.method(printerManager, 'getStatus', () => ({ firmwareVersion: '01.09.00.00', sdCardPresent: true } as never))
   mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
@@ -349,7 +349,7 @@ test('firmware-updates upload is rejected when installed firmware is below the o
 test('firmware-updates upload errors with guidance when a stepping-stone version is required', async () => {
   const realFetch = globalThis.fetch
   mock.method(printerManager, 'getPrinter', () => printer)
-  mock.method(printerManager, 'getTenantId', () => 'tenant-1')
+  mock.method(printerManager, 'getWorkspaceId', () => 'workspace-1')
   // Above the floor, below the bridge: jumping straight to 01.10.00.00 needs 01.09.01.00 first.
   mock.method(printerManager, 'getStatus', () => ({ online: true, firmwareVersion: '01.09.00.00', sdCardPresent: true } as never))
   mock.method(globalThis, 'fetch', firmwareFetchMock(realFetch, [{ version: '01.10.00.00', url: 'https://public-cdn.bblmw.com/example.zip' }]))

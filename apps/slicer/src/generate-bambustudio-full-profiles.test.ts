@@ -6,8 +6,8 @@ import test from 'node:test'
 
 // The generator ships as a standalone ESM script that runs inside the slicer
 // image, so it is imported here by relative path rather than through the
-// package entrypoint. It is plain JS with no declaration file.
-// @ts-expect-error - untyped sibling ESM script
+// package entrypoint. It stays plain JS; its types live in the sibling
+// `.d.mts`, added when the native app's installer started importing it too.
 import { generateFullProfiles } from '../docker/generate-bambustudio-full-profiles.mjs'
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {

@@ -64,7 +64,7 @@ That fallback is a compatibility bridge, not a substitute for real migrations. I
 
 For local schema work, prefer `npm run db:migrate -- <name>` so Prisma records a real migration in `apps/api/prisma/migrations/`.
 
-To clear local auth identities, roles, sessions, service accounts, and auth-provider setup state while preserving tenants, printers, library files, jobs, and other app data, run `npm run db:reset-auth`. The script reseeds built-in platform roles and each existing tenant's built-in roles after the reset.
+To clear local auth identities, roles, sessions, service accounts, and auth-provider setup state while preserving workspaces, printers, library files, jobs, and other app data, run `npm run db:reset-auth`. The script reseeds built-in platform roles and each existing workspace's built-in roles after the reset.
 
 ## Slicer sidecar in development
 

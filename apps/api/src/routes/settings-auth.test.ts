@@ -15,7 +15,7 @@ import { prisma, rootPrisma } from '../lib/prisma.js'
 import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 import { HttpError } from '../lib/http-error.js'
 import { listAllWorkspaceSupportPermissions } from '../lib/support-access.js'
-import { installTenantContext } from '../lib/tenant-context.js'
+import { installWorkspaceContext } from '../lib/workspace-context.js'
 
 const p = prisma as unknown as Record<string, Record<string, unknown>>
 const rp = rootPrisma as unknown as Record<string, Record<string, unknown>>
@@ -25,7 +25,7 @@ restorePrismaMethodsAfterEach([
   [p.setting, 'upsert'],
   [p.authSession, 'findUnique'],
   [p.authUser, 'count'],
-  [rp.tenant, 'findMany'],
+  [rp.workspace, 'findMany'],
   [rp.setting, 'findUnique']
 ])
 
@@ -132,10 +132,10 @@ test('settings write accepts a quick-start-only update when auth is disabled', a
   prisma.setting.upsert = ((async () => ({})) as unknown) as typeof prisma.setting.upsert
   prisma.setting.findUnique = ((async () => null) as unknown) as typeof prisma.setting.findUnique
   // The expected 200 relies on the wide-open workspace fallback resolving the
-  // install's single tenant; pin its rootPrisma reads so the result does not
+  // install's single workspace; pin its rootPrisma reads so the result does not
   // depend on what the test database happens to contain (a fresh CI database
-  // has no tenant rows, which otherwise turns this into a 401).
-  rootPrisma.tenant.findMany = ((async () => [{ id: 'tenant-1', slug: 'alpha', name: 'Alpha' }]) as unknown) as typeof rootPrisma.tenant.findMany
+  // has no workspace rows, which otherwise turns this into a 401).
+  rootPrisma.workspace.findMany = ((async () => [{ id: 'workspace-1', slug: 'alpha', name: 'Alpha' }]) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findUnique = ((async () => null) as unknown) as typeof rootPrisma.setting.findUnique
 
   await withSettingsApp({
@@ -178,9 +178,9 @@ test('settings write is blocked in demo mode even with settings.manage permissio
   })
 })
 
-test('settings write is blocked in the demo tenant even for a signed-in platform admin', async () => {
+test('settings write is blocked in the demo workspace even for a signed-in platform admin', async () => {
   prisma.setting.upsert = ((async () => {
-    throw new Error('demo tenant settings writes must not persist')
+    throw new Error('demo workspace settings writes must not persist')
   }) as unknown) as typeof prisma.setting.upsert
 
   await withSettingsApp({
@@ -189,8 +189,8 @@ test('settings write is blocked in the demo tenant even for a signed-in platform
       type: 'user',
       userId: 'platform-user-1',
       isPlatformUser: true,
-      tenant: {
-        id: 'tenant-demo',
+      workspace: {
+        id: 'workspace-demo',
         slug: 'demo',
         name: 'Public Demo'
       }
@@ -217,8 +217,8 @@ test('settings write for support access requires the dedicated permission', asyn
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -266,8 +266,8 @@ test('settings write for support access requires recent verification', async () 
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -302,8 +302,8 @@ test('settings write for support access allows a recently verified admin', async
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -366,8 +366,8 @@ test('settings write for support access rejects disabling support when auth has 
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -421,8 +421,8 @@ test('settings write for support access also rejects setup-incomplete auth with 
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -453,7 +453,7 @@ async function withSettingsApp(
     request.auth = auth
     next()
   })
-  app.use(installTenantContext())
+  app.use(installWorkspaceContext())
   app.use('/api/settings', settingsRouter)
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof HttpError) {

@@ -33,9 +33,9 @@ import {
   AUTH_USERS_VIEW_SESSIONS_PERMISSION,
   PLUGINS_MANAGE_PERMISSION,
   SETTINGS_MANAGE_PERMISSION,
-  TENANTS_MANAGE_PERMISSION,
+  WORKSPACES_MANAGE_PERMISSION,
   filterPermissionsForPlatformContext,
-  filterPermissionsForTenantContext,
+  filterPermissionsForWorkspaceContext,
   permissionValues,
   type AuthBootstrapCapabilities,
   type AuthManagementCapabilities,
@@ -43,7 +43,7 @@ import {
 } from '@printstream/shared'
 import type { RequestAuthContext } from './auth-context.js'
 import { authUsesExplicitPermissions } from './auth-context.js'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 
 type AuthCapabilityContext = Pick<RequestAuthContext, 'authEnabled' | 'publicDemoGuest' | 'actor' | 'permissions' | 'platformPermissions'>
 
@@ -56,7 +56,7 @@ export function buildAuthBootstrapCapabilities(
     canManageAuthProviders: input.setupRequired || hasEffectivePermission(auth, AUTH_PROVIDERS_MANAGE_PERMISSION),
     canManageSettings: hasEffectivePermission(auth, SETTINGS_MANAGE_PERMISSION),
     canManageSupportAccess: hasEffectivePermission(auth, AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION),
-    canManageTenants: hasEffectivePermission(auth, TENANTS_MANAGE_PERMISSION),
+    canManageWorkspaces: hasEffectivePermission(auth, WORKSPACES_MANAGE_PERMISSION),
     canManagePlugins: hasEffectivePermission(auth, PLUGINS_MANAGE_PERMISSION),
     canViewLogs: hasEffectivePermission(auth, SETTINGS_MANAGE_PERMISSION)
   }
@@ -94,8 +94,8 @@ export function buildAuthManagementCapabilities(auth: AuthCapabilityContext): Au
 }
 
 export function readAssignablePermissions(auth: AuthCapabilityContext): Permission[] {
-  const visiblePermissions = getCurrentTenant()
-    ? filterPermissionsForTenantContext(permissionValues)
+  const visiblePermissions = getCurrentWorkspace()
+    ? filterPermissionsForWorkspaceContext(permissionValues)
     : filterPermissionsForPlatformContext(permissionValues)
 
   if (!authUsesExplicitPermissions(auth)) {
@@ -128,22 +128,22 @@ export function permissionsAreManageableByActor(
 }
 
 function actorCanManageEqualPermissionSet(auth: AuthCapabilityContext): boolean {
-  const tenant = getCurrentTenant()
-  if (!tenant) {
+  const workspace = getCurrentWorkspace()
+  if (!workspace) {
     const platformVisiblePermissions = filterPermissionsForPlatformContext(permissionValues)
     const actorPermissions = new Set(auth.platformPermissions ?? auth.permissions)
     return platformVisiblePermissions.every((permission) => actorPermissions.has(permission))
   }
 
-  // Platform users in tenant context are external authorities, not peers.
-  // The tenant opted in to their access, so the equal-permission gate does not apply.
+  // Platform users in workspace context are external authorities, not peers.
+  // The workspace opted in to their access, so the equal-permission gate does not apply.
   if (auth.actor.type === 'user' && auth.actor.isPlatformUser) {
     return true
   }
 
-  const tenantVisiblePermissions = filterPermissionsForTenantContext(permissionValues)
+  const workspaceVisiblePermissions = filterPermissionsForWorkspaceContext(permissionValues)
   const actorPermissions = new Set(auth.permissions)
-  return tenantVisiblePermissions.every((permission) => actorPermissions.has(permission))
+  return workspaceVisiblePermissions.every((permission) => actorPermissions.has(permission))
 }
 
 function hasEffectivePermission(auth: AuthCapabilityContext, permission: Permission): boolean {
@@ -151,7 +151,7 @@ function hasEffectivePermission(auth: AuthCapabilityContext, permission: Permiss
     return auth.permissions.includes(permission)
   }
 
-  if (getCurrentTenant()) {
+  if (getCurrentWorkspace()) {
     return true
   }
 

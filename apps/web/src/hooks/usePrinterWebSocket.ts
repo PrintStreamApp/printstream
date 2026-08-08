@@ -88,6 +88,16 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           void queryClient.invalidateQueries({ queryKey: storageKey })
           void queryClient.invalidateQueries({ queryKey: platesKey })
         }
+        if (event.resource === 'billing') {
+          // Every surface that shows a plan, plus the plugin catalogue the plan
+          // gates. `billing-me` and the customer queries are separate keys, so
+          // the plan flip has to reach all of them or one surface keeps saying
+          // Free after another says Pro.
+          void queryClient.invalidateQueries({ queryKey: ['billing-me'] })
+          void queryClient.invalidateQueries({ queryKey: ['customer'] })
+          void queryClient.invalidateQueries({ queryKey: ['auth-bootstrap'] })
+          void invalidatePluginRelatedQueries(queryClient)
+        }
         if (event.resource === 'notification.templates') {
           void queryClient.invalidateQueries({ queryKey: ['notification-templates'] })
         }

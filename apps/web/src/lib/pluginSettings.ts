@@ -2,7 +2,7 @@
  * Plugin presentation helpers for the settings/manager surfaces: merges the API
  * plugin catalog with web-registered plugins by name, derives install/enable/
  * availability state, classifies plugins (notification vs auth) and orders them,
- * resolves display names and the platform/tenant surfaces a plugin supports, and
+ * resolves display names and the platform/workspace surfaces a plugin supports, and
  * parses disabled/not-installed plugin names out of API error messages.
  */
 import type { PluginCatalogEntry, PluginManagementEntry, PluginSurface } from '@printstream/shared'
@@ -181,9 +181,9 @@ function notificationPluginPriority(name: string): number {
 }
 
 function resolveRuntimeSurfaces(entry: Pick<MergedPluginEntry, 'api' | 'web'>): PluginSurface[] {
-  return entry.api?.runtimeSurfaces ?? entry.web?.runtimeSurfaces ?? ['tenant']
+  return entry.api?.runtimeSurfaces ?? entry.web?.runtimeSurfaces ?? ['workspace']
 }
 
 function resolveManagerSurfaces(entry: Pick<MergedPluginEntry, 'api' | 'web'>): PluginSurface[] {
-  return entry.api?.managerSurfaces ?? entry.web?.managerSurfaces ?? ['platform', 'tenant']
+  return entry.api?.managerSurfaces ?? entry.web?.managerSurfaces ?? ['platform', 'workspace']
 }

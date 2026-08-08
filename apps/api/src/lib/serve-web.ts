@@ -16,6 +16,7 @@
 import express from 'express'
 import type { Express, Response } from 'express'
 import path from 'node:path'
+import { sendFileFromDir } from './request-helpers.js'
 
 const NO_STORE = 'no-store, no-cache, must-revalidate, proxy-revalidate'
 
@@ -78,7 +79,10 @@ export function installWebApp(app: Express, webDir: string | undefined): boolean
     if (requestPath === '/api' || requestPath.startsWith('/api/')) return next()
     if (requestPath === '/ws' || requestPath.startsWith('/ws/')) return next()
     applyNoStore(response)
-    response.sendFile(path.join(root, 'index.html'), (error) => {
+    // By name under `root`, never as an absolute path: see `sendFileFromDir`.
+    // An absolute path 404s whenever the install sits under a dot-directory,
+    // which on Linux is the default (`~/.local/share/printstream`).
+    sendFileFromDir(response, root, 'index.html', (error) => {
       if (error) next(error)
     })
   })

@@ -173,11 +173,29 @@ export const auroraTheme = createAppTheme({
  * Sticky tab styling shared by every section nav. Pulled out of the
  * layout so individual pages can re-use the same look if they need to
  * present a secondary nav.
+ *
+ * The padding and height here are the baseline for a row that does no fitting.
+ * `AppShell`'s desktop row does, so `navDensitySx` below restates both at every
+ * rung and wins on specificity — change one and check the other.
  */
 export const sectionTabSx = {
-  flex: { xs: '1 0 auto', sm: '1 1 0' },
+  /**
+   * A tab is never narrower than its own label. It grows to share out the bar,
+   * and when the labels genuinely do not fit, the ROW scrolls (`AppShell`'s
+   * TabList sets `overflowX: auto`) rather than every tab shrinking.
+   *
+   * `1 0 auto`, not `1 1 auto`: with shrink enabled and a floor of 0 the tabs
+   * always gave way, so EVERY label truncated a little and none was readable —
+   * and because the row then always fitted, the scroll it is supposed to fall
+   * back on never engaged. Growing is still wanted (the tabs fill the pill);
+   * only the shrinking was wrong.
+   *
+   * `max-content` on both breakpoints for the same reason mobile already had
+   * it: that row scrolls by design, and now so does this one.
+   */
+  flex: { xs: '1 0 auto', sm: '1 0 auto' },
   minHeight: { xs: 52, sm: 52 },
-  minWidth: { xs: 'max-content', sm: 0 },
+  minWidth: { xs: 'max-content', sm: 'max-content' },
   px: { xs: 1, sm: 2 },
   borderRadius: 'md',
   color: 'var(--printstream-section-nav-text)',
@@ -194,5 +212,77 @@ export const sectionTabSx = {
     backgroundColor: 'var(--printstream-section-tab-selected-background)',
     boxShadow: 'inset 0 0 0 1px var(--printstream-section-tab-selected-ring)',
     borderColor: 'var(--printstream-section-tab-selected-border)'
+  }
+} as const
+
+/**
+ * How a nav row tightens when its tabs do not fit, keyed off the
+ * `data-nav-density` attribute that `useFittedNavDensity` writes.
+ *
+ * Spread onto the SCROLL CONTAINER, not the tabs: the rules have to out-specify
+ * each tab's own `sectionTabSx`, and a container-plus-attribute selector does
+ * that on its own. Putting them on the tab would need `!important` or a second
+ * responsive object to fight the first.
+ *
+ * Every rung is stated here, `comfortable` included, so the ladder reads as one
+ * table rather than three steps measured against a baseline kept elsewhere.
+ * The first three keep every label — only `icons` hides one, and by then the
+ * words genuinely do not fit. See the hook for why truncation is not a rung.
+ *
+ * The padding is deliberately tighter than a button's would be. A tab grows to
+ * fill the pill anyway (`sectionTabSx` sets `flex: 1 0 auto`), so generous
+ * padding buys no breathing room at a comfortable width — it only inflates the
+ * tab's INTRINSIC width, which is the thing the fitting loop measures, and so
+ * costs a rung earlier than it needs to.
+ */
+export const navDensitySx = {
+  '&[data-nav-density="comfortable"]': {
+    gap: 0.75,
+    px: 1,
+    '& .MuiTab-root': { px: 1.25, minHeight: 52 },
+    '& [data-nav-tab-gap]': { gap: '6px' }
+  },
+  // Padding only. The type stays at full size through this rung and the next,
+  // because a tab's horizontal padding is pure slack -- the text never reaches
+  // the edge -- and spending slack costs the reader nothing.
+  '&[data-nav-density="snug"]': {
+    gap: 0.5,
+    px: 0.75,
+    '& .MuiTab-root': { px: 0.875, minHeight: 52 },
+    '& [data-nav-tab-gap]': { gap: '5px' }
+  },
+  // Padding at its floor: still clear of the text, but with nothing left to
+  // give. Anything past here has to come out of the type or the words.
+  '&[data-nav-density="tight"]': {
+    gap: 0.375,
+    px: 0.5,
+    '& .MuiTab-root': { px: 0.5, minHeight: 52 },
+    '& [data-nav-tab-gap]': { gap: '4px' }
+  },
+  // The first rung that costs legibility, and only reached once all three
+  // padding rungs are spent.
+  '&[data-nav-density="condensed"]': {
+    gap: 0.375,
+    px: 0.5,
+    '& .MuiTab-root': { px: 0.5, minHeight: 48, fontSize: 'sm' },
+    '& .MuiTab-root svg': { fontSize: 18 },
+    '& [data-nav-tab-gap]': { gap: '4px' },
+    // The logo steps with the TYPE, not with the padding. It reads as another
+    // piece of lettering in the row, so shrinking it on a rung where every word
+    // stayed full size made the bar look like it had changed size when nothing
+    // else had.
+    '& [data-nav-logo]': { width: 38, height: 38 }
+  },
+  '&[data-nav-density="icons"]': {
+    gap: 0.25,
+    px: 0.5,
+    // The padding comes BACK here: with no label to pad, this is the icon's
+    // hit area rather than slack around text.
+    '& .MuiTab-root': { px: 1.25, minHeight: 48 },
+    // The icon carries the tab on its own now, so the row must not also
+    // reserve the label's width -- `sectionTabSx` floors every tab at
+    // `max-content`, which would still be measured from the hidden text.
+    '& [data-nav-label]': { display: 'none' },
+    '& [data-nav-logo]': { width: 38, height: 38 }
   }
 } as const

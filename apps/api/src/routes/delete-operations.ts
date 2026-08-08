@@ -35,7 +35,7 @@ deleteOperationsRouter.get('/', (request, response) => {
     }
   }
 
-  const jobs = deleteOperationDispatcher.list(request.tenant?.id ?? null).filter((job) => {
+  const jobs = deleteOperationDispatcher.list(request.workspace?.id ?? null).filter((job) => {
     if (job.kind === 'library.delete') return canManageLibrary || !request.auth.authEnabled
     if (job.kind === 'printer.storage.delete') return canManagePrinterStorage || !request.auth.authEnabled
     return false

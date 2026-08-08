@@ -42,7 +42,25 @@ async function main(): Promise<void> {
   await import('./index.js')
 }
 
-void main().catch((error) => {
+/**
+ * Resolves once the embedded database is up, migrated, and `index.ts` has
+ * loaded -- i.e. once `DATABASE_URL` is published and safe to read.
+ *
+ * Exported because a HOST process needs to await the BOOT, not the module
+ * evaluation. `void main()` on its own made `await import('@printstream/api/server')`
+ * resolve immediately, so the native app's `run.ts` carried on and imported
+ * API modules while `DATABASE_URL` was still the compose default -- which
+ * constructs Prisma against `db:5432` and CACHES it for the life of the
+ * process. The result was an app whose migrations ran against the embedded
+ * socket while every query went to a host that does not exist, and which then
+ * died on the first unhandled rejection.
+ *
+ * Nothing awaits this on the Docker/cloud path, where this file is the process
+ * entry; the rejection handler below is what matters there.
+ */
+export const started: Promise<void> = main()
+
+started.catch((error) => {
   // Print a real reason, not `undefined`: some startup failures (e.g. the
   // embedded database) reject without an Error, with the detail logged above.
   const detail =

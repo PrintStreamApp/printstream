@@ -8,7 +8,7 @@
  *   ledger — see `routes.ts`.
  * - Auto-adds RFID-tagged Bambu spools on AMS insert and re-associates known
  *   spools with their current slot, syncing remaining filament from the
- *   printer's remain% — see `status-sync.ts` (gated by the per-tenant
+ *   printer's remain% — see `status-sync.ts` (gated by the per-workspace
  *   `autoAddBambuSpools` setting, default on).
  * - Decrements non-Bambu spools by per-job grams when a print finishes — see
  *   `consumption.ts`. (Hybrid tracking: Bambu spools use remain%, others use
@@ -41,10 +41,10 @@ export const filamentManagerPlugin: ApiPlugin = {
     context.printerEvents.on('print-job.finished', onJobFinished)
 
     // Expose "which spool is loaded in this slot" to other plugins (calibration ties a run to the
-    // loaded spool) without them importing this plugin. Uses rootPrisma with an explicit tenant
+    // loaded spool) without them importing this plugin. Uses rootPrisma with an explicit workspace
     // filter since the resolver runs outside a per-request scope.
-    const offResolver = context.registerSlotFilamentResolver(({ tenantId, printerId, amsId, slotId }) =>
-      findLoadedSpoolIdentity(rootPrisma, tenantId, printerId, amsId, slotId))
+    const offResolver = context.registerSlotFilamentResolver(({ workspaceId, printerId, amsId, slotId }) =>
+      findLoadedSpoolIdentity(rootPrisma, workspaceId, printerId, amsId, slotId))
 
     context.onShutdown(() => {
       context.printerEvents.off('status', onStatus)

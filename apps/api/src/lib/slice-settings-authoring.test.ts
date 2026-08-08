@@ -45,7 +45,7 @@ test('the preserved project gains the process preset the slice ran with, plus it
     })) as typeof slicerClient.resolveProcessConfig
 
     const authoredPath = await authorSliceSettingsIntoProject({
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       slicerTargetId: 'bambustudio-2-7-1',
       target: makeTarget({
         processProfileId: buildBuiltinSlicingPresetId('process', '0.08mm Extra Fine @BBL X1C'),
@@ -90,7 +90,7 @@ test('the resolved preset wins over the project\'s declared changes, because the
     })) as typeof slicerClient.resolveProcessConfig
 
     const authoredPath = await authorSliceSettingsIntoProject({
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       slicerTargetId: 'bambustudio-2-7-1',
       target: makeTarget({
         processProfileId: buildBuiltinSlicingPresetId('process', '0.08mm Extra Fine @BBL X1C'),
@@ -127,7 +127,7 @@ test('the preserved project binds each filament slot to the preset that slot was
     )) as typeof slicerClient.resolveFilamentConfig
 
     const authoredPath = await authorSliceSettingsIntoProject({
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       slicerTargetId: 'bambustudio-2-7-1',
       target: makeTarget({
         filamentMappings: [
@@ -170,7 +170,7 @@ test('a per-material override is recorded as a user change, not baked in silentl
     )) as typeof slicerClient.resolveFilamentConfig
 
     const authoredPath = await authorSliceSettingsIntoProject({
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       slicerTargetId: 'bambustudio-2-7-1',
       target: makeTarget({
         filamentMappings: [{
@@ -207,7 +207,7 @@ test('an unresolvable process preset leaves the project its own settings', async
     slicerClient.resolveProcessConfig = (async () => { resolveCalls += 1; return null }) as typeof slicerClient.resolveProcessConfig
 
     const authoredPath = await authorSliceSettingsIntoProject({
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       slicerTargetId: 'bambustudio-2-7-1',
       target: makeTarget({ processProfileId: 'project:process:Custom For This Project' }),
       projectPath,

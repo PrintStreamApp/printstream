@@ -8,19 +8,20 @@
  */
 import {
   AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION,
-  filterPermissionsForTenantContext,
+  filterPermissionsForWorkspaceContext,
   permissionSchema,
   permissionValues,
   type Permission
 } from '@printstream/shared'
 import { rootPrisma } from './prisma.js'
-import { filterEnabledTenants } from './tenant-availability.js'
-import { scopeSettingKeyForTenant } from './tenant-settings.js'
+import { filterEnabledWorkspaces } from './workspace-availability.js'
+import { scopeSettingKeyForWorkspace } from './workspace-settings.js'
+import { visibleWorkspacesWhere } from './workspace-visibility.js'
 
 export const SUPPORT_ACCESS_ENABLED_SETTING_KEY = 'auth:supportAccessEnabled'
 export const SUPPORT_ACCESS_PERMISSIONS_SETTING_KEY = 'auth:supportAccessPermissions'
 
-const allWorkspacePermissions = filterPermissionsForTenantContext([...permissionValues])
+const allWorkspacePermissions = filterPermissionsForWorkspaceContext([...permissionValues])
 
 export function hasSupportAccessBypass(permissions: readonly Permission[]): boolean {
   return permissions.includes(AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION)
@@ -33,15 +34,15 @@ export function listAllWorkspaceSupportPermissions(): Permission[] {
 export async function listSupportAccessibleWorkspaces(input: {
   bypassSupportAccess: boolean
   authEnabled?: boolean
-  tenantId?: string | null
+  workspaceId?: string | null
 }): Promise<Array<{
   id: string
   slug: string
   name: string
   description?: string | null
 }>> {
-  const tenants = await rootPrisma.tenant.findMany({
-    where: input.tenantId ? { id: input.tenantId } : undefined,
+  const workspaces = await rootPrisma.workspace.findMany({
+    where: visibleWorkspacesWhere(input.workspaceId ? { id: input.workspaceId } : {}),
     select: {
       id: true,
       slug: true,
@@ -49,13 +50,13 @@ export async function listSupportAccessibleWorkspaces(input: {
       description: true
     }
   })
-  const enabledTenants = await filterEnabledTenants({ tenants })
+  const enabledWorkspaces = await filterEnabledWorkspaces({ workspaces })
 
-  if (enabledTenants.length === 0 || input.bypassSupportAccess || input.authEnabled === false) {
-    return enabledTenants
+  if (enabledWorkspaces.length === 0 || input.bypassSupportAccess || input.authEnabled === false) {
+    return enabledWorkspaces
   }
 
-  const disabledKeys = enabledTenants.map((tenant) => scopeSettingKeyForTenant(tenant.id, SUPPORT_ACCESS_ENABLED_SETTING_KEY))
+  const disabledKeys = enabledWorkspaces.map((workspace) => scopeSettingKeyForWorkspace(workspace.id, SUPPORT_ACCESS_ENABLED_SETTING_KEY))
   const disabledRows = await rootPrisma.setting.findMany({
     where: {
       key: { in: disabledKeys },
@@ -65,20 +66,20 @@ export async function listSupportAccessibleWorkspaces(input: {
   })
   const disabledKeySet = new Set(disabledRows.map((row) => row.key))
 
-  return enabledTenants.filter((tenant) => !disabledKeySet.has(scopeSettingKeyForTenant(tenant.id, SUPPORT_ACCESS_ENABLED_SETTING_KEY)))
+  return enabledWorkspaces.filter((workspace) => !disabledKeySet.has(scopeSettingKeyForWorkspace(workspace.id, SUPPORT_ACCESS_ENABLED_SETTING_KEY)))
 }
 
 export async function isSupportAccessAllowed(input: {
-  tenantId: string
+  workspaceId: string
   bypassSupportAccess: boolean
   authEnabled?: boolean
 }): Promise<boolean> {
-  const tenants = await listSupportAccessibleWorkspaces(input)
-  return tenants.length > 0
+  const workspaces = await listSupportAccessibleWorkspaces(input)
+  return workspaces.length > 0
 }
 
 export async function readSupportAccessPermissions(input: {
-  tenantId: string
+  workspaceId: string
   bypassSupportAccess: boolean
 }): Promise<Permission[]> {
   if (input.bypassSupportAccess) {
@@ -87,7 +88,7 @@ export async function readSupportAccessPermissions(input: {
 
   const row = await rootPrisma.setting.findUnique({
     where: {
-      key: scopeSettingKeyForTenant(input.tenantId, SUPPORT_ACCESS_PERMISSIONS_SETTING_KEY)
+      key: scopeSettingKeyForWorkspace(input.workspaceId, SUPPORT_ACCESS_PERMISSIONS_SETTING_KEY)
     },
     select: { value: true }
   })
@@ -100,14 +101,14 @@ export async function readSupportAccessPermissions(input: {
 }
 
 export function serializeSupportAccessPermissions(permissions: readonly Permission[]): string {
-  return JSON.stringify(filterPermissionsForTenantContext([...permissions]))
+  return JSON.stringify(filterPermissionsForWorkspaceContext([...permissions]))
 }
 
 function parseSupportAccessPermissions(value: string): Permission[] {
   try {
     const parsed = JSON.parse(value) as unknown
     const permissions = permissionSchema.array().parse(parsed)
-    return filterPermissionsForTenantContext(permissions)
+    return filterPermissionsForWorkspaceContext(permissions)
   } catch {
     return listAllWorkspaceSupportPermissions()
   }

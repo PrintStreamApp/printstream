@@ -2,13 +2,13 @@
  * The public 3MF editor's anonymous process-config resolver — the `resolveConfig` seam
  * `ProcessSettingsDialog` (and the machine-switch carry-over) call to seed a preset's baseline.
  *
- * Mirrors the tenant `/api/slicing/profiles/resolve-process` route, split by where the data lives:
+ * Mirrors the workspace `/api/slicing/profiles/resolve-process` route, split by where the data lives:
  * - BUILT-IN preset -> the anonymous `/api/public/slicing/resolve-process` endpoint (the slicer
  *   resolves it from its image; no workspace needed).
  * - PROJECT preset (`project:`) -> resolved IN THE BROWSER from the 3MF's own
  *   `project_settings.config` (via the shared `extractProjectProcessConfig`), with the baseline
  *   resolved by matching the project's parent preset NAME to a built-in in the loaded catalogue and
- *   resolving THAT through the public endpoint. This is exactly what the tenant route does with the
+ *   resolving THAT through the public endpoint. This is exactly what the workspace route does with the
  *   file it reads server-side — here the file only exists in the tab.
  * - CUSTOM/workspace preset -> impossible on an anonymous host; treated as unresolvable.
  */
@@ -27,7 +27,7 @@ import type { ClientThreeMfProject } from './clientThreeMfProject'
 /** Resolve a built-in preset's config via the anonymous endpoint. Injectable for tests. */
 export type BuiltinProcessResolver = (processProfileId: string, targetId: string | null) => Promise<ResolveProcessConfigResponse>
 
-const resolveBuiltinProcessViaApi: BuiltinProcessResolver = (processProfileId, targetId) =>
+export const resolveBuiltinProcessViaApi: BuiltinProcessResolver = (processProfileId, targetId) =>
   apiFetch<ResolveProcessConfigResponse>('/api/public/slicing/resolve-process', {
     method: 'POST',
     body: { processProfileId, targetId }
@@ -70,14 +70,14 @@ export function buildLocalProcessConfigResolver(input: {
         const parent = exact ?? findParentBuiltinPreset(input.processProfiles, project.presetName, 'process')
         if (parent) baseline = (await resolveBuiltinProcess(parent.id, targetId)).config
       }
-      // The file's declared record rides along in BOTH branches, matching the tenant route: a
+      // The file's declared record rides along in BOTH branches, matching the workspace route: a
       // resolved baseline does not make it redundant, it is what says whether a difference from
       // that baseline was a user's change or drift the vendor would normalize away.
       return baseline
         ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides }
         // No preset resolved: `baseConfig` is a stand-in copy, so only the declared record can say
         // what changed. Flagged explicitly — the payload cannot be told apart from an unmodified
-        // project otherwise. Same contract as the tenant route.
+        // project otherwise. Same contract as the workspace route.
         : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false }
     }
     if (slicingPresetProvenance(processProfileId) === 'builtin') {

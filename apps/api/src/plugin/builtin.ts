@@ -35,17 +35,17 @@ export async function registerBuiltinPlugins(): Promise<void> {
     await pluginRegistry.register(authPasswordPlugin, {
       forceInstalled: true,
       forceEnabled: true,
-      runtimeSurfaces: ['platform', 'tenant'],
+      runtimeSurfaces: ['platform', 'workspace'],
       managerSurfaces: ['platform'],
-      tenantAccess: 'always'
+      workspaceAccess: 'always'
     })
   } else {
     await pluginRegistry.register(authOauthPlugin, {
       forceInstalled: true,
       forceEnabled: true,
-      runtimeSurfaces: ['platform', 'tenant'],
+      runtimeSurfaces: ['platform', 'workspace'],
       managerSurfaces: ['platform'],
-      tenantAccess: 'always'
+      workspaceAccess: 'always'
     })
   }
   // SMTP transport is the OSS path for sending email (cloud uses Cloudflare).
@@ -55,85 +55,85 @@ export async function registerBuiltinPlugins(): Promise<void> {
     await pluginRegistry.register(emailSmtpPlugin, {
       forceInstalled: true,
       forceEnabled: true,
-      runtimeSurfaces: ['platform', 'tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'always'
+      runtimeSurfaces: ['platform', 'workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'always'
     })
   }
   await pluginRegistry.register(modelStudioPlugin, {
     defaultEnabled: true,
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsNtfyPlugin, {
-    // Notification channels run on both surfaces: tenant workspaces deliver
+    // Notification channels run on both surfaces: workspaces deliver
     // printer events; the platform workspace delivers platform-scope events
     // (bridge crashes, deployment-registered operator events).
-    runtimeSurfaces: ['platform', 'tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['platform', 'workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsDiscordPlugin, {
-    // Notification channels run on both surfaces: tenant workspaces deliver
+    // Notification channels run on both surfaces: workspaces deliver
     // printer events; the platform workspace delivers platform-scope events
     // (bridge crashes, deployment-registered operator events).
-    runtimeSurfaces: ['platform', 'tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['platform', 'workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsBrowserPlugin, {
-    // Notification channels run on both surfaces: tenant workspaces deliver
+    // Notification channels run on both surfaces: workspaces deliver
     // printer events; the platform workspace delivers platform-scope events
     // (bridge crashes, deployment-registered operator events).
-    runtimeSurfaces: ['platform', 'tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['platform', 'workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(notificationsEmailPlugin, {
-    // Notification channels run on both surfaces: tenant workspaces deliver
+    // Notification channels run on both surfaces: workspaces deliver
     // printer events; the platform workspace delivers platform-scope events
     // (bridge crashes, deployment-registered operator events).
-    runtimeSurfaces: ['platform', 'tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['platform', 'workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(plateClearingPlugin, {
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(firmwareUpdatesPlugin, {
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(ordersPlugin, {
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(filamentManagerPlugin, {
     defaultEnabled: true,
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(calibrationPlugin, {
     defaultEnabled: false,
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(printQueuePlugin, {
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(homeAssistantPlugin, {
     defaultEnabled: false,
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled'
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
   })
 }

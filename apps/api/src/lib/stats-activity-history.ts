@@ -1,5 +1,5 @@
 /**
- * Builds the 30-day activity timeline used by the tenant and platform stats
+ * Builds the 30-day activity timeline used by the workspace and platform stats
  * cards.
  *
  * Each point captures the total printer count for that UTC day alongside how
@@ -89,7 +89,7 @@ function buildStatsActivityHistory(input: {
   return history
 }
 
-export async function readTenantStatsActivityHistory(): Promise<StatsActivityHistory> {
+export async function readWorkspaceStatsActivityHistory(): Promise<StatsActivityHistory> {
   const today = startOfUtcDay(new Date())
   const windowStart = addUtcDays(today, -(ACTIVITY_WINDOW_DAYS - 1))
   const tomorrow = addUtcDays(today, 1)
@@ -119,23 +119,23 @@ export async function readTenantStatsActivityHistory(): Promise<StatsActivityHis
   })
 }
 
-export async function readPlatformStatsActivityHistory(visibleTenantIds?: readonly string[]): Promise<StatsActivityHistory> {
-  if (visibleTenantIds != null && visibleTenantIds.length === 0) {
+export async function readPlatformStatsActivityHistory(visibleWorkspaceIds?: readonly string[]): Promise<StatsActivityHistory> {
+  if (visibleWorkspaceIds != null && visibleWorkspaceIds.length === 0) {
     return buildStatsActivityHistory({ printerCreatedAt: [], printerActivity: [] })
   }
 
   const today = startOfUtcDay(new Date())
   const windowStart = addUtcDays(today, -(ACTIVITY_WINDOW_DAYS - 1))
   const tomorrow = addUtcDays(today, 1)
-  const tenantFilter = visibleTenantIds == null ? {} : { tenantId: { in: [...visibleTenantIds] } }
+  const workspaceFilter = visibleWorkspaceIds == null ? {} : { workspaceId: { in: [...visibleWorkspaceIds] } }
   const [printers, jobs] = await Promise.all([
     rootPrisma.printer.findMany({
-      where: tenantFilter,
+      where: workspaceFilter,
       select: { createdAt: true }
     }),
     rootPrisma.printJob.findMany({
       where: {
-        ...tenantFilter,
+        ...workspaceFilter,
         startedAt: { lt: tomorrow },
         OR: [
           { finishedAt: null },

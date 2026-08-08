@@ -1,8 +1,8 @@
 /**
  * Email notifications plugin (built-in).
  *
- * Emails opted-in users on notification events. In a tenant workspace the
- * recipients are opted-in members (per-tenant opt-in) for printer events; at
+ * Emails opted-in users on notification events. In a workspace the
+ * recipients are opted-in members (per-workspace opt-in) for printer events; at
  * the platform scope the recipients are opted-in platform users for
  * platform events (bridge crashes, deployment-registered operator events).
  * Message formatting is delegated to the shared notification helper; delivery
@@ -31,7 +31,7 @@ export const notificationsEmailPlugin: ApiPlugin = {
 
     context.router.get('/', requireAuthenticatedCurrentUser(), async (request, response) => {
       const scope = requestNotificationScope(context, request)
-      if (!scope.tenantId) assertPlatformScopeActor(request)
+      if (!scope.workspaceId) assertPlatformScopeActor(request)
       const userId = currentUserId(request)
       const subscribers = await readEmailSubscribers(scope.settings)
       response.json({
@@ -42,7 +42,7 @@ export const notificationsEmailPlugin: ApiPlugin = {
 
     context.router.post('/subscription', requireAuthenticatedCurrentUser(), async (request, response) => {
       const scope = requestNotificationScope(context, request)
-      if (!scope.tenantId) assertPlatformScopeActor(request)
+      if (!scope.workspaceId) assertPlatformScopeActor(request)
       const userId = currentUserId(request)
       const subscribers = await readEmailSubscribers(scope.settings)
       if (!subscribers.includes(userId)) {
@@ -59,7 +59,7 @@ export const notificationsEmailPlugin: ApiPlugin = {
 
     context.router.delete('/subscription', requireAuthenticatedCurrentUser(), async (request, response) => {
       const scope = requestNotificationScope(context, request)
-      if (!scope.tenantId) assertPlatformScopeActor(request)
+      if (!scope.workspaceId) assertPlatformScopeActor(request)
       const userId = currentUserId(request)
       const subscribers = await readEmailSubscribers(scope.settings)
       if (subscribers.includes(userId)) {
@@ -77,7 +77,7 @@ export const notificationsEmailPlugin: ApiPlugin = {
     const handle = createEmailNotificationHandler(context)
     const off = subscribePrinterNotifications(context.printerEvents, handle, {
       onError: (error) => context.logger.warn('failed to deliver email notification', error),
-      shouldHandleTenantId: (tenantId) => context.isEnabledForTenant?.(tenantId) ?? true
+      shouldHandleWorkspaceId: (workspaceId) => context.isEnabledForWorkspace?.(workspaceId) ?? true
     })
     context.onShutdown(off)
   }

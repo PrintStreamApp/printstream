@@ -3,14 +3,14 @@
  * "tune" dialog and the sidebar's per-material "changed vs preset" badge call to seed a filament's
  * baseline. The filament counterpart of `buildLocalProcessConfigResolver`.
  *
- * Mirrors the tenant `/api/slicing/profiles/resolve-filament` route, split by where the data lives:
+ * Mirrors the workspace `/api/slicing/profiles/resolve-filament` route, split by where the data lives:
  * - BUILT-IN preset -> the anonymous `/api/public/slicing/resolve-filament` endpoint (the slicer
  *   resolves it from its image; no workspace needed).
  * - PROJECT filament (`project:filament:`) -> resolved IN THE BROWSER from the 3MF's own
  *   `project_settings.config` at the filament's SLOT column (via the shared
  *   `extractProjectFilamentConfig`), with the baseline resolved by matching the slot's parent preset
  *   NAME to a built-in in the loaded catalogue and resolving THAT through the public endpoint. This
- *   is exactly what the tenant route does with the file it reads server-side — here the file only
+ *   is exactly what the workspace route does with the file it reads server-side — here the file only
  *   exists in the tab.
  * - BROWSER-STORED preset (`local:filament:`) -> the document the user uploaded through the
  *   "Manage" dialog, read straight from that store. NOT unresolvable, despite there being no
@@ -19,7 +19,7 @@
  *
  * A BUILT-IN preset is also asked about a SLOT, because a slot whose picker names a stock preset can
  * still carry drift baked into the 3MF (this is how a project keeps a raised max volumetric speed
- * while still naming the stock preset). The tenant route reads that from the file server-side; here
+ * while still naming the stock preset). The workspace route reads that from the file server-side; here
  * it comes from the same in-tab archive, so the two hosts report the same badge for the same
  * project instead of the viewer flatly reporting none.
  */
@@ -54,7 +54,7 @@ function readProjectFilamentSlot(project: ClientThreeMfProject, projectFilamentI
 /** Resolve a built-in filament preset's config via the anonymous endpoint. Injectable for tests. */
 export type BuiltinFilamentResolver = (filamentProfileId: string, targetId: string | null) => Promise<ResolveFilamentConfigResponse>
 
-const resolveBuiltinFilamentViaApi: BuiltinFilamentResolver = (filamentProfileId, targetId) =>
+export const resolveBuiltinFilamentViaApi: BuiltinFilamentResolver = (filamentProfileId, targetId) =>
   apiFetch<ResolveFilamentConfigResponse>('/api/public/slicing/resolve-filament', {
     method: 'POST',
     body: { filamentProfileId, targetId }
@@ -89,14 +89,14 @@ export function buildLocalFilamentConfigResolver(input: {
         const parent = exact ?? findParentBuiltinPreset(input.filamentProfiles, project.presetName, 'filament')
         if (parent) baseline = (await resolveBuiltinFilament(parent.id, targetId)).config
       }
-      // The file's declared record rides along in BOTH branches, matching the tenant route: a
+      // The file's declared record rides along in BOTH branches, matching the workspace route: a
       // resolved baseline does not make it redundant, it is what says whether a difference from
       // that baseline was a user's change or drift the vendor would normalize away.
       return baseline
         ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides }
         // No preset resolved: `baseConfig` is a stand-in copy, so only the declared record can say
         // what changed. Flagged explicitly — the payload cannot be told apart from an unmodified
-        // project otherwise. Same contract as the tenant route.
+        // project otherwise. Same contract as the workspace route.
         : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false }
     }
     if (slicingPresetProvenance(filamentProfileId) === 'builtin') {
@@ -120,7 +120,7 @@ export function buildLocalFilamentConfigResolver(input: {
       // Only the DECLARED changes follow the slot onto a different preset (BambuStudio's
       // `Tab::select_preset` carries the dirty options and takes the new preset's value for the
       // rest); without a declared record the whole slot carries, as it always did. Same rule as
-      // the tenant route's `/profiles/resolve-filament`, so both hosts agree.
+      // the workspace route's `/profiles/resolve-filament`, so both hosts agree.
       const declaredCarry = slot?.declaresOverrides
         ? slot.overriddenKeys.reduce<ProcessConfig>((picked, key) => {
             const value = slotConfig[key]

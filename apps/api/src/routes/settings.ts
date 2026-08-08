@@ -5,10 +5,10 @@
  * that the web app can combine with device-local overrides.
  */
 import { Router } from 'express'
-import { AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION, SETTINGS_MANAGE_PERMISSION, filterPermissionsForTenantContext, updateGeneralSettingsSchema } from '@printstream/shared'
+import { AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION, SETTINGS_MANAGE_PERMISSION, filterPermissionsForWorkspaceContext, updateGeneralSettingsSchema } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { authProviderRegistry } from '../lib/auth-registry.js'
-import { broadcastAuthChangedForTenant } from '../lib/auth-change-events.js'
+import { broadcastAuthChangedForWorkspace } from '../lib/auth-change-events.js'
 import { requestHasPermission } from '../lib/auth-context.js'
 import { assertSettingsMutationsAllowed } from '../lib/demo-mode.js'
 import { requireRecentUserSession } from '../lib/auth-session.js'
@@ -34,22 +34,22 @@ settingsRouter.put('/', async (request, response) => {
   }
 
   if (parsed.data.supportAccessEnabled !== undefined || parsed.data.supportAccessPermissions !== undefined) {
-    if (!request.tenant) {
-      throw badRequest('Tenant context is required.')
+    if (!request.workspace) {
+      throw badRequest('Workspace context is required.')
     }
 
     assertRequestPermission(request, AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION)
 
     if (parsed.data.supportAccessPermissions) {
-      const visiblePermissions = new Set(filterPermissionsForTenantContext(parsed.data.supportAccessPermissions))
+      const visiblePermissions = new Set(filterPermissionsForWorkspaceContext(parsed.data.supportAccessPermissions))
       if (visiblePermissions.size !== parsed.data.supportAccessPermissions.length) {
         throw badRequest('One or more support permissions are not available in this workspace.')
       }
     }
 
-    const tenantHasAnyEnabledAuthProvider = (await authProviderRegistry.list()).some((provider) => provider.enabled)
+    const workspaceHasAnyEnabledAuthProvider = (await authProviderRegistry.list()).some((provider) => provider.enabled)
 
-    if (tenantHasAnyEnabledAuthProvider) {
+    if (workspaceHasAnyEnabledAuthProvider) {
       if (request.auth.actor.type !== 'user') {
         throw unauthorized(AUTHENTICATION_REQUIRED_MESSAGE)
       }
@@ -57,18 +57,18 @@ settingsRouter.put('/', async (request, response) => {
       await requireRecentUserSession(prisma, request, request.auth.actor.userId)
 
       if (parsed.data.supportAccessEnabled === false) {
-        const enabledTenantAdminCount = await prisma.authUser.count({
+        const enabledWorkspaceAdminCount = await prisma.authUser.count({
           where: {
-            tenantMemberships: {
+            workspaceMemberships: {
               some: {
-                tenantId: request.tenant.id,
+                workspaceId: request.workspace.id,
                 loginDisabled: false
               }
             },
             memberships: {
               some: {
                 group: {
-                  tenantId: request.tenant.id,
+                  workspaceId: request.workspace.id,
                   key: 'admin'
                 }
               }
@@ -76,7 +76,7 @@ settingsRouter.put('/', async (request, response) => {
           }
         })
 
-        if (enabledTenantAdminCount === 0) {
+        if (enabledWorkspaceAdminCount === 0) {
           throw conflict('At least one enabled Admin user must remain before disabling support access.')
         }
       }
@@ -95,7 +95,7 @@ settingsRouter.put('/', async (request, response) => {
 
   const updated = await updateGeneralSettings(parsed.data)
   if (parsed.data.supportAccessEnabled !== undefined || parsed.data.supportAccessPermissions !== undefined) {
-    broadcastAuthChangedForTenant(request.tenant?.id)
+    broadcastAuthChangedForWorkspace(request.workspace?.id)
   }
 
   // Record exactly which settings changed. All of these keys are

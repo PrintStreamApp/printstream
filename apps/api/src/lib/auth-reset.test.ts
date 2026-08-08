@@ -5,7 +5,7 @@ import { resetAuthData } from './auth-reset.js'
 
 type GroupRow = {
   id: string
-  tenantId: string | null
+  workspaceId: string | null
   key: string | null
   name: string
   description: string | null
@@ -15,14 +15,14 @@ type GroupRow = {
   isRemovable: boolean
 }
 
-test('resetAuthData clears auth state, preserves tenants, and reseeds built-in roles', async () => {
-  const tenants = [
-    { id: 'tenant-1', slug: 'default', name: 'Default' },
-    { id: 'tenant-2', slug: 'studio', name: 'Studio' }
+test('resetAuthData clears auth state, preserves workspaces, and reseeds built-in roles', async () => {
+  const workspaces = [
+    { id: 'workspace-1', slug: 'default', name: 'Default' },
+    { id: 'workspace-2', slug: 'studio', name: 'Studio' }
   ]
   const groups: GroupRow[] = [{
     id: 'custom-platform-role',
-    tenantId: null,
+    workspaceId: null,
     key: 'custom_platform',
     name: 'Custom platform role',
     description: null,
@@ -33,10 +33,10 @@ test('resetAuthData clears auth state, preserves tenants, and reseeds built-in r
   }]
   const settings = [
     { key: 'plugin:auth-local:platform:enabled' },
-    { key: 'plugin:auth-oauth:tenant:tenant-1:clientSecret' },
-    { key: 'tenant:tenant-1:auth:supportAccessEnabled' },
+    { key: 'plugin:auth-oauth:workspace:workspace-1:clientSecret' },
+    { key: 'workspace:workspace-1:auth:supportAccessEnabled' },
     { key: 'platform:auth:sessionDuration' },
-    { key: 'plugin:plate-clearing:tenant:tenant-1:enabled' }
+    { key: 'plugin:plate-clearing:workspace:workspace-1:enabled' }
   ]
   const scalarCounts = {
     authSession: 2,
@@ -44,20 +44,20 @@ test('resetAuthData clears auth state, preserves tenants, and reseeds built-in r
     authPasskeyCredential: 1,
     authUserGroupMembership: 3,
     authServiceAccountGroupMembership: 1,
-    authTenantMembership: 2,
+    authWorkspaceMembership: 2,
     authServiceAccount: 1,
     authUser: 2
   }
 
-  const prisma = createAuthResetPrisma({ tenants, groups, settings, scalarCounts })
+  const prisma = createAuthResetPrisma({ workspaces, groups, settings, scalarCounts })
 
   const result = await resetAuthData(prisma as never)
 
-  assert.deepEqual(result.tenantsPreserved, tenants)
+  assert.deepEqual(result.workspacesPreserved, workspaces)
   assert.deepEqual(result.before, {
     users: 2,
     roles: 1,
-    tenantMemberships: 2,
+    workspaceMemberships: 2,
     serviceAccounts: 1,
     sessions: 2,
     authSettings: 4
@@ -67,23 +67,23 @@ test('resetAuthData clears auth state, preserves tenants, and reseeds built-in r
   assert.equal(result.deleted.authSettings, 4)
   assert.deepEqual(result.after, {
     users: 0,
-    roles: builtInPlatformAuthGroupSeeds.length + tenants.length * builtInAuthGroupSeeds.length,
-    tenantMemberships: 0,
+    roles: builtInPlatformAuthGroupSeeds.length + workspaces.length * builtInAuthGroupSeeds.length,
+    workspaceMemberships: 0,
     serviceAccounts: 0,
     sessions: 0,
     authSettings: 0
   })
   assert.equal(result.reseededRoles, result.after.roles)
   assert.equal(settings.length, 1)
-  assert.equal(settings[0]?.key, 'plugin:plate-clearing:tenant:tenant-1:enabled')
+  assert.equal(settings[0]?.key, 'plugin:plate-clearing:workspace:workspace-1:enabled')
   assert.equal(groups.some((group) => group.key === 'custom_platform'), false)
   assert.equal(groups.find((group) => group.key === PLATFORM_ADMIN_GROUP_KEY)?.id, 'platform-group-admin')
-  assert.equal(groups.filter((group) => group.tenantId === 'tenant-1').length, builtInAuthGroupSeeds.length)
-  assert.equal(groups.filter((group) => group.tenantId === 'tenant-2').length, builtInAuthGroupSeeds.length)
+  assert.equal(groups.filter((group) => group.workspaceId === 'workspace-1').length, builtInAuthGroupSeeds.length)
+  assert.equal(groups.filter((group) => group.workspaceId === 'workspace-2').length, builtInAuthGroupSeeds.length)
 })
 
 function createAuthResetPrisma(input: {
-  tenants: Array<{ id: string; slug: string; name: string }>
+  workspaces: Array<{ id: string; slug: string; name: string }>
   groups: GroupRow[]
   settings: Array<{ key: string }>
   scalarCounts: Record<string, number>
@@ -96,9 +96,9 @@ function createAuthResetPrisma(input: {
   const countScalar = (modelName: string) => async () => input.scalarCounts[modelName] ?? 0
 
   return {
-    tenant: {
+    workspace: {
       async findMany() {
-        return input.tenants
+        return input.workspaces
       }
     },
     authSession: { count: countScalar('authSession'), deleteMany: deleteScalar('authSession') },
@@ -106,7 +106,7 @@ function createAuthResetPrisma(input: {
     authPasskeyCredential: { deleteMany: deleteScalar('authPasskeyCredential') },
     authUserGroupMembership: { deleteMany: deleteScalar('authUserGroupMembership') },
     authServiceAccountGroupMembership: { deleteMany: deleteScalar('authServiceAccountGroupMembership') },
-    authTenantMembership: { count: countScalar('authTenantMembership'), deleteMany: deleteScalar('authTenantMembership') },
+    authWorkspaceMembership: { count: countScalar('authWorkspaceMembership'), deleteMany: deleteScalar('authWorkspaceMembership') },
     authServiceAccount: { count: countScalar('authServiceAccount'), deleteMany: deleteScalar('authServiceAccount') },
     authUser: { count: countScalar('authUser'), deleteMany: deleteScalar('authUser') },
     authGroup: {
@@ -118,20 +118,20 @@ function createAuthResetPrisma(input: {
         input.groups.splice(0, input.groups.length)
         return { count }
       },
-      async findUnique(args: { where: { tenantId_key?: { tenantId: string; key: string }; id?: string } }) {
-        if (args.where.tenantId_key) {
-          const { tenantId, key } = args.where.tenantId_key
-          return input.groups.find((group) => group.tenantId === tenantId && group.key === key) ?? null
+      async findUnique(args: { where: { workspaceId_key?: { workspaceId: string; key: string }; id?: string } }) {
+        if (args.where.workspaceId_key) {
+          const { workspaceId, key } = args.where.workspaceId_key
+          return input.groups.find((group) => group.workspaceId === workspaceId && group.key === key) ?? null
         }
         return input.groups.find((group) => group.id === args.where.id) ?? null
       },
-      async findFirst(args: { where: { tenantId: string | null; key: string } }) {
-        return input.groups.find((group) => group.tenantId === args.where.tenantId && group.key === args.where.key) ?? null
+      async findFirst(args: { where: { workspaceId: string | null; key: string } }) {
+        return input.groups.find((group) => group.workspaceId === args.where.workspaceId && group.key === args.where.key) ?? null
       },
       async create(args: { data: Partial<GroupRow> & { key: string; name: string; permissions: string[]; isSystem: boolean; isEditable: boolean; isRemovable: boolean } }) {
         const row: GroupRow = {
           id: args.data.id ?? `group-${input.groups.length + 1}`,
-          tenantId: args.data.tenantId ?? null,
+          workspaceId: args.data.workspaceId ?? null,
           key: args.data.key,
           name: args.data.name,
           description: args.data.description ?? null,

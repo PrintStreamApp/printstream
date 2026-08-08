@@ -9,7 +9,7 @@ import { publicSlicingRouter } from './public-slicing.js'
 import { slicerClient } from '../lib/slicer-client.js'
 
 /**
- * The point of this surface is that it is anonymous AND carries nothing tenant-specific. Both halves
+ * The point of this surface is that it is anonymous AND carries nothing workspace-specific. Both halves
  * are asserted: a caller with no session gets the catalogue, and what comes back is exactly what the
  * slicer reported — no custom profiles, which by definition belong to a workspace this caller does
  * not have.
@@ -46,7 +46,7 @@ test('the built-in catalogue is served without any session', async () => {
   ] as unknown as Awaited<ReturnType<typeof slicerClient.profiles>>
 
   await withApp(async (baseUrl) => {
-    // No cookie, no tenant header, no permission — the whole point of the surface.
+    // No cookie, no workspace header, no permission — the whole point of the surface.
     const response = await fetch(`${baseUrl}/profiles`)
     assert.equal(response.status, 200)
     const body = await response.json() as { profiles: Array<{ id: string }> }
@@ -57,13 +57,13 @@ test('the built-in catalogue is served without any session', async () => {
   })
 })
 
-test('the catalogue is exactly what the slicer reported, with nothing tenant-owned added', async () => {
-  // The tenant route merges custom profiles in. This one must not — a caller here has no workspace,
+test('the catalogue is exactly what the slicer reported, with nothing workspace-owned added', async () => {
+  // The workspace route merges custom profiles in. This one must not — a caller here has no workspace,
   // so any custom preset appearing would be someone else's.
   const builtin = [{ id: 'process:0.20mm', kind: 'process', name: '0.20mm Standard' }]
-  let tenantArgumentSeen: unknown = 'not-called'
+  let workspaceArgumentSeen: unknown = 'not-called'
   slicerClient.profiles = async (targetId) => {
-    tenantArgumentSeen = targetId
+    workspaceArgumentSeen = targetId
     return builtin as unknown as Awaited<ReturnType<typeof slicerClient.profiles>>
   }
 
@@ -71,7 +71,7 @@ test('the catalogue is exactly what the slicer reported, with nothing tenant-own
     const response = await fetch(`${baseUrl}/profiles?targetId=bs-2.7`)
     const body = await response.json() as { profiles: unknown[] }
     assert.equal(body.profiles.length, builtin.length)
-    assert.equal(tenantArgumentSeen, 'bs-2.7', 'the target passes through; nothing else does')
+    assert.equal(workspaceArgumentSeen, 'bs-2.7', 'the target passes through; nothing else does')
   })
 })
 
@@ -132,8 +132,8 @@ test('a built-in printer preset resolves anonymously, for the browser-side machi
   })
 })
 
-test('a workspace preset id is refused here rather than reaching a tenant lookup', async () => {
-  // The whole point of the surface: nothing here ever consults a tenant, so a custom preset must be
+test('a workspace preset id is refused here rather than reaching a workspace lookup', async () => {
+  // The whole point of the surface: nothing here ever consults a workspace, so a custom preset must be
   // rejected at the boundary instead of being resolved through some other path.
   let resolved = 0
   slicerClient.resolveMachineConfig = async () => { resolved += 1; return null }

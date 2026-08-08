@@ -10,7 +10,7 @@
  * for dialogs mounted anywhere in the tree (including portals) rather than only under a provider.
  */
 import { useSyncExternalStore } from 'react'
-import { getOpenDialogCount, subscribeToOpenDialogs } from '../components/BackAwareModal'
+import { getOpenDialogCount, subscribeToOpenDialogs } from '../lib/openDialogRegistry'
 
 export function useAnyDialogOpen(): boolean {
   return useSyncExternalStore(subscribeToOpenDialogs, () => getOpenDialogCount() > 0, () => false)

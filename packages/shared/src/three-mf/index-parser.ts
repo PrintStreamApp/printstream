@@ -56,8 +56,16 @@ export { decodeXmlAttributeValue }
  *      existed, so they report an affected project as clean and must re-derive.
  * v24: `settingsRepairReasons` also covers a project that names filament presets but carries none of
  *      their values. Same VALUE-change reasoning as v23.
+ * v25: `settingsRepairReasons` also covers `inherits_group` left at the width of a filament set the
+ *      project no longer has — the engine reads the filament names past their end and SIGSEGVs
+ *      while LOADING (exit 139). Same VALUE-change reasoning as v23: affected projects sitting in
+ *      the cache report clean and must re-derive.
+ * v26: `settingsRepairReasons` also covers objects whose material lives only in part-level
+ *      `extruder` metadata (the CLI slices by the OBJECT-level entry, so they print with filament
+ *      1), and `filamentPhysics` detection was blunted (ANY missing sentinel or a stale-width
+ *      filament array flags, not only the all-dropped shape). Same VALUE-change reasoning as v23.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 24
+export const THREE_MF_INDEX_PARSER_VERSION = 26
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -88,13 +96,18 @@ interface ModelSettingsSupportConfig {
  * Assemble the typed 3MF index from the already-extracted archive entries: the slice-info XML, the
  * project settings JSON, the model-settings plate metadata, the embedded plate thumbnails, and the
  * layer-based custom G-code sidecar (filament changes + pauses; null when the archive has none).
+ *
+ * `modelSettingsXml` is the RAW `model_settings.config` document, wanted only by the repair
+ * inspection (object-level extruder bindings live there, not in the pre-parsed plate metadata).
+ * Callers without it (printer-SD indexes) omit it and merely skip those checks.
  */
 export function buildThreeMfIndex(
   sliceInfoXml: string | null,
   projectSettingsJson: string | null,
   modelSettings: Map<number, string> | ModelSettingsPlateMetadata[] = new Map(),
   thumbnailPlateFiles: Map<number, string> = new Map(),
-  customGcodeXml: string | null = null
+  customGcodeXml: string | null = null,
+  modelSettingsXml: string | null = null
 ): BridgeLibraryThreeMfIndex {
   const modelSettingsPlates = Array.isArray(modelSettings)
     ? modelSettings
@@ -232,7 +245,7 @@ export function buildThreeMfIndex(
   // the project at all. `needsSettingsRepair` stays as the gate so existing callers are unaffected.
   // Which defects exist is owned by `repairs/` — this path only reports what it is told, so a new
   // repairable defect never edits the parser.
-  const settingsRepairReasons = collectSettingsRepairReasons(projectSettingsJson)
+  const settingsRepairReasons = collectSettingsRepairReasons(projectSettingsJson, modelSettingsXml)
   const needsSettingsRepair = settingsRepairReasons.length > 0
   // The Bambu Studio build that saved this project. BambuStudio REFUSES to open a project from a
   // newer version than the engine slicing it (major.minor only — see bambu-file-version.ts), so

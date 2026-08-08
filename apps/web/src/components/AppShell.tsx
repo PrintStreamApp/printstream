@@ -6,12 +6,15 @@
  * row, and a max-width content column.
  */
 import React, { type MouseEvent, type ReactNode } from 'react'
-import { Box, Button, Stack, Tab, TabList, Tabs, Typography } from '@mui/joy'
+import { Box, Button, Stack, Tab, TabList, Tabs, Tooltip, Typography } from '@mui/joy'
 import type { ShellIdentity } from '../lib/authUi'
 import { HorizontalOverflowScroller } from './HorizontalOverflowScroller'
 import { appShellDesktopSecondaryNavHostId } from './AppShell.constants'
-import { sectionTabSx } from '../theme/theme'
+import { navDensitySx, sectionTabSx } from '../theme/theme'
 import { useShellTabBadges } from '../lib/shellBadges'
+import { CONTEXT_CHOOSER_LABEL } from '../lib/workspaceRoute'
+import { tabTooltip } from './tabTooltip'
+import { useFittedNavDensity } from '../hooks/useFittedNavDensity'
 
 const ambientOverlayBase = [
   'var(--printstream-shell-ambient-overlay-base)',
@@ -22,6 +25,13 @@ export interface ShellTab<TValue extends string = string> {
   value: TValue
   label: string
   ariaLabel?: string
+  /**
+   * What the tab is FOR, shown as its tooltip when the label is already on
+   * screen. Omit it and a readable tab gets no tooltip at all — a tooltip that
+   * repeats the word under the pointer is noise, so this has to earn its place
+   * by saying something the label does not.
+   */
+  description?: string
   icon?: ReactNode
   mobileIcon?: ReactNode
   iconOnly?: boolean
@@ -36,6 +46,12 @@ interface AppShellProps<TValue extends string> {
   onOpenAccount?: () => void
   workspaceLabel?: string
   workspaceChooserLabel?: string
+  /**
+   * Icon for the context being named. The shell only ever receives the NAME,
+   * which cannot say whether "Home" is a workspace, an account or the
+   * platform — and those behave nothing alike.
+   */
+  workspaceChooserIcon?: ReactNode
   showNavigationFrame?: boolean
   unconstrainedWidth?: boolean
   identity?: ShellIdentity | null
@@ -56,6 +72,7 @@ export function AppShell<TValue extends string>({
   onOpenAccount,
   workspaceLabel,
   workspaceChooserLabel,
+  workspaceChooserIcon,
   showNavigationFrame = false,
   unconstrainedWidth = false,
   identity = null,
@@ -80,15 +97,23 @@ export function AppShell<TValue extends string>({
     px: { xs: 0.125, sm: 1.25 }
   } as const
 
+  // Keyed on the tabs themselves, not just their count: a plugin swapping one
+  // tab for a longer-worded one changes what has to fit without changing how
+  // many there are.
+  const { ref: desktopTabListRef, density: desktopNavDensity } = useFittedNavDensity<HTMLDivElement>(
+    tabs.map((tab) => tab.value).join('|')
+  )
+  const desktopLabelsHidden = desktopNavDensity === 'icons'
+
   const hasTabs = tabs.length > 0
   const showsNavigationFrame = showNavigationFrame || hasTabs
   const canOpenWorkspaceChooser = workspaceChooserAvailable && typeof onOpenWorkspaceChooser === 'function'
   const badgedTabs = useShellTabBadges()
   const showsWorkspaceChooser = workspaceChooserAvailable
-  const workspaceChooserButtonLabel = workspaceChooserLabel ?? 'Choose workspace'
+  const workspaceChooserButtonLabel = workspaceChooserLabel ?? CONTEXT_CHOOSER_LABEL
   const workspaceChooserButtonAriaLabel = workspaceChooserLabel
-    ? `Choose workspace. Current workspace: ${workspaceChooserLabel}`
-    : 'Choose workspace'
+    ? `${CONTEXT_CHOOSER_LABEL}. Currently in: ${workspaceChooserLabel}`
+    : CONTEXT_CHOOSER_LABEL
   const shouldNavigateToTab = (tabValue: TValue) => {
     if (currentPath === tabValue) return false
     if (currentPath.startsWith(`${tabValue}/`)) return true
@@ -110,13 +135,24 @@ export function AppShell<TValue extends string>({
       sx={{
         minHeight: '100vh',
         position: 'relative',
+        // Column + `mt: auto` on the footer keeps it at the bottom of the
+        // viewport when the page does not fill it, rather than floating under
+        // short content with dead space beneath.
+        display: 'flex',
+        flexDirection: 'column',
         px: { xs: 2, md: 4 },
         pt: {
           xs: 'calc(var(--app-top-inset, 0px) + 16px)',
           md: 'calc(var(--app-top-inset, 0px) + 10px)'
         },
         pb: {
-          xs: 'calc(var(--app-safe-bottom, 0px) + 78px)',
+          // The 78px clears the FIXED mobile nav bar below — so it is reserved
+          // only when that bar is actually rendered. Reserving it unconditionally
+          // pushed every tab-less page (the workspace chooser, sign-in) past the
+          // viewport by exactly the height of a bar that was not there.
+          xs: showsNavigationFrame
+            ? 'calc(var(--app-safe-bottom, 0px) + 78px)'
+            : 'calc(var(--app-safe-bottom, 0px) + 16px)',
           sm: 4,
           md: 5
         }
@@ -151,7 +187,17 @@ export function AppShell<TValue extends string>({
       />
       <Stack
         spacing={4}
-        sx={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: unconstrainedWidth ? 'none' : 1200, mx: 'auto' }}
+        sx={{
+          position: 'relative',
+          zIndex: 1,
+          width: '100%',
+          maxWidth: unconstrainedWidth ? 'none' : 1200,
+          mx: 'auto',
+          // Grows to fill the root's `minHeight: 100vh`, which is what gives the
+          // footer's `mt: auto` room to push against. Without it the column is
+          // only as tall as its content and the footer floats mid-viewport.
+          flexGrow: 1
+        }}
       >
         <Tabs
           value={activeTab}
@@ -217,13 +263,20 @@ export function AppShell<TValue extends string>({
                       tab off the end — and it duplicated the desktop header's home affordance
                       while the bar's whole job is reaching the tabs. */}
                   {tabs.map((tab) => (
-                    <Tab
+                    // The app's tooltip rather than the browser's `title`, which
+                    // renders unstyled after its own delay and cannot match the
+                    // surrounding chrome.
+                    <Tooltip
                       key={tab.value}
+                      title={tabTooltip(tab, { labelHidden: Boolean(tab.mobileIcon) })}
+                      variant="soft"
+                      size="sm"
+                    >
+                    <Tab
                       value={tab.value}
                       data-tab-value={tab.value}
                       sx={[...(tab.iconOnly || tab.mobileIcon ? [primaryTabSx, iconOnlyTabSx] : [primaryTabSx]), { position: 'relative' }]}
                       aria-label={tab.ariaLabel ?? tab.label}
-                      title={tab.ariaLabel ?? tab.label}
                     >
                       {badgedTabs.has(tab.value) && <TabBadgeDot />}
                       {tab.iconOnly ? (
@@ -252,9 +305,12 @@ export function AppShell<TValue extends string>({
                             {tab.mobileIcon}
                           </Box>
                           <Stack direction="row" spacing={0.75} alignItems="center" sx={{ display: { xs: 'none', sm: 'inline-flex' } }}>
-                            {tab.icon && (
+                            {/* Falls back to the mobile icon so a tab only needs
+                                to name one: every tab carries its icon on
+                                desktop too, beside the label. */}
+                            {(tab.icon ?? tab.mobileIcon) && (
                               <Box component="span" sx={{ display: 'inline-flex', '& svg': { fontSize: 20 } }}>
-                                {tab.icon}
+                                {tab.icon ?? tab.mobileIcon}
                               </Box>
                             )}
                             <span>{tab.label}</span>
@@ -271,6 +327,7 @@ export function AppShell<TValue extends string>({
                         </Stack>
                       )}
                     </Tab>
+                    </Tooltip>
                   ))}
                 </TabList>
               </HorizontalOverflowScroller>
@@ -290,9 +347,11 @@ export function AppShell<TValue extends string>({
               }}
             >
               <TabList
+                ref={desktopTabListRef}
                 disableUnderline
                 onClickCapture={handleTabListClickCapture}
                 sx={{
+                  ...navDensitySx,
                   mt: 0.5,
                   mb: 0,
                   mx: 0,
@@ -302,7 +361,11 @@ export function AppShell<TValue extends string>({
                   position: 'relative',
                   borderRadius: 'md',
                   flexWrap: 'nowrap',
-                  overflowX: 'visible',
+                  // The safety valve behind the tabs' `max-content` floor: once
+                  // the labels genuinely cannot fit, the row scrolls (as it
+                  // already does on mobile) instead of spilling outside the
+                  // nav pill. The scrollbar itself stays hidden, below.
+                  overflowX: 'auto',
                   scrollbarWidth: 'none',
                   '&::-webkit-scrollbar': { display: 'none' },
                   backgroundColor: 'color-mix(in srgb, var(--printstream-shell-nav-background) 88%, transparent)',
@@ -339,6 +402,7 @@ export function AppShell<TValue extends string>({
                   }}
                 >
                   <Box
+                    data-nav-logo
                     sx={{
                       width: 48,
                       height: 48,
@@ -354,7 +418,12 @@ export function AppShell<TValue extends string>({
                       alt=""
                       sx={{
                         display: 'block',
-                        width: 52,
+                        // A ratio, not 52px: the box is deliberately narrower
+                        // than the art (it crops the icon's own padding), and
+                        // the density rules shrink the box -- a fixed width
+                        // would crop harder at every step down.
+                        width: '108%',
+                        flexShrink: 0,
                         height: 'auto',
                         objectFit: 'contain'
                       }}
@@ -362,13 +431,17 @@ export function AppShell<TValue extends string>({
                   </Box>
                 </Box>
                 {tabs.map((tab) => (
-                  <Tab
+                  <Tooltip
                     key={`desktop-${tab.value}`}
+                    title={tabTooltip(tab, { labelHidden: desktopLabelsHidden })}
+                    variant="soft"
+                    size="sm"
+                  >
+                  <Tab
                     value={tab.value}
                     data-tab-value={tab.value}
                     sx={[...(tab.iconOnly ? [sectionTabSx, iconOnlyTabSx] : [sectionTabSx]), { position: 'relative' }]}
                     aria-label={tab.ariaLabel ?? tab.label}
-                    title={tab.ariaLabel ?? tab.label}
                   >
                     {badgedTabs.has(tab.value) && <TabBadgeDot />}
                     {tab.iconOnly ? (
@@ -384,16 +457,38 @@ export function AppShell<TValue extends string>({
                         {tab.icon ?? tab.label}
                       </Box>
                     ) : (
-                      <Stack direction="row" spacing={0.75} alignItems="center">
-                        {tab.icon && (
-                          <Box component="span" sx={{ display: 'inline-flex', '& svg': { fontSize: 20 } }}>
-                            {tab.icon}
+                      <Stack
+                        direction="row"
+                        spacing={0.75}
+                        alignItems="center"
+                        // The icon-to-label gap is slack too, and tightens with
+                        // the tab's padding rather than waiting for the type to
+                        // shrink. See `navDensitySx`.
+                        data-nav-tab-gap
+                        sx={{ minWidth: 0 }}
+                      >
+                        {/* `minWidth: 0` above is what lets the label ellipsis
+                            rather than force the tab wide: a flex item defaults
+                            to min-content, so without it the text refuses to
+                            shrink and pushes the row into a scroll. The icon
+                            keeps its size -- a half-drawn icon reads as
+                            breakage, a truncated word reads as truncated. */}
+                        {(tab.icon ?? tab.mobileIcon) && (
+                          <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0, '& svg': { fontSize: 20 } }}>
+                            {tab.icon ?? tab.mobileIcon}
                           </Box>
                         )}
-                        <span>{tab.label}</span>
+                        <Box
+                          component="span"
+                          data-nav-label
+                          sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                        >
+                          {tab.label}
+                        </Box>
                       </Stack>
                     )}
                   </Tab>
+                  </Tooltip>
                 ))}
               </TabList>
               <Box id={appShellDesktopSecondaryNavHostId} />
@@ -433,7 +528,7 @@ export function AppShell<TValue extends string>({
           </Box>
         </Tabs>
 
-        <Box component="footer" sx={{ textAlign: 'center', pb: 1 }}>
+        <Box component="footer" sx={{ textAlign: 'center', pb: 1, mt: 'auto', pt: 3 }}>
           <Stack
             direction="row"
             spacing={{ xs: 1.25, sm: 2.5 }}
@@ -476,13 +571,20 @@ export function AppShell<TValue extends string>({
                 alignItems="center"
                 sx={{ width: 'fit-content', maxWidth: '100%' }}
               >
+                {/* "Context", not "Workspace". The thing named beside it is
+                    whichever context you are in -- a cloud workspace, the
+                    billing account, or the platform -- so the fixed word was
+                    wrong two times in three, and said "Workspace: Platform" on
+                    a customer's own billing pages. Same reasoning as
+                    CONTEXT_CHOOSER_LABEL. */}
                 <Typography level="body-xs" sx={{ color: 'neutral.500', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  Workspace
+                  Context
                 </Typography>
                 <Button
                   variant="plain"
                   color="neutral"
                   size="sm"
+                  startDecorator={workspaceChooserIcon}
                   aria-label={workspaceChooserButtonAriaLabel}
                   onClick={canOpenWorkspaceChooser ? () => onOpenWorkspaceChooser() : undefined}
                   loading={workspaceChooserPending}

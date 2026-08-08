@@ -62,16 +62,16 @@ test('recovers rediscovered printers from a disconnected stale bridge assignment
     return { count: 1 }
   }) as unknown) as typeof rootPrisma.printer.updateMany
   const managerUpdates: Array<{ printerId: string; bridgeId: string | null | undefined }> = []
-  printerManager.update = ((printer, _tenantId, bridgeId) => {
+  printerManager.update = ((printer, _workspaceId, bridgeId) => {
     managerUpdates.push({ printerId: printer.id, bridgeId })
   }) as typeof printerManager.update
 
-  const recovered = await recoverBridgePrinterAssignments({ tenantId: 'tenant-1', bridgeId: 'new-bridge' })
+  const recovered = await recoverBridgePrinterAssignments({ workspaceId: 'workspace-1', bridgeId: 'new-bridge' })
 
   assert.deepEqual(recovered.map((printer) => printer.id), ['printer-1'])
   assert.deepEqual(updateManyArgs, {
     where: {
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       id: { in: ['printer-1'] }
     },
     data: { bridgeId: 'new-bridge' }
@@ -99,7 +99,7 @@ test('does not recover printers from another connected bridge', async () => {
     throw new Error('printer manager should not be updated')
   }) as typeof printerManager.update
 
-  const recovered = await recoverBridgePrinterAssignments({ tenantId: 'tenant-1', bridgeId: 'new-bridge' })
+  const recovered = await recoverBridgePrinterAssignments({ workspaceId: 'workspace-1', bridgeId: 'new-bridge' })
 
   assert.deepEqual(recovered, [])
   assert.equal(updateCalled, false)
@@ -125,9 +125,9 @@ test('re-homes the library from a disconnected bridge once its last printer is d
   rootPrisma.libraryFolder.updateMany = ((async (args: unknown) => { libraryUpdates.push(args); return { count: 2 } }) as unknown) as typeof rootPrisma.libraryFolder.updateMany
   rootPrisma.libraryFileVersion.updateMany = ((async (args: unknown) => { libraryUpdates.push(args); return { count: 1 } }) as unknown) as typeof rootPrisma.libraryFileVersion.updateMany
 
-  await recoverBridgePrinterAssignments({ tenantId: 'tenant-1', bridgeId: 'new-bridge' })
+  await recoverBridgePrinterAssignments({ workspaceId: 'workspace-1', bridgeId: 'new-bridge' })
 
-  const expected = { where: { tenantId: 'tenant-1', ownerBridgeId: 'old-bridge' }, data: { ownerBridgeId: 'new-bridge' } }
+  const expected = { where: { workspaceId: 'workspace-1', ownerBridgeId: 'old-bridge' }, data: { ownerBridgeId: 'new-bridge' } }
   assert.deepEqual(libraryUpdates, [expected, expected, expected])
 })
 
@@ -148,18 +148,18 @@ test('does not re-home the library while the drained bridge still owns printers'
   rootPrisma.printer.count = ((async () => 1) as unknown) as typeof rootPrisma.printer.count
   rootPrisma.libraryFile.updateMany = (() => { throw new Error('library must not be re-homed') }) as typeof rootPrisma.libraryFile.updateMany
 
-  await recoverBridgePrinterAssignments({ tenantId: 'tenant-1', bridgeId: 'new-bridge' })
+  await recoverBridgePrinterAssignments({ workspaceId: 'workspace-1', bridgeId: 'new-bridge' })
 })
 
 function makePrinter(overrides: Partial<{
   id: string
-  tenantId: string
+  workspaceId: string
   bridgeId: string | null
   serial: string
 }> = {}) {
   return {
     id: overrides.id ?? 'printer-1',
-    tenantId: overrides.tenantId ?? 'tenant-1',
+    workspaceId: overrides.workspaceId ?? 'workspace-1',
     bridgeId: overrides.bridgeId ?? null,
     name: 'Printer One',
     host: 'printer-one.local',

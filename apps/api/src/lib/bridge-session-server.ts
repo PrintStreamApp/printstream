@@ -163,7 +163,7 @@ export function attachBridgeSessionServer(server: HttpServer): AttachedBridgeSes
           authenticatedBridgeId = context.bridgeId
           authenticatedConnection = {
             bridgeId: context.bridgeId,
-            tenantId: context.tenantId,
+            workspaceId: context.workspaceId,
             send(outboundMessage) {
               if (socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify(outboundMessage))
@@ -177,11 +177,11 @@ export function attachBridgeSessionServer(server: HttpServer): AttachedBridgeSes
           socket.send(JSON.stringify({
             type: 'bridge.welcome',
             bridgeId: context.bridgeId,
-            connected: context.tenantId != null,
-            tenantId: context.tenantId,
+            connected: context.workspaceId != null,
+            workspaceId: context.workspaceId,
             heartbeatIntervalSeconds: 15
           }))
-          void recoverAndSyncBridgePrinters(context.bridgeId, context.tenantId)
+          void recoverAndSyncBridgePrinters(context.bridgeId, context.workspaceId)
         }).catch((error) => {
           console.warn('[bridge-session] hello handling failed', (error as Error).message)
           socket.close(4003, 'bridge authentication failed')
@@ -193,7 +193,7 @@ export function attachBridgeSessionServer(server: HttpServer): AttachedBridgeSes
 
       handleAuthenticatedMessage(
         authenticatedBridgeId,
-        authenticatedConnection?.tenantId ?? null,
+        authenticatedConnection?.workspaceId ?? null,
         message,
         takeHeartbeatLastSeenAt
       )
@@ -209,21 +209,21 @@ export function attachBridgeSessionServer(server: HttpServer): AttachedBridgeSes
         if (!bridgeSessionManager.isActiveConnection(authenticatedBridgeId, authenticatedConnection ?? undefined)) {
           return
         }
-        const tenantId = authenticatedConnection?.tenantId ?? null
+        const workspaceId = authenticatedConnection?.workspaceId ?? null
         const clearedPrinterIds = bridgeSessionManager.clearBridgePrinterFtpActivity(authenticatedBridgeId)
         clearBridgeDebugCaptureStatus(authenticatedBridgeId)
         clearBridgeMetrics(authenticatedBridgeId)
-        if (tenantId) {
+        if (workspaceId) {
           for (const printerId of clearedPrinterIds) {
-            wsBroadcaster.broadcast({ type: 'printer.ftps.active', printerId, active: false }, tenantId)
+            wsBroadcaster.broadcast({ type: 'printer.ftps.active', printerId, active: false }, workspaceId)
           }
           // A disconnected bridge can no longer be controlled or report capture
           // progress; clear the banner. It re-announces on reconnect.
           wsBroadcaster.broadcast(
             { type: 'bridge.debug.capture', bridgeId: authenticatedBridgeId, status: inactiveBridgeDebugCaptureStatus },
-            tenantId
+            workspaceId
           )
-          broadcastBridgesChanged(tenantId)
+          broadcastBridgesChanged(workspaceId)
         }
         bridgeSessionManager.unregisterConnection(authenticatedBridgeId, authenticatedConnection ?? undefined)
         printerDiscovery.clearBridge(authenticatedBridgeId)
@@ -273,12 +273,12 @@ function parseBridgeMessage(data: WebSocket.RawData): ParsedBridgeMessage {
 async function authenticateBridgeHello(
   socket: WebSocket,
   message: Extract<BridgeRuntimeInboundMessage, { type: 'bridge.hello' }>
-): Promise<{ bridgeId: string; tenantId: string | null } | null> {
+): Promise<{ bridgeId: string; workspaceId: string | null } | null> {
   const bridge = await rootPrisma.bridge.findUnique({
     where: { id: message.bridgeId },
     select: {
       id: true,
-      tenantId: true,
+      workspaceId: true,
       version: true,
       releaseFingerprint: true,
       buildRevision: true,
@@ -314,19 +314,19 @@ async function authenticateBridgeHello(
       lastUpdateError: null
     }
   })
-  if (bridge.tenantId) {
-    broadcastBridgesChanged(bridge.tenantId)
+  if (bridge.workspaceId) {
+    broadcastBridgesChanged(bridge.workspaceId)
   }
 
   return {
     bridgeId: bridge.id,
-    tenantId: bridge.tenantId
+    workspaceId: bridge.workspaceId
   }
 }
 
 function handleAuthenticatedMessage(
   bridgeId: string,
-  tenantId: string | null,
+  workspaceId: string | null,
   message: BridgeRuntimeInboundMessage,
   takeHeartbeatLastSeenAt: () => Date | null
 ): void {
@@ -360,8 +360,8 @@ function handleAuthenticatedMessage(
     }
     case 'bridge.printer.ftps.active': {
       const changed = bridgeSessionManager.setPrinterFtpActivity(bridgeId, message.printerId, message.active)
-      if (changed && tenantId) {
-        wsBroadcaster.broadcast({ type: 'printer.ftps.active', printerId: message.printerId, active: message.active }, tenantId)
+      if (changed && workspaceId) {
+        wsBroadcaster.broadcast({ type: 'printer.ftps.active', printerId: message.printerId, active: message.active }, workspaceId)
       }
       return
     }
@@ -371,8 +371,8 @@ function handleAuthenticatedMessage(
     }
     case 'bridge.printer.discovered': {
       printerDiscovery.setBridgePrinters(bridgeId, message.printers)
-      if (tenantId) {
-        void recoverAndSyncBridgePrinters(bridgeId, tenantId)
+      if (workspaceId) {
+        void recoverAndSyncBridgePrinters(bridgeId, workspaceId)
       }
       return
     }
@@ -395,18 +395,18 @@ function handleAuthenticatedMessage(
     }
     case 'bridge.debug.capture.status': {
       setBridgeDebugCaptureStatus(bridgeId, message.status)
-      if (tenantId) {
-        wsBroadcaster.broadcast({ type: 'bridge.debug.capture', bridgeId, status: message.status }, tenantId)
+      if (workspaceId) {
+        wsBroadcaster.broadcast({ type: 'bridge.debug.capture', bridgeId, status: message.status }, workspaceId)
       }
       return
     }
     case 'bridge.metrics': {
-      recordBridgeMetricsSnapshot(bridgeId, tenantId, message.metrics)
+      recordBridgeMetricsSnapshot(bridgeId, workspaceId, message.metrics)
       return
     }
     case 'bridge.crash.report': {
       // Fire-and-forget: recording a crash must never stall the session loop.
-      void ingestBridgeCrashReport({ bridgeId, sessionTenantId: tenantId, report: message.report })
+      void ingestBridgeCrashReport({ bridgeId, sessionWorkspaceId: workspaceId, report: message.report })
         .catch((error) => console.error(`[bridge-crash] failed to record crash report for bridge ${bridgeId}`, (error as Error).message))
       return
     }
@@ -416,12 +416,12 @@ function handleAuthenticatedMessage(
   }
 }
 
-async function recoverAndSyncBridgePrinters(bridgeId: string, tenantId: string | null): Promise<void> {
-  const recoveredPrinters = tenantId
-    ? await recoverBridgePrinterAssignments({ bridgeId, tenantId })
+async function recoverAndSyncBridgePrinters(bridgeId: string, workspaceId: string | null): Promise<void> {
+  const recoveredPrinters = workspaceId
+    ? await recoverBridgePrinterAssignments({ bridgeId, workspaceId })
     : []
   await syncBridgePrinterConfig(bridgeId)
-  if (tenantId && recoveredPrinters.length > 0) {
-    broadcastPrinterViewsChanged(tenantId)
+  if (workspaceId && recoveredPrinters.length > 0) {
+    broadcastPrinterViewsChanged(workspaceId)
   }
 }

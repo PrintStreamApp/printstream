@@ -34,7 +34,7 @@ X-GNOME-Autostart-enabled=true
   if (process.platform === 'win32') {
     // Launch hidden via wscript so login does not flash a console window.
     const vbsPath = ensureWindowsTrayVbs(exePath)
-    runCommand('reg', ['add', WINDOWS_RUN_KEY, '/v', windowsRunValue(identity), '/t', 'REG_SZ', '/d', `"${windowsWscriptPath()}" //nologo "${vbsPath}"`, '/f'])
+    runCommand('reg', ['add', WINDOWS_RUN_KEY, '/v', windowsRunValue(identity), '/t', 'REG_SZ', '/d', `"${windowsWscriptPath()}" //nologo //B "${vbsPath}"`, '/f'])
     return `${WINDOWS_RUN_KEY}\\${windowsRunValue(identity)}`
   }
 

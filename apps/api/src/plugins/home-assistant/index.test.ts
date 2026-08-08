@@ -283,9 +283,9 @@ test('home-assistant routes expose summary counts and the bridge snapshot', asyn
   })
 })
 
-test('home-assistant skips tenant-scoped websocket events when the plugin is disabled for that tenant', async () => {
+test('home-assistant skips workspace-scoped websocket events when the plugin is disabled for that workspace', async () => {
   const bus = new PrinterEventBus()
-  const broadcasts: Array<{ tenantId: string | null; event: unknown }> = []
+  const broadcasts: Array<{ workspaceId: string | null; event: unknown }> = []
   const plugin = createHomeAssistantPlugin({
     async listPrinters() {
       return [printer]
@@ -307,11 +307,11 @@ test('home-assistant skips tenant-scoped websocket events when the plugin is dis
     } as never,
     printerEvents: bus,
     ws: {
-      broadcast(event: unknown, tenantId: string | null) {
-        broadcasts.push({ event, tenantId })
+      broadcast(event: unknown, workspaceId: string | null) {
+        broadcasts.push({ event, workspaceId })
       }
     } as never,
-    isEnabledForTenant() {
+    isEnabledForWorkspace() {
       return false
     },
     router: express.Router(),
@@ -319,7 +319,7 @@ test('home-assistant skips tenant-scoped websocket events when the plugin is dis
       async get() { return null },
       async set() {},
       async delete() {},
-      forTenant() { throw new Error('not used') }
+      forWorkspace() { throw new Error('not used') }
     },
     onShutdown() {},
     registerPrintGuard() {

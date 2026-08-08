@@ -11,19 +11,19 @@
  *   when reinstalled. Requests to an uninstalled plugin's sub-router
  *   return 404.
  * - `enabled` — whether an installed platform-scoped plugin is active.
- *   Tenant-scoped plugins keep their own tenant-local enablement while the
- *   platform stores only the allow/default policy for tenant workspaces.
+ *   Workspace-scoped plugins keep their own workspace-local enablement while the
+ *   platform stores only the allow/default policy for workspaces.
  *
  * Background work (event listeners, timers, sockets) is torn down by
  * invoking the shutdown handlers the plugin registered, and re-created
  * by calling `register` again on enable/install.
  *
  * State is persisted under `plugin:<name>:_installed`,
- * `plugin:<name>:_enabled`, and tenant-policy keys for controlled
- * tenant plugins.
+ * `plugin:<name>:_enabled`, and workspace-policy keys for controlled
+ * workspace plugins.
  */
 import express, { type NextFunction, type Request, type Response, type Router } from 'express'
-import type { PluginSurface, PluginTenantAccess, PluginSource, TenantPluginAvailability } from '@printstream/shared'
+import type { PluginSurface, PluginWorkspaceAccess, PluginSource, WorkspacePluginAvailability } from '@printstream/shared'
 import type { ApiPlugin, ApiPluginContext, PluginInfo, PluginLogger, PluginSettingStore, PublicPluginInfo } from './types.js'
 import { authProviderRegistry } from '../lib/auth-registry.js'
 import type { PrintGuardContext } from '../lib/print-guards.js'
@@ -33,14 +33,16 @@ import { printerManager } from '../lib/printer-manager.js'
 import { printGuards } from '../lib/print-guards.js'
 import { slotFilamentResolvers, type SlotFilamentResolver } from '../lib/slot-filament-registry.js'
 import { wsBroadcaster } from '../lib/ws-server.js'
-import { blockedPluginsForTenant, planGatedPluginNames } from '../lib/plugin-plan-gate.js'
+import { blockedPluginsForWorkspace, planGatedPluginNames } from '../lib/plugin-plan-gate.js'
 import { broadcastPluginSettingsChanged, broadcastPluginsChanged } from '../lib/ws-resource-events.js'
 import {
   derivePluginDefaultEnableMode,
   isPluginEnabledByDefault,
   PLUGIN_DEFAULT_ENABLE_MODE_KEY,
+  PLUGIN_SETTING_PREFIX,
   type PluginDefaultEnableMode
 } from './default-enable-mode.js'
+import { visibleWorkspaceScope } from '../lib/workspace-visibility.js'
 
 interface RegisteredPlugin {
   plugin: ApiPlugin
@@ -49,20 +51,20 @@ interface RegisteredPlugin {
   enabled: boolean
   /**
    * Platform-scope enablement. For plugins with their own platform bit
-   * (dual-surface tenant-'controlled' plugins, whose `enabled` means the
-   * tenant default) this is persisted separately under `_platformEnabled`;
+   * (dual-surface workspace-'controlled' plugins, whose `enabled` means the
+   * workspace default) this is persisted separately under `_platformEnabled`;
    * for every other platform-capable plugin it mirrors `enabled`.
    */
   platformEnabled: boolean
   active: boolean
   runtimeSurfaces: PluginSurface[]
   managerSurfaces: PluginSurface[]
-  tenantAccess: PluginTenantAccess
-  tenantAvailability: {
+  workspaceAccess: PluginWorkspaceAccess
+  workspaceAvailability: {
     allowed: boolean
     enabledByDefault: boolean
   }
-  tenantEnabledOverrides: Map<string, boolean>
+  workspaceEnabledOverrides: Map<string, boolean>
   pluginRouter: Router
   shutdownHandlers: Array<() => void | Promise<void>>
 }
@@ -70,12 +72,13 @@ interface RegisteredPlugin {
 const ENABLED_KEY = '_enabled'
 const PLATFORM_ENABLED_KEY = '_platformEnabled'
 const INSTALLED_KEY = '_installed'
-const TENANT_DEFAULT_ALLOWED_KEY = '_tenantDefaultAllowed'
-const TENANT_DEFAULT_ENABLED_KEY = '_tenantDefaultEnabled'
-const TENANT_ENABLED_OVERRIDE_PREFIX = '_tenantEnabled:'
-const LEGACY_TENANT_OVERRIDE_PREFIX = '_tenantAllowed:'
+const WORKSPACE_DEFAULT_ALLOWED_KEY = '_workspaceDefaultAllowed'
+const WORKSPACE_DEFAULT_ENABLED_KEY = '_workspaceDefaultEnabled'
+// Persisted settings-key prefixes; the stored spelling outlives the rename.
+const WORKSPACE_ENABLED_OVERRIDE_PREFIX = '_workspaceEnabled:'
+const LEGACY_WORKSPACE_OVERRIDE_PREFIX = '_workspaceAllowed:'
 /** Internal keys that are never cleared on uninstall. */
-const RESERVED_KEYS = new Set([ENABLED_KEY, PLATFORM_ENABLED_KEY, INSTALLED_KEY, TENANT_DEFAULT_ALLOWED_KEY, TENANT_DEFAULT_ENABLED_KEY])
+const RESERVED_KEYS = new Set([ENABLED_KEY, PLATFORM_ENABLED_KEY, INSTALLED_KEY, WORKSPACE_DEFAULT_ALLOWED_KEY, WORKSPACE_DEFAULT_ENABLED_KEY])
 
 export class PluginRegistry {
   private readonly registered = new Map<string, RegisteredPlugin>()
@@ -90,17 +93,17 @@ export class PluginRegistry {
     forceEnabled?: boolean
     runtimeSurfaces?: PluginSurface[]
     managerSurfaces?: PluginSurface[]
-    tenantAccess?: PluginTenantAccess
+    workspaceAccess?: PluginWorkspaceAccess
   } = {}): Promise<void> {
     if (this.registered.has(plugin.name)) {
       throw new Error(`Plugin already registered: ${plugin.name}`)
     }
 
     const pluginRouter = express.Router()
-    const runtimeSurfaces = normalizePluginSurfaces(options.runtimeSurfaces ?? plugin.runtimeSurfaces ?? ['tenant'])
+    const runtimeSurfaces = normalizePluginSurfaces(options.runtimeSurfaces ?? plugin.runtimeSurfaces ?? ['workspace'])
     const managerSurfaces = normalizePluginSurfaces(options.managerSurfaces ?? plugin.managerSurfaces ?? defaultManagerSurfaces(runtimeSurfaces))
-    const tenantAccess = normalizeTenantAccess(options.tenantAccess ?? plugin.tenantAccess ?? defaultTenantAccess(runtimeSurfaces))
-    validatePluginMetadata(plugin.name, runtimeSurfaces, managerSurfaces, tenantAccess)
+    const workspaceAccess = normalizeWorkspaceAccess(options.workspaceAccess ?? plugin.workspaceAccess ?? defaultWorkspaceAccess(runtimeSurfaces))
+    validatePluginMetadata(plugin.name, runtimeSurfaces, managerSurfaces, workspaceAccess)
     const entry: RegisteredPlugin = {
       plugin,
       source: options.source ?? 'builtin',
@@ -110,12 +113,12 @@ export class PluginRegistry {
       active: false,
       runtimeSurfaces,
       managerSurfaces,
-      tenantAccess,
-      tenantAvailability: {
-        allowed: tenantAccess === 'controlled',
+      workspaceAccess,
+      workspaceAvailability: {
+        allowed: workspaceAccess === 'controlled',
         enabledByDefault: false
       },
-      tenantEnabledOverrides: new Map(),
+      workspaceEnabledOverrides: new Map(),
       pluginRouter,
       shutdownHandlers: []
     }
@@ -140,9 +143,9 @@ export class PluginRegistry {
         response.status(503).json({ error: `Plugin disabled: ${plugin.name}` })
         return
       }
-      const tenantId = request.tenant?.id
-      if (tenantId && planGatedPluginNames().has(plugin.name)) {
-        void blockedPluginsForTenant(tenantId)
+      const workspaceId = request.workspace?.id
+      if (workspaceId && planGatedPluginNames().has(plugin.name)) {
+        void blockedPluginsForWorkspace(workspaceId)
           .then((blocked) => {
             if (blocked.has(plugin.name)) {
               response.status(403).json({ error: `This plugin requires the Pro plan: ${plugin.name}` })
@@ -167,11 +170,11 @@ export class PluginRegistry {
     entry.platformEnabled = options.forceEnabled ?? (platformEnabledRaw == null
       ? (hasOwnPlatformBit(entry) ? enabledByDefault : entry.enabled)
       : platformEnabledRaw !== 'false')
-    entry.tenantAvailability = await this.loadTenantAvailability(plugin.name, {
-      allowed: entry.tenantAccess === 'controlled',
+    entry.workspaceAvailability = await this.loadWorkspaceAvailability(plugin.name, {
+      allowed: entry.workspaceAccess === 'controlled',
       enabledByDefault: entry.enabled
     })
-    entry.tenantEnabledOverrides = await this.loadTenantEnabledOverrides(plugin.name)
+    entry.workspaceEnabledOverrides = await this.loadWorkspaceEnabledOverrides(plugin.name)
 
     await this.reconcileActivation(entry)
   }
@@ -180,8 +183,8 @@ export class PluginRegistry {
     const entry = this.registered.get(name)
     if (!entry) throw new Error(`Unknown plugin: ${name}`)
     if (!entry.installed) throw new Error(`Plugin is not installed: ${name}`)
-    if (entry.tenantAccess === 'controlled' && !entry.runtimeSurfaces.includes('platform')) {
-      throw new Error(`Plugin is tenant-managed in workspaces: ${name}`)
+    if (entry.workspaceAccess === 'controlled' && !entry.runtimeSurfaces.includes('platform')) {
+      throw new Error(`Plugin is workspace-managed in workspaces: ${name}`)
     }
     if (entry.enabled === enabled) return this.toInfo(entry)
 
@@ -228,7 +231,7 @@ export class PluginRegistry {
 
     // Wipe scoped settings so a reinstall starts clean. Internal flags
     // are kept so we remember the user uninstalled this plugin.
-    const prefix = `plugin:${name}:`
+    const prefix = `${PLUGIN_SETTING_PREFIX}${name}:`
     const rows = await prisma.setting.findMany({ where: { key: { startsWith: prefix } } })
     const toDelete = rows
       .map((row) => row.key.slice(prefix.length))
@@ -255,7 +258,7 @@ export class PluginRegistry {
     return Array.from(this.registered.values()).map((entry) => this.toInfo(entry))
   }
 
-  listCatalog(request: Pick<Request, 'tenant'>): PublicPluginInfo[] {
+  listCatalog(request: Pick<Request, 'workspace'>): PublicPluginInfo[] {
     return Array.from(this.registered.values()).map((entry) => this.toCatalogInfo(entry, request))
   }
 
@@ -264,19 +267,19 @@ export class PluginRegistry {
     return entry ? this.toInfo(entry) : null
   }
 
-  async setTenantAvailability(name: string, availability: TenantPluginAvailability): Promise<PluginInfo> {
+  async setWorkspaceAvailability(name: string, availability: WorkspacePluginAvailability): Promise<PluginInfo> {
     const entry = this.registered.get(name)
     if (!entry) throw new Error(`Unknown plugin: ${name}`)
-    if (entry.tenantAccess !== 'controlled') {
-      throw new Error(`Plugin does not support tenant availability controls: ${name}`)
+    if (entry.workspaceAccess !== 'controlled') {
+      throw new Error(`Plugin does not support workspace availability controls: ${name}`)
     }
 
     const settings = createSettingStore(name)
-    await settings.set(TENANT_DEFAULT_ALLOWED_KEY, availability.allowed ? 'true' : 'false')
-    await settings.set(TENANT_DEFAULT_ENABLED_KEY, availability.enabledByDefault ? 'true' : 'false')
-    await prisma.setting.deleteMany({ where: { key: { startsWith: `plugin:${name}:${LEGACY_TENANT_OVERRIDE_PREFIX}` } } })
+    await settings.set(WORKSPACE_DEFAULT_ALLOWED_KEY, availability.allowed ? 'true' : 'false')
+    await settings.set(WORKSPACE_DEFAULT_ENABLED_KEY, availability.enabledByDefault ? 'true' : 'false')
+    await prisma.setting.deleteMany({ where: { key: { startsWith: `${PLUGIN_SETTING_PREFIX}${name}:${LEGACY_WORKSPACE_OVERRIDE_PREFIX}` } } })
 
-    entry.tenantAvailability = {
+    entry.workspaceAvailability = {
       allowed: availability.allowed,
       enabledByDefault: availability.enabledByDefault
     }
@@ -285,40 +288,40 @@ export class PluginRegistry {
     return this.toInfo(entry)
   }
 
-  async setTenantEnabled(name: string, tenantId: string, enabled: boolean, request: Pick<Request, 'tenant'>): Promise<PublicPluginInfo> {
+  async setWorkspaceEnabled(name: string, workspaceId: string, enabled: boolean, request: Pick<Request, 'workspace'>): Promise<PublicPluginInfo> {
     const entry = this.registered.get(name)
     if (!entry) throw new Error(`Unknown plugin: ${name}`)
-    if (entry.tenantAccess !== 'controlled' || !entry.runtimeSurfaces.includes('tenant')) {
-      throw new Error(`Plugin does not support tenant workspace toggles: ${name}`)
+    if (entry.workspaceAccess !== 'controlled' || !entry.runtimeSurfaces.includes('workspace')) {
+      throw new Error(`Plugin does not support workspace toggles: ${name}`)
     }
-    if (!entry.tenantAvailability.allowed) {
+    if (!entry.workspaceAvailability.allowed) {
       throw new Error(`Plugin unavailable in this workspace: ${name}`)
     }
 
-    const currentEnabled = entry.tenantEnabledOverrides.get(tenantId) ?? entry.tenantAvailability.enabledByDefault
+    const currentEnabled = entry.workspaceEnabledOverrides.get(workspaceId) ?? entry.workspaceAvailability.enabledByDefault
     if (currentEnabled === enabled) {
       return this.toCatalogInfo(entry, request)
     }
 
     const settings = createSettingStore(name)
-    const key = `${TENANT_ENABLED_OVERRIDE_PREFIX}${tenantId}`
-    if (enabled === entry.tenantAvailability.enabledByDefault) {
-      entry.tenantEnabledOverrides.delete(tenantId)
+    const key = `${WORKSPACE_ENABLED_OVERRIDE_PREFIX}${workspaceId}`
+    if (enabled === entry.workspaceAvailability.enabledByDefault) {
+      entry.workspaceEnabledOverrides.delete(workspaceId)
       await settings.delete(key)
     } else {
-      entry.tenantEnabledOverrides.set(tenantId, enabled)
+      entry.workspaceEnabledOverrides.set(workspaceId, enabled)
       await settings.set(key, enabled ? 'true' : 'false')
     }
 
     await this.reconcileActivation(entry)
-    broadcastPluginsChanged(tenantId)
+    broadcastPluginsChanged(workspaceId)
     return this.toCatalogInfo(entry, request)
   }
 
   /** List `Setting` rows scoped to a plugin (excluding internal flags). */
   async listSettings(name: string): Promise<Array<{ key: string; value: string }>> {
     if (!this.registered.has(name)) return []
-    const prefix = `plugin:${name}:`
+    const prefix = `${PLUGIN_SETTING_PREFIX}${name}:`
     const rows = await prisma.setting.findMany({ where: { key: { startsWith: prefix } } })
     return rows
       .map((row) => ({ key: row.key.slice(prefix.length), value: row.value }))
@@ -333,18 +336,18 @@ export class PluginRegistry {
       printerEvents,
       ws: wsBroadcaster,
       // `null` asks about the PLATFORM scope: enabled there when the plugin
-      // runs on the platform surface and is platform-enabled. Tenant ids keep
-      // the per-tenant controlled/override semantics.
-      isEnabledForTenant: (tenantId) => tenantId === null
+      // runs on the platform surface and is platform-enabled. Workspace ids keep
+      // the per-workspace controlled/override semantics.
+      isEnabledForWorkspace: (workspaceId) => workspaceId === null
         ? entry.installed && entry.runtimeSurfaces.includes('platform') && this.isPlatformEnabled(entry)
-        : this.isEnabledForTenant(entry, tenantId),
+        : this.isEnabledForWorkspace(entry, workspaceId),
       router: entry.pluginRouter,
       settings: createSettingStore(entry.plugin.name),
       onShutdown: (handler) => entry.shutdownHandlers.push(handler),
       registerPrintGuard: (guard) => {
         const wrappedGuard = ((guardContext: PrintGuardContext) => {
-          const tenantId = printerManager.getTenantId(guardContext.printerId) ?? null
-          if (!this.isEnabledForTenant(entry, tenantId)) {
+          const workspaceId = printerManager.getWorkspaceId(guardContext.printerId) ?? null
+          if (!this.isEnabledForWorkspace(entry, workspaceId)) {
             return true
           }
           return guard(guardContext)
@@ -359,10 +362,10 @@ export class PluginRegistry {
         return off
       },
       registerSlotFilamentResolver: (resolver) => {
-        // Only answer for tenants this plugin is enabled for, mirroring print guards — a
+        // Only answer for workspaces this plugin is enabled for, mirroring print guards — a
         // disabled filament plugin must not leak spool associations into other plugins.
         const scopedResolver: SlotFilamentResolver = (query) =>
-          this.isEnabledForTenant(entry, query.tenantId) ? resolver(query) : Promise.resolve(null)
+          this.isEnabledForWorkspace(entry, query.workspaceId) ? resolver(query) : Promise.resolve(null)
         const off = slotFilamentResolvers.register(scopedResolver)
         entry.shutdownHandlers.push(off)
         return off
@@ -408,34 +411,35 @@ export class PluginRegistry {
     if (entry.runtimeSurfaces.includes('platform') && this.isPlatformEnabled(entry)) {
       return true
     }
-    if (!entry.runtimeSurfaces.includes('tenant')) {
+    if (!entry.runtimeSurfaces.includes('workspace')) {
       return false
     }
-    if (entry.tenantAccess === 'always') {
+    if (entry.workspaceAccess === 'always') {
       return entry.enabled
     }
-    if (entry.tenantAccess !== 'controlled' || !entry.tenantAvailability.allowed) {
+    if (entry.workspaceAccess !== 'controlled' || !entry.workspaceAvailability.allowed) {
       return false
     }
-    return this.hasAnyEnabledTenant(entry)
+    return this.hasAnyEnabledWorkspace(entry)
   }
 
-  private async hasAnyEnabledTenant(entry: RegisteredPlugin): Promise<boolean> {
-    if (!entry.tenantAvailability.allowed) {
+  private async hasAnyEnabledWorkspace(entry: RegisteredPlugin): Promise<boolean> {
+    if (!entry.workspaceAvailability.allowed) {
       return false
     }
 
-    if (!entry.tenantAvailability.enabledByDefault) {
-      return Array.from(entry.tenantEnabledOverrides.values()).some(Boolean)
+    if (!entry.workspaceAvailability.enabledByDefault) {
+      return Array.from(entry.workspaceEnabledOverrides.values()).some(Boolean)
     }
 
-    const tenants = await prisma.tenant.findMany({
+    const workspaces = await prisma.workspace.findMany({
+      where: visibleWorkspaceScope,
       select: { id: true }
     })
-    if (tenants.length === 0) {
+    if (workspaces.length === 0) {
       return false
     }
-    return tenants.some((tenant) => entry.tenantEnabledOverrides.get(tenant.id) ?? true)
+    return workspaces.some((workspace) => entry.workspaceEnabledOverrides.get(workspace.id) ?? true)
   }
 
   private async getDefaultEnableMode(): Promise<PluginDefaultEnableMode> {
@@ -446,8 +450,13 @@ export class PluginRegistry {
           return existing.value
         }
 
-        const settingCount = await prisma.setting.count()
-        const mode = derivePluginDefaultEnableMode(settingCount)
+        // Only plugin state answers "did this install predate the policy" —
+        // see the reasoning in `default-enable-mode.ts`. A total row count put
+        // the answer at the mercy of any other boot-time write.
+        const pluginSettingCount = await prisma.setting.count({
+          where: { key: { startsWith: PLUGIN_SETTING_PREFIX } }
+        })
+        const mode = derivePluginDefaultEnableMode(pluginSettingCount)
         await prisma.setting.upsert({
           where: { key: PLUGIN_DEFAULT_ENABLE_MODE_KEY },
           update: { value: mode },
@@ -471,18 +480,18 @@ export class PluginRegistry {
       platformEnabled: entry.runtimeSurfaces.includes('platform') ? this.isPlatformEnabled(entry) : null,
       runtimeSurfaces: entry.runtimeSurfaces,
       managerSurfaces: entry.managerSurfaces,
-      tenantAccess: entry.tenantAccess,
+      workspaceAccess: entry.workspaceAccess,
       availableInCurrentContext: true,
-      tenantAvailability: entry.tenantAccess === 'controlled'
+      workspaceAvailability: entry.workspaceAccess === 'controlled'
         ? {
-            allowed: entry.tenantAvailability.allowed,
-            enabledByDefault: entry.tenantAvailability.enabledByDefault
+            allowed: entry.workspaceAvailability.allowed,
+            enabledByDefault: entry.workspaceAvailability.enabledByDefault
           }
         : null
     }
   }
 
-  private toCatalogInfo(entry: RegisteredPlugin, request: Pick<Request, 'tenant'>): PublicPluginInfo {
+  private toCatalogInfo(entry: RegisteredPlugin, request: Pick<Request, 'workspace'>): PublicPluginInfo {
     return {
       name: entry.plugin.name,
       version: entry.plugin.version,
@@ -493,40 +502,40 @@ export class PluginRegistry {
       platformEnabled: entry.runtimeSurfaces.includes('platform') ? this.isPlatformEnabled(entry) : null,
       runtimeSurfaces: entry.runtimeSurfaces,
       managerSurfaces: entry.managerSurfaces,
-      tenantAccess: entry.tenantAccess,
+      workspaceAccess: entry.workspaceAccess,
       availableInCurrentContext: this.isAvailableInRequestContext(entry, request)
     }
   }
 
-  private isAvailableInRequestContext(entry: RegisteredPlugin, request: Pick<Request, 'tenant'>): boolean {
-    const surface: PluginSurface = request.tenant ? 'tenant' : 'platform'
+  private isAvailableInRequestContext(entry: RegisteredPlugin, request: Pick<Request, 'workspace'>): boolean {
+    const surface: PluginSurface = request.workspace ? 'workspace' : 'platform'
     if (!entry.runtimeSurfaces.includes(surface)) {
       return false
     }
-    if (surface !== 'tenant') {
+    if (surface !== 'workspace') {
       return true
     }
-    if (entry.tenantAccess === 'always') {
+    if (entry.workspaceAccess === 'always') {
       return true
     }
-    if (entry.tenantAccess === 'none') {
+    if (entry.workspaceAccess === 'none') {
       return false
     }
-    return entry.tenantAvailability.allowed
+    return entry.workspaceAvailability.allowed
   }
 
-  private isEnabledInRequestContext(entry: RegisteredPlugin, request: Pick<Request, 'tenant'>): boolean {
-    const surface: PluginSurface = request.tenant ? 'tenant' : 'platform'
+  private isEnabledInRequestContext(entry: RegisteredPlugin, request: Pick<Request, 'workspace'>): boolean {
+    const surface: PluginSurface = request.workspace ? 'workspace' : 'platform'
     if (!entry.installed) {
       return false
     }
     if (surface === 'platform') {
       return entry.runtimeSurfaces.includes('platform') ? this.isPlatformEnabled(entry) : entry.enabled
     }
-    if (entry.tenantAccess === 'always') {
+    if (entry.workspaceAccess === 'always') {
       return entry.enabled
     }
-    return this.isEnabledForTenant(entry, request.tenant?.id ?? null)
+    return this.isEnabledForWorkspace(entry, request.workspace?.id ?? null)
   }
 
   /** Platform-scope enablement (see `RegisteredPlugin.platformEnabled`). */
@@ -537,9 +546,9 @@ export class PluginRegistry {
 
   /**
    * Toggle a plugin for the platform workspace. For plugins whose `enabled`
-   * flag already IS the platform switch (platform-only or tenantAccess
+   * flag already IS the platform switch (platform-only or workspaceAccess
    * 'always'), this delegates to `setEnabled`; dual-surface controlled
-   * plugins get their own persisted bit so the tenant default stays
+   * plugins get their own persisted bit so the workspace default stays
    * independent.
    */
   async setPlatformEnabled(name: string, enabled: boolean): Promise<PluginInfo> {
@@ -562,26 +571,26 @@ export class PluginRegistry {
     return this.toInfo(entry)
   }
 
-  private isEnabledForTenant(entry: RegisteredPlugin, tenantId: string | null): boolean {
-    if (!entry.installed || !entry.runtimeSurfaces.includes('tenant')) {
+  private isEnabledForWorkspace(entry: RegisteredPlugin, workspaceId: string | null): boolean {
+    if (!entry.installed || !entry.runtimeSurfaces.includes('workspace')) {
       return false
     }
-    if (entry.tenantAccess === 'always') {
+    if (entry.workspaceAccess === 'always') {
       return entry.enabled
     }
-    if (entry.tenantAccess !== 'controlled' || !entry.tenantAvailability.allowed || !tenantId) {
+    if (entry.workspaceAccess !== 'controlled' || !entry.workspaceAvailability.allowed || !workspaceId) {
       return false
     }
-    return entry.tenantEnabledOverrides.get(tenantId) ?? entry.tenantAvailability.enabledByDefault
+    return entry.workspaceEnabledOverrides.get(workspaceId) ?? entry.workspaceAvailability.enabledByDefault
   }
 
-  private async loadTenantAvailability(
+  private async loadWorkspaceAvailability(
     name: string,
-    defaults: Pick<RegisteredPlugin['tenantAvailability'], 'allowed' | 'enabledByDefault'>
-  ): Promise<RegisteredPlugin['tenantAvailability']> {
+    defaults: Pick<RegisteredPlugin['workspaceAvailability'], 'allowed' | 'enabledByDefault'>
+  ): Promise<RegisteredPlugin['workspaceAvailability']> {
     const settings = createSettingStore(name)
-    const allowedRaw = await settings.get(TENANT_DEFAULT_ALLOWED_KEY)
-    const enabledByDefaultRaw = await settings.get(TENANT_DEFAULT_ENABLED_KEY)
+    const allowedRaw = await settings.get(WORKSPACE_DEFAULT_ALLOWED_KEY)
+    const enabledByDefaultRaw = await settings.get(WORKSPACE_DEFAULT_ENABLED_KEY)
 
     return {
       allowed: allowedRaw == null ? defaults.allowed : allowedRaw !== 'false',
@@ -589,8 +598,8 @@ export class PluginRegistry {
     }
   }
 
-  private async loadTenantEnabledOverrides(name: string): Promise<Map<string, boolean>> {
-    const overridePrefix = `plugin:${name}:${TENANT_ENABLED_OVERRIDE_PREFIX}`
+  private async loadWorkspaceEnabledOverrides(name: string): Promise<Map<string, boolean>> {
+    const overridePrefix = `${PLUGIN_SETTING_PREFIX}${name}:${WORKSPACE_ENABLED_OVERRIDE_PREFIX}`
     const rows = await prisma.setting.findMany({
       where: { key: { startsWith: overridePrefix } },
       orderBy: { key: 'asc' }
@@ -611,7 +620,7 @@ export class PluginRegistry {
     const entry = this.registered.get(name)
     if (!entry) return
     // Tear down what is actually wired (`active`), not `enabled` — a plugin can
-    // be active without being platform-`enabled` (e.g. a tenant-surface plugin),
+    // be active without being platform-`enabled` (e.g. a workspace-surface plugin),
     // and gating on `enabled` would leak its subscriptions/connections. Matches
     // `uninstall`, which also keys teardown on `active`.
     if (entry.active) {
@@ -619,7 +628,7 @@ export class PluginRegistry {
       entry.active = false
     }
     this.registered.delete(name)
-    const prefix = `plugin:${name}:`
+    const prefix = `${PLUGIN_SETTING_PREFIX}${name}:`
     await prisma.setting.deleteMany({ where: { key: { startsWith: prefix } } })
     broadcastPluginsChanged()
   }
@@ -634,8 +643,8 @@ function createLogger(pluginName: string): PluginLogger {
   }
 }
 
-function createSettingStore(pluginName: string, keyPrefix?: string, broadcastTenantId?: string | null): PluginSettingStore {
-  const basePrefix = keyPrefix ?? `plugin:${pluginName}:`
+function createSettingStore(pluginName: string, keyPrefix?: string, broadcastWorkspaceId?: string | null): PluginSettingStore {
+  const basePrefix = keyPrefix ?? `${PLUGIN_SETTING_PREFIX}${pluginName}:`
   const keyFor = (key: string) => `${basePrefix}${key}`
   return {
     async get(key) {
@@ -649,17 +658,17 @@ function createSettingStore(pluginName: string, keyPrefix?: string, broadcastTen
         update: { value }
       })
       if (!RESERVED_KEYS.has(key)) {
-        broadcastPluginSettingsChanged(pluginName, broadcastTenantId)
+        broadcastPluginSettingsChanged(pluginName, broadcastWorkspaceId)
       }
     },
     async delete(key) {
       await prisma.setting.deleteMany({ where: { key: keyFor(key) } })
       if (!RESERVED_KEYS.has(key)) {
-        broadcastPluginSettingsChanged(pluginName, broadcastTenantId)
+        broadcastPluginSettingsChanged(pluginName, broadcastWorkspaceId)
       }
     },
-    forTenant(tenantId: string) {
-      return createSettingStore(pluginName, `${basePrefix}tenant:${tenantId}:`, tenantId)
+    forWorkspace(workspaceId: string) {
+      return createSettingStore(pluginName, `${basePrefix}workspace:${workspaceId}:`, workspaceId)
     }
   }
 }
@@ -668,31 +677,31 @@ export const pluginRegistry = new PluginRegistry()
 
 /**
  * Whether the plugin keeps a dedicated platform-enable bit: dual-surface
- * tenant-'controlled' plugins, where `enabled` means "enabled by default for
- * tenant workspaces" and cannot double as the platform switch.
+ * workspace-'controlled' plugins, where `enabled` means "enabled by default for
+ * workspaces" and cannot double as the platform switch.
  */
-function hasOwnPlatformBit(entry: Pick<RegisteredPlugin, 'runtimeSurfaces' | 'tenantAccess'>): boolean {
+function hasOwnPlatformBit(entry: Pick<RegisteredPlugin, 'runtimeSurfaces' | 'workspaceAccess'>): boolean {
   return entry.runtimeSurfaces.includes('platform')
-    && entry.runtimeSurfaces.includes('tenant')
-    && entry.tenantAccess === 'controlled'
+    && entry.runtimeSurfaces.includes('workspace')
+    && entry.workspaceAccess === 'controlled'
 }
 
 function normalizePluginSurfaces(input: PluginSurface[]): PluginSurface[] {
   const out = Array.from(new Set(input))
-  return out.length > 0 ? out : ['tenant']
+  return out.length > 0 ? out : ['workspace']
 }
 
 function defaultManagerSurfaces(runtimeSurfaces: PluginSurface[]): PluginSurface[] {
-  return runtimeSurfaces.includes('tenant')
-    ? ['platform', 'tenant']
+  return runtimeSurfaces.includes('workspace')
+    ? ['platform', 'workspace']
     : ['platform']
 }
 
-function defaultTenantAccess(runtimeSurfaces: PluginSurface[]): PluginTenantAccess {
-  return runtimeSurfaces.includes('tenant') ? 'controlled' : 'none'
+function defaultWorkspaceAccess(runtimeSurfaces: PluginSurface[]): PluginWorkspaceAccess {
+  return runtimeSurfaces.includes('workspace') ? 'controlled' : 'none'
 }
 
-function normalizeTenantAccess(input: PluginTenantAccess): PluginTenantAccess {
+function normalizeWorkspaceAccess(input: PluginWorkspaceAccess): PluginWorkspaceAccess {
   return input
 }
 
@@ -700,18 +709,18 @@ function validatePluginMetadata(
   pluginName: string,
   runtimeSurfaces: PluginSurface[],
   managerSurfaces: PluginSurface[],
-  tenantAccess: PluginTenantAccess
+  workspaceAccess: PluginWorkspaceAccess
 ): void {
-  if (tenantAccess !== 'none' && !runtimeSurfaces.includes('tenant')) {
-    throw new Error(`Plugin ${pluginName} sets tenantAccess=${tenantAccess} without tenant runtime support`)
+  if (workspaceAccess !== 'none' && !runtimeSurfaces.includes('workspace')) {
+    throw new Error(`Plugin ${pluginName} sets workspaceAccess=${workspaceAccess} without workspace runtime support`)
   }
-  if (tenantAccess === 'controlled' && !managerSurfaces.includes('platform')) {
-    throw new Error(`Plugin ${pluginName} with tenantAccess=controlled must be manageable from the platform workspace`)
+  if (workspaceAccess === 'controlled' && !managerSurfaces.includes('platform')) {
+    throw new Error(`Plugin ${pluginName} with workspaceAccess=controlled must be manageable from the platform workspace`)
   }
 }
 
 function isReservedPluginSettingKey(key: string): boolean {
   return RESERVED_KEYS.has(key)
-    || key.startsWith(TENANT_ENABLED_OVERRIDE_PREFIX)
-    || key.startsWith(LEGACY_TENANT_OVERRIDE_PREFIX)
+    || key.startsWith(WORKSPACE_ENABLED_OVERRIDE_PREFIX)
+    || key.startsWith(LEGACY_WORKSPACE_OVERRIDE_PREFIX)
 }

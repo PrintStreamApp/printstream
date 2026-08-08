@@ -22,7 +22,7 @@ import {
   type PluginManagementEntry,
   type PluginManagementResponse,
   type PluginSurface,
-  type UpdateTenantPluginAvailabilityInput
+  type UpdateWorkspacePluginAvailabilityInput
 } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { buildApiUrl } from '../lib/apiUrl'
@@ -45,17 +45,18 @@ import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { toast } from '../lib/toast'
 import { webPluginRegistry } from '../plugin/registry'
 import { BackAwareModal as Modal } from './BackAwareModal'
+import { ListSkeleton } from '../components/ListSkeleton'
 
 type PluginManagerSectionProps = {
   surface: PluginSurface
 }
 
 /**
- * Split plugin manager used by both the platform workspace and tenant settings.
+ * Split plugin manager used by both the platform workspace and workspace settings.
  *
- * Platform mode manages installation for platform-only plugins and tenant-use
- * policy for tenant plugins. Tenant mode shows only the allowed plugins and
- * lets each tenant enable or disable them locally.
+ * Platform mode manages installation for platform-only plugins and workspace-use
+ * policy for workspace plugins. Workspace mode shows only the allowed plugins and
+ * lets each workspace enable or disable them locally.
  */
 export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
   const { demoMode, selfHosted } = useRuntimePolicy()
@@ -66,14 +67,14 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
     queryFn: () => apiFetch<PluginManagementResponse>('/api/admin/plugins'),
     enabled: isPlatformManager
   })
-  const tenantQuery = usePluginCatalogQuery({
+  const workspaceQuery = usePluginCatalogQuery({
     enabled: !isPlatformManager,
     suppressGlobalErrorToast: true
   })
 
   const apiPlugins = isPlatformManager
     ? (platformQuery.data?.plugins ?? [])
-    : (tenantQuery.data?.plugins ?? [])
+    : (workspaceQuery.data?.plugins ?? [])
 
   const setEnabled = useMutation({
     mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
@@ -109,16 +110,16 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
     onSuccess: () => invalidatePluginRelatedQueries(queryClient)
   })
 
-  const setTenantAvailability = useMutation({
-    mutationFn: ({ name, body }: { name: string; body: UpdateTenantPluginAvailabilityInput }) =>
-      apiFetch(`/api/admin/plugins/${name}/tenant-availability`, {
+  const setWorkspaceAvailability = useMutation({
+    mutationFn: ({ name, body }: { name: string; body: UpdateWorkspacePluginAvailabilityInput }) =>
+      apiFetch(`/api/admin/plugins/${name}/workspace-availability`, {
         method: 'PUT',
         body
       }),
     onSuccess: () => invalidatePluginRelatedQueries(queryClient)
   })
 
-  const setTenantEnabled = useMutation({
+  const setWorkspaceEnabled = useMutation({
     mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
       apiFetch(`/api/plugin-catalog/${name}/enabled`, {
         method: 'POST',
@@ -162,28 +163,28 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
     ?? uninstall.variables
     ?? setEnabled.variables?.name
     ?? setPlatformEnabled.variables?.name
-    ?? setTenantAvailability.variables?.name
-    ?? setTenantEnabled.variables?.name
+    ?? setWorkspaceAvailability.variables?.name
+    ?? setWorkspaceEnabled.variables?.name
 
   const webPlugins = webPluginRegistry.list()
   const hasPluginState = isPlatformManager
     ? platformQuery.data?.plugins != null
-    : tenantQuery.data?.plugins != null
+    : workspaceQuery.data?.plugins != null
   const merged = hasPluginState
     ? mergePlugins(apiPlugins, webPlugins)
       .filter((entry) => !isAuthPlugin(entry.name))
       // Self-hosted-only plugins (e.g. email-smtp) have no backend in cloud; hide them.
       .filter((entry) => selfHosted || !entry.web?.selfHostedOnly)
     : []
-  const platformEntries = merged.filter((entry) => pluginHasManagerSurface(entry, 'platform') && !pluginHasManagerSurface(entry, 'tenant'))
-  const tenantEntries = merged.filter((entry) => pluginHasManagerSurface(entry, 'tenant'))
+  const platformEntries = merged.filter((entry) => pluginHasManagerSurface(entry, 'platform') && !pluginHasManagerSurface(entry, 'workspace'))
+  const workspaceEntries = merged.filter((entry) => pluginHasManagerSurface(entry, 'workspace'))
   const visibleEntries = isPlatformManager
     ? []
-    : tenantEntries.filter((entry) => isPluginAvailableInCurrentContext(entry))
-  const installedCount = (isPlatformManager ? tenantEntries : visibleEntries)
+    : workspaceEntries.filter((entry) => isPluginAvailableInCurrentContext(entry))
+  const installedCount = (isPlatformManager ? workspaceEntries : visibleEntries)
     .filter((entry) => isPluginInstalled(entry))
     .length
-  const activeQuery = isPlatformManager ? platformQuery : tenantQuery
+  const activeQuery = isPlatformManager ? platformQuery : workspaceQuery
 
   return (
     <Stack spacing={1.5}>
@@ -200,7 +201,7 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
         justifyContent="space-between"
       >
         <Typography level="body-sm" textColor="text.tertiary">
-          {installedCount} of {(isPlatformManager ? tenantEntries : visibleEntries).length} installed
+          {installedCount} of {(isPlatformManager ? workspaceEntries : visibleEntries).length} installed
         </Typography>
         {/* External plugin installs are self-hosted only; hosted deployments ship every plugin with the codebase. */}
         {isPlatformManager && selfHosted && (
@@ -239,7 +240,7 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
         </Typography>
       )}
 
-      {activeQuery.isLoading && <Typography level="body-sm">Loading…</Typography>}
+      {activeQuery.isLoading && <ListSkeleton rows={3} />}
       {activeQuery.error && (
         <Typography color="danger" level="body-sm">
           {(activeQuery.error as Error).message}
@@ -250,7 +251,7 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
         <>
           <PluginSectionCard
             title="Platform plugins"
-            summary="Installed once for the whole deployment. These stay in the platform workspace."
+            summary="Installed once for this server, not per workspace. These stay in the platform workspace."
             entries={platformEntries}
             surface={surface}
             pendingName={pendingName}
@@ -263,9 +264,9 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
             setEnabledPending={setEnabled.isPending}
           />
           <PluginSectionCard
-            title="Tenant plugins"
-            summary="Installed centrally. The platform only decides whether tenants can use them and whether they start enabled for new workspaces."
-            entries={tenantEntries}
+            title="Workspace plugins"
+            summary="Installed centrally. The platform only decides whether workspaces can use them and whether they start enabled for new workspaces."
+            entries={workspaceEntries}
             surface={surface}
             pendingName={pendingName}
             setEnabled={setEnabled.mutate}
@@ -277,13 +278,13 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
             setEnabledPending={setEnabled.isPending}
             renderExtra={(entry) => {
               const plugin = asManagementPlugin(entry.api)
-              if (!plugin?.tenantAvailability) return null
+              if (!plugin?.workspaceAvailability) return null
               return (
-                <TenantAvailabilityEditor
+                <WorkspaceAvailabilityEditor
                   plugin={plugin}
-                  busy={pendingName === entry.name && setTenantAvailability.isPending}
+                  busy={pendingName === entry.name && setWorkspaceAvailability.isPending}
                   onChange={(next) => {
-                    setTenantAvailability.mutate({
+                    setWorkspaceAvailability.mutate({
                       name: plugin.name,
                       body: next
                     })
@@ -301,12 +302,12 @@ export function PluginManagerSection({ surface }: PluginManagerSectionProps) {
           surface={surface}
           showHeader={false}
           pendingName={pendingName}
-          setEnabled={setTenantEnabled.mutate}
+          setEnabled={setWorkspaceEnabled.mutate}
           install={install.mutate}
           uninstall={setConfirmUninstall}
           installPending={install.isPending}
           uninstallPending={uninstall.isPending}
-          setEnabledPending={setTenantEnabled.isPending}
+          setEnabledPending={setWorkspaceEnabled.isPending}
           emptyMessage="No plugins are currently available in this workspace."
         />
       )}
@@ -429,16 +430,16 @@ function PluginSectionCard({
           // Plan-gated (e.g. a Pro plugin on a Free workspace): visible but not
           // togglable, with the reason stated instead of a dead switch.
           const planBlocked = entry.api?.planBlocked === true
-          const tenantManaged = entry.api?.tenantAccess === 'controlled'
+          const workspaceManaged = entry.api?.workspaceAccess === 'controlled'
           const platformCapable = entry.api?.runtimeSurfaces.includes('platform') ?? false
           // In the platform manager the main switch is the plugin's own
           // platform/global enablement: platform-capable plugins toggle their
-          // platform scope; tenant-only plugins that are not tenant-managed
-          // toggle their global flag. Tenant-managed tenant-only plugins are
+          // platform scope; workspace-only plugins that are not workspace-managed
+          // toggle their global flag. Workspace-managed workspace-only plugins are
           // toggled by each workspace instead.
           const togglable = entry.api != null && installed && (
             isPlatformManager
-              ? (platformCapable || !tenantManaged)
+              ? (platformCapable || !workspaceManaged)
               : available
           )
           const showToggle = togglable
@@ -446,7 +447,7 @@ function PluginSectionCard({
           // manage plugins purely with the enable toggles.
           const canInstall = isPlatformManager && entry.api != null && selfHosted
           const Panel = entry.web?.settingsPanel
-          const showPanel = shouldRenderPluginSettingsPanel(entry, 'manager') && (!isPlatformManager || !tenantManaged)
+          const showPanel = shouldRenderPluginSettingsPanel(entry, 'manager') && (!isPlatformManager || !workspaceManaged)
           const isNotificationSettingsPlugin = isNotificationPlugin(entry.name)
           const busy = pendingName === entry.name && (installPending || uninstallPending || setEnabledPending)
           const detailKey = `${title}:${entry.name}`
@@ -458,11 +459,11 @@ function PluginSectionCard({
             <Typography level="body-sm" textColor="text.tertiary">
               Install this plugin to configure it.
             </Typography>
-          ) : isPlatformManager && tenantManaged ? (
+          ) : isPlatformManager && workspaceManaged ? (
             <Typography level="body-sm" textColor="text.tertiary">
               {platformCapable
-                ? 'Tenant workspaces decide whether to turn this plugin on for themselves; the toggle above controls only the platform workspace. Availability and the tenant default are set below.'
-                : 'Tenant workspaces decide whether to turn this plugin on. The platform only controls whether it is available and whether it starts enabled for them.'}
+                ? 'Workspaces decide whether to turn this plugin on for themselves; the toggle above controls only the platform workspace. Availability and the workspace default are set below.'
+                : 'Workspaces decide whether to turn this plugin on. The platform only controls whether it is available and whether it starts enabled for them.'}
             </Typography>
           ) : planBlocked ? (
             <Typography level="body-sm" textColor="text.tertiary">
@@ -520,7 +521,7 @@ function PluginSectionCard({
                       {showToggle && (
                         <Stack direction="row" spacing={1} alignItems="center" justifyContent={{ xs: 'space-between', md: 'flex-end' }} sx={{ width: { xs: '100%', md: 'auto' } }}>
                           <Typography level="body-sm" textColor="text.tertiary">
-                            {isPlatformManager && platformCapable && tenantManaged
+                            {isPlatformManager && platformCapable && workspaceManaged
                               ? (entry.api?.platformEnabled ? 'Enabled in platform' : 'Disabled in platform')
                               : installed && enabled ? 'Enabled' : 'Disabled'}
                           </Typography>
@@ -619,17 +620,17 @@ function pluginToggleMessage(name: string, enabled: boolean): string {
   return `${getPluginDisplayName(name)} ${enabled ? 'enabled' : 'disabled'}`
 }
 
-function TenantAvailabilityEditor({
+function WorkspaceAvailabilityEditor({
   plugin,
   busy,
   onChange
 }: {
   plugin: PluginManagementEntry
   busy: boolean
-  onChange: (next: UpdateTenantPluginAvailabilityInput) => void
+  onChange: (next: UpdateWorkspacePluginAvailabilityInput) => void
 }) {
-  const allowed = plugin.tenantAvailability?.allowed ?? false
-  const enabledByDefault = plugin.tenantAvailability?.enabledByDefault ?? false
+  const allowed = plugin.workspaceAvailability?.allowed ?? false
+  const enabledByDefault = plugin.workspaceAvailability?.enabledByDefault ?? false
 
   return (
     <Card variant="soft">
@@ -637,9 +638,9 @@ function TenantAvailabilityEditor({
         <Stack spacing={1.25}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
             <Box>
-              <Typography level="title-sm">Allow for tenants</Typography>
+              <Typography level="title-sm">Allow for workspaces</Typography>
               <Typography level="body-xs" textColor="text.tertiary">
-                Hide this plugin from tenant workspaces entirely when disabled.
+                Hide this plugin from workspaces entirely when disabled.
               </Typography>
             </Box>
             <Switch
@@ -656,7 +657,7 @@ function TenantAvailabilityEditor({
             <Box>
               <Typography level="title-sm">Enabled by default</Typography>
               <Typography level="body-xs" textColor="text.tertiary">
-                Controls the starting state when a tenant workspace first sees this plugin. Tenants can still change it later.
+                Controls the starting state when a workspace first sees this plugin. Workspaces can still change it later.
               </Typography>
             </Box>
             <Switch
@@ -675,7 +676,7 @@ function TenantAvailabilityEditor({
 }
 
 function asManagementPlugin(plugin: ApiPluginInfo | null): PluginManagementEntry | null {
-  if (!plugin || !('tenantAvailability' in plugin)) {
+  if (!plugin || !('workspaceAvailability' in plugin)) {
     return null
   }
   return plugin

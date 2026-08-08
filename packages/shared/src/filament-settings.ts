@@ -27,7 +27,6 @@ import {
   type ProcessSettingsCatalog
 } from './process-settings.js'
 import { filamentSettingsCatalog } from './generated/filament-settings.generated.js'
-import { resolveDisplayFilamentType } from './slicing-preset-identity.js'
 
 export { filamentSettingsCatalog }
 
@@ -283,7 +282,7 @@ export function filamentVariantValuesEqual(
  * Mirrors BambuStudio's `Tab::select_preset` (Tab.cpp): selecting a filament preset whose
  * `filament_type` differs from the edited one sets `no_transfer = true`, so nothing carries; the
  * transfer option exists only on the PRINT (process) tab, and a printer switch never transfers.
- * Types are compared DERIVED ({@link resolveDisplayFilamentType}), so a support filament counts as
+ * Types are compared DERIVED (see `resolveDisplayFilamentType` in `slicing-preset-identity.ts`), so a support filament counts as
  * its own material rather than as its base polymer.
  *
  * Returns true when either side has no type to compare — absence is not proof of a mismatch, and
@@ -309,20 +308,6 @@ function rawFilamentTypeOf(config: ProcessConfig): string | undefined {
   const value = config.filament_type
   const entry = Array.isArray(value) ? value[0] : value
   return typeof entry === 'string' && entry.trim() ? entry.trim() : undefined
-}
-
-/** Derived filament type of a config, reading either the scalar or per-slot/variant array form. */
-function displayFilamentTypeOf(config: ProcessConfig): string | undefined {
-  const first = (value: ProcessConfig[string] | undefined): string | undefined => {
-    const entry = Array.isArray(value) ? value[0] : value
-    return typeof entry === 'string' && entry.trim() ? entry.trim() : undefined
-  }
-  const rawIds = config.filament_ids
-  return resolveDisplayFilamentType({
-    filamentType: first(config.filament_type) ?? null,
-    filamentIds: Array.isArray(rawIds) ? rawIds : typeof rawIds === 'string' && rawIds ? [rawIds] : null,
-    filamentIsSupport: first(config.filament_is_support) === '1'
-  })
 }
 
 /**

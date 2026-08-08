@@ -1,13 +1,13 @@
 /**
  * Client for the standalone BambuStudio slicer runtime(s).
  *
- * The API owns tenant checks, queueing, and library persistence. This client
+ * The API owns workspace checks, queueing, and library persistence. This client
  * only speaks to the external worker container(s) that run the CLI.
  * `SLICER_SERVICE_URL` may list several identical sidecars (comma-separated):
  * slices go to the least-busy instance, progress polls follow the instance
  * that owns the job, and reads (health/profiles/resolve) fail over in order.
  */
-import { slicingMetadataSchema, slicingOutputLineSchema, slicingPresetSummarySchema, slicingTargetDescriptorSchema, type CreateSlicingJob, type SliceEnvelope, type SlicingMetadata, type SlicingOutputLine, type SlicingPresetSummary, type SlicingTargetDescriptor } from '@printstream/shared'
+import { slicerEngineInstallStatusSchema, slicingMetadataSchema, slicingOutputLineSchema, slicingPresetSummarySchema, slicingTargetDescriptorSchema, type CreateSlicingJob, type SliceEnvelope, type SlicerEngineInstallStatus, type SlicingMetadata, type SlicingOutputLine, type SlicingPresetSummary, type SlicingTargetDescriptor } from '@printstream/shared'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rename, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -35,6 +35,8 @@ export interface SlicerCapabilities {
   slicerName: string | null
   defaultTargetId: string | null
   targets: SlicingTargetDescriptor[]
+  /** An engine being fetched right now, or null. Surfaced to ordinary users. */
+  engineInstall: SlicerEngineInstallStatus | null
 }
 
 export interface SlicerRunInput {
@@ -103,7 +105,7 @@ export class SlicerClient {
 
   async capabilities(): Promise<SlicerCapabilities> {
     if (this.baseUrls.length === 0) {
-      return { configured: false, healthy: false, slicerName: null, defaultTargetId: null, targets: [] }
+      return { configured: false, healthy: false, slicerName: null, defaultTargetId: null, targets: [], engineInstall: null }
     }
 
     for (const baseUrl of this.baseUrls) {
@@ -116,7 +118,7 @@ export class SlicerClient {
           console.warn('[slicer] capabilities failed', `slicer service at ${baseUrl} returned ${response.status}`)
           continue
         }
-        const body = await response.json().catch(() => ({})) as { name?: unknown; defaultTargetId?: unknown; targets?: unknown }
+        const body = await response.json().catch(() => ({})) as { name?: unknown; defaultTargetId?: unknown; targets?: unknown; engineInstall?: unknown }
         const targets = parseSlicerTargets(body.targets)
         const defaultTargetId = typeof body.defaultTargetId === 'string' && body.defaultTargetId.trim() ? body.defaultTargetId.trim() : null
         const defaultTarget = defaultTargetId ? targets.find((target) => target.id === defaultTargetId) ?? null : targets[0] ?? null
@@ -125,13 +127,16 @@ export class SlicerClient {
           healthy: true,
           slicerName: defaultTarget?.label ?? (typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'PrintStream slicer'),
           defaultTargetId,
-          targets
+          targets,
+          // Through the shared schema, not another hand-read field: a rebuilt
+          // subset silently drops whatever the contract grows next.
+          engineInstall: slicerEngineInstallStatusSchema.nullable().catch(null).parse(body.engineInstall ?? null)
         }
       } catch (error) {
         console.warn('[slicer] capabilities failed', `${baseUrl}: ${(error as Error).message}`)
       }
     }
-    return { configured: true, healthy: false, slicerName: null, defaultTargetId: null, targets: [] }
+    return { configured: true, healthy: false, slicerName: null, defaultTargetId: null, targets: [], engineInstall: null }
   }
 
   async profiles(targetId?: string | null): Promise<SlicingPresetSummary[]> {
@@ -393,6 +398,94 @@ export class SlicerClient {
     }
   }
 
+  /**
+   * The engines each configured instance offers, as ONE answer.
+   *
+   * Fanned out because `SLICER_SERVICE_URL` may name several identical sidecars
+   * (production runs two) and a slice lands on whichever is least busy. An
+   * engine present on only some instances is therefore not usable: it would
+   * slice or fail depending on routing. So an engine reads as installed only
+   * when EVERY instance has it, and a partial state surfaces as not-installed —
+   * which the install below then repairs.
+   */
+  async listEngines(): Promise<SlicerEngineListing | null> {
+    if (this.baseUrls.length === 0) return null
+    const responses = await Promise.all(this.baseUrls.map(async (baseUrl) => {
+      try {
+        const response = await fetch(`${baseUrl}/engines`, {
+          headers: this.headers(),
+          signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 15_000))
+        })
+        if (!response.ok) {
+          console.warn('[slicer] engines listing failed', `${baseUrl} returned ${response.status}`)
+          return null
+        }
+        return await response.json() as SlicerEngineListing
+      } catch (error) {
+        console.warn('[slicer] engines listing failed', error instanceof Error ? error.message : error)
+        return null
+      }
+    }))
+    const reachable = responses.filter((entry): entry is SlicerEngineListing => entry !== null)
+    // An unreachable instance is not an empty one: reporting engines as absent
+    // because a sidecar was restarting would invite a pointless reinstall.
+    if (reachable.length !== this.baseUrls.length) return null
+
+    const first = reachable[0]!
+    return {
+      ...first,
+      engines: first.engines.map((engine) => ({
+        ...engine,
+        installed: reachable.every((listing) =>
+          listing.engines.find((candidate) => candidate.id === engine.id)?.installed === true)
+      }))
+    }
+  }
+
+  /**
+   * Start an install, or perform a removal, on EVERY instance.
+   *
+   * Both calls return promptly: the slicer answers an install with 202 and does
+   * the download in the background, so nothing here waits on a multi-hundred-
+   * megabyte transfer. Progress is read back through {@link listEngines}, which
+   * is also what makes a partial state visible — an engine reads as installed
+   * only once every instance has it.
+   *
+   * Issued to all instances together. They are separate containers with
+   * separate volumes, and serialising would leave the fleet inconsistent for
+   * however long the first download took.
+   *
+   * A failure names the instance. The others keep whatever they did, which the
+   * listing reports honestly rather than hiding.
+   */
+  async changeEngine(id: string, action: 'install' | 'remove'): Promise<void> {
+    if (this.baseUrls.length === 0) throw new Error('Slicer service is not configured')
+    const failures: string[] = []
+    await Promise.all(this.baseUrls.map(async (baseUrl) => {
+      const url = action === 'install'
+        ? `${baseUrl}/engines/${encodeURIComponent(id)}/install`
+        : `${baseUrl}/engines/${encodeURIComponent(id)}`
+      try {
+        const response = await fetch(url, {
+          method: action === 'install' ? 'POST' : 'DELETE',
+          headers: this.headers(),
+          // Seconds, not minutes: this only starts the work. A removal deletes a
+          // directory, which is also quick.
+          signal: AbortSignal.timeout(60_000)
+        })
+        if (!response.ok) {
+          const detail = await response.text().catch(() => '')
+          failures.push(`${baseUrl}: ${response.status} ${detail}`.trim())
+        }
+      } catch (error) {
+        failures.push(`${baseUrl}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }))
+    if (failures.length > 0) {
+      throw new Error(`Could not ${action} ${id} on ${failures.length} slicer instance(s) — ${failures.join('; ')}`)
+    }
+  }
+
   private headers(): Record<string, string> {
     return env.SLICER_SERVICE_TOKEN ? { Authorization: `Bearer ${env.SLICER_SERVICE_TOKEN}` } : {}
   }
@@ -556,7 +649,7 @@ function parseProfiles(value: unknown): SlicingPresetSummary[] {
   return value.flatMap((entry) => {
     const parsed = slicingPresetSummarySchema.safeParse(entry)
     // Builtin presets are the only kind the slicer owns; a `custom` preset coming
-    // back from it would shadow the tenant's own stored presets.
+    // back from it would shadow the workspace's own stored presets.
     if (!parsed.success || parsed.data.source !== 'builtin') return []
     return [parsed.data]
   })
@@ -646,4 +739,24 @@ function normalizeResolvedConfig(record: Record<string, unknown>): Record<string
     }
   }
   return result
+}
+
+export interface SlicerEngineSummary {
+  id: string
+  label: string
+  version: string
+  slicerName: string
+  prerelease: boolean
+  installed: boolean
+  downloadBytes: number
+  installBytes: number
+  /** In-flight or failed work on this engine; null when nothing is happening. */
+  status: SlicerEngineInstallStatus | null
+}
+
+export interface SlicerEngineListing {
+  defaultTargetId: string | null
+  engines: SlicerEngineSummary[]
+  /** False where no engine can run on the slicer's platform (Linux on ARM). */
+  platformSupported: boolean
 }

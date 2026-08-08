@@ -81,7 +81,7 @@ test('admin plugin routes allow actors with plugin management permission', async
   })
 })
 
-test('admin plugin routes reject tenant-context requests even for platform admins', async () => {
+test('admin plugin routes reject workspace-context requests even for platform admins', async () => {
   pluginRegistry.list = () => []
 
   await withAdminPluginsApp({
@@ -93,9 +93,9 @@ test('admin plugin routes reject tenant-context requests even for platform admin
     const response = await fetch(`${baseUrl}/`)
 
     assert.equal(response.status, 403)
-    assert.deepEqual(await response.json(), { error: 'Switch to the platform workspace to manage plugin installation and tenant availability.' })
+    assert.deepEqual(await response.json(), { error: 'Switch to the platform workspace to manage plugin installation and workspace availability.' })
   }, {
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
   })
 })
 
@@ -103,13 +103,13 @@ async function withAdminPluginsApp(
   auth: RequestAuthContext,
   run: (baseUrl: string) => Promise<void>,
   input: {
-    tenant?: { id: string; slug: string; name: string } | null
+    workspace?: { id: string; slug: string; name: string } | null
   } = {}
 ): Promise<void> {
   const app = express()
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = input.tenant ?? null
+    request.workspace = input.workspace ?? null
     next()
   })
   app.use(adminPluginsRouter)

@@ -1,6 +1,6 @@
 /**
  * The notification channel entries renderable in the current workspace context
- * (tenant or platform): installed + enabled `notifications-*` plugins with a
+ * (workspace or platform): installed + enabled `notifications-*` plugins with a
  * settings panel. Rendered by `NotificationChannelsPanel`; also consumed by hosts
  * that need the channel count before deciding to show a Notifications section at
  * all (e.g. `PlatformView`). Own file so the panel exports only components
@@ -21,7 +21,7 @@ export function useNotificationChannelEntries() {
   // A channel's web panel talks to its API plugin, so the plugin must exist
   // in the CURRENT surface's catalog. Web-only merged entries default to
   // installed/enabled/available, which would mount the other surface's
-  // panels here (tenant channels on the platform view and vice versa) and
+  // panels here (workspace channels on the platform view and vice versa) and
   // toast "Plugin unavailable in this workspace" from their status queries.
   const present = mergePlugins(pluginCatalogQuery.data?.plugins ?? [], webPluginRegistry.list())
     .filter((entry): entry is MergedPluginEntry => isNotificationPlugin(entry.name))

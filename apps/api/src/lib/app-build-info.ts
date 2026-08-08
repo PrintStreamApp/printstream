@@ -86,7 +86,7 @@ export function resetAppBuildInfoCache(): void {
  * Applies visibility and assembles the `/api/app/version` payload.
  *
  * Visibility:
- *  - published image -> shown to everyone (typical OSS self-host is single-tenant);
+ *  - published image -> shown to everyone (typical OSS self-host is single-workspace);
  *  - any other image with a baked revision -> shown to platform users only (the
  *    cloud image: operators see the running build, members do not);
  *  - no baked revision -> nothing to show.

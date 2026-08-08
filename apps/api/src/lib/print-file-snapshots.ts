@@ -23,11 +23,11 @@ import {
   storeBridgeLibraryFile
 } from './bridge-library-files.js'
 import { prisma } from './prisma.js'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 
 export interface SnapshotLibraryFile {
   id: string
-  tenantId: string
+  workspaceId: string
   name: string
   ownerBridgeId?: string | null
   storedPath: string
@@ -39,7 +39,7 @@ export interface SnapshotLibraryFile {
 /** The columns {@link SnapshotLibraryFile} is made of; every lookup here selects exactly these. */
 const SNAPSHOT_SELECT = {
   id: true,
-  tenantId: true,
+  workspaceId: true,
   name: true,
   ownerBridgeId: true,
   storedPath: true,
@@ -80,12 +80,12 @@ export async function ensureLibrarySnapshotRecord(file: SnapshotLibraryFile): Pr
     targetBridgeId: ownerBridgeId,
     targetStoredPath: storedPath
   })
-  const tenantId = requireTenantId()
+  const workspaceId = requireWorkspaceId()
 
   try {
     return await prisma.libraryFile.create({
       data: {
-        tenantId,
+        workspaceId,
         ownerBridgeId,
         name: file.name,
         storedPath,
@@ -117,7 +117,7 @@ export async function ensureLibrarySnapshotRecord(file: SnapshotLibraryFile): Pr
  * re-uploading. Never overwrites or versions anything — a snapshot row is immutable.
  */
 export async function ensureLibrarySnapshotFromLocalPath(input: {
-  tenantId: string
+  workspaceId: string
   ownerBridgeId: string
   fileName: string
   sourcePath: string
@@ -138,7 +138,7 @@ export async function ensureLibrarySnapshotFromLocalPath(input: {
   try {
     return await prisma.libraryFile.create({
       data: {
-        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
         ownerBridgeId: input.ownerBridgeId,
         name: path.basename(input.fileName),
         storedPath,
@@ -166,13 +166,13 @@ async function hashLocalFile(sourcePath: string): Promise<string> {
   return hash.digest('hex')
 }
 
-function requireTenantId(): string {
-  const tenantId = getCurrentTenant()?.id
-  if (tenantId) {
-    return tenantId
+function requireWorkspaceId(): string {
+  const workspaceId = getCurrentWorkspace()?.id
+  if (workspaceId) {
+    return workspaceId
   }
 
-  throw new Error('Tenant context is required for print file snapshots.')
+  throw new Error('Workspace context is required for print file snapshots.')
 }
 
 function requireOwnerBridgeId(ownerBridgeId: string | null | undefined): string {

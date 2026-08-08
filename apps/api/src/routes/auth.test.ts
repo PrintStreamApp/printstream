@@ -21,12 +21,12 @@ import {
   AUTH_USERS_DISABLE_SIGN_IN_PERMISSION,
   AUTH_USERS_VIEW_PERMISSION,
   filterPermissionsForPlatformContext,
-  filterPermissionsForTenantContext,
+  filterPermissionsForWorkspaceContext,
   permissionValues,
   PRINTERS_MANAGE_PERMISSION,
   PRINTERS_VIEW_PERMISSION,
   SETTINGS_MANAGE_PERMISSION,
-  TENANTS_MANAGE_PERMISSION
+  WORKSPACES_MANAGE_PERMISSION
 } from '@printstream/shared'
 import crypto from 'node:crypto'
 import { authRouter } from './auth.js'
@@ -37,7 +37,7 @@ import type { RequestAuthContext } from '../lib/auth-context.js'
 import { env } from '../lib/env.js'
 import { HttpError } from '../lib/http-error.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
-import { getCurrentTenant, installTenantContext } from '../lib/tenant-context.js'
+import { getCurrentWorkspace, installWorkspaceContext } from '../lib/workspace-context.js'
 import { builtInAuthGroupSeeds, builtInPlatformAuthGroupSeeds } from '../lib/default-auth-groups.js'
 import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 
@@ -49,9 +49,9 @@ env.SELF_HOSTED = false
 
 // These three are still read inside individual tests (to detect whether the test stubbed the method),
 // so they stay as named references; the rest are tracked only by restorePrismaMethodsAfterEach below.
-const originalRootAuthTenantMembershipFindMany = rootPrisma.authTenantMembership.findMany
-const originalAuthTenantMembershipFindMany = prisma.authTenantMembership.findMany
-const originalAuthTenantMembershipCount = prisma.authTenantMembership.count
+const originalRootAuthWorkspaceMembershipFindMany = rootPrisma.authWorkspaceMembership.findMany
+const originalAuthWorkspaceMembershipFindMany = prisma.authWorkspaceMembership.findMany
+const originalAuthWorkspaceMembershipCount = prisma.authWorkspaceMembership.count
 
 // Auto-restore every prisma/rootPrisma method this suite overrides, so the tests no longer hand-track
 // ~37 `original*` variables and a matching restore block. Accessed through loose-typed aliases so TS
@@ -73,19 +73,19 @@ restorePrismaMethodsAfterEach([
   [p.authSession, 'findFirst'],
   [p.authSession, 'findUnique'],
   [p.authSession, 'updateMany'],
-  [p.authTenantMembership, 'findMany'],
-  [p.authTenantMembership, 'findFirst'],
-  [p.authTenantMembership, 'count'],
+  [p.authWorkspaceMembership, 'findMany'],
+  [p.authWorkspaceMembership, 'findFirst'],
+  [p.authWorkspaceMembership, 'count'],
   [p.authUserGroupMembership, 'deleteMany'],
   [p.authServiceAccount, 'count'],
   [p.setting, 'findUnique'],
   [p.setting, 'upsert'],
-  [p.tenant, 'findUnique'],
-  [p.tenant, 'findMany'],
-  [p.tenant, 'create'],
-  [p.tenant, 'update'],
+  [p.workspace, 'findUnique'],
+  [p.workspace, 'findMany'],
+  [p.workspace, 'create'],
+  [p.workspace, 'update'],
   [p.bridge, 'count'],
-  [rp.tenant, 'findMany'],
+  [rp.workspace, 'findMany'],
   [rp.setting, 'findMany'],
   [rp.setting, 'findUnique'],
   [rp.auditLog, 'create'],
@@ -93,8 +93,8 @@ restorePrismaMethodsAfterEach([
   [rp.authGroup, 'findUnique'],
   [rp.authGroup, 'update'],
   [rp.authUser, 'count'],
-  [rp.authTenantMembership, 'findMany'],
-  [rp.authTenantMembership, 'count'],
+  [rp.authWorkspaceMembership, 'findMany'],
+  [rp.authWorkspaceMembership, 'count'],
   [rp.authUserGroupMembership, 'createMany']
 ])
 
@@ -102,11 +102,11 @@ afterEach(() => {
   authProviderRegistry.clear()
 })
 
-test('auth bootstrap exposes public demo runtime policy for the reserved demo tenant', async () => {
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string } }) => {
-    if (input.where.slug === 'demo') return { id: 'tenant-demo', slug: 'demo', name: 'Public Demo' }
+test('auth bootstrap exposes public demo runtime policy for the reserved demo workspace', async () => {
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string } }) => {
+    if (input.where.slug === 'demo') return { id: 'workspace-demo', slug: 'demo', name: 'Public Demo' }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
 
   await withAuthApp({
     authEnabled: true,
@@ -115,7 +115,7 @@ test('auth bootstrap exposes public demo runtime policy for the reserved demo te
     permissions: [],
     runtimePolicy: { demoMode: true }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/bootstrap`, { headers: { 'X-PrintStream-Tenant': 'demo' } })
+    const response = await fetch(`${baseUrl}/api/auth/bootstrap`, { headers: { 'X-PrintStream-Workspace': 'demo' } })
 
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), {
@@ -123,10 +123,11 @@ test('auth bootstrap exposes public demo runtime policy for the reserved demo te
       platformAuthEnabled: false,
       setupRequired: false,
       providers: [],
-      tenant: { id: 'tenant-demo', slug: 'demo', name: 'Public Demo' },
-      memberTenants: [],
-      availableTenants: [],
-      tenantHasConnectedBridges: false,
+      workspace: { id: 'workspace-demo', slug: 'demo', name: 'Public Demo' },
+      memberWorkspaces: [],
+      availableWorkspaces: [],
+    customers: [],
+      workspaceHasConnectedBridges: false,
       actor: { type: 'anonymous', isPlatformUser: false },
       permissions: [],
       capabilities: {
@@ -134,7 +135,7 @@ test('auth bootstrap exposes public demo runtime policy for the reserved demo te
         canManageAuthProviders: false,
         canManageSettings: false,
         canManageSupportAccess: false,
-        canManageTenants: false,
+        canManageWorkspaces: false,
         canManagePlugins: false,
         canViewLogs: false
       },
@@ -147,11 +148,11 @@ test('auth bootstrap exposes public demo runtime policy for the reserved demo te
   })
 })
 
-test('auth bootstrap reports no-auth for a public demo guest even when the demo tenant has an enabled provider', async () => {
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string } }) => {
-    if (input.where.slug === 'demo') return { id: 'tenant-demo', slug: 'demo', name: 'Public Demo' }
+test('auth bootstrap reports no-auth for a public demo guest even when the demo workspace has an enabled provider', async () => {
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string } }) => {
+    if (input.where.slug === 'demo') return { id: 'workspace-demo', slug: 'demo', name: 'Public Demo' }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   authProviderRegistry.register({
     id: 'auth-local',
     label: 'Local Auth',
@@ -175,7 +176,7 @@ test('auth bootstrap reports no-auth for a public demo guest even when the demo 
     permissions: [],
     runtimePolicy: { demoMode: true }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/bootstrap`, { headers: { 'X-PrintStream-Tenant': 'demo' } })
+    const response = await fetch(`${baseUrl}/api/auth/bootstrap`, { headers: { 'X-PrintStream-Workspace': 'demo' } })
 
     assert.equal(response.status, 200)
     const payload = await response.json()
@@ -188,7 +189,7 @@ test('auth bootstrap reports no-auth for a public demo guest even when the demo 
 
 test('auth bootstrap stays in platform context for anonymous requests when a provider is enabled', async () => {
   // An enabled provider keeps the install out of wide-open mode, so an
-  // anonymous, context-less request resolves to no tenant rather than being
+  // anonymous, context-less request resolves to no workspace rather than being
   // scoped into one.
   authProviderRegistry.register({
     id: 'auth-local',
@@ -205,14 +206,14 @@ test('auth bootstrap stays in platform context for anonymous requests when a pro
       recentVerificationMethods: ['passkey']
     }
   })
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string } }) => {
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string } }) => {
     if (input.where.slug === 'local') {
-      return { id: 'tenant-1', slug: 'local', name: 'Local Dev' }
+      return { id: 'workspace-1', slug: 'local', name: 'Local Dev' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  prisma.tenant.findMany = ((async () => ([{ id: 'tenant-1', slug: 'local', name: 'Local Dev' }])) as unknown) as typeof prisma.tenant.findMany
+  }) as unknown) as typeof prisma.workspace.findFirst
+  prisma.workspace.findMany = ((async () => ([{ id: 'workspace-1', slug: 'local', name: 'Local Dev' }])) as unknown) as typeof prisma.workspace.findMany
 
   await withAuthApp({
     authEnabled: false,
@@ -223,14 +224,14 @@ test('auth bootstrap stays in platform context for anonymous requests when a pro
     const response = await fetch(`${baseUrl}/api/auth/bootstrap`)
 
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).tenant, null)
+    assert.equal((await response.json()).workspace, null)
   })
 })
 
 test('auth bootstrap defaults context-less anonymous requests into the single wide-open workspace', async () => {
-  rootPrisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' }
-  ])) as unknown) as typeof rootPrisma.tenant.findMany
+  rootPrisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' }
+  ])) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findUnique = ((async () => null) as unknown) as typeof rootPrisma.setting.findUnique
   prisma.bridge.count = ((async () => 0) as unknown) as typeof prisma.bridge.count
 
@@ -244,7 +245,7 @@ test('auth bootstrap defaults context-less anonymous requests into the single wi
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.deepEqual(payload.tenant, { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' })
+    assert.deepEqual(payload.workspace, { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' })
     // Route guards bypass enforcement in this state, so bootstrap must report
     // the workspace permissions the UI is actually allowed to use.
     assert.ok(payload.permissions.includes('printers.view'))
@@ -253,9 +254,9 @@ test('auth bootstrap defaults context-less anonymous requests into the single wi
 })
 
 test('auth bootstrap also defaults the explicit no-context hint into the wide-open workspace', async () => {
-  rootPrisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' }
-  ])) as unknown) as typeof rootPrisma.tenant.findMany
+  rootPrisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' }
+  ])) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findUnique = ((async () => null) as unknown) as typeof rootPrisma.setting.findUnique
   prisma.bridge.count = ((async () => 0) as unknown) as typeof prisma.bridge.count
 
@@ -267,18 +268,18 @@ test('auth bootstrap also defaults the explicit no-context hint into the wide-op
   }, async (baseUrl) => {
     // The web's ambient pages (e.g. `/`) pin "no workspace chosen".
     const response = await fetch(`${baseUrl}/api/auth/bootstrap`, {
-      headers: { 'X-PrintStream-Tenant': 'none' }
+      headers: { 'X-PrintStream-Workspace': 'none' }
     })
 
     assert.equal(response.status, 200)
-    assert.deepEqual((await response.json()).tenant, { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' })
+    assert.deepEqual((await response.json()).workspace, { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' })
   })
 })
 
 test('auth bootstrap keeps the explicit platform hint on the platform scope', async () => {
-  rootPrisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' }
-  ])) as unknown) as typeof rootPrisma.tenant.findMany
+  rootPrisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' }
+  ])) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findUnique = ((async () => null) as unknown) as typeof rootPrisma.setting.findUnique
 
   await withAuthApp({
@@ -288,18 +289,18 @@ test('auth bootstrap keeps the explicit platform hint on the platform scope', as
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/auth/bootstrap`, {
-      headers: { 'X-PrintStream-Tenant': 'platform' }
+      headers: { 'X-PrintStream-Workspace': 'platform' }
     })
 
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).tenant, null)
+    assert.equal((await response.json()).workspace, null)
   })
 })
 
 test('auth bootstrap keeps requests carrying a live session cookie on the platform scope', async () => {
-  rootPrisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' }
-  ])) as unknown) as typeof rootPrisma.tenant.findMany
+  rootPrisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' }
+  ])) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findUnique = ((async () => null) as unknown) as typeof rootPrisma.setting.findUnique
   prisma.authSession.findUnique = ((async () => ({
     revokedAt: null,
@@ -317,14 +318,14 @@ test('auth bootstrap keeps requests carrying a live session cookie on the platfo
     })
 
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).tenant, null)
+    assert.equal((await response.json()).workspace, null)
   })
 })
 
 test('auth bootstrap ignores a stale session cookie when resolving the wide-open workspace', async () => {
-  rootPrisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' }
-  ])) as unknown) as typeof rootPrisma.tenant.findMany
+  rootPrisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' }
+  ])) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findUnique = ((async () => null) as unknown) as typeof rootPrisma.setting.findUnique
   prisma.bridge.count = ((async () => 0) as unknown) as typeof prisma.bridge.count
   // A leftover cookie from an older deployment that no longer maps to a session.
@@ -341,7 +342,7 @@ test('auth bootstrap ignores a stale session cookie when resolving the wide-open
     })
 
     assert.equal(response.status, 200)
-    assert.deepEqual((await response.json()).tenant, { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' })
+    assert.deepEqual((await response.json()).workspace, { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' })
   })
 })
 
@@ -361,9 +362,9 @@ test('auth bootstrap keeps the platform scope when an enabled provider is still 
       recentVerificationMethods: ['passkey']
     }
   })
-  rootPrisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1', slug: 'workspace', name: 'My Workspace' }
-  ])) as unknown) as typeof rootPrisma.tenant.findMany
+  rootPrisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1', slug: 'workspace', name: 'My Workspace' }
+  ])) as unknown) as typeof rootPrisma.workspace.findMany
 
   await withAuthApp({
     authEnabled: false,
@@ -375,12 +376,12 @@ test('auth bootstrap keeps the platform scope when an enabled provider is still 
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.equal(payload.tenant, null)
+    assert.equal(payload.workspace, null)
     assert.equal(payload.setupRequired, true)
   })
 })
 
-test('auth bootstrap hides tenant options from anonymous platform requests before auth is enabled', async () => {
+test('auth bootstrap hides workspace options from anonymous platform requests before auth is enabled', async () => {
   await withAuthApp({
     authEnabled: false,
     actor: { type: 'anonymous' },
@@ -390,13 +391,13 @@ test('auth bootstrap hides tenant options from anonymous platform requests befor
     const response = await fetch(`${baseUrl}/api/auth/bootstrap`)
 
     assert.equal(response.status, 200)
-    assert.deepEqual((await response.json()).memberTenants, [])
+    assert.deepEqual((await response.json()).memberWorkspaces, [])
   })
 })
 
-test('auth bootstrap still hides tenant options from anonymous platform requests when some tenants are disabled', async () => {
+test('auth bootstrap still hides workspace options from anonymous platform requests when some workspaces are disabled', async () => {
   rootPrisma.setting.findMany = ((async () => ([
-    { key: 'tenant:tenant-2:platform:tenantDisabled' }
+    { key: 'workspace:workspace-2:platform:workspaceDisabled' }
   ])) as unknown) as typeof rootPrisma.setting.findMany
 
   await withAuthApp({
@@ -409,8 +410,8 @@ test('auth bootstrap still hides tenant options from anonymous platform requests
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.deepEqual(payload.memberTenants, [])
-    assert.deepEqual(payload.availableTenants, [])
+    assert.deepEqual(payload.memberWorkspaces, [])
+    assert.deepEqual(payload.availableWorkspaces, [])
   })
 })
 
@@ -449,10 +450,11 @@ test('auth bootstrap includes registered provider metadata', async () => {
       authEnabled: false,
       platformAuthEnabled: false,
       setupRequired: true,
-      tenant: null,
-      memberTenants: [],
-      availableTenants: [],
-      tenantHasConnectedBridges: false,
+      workspace: null,
+      memberWorkspaces: [],
+      availableWorkspaces: [],
+    customers: [],
+      workspaceHasConnectedBridges: false,
       providers: [{
         id: 'auth-local',
         label: 'Local Auth',
@@ -481,7 +483,7 @@ test('auth bootstrap includes registered provider metadata', async () => {
         canManageAuthProviders: true,
         canManageSettings: false,
         canManageSupportAccess: false,
-        canManageTenants: false,
+        canManageWorkspaces: false,
         canManagePlugins: false,
         canViewLogs: false
       },
@@ -494,20 +496,20 @@ test('auth bootstrap includes registered provider metadata', async () => {
   })
 })
 
-test('tenant auth bootstrap reports platform auth state separately from tenant auth state', async () => {
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string } }) => {
+test('workspace auth bootstrap reports platform auth state separately from workspace auth state', async () => {
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string } }) => {
     if (input.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   authProviderRegistry.register(() => {
-    const tenant = getCurrentTenant()
+    const workspace = getCurrentWorkspace()
     return {
       id: 'auth-local',
       label: 'Local Auth',
-      enabled: tenant == null,
+      enabled: workspace == null,
       methods: ['passkey', 'email-code'],
       setupRequired: false,
       capabilities: {
@@ -528,7 +530,7 @@ test('tenant auth bootstrap reports platform auth state separately from tenant a
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/auth/bootstrap`, {
-      headers: { 'x-printstream-tenant': 'alpha' }
+      headers: { 'x-printstream-workspace': 'alpha' }
     })
 
     assert.equal(response.status, 200)
@@ -536,10 +538,11 @@ test('tenant auth bootstrap reports platform auth state separately from tenant a
       authEnabled: false,
       platformAuthEnabled: true,
       setupRequired: false,
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-      memberTenants: [],
-      availableTenants: [],
-      tenantHasConnectedBridges: false,
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+      memberWorkspaces: [],
+      availableWorkspaces: [],
+    customers: [],
+      workspaceHasConnectedBridges: false,
       providers: [{
         id: 'auth-local',
         label: 'Local Auth',
@@ -562,7 +565,7 @@ test('tenant auth bootstrap reports platform auth state separately from tenant a
         canManageAuthProviders: false,
         canManageSettings: false,
         canManageSupportAccess: false,
-        canManageTenants: false,
+        canManageWorkspaces: false,
         canManagePlugins: false,
         canViewLogs: false
       },
@@ -571,46 +574,46 @@ test('tenant auth bootstrap reports platform auth state separately from tenant a
   })
 })
 
-test('tenant auth bootstrap reports whether the active workspace has connected bridges', async () => {
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string } }) => {
+test('workspace auth bootstrap reports whether the active workspace has connected bridges', async () => {
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string } }) => {
     if (input.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   prisma.bridge.count = ((async () => 2) as unknown) as typeof prisma.bridge.count
 
   await withAuthApp({
     authEnabled: true,
-    actor: { type: 'user', userId: 'user-1', tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' } },
+    actor: { type: 'user', userId: 'user-1', workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' } },
     permissions: [PRINTERS_VIEW_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/auth/bootstrap`, {
-      headers: { 'x-printstream-tenant': 'alpha' }
+      headers: { 'x-printstream-workspace': 'alpha' }
     })
 
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).tenantHasConnectedBridges, true)
+    assert.equal((await response.json()).workspaceHasConnectedBridges, true)
   })
 })
 
-test('tenant auth bootstrap reports managed-bridge mode when the server secret is set', async () => {
+test('workspace auth bootstrap reports managed-bridge mode when the server secret is set', async () => {
   const originalManagedBridge = env.MANAGED_BRIDGE
   env.MANAGED_BRIDGE = true
-  prisma.tenant.findUnique = ((async () => ({ id: 'tenant-1', slug: 'alpha', name: 'Alpha' })) as unknown) as typeof prisma.tenant.findUnique
+  prisma.workspace.findFirst = ((async () => ({ id: 'workspace-1', slug: 'alpha', name: 'Alpha' })) as unknown) as typeof prisma.workspace.findFirst
   prisma.bridge.count = ((async () => 1) as unknown) as typeof prisma.bridge.count
 
   try {
     await withAuthApp({
       authEnabled: true,
-      actor: { type: 'user', userId: 'user-1', tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' } },
+      actor: { type: 'user', userId: 'user-1', workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' } },
       permissions: [PRINTERS_VIEW_PERMISSION],
       runtimePolicy: { demoMode: false }
     }, async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/auth/bootstrap`, {
-        headers: { 'x-printstream-tenant': 'alpha' }
+        headers: { 'x-printstream-workspace': 'alpha' }
       })
 
       assert.equal(response.status, 200)
@@ -668,22 +671,22 @@ test('auth bootstrap does not stay in global setup mode once any enabled provide
   })
 })
 
-test('auth bootstrap only lists the active tenant for a tenant-scoped user', async () => {
-  rootPrisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1', _count: { authMemberships: 3, printers: 5 } },
-    { id: 'tenant-2', _count: { authMemberships: 1, printers: 2 } }
-  ])) as unknown) as typeof rootPrisma.tenant.findMany
-  rootPrisma.authTenantMembership.findMany = ((async () => ([
-    { tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' } },
-    { tenant: { id: 'tenant-2', slug: 'beta', name: 'Beta' } }
-  ])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
+test('auth bootstrap only lists the active workspace for a workspace-scoped user', async () => {
+  rootPrisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1', _count: { authMemberships: 3, printers: 5 } },
+    { id: 'workspace-2', _count: { authMemberships: 1, printers: 2 } }
+  ])) as unknown) as typeof rootPrisma.workspace.findMany
+  rootPrisma.authWorkspaceMembership.findMany = ((async () => ([
+    { workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' } },
+    { workspace: { id: 'workspace-2', slug: 'beta', name: 'Beta' } }
+  ])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
 
   await withAuthApp({
     authEnabled: true,
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     },
     permissions: [],
     runtimePolicy: { demoMode: false }
@@ -692,47 +695,47 @@ test('auth bootstrap only lists the active tenant for a tenant-scoped user', asy
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.deepEqual(payload.memberTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 3, printerCount: 5 },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', userCount: 1, printerCount: 2 }
+    assert.deepEqual(payload.memberWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 3, printerCount: 5 },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', userCount: 1, printerCount: 2 }
     ])
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 3, printerCount: 5 },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', userCount: 1, printerCount: 2 }
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 3, printerCount: 5 },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', userCount: 1, printerCount: 2 }
     ])
   })
 })
 
-test('auth bootstrap includes tenant descriptions in available workspace summaries', async () => {
-  rootPrisma.tenant.findMany = ((async () => ([
-    { id: 'tenant-1', _count: { authMemberships: 2, printers: 4 } },
-    { id: 'tenant-2', _count: { authMemberships: 1, printers: 0 } }
-  ])) as unknown) as typeof rootPrisma.tenant.findMany
-  rootPrisma.authTenantMembership.findMany = ((async () => ([
+test('auth bootstrap includes workspace descriptions in available workspace summaries', async () => {
+  rootPrisma.workspace.findMany = ((async () => ([
+    { id: 'workspace-1', _count: { authMemberships: 2, printers: 4 } },
+    { id: 'workspace-2', _count: { authMemberships: 1, printers: 0 } }
+  ])) as unknown) as typeof rootPrisma.workspace.findMany
+  rootPrisma.authWorkspaceMembership.findMany = ((async () => ([
     {
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha',
         description: 'Runs the alpha production line.'
       }
     },
     {
-      tenant: {
-        id: 'tenant-2',
+      workspace: {
+        id: 'workspace-2',
         slug: 'beta',
         name: 'Beta',
         description: null
       }
     }
-  ])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
+  ])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
 
   await withAuthApp({
     authEnabled: true,
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     },
     permissions: [],
     runtimePolicy: { demoMode: false }
@@ -741,9 +744,9 @@ test('auth bootstrap includes tenant descriptions in available workspace summari
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.deepEqual(payload.memberTenants, [
+    assert.deepEqual(payload.memberWorkspaces, [
       {
-        id: 'tenant-1',
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha',
         description: 'Runs the alpha production line.',
@@ -751,7 +754,7 @@ test('auth bootstrap includes tenant descriptions in available workspace summari
         printerCount: 4
       },
       {
-        id: 'tenant-2',
+        id: 'workspace-2',
         slug: 'beta',
         name: 'Beta',
         description: null,
@@ -759,9 +762,9 @@ test('auth bootstrap includes tenant descriptions in available workspace summari
         printerCount: 0
       }
     ])
-    assert.deepEqual(payload.availableTenants, [
+    assert.deepEqual(payload.availableWorkspaces, [
       {
-        id: 'tenant-1',
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha',
         description: 'Runs the alpha production line.',
@@ -769,7 +772,7 @@ test('auth bootstrap includes tenant descriptions in available workspace summari
         printerCount: 4
       },
       {
-        id: 'tenant-2',
+        id: 'workspace-2',
         slug: 'beta',
         name: 'Beta',
         description: null,
@@ -780,21 +783,21 @@ test('auth bootstrap includes tenant descriptions in available workspace summari
   })
 })
 
-test('auth bootstrap lists all tenants for a platform admin user unless a tenant opts out', async () => {
-  rootPrisma.tenant.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
+test('auth bootstrap lists all workspaces for a platform admin user unless a workspace opts out', async () => {
+  rootPrisma.workspace.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
     args?.select && '_count' in args.select
       ? [
-          { id: 'tenant-1', _count: { authMemberships: 4, printers: 6 } },
-          { id: 'tenant-3', _count: { authMemberships: 2, printers: 1 } }
+          { id: 'workspace-1', _count: { authMemberships: 4, printers: 6 } },
+          { id: 'workspace-3', _count: { authMemberships: 2, printers: 1 } }
         ]
       : [
-          { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-          { id: 'tenant-2', slug: 'beta', name: 'Beta' },
-          { id: 'tenant-3', slug: 'gamma', name: 'Gamma' }
+          { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+          { id: 'workspace-2', slug: 'beta', name: 'Beta' },
+          { id: 'workspace-3', slug: 'gamma', name: 'Gamma' }
         ]
-  )) as unknown) as typeof rootPrisma.tenant.findMany
+  )) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => ([
-    { key: 'tenant:tenant-2:auth:supportAccessEnabled' }
+    { key: 'workspace:workspace-2:auth:supportAccessEnabled' }
   ])) as unknown) as typeof rootPrisma.setting.findMany
 
   prisma.authUser.findUnique = ((async () => ({
@@ -812,29 +815,29 @@ test('auth bootstrap lists all tenants for a platform admin user unless a tenant
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.deepEqual(payload.memberTenants, [])
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
-      { id: 'tenant-3', slug: 'gamma', name: 'Gamma', userCount: 2, printerCount: 1 }
+    assert.deepEqual(payload.memberWorkspaces, [])
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
+      { id: 'workspace-3', slug: 'gamma', name: 'Gamma', userCount: 2, printerCount: 1 }
     ])
   })
 })
 
-test('auth bootstrap still filters support-disabled tenants for a platform admin when tenant auth is disabled in the active workspace', async () => {
-  rootPrisma.tenant.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
+test('auth bootstrap still filters support-disabled workspaces for a platform admin when workspace auth is disabled in the active workspace', async () => {
+  rootPrisma.workspace.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
     args?.select && '_count' in args.select
       ? [
-          { id: 'tenant-1', _count: { authMemberships: 4, printers: 6 } },
-          { id: 'tenant-3', _count: { authMemberships: 2, printers: 1 } }
+          { id: 'workspace-1', _count: { authMemberships: 4, printers: 6 } },
+          { id: 'workspace-3', _count: { authMemberships: 2, printers: 1 } }
         ]
       : [
-          { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-          { id: 'tenant-2', slug: 'beta', name: 'Beta' },
-          { id: 'tenant-3', slug: 'gamma', name: 'Gamma' }
+          { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+          { id: 'workspace-2', slug: 'beta', name: 'Beta' },
+          { id: 'workspace-3', slug: 'gamma', name: 'Gamma' }
         ]
-  )) as unknown) as typeof rootPrisma.tenant.findMany
+  )) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => ([
-    { key: 'tenant:tenant-2:auth:supportAccessEnabled' }
+    { key: 'workspace:workspace-2:auth:supportAccessEnabled' }
   ])) as unknown) as typeof rootPrisma.setting.findMany
   prisma.authUser.findUnique = ((async () => ({
     email: 'platform@example.com',
@@ -847,7 +850,7 @@ test('auth bootstrap still filters support-disabled tenants for a platform admin
       type: 'user',
       userId: 'user-1',
       isPlatformUser: true,
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     },
     permissions: [PRINTERS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
@@ -856,29 +859,29 @@ test('auth bootstrap still filters support-disabled tenants for a platform admin
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.deepEqual(payload.memberTenants, [])
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
-      { id: 'tenant-3', slug: 'gamma', name: 'Gamma', userCount: 2, printerCount: 1 }
+    assert.deepEqual(payload.memberWorkspaces, [])
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
+      { id: 'workspace-3', slug: 'gamma', name: 'Gamma', userCount: 2, printerCount: 1 }
     ])
   })
 })
 
-test('auth bootstrap still hides support-disabled tenants for a platform admin already inside another tenant workspace', async () => {
-  rootPrisma.tenant.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
+test('auth bootstrap still hides support-disabled workspaces for a platform admin already inside another workspace', async () => {
+  rootPrisma.workspace.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
     args?.select && '_count' in args.select
       ? [
-          { id: 'tenant-1', _count: { authMemberships: 4, printers: 6 } },
-          { id: 'tenant-3', _count: { authMemberships: 2, printers: 1 } }
+          { id: 'workspace-1', _count: { authMemberships: 4, printers: 6 } },
+          { id: 'workspace-3', _count: { authMemberships: 2, printers: 1 } }
         ]
       : [
-          { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-          { id: 'tenant-2', slug: 'beta', name: 'Beta' },
-          { id: 'tenant-3', slug: 'gamma', name: 'Gamma' }
+          { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+          { id: 'workspace-2', slug: 'beta', name: 'Beta' },
+          { id: 'workspace-3', slug: 'gamma', name: 'Gamma' }
         ]
-  )) as unknown) as typeof rootPrisma.tenant.findMany
+  )) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => ([
-    { key: 'tenant:tenant-2:auth:supportAccessEnabled' }
+    { key: 'workspace:workspace-2:auth:supportAccessEnabled' }
   ])) as unknown) as typeof rootPrisma.setting.findMany
 
   prisma.authUser.findUnique = ((async () => ({
@@ -892,7 +895,7 @@ test('auth bootstrap still hides support-disabled tenants for a platform admin a
       type: 'user',
       userId: 'user-1',
       isPlatformUser: true,
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     },
     permissions: [PRINTERS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
@@ -901,31 +904,31 @@ test('auth bootstrap still hides support-disabled tenants for a platform admin a
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.deepEqual(payload.memberTenants, [])
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
-      { id: 'tenant-3', slug: 'gamma', name: 'Gamma', userCount: 2, printerCount: 1 }
+    assert.deepEqual(payload.memberWorkspaces, [])
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
+      { id: 'workspace-3', slug: 'gamma', name: 'Gamma', userCount: 2, printerCount: 1 }
     ])
   })
 })
 
-test('auth bootstrap clears a disabled tenant context cookie for a platform admin', async () => {
-  prisma.tenant.findUnique = ((async (input: { where: { id?: string } }) => {
-    if (input.where.id === 'tenant-2') {
-      return { id: 'tenant-2', slug: 'beta', name: 'Beta' }
+test('auth bootstrap clears a disabled workspace context cookie for a platform admin', async () => {
+  prisma.workspace.findFirst = ((async (input: { where: { id?: string } }) => {
+    if (input.where.id === 'workspace-2') {
+      return { id: 'workspace-2', slug: 'beta', name: 'Beta' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  rootPrisma.tenant.findMany = ((async (input: { where?: { id?: string } }) => {
-    if (input.where?.id === 'tenant-2') {
-      return [{ id: 'tenant-2', slug: 'beta', name: 'Beta' }]
+  }) as unknown) as typeof prisma.workspace.findFirst
+  rootPrisma.workspace.findMany = ((async (input: { where?: { id?: string } }) => {
+    if (input.where?.id === 'workspace-2') {
+      return [{ id: 'workspace-2', slug: 'beta', name: 'Beta' }]
     }
 
-    return [{ id: 'tenant-2', slug: 'beta', name: 'Beta' }]
-  }) as unknown) as typeof rootPrisma.tenant.findMany
+    return [{ id: 'workspace-2', slug: 'beta', name: 'Beta' }]
+  }) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => ([
-    { key: 'tenant:tenant-2:auth:supportAccessEnabled' }
+    { key: 'workspace:workspace-2:auth:supportAccessEnabled' }
   ])) as unknown) as typeof rootPrisma.setting.findMany
   prisma.authUser.findUnique = ((async () => ({
     email: 'platform@example.com',
@@ -939,20 +942,20 @@ test('auth bootstrap clears a disabled tenant context cookie for a platform admi
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/auth/bootstrap`, {
-      headers: { Cookie: 'printstream_tenant_context=tenant-2' }
+      headers: { Cookie: 'printstream_workspace_context=workspace-2' }
     })
 
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).tenant, null)
+    assert.equal((await response.json()).workspace, null)
   })
 })
 
-test('auth bootstrap ignores a tenant context cookie when the browser sends a neutral workspace hint', async () => {
-  rootPrisma.tenant.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
+test('auth bootstrap ignores a workspace context cookie when the browser sends a neutral workspace hint', async () => {
+  rootPrisma.workspace.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
     args?.select && '_count' in args.select
-      ? [{ id: 'tenant-2', _count: { authMemberships: 2, printers: 3 } }]
-      : [{ id: 'tenant-2', slug: 'beta', name: 'Beta' }]
-  )) as unknown) as typeof rootPrisma.tenant.findMany
+      ? [{ id: 'workspace-2', _count: { authMemberships: 2, printers: 3 } }]
+      : [{ id: 'workspace-2', slug: 'beta', name: 'Beta' }]
+  )) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => []) as unknown) as typeof rootPrisma.setting.findMany
   prisma.authUser.findUnique = ((async () => ({
     email: 'platform@example.com',
@@ -967,32 +970,32 @@ test('auth bootstrap ignores a tenant context cookie when the browser sends a ne
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/auth/bootstrap`, {
       headers: {
-        Cookie: 'printstream_tenant_context=tenant-2',
-        'X-PrintStream-Tenant': 'none'
+        Cookie: 'printstream_workspace_context=workspace-2',
+        'X-PrintStream-Workspace': 'none'
       }
     })
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.equal(payload.tenant, null)
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 }
+    assert.equal(payload.workspace, null)
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 }
     ])
   })
 })
 
-test('auth bootstrap includes tenants that have no matching tenant user for the platform admin', async () => {
-  rootPrisma.tenant.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
+test('auth bootstrap includes workspaces that have no matching workspace user for the platform admin', async () => {
+  rootPrisma.workspace.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
     args?.select && '_count' in args.select
       ? [
-          { id: 'tenant-1', _count: { authMemberships: 4, printers: 6 } },
-          { id: 'tenant-2', _count: { authMemberships: 2, printers: 3 } }
+          { id: 'workspace-1', _count: { authMemberships: 4, printers: 6 } },
+          { id: 'workspace-2', _count: { authMemberships: 2, printers: 3 } }
         ]
       : [
-          { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-          { id: 'tenant-2', slug: 'beta', name: 'Beta' }
+          { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+          { id: 'workspace-2', slug: 'beta', name: 'Beta' }
         ]
-  )) as unknown) as typeof rootPrisma.tenant.findMany
+  )) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => []) as unknown) as typeof rootPrisma.setting.findMany
   prisma.authUser.findUnique = ((async () => ({
     email: 'platform@example.com',
@@ -1009,37 +1012,37 @@ test('auth bootstrap includes tenants that have no matching tenant user for the 
 
     assert.equal(response.status, 200)
     const payload = await response.json()
-    assert.deepEqual(payload.memberTenants, [])
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 }
+    assert.deepEqual(payload.memberWorkspaces, [])
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 }
     ])
   })
 })
 
 test('auth bootstrap separates personal memberships from broader accessible workspaces for platform users', async () => {
-  rootPrisma.tenant.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
+  rootPrisma.workspace.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
     args?.select && '_count' in args.select
       ? [
-          { id: 'tenant-1', _count: { authMemberships: 4, printers: 6 } },
-          { id: 'tenant-2', _count: { authMemberships: 2, printers: 3 } }
+          { id: 'workspace-1', _count: { authMemberships: 4, printers: 6 } },
+          { id: 'workspace-2', _count: { authMemberships: 2, printers: 3 } }
         ]
       : [
-          { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-          { id: 'tenant-2', slug: 'beta', name: 'Beta' }
+          { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+          { id: 'workspace-2', slug: 'beta', name: 'Beta' }
         ]
-  )) as unknown) as typeof rootPrisma.tenant.findMany
+  )) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => []) as unknown) as typeof rootPrisma.setting.findMany
-  rootPrisma.authTenantMembership.findMany = ((async () => ([
+  rootPrisma.authWorkspaceMembership.findMany = ((async () => ([
     {
-      tenant: {
-        id: 'tenant-2',
+      workspace: {
+        id: 'workspace-2',
         slug: 'beta',
         name: 'Beta',
         description: null
       }
     }
-  ])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
+  ])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
   prisma.authUser.findUnique = ((async () => ({
     email: 'platform@example.com',
     displayName: 'Platform Admin'
@@ -1055,59 +1058,59 @@ test('auth bootstrap separates personal memberships from broader accessible work
     const payload = await response.json()
 
     assert.equal(response.status, 200)
-    assert.deepEqual(payload.memberTenants, [
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', description: null, userCount: 2, printerCount: 3 }
+    assert.deepEqual(payload.memberWorkspaces, [
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', description: null, userCount: 2, printerCount: 3 }
     ])
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 }
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 }
     ])
   })
 })
 
 test('auth bootstrap keeps personal memberships visible while a platform user is inside a support-access workspace', async () => {
-  rootPrisma.tenant.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
+  rootPrisma.workspace.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
     args?.select && '_count' in args.select
       ? [
-          { id: 'tenant-1', _count: { authMemberships: 4, printers: 6 } },
-          { id: 'tenant-2', _count: { authMemberships: 2, printers: 3 } },
-          { id: 'tenant-3', _count: { authMemberships: 1, printers: 1 } }
+          { id: 'workspace-1', _count: { authMemberships: 4, printers: 6 } },
+          { id: 'workspace-2', _count: { authMemberships: 2, printers: 3 } },
+          { id: 'workspace-3', _count: { authMemberships: 1, printers: 1 } }
         ]
       : [
-          { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-          { id: 'tenant-2', slug: 'beta', name: 'Beta' },
-          { id: 'tenant-3', slug: 'gamma', name: 'Gamma' }
+          { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+          { id: 'workspace-2', slug: 'beta', name: 'Beta' },
+          { id: 'workspace-3', slug: 'gamma', name: 'Gamma' }
         ]
-  )) as unknown) as typeof rootPrisma.tenant.findMany
+  )) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => []) as unknown) as typeof rootPrisma.setting.findMany
-  rootPrisma.authTenantMembership.findMany = ((async () => ([
+  rootPrisma.authWorkspaceMembership.findMany = ((async () => ([
     {
-      tenant: {
-        id: 'tenant-2',
+      workspace: {
+        id: 'workspace-2',
         slug: 'beta',
         name: 'Beta',
         description: null
       }
     },
     {
-      tenant: {
-        id: 'tenant-3',
+      workspace: {
+        id: 'workspace-3',
         slug: 'gamma',
         name: 'Gamma',
         description: null
       }
     }
-  ])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
-  prisma.authTenantMembership.findMany = ((async () => ([
+  ])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
+  prisma.authWorkspaceMembership.findMany = ((async () => ([
     {
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha',
         description: null
       }
     }
-  ])) as unknown) as typeof prisma.authTenantMembership.findMany
+  ])) as unknown) as typeof prisma.authWorkspaceMembership.findMany
   prisma.authUser.findUnique = ((async () => ({
     email: 'platform@example.com',
     displayName: 'Platform Admin'
@@ -1119,7 +1122,7 @@ test('auth bootstrap keeps personal memberships visible while a platform user is
       type: 'user',
       userId: 'user-1',
       isPlatformUser: true,
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     },
     permissions: [PRINTERS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
@@ -1128,51 +1131,51 @@ test('auth bootstrap keeps personal memberships visible while a platform user is
     const payload = await response.json()
 
     assert.equal(response.status, 200)
-    assert.deepEqual(payload.memberTenants, [
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', description: null, userCount: 2, printerCount: 3 },
-      { id: 'tenant-3', slug: 'gamma', name: 'Gamma', description: null, userCount: 1, printerCount: 1 }
+    assert.deepEqual(payload.memberWorkspaces, [
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', description: null, userCount: 2, printerCount: 3 },
+      { id: 'workspace-3', slug: 'gamma', name: 'Gamma', description: null, userCount: 1, printerCount: 1 }
     ])
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 },
-      { id: 'tenant-3', slug: 'gamma', name: 'Gamma', userCount: 1, printerCount: 1 }
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 },
+      { id: 'workspace-3', slug: 'gamma', name: 'Gamma', userCount: 1, printerCount: 1 }
     ])
   })
 })
 
-test('auth bootstrap keeps personal memberships visible while a platform user is inside a support-access workspace with tenant auth disabled', async () => {
-  rootPrisma.tenant.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
+test('auth bootstrap keeps personal memberships visible while a platform user is inside a support-access workspace with workspace auth disabled', async () => {
+  rootPrisma.workspace.findMany = ((async (args?: { select?: { _count?: unknown } }) => (
     args?.select && '_count' in args.select
       ? [
-          { id: 'tenant-1', _count: { authMemberships: 4, printers: 6 } },
-          { id: 'tenant-2', _count: { authMemberships: 2, printers: 3 } },
-          { id: 'tenant-3', _count: { authMemberships: 1, printers: 1 } }
+          { id: 'workspace-1', _count: { authMemberships: 4, printers: 6 } },
+          { id: 'workspace-2', _count: { authMemberships: 2, printers: 3 } },
+          { id: 'workspace-3', _count: { authMemberships: 1, printers: 1 } }
         ]
       : [
-          { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-          { id: 'tenant-2', slug: 'beta', name: 'Beta' },
-          { id: 'tenant-3', slug: 'gamma', name: 'Gamma' }
+          { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+          { id: 'workspace-2', slug: 'beta', name: 'Beta' },
+          { id: 'workspace-3', slug: 'gamma', name: 'Gamma' }
         ]
-  )) as unknown) as typeof rootPrisma.tenant.findMany
+  )) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => []) as unknown) as typeof rootPrisma.setting.findMany
-  rootPrisma.authTenantMembership.findMany = ((async () => ([
+  rootPrisma.authWorkspaceMembership.findMany = ((async () => ([
     {
-      tenant: {
-        id: 'tenant-2',
+      workspace: {
+        id: 'workspace-2',
         slug: 'beta',
         name: 'Beta',
         description: null
       }
     },
     {
-      tenant: {
-        id: 'tenant-3',
+      workspace: {
+        id: 'workspace-3',
         slug: 'gamma',
         name: 'Gamma',
         description: null
       }
     }
-  ])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
+  ])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
   prisma.authUser.findUnique = ((async () => ({
     email: 'platform@example.com',
     displayName: 'Platform Admin'
@@ -1184,7 +1187,7 @@ test('auth bootstrap keeps personal memberships visible while a platform user is
       type: 'user',
       userId: 'user-1',
       isPlatformUser: true,
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     },
     permissions: [PRINTERS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
@@ -1194,48 +1197,48 @@ test('auth bootstrap keeps personal memberships visible while a platform user is
 
     assert.equal(response.status, 200)
     assert.equal(payload.authEnabled, false)
-    assert.deepEqual(payload.memberTenants, [
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', description: null, userCount: 2, printerCount: 3 },
-      { id: 'tenant-3', slug: 'gamma', name: 'Gamma', description: null, userCount: 1, printerCount: 1 }
+    assert.deepEqual(payload.memberWorkspaces, [
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', description: null, userCount: 2, printerCount: 3 },
+      { id: 'workspace-3', slug: 'gamma', name: 'Gamma', description: null, userCount: 1, printerCount: 1 }
     ])
-    assert.deepEqual(payload.availableTenants, [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 },
-      { id: 'tenant-3', slug: 'gamma', name: 'Gamma', userCount: 1, printerCount: 1 }
+    assert.deepEqual(payload.availableWorkspaces, [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha', userCount: 4, printerCount: 6 },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta', userCount: 2, printerCount: 3 },
+      { id: 'workspace-3', slug: 'gamma', name: 'Gamma', userCount: 1, printerCount: 1 }
     ])
   })
 })
 
-test('auth switch-tenant lets a tenant member switch without reauthenticating', async () => {
-  prisma.authTenantMembership.findFirst = ((async () => ({ tenantId: 'tenant-2' })) as unknown) as typeof prisma.authTenantMembership.findFirst
+test('auth switch-workspace lets a workspace member switch without reauthenticating', async () => {
+  prisma.authWorkspaceMembership.findFirst = ((async () => ({ workspaceId: 'workspace-2' })) as unknown) as typeof prisma.authWorkspaceMembership.findFirst
 
   await withAuthApp({
     authEnabled: true,
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     },
     permissions: [],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/switch-tenant`, {
+    const response = await fetch(`${baseUrl}/api/auth/switch-workspace`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Cookie: 'printstream_auth=session-secret'
       },
-      body: JSON.stringify({ tenantId: 'tenant-2' })
+      body: JSON.stringify({ workspaceId: 'workspace-2' })
     })
 
     assert.equal(response.status, 204)
-    assert.match(response.headers.get('set-cookie') ?? '', /printstream_tenant_context=tenant-2/)
+    assert.match(response.headers.get('set-cookie') ?? '', /printstream_workspace_context=workspace-2/)
   })
 })
 
-test('auth switch-tenant rejects disabled workspaces for platform users', async () => {
+test('auth switch-workspace rejects disabled workspaces for platform users', async () => {
   rootPrisma.setting.findUnique = ((async (input: { where: { key: string } }) => {
-    if (input.where.key === 'tenant:tenant-2:platform:tenantDisabled') {
+    if (input.where.key === 'workspace:workspace-2:platform:workspaceDisabled') {
       return { value: 'true' }
     }
 
@@ -1248,13 +1251,13 @@ test('auth switch-tenant rejects disabled workspaces for platform users', async 
     permissions: [],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/switch-tenant`, {
+    const response = await fetch(`${baseUrl}/api/auth/switch-workspace`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Cookie: 'printstream_auth=session-secret'
       },
-      body: JSON.stringify({ tenantId: 'tenant-2' })
+      body: JSON.stringify({ workspaceId: 'workspace-2' })
     })
 
     assert.equal(response.status, 403)
@@ -1262,16 +1265,16 @@ test('auth switch-tenant rejects disabled workspaces for platform users', async 
   })
 })
 
-test('auth tenant-context stores the selected platform admin tenant context cookie and can switch back to platform mode', async () => {
-  rootPrisma.tenant.findMany = ((async (input: { where?: { id?: string } }) => {
+test('auth workspace-context stores the selected platform admin workspace context cookie and can switch back to platform mode', async () => {
+  rootPrisma.workspace.findMany = ((async (input: { where?: { id?: string } }) => {
     if (input.where?.id) {
       return [{ id: input.where.id, slug: 'beta', name: 'Beta' }]
     }
 
     return []
-  }) as unknown) as typeof rootPrisma.tenant.findMany
+  }) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => []) as unknown) as typeof rootPrisma.setting.findMany
-  rootPrisma.authTenantMembership.findMany = ((async () => ([{ tenantId: 'tenant-2' }])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
+  rootPrisma.authWorkspaceMembership.findMany = ((async () => ([{ workspaceId: 'workspace-2' }])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
 
   await withAuthApp({
     authEnabled: true,
@@ -1279,33 +1282,33 @@ test('auth tenant-context stores the selected platform admin tenant context cook
     permissions: [PRINTERS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const tenantResponse = await fetch(`${baseUrl}/api/auth/tenant-context`, {
+    const workspaceResponse = await fetch(`${baseUrl}/api/auth/workspace-context`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenantId: 'tenant-2' })
+      body: JSON.stringify({ workspaceId: 'workspace-2' })
     })
 
-    assert.equal(tenantResponse.status, 204)
-    assert.match(tenantResponse.headers.get('set-cookie') ?? '', /printstream_tenant_context=tenant-2/)
+    assert.equal(workspaceResponse.status, 204)
+    assert.match(workspaceResponse.headers.get('set-cookie') ?? '', /printstream_workspace_context=workspace-2/)
 
-    const platformResponse = await fetch(`${baseUrl}/api/auth/tenant-context`, {
+    const platformResponse = await fetch(`${baseUrl}/api/auth/workspace-context`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenantId: null })
+      body: JSON.stringify({ workspaceId: null })
     })
 
     assert.equal(platformResponse.status, 204)
-    assert.match(platformResponse.headers.get('set-cookie') ?? '', /printstream_tenant_context=platform/)
+    assert.match(platformResponse.headers.get('set-cookie') ?? '', /printstream_workspace_context=platform/)
   })
 })
 
-test('auth tenant-context lets platform users enter a workspace through support access without a tenant account', async () => {
-  rootPrisma.tenant.findMany = ((async (input: { where?: { id?: string } }) => {
+test('auth workspace-context lets platform users enter a workspace through support access without a workspace account', async () => {
+  rootPrisma.workspace.findMany = ((async (input: { where?: { id?: string } }) => {
     if (input.where?.id) {
       return [{ id: input.where.id, slug: 'beta', name: 'Beta' }]
     }
     return []
-  }) as unknown) as typeof rootPrisma.tenant.findMany
+  }) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => []) as unknown) as typeof rootPrisma.setting.findMany
 
   await withAuthApp({
@@ -1314,26 +1317,26 @@ test('auth tenant-context lets platform users enter a workspace through support 
     permissions: [PRINTERS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/tenant-context`, {
+    const response = await fetch(`${baseUrl}/api/auth/workspace-context`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenantId: 'tenant-2' })
+      body: JSON.stringify({ workspaceId: 'workspace-2' })
     })
 
     assert.equal(response.status, 204)
-    assert.match(response.headers.get('set-cookie') ?? '', /printstream_tenant_context=tenant-2/)
+    assert.match(response.headers.get('set-cookie') ?? '', /printstream_workspace_context=workspace-2/)
   })
 })
 
-test('auth tenant-context rejects platform users without a tenant account when support access is disabled', async () => {
-  rootPrisma.tenant.findMany = ((async (input: { where?: { id?: string } }) => {
+test('auth workspace-context rejects platform users without a workspace account when support access is disabled', async () => {
+  rootPrisma.workspace.findMany = ((async (input: { where?: { id?: string } }) => {
     if (input.where?.id) {
       return [{ id: input.where.id, slug: 'beta', name: 'Beta' }]
     }
     return []
-  }) as unknown) as typeof rootPrisma.tenant.findMany
+  }) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => ([
-    { key: 'tenant:tenant-2:auth:supportAccessEnabled' }
+    { key: 'workspace:workspace-2:auth:supportAccessEnabled' }
   ])) as unknown) as typeof rootPrisma.setting.findMany
 
   await withAuthApp({
@@ -1342,10 +1345,10 @@ test('auth tenant-context rejects platform users without a tenant account when s
     permissions: [PRINTERS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/tenant-context`, {
+    const response = await fetch(`${baseUrl}/api/auth/workspace-context`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenantId: 'tenant-2' })
+      body: JSON.stringify({ workspaceId: 'workspace-2' })
     })
 
     assert.equal(response.status, 403)
@@ -1353,17 +1356,17 @@ test('auth tenant-context rejects platform users without a tenant account when s
   })
 })
 
-test('auth tenant-context allows platform admin tenant switching with a tenant account even when support access is disabled', async () => {
-  rootPrisma.tenant.findMany = ((async (input: { where?: { id?: string } }) => {
+test('auth workspace-context allows platform admin workspace switching with a workspace account even when support access is disabled', async () => {
+  rootPrisma.workspace.findMany = ((async (input: { where?: { id?: string } }) => {
     if (input.where?.id) {
       return [{ id: input.where.id, slug: 'beta', name: 'Beta' }]
     }
     return []
-  }) as unknown) as typeof rootPrisma.tenant.findMany
+  }) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => ([
-    { key: 'tenant:tenant-2:auth:supportAccessEnabled' }
+    { key: 'workspace:workspace-2:auth:supportAccessEnabled' }
   ])) as unknown) as typeof rootPrisma.setting.findMany
-  rootPrisma.authTenantMembership.findMany = ((async () => ([{ tenantId: 'tenant-2' }])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
+  rootPrisma.authWorkspaceMembership.findMany = ((async () => ([{ workspaceId: 'workspace-2' }])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
 
   await withAuthApp({
     authEnabled: true,
@@ -1371,32 +1374,32 @@ test('auth tenant-context allows platform admin tenant switching with a tenant a
     permissions: [PRINTERS_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/tenant-context`, {
+    const response = await fetch(`${baseUrl}/api/auth/workspace-context`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenantId: 'tenant-2' })
+      body: JSON.stringify({ workspaceId: 'workspace-2' })
     })
 
     assert.equal(response.status, 204)
-    assert.match(response.headers.get('set-cookie') ?? '', /printstream_tenant_context=tenant-2/)
+    assert.match(response.headers.get('set-cookie') ?? '', /printstream_workspace_context=workspace-2/)
   })
 })
 
-test('auth tenant-context requires sign-in before switching platform workspace context', async () => {
+test('auth workspace-context requires sign-in before switching platform workspace context', async () => {
   await withAuthApp({
     authEnabled: false,
     actor: { type: 'anonymous' },
     permissions: [],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const tenantResponse = await fetch(`${baseUrl}/api/auth/tenant-context`, {
+    const workspaceResponse = await fetch(`${baseUrl}/api/auth/workspace-context`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenantId: 'tenant-2' })
+      body: JSON.stringify({ workspaceId: 'workspace-2' })
     })
 
-    assert.equal(tenantResponse.status, 401)
-    assert.deepEqual(await tenantResponse.json(), {
+    assert.equal(workspaceResponse.status, 401)
+    assert.deepEqual(await workspaceResponse.json(), {
       error: 'Sign in to change workspace context.'
     })
   })
@@ -1463,7 +1466,7 @@ test('auth logout writes an explicit session audit entry', async () => {
 
   await logged
   assert.deepEqual(capturedData, {
-    tenantId: null,
+    workspaceId: null,
     actorType: 'user',
     actorUserId: 'user-1',
     actorServiceAccountId: null,
@@ -1597,7 +1600,7 @@ test('auth me returns the current user profile and blocks direct email changes w
     email: 'member@example.com',
     displayName: 'Member',
     isPlatformUser: false,
-    tenantMemberships: [{ loginDisabled: false }],
+    workspaceMemberships: [{ loginDisabled: false }],
     memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin' } }],
     _count: { passkeys: 1 },
     createdAt,
@@ -1710,7 +1713,7 @@ test('auth session policy reads and updates the core browser-session duration', 
   })
 })
 
-test('auth groups list stays scoped to the current tenant workspace', async () => {
+test('auth groups list stays scoped to the current workspace', async () => {
   let requestedWhere: unknown = null
 
   prisma.authGroup.findUnique = ((async () => null) as unknown) as typeof prisma.authGroup.findUnique
@@ -1723,8 +1726,8 @@ test('auth groups list stays scoped to the current tenant workspace', async () =
         id: 'group-1',
         key: 'viewer',
         name: 'Viewer',
-        description: 'Tenant one viewer',
-        permissions: [AUTH_ROLES_VIEW_PERMISSION, TENANTS_MANAGE_PERMISSION],
+        description: 'Workspace one viewer',
+        permissions: [AUTH_ROLES_VIEW_PERMISSION, WORKSPACES_MANAGE_PERMISSION],
         isSystem: true,
         isEditable: true,
         isRemovable: false,
@@ -1743,8 +1746,8 @@ test('auth groups list stays scoped to the current tenant workspace', async () =
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -1756,14 +1759,14 @@ test('auth groups list stays scoped to the current tenant workspace', async () =
     const body = await response.json()
 
     assert.equal(response.status, 200)
-    assert.deepEqual(requestedWhere, { tenantId: 'tenant-1' })
+    assert.deepEqual(requestedWhere, { workspaceId: 'workspace-1' })
     assert.equal(body.groups.length, 1)
     assert.deepEqual(body.groups[0]?.permissions, [AUTH_ROLES_VIEW_PERMISSION])
   })
 })
 
-test('auth groups list recreates missing built-in tenant roles before returning them', async () => {
-  const tenantId = 'tenant-1'
+test('auth groups list recreates missing built-in workspace roles before returning them', async () => {
+  const workspaceId = 'workspace-1'
   const createdAt = new Date('2026-05-01T00:00:00.000Z')
   const store = new Map<string, {
     id: string
@@ -1782,12 +1785,12 @@ test('auth groups list recreates missing built-in tenant roles before returning 
     }
   }>()
 
-  prisma.authGroup.findUnique = ((async (input: { where: { tenantId_key: { tenantId: string; key: string } } }) => {
-    const compound = input.where.tenantId_key
-    return store.get(`${compound.tenantId}:${compound.key}`) ?? null
+  prisma.authGroup.findUnique = ((async (input: { where: { workspaceId_key: { workspaceId: string; key: string } } }) => {
+    const compound = input.where.workspaceId_key
+    return store.get(`${compound.workspaceId}:${compound.key}`) ?? null
   }) as unknown) as typeof prisma.authGroup.findUnique
 
-  prisma.authGroup.create = ((async (input: { data: { tenantId: string | null; key: string | null; name: string; description: string; permissions: string[]; isSystem: boolean; isEditable: boolean; isRemovable: boolean } }) => {
+  prisma.authGroup.create = ((async (input: { data: { workspaceId: string | null; key: string | null; name: string; description: string; permissions: string[]; isSystem: boolean; isEditable: boolean; isRemovable: boolean } }) => {
     const row = {
       id: `group-${input.data.key}`,
       key: input.data.key,
@@ -1804,13 +1807,13 @@ test('auth groups list recreates missing built-in tenant roles before returning 
         serviceAccountMemberships: 0
       }
     }
-    store.set(`${input.data.tenantId}:${input.data.key}`, row)
+    store.set(`${input.data.workspaceId}:${input.data.key}`, row)
     return row
   }) as unknown) as typeof prisma.authGroup.create
 
-  prisma.authGroup.findMany = ((async (input: { where?: { tenantId?: string | null } }) => {
+  prisma.authGroup.findMany = ((async (input: { where?: { workspaceId?: string | null } }) => {
     return Array.from(store.values())
-      .filter((row) => row.key != null && row && input.where?.tenantId === tenantId)
+      .filter((row) => row.key != null && row && input.where?.workspaceId === workspaceId)
       .sort((left, right) => left.name.localeCompare(right.name))
   }) as unknown) as typeof prisma.authGroup.findMany
 
@@ -1819,8 +1822,8 @@ test('auth groups list recreates missing built-in tenant roles before returning 
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: tenantId,
+      workspace: {
+        id: workspaceId,
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -1840,13 +1843,13 @@ test('auth groups list recreates missing built-in tenant roles before returning 
   })
 })
 
-test('auth status counts stay scoped to the current tenant workspace', async () => {
+test('auth status counts stay scoped to the current workspace', async () => {
   let requestedGroupCountWhere: unknown = null
   let requestedServiceAccountCountWhere: unknown = null
 
   prisma.authGroup.findUnique = ((async () => null) as unknown) as typeof prisma.authGroup.findUnique
   prisma.authGroup.create = ((async () => ({})) as unknown) as typeof prisma.authGroup.create
-  prisma.authTenantMembership.count = ((async () => 2) as unknown) as typeof prisma.authTenantMembership.count
+  prisma.authWorkspaceMembership.count = ((async () => 2) as unknown) as typeof prisma.authWorkspaceMembership.count
   prisma.authGroup.count = ((async (input: { where?: unknown }) => {
     requestedGroupCountWhere = input.where ?? null
     return 3
@@ -1862,8 +1865,8 @@ test('auth status counts stay scoped to the current tenant workspace', async () 
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -1875,18 +1878,18 @@ test('auth status counts stay scoped to the current tenant workspace', async () 
     const body = await response.json()
 
     assert.equal(response.status, 200)
-    assert.deepEqual(requestedGroupCountWhere, { tenantId: 'tenant-1' })
-    assert.deepEqual(requestedServiceAccountCountWhere, { tenantId: 'tenant-1' })
+    assert.deepEqual(requestedGroupCountWhere, { workspaceId: 'workspace-1' })
+    assert.deepEqual(requestedServiceAccountCountWhere, { workspaceId: 'workspace-1' })
     assert.deepEqual(body.counts, {
       users: 2,
       groups: 3,
       serviceAccounts: 4
     })
-    assert.equal(body.permissionDefinitions.some((definition: { key: string }) => definition.key === TENANTS_MANAGE_PERMISSION), false)
+    assert.equal(body.permissionDefinitions.some((definition: { key: string }) => definition.key === WORKSPACES_MANAGE_PERMISSION), false)
   })
 })
 
-test('auth groups reject platform-only permissions in tenant workspaces', async () => {
+test('auth groups reject platform-only permissions in workspaces', async () => {
   prisma.authSession.findUnique = ((async () => ({
     userId: 'user-1',
     createdAt: new Date(Date.now() - (5 * 60 * 1000)),
@@ -1899,8 +1902,8 @@ test('auth groups reject platform-only permissions in tenant workspaces', async 
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -1917,7 +1920,7 @@ test('auth groups reject platform-only permissions in tenant workspaces', async 
       body: JSON.stringify({
         name: 'Support',
         description: 'Support access',
-        permissions: [TENANTS_MANAGE_PERMISSION]
+        permissions: [WORKSPACES_MANAGE_PERMISSION]
       })
     })
 
@@ -1928,7 +1931,7 @@ test('auth groups reject platform-only permissions in tenant workspaces', async 
   })
 })
 
-test('tenant auth groups hide platform-only permissions in returned roles', async () => {
+test('workspace auth groups hide platform-only permissions in returned roles', async () => {
   const createdAt = new Date('2026-05-01T00:00:00.000Z')
   prisma.authGroup.findUnique = ((async () => null) as unknown) as typeof prisma.authGroup.findUnique
   prisma.authGroup.create = ((async () => ({})) as unknown) as typeof prisma.authGroup.create
@@ -1937,8 +1940,8 @@ test('tenant auth groups hide platform-only permissions in returned roles', asyn
     key: 'admin',
     name: 'Admin',
     description: 'Workspace administrators',
-    permissions: [AUTH_ROLES_VIEW_PERMISSION, SETTINGS_MANAGE_PERMISSION, TENANTS_MANAGE_PERMISSION, AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION],
-    tenantId: 'tenant-1',
+    permissions: [AUTH_ROLES_VIEW_PERMISSION, SETTINGS_MANAGE_PERMISSION, WORKSPACES_MANAGE_PERMISSION, AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION],
+    workspaceId: 'workspace-1',
     isSystem: true,
     isEditable: false,
     isRemovable: false,
@@ -1955,8 +1958,8 @@ test('tenant auth groups hide platform-only permissions in returned roles', asyn
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -1996,13 +1999,13 @@ test('platform auth groups reject workspace permissions but allow owned platform
   })) as unknown) as typeof prisma.authSession.findUnique
 
   const createdAt = new Date('2026-05-01T00:00:00.000Z')
-  prisma.authGroup.create = ((async (input: { data: { tenantId: string | null; name: string; description: string | null; permissions: string[] } }) => ({
+  prisma.authGroup.create = ((async (input: { data: { workspaceId: string | null; name: string; description: string | null; permissions: string[] } }) => ({
     id: 'platform-group-custom',
     key: null,
     name: input.data.name,
     description: input.data.description,
     permissions: input.data.permissions,
-    tenantId: input.data.tenantId,
+    workspaceId: input.data.workspaceId,
     isSystem: false,
     isEditable: true,
     isRemovable: true,
@@ -2020,9 +2023,9 @@ test('platform auth groups reject workspace permissions but allow owned platform
       type: 'user',
       userId: 'user-1',
       isPlatformUser: true,
-      tenant: null
+      workspace: null
     },
-    permissions: [AUTH_ROLES_CREATE_PERMISSION, AUTH_ROLES_ASSIGN_PERMISSION, AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, TENANTS_MANAGE_PERMISSION],
+    permissions: [AUTH_ROLES_CREATE_PERMISSION, AUTH_ROLES_ASSIGN_PERMISSION, AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, WORKSPACES_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const workspacePermissionResponse = await fetch(`${baseUrl}/api/auth/groups`, {
@@ -2052,13 +2055,13 @@ test('platform auth groups reject workspace permissions but allow owned platform
       body: JSON.stringify({
         name: 'Support Bypass',
         description: 'Support users who can enter any workspace.',
-        permissions: [AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, TENANTS_MANAGE_PERMISSION]
+        permissions: [AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, WORKSPACES_MANAGE_PERMISSION]
       })
     })
 
     assert.equal(bypassResponse.status, 201)
     const body = await bypassResponse.json()
-    assert.deepEqual(body.group.permissions, [AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, TENANTS_MANAGE_PERMISSION])
+    assert.deepEqual(body.group.permissions, [AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, WORKSPACES_MANAGE_PERMISSION])
   })
 })
 
@@ -2075,8 +2078,8 @@ test('auth group permission edits require recent verification', async () => {
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -2117,8 +2120,8 @@ test('auth user role assignment requires recent verification', async () => {
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -2155,8 +2158,8 @@ test('auth user creation with initial roles requires recent verification', async
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -2184,7 +2187,7 @@ test('auth user creation with initial roles requires recent verification', async
   })
 })
 
-test('platform user creation reuses an existing tenant identity with the same email', async () => {
+test('platform user creation reuses an existing workspace identity with the same email', async () => {
   const createdAt = new Date('2026-05-16T00:00:00.000Z')
   const platformAdminPermissions = filterPermissionsForPlatformContext(permissionValues)
   let promotedUserId: string | null = null
@@ -2215,9 +2218,9 @@ test('platform user creation reuses an existing tenant identity with the same em
   }) => Promise<T>) => await run({
     authUser: {
       async findFirst(args) {
-        assert.equal(args.where.email.equals, 'tenant-user@example.com')
+        assert.equal(args.where.email.equals, 'workspace-user@example.com')
         return {
-          id: 'user-tenant-only',
+          id: 'user-workspace-only',
           isPlatformUser: false
         }
       },
@@ -2240,11 +2243,11 @@ test('platform user creation reuses an existing tenant identity with the same em
   })) as unknown) as typeof prisma.$transaction
 
   prisma.authUser.findFirst = ((async () => ({
-    id: 'user-tenant-only',
-    email: 'tenant-user@example.com',
-    displayName: 'Tenant User',
+    id: 'user-workspace-only',
+    email: 'workspace-user@example.com',
+    displayName: 'Workspace User',
     isPlatformUser: true,
-    tenantMemberships: [],
+    workspaceMemberships: [],
     memberships: [{ group: { id: 'platform-group-admin', key: 'admin', name: 'Admin', permissions: platformAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
@@ -2257,7 +2260,7 @@ test('platform user creation reuses an existing tenant identity with the same em
       type: 'user',
       userId: 'user-platform-admin',
       isPlatformUser: true,
-      tenant: null
+      workspace: null
     },
     permissions: [AUTH_USERS_CREATE_PERMISSION, AUTH_USERS_ASSIGN_ROLES_PERMISSION, AUTH_ROLES_ASSIGN_PERMISSION, ...platformAdminPermissions],
     runtimePolicy: { demoMode: false }
@@ -2269,21 +2272,21 @@ test('platform user creation reuses an existing tenant identity with the same em
         Cookie: `${AUTH_SESSION_COOKIE_NAME}=session-token`
       },
       body: JSON.stringify({
-        email: 'tenant-user@example.com',
-        displayName: 'Tenant User',
+        email: 'workspace-user@example.com',
+        displayName: 'Workspace User',
         groupIds: ['platform-group-admin']
       })
     })
 
     assert.equal(response.status, 201)
     assert.equal(createdPlatformUser, false)
-    assert.equal(promotedUserId, 'user-tenant-only')
-    assert.deepEqual(assignedMemberships, [{ userId: 'user-tenant-only', groupId: 'platform-group-admin' }])
+    assert.equal(promotedUserId, 'user-workspace-only')
+    assert.deepEqual(assignedMemberships, [{ userId: 'user-workspace-only', groupId: 'platform-group-admin' }])
     assert.deepEqual(await response.json(), {
       user: {
-        id: 'user-tenant-only',
-        email: 'tenant-user@example.com',
-        displayName: 'Tenant User',
+        id: 'user-workspace-only',
+        email: 'workspace-user@example.com',
+        displayName: 'Workspace User',
         loginDisabled: false,
         isPlatformUser: true,
         groups: [{ id: 'platform-group-admin', key: 'admin', name: 'Admin' }],
@@ -2297,14 +2300,14 @@ test('platform user creation reuses an existing tenant identity with the same em
 
 test('platform auth managers cannot manage users with broader platform permissions', async () => {
   const createdAt = new Date('2026-05-04T00:00:00.000Z')
-  const superAdminPermissions = [AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, AUTH_USERS_VIEW_PERMISSION, AUTH_USERS_ASSIGN_ROLES_PERMISSION, AUTH_ROLES_ASSIGN_PERMISSION, SETTINGS_MANAGE_PERMISSION, TENANTS_MANAGE_PERMISSION]
+  const superAdminPermissions = [AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, AUTH_USERS_VIEW_PERMISSION, AUTH_USERS_ASSIGN_ROLES_PERMISSION, AUTH_ROLES_ASSIGN_PERMISSION, SETTINGS_MANAGE_PERMISSION, WORKSPACES_MANAGE_PERMISSION]
 
   prisma.authUser.findMany = ((async () => ([{
     id: 'user-super',
     email: 'super@example.com',
     displayName: 'Super Admin',
     isPlatformUser: true,
-    tenantMemberships: [],
+    workspaceMemberships: [],
     memberships: [{ group: { id: 'platform-group-admin', key: 'admin', name: 'Admin', permissions: superAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
@@ -2316,7 +2319,7 @@ test('platform auth managers cannot manage users with broader platform permissio
     email: 'super@example.com',
     displayName: 'Super Admin',
     isPlatformUser: true,
-    tenantMemberships: [],
+    workspaceMemberships: [],
     memberships: [{ group: { id: 'platform-group-admin', key: 'admin', name: 'Admin', permissions: superAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
@@ -2336,9 +2339,9 @@ test('platform auth managers cannot manage users with broader platform permissio
       type: 'user',
       userId: 'user-manager',
       isPlatformUser: true,
-      tenant: null
+      workspace: null
     },
-    permissions: [AUTH_USERS_VIEW_PERMISSION, AUTH_USERS_ASSIGN_ROLES_PERMISSION, AUTH_ROLES_ASSIGN_PERMISSION, TENANTS_MANAGE_PERMISSION],
+    permissions: [AUTH_USERS_VIEW_PERMISSION, AUTH_USERS_ASSIGN_ROLES_PERMISSION, AUTH_ROLES_ASSIGN_PERMISSION, WORKSPACES_MANAGE_PERMISSION],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const listResponse = await fetch(`${baseUrl}/api/auth/users`)
@@ -2361,7 +2364,7 @@ test('platform auth managers cannot manage users with broader platform permissio
   })
 })
 
-test('tenant auth managers cannot assign roles with permissions they do not have', async () => {
+test('workspace auth managers cannot assign roles with permissions they do not have', async () => {
   const createdAt = new Date('2026-05-04T00:00:00.000Z')
 
   prisma.authUser.findFirst = ((async () => ({
@@ -2369,7 +2372,7 @@ test('tenant auth managers cannot assign roles with permissions they do not have
     email: 'viewer@example.com',
     displayName: 'Viewer',
     isPlatformUser: false,
-    tenantMemberships: [{ loginDisabled: false }],
+    workspaceMemberships: [{ loginDisabled: false }],
     memberships: [{ group: { id: 'group-viewer', key: 'viewer', name: 'Viewer', permissions: [PRINTERS_VIEW_PERMISSION] } }],
     _count: { passkeys: 0 },
     createdAt,
@@ -2393,8 +2396,8 @@ test('tenant auth managers cannot assign roles with permissions they do not have
     actor: {
       type: 'user',
       userId: 'user-manager',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -2426,7 +2429,7 @@ test('auth managers cannot manage users with equal permissions unless they are a
     email: 'peer@example.com',
     displayName: 'Peer Manager',
     isPlatformUser: false,
-    tenantMemberships: [{ loginDisabled: false }],
+    workspaceMemberships: [{ loginDisabled: false }],
     memberships: [{ group: { id: 'group-manager', key: null, name: 'Manager', permissions: [AUTH_USERS_DISABLE_SIGN_IN_PERMISSION] } }],
     _count: { passkeys: 0 },
     createdAt,
@@ -2438,8 +2441,8 @@ test('auth managers cannot manage users with equal permissions unless they are a
     actor: {
       type: 'user',
       userId: 'user-manager',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -2460,17 +2463,17 @@ test('auth managers cannot manage users with equal permissions unless they are a
   })
 })
 
-test('tenant admin-equivalent users can manage equal-permission users', async () => {
+test('workspace admin-equivalent users can manage equal-permission users', async () => {
   const createdAt = new Date('2026-05-04T00:00:00.000Z')
-  const tenantAdminPermissions = filterPermissionsForTenantContext(permissionValues)
+  const workspaceAdminPermissions = filterPermissionsForWorkspaceContext(permissionValues)
 
   prisma.authUser.findFirst = ((async () => ({
     id: 'user-admin-peer',
     email: 'admin-peer@example.com',
     displayName: 'Admin Peer',
     isPlatformUser: false,
-    tenantMemberships: [{ loginDisabled: false }],
-    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: tenantAdminPermissions } }],
+    workspaceMemberships: [{ loginDisabled: false }],
+    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: workspaceAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
     updatedAt: createdAt
@@ -2483,13 +2486,13 @@ test('tenant admin-equivalent users can manage equal-permission users', async ()
     actor: {
       type: 'user',
       userId: 'user-admin',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
     },
-    permissions: tenantAdminPermissions,
+    permissions: workspaceAdminPermissions,
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/auth/users/user-admin-peer/sessions`)
@@ -2499,16 +2502,16 @@ test('tenant admin-equivalent users can manage equal-permission users', async ()
   })
 })
 
-test('tenant admin users can disable sign-in for other tenant admins', async () => {
+test('workspace admin users can disable sign-in for other workspace admins', async () => {
   const createdAt = new Date('2026-05-04T00:00:00.000Z')
-  const tenantAdminPermissions = filterPermissionsForTenantContext(permissionValues)
+  const workspaceAdminPermissions = filterPermissionsForWorkspaceContext(permissionValues)
   const targetUser = {
     id: 'user-admin-peer',
     email: 'admin-peer@example.com',
     displayName: 'Admin Peer',
     isPlatformUser: false,
-    tenantMemberships: [{ loginDisabled: false }],
-    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: tenantAdminPermissions } }],
+    workspaceMemberships: [{ loginDisabled: false }],
+    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: workspaceAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
     updatedAt: createdAt
@@ -2518,13 +2521,13 @@ test('tenant admin users can disable sign-in for other tenant admins', async () 
   prisma.authUser.findFirst = ((async () => currentUser) as unknown) as typeof prisma.authUser.findFirst
   prisma.authUser.count = ((async () => 1) as unknown) as typeof prisma.authUser.count
   prisma.$transaction = ((async <T>(run: (tx: {
-    authTenantMembership: { update(args: { data: { loginDisabled: boolean } }): Promise<unknown> }
+    authWorkspaceMembership: { update(args: { data: { loginDisabled: boolean } }): Promise<unknown> }
   }) => Promise<T>) => await run({
-    authTenantMembership: {
+    authWorkspaceMembership: {
       async update(args) {
         currentUser = {
           ...currentUser,
-          tenantMemberships: [{ loginDisabled: args.data.loginDisabled }]
+          workspaceMemberships: [{ loginDisabled: args.data.loginDisabled }]
         }
         return {}
       }
@@ -2536,13 +2539,13 @@ test('tenant admin users can disable sign-in for other tenant admins', async () 
     actor: {
       type: 'user',
       userId: 'user-admin',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
     },
-    permissions: tenantAdminPermissions,
+    permissions: workspaceAdminPermissions,
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/auth/users/user-admin-peer`, {
@@ -2556,18 +2559,18 @@ test('tenant admin users can disable sign-in for other tenant admins', async () 
   })
 })
 
-test('platform admin users can delete the last remaining tenant admin', async () => {
+test('platform admin users can delete the last remaining workspace admin', async () => {
   const createdAt = new Date('2026-05-04T00:00:00.000Z')
-  const tenantAdminPermissions = filterPermissionsForTenantContext(permissionValues)
+  const workspaceAdminPermissions = filterPermissionsForWorkspaceContext(permissionValues)
   let deletedUserId: string | null = null
 
   prisma.authUser.findFirst = ((async () => ({
-    id: 'user-tenant-admin',
-    email: 'tenant-admin@example.com',
-    displayName: 'Tenant Admin',
+    id: 'user-workspace-admin',
+    email: 'workspace-admin@example.com',
+    displayName: 'Workspace Admin',
     isPlatformUser: false,
-    tenantMemberships: [{ loginDisabled: false }],
-    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: tenantAdminPermissions } }],
+    workspaceMemberships: [{ loginDisabled: false }],
+    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: workspaceAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
     updatedAt: createdAt
@@ -2575,9 +2578,9 @@ test('platform admin users can delete the last remaining tenant admin', async ()
 
   prisma.$transaction = ((async <T>(run: (tx: {
     authUserGroupMembership: { deleteMany(): Promise<unknown> }
-    authTenantMembership: { delete(): Promise<unknown> }
+    authWorkspaceMembership: { delete(): Promise<unknown> }
     authUser: {
-      findUnique(): Promise<{ isPlatformUser: boolean; _count: { tenantMemberships: number } }>
+      findUnique(): Promise<{ isPlatformUser: boolean; _count: { workspaceMemberships: number } }>
       delete(args: { where: { id: string } }): Promise<unknown>
     }
   }) => Promise<T>) => await run({
@@ -2586,7 +2589,7 @@ test('platform admin users can delete the last remaining tenant admin', async ()
         return { count: 1 }
       }
     },
-    authTenantMembership: {
+    authWorkspaceMembership: {
       async delete() {
         return {}
       }
@@ -2595,7 +2598,7 @@ test('platform admin users can delete the last remaining tenant admin', async ()
       async findUnique() {
         return {
           isPlatformUser: false,
-          _count: { tenantMemberships: 0 }
+          _count: { workspaceMemberships: 0 }
         }
       },
       async delete(args) {
@@ -2611,28 +2614,28 @@ test('platform admin users can delete the last remaining tenant admin', async ()
       type: 'user',
       userId: 'user-platform-admin',
       isPlatformUser: true,
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
     },
     platformPermissions: filterPermissionsForPlatformContext(permissionValues),
-    permissions: tenantAdminPermissions,
+    permissions: workspaceAdminPermissions,
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/users/user-tenant-admin`, {
+    const response = await fetch(`${baseUrl}/api/auth/users/user-workspace-admin`, {
       method: 'DELETE'
     })
 
     assert.equal(response.status, 204)
-    assert.equal(deletedUserId, 'user-tenant-admin')
+    assert.equal(deletedUserId, 'user-workspace-admin')
   })
 })
 
-test('tenant admin users cannot remove their own last admin role', async () => {
+test('workspace admin users cannot remove their own last admin role', async () => {
   const createdAt = new Date('2026-05-04T00:00:00.000Z')
-  const tenantAdminPermissions = filterPermissionsForTenantContext(permissionValues)
+  const workspaceAdminPermissions = filterPermissionsForWorkspaceContext(permissionValues)
   let membershipDeleteCalled = false
 
   prisma.authUser.findFirst = ((async () => ({
@@ -2640,8 +2643,8 @@ test('tenant admin users cannot remove their own last admin role', async () => {
     email: 'admin-self@example.com',
     displayName: 'Admin Self',
     isPlatformUser: false,
-    tenantMemberships: [{ loginDisabled: false }],
-    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: tenantAdminPermissions } }],
+    workspaceMemberships: [{ loginDisabled: false }],
+    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: workspaceAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
     updatedAt: createdAt
@@ -2664,13 +2667,13 @@ test('tenant admin users cannot remove their own last admin role', async () => {
     actor: {
       type: 'user',
       userId: 'user-admin-self',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
     },
-    permissions: tenantAdminPermissions,
+    permissions: workspaceAdminPermissions,
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/auth/users/user-admin-self/groups`, {
@@ -2690,17 +2693,17 @@ test('tenant admin users cannot remove their own last admin role', async () => {
   })
 })
 
-test('platform support users with full effective tenant permissions can manage tenant admins', async () => {
+test('platform support users with full effective workspace permissions can manage workspace admins', async () => {
   const createdAt = new Date('2026-05-04T00:00:00.000Z')
-  const tenantAdminPermissions = filterPermissionsForTenantContext(permissionValues)
+  const workspaceAdminPermissions = filterPermissionsForWorkspaceContext(permissionValues)
 
   prisma.authUser.findFirst = ((async () => ({
-    id: 'user-tenant-admin',
-    email: 'tenant-admin@example.com',
-    displayName: 'Tenant Admin',
+    id: 'user-workspace-admin',
+    email: 'workspace-admin@example.com',
+    displayName: 'Workspace Admin',
     isPlatformUser: false,
-    tenantMemberships: [{ loginDisabled: false }],
-    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: tenantAdminPermissions } }],
+    workspaceMemberships: [{ loginDisabled: false }],
+    memberships: [{ group: { id: 'group-admin', key: 'admin', name: 'Admin', permissions: workspaceAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
     updatedAt: createdAt
@@ -2714,16 +2717,16 @@ test('platform support users with full effective tenant permissions can manage t
       type: 'user',
       userId: 'user-platform-support',
       isPlatformUser: true,
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
     },
-    permissions: tenantAdminPermissions,
+    permissions: workspaceAdminPermissions,
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/users/user-tenant-admin/sessions`)
+    const response = await fetch(`${baseUrl}/api/auth/users/user-workspace-admin/sessions`)
 
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { sessions: [] })
@@ -2739,7 +2742,7 @@ test('platform admin users can manage equal-permission platform users', async ()
     email: 'platform-peer@example.com',
     displayName: 'Platform Peer',
     isPlatformUser: true,
-    tenantMemberships: [],
+    workspaceMemberships: [],
     memberships: [{ group: { id: 'group-platform-admin', key: 'admin', name: 'Admin', permissions: platformAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
@@ -2754,7 +2757,7 @@ test('platform admin users can manage equal-permission platform users', async ()
       type: 'user',
       userId: 'user-platform-admin',
       isPlatformUser: true,
-      tenant: null
+      workspace: null
     },
     platformPermissions: platformAdminPermissions,
     permissions: platformAdminPermissions,
@@ -2776,7 +2779,7 @@ test('platform admin users cannot edit other platform admins global profile fiel
     email: 'platform-peer@example.com',
     displayName: 'Platform Peer',
     isPlatformUser: true,
-    tenantMemberships: [],
+    workspaceMemberships: [],
     memberships: [{ group: { id: 'group-platform-admin', key: 'admin', name: 'Admin', permissions: platformAdminPermissions } }],
     _count: { passkeys: 0 },
     createdAt,
@@ -2789,7 +2792,7 @@ test('platform admin users cannot edit other platform admins global profile fiel
       type: 'user',
       userId: 'user-platform-admin',
       isPlatformUser: true,
-      tenant: null
+      workspace: null
     },
     platformPermissions: platformAdminPermissions,
     permissions: platformAdminPermissions,
@@ -2822,7 +2825,7 @@ test('platform admin users can create lower platform manager roles', async () =>
 
   prisma.authGroup.create = ((async (args: { data: { name: string; description?: string | null; permissions: string[] } }) => ({
     id: 'group-created-manager',
-    tenantId: null,
+    workspaceId: null,
     key: null,
     name: args.data.name,
     description: args.data.description ?? null,
@@ -2844,7 +2847,7 @@ test('platform admin users can create lower platform manager roles', async () =>
       type: 'user',
       userId: 'user-platform-admin',
       isPlatformUser: true,
-      tenant: null
+      workspace: null
     },
     platformPermissions: platformAdminPermissions,
     permissions: platformAdminPermissions,
@@ -2884,7 +2887,7 @@ test('platform managers cannot mint equal platform managers', async () => {
       type: 'user',
       userId: 'user-platform-manager',
       isPlatformUser: true,
-      tenant: null
+      workspace: null
     },
     platformPermissions: platformManagerPermissions,
     permissions: platformManagerPermissions,
@@ -2935,8 +2938,8 @@ test('auth managers cannot edit roles with permissions they do not have', async 
     actor: {
       type: 'user',
       userId: 'user-manager',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -2973,8 +2976,8 @@ test('auth service-account role assignment requires recent verification', async 
     actor: {
       type: 'user',
       userId: 'user-1',
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'alpha',
         name: 'Alpha'
       }
@@ -3002,16 +3005,16 @@ test('auth service-account role assignment requires recent verification', async 
 })
 
 async function withAuthApp(auth: RequestAuthContext, run: (baseUrl: string) => Promise<void>): Promise<void> {
-  if (rootPrisma.authTenantMembership.findMany === originalRootAuthTenantMembershipFindMany) {
-    rootPrisma.authTenantMembership.findMany = ((async () => ([])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
+  if (rootPrisma.authWorkspaceMembership.findMany === originalRootAuthWorkspaceMembershipFindMany) {
+    rootPrisma.authWorkspaceMembership.findMany = ((async () => ([])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
   }
 
-  if (prisma.authTenantMembership.findMany === originalAuthTenantMembershipFindMany) {
-    prisma.authTenantMembership.findMany = ((async () => ([])) as unknown) as typeof prisma.authTenantMembership.findMany
+  if (prisma.authWorkspaceMembership.findMany === originalAuthWorkspaceMembershipFindMany) {
+    prisma.authWorkspaceMembership.findMany = ((async () => ([])) as unknown) as typeof prisma.authWorkspaceMembership.findMany
   }
 
-  if (prisma.authTenantMembership.count === originalAuthTenantMembershipCount) {
-    prisma.authTenantMembership.count = ((async () => 0) as unknown) as typeof prisma.authTenantMembership.count
+  if (prisma.authWorkspaceMembership.count === originalAuthWorkspaceMembershipCount) {
+    prisma.authWorkspaceMembership.count = ((async () => 0) as unknown) as typeof prisma.authWorkspaceMembership.count
   }
 
   const app = express()
@@ -3020,7 +3023,7 @@ async function withAuthApp(auth: RequestAuthContext, run: (baseUrl: string) => P
     request.auth = auth
     next()
   })
-  app.use(installTenantContext())
+  app.use(installWorkspaceContext())
   app.use('/api/auth', authRouter)
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof HttpError) {
@@ -3041,16 +3044,16 @@ async function withAuthApp(auth: RequestAuthContext, run: (baseUrl: string) => P
 }
 
 async function withAuthAuditApp(auth: RequestAuthContext, run: (baseUrl: string) => Promise<void>): Promise<void> {
-  if (rootPrisma.authTenantMembership.findMany === originalRootAuthTenantMembershipFindMany) {
-    rootPrisma.authTenantMembership.findMany = ((async () => ([])) as unknown) as typeof rootPrisma.authTenantMembership.findMany
+  if (rootPrisma.authWorkspaceMembership.findMany === originalRootAuthWorkspaceMembershipFindMany) {
+    rootPrisma.authWorkspaceMembership.findMany = ((async () => ([])) as unknown) as typeof rootPrisma.authWorkspaceMembership.findMany
   }
 
-  if (prisma.authTenantMembership.findMany === originalAuthTenantMembershipFindMany) {
-    prisma.authTenantMembership.findMany = ((async () => ([])) as unknown) as typeof prisma.authTenantMembership.findMany
+  if (prisma.authWorkspaceMembership.findMany === originalAuthWorkspaceMembershipFindMany) {
+    prisma.authWorkspaceMembership.findMany = ((async () => ([])) as unknown) as typeof prisma.authWorkspaceMembership.findMany
   }
 
-  if (prisma.authTenantMembership.count === originalAuthTenantMembershipCount) {
-    prisma.authTenantMembership.count = ((async () => 0) as unknown) as typeof prisma.authTenantMembership.count
+  if (prisma.authWorkspaceMembership.count === originalAuthWorkspaceMembershipCount) {
+    prisma.authWorkspaceMembership.count = ((async () => 0) as unknown) as typeof prisma.authWorkspaceMembership.count
   }
 
   const app = express()
@@ -3059,7 +3062,7 @@ async function withAuthAuditApp(auth: RequestAuthContext, run: (baseUrl: string)
     request.auth = auth
     next()
   })
-  app.use(installTenantContext())
+  app.use(installWorkspaceContext())
   app.use(installAuditLogCapture())
   app.use('/api/auth', authRouter)
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {

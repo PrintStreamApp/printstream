@@ -6,7 +6,7 @@
  * the browser by `lib/localSlicingPresets.ts`, the same promise the opened file itself carries.
  *
  * The two managers are deliberately separate components rather than one with a mode flag: the
- * workspace one is a tenant surface (server paging, filters, per-preset editors, delete
+ * workspace one is a workspace surface (server paging, filters, per-preset editors, delete
  * confirmation across a workspace's shared data), while this one manages a handful of files in one
  * browser. Sharing the shell would mean threading a data seam through every one of those.
  *

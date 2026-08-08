@@ -10,7 +10,7 @@ function memoryStore(initial: Record<string, string> = {}): PluginSettingStore {
     async get(key) { return map.get(key) ?? null },
     async set(key, value) { map.set(key, value) },
     async delete(key) { map.delete(key) },
-    forTenant: () => store
+    forWorkspace: () => store
   }
   return store
 }

@@ -1,5 +1,5 @@
 /**
- * Cloudflare Email Sending transport shared by beta signup and auth emails.
+ * Cloudflare Email Sending transport shared by registration and auth emails.
  */
 import { env } from './env.js'
 import { HttpError } from './http-error.js'

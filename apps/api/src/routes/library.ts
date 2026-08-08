@@ -6,8 +6,7 @@
  */
 import { createReadStream, mkdirSync } from 'node:fs'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { appendFile, copyFile, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { appendFile, copyFile, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import express, { Router } from 'express'
 import type { NextFunction, Request, Response } from 'express'
@@ -71,7 +70,7 @@ import { badRequest, conflict, forbidden, HttpError, notFound } from '../lib/htt
 import { createKeyedMutex } from '../lib/keyed-mutex.js'
 import { assertLibraryPrintCompatibilityForIndex } from '../lib/print-filament-compatibility.js'
 import { printerManager } from '../lib/printer-manager.js'
-import { requireTenantOwnedConnectedPrinter } from '../lib/printer-access.js'
+import { requireWorkspaceOwnedConnectedPrinter } from '../lib/printer-access.js'
 import {
   buildProjectFilePrintCommand,
   printerModelHasDualNozzles,
@@ -85,7 +84,6 @@ import { meshToBinaryStl, tessellateStepMesh } from '../lib/mesh-import.js'
 import { extractThreeMfImportMesh } from '../lib/three-mf-mesh-extract.js'
 import { libraryDir } from '../lib/library-paths.js'
 import { deleteLibraryFolderTree, ensureLibraryFolderPath, persistLibraryFileFromLocalPath } from '../lib/library-files.js'
-import { repairProjectSettingsThreeMf } from '../lib/library-settings-repair.js'
 import { resolveRequestActorAttribution } from '../lib/actor-attribution.js'
 import { visibleLibraryFilesWhere } from '../lib/library-visibility.js'
 import { getFavoritedFileIds, resolveFavoriteOwnerKey } from '../lib/library-favorites.js'
@@ -116,7 +114,7 @@ import { requireRequestPermission } from '../lib/authorization.js'
 import {
   parsePlateIndexQuery,
   requestAbortSignal,
-  requireRequestTenantId,
+  requireRequestWorkspaceId,
   requireRouteParam,
   sendModelBuffer,
   singleUploadWithLimit
@@ -176,7 +174,7 @@ interface LibraryUploadSession {
   receivedBytes: number
   phase: 'receiving' | 'transferring' | 'finalizing'
   bridgeReceivedBytes: number
-  tenantId: string
+  workspaceId: string
   folderId: string | null
   bridgeId: string | null
   hidden: boolean
@@ -191,7 +189,7 @@ type LibraryUploadSessionResponse = Pick<LibraryUploadSession,
 
 type LibraryFileRow = {
   id: string
-  tenantId: string
+  workspaceId: string
   name: string
   ownerBridgeId?: string | null
   sizeBytes: number
@@ -212,7 +210,7 @@ type LibraryFileRow = {
 type LibraryFileVersionRow = {
   id: string
   libraryFileId: string
-  tenantId: string
+  workspaceId: string
   name: string
   ownerBridgeId?: string | null
   sizeBytes: number
@@ -329,9 +327,9 @@ async function createLibraryFileFromUpload(input: {
   onBridgeProgress?: (transferredBytes: number) => Promise<void> | void
   onBridgeComplete?: () => Promise<void> | void
 }) {
-  const tenantId = requireRequestTenantId(input.request)
+  const workspaceId = requireRequestWorkspaceId(input.request)
   return await persistLibraryFileFromLocalPath({
-    tenantId,
+    workspaceId,
     sourcePath: input.sourcePath,
     fileName: input.fileName,
     sizeBytes: input.sizeBytes,
@@ -353,7 +351,7 @@ export const libraryRouter = Router()
  * an all-folders search) returns at most this many file rows; past it the response
  * sets `truncated` so the UI can prompt the user to narrow rather than the server
  * silently dropping rows or one request ballooning memory/JSON in a large
- * multi-tenant process. Folders are never capped (they are few). We fetch
+ * multi-workspace process. Folders are never capped (they are few). We fetch
  * LIMIT + 1 to detect overflow without a second COUNT query. Mirrors the bounded
  * bridge SD-card listing pattern (`limit`/`truncated`).
  */
@@ -394,13 +392,13 @@ export function parseLibraryFileIdsQuery(value: unknown): string[] | null {
 
 libraryRouter.get('/', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const folderId = parseFolderQuery(request.query.folderId)
-  const tenantId = request.tenant?.id ?? null
+  const workspaceId = request.workspace?.id ?? null
   const ownerKey = resolveFavoriteOwnerKey(request)
   const requestedIds = parseLibraryFileIdsQuery(request.query.ids)
   // Hidden files (transient one-off prints) are intentionally excluded
   // from the library UI. They’re still reachable by id for re-dispatch.
   const where: Record<string, unknown> = visibleLibraryFilesWhere({ ownerBridgeId: { not: null } })
-  if (tenantId) where.tenantId = tenantId
+  if (workspaceId) where.workspaceId = workspaceId
   if (folderId !== undefined) where.folderId = folderId
 
   // Resolve-by-id mode: callers that only need specific files (e.g. the orders
@@ -445,7 +443,7 @@ libraryRouter.get('/', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async 
 libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const folderId = parseFolderQuery(request.query.folderId) ?? null
   const bridgeId = parseBridgeQuery(request.query.bridgeId)
-  const tenantId = request.tenant?.id ?? null
+  const workspaceId = request.workspace?.id ?? null
   const ownerKey = resolveFavoriteOwnerKey(request)
   // Sort + favorites filter are applied in the DB (before the recency cap) so the
   // top files / a user's favorites surface correctly even past LIBRARY_BROWSE_FILE_LIMIT.
@@ -459,7 +457,7 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
   const searching = search.length > 0
   const nameContains = { contains: search, mode: 'insensitive' as const }
   const bridges = (await prisma.bridge.findMany({
-    where: tenantId ? { tenantId } : undefined,
+    where: workspaceId ? { workspaceId } : undefined,
     orderBy: { createdAt: 'asc' },
     select: { id: true, name: true }
   })).map((bridge) => ({
@@ -471,7 +469,7 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
     ? await prisma.libraryFolder.findFirst({
         where: {
           id: folderId,
-          ...(tenantId ? { tenantId } : {})
+          ...(workspaceId ? { workspaceId } : {})
         },
         select: { ownerBridgeId: true }
       })
@@ -509,7 +507,7 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
         ...(searching ? { name: nameContains } : {}),
         ...(flatList ? {} : { folderId }),
         ownerBridgeId: activeBridgeId,
-        ...(tenantId ? { tenantId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
         ...(favoritesOnly ? { favorites: { some: { userId: ownerKey } } } : {})
       }),
       orderBy: buildLibraryFileOrderBy(sortKey, sortDir),
@@ -521,7 +519,7 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
           where: {
             ...(searching ? { name: nameContains } : { parentId: folderId }),
             ownerBridgeId: activeBridgeId,
-            ...(tenantId ? { tenantId } : {})
+            ...(workspaceId ? { workspaceId } : {})
           },
           orderBy: { name: 'asc' }
         })
@@ -544,9 +542,9 @@ libraryRouter.get('/browse', requireRequestPermission(LIBRARY_VIEW_PERMISSION), 
 /** List all folders. The web client builds the tree client-side from `parentId`. */
 libraryRouter.get('/folders', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const bridgeId = parseBridgeQuery(request.query.bridgeId)
-  const tenantId = request.tenant?.id ?? null
+  const workspaceId = request.workspace?.id ?? null
   const where: Record<string, unknown> = bridgeId ? { ownerBridgeId: bridgeId } : { ownerBridgeId: { not: null } }
-  if (tenantId) where.tenantId = tenantId
+  if (workspaceId) where.workspaceId = workspaceId
   const rows = await prisma.libraryFolder.findMany({
     where,
     orderBy: { name: 'asc' }
@@ -563,7 +561,7 @@ const createFolderSchema = z.object({
 libraryRouter.post('/folders', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
   const parsed = createFolderSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid folder payload')
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const parentId = parsed.data.parentId ?? null
   let ownerBridgeId: string | null = parsed.data.bridgeId ?? null
   if (parentId) {
@@ -574,7 +572,7 @@ libraryRouter.post('/folders', requireRequestPermission(LIBRARY_MANAGE_PERMISSIO
   if (!ownerBridgeId) throw badRequest('Select a bridge before creating a folder')
   try {
     const created = await prisma.libraryFolder.create({
-      data: { tenantId, ownerBridgeId, name: parsed.data.name, parentId }
+      data: { workspaceId, ownerBridgeId, name: parsed.data.name, parentId }
     })
     annotateRequestAuditLog(request, {
       action: 'create-folder',
@@ -706,9 +704,9 @@ const recycleFilesSchema = z.object({ fileIds: z.array(z.string().min(1)).min(1)
 
 /** List the recycle bin, newest deletions first. */
 libraryRouter.get('/recycle-bin', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-  const tenantId = request.tenant?.id ?? null
+  const workspaceId = request.workspace?.id ?? null
   const rows = await prisma.libraryFile.findMany({
-    where: { deletedAt: { not: null }, hidden: false, ...(tenantId ? { tenantId } : {}) },
+    where: { deletedAt: { not: null }, hidden: false, ...(workspaceId ? { workspaceId } : {}) },
     orderBy: { deletedAt: 'desc' }
   }) as Array<LibraryFileRow & { deletedAt: Date }>
   response.json(libraryRecycleBinResponseSchema.parse({
@@ -723,9 +721,9 @@ libraryRouter.get('/recycle-bin', requireRequestPermission(LIBRARY_MANAGE_PERMIS
 libraryRouter.post('/recycle-bin/files', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
   const parsed = recycleFilesSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid recycle payload')
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const rows = await prisma.libraryFile.findMany({
-    where: { id: { in: parsed.data.fileIds }, tenantId },
+    where: { id: { in: parsed.data.fileIds }, workspaceId },
     select: { id: true, name: true, hidden: true, deletedAt: true }
   })
   if (rows.length !== parsed.data.fileIds.length) throw notFound('One or more files were not found')
@@ -750,9 +748,9 @@ libraryRouter.post('/recycle-bin/files', requireRequestPermission(LIBRARY_MANAGE
 libraryRouter.post('/recycle-bin/restore', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
   const parsed = recycleFilesSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid restore payload')
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const rows = await prisma.libraryFile.findMany({
-    where: { id: { in: parsed.data.fileIds }, tenantId, deletedAt: { not: null } },
+    where: { id: { in: parsed.data.fileIds }, workspaceId, deletedAt: { not: null } },
     select: { id: true, name: true }
   })
   if (rows.length === 0) throw notFound('No recycled files to restore')
@@ -774,9 +772,9 @@ libraryRouter.post('/recycle-bin/restore', requireRequestPermission(LIBRARY_MANA
 
 /** Permanently delete everything in the recycle bin via a queued delete job. */
 libraryRouter.delete('/recycle-bin', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const rows = await prisma.libraryFile.findMany({
-    where: { tenantId, deletedAt: { not: null } },
+    where: { workspaceId, deletedAt: { not: null } },
     select: { id: true, name: true, hidden: true }
   })
   if (rows.length === 0) throw conflict('The recycle bin is already empty')
@@ -831,7 +829,7 @@ libraryRouter.post('/uploads', requireRequestPermission(LIBRARY_UPLOAD_PERMISSIO
     throw new HttpError(413, `File exceeds ${limitMb} MB upload limit`)
   }
   const hidden = resolveLibraryUploadHidden(request, parsed.data.hidden ?? false, parsed.data.sizeBytes)
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const uploadId = randomUUID()
   const session: LibraryUploadSession = {
     id: uploadId,
@@ -840,7 +838,7 @@ libraryRouter.post('/uploads', requireRequestPermission(LIBRARY_UPLOAD_PERMISSIO
     receivedBytes: 0,
     phase: 'receiving',
     bridgeReceivedBytes: 0,
-    tenantId,
+    workspaceId,
     folderId: parsed.data.folderId ?? null,
     bridgeId: parsed.data.bridgeId ?? null,
     hidden,
@@ -855,8 +853,8 @@ libraryRouter.get('/uploads/:uploadId', requireRequestPermission(LIBRARY_UPLOAD_
   const uploadId = requireRouteParam(request.params.uploadId, 'Upload id')
   const session = await readUploadSession(uploadId)
   if (!session) throw notFound('Upload session not found')
-  const tenantId = requireRequestTenantId(request)
-  if (session.tenantId !== tenantId) throw notFound('Upload session not found')
+  const workspaceId = requireRequestWorkspaceId(request)
+  if (session.workspaceId !== workspaceId) throw notFound('Upload session not found')
   response.json({ upload: toUploadSessionResponse(session) })
 })
 
@@ -866,7 +864,7 @@ libraryRouter.post(
   uploadChunkBody,
   async (request, response) => {
     const uploadId = requireRouteParam(request.params.uploadId, 'Upload id')
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const chunk = Buffer.isBuffer(request.body) ? request.body : null
     if (!chunk || chunk.byteLength === 0) throw badRequest('Upload chunk is empty')
     if (chunk.byteLength > CHUNK_UPLOAD_BYTES) throw badRequest('Upload chunk is too large')
@@ -877,7 +875,7 @@ libraryRouter.post(
     const result = await uploadChunkMutex.run(uploadId, async () => {
       const session = await readUploadSession(uploadId)
       if (!session) throw notFound('Upload session not found')
-      if (session.tenantId !== tenantId) throw notFound('Upload session not found')
+      if (session.workspaceId !== workspaceId) throw notFound('Upload session not found')
       const offset = offsetHeader == null ? session.receivedBytes : Number(offsetHeader)
       if (!Number.isSafeInteger(offset) || offset !== session.receivedBytes) {
         throw conflict(`Upload offset mismatch. Resume at byte ${session.receivedBytes}.`)
@@ -899,8 +897,8 @@ libraryRouter.delete('/uploads/:uploadId', requireRequestPermission(LIBRARY_UPLO
   const uploadId = requireRouteParam(request.params.uploadId, 'Upload id')
   const session = await readUploadSession(uploadId)
   if (session) {
-    const tenantId = requireRequestTenantId(request)
-    if (session.tenantId !== tenantId) throw notFound('Upload session not found')
+    const workspaceId = requireRequestWorkspaceId(request)
+    if (session.workspaceId !== workspaceId) throw notFound('Upload session not found')
   }
   await deleteUploadSession(uploadId)
   response.status(204).end()
@@ -910,8 +908,8 @@ libraryRouter.post('/uploads/:uploadId/complete', requireRequestPermission(LIBRA
   const uploadId = requireRouteParam(request.params.uploadId, 'Upload id')
   const session = await readUploadSession(uploadId)
   if (!session) throw notFound('Upload session not found')
-  const tenantId = requireRequestTenantId(request)
-  if (session.tenantId !== tenantId) throw notFound('Upload session not found')
+  const workspaceId = requireRequestWorkspaceId(request)
+  if (session.workspaceId !== workspaceId) throw notFound('Upload session not found')
   if (session.receivedBytes !== session.sizeBytes) {
     throw badRequest(`Upload is incomplete. Resume at byte ${session.receivedBytes}.`)
   }
@@ -924,7 +922,7 @@ libraryRouter.post('/uploads/:uploadId/complete', requireRequestPermission(LIBRA
     // uploads never join a folder, so skip the tree there).
     const folderId = !session.hidden && session.relativeFolderPath?.length
       ? await ensureLibraryFolderPath({
-        tenantId,
+        workspaceId,
         bridgeId: session.bridgeId,
         baseFolderId: session.folderId,
         segments: session.relativeFolderPath
@@ -1134,87 +1132,6 @@ libraryRouter.delete('/:id/current-version', requireRequestPermission(LIBRARY_MA
   response.json({ file: await toDto(updated) })
 })
 
-/**
- * Repair a saved project whose embedded settings contradict its own machine topology (the
- * `needsSettingsRepair` flag on the DTO — see `library-settings-repair.ts`).
- *
- * Explicitly user-invoked: the editor banner and the slice dialog offer it, and nothing repairs a
- * stored file as a side effect of opening/listing/slicing it. The result lands as a NEW version so
- * the pre-repair bytes stay restorable. Responds `repaired: false` (200, no write) when the
- * project turned out to need nothing — the flag may be stale on a client that has not refreshed.
- */
-libraryRouter.post('/:id/repair-settings', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
-  const fileId = requireRouteParam(request.params.id, 'File id')
-  const tenantId = requireRequestTenantId(request)
-  // Full row, not a narrow select: the "nothing to repair" branch below answers with `toDto`,
-  // which reads sizeBytes/uploadedAt/thumbnailPath. The `as LibraryFileRow` cast hid that from the
-  // compiler, so an under-selected row surfaced as a 500 the moment that branch became reachable.
-  const current = await prisma.libraryFile.findFirst({
-    where: { id: fileId, tenantId }
-  }) as LibraryFileRow | null
-  if (!current) throw notFound('File not found')
-  assertDemoLibraryFileMutationAllowed(request, current)
-  if (current.kind !== '3mf') throw badRequest('Only 3MF projects carry repairable project settings')
-
-  const sourcePath = await resolveLibraryFileToLocalPath(current)
-  const workDir = await mkdtemp(path.join(tmpdir(), 'printstream-settings-repair-'))
-  try {
-    const outputPath = path.join(workDir, 'repaired.3mf')
-    const result = await repairProjectSettingsThreeMf(sourcePath, outputPath)
-    if (!result.repaired) {
-      response.json({ repaired: false, file: await toDto(current) })
-      return
-    }
-
-    const { file: saved } = await persistLibraryFileFromLocalPath({
-      tenantId,
-      sourcePath: outputPath,
-      fileName: current.name,
-      sizeBytes: (await stat(outputPath)).size,
-      folderId: current.folderId,
-      bridgeId: current.ownerBridgeId ?? null,
-      hidden: false,
-      request,
-      auditAction: 'upload',
-      missingBridgeMessage: 'This file has no bridge to save the repaired project to'
-    })
-
-    annotateRequestAuditLog(request, {
-      action: 'repair-settings',
-      resource: 'library file',
-      summary: `Repaired project settings for ${current.name}.`,
-      metadata: {
-        fileId: current.id,
-        fileName: current.name,
-        flushMatrixBefore: result.matrix?.before ?? null,
-        flushMatrixAfter: result.matrix?.after ?? null,
-        filamentCount: result.matrix?.filaments ?? null,
-        extruderCount: result.matrix?.extruders ?? null,
-        // Which invariant actually needed fixing — the trail should distinguish "the slice was
-        // broken" from "Bambu Studio could not open it", since one repair action covers both.
-        variantIndexBefore: result.variantIndex?.before ?? null,
-        variantIndexAfter: result.variantIndex?.after ?? null,
-        variantRows: result.variantIndex?.variantRows ?? null,
-        // Slot ids corrected, and the slots deliberately left alone because their preset could not
-        // be matched — the trail must record a PARTIAL repair as partial, or a still-affected
-        // project looks like one that was fixed.
-        filamentIdsCorrected: result.filamentIds?.corrected ?? null,
-        filamentIdsUnresolvedSlots: result.filamentIds?.unresolved.map((slot) => slot.slot) ?? null
-      }
-    })
-    broadcastLibraryChanged()
-    // `unresolvedSlots` tells the caller the repair was PARTIAL: those slots' presets could not be
-    // matched to a known material, so their ids were left as they were rather than guessed at.
-    response.json({
-      repaired: true,
-      file: { id: saved.id, name: saved.name },
-      unresolvedSlots: result.filamentIds?.unresolved.map((slot) => slot.slot) ?? []
-    })
-  } finally {
-    await rm(workDir, { recursive: true, force: true })
-  }
-})
-
 libraryRouter.get('/versions/:versionId/download', requireRequestPermission(LIBRARY_DOWNLOAD_PERMISSION), async (request, response) => {
   const versionId = requireRouteParam(request.params.versionId, 'Version id')
   const row = await prisma.libraryFileVersion.findUnique({ where: { id: versionId } }) as LibraryFileVersionRow | null
@@ -1261,7 +1178,7 @@ libraryRouter.post('/versions/:versionId/print', requireRequestPermission(PRINTS
   }, {
     fileId: version.libraryFileId,
     id: version.id,
-    tenantId: version.tenantId,
+    workspaceId: version.workspaceId,
     name: version.name,
     ownerBridgeId: version.ownerBridgeId,
     storedPath: version.storedPath,
@@ -1288,7 +1205,7 @@ libraryRouter.post('/versions/:versionId/print', requireRequestPermission(PRINTS
       plate: job.plate
     }
   })
-  broadcastPrintDispatchChanged(version.tenantId)
+  broadcastPrintDispatchChanged(version.workspaceId)
   response.status(202).json({ job })
 })
 
@@ -1382,7 +1299,7 @@ libraryRouter.post('/:id/download-link', requireRequestPermission(LIBRARY_DOWNLO
   const attribution = await resolveRequestActorAttribution(request)
   await prisma.libraryDownloadLink.create({
     data: {
-      tenantId: row.tenantId,
+      workspaceId: row.workspaceId,
       libraryFileId: row.id,
       tokenHash: hashDownloadLinkToken(token),
       expiresAt,
@@ -1405,9 +1322,9 @@ libraryRouter.post('/:id/download-link', requireRequestPermission(LIBRARY_DOWNLO
 /**
  * Redeem a download link minted above. Intentionally has NO permission gate:
  * the unguessable token IS the authorization, scoped to one file for a short
- * window. The request carries no auth/tenant context, so the lookup uses
+ * window. The request carries no auth/workspace context, so the lookup uses
  * `rootPrisma` (a deliberate platform-wide read) and re-scopes the file load to
- * the token's own tenant. The trailing filename segment is informational so the
+ * the token's own workspace. The trailing filename segment is informational so the
  * downloaded temp file keeps the correct extension; only the token is checked.
  */
 libraryRouter.get('/download-links/:token{/:filename}', async (request, response) => {
@@ -1417,7 +1334,7 @@ libraryRouter.get('/download-links/:token{/:filename}', async (request, response
   })
   if (!link || link.expiresAt.getTime() <= Date.now()) throw notFound('Download link not found or expired')
   const row = await rootPrisma.libraryFile.findFirst({
-    where: { id: link.libraryFileId, tenantId: link.tenantId }
+    where: { id: link.libraryFileId, workspaceId: link.workspaceId }
   }) as LibraryFileRow | null
   if (!row) throw notFound('File not found')
   await sendLibraryFileDownload(response, row)
@@ -1761,21 +1678,21 @@ const toggleFavoriteSchema = z.object({ favorite: z.boolean() })
  * library queries client-side.
  */
 libraryRouter.put('/:id/favorite', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const fileId = requireRouteParam(request.params.id, 'File id')
   const ownerKey = resolveFavoriteOwnerKey(request)
   const parsed = toggleFavoriteSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid favorite payload')
 
-  const row = await prisma.libraryFile.findFirst({ where: visibleLibraryFilesWhere({ id: fileId, tenantId }) })
+  const row = await prisma.libraryFile.findFirst({ where: visibleLibraryFilesWhere({ id: fileId, workspaceId }) })
   if (!row?.ownerBridgeId) throw notFound('File not found')
 
   if (parsed.data.favorite) {
     // A favorite has nothing to update, so this is create-or-ignore: a duplicate
     // (already favorited) is an idempotent no-op. (Plain create — not upsert — so it
-    // takes the tenant-scoping extension's create path, which injects the tenant id.)
+    // takes the workspace-scoping extension's create path, which injects the workspace id.)
     try {
-      await prisma.libraryFileFavorite.create({ data: { tenantId, userId: ownerKey, libraryFileId: row.id } })
+      await prisma.libraryFileFavorite.create({ data: { workspaceId, userId: ownerKey, libraryFileId: row.id } })
     } catch (error) {
       if (!isUniqueConstraintError(error)) throw error
     }
@@ -1792,7 +1709,7 @@ libraryRouter.put('/:id/favorite', requireRequestPermission(LIBRARY_VIEW_PERMISS
  * FTPS upload and MQTT start command in the background.
  */
 libraryRouter.post('/:id/print', requireRequestPermission(PRINTS_DISPATCH_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const fileId = requireRouteParam(request.params.id, 'File id')
   const parsed = printFromLibrarySchema.omit({ fileId: true }).safeParse(request.body)
   if (!parsed.success) {
@@ -1805,7 +1722,7 @@ libraryRouter.post('/:id/print', requireRequestPermission(PRINTS_DISPATCH_PERMIS
   const job = await enqueueLibraryPrint({
     fileId,
     ...parsed.data
-  }, tenantId)
+  }, workspaceId)
   annotateRequestAuditLog(request, {
     action: 'start-print',
     resource: 'print job',
@@ -1819,7 +1736,7 @@ libraryRouter.post('/:id/print', requireRequestPermission(PRINTS_DISPATCH_PERMIS
       plate: job.plate
     }
   })
-  broadcastPrintDispatchChanged(tenantId)
+  broadcastPrintDispatchChanged(workspaceId)
   response.status(202).json({ job })
 })
 
@@ -1852,9 +1769,9 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
   }
   const file = await prisma.libraryFile.findUnique({ where: { id: fileId } })
   if (!file) throw notFound('File not found')
-  // Resolve the target printer through the tenant gate — getPrinter() alone is keyed by
-  // id only, which would let a tenant start a print on another tenant's printer.
-  const printer = await requireTenantOwnedConnectedPrinter(parsed.data.printerId)
+  // Resolve the target printer through the workspace gate — getPrinter() alone is keyed by
+  // id only, which would let a workspace start a print on another workspace's printer.
+  const printer = await requireWorkspaceOwnedConnectedPrinter(parsed.data.printerId)
 
   if (!isDirectPrintableFileName(file.name)) {
     throw badRequest('Only .gcode or .gcode.3mf files can be printed directly')
@@ -2044,7 +1961,7 @@ async function toDto(row: {
       // parse, no bridge RPC. On a miss/stale row, return empty chips now and warm
       // (inspect + derive + persist) in the background so the next listing is
       // served from the row. Single-file/upload paths derive fresh inline.
-      const cached = parseDerivedChips(row.derivedChipsJson, row.derivedChipsVersion)
+      const cached = parseDerivedChips(row.derivedChipsJson, row.derivedChipsVersion, row.storedPath)
       if (options.cacheOnly) {
         if (cached) {
           chips = cached
@@ -2157,7 +2074,7 @@ function buildLibraryStoredPath(fileName: string): string {
 
 function toLibraryFileVersionCreateInput(row: LibraryFileRow) {
   return {
-    tenantId: row.tenantId,
+    workspaceId: row.workspaceId,
     libraryFileId: row.id,
     ownerBridgeId: row.ownerBridgeId,
     folderId: row.folderId,
@@ -2272,7 +2189,7 @@ function sendNotModifiedIfLibraryFileFresh(
   response.setHeader('Cache-Control', 'private, no-cache, max-age=0, must-revalidate, s-maxage=0')
   response.setHeader('ETag', etag)
   response.vary('Cookie')
-  response.vary('X-PrintStream-Tenant')
+  response.vary('X-PrintStream-Workspace')
   if (!requestFreshnessMatches(request, etag)) return false
   response.status(304).end()
   return true

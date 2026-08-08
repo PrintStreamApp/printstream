@@ -25,7 +25,7 @@ import { SliceEstimates } from '../../components/library/SliceEstimates'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { toast } from '../../lib/toast'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
-import { buildTenantWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
+import { buildWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
 import { useSlicingJobs } from '../../hooks/useSlicingJobs'
 import {
   formatSlicingProgress,
@@ -74,8 +74,8 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
 
   // Every exit lands on the Calibration page so the run is visible where it is managed.
   const handleClose = useCallback(() => {
-    const { tenantSlug } = parseWorkspacePathname(location.pathname)
-    if (tenantSlug) navigate(buildTenantWorkspacePath(tenantSlug, '/calibration'))
+    const { workspaceSlug } = parseWorkspacePathname(location.pathname)
+    if (workspaceSlug) navigate(buildWorkspacePath(workspaceSlug, '/calibration'))
     onClose()
   }, [location.pathname, navigate, onClose])
 

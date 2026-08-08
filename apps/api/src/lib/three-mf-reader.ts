@@ -144,9 +144,13 @@ export async function readPlateIndex(filePath: string, signal?: AbortSignal): Pr
   }
 
   let modelSettingsPlates: ModelSettingsPlateMetadata[] = []
+  // Raw document kept beside the parsed plates: the repair inspection reads object-level
+  // extruder bindings, which the plate metadata does not carry.
+  let modelSettingsXml: string | null = null
   try {
     const buffer = await readEntry(filePath, 'Metadata/model_settings.config', signal)
-    modelSettingsPlates = parseModelSettingsPlates(buffer.toString('utf8'), projectSettingsJson)
+    modelSettingsXml = buffer.toString('utf8')
+    modelSettingsPlates = parseModelSettingsPlates(modelSettingsXml, projectSettingsJson)
   } catch {
     /* no model settings; plates degrade to thumbnails or a synthetic default */
   }
@@ -156,7 +160,7 @@ export async function readPlateIndex(filePath: string, signal?: AbortSignal): Pr
   const customGcodeXml = await readEntry(filePath, CUSTOM_GCODE_PER_LAYER_ENTRY, signal)
     .then((buffer) => buffer.toString('utf8'))
     .catch(() => null)
-  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles, customGcodeXml)
+  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles, customGcodeXml, modelSettingsXml)
   cache.set(filePath, { mtimeMs: info.mtimeMs, parserVersion: THREE_MF_PARSER_CACHE_VERSION, index })
   return index
 }

@@ -168,3 +168,31 @@ test('preset bookkeeping never reaches the project config', () => {
   // The settings alongside it still are.
   assert.deepEqual(record.nozzle_temperature, ['245', '245', '245', '245', '245', '245'])
 })
+
+test('a partially-damaged project keeps its present keys and gains only the missing ones', () => {
+  // The CHM - H2 shape: blunt detection fires on a file where SOME keys survived (here a
+  // nozzle_temperature carrying an in-project tweak on slot 2). The restore must write the
+  // missing sentinels and leave the healthy key alone — overwriting it from the presets would
+  // quietly normalise a value the user never touched.
+  const record = {
+    ...dropped(),
+    nozzle_temperature: ['245', '245', '245', '245', '221', '221']
+  }
+  restoreFilamentPhysics(record, [PETG, PETG, PLA])
+
+  assert.deepEqual(record.nozzle_temperature, ['245', '245', '245', '245', '221', '221'])
+  assert.deepEqual(record.filament_flow_ratio, ['0.95', '0.95', '0.95', '0.95', '0.98', '0.98'])
+  // The restored file must inspect clean, or detection and repair would disagree forever.
+  assert.equal(inspectProjectFilamentPhysics(JSON.stringify(record))?.inconsistent, false)
+})
+
+test('a stale-width key is rewritten from the presets, not preserved', () => {
+  // A 2-wide density in a 3-slot project is positional garbage; preserve-present must not
+  // protect it. The shared width rule decides which side of the line a key falls on.
+  const record = {
+    ...dropped(),
+    filament_density: ['1.28', '1.26']
+  }
+  restoreFilamentPhysics(record, [PETG, PETG, PLA])
+  assert.deepEqual(record.filament_density, ['1.28', '1.28', '1.26'])
+})

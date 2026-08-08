@@ -14,6 +14,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  *
  * Same-tab only, deliberately: the `storage` event would also sync other TABS, which is a broader
  * behaviour change than the bug requires. Revisit if a preference ever needs to follow across tabs.
+ *
+ * **Renaming a key needs `legacyKeys`.** A storage key is a persisted identifier: renaming one
+ * without a read-through silently resets everybody's saved preference on the first load after a
+ * deploy, which nobody reports as a bug because it looks like they never set it. Pass the old
+ * name(s) and the first load migrates the value forward.
  */
 
 /** Listeners per storage key, so a write can reach the other instances reading it. */
@@ -41,12 +46,25 @@ export function useLocalStorageState<T>(
   key: string,
   fallback: T,
   parse: (raw: string) => T | null,
-  serialize: (value: T) => string = JSON.stringify
+  serialize: (value: T) => string = JSON.stringify,
+  /**
+   * Former names for this key, newest first. Read only when `key` itself holds
+   * nothing; the next write lands on `key`, so the migration happens once and
+   * the old entry is simply left behind rather than deleted (another tab on the
+   * previous build may still be reading it).
+   */
+  legacyKeys: ReadonlyArray<string> = []
 ): [T, (value: T) => void, boolean] {
+  // Stable across renders so callers can pass an inline array literal without
+  // re-running the read on every render.
+  const legacyKeysRef = useRef(legacyKeys)
+  legacyKeysRef.current = legacyKeys
   const readValue = useCallback(() => {
     if (typeof window === 'undefined') return fallback
     try {
       const raw = window.localStorage.getItem(key)
+        ?? legacyKeysRef.current.map((legacy) => window.localStorage.getItem(legacy)).find((value) => value != null)
+        ?? null
       if (raw == null) return fallback
       return parse(raw) ?? fallback
     } catch {

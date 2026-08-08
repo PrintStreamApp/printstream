@@ -73,7 +73,7 @@ export const apiSaveTarget: EditorSaveTarget = {
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        ...(workspaceContext ? { 'X-PrintStream-Tenant': workspaceContext } : {})
+        ...(workspaceContext ? { 'X-PrintStream-Workspace': workspaceContext } : {})
       },
       body: JSON.stringify(payload)
     })

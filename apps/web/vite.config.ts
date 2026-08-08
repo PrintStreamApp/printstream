@@ -13,6 +13,10 @@ const sharedPrivateExists = existsSync(sharedPrivateSourceEntry)
 
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, fileURLToPath(new URL('../..', import.meta.url)), 'VITE_')
+  // Where dev requests to /api and /ws go. Defaults to the API this repo's
+  // `npm run dev` starts; overridable so a second web+API pair can run on spare
+  // ports without disturbing the one already in use.
+  const apiPort = env.VITE_API_PORT ?? '4000'
   return {
     cacheDir: '.vite',
     envDir: '../..',
@@ -137,9 +141,12 @@ export default defineConfig(({ command, mode }) => {
         // The bridge-runtime connection is a long-lived WebSocket under /api, so it
         // needs an explicit ws proxy entry (listed first, most-specific) — without it
         // a home/LAN bridge pointed at a from-source dev origin can't connect.
-        '/api/bridge-runtime/connect': { target: 'ws://localhost:4000', ws: true },
-        '/api': { target: 'http://localhost:4000' },
-        '/ws': { target: 'ws://localhost:4000', ws: true }
+        // Target is overridable so a second dev web server can be pointed at a
+        // second API — running one of each on spare ports is how you exercise
+        // in-progress API changes without restarting the one you are using.
+        '/api/bridge-runtime/connect': { target: `ws://localhost:${apiPort}`, ws: true },
+        '/api': { target: `http://localhost:${apiPort}` },
+        '/ws': { target: `ws://localhost:${apiPort}`, ws: true }
       }
     }
   }

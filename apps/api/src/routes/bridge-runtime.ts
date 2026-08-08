@@ -4,6 +4,8 @@
  * Bridges register themselves before they are connected to a workspace so
  * the cloud can issue a durable machine credential and a short pairing code.
  */
+import path from 'node:path'
+import { sendFileFromDir } from '../lib/request-helpers.js'
 import express from 'express'
 import type { Prisma } from '@prisma/client'
 import {
@@ -24,9 +26,9 @@ import { getBridgeDebugCaptureStatus } from '../lib/bridge-debug-capture.js'
 import { readRequestOrigin } from '../lib/request-helpers.js'
 import { buildBridgeUpdateSummary, getBridgeReleaseManifest, resolveBridgeAssetOrigin } from '../lib/bridge-update-policy.js'
 import { resolveBridgeReleaseAsset } from '../lib/bridge-release-assets.js'
-import { pairBridgeToTenant } from '../lib/bridge-pairing.js'
+import { pairBridgeToWorkspace } from '../lib/bridge-pairing.js'
 import { ensureManagedBridgeToken, isManagedBridgeMode, managedBridgeSecretMatches } from '../lib/managed-bridge.js'
-import { resolveSoleTenant } from '../lib/default-tenant.js'
+import { resolveSoleWorkspace } from '../lib/workspace-resolution.js'
 import { env } from '../lib/env.js'
 
 const BRIDGE_RUNTIME_CONNECT_PATH = '/api/bridge-runtime/connect'
@@ -48,13 +50,13 @@ async function attemptManagedAutoPair(bridgeId: string, provisionSecret: string 
     console.warn(`[managed-bridge] bridge ${bridgeId} did not present a matching provisioning token; leaving it unpaired`)
     return false
   }
-  const tenant = await resolveSoleTenant()
-  if (!tenant) {
+  const workspace = await resolveSoleWorkspace()
+  if (!workspace) {
     console.warn(`[managed-bridge] bridge ${bridgeId} presented a valid secret but the target workspace is ambiguous; leaving it unpaired`)
     return false
   }
-  await pairBridgeToTenant({ bridgeId, tenantId: tenant.id })
-  console.info(`[managed-bridge] auto-paired bridge ${bridgeId} into workspace ${tenant.slug}`)
+  await pairBridgeToWorkspace({ bridgeId, workspaceId: workspace.id })
+  console.info(`[managed-bridge] auto-paired bridge ${bridgeId} into workspace ${workspace.slug}`)
   return true
 }
 
@@ -73,7 +75,10 @@ bridgeRuntimeRouter.get('/release-assets/:fileName', async (request, response) =
     fileName: request.params.fileName
   })
   response.type(asset.contentType)
-  response.sendFile(asset.filePath)
+  // By name under the releases dir — an absolute path 404s when the install
+  // lives under a dot-directory. `resolveBridgeReleaseAsset` has already
+  // validated the name and confined it to that directory.
+  sendFileFromDir(response, env.BRIDGE_RELEASES_DIR, path.basename(asset.filePath))
 })
 
 /** Bridge columns needed to build a registration response (never includes secrets). */
@@ -81,7 +86,7 @@ const BRIDGE_RESPONSE_SELECT = {
   id: true,
   name: true,
   connectCode: true,
-  tenantId: true,
+  workspaceId: true,
   version: true,
   releaseFingerprint: true,
   buildRevision: true,
@@ -163,7 +168,7 @@ bridgeRuntimeRouter.post('/register', async (request, response) => {
 
     const existing = await rootPrisma.bridge.findUnique({
       where: { id: parsed.bridgeId },
-      select: { id: true, tenantId: true, installationId: true, runtimeTokenHash: true }
+      select: { id: true, workspaceId: true, installationId: true, runtimeTokenHash: true }
     })
 
     if (!existing || !bridgeRuntimeTokenMatches(parsed.runtimeToken, existing.runtimeTokenHash)) {
@@ -173,7 +178,7 @@ bridgeRuntimeRouter.post('/register', async (request, response) => {
     const updated = await rootPrisma.bridge.update({
       where: { id: existing.id },
       data: {
-        ...buildBridgeMetadataRefresh(parsed, now, { allowRename: !existing.tenantId }),
+        ...buildBridgeMetadataRefresh(parsed, now, { allowRename: !existing.workspaceId }),
         // Backfill the durable install identity for bridges that registered before
         // it existed, so a future credential reset re-binds instead of duplicating.
         ...(parsed.installationId && !existing.installationId ? { installationId: parsed.installationId } : {})
@@ -181,7 +186,7 @@ bridgeRuntimeRouter.post('/register', async (request, response) => {
       select: BRIDGE_RESPONSE_SELECT
     })
 
-    const autoPaired = existing.tenantId
+    const autoPaired = existing.workspaceId
       ? false
       : await attemptManagedAutoPair(existing.id, parsed.provisionSecret)
 
@@ -198,19 +203,19 @@ bridgeRuntimeRouter.post('/register', async (request, response) => {
   if (parsed.installationId) {
     const known = await rootPrisma.bridge.findUnique({
       where: { installationId: parsed.installationId },
-      select: { id: true, tenantId: true }
+      select: { id: true, workspaceId: true }
     })
     if (known) {
       const reboundToken = createBridgeRuntimeToken()
       const rebound = await rootPrisma.bridge.update({
         where: { id: known.id },
         data: {
-          ...buildBridgeMetadataRefresh(parsed, now, { allowRename: !known.tenantId }),
+          ...buildBridgeMetadataRefresh(parsed, now, { allowRename: !known.workspaceId }),
           runtimeTokenHash: hashBridgeRuntimeToken(reboundToken)
         },
         select: BRIDGE_RESPONSE_SELECT
       })
-      const reboundAutoPaired = known.tenantId
+      const reboundAutoPaired = known.workspaceId
         ? false
         : await attemptManagedAutoPair(known.id, parsed.provisionSecret)
       console.info(`[bridge-runtime] re-bound returning bridge ${known.id} from installation id (no duplicate created)`)

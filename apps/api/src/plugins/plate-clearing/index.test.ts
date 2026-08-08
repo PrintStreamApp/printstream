@@ -20,7 +20,7 @@ test('plate-clearing does not mark the plate cleared when a print starts', async
     ['cleared:printer-1']: 'false'
   })
 
-  mock.method(printerManager, 'getTenantId', () => 'tenant-1')
+  mock.method(printerManager, 'getWorkspaceId', () => 'workspace-1')
 
   events.emit('job.started', {
     printer: { id: 'printer-1' },
@@ -36,7 +36,7 @@ test('plate-clearing marks the plate uncleared when a print finishes successfull
     ['cleared:printer-1']: 'true'
   })
 
-  mock.method(printerManager, 'getTenantId', () => 'tenant-1')
+  mock.method(printerManager, 'getWorkspaceId', () => 'workspace-1')
 
   events.emit('job.finished', {
     printer: { id: 'printer-1' },
@@ -53,7 +53,7 @@ test('plate-clearing marks the plate uncleared when a print is cancelled', async
     ['cleared:printer-1']: 'true'
   })
 
-  mock.method(printerManager, 'getTenantId', () => 'tenant-1')
+  mock.method(printerManager, 'getWorkspaceId', () => 'workspace-1')
 
   events.emit('job.finished', {
     printer: { id: 'printer-1' },
@@ -70,7 +70,7 @@ test('plate-clearing marks the plate uncleared when a print fails', async () => 
     ['cleared:printer-1']: 'true'
   })
 
-  mock.method(printerManager, 'getTenantId', () => 'tenant-1')
+  mock.method(printerManager, 'getWorkspaceId', () => 'workspace-1')
 
   events.emit('job.finished', {
     printer: { id: 'printer-1' },
@@ -83,20 +83,20 @@ test('plate-clearing marks the plate uncleared when a print fails', async () => 
 })
 
 async function registerPlateClearingPlugin(initialSettings: Record<string, string>) {
-  // The plugin stores all state per-tenant via `forTenant`; printer-1 is tenant-1.
-  const tenant1 = new Map(Object.entries(initialSettings))
-  const tenantSettings = new Map<string, Map<string, string>>([['tenant-1', tenant1]])
+  // The plugin stores all state per-workspace via `forWorkspace`; printer-1 is workspace-1.
+  const workspace1 = new Map(Object.entries(initialSettings))
+  const workspaceSettings = new Map<string, Map<string, string>>([['workspace-1', workspace1]])
   const events = new PrinterEventBus()
 
   const makeStore = (map: Map<string, string>) => ({
     async get(key: string) { return map.get(key) ?? null },
     async set(key: string, value: string) { map.set(key, value) },
     async delete(key: string) { map.delete(key) },
-    forTenant() { throw new Error('nested forTenant not supported') }
+    forWorkspace() { throw new Error('nested forWorkspace not supported') }
   })
 
   Object.defineProperty(rootPrisma.printer, 'findMany', {
-    value: async () => [{ id: 'printer-1', tenantId: 'tenant-1' }],
+    value: async () => [{ id: 'printer-1', workspaceId: 'workspace-1' }],
     configurable: true
   })
 
@@ -110,14 +110,14 @@ async function registerPlateClearingPlugin(initialSettings: Record<string, strin
     },
     printerEvents: events,
     ws: { broadcast() {} },
-    isEnabledForTenant: () => true,
+    isEnabledForWorkspace: () => true,
     router: express.Router(),
     settings: {
       // Platform-global store is unused by this plugin now.
       ...makeStore(new Map<string, string>()),
-      forTenant(tenantId: string) {
-        let map = tenantSettings.get(tenantId)
-        if (!map) { map = new Map(); tenantSettings.set(tenantId, map) }
+      forWorkspace(workspaceId: string) {
+        let map = workspaceSettings.get(workspaceId)
+        if (!map) { map = new Map(); workspaceSettings.set(workspaceId, map) }
         return makeStore(map)
       }
     },
@@ -130,6 +130,6 @@ async function registerPlateClearingPlugin(initialSettings: Record<string, strin
     }
   } as never)
 
-  // `settings` is tenant-1's store, where this printer's state lives.
-  return { events, settings: tenant1, tenantSettings }
+  // `settings` is workspace-1's store, where this printer's state lives.
+  return { events, settings: workspace1, workspaceSettings }
 }

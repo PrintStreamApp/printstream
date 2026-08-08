@@ -19,7 +19,7 @@ import {
 
 type AuthGroupRow = {
   id: string
-  tenantId: string | null
+  workspaceId: string | null
   key: string | null
   name: string
   description: string | null
@@ -29,14 +29,14 @@ type AuthGroupRow = {
   isRemovable: boolean
 }
 
-test('ensureBuiltInAuthGroups creates the default tenant roles', async () => {
+test('ensureBuiltInAuthGroups creates the default workspace roles', async () => {
   const store = createAuthGroupStore()
 
-  await ensureBuiltInAuthGroups(store.prisma, 'tenant-1')
+  await ensureBuiltInAuthGroups(store.prisma, 'workspace-1')
 
-  assert.deepEqual(store.keysForTenant('tenant-1'), builtInAuthGroupSeeds.map((seed) => seed.key))
-  assert.deepEqual(store.get('tenant-1', 'viewer')?.permissions, ['printers.view', 'camera.view', 'jobs.view'])
-  assert.deepEqual(store.get('tenant-1', 'operator')?.permissions, [
+  assert.deepEqual(store.keysForWorkspace('workspace-1'), builtInAuthGroupSeeds.map((seed) => seed.key))
+  assert.deepEqual(store.get('workspace-1', 'viewer')?.permissions, ['printers.view', 'camera.view', 'jobs.view'])
+  assert.deepEqual(store.get('workspace-1', 'operator')?.permissions, [
     'printers.view',
     'camera.view',
     'jobs.view',
@@ -46,20 +46,20 @@ test('ensureBuiltInAuthGroups creates the default tenant roles', async () => {
     'library.view',
     'prints.dispatch'
   ])
-  assert.equal(store.get('tenant-1', 'technician')?.name, 'Manager')
-  assert.deepEqual(store.get('tenant-1', 'technician')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'technician')?.permissions)
-  assert.equal(store.get('tenant-1', 'viewer')?.permissions.includes('jobs.delete'), false)
-  assert.equal(store.get('tenant-1', 'operator')?.permissions.includes('jobs.delete'), false)
-  assert.equal(store.get('tenant-1', 'technician')?.permissions.includes('jobs.delete'), true)
-  assert.equal(store.get('tenant-1', 'technician')?.permissions.includes(AUTH_USERS_VIEW_PERMISSION), true)
-  assert.equal(store.get('tenant-1', 'technician')?.permissions.includes(AUTH_ROLES_VIEW_PERMISSION), true)
-  assert.equal(store.get('tenant-1', 'technician')?.permissions.includes(AUTH_SERVICE_ACCOUNTS_VIEW_PERMISSION), true)
-  assert.equal(store.get('tenant-1', 'technician')?.permissions.includes(AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION), true)
-  assert.equal(store.get('tenant-1', 'admin')?.permissions.includes('jobs.delete'), true)
-  assert.equal(store.get('tenant-1', 'admin')?.permissions.includes(AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION), true)
-  assert.deepEqual(store.get('tenant-1', 'admin')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'admin')?.permissions)
-  assert.equal(store.get('tenant-1', 'admin')?.isEditable, false)
-  assert.equal(store.get('tenant-1', 'admin')?.isRemovable, false)
+  assert.equal(store.get('workspace-1', 'technician')?.name, 'Manager')
+  assert.deepEqual(store.get('workspace-1', 'technician')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'technician')?.permissions)
+  assert.equal(store.get('workspace-1', 'viewer')?.permissions.includes('jobs.delete'), false)
+  assert.equal(store.get('workspace-1', 'operator')?.permissions.includes('jobs.delete'), false)
+  assert.equal(store.get('workspace-1', 'technician')?.permissions.includes('jobs.delete'), true)
+  assert.equal(store.get('workspace-1', 'technician')?.permissions.includes(AUTH_USERS_VIEW_PERMISSION), true)
+  assert.equal(store.get('workspace-1', 'technician')?.permissions.includes(AUTH_ROLES_VIEW_PERMISSION), true)
+  assert.equal(store.get('workspace-1', 'technician')?.permissions.includes(AUTH_SERVICE_ACCOUNTS_VIEW_PERMISSION), true)
+  assert.equal(store.get('workspace-1', 'technician')?.permissions.includes(AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION), true)
+  assert.equal(store.get('workspace-1', 'admin')?.permissions.includes('jobs.delete'), true)
+  assert.equal(store.get('workspace-1', 'admin')?.permissions.includes(AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION), true)
+  assert.deepEqual(store.get('workspace-1', 'admin')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'admin')?.permissions)
+  assert.equal(store.get('workspace-1', 'admin')?.isEditable, false)
+  assert.equal(store.get('workspace-1', 'admin')?.isRemovable, false)
 })
 
 test('ensureBuiltInPlatformAuthGroups creates and restores platform roles without deleting custom roles', async () => {
@@ -88,13 +88,13 @@ test('ensureBuiltInPlatformAuthGroups creates and restores platform roles withou
 
   await ensureBuiltInPlatformAuthGroups(store.prisma)
 
-  assert.deepEqual(new Set(store.keysForTenant(null)), new Set([...builtInPlatformAuthGroupSeeds.map((seed) => seed.key), 'custom_platform']))
+  assert.deepEqual(new Set(store.keysForWorkspace(null)), new Set([...builtInPlatformAuthGroupSeeds.map((seed) => seed.key), 'custom_platform']))
   assert.deepEqual(store.get(null, PLATFORM_ADMIN_GROUP_KEY), {
     id: 'platform-group-admin',
-    tenantId: null,
+    workspaceId: null,
     key: PLATFORM_ADMIN_GROUP_KEY,
     name: 'Admin',
-    description: 'Full platform access including billing, settings, plugins, tenants, auth management, and support-access bypass.',
+    description: 'Full platform access including billing, settings, plugins, workspaces, auth management, and support-access bypass.',
     permissions: builtInPlatformAuthGroupSeeds.find((seed) => seed.key === PLATFORM_ADMIN_GROUP_KEY)?.permissions,
     isSystem: true,
     isEditable: false,
@@ -118,13 +118,22 @@ test('platform Manager stays below platform Admin without support-access bypass'
   assert.ok(admin)
   assert.ok(support)
   assert.equal(manager.permissions.includes(AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION), false)
-  assert.equal(support.permissions.length, 0)
+  // Support is READ-ONLY, not empty: it looks up what an account holds so it can
+  // answer questions. What matters is that it stays a strict subset of Manager
+  // and never gains a write. `platform-account-authority.test.ts` pins which
+  // permissions those are.
+  assert.ok(
+    support.permissions.every((permission) => manager.permissions.includes(permission)),
+    'Support must not hold anything Manager lacks'
+  )
+  assert.ok(support.permissions.length < manager.permissions.length)
+  assert.equal(support.permissions.includes(AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION), false)
   assert.equal(admin.permissions.every((permission) => manager.permissions.includes(permission)), false)
 })
 
 test('ensureBuiltInAuthGroups preserves customized lower roles but restores fixed Admin', async () => {
   const store = createAuthGroupStore([
-    tenantGroup('tenant-1', {
+    workspaceGroup('workspace-1', {
       id: 'viewer-id',
       key: 'viewer',
       name: 'Viewer+',
@@ -134,7 +143,7 @@ test('ensureBuiltInAuthGroups preserves customized lower roles but restores fixe
       isEditable: true,
       isRemovable: false
     }),
-    tenantGroup('tenant-1', {
+    workspaceGroup('workspace-1', {
       id: 'admin-id',
       key: 'admin',
       name: 'Admin',
@@ -146,17 +155,17 @@ test('ensureBuiltInAuthGroups preserves customized lower roles but restores fixe
     })
   ])
 
-  await ensureBuiltInAuthGroups(store.prisma, 'tenant-1')
+  await ensureBuiltInAuthGroups(store.prisma, 'workspace-1')
 
-  assert.deepEqual(store.get('tenant-1', 'viewer')?.permissions, ['printers.view', 'jobs.view', 'camera.view'])
-  assert.deepEqual(store.get('tenant-1', 'admin')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'admin')?.permissions)
-  assert.equal(store.get('tenant-1', 'admin')?.isEditable, false)
-  assert.equal(store.get('tenant-1', 'admin')?.isRemovable, false)
+  assert.deepEqual(store.get('workspace-1', 'viewer')?.permissions, ['printers.view', 'jobs.view', 'camera.view'])
+  assert.deepEqual(store.get('workspace-1', 'admin')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'admin')?.permissions)
+  assert.equal(store.get('workspace-1', 'admin')?.isEditable, false)
+  assert.equal(store.get('workspace-1', 'admin')?.isRemovable, false)
 })
 
 test('ensureBuiltInAuthGroups upgrades previous built-in role snapshots', async () => {
   const store = createAuthGroupStore([
-    tenantGroup('tenant-1', {
+    workspaceGroup('workspace-1', {
       id: 'viewer-id',
       key: 'viewer',
       name: 'Viewer',
@@ -166,7 +175,7 @@ test('ensureBuiltInAuthGroups upgrades previous built-in role snapshots', async 
       isEditable: true,
       isRemovable: false
     }),
-    tenantGroup('tenant-1', {
+    workspaceGroup('workspace-1', {
       id: 'operator-id',
       key: 'operator',
       name: 'Operator',
@@ -176,7 +185,7 @@ test('ensureBuiltInAuthGroups upgrades previous built-in role snapshots', async 
       isEditable: true,
       isRemovable: false
     }),
-    tenantGroup('tenant-1', {
+    workspaceGroup('workspace-1', {
       id: 'technician-id',
       key: 'technician',
       name: 'Technician',
@@ -186,8 +195,8 @@ test('ensureBuiltInAuthGroups upgrades previous built-in role snapshots', async 
       isEditable: true,
       isRemovable: false
     }),
-    tenantGroup('tenant-2', {
-      id: 'tenant-2-technician-id',
+    workspaceGroup('workspace-2', {
+      id: 'workspace-2-technician-id',
       key: 'technician',
       name: 'Manager',
       description: 'Coordinate day-to-day operations, including print dispatch, plate clearing, printer management, storage downloads, and library management.',
@@ -198,14 +207,14 @@ test('ensureBuiltInAuthGroups upgrades previous built-in role snapshots', async 
     })
   ])
 
-  await ensureBuiltInAuthGroups(store.prisma, 'tenant-1')
-  await ensureBuiltInAuthGroups(store.prisma, 'tenant-2')
+  await ensureBuiltInAuthGroups(store.prisma, 'workspace-1')
+  await ensureBuiltInAuthGroups(store.prisma, 'workspace-2')
 
-  assert.deepEqual(store.get('tenant-1', 'viewer')?.permissions, ['printers.view', 'camera.view', 'jobs.view'])
-  assert.deepEqual(store.get('tenant-1', 'operator')?.permissions, ['printers.view', 'camera.view', 'jobs.view', 'printers.control', 'printers.clearPlate', 'printerStorage.view', 'library.view', 'prints.dispatch'])
-  assert.equal(store.get('tenant-1', 'technician')?.name, 'Manager')
-  assert.deepEqual(store.get('tenant-1', 'technician')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'technician')?.permissions)
-  assert.deepEqual(store.get('tenant-2', 'technician')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'technician')?.permissions)
+  assert.deepEqual(store.get('workspace-1', 'viewer')?.permissions, ['printers.view', 'camera.view', 'jobs.view'])
+  assert.deepEqual(store.get('workspace-1', 'operator')?.permissions, ['printers.view', 'camera.view', 'jobs.view', 'printers.control', 'printers.clearPlate', 'printerStorage.view', 'library.view', 'prints.dispatch'])
+  assert.equal(store.get('workspace-1', 'technician')?.name, 'Manager')
+  assert.deepEqual(store.get('workspace-1', 'technician')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'technician')?.permissions)
+  assert.deepEqual(store.get('workspace-2', 'technician')?.permissions, builtInAuthGroupSeeds.find((seed) => seed.key === 'technician')?.permissions)
 })
 
 function createAuthGroupStore(initialRows: AuthGroupRow[] = []) {
@@ -213,20 +222,20 @@ function createAuthGroupStore(initialRows: AuthGroupRow[] = []) {
 
   const prisma = {
     authGroup: {
-      async findUnique(input: { where: { tenantId_key?: { tenantId: string; key: string }; id?: string } }) {
-        if (input.where.tenantId_key) {
-          const { tenantId, key } = input.where.tenantId_key
-          return rows.find((row) => row.tenantId === tenantId && row.key === key) ?? null
+      async findUnique(input: { where: { workspaceId_key?: { workspaceId: string; key: string }; id?: string } }) {
+        if (input.where.workspaceId_key) {
+          const { workspaceId, key } = input.where.workspaceId_key
+          return rows.find((row) => row.workspaceId === workspaceId && row.key === key) ?? null
         }
         return rows.find((row) => row.id === input.where.id) ?? null
       },
-      async findFirst(input: { where: { tenantId: string | null; key: string } }) {
-        return rows.find((row) => row.tenantId === input.where.tenantId && row.key === input.where.key) ?? null
+      async findFirst(input: { where: { workspaceId: string | null; key: string } }) {
+        return rows.find((row) => row.workspaceId === input.where.workspaceId && row.key === input.where.key) ?? null
       },
       async create(input: { data: Partial<AuthGroupRow> & { key: string | null; name: string; description: string; permissions: string[]; isSystem: boolean; isEditable: boolean; isRemovable: boolean } }) {
         const row: AuthGroupRow = {
           id: input.data.id ?? `group-${rows.length + 1}`,
-          tenantId: input.data.tenantId ?? null,
+          workspaceId: input.data.workspaceId ?? null,
           key: input.data.key,
           name: input.data.name,
           description: input.data.description,
@@ -249,19 +258,19 @@ function createAuthGroupStore(initialRows: AuthGroupRow[] = []) {
 
   return {
     prisma,
-    get(tenantId: string | null, key: string) {
-      return rows.find((row) => row.tenantId === tenantId && row.key === key)
+    get(workspaceId: string | null, key: string) {
+      return rows.find((row) => row.workspaceId === workspaceId && row.key === key)
     },
-    keysForTenant(tenantId: string | null) {
-      return rows.filter((row) => row.tenantId === tenantId).map((row) => row.key)
+    keysForWorkspace(workspaceId: string | null) {
+      return rows.filter((row) => row.workspaceId === workspaceId).map((row) => row.key)
     }
   }
 }
 
-function platformGroup(row: Omit<AuthGroupRow, 'tenantId'>): AuthGroupRow {
-  return { ...row, tenantId: null }
+function platformGroup(row: Omit<AuthGroupRow, 'workspaceId'>): AuthGroupRow {
+  return { ...row, workspaceId: null }
 }
 
-function tenantGroup(tenantId: string, row: Omit<AuthGroupRow, 'tenantId'>): AuthGroupRow {
-  return { ...row, tenantId }
+function workspaceGroup(workspaceId: string, row: Omit<AuthGroupRow, 'workspaceId'>): AuthGroupRow {
+  return { ...row, workspaceId }
 }

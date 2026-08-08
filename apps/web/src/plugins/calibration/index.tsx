@@ -22,6 +22,7 @@ export const calibrationPlugin: WebPlugin = {
     {
       path: '/calibration/*',
       navLabel: 'Calibration',
+      navDescription: 'Flow and pressure-advance tests, and the profiles they produce.',
       navMobileIcon: <ScienceRoundedIcon />,
       element: CalibrationView
     }

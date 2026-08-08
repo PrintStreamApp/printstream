@@ -31,7 +31,7 @@ export function PluginSlot({ name, context, fallback = null }: PluginSlotProps) 
     enabled: authBootstrapQuery.isSuccess ? (!authBootstrapQuery.data.authEnabled || authBootstrapQuery.data.actor.type !== 'anonymous') : false,
     suppressGlobalErrorToast: true
   })
-  const currentSurface: PluginSurface = authBootstrapQuery.data?.tenant ? 'tenant' : 'platform'
+  const currentSurface: PluginSurface = authBootstrapQuery.data?.workspace ? 'workspace' : 'platform'
   const apiPluginsByName = useMemo(
     () => new Map((pluginStateQuery.data?.plugins ?? []).map((plugin) => [plugin.name, plugin] as const)),
     [pluginStateQuery.data?.plugins]

@@ -18,12 +18,12 @@ export function buildApiUrlWithContext(path: string, apiBaseUrl: string, workspa
 
   if (base) {
     const url = new URL(`${base}${suffix}`)
-    url.searchParams.set('tenant', workspaceContext)
+    url.searchParams.set('workspace', workspaceContext)
     return url.toString()
   }
 
   const url = new URL(suffix, 'http://printstream.local')
-  url.searchParams.set('tenant', workspaceContext)
+  url.searchParams.set('workspace', workspaceContext)
   return `${url.pathname}${url.search}${url.hash}`
 }
 
@@ -40,14 +40,14 @@ export function buildWebSocketUrl(path = '/ws'): string {
   if (!base) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = new URL(`${protocol}//${window.location.host}${path}`)
-    if (workspaceContext) url.searchParams.set('tenant', workspaceContext)
+    if (workspaceContext) url.searchParams.set('workspace', workspaceContext)
     url.searchParams.set('client', clientId)
     return url.toString()
   }
   const url = new URL(base)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.pathname = path
-  if (workspaceContext) url.searchParams.set('tenant', workspaceContext)
+  if (workspaceContext) url.searchParams.set('workspace', workspaceContext)
   url.searchParams.set('client', clientId)
   return url.toString()
 }

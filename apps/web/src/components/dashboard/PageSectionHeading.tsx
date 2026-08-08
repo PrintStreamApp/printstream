@@ -10,6 +10,11 @@
  * Purely presentational. The section's anchor id and `scrollMarginTop` stay on the caller's
  * wrapper, which is the element `SectionNav` scrolls to.
  *
+ * A section that has outgrown the stack and become its own route passes
+ * `level="h3"`, which is the heading size every other top-level view uses; it
+ * keeps the count, description, and actions rather than growing a second header
+ * above them.
+ *
  * Counterpart: `SectionNav` renders the same sections as a nav strip, so a section's title and
  * count must agree between the two.
  */
@@ -31,7 +36,8 @@ export function PageSectionHeading({
   title,
   description,
   count,
-  actions
+  actions,
+  level = 'title-lg'
 }: {
   /** The section's icon, matching the icon its `EmptyState` uses. */
   icon: ReactNode
@@ -42,6 +48,12 @@ export function PageSectionHeading({
   count?: number | null
   /** Section-level actions, right-aligned beside the title on desktop and wrapping below it when narrow. */
   actions?: ReactNode
+  /**
+   * Typography level for the title. `h3` when this section IS a page rather
+   * than one of several stacked on one — a section that becomes its own route
+   * must not keep a heading a size smaller than every other top-level view's.
+   */
+  level?: 'title-lg' | 'h3'
 }) {
   return (
     <Stack spacing={0.75}>
@@ -54,7 +66,7 @@ export function PageSectionHeading({
       >
         <Box sx={{ minWidth: 0 }}>
           <Typography
-            level="title-lg"
+            level={level}
             startDecorator={icon}
             endDecorator={count != null && count > 0 ? (
               <Chip size="sm" variant="soft" color="neutral">{count}</Chip>

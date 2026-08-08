@@ -23,7 +23,7 @@ export interface PrinterEvents {
   }) => void
   'printer.added': (printer: Printer) => void
   'printer.updated': (printer: Printer) => void
-  'printer.removed': (event: { printerId: string; tenantId: string }) => void
+  'printer.removed': (event: { printerId: string; workspaceId: string }) => void
   /**
    * Emitted when the LAN discovery listener's known set changes
    * (a printer was first seen, an attribute changed, or an entry
@@ -45,10 +45,10 @@ export interface PrinterEvents {
    * - `order-print.dispatched` — dispatched from the queue onto `printerId` as
    *   `fileName`/`plate` (orders records the started print and then syncs its result).
    */
-  'order-print.queued': (event: { tenantId: string; orderPrintId: string }) => void
-  'order-print.unqueued': (event: { tenantId: string; orderPrintId: string }) => void
+  'order-print.queued': (event: { workspaceId: string; orderPrintId: string }) => void
+  'order-print.unqueued': (event: { workspaceId: string; orderPrintId: string }) => void
   'order-print.dispatched': (event: {
-    tenantId: string
+    workspaceId: string
     orderPrintId: string
     printerId: string
     fileName: string
@@ -58,20 +58,20 @@ export interface PrinterEvents {
    * A bridge reported that its previous run crashed (restarted without a clean
    * shutdown). Emitted by the bridge-crash-report ingest after it has decided the
    * crash warrants a user notification (rate-limited); the notification formatter
-   * turns it into a `bridge.crashed` message on every channel. `tenantId` is null
+   * turns it into a `bridge.crashed` message on every channel. `workspaceId` is null
    * for an unpaired bridge (no one to notify).
    */
   'bridge.crashed': (event: {
     bridgeId: string
     bridgeName: string
-    tenantId: string | null
+    workspaceId: string | null
     recentCrashCount: number
   }) => void
   /**
    * A pre-rendered platform-scope notification (operator events: no owning
-   * tenant). Emitted by `lib/platform-notification-events.ts`; the channel
+   * workspace). Emitted by `lib/platform-notification-events.ts`; the channel
    * plugins deliver it through their platform-scope configuration. The
-   * message's `tenantId` is intentionally unset.
+   * message's `workspaceId` is intentionally unset.
    */
   'platform.notification': (event: { message: NotificationMessage }) => void
   /**
@@ -79,11 +79,11 @@ export interface PrinterEvents {
    * matched by its collapse `tag` (e.g. the user read the support thread, so
    * the thread's notification is stale on every device). With
    * `targetUserIds` the dismissal addresses only those users' devices
-   * (cross-scope when `tenantId` is null, mirroring the targeted-delivery
+   * (cross-scope when `workspaceId` is null, mirroring the targeted-delivery
    * contract); without it every subscription in the given scope is asked.
    * Channels that cannot retract (email, webhooks) ignore it.
    */
-  'notification.dismiss': (event: { tag: string; tenantId: string | null; targetUserIds?: string[] }) => void
+  'notification.dismiss': (event: { tag: string; workspaceId: string | null; targetUserIds?: string[] }) => void
   /**
    * A filament spool became loaded in an AMS slot (the `filament-manager` plugin
    * emits on RFID auto-association and manual slot assignment). Carries the
@@ -91,7 +91,7 @@ export interface PrinterEvents {
    * apply a saved calibration for that filament without importing filament-manager.
    */
   'ams-slot.filament-loaded': (event: {
-    tenantId: string
+    workspaceId: string
     printerId: string
     amsId: number
     slotId: number

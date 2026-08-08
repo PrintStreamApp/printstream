@@ -73,7 +73,7 @@ const BRIDGE_OFFLINE_GRACE_MS = 15_000
 
 class PrinterManager {
   private readonly managed = new Map<string, ManagedPrinter>()
-  private readonly tenantIds = new Map<string, string>()
+  private readonly workspaceIds = new Map<string, string>()
   private readonly bridgeIds = new Map<string, string | null>()
   private readonly pendingPressureAdvanceProfiles = new Map<string, PendingPressureAdvanceProfilesRequest>()
   // Per-printer timers that defer a bridge-disconnect offline through the grace
@@ -99,7 +99,7 @@ class PrinterManager {
 
     for (const printer of printers) {
       const row = rows.find((candidate) => candidate.id === printer.id)
-      if (row) this.tenantIds.set(printer.id, row.tenantId)
+      if (row) this.workspaceIds.set(printer.id, row.workspaceId)
       this.bridgeIds.set(printer.id, row?.bridgeId ?? null)
       this.connect(printer)
     }
@@ -112,32 +112,32 @@ class PrinterManager {
     for (const timer of this.pendingOfflineTimers.values()) clearTimeout(timer)
     this.pendingOfflineTimers.clear()
     this.managed.clear()
-    this.tenantIds.clear()
+    this.workspaceIds.clear()
     this.bridgeIds.clear()
     this.started = false
   }
 
-  add(printer: Printer, tenantId?: string, bridgeId: string | null = null): void {
+  add(printer: Printer, workspaceId?: string, bridgeId: string | null = null): void {
     if (this.managed.has(printer.id)) {
-      this.update(printer, tenantId, bridgeId)
+      this.update(printer, workspaceId, bridgeId)
       return
     }
-    if (tenantId) this.tenantIds.set(printer.id, tenantId)
+    if (workspaceId) this.workspaceIds.set(printer.id, workspaceId)
     this.bridgeIds.set(printer.id, bridgeId)
     this.connect(printer)
     printerEvents.emit('printer.added', printer)
   }
 
-  update(printer: Printer, tenantId?: string, bridgeId: string | null = null): void {
+  update(printer: Printer, workspaceId?: string, bridgeId: string | null = null): void {
     const existing = this.managed.get(printer.id)
     if (!existing) {
-      if (tenantId) this.tenantIds.set(printer.id, tenantId)
+      if (workspaceId) this.workspaceIds.set(printer.id, workspaceId)
       this.bridgeIds.set(printer.id, bridgeId)
       this.connect(printer)
       printerEvents.emit('printer.added', printer)
       return
     }
-    if (tenantId) this.tenantIds.set(printer.id, tenantId)
+    if (workspaceId) this.workspaceIds.set(printer.id, workspaceId)
     const previousBridgeId = this.bridgeIds.get(printer.id) ?? null
     this.bridgeIds.set(printer.id, bridgeId)
     const hostChanged = existing.printer.host !== printer.host
@@ -158,23 +158,23 @@ class PrinterManager {
   remove(printerId: string): void {
     const existing = this.managed.get(printerId)
     if (!existing) return
-    const tenantId = this.tenantIds.get(printerId)
+    const workspaceId = this.workspaceIds.get(printerId)
     this.clearPendingPressureAdvanceRequests(printerId, 'Printer was removed')
     this.cancelPendingBridgePrinterOffline(printerId)
     this.managed.delete(printerId)
-    this.tenantIds.delete(printerId)
+    this.workspaceIds.delete(printerId)
     this.bridgeIds.delete(printerId)
-    if (tenantId) {
+    if (workspaceId) {
       printerEvents.emit('printer.removed', {
         printerId,
-        tenantId
+        workspaceId
       })
     }
   }
 
-  /** Look up the cached tenant ID for a managed printer, if known. */
-  getTenantId(printerId: string): string | undefined {
-    return this.tenantIds.get(printerId)
+  /** Look up the cached workspace ID for a managed printer, if known. */
+  getWorkspaceId(printerId: string): string | undefined {
+    return this.workspaceIds.get(printerId)
   }
 
   /** Snapshot of the current cached status for every managed printer. */
@@ -292,7 +292,7 @@ class PrinterManager {
    * `bridgeId` is the *authenticated* reporting bridge; we drop the report unless
    * that bridge is the one this printer is actually assigned to, so a bridge can
    * never inject status for a printer it does not own (potentially in another
-   * tenant). The same ownership guard applies to every `ingestBridge*` /
+   * workspace). The same ownership guard applies to every `ingestBridge*` /
    * `markBridgePrinterOffline` entry point below.
    */
   ingestBridgeReport(printerId: string, report: unknown, bridgeId: string): void {
@@ -393,8 +393,8 @@ class PrinterManager {
   /**
    * Hint that a discovered printer is broadcasting again and should reconnect if
    * still offline. Scoped to the bridge that observed the discovery: serials are
-   * only unique per tenant, so we act only on managed printers assigned to the
-   * reporting `bridgeId` — never on a same-serial printer in another tenant/bridge.
+   * only unique per workspace, so we act only on managed printers assigned to the
+   * reporting `bridgeId` — never on a same-serial printer in another workspace/bridge.
    */
   hintOnline(serial: string, bridgeId: string): boolean {
     const offlineMatches = Array.from(this.managed.values())

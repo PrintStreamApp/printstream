@@ -15,7 +15,7 @@ test('resolveActiveNavTab prefers the longest matching tab for nested tab values
 })
 
 test('resolveActiveNavTab highlights nothing for routes outside every tab subtree', () => {
-  // e.g. Suggestions opened from a tenant workspace: no nav tab owns it.
+  // e.g. Suggestions opened from a workspace: no nav tab owns it.
   assert.equal(resolveActiveNavTab(NAV_TABS, '/suggestions'), null)
   assert.equal(resolveActiveNavTab(NAV_TABS, '/'), null)
   // Sibling paths that merely share a prefix are not children of the tab.

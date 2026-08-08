@@ -2,7 +2,7 @@
  * Durable user audit logging.
  *
  * Captures user-visible mutating actions and annotated read operations after
- * they complete so platform and tenant logs can surface who changed what, in
+ * they complete so platform and workspace logs can surface who changed what, in
  * which workspace, and whether the action succeeded. Routes can attach richer
  * action/resource metadata so logs stay understandable and can be surfaced
  * alongside related resources.
@@ -44,7 +44,7 @@ export interface RequestAuditLogAnnotation {
   action?: string
   resource?: string
   summary?: string
-  tenantId?: string | null
+  workspaceId?: string | null
   metadata?: AuditLogMetadata
   requiredPermissions?: string[]
   /** When true, the request is deliberately excluded from the audit trail (see {@link skipRequestAuditLog}). */
@@ -53,7 +53,7 @@ export interface RequestAuditLogAnnotation {
 
 interface AuditLogRowShape {
   id: string
-  tenantId: string | null
+  workspaceId: string | null
   actorType: string
   actorUserId: string | null
   actorServiceAccountId: string | null
@@ -81,7 +81,7 @@ export function installAuditLogCapture() {
     const snapshot = {
       method: request.method,
       path: request.path,
-      tenantId: request.tenant?.id ?? null,
+      workspaceId: request.workspace?.id ?? null,
       actor: request.auth.actor,
       ipAddress: request.ip || null
     }
@@ -98,13 +98,13 @@ export function installAuditLogCapture() {
       }
 
       const descriptor = deriveAuditDescriptor(snapshot.method, snapshot.path, request.auditLog)
-      const tenantId = hasAuditTenantOverride(request.auditLog)
-        ? request.auditLog?.tenantId ?? null
-        : snapshot.tenantId
+      const workspaceId = hasAuditWorkspaceOverride(request.auditLog)
+        ? request.auditLog?.workspaceId ?? null
+        : snapshot.workspaceId
       const metadataJson = buildMetadataJson(request.auditLog)
       void rootPrisma.auditLog.create({
         data: {
-          tenantId,
+          workspaceId,
           actorType: readActorType(snapshot.actor),
           actorUserId: snapshot.actor.type === 'user' ? snapshot.actor.userId : null,
           actorServiceAccountId: snapshot.actor.type === 'service-account' ? snapshot.actor.serviceAccountId : null,
@@ -121,7 +121,7 @@ export function installAuditLogCapture() {
           metadataJson
         }
       }).then(() => {
-        broadcastLogsChanged(tenantId)
+        broadcastLogsChanged(workspaceId)
       }).catch((error) => {
         console.error('Failed to write audit log entry', error)
       })
@@ -146,14 +146,14 @@ function hasExplicitReadAuditAnnotation(annotation?: RequestAuditLogAnnotation):
 
 export function annotateRequestAuditLog(
   request: Request,
-  input: Pick<RequestAuditLogAnnotation, 'action' | 'resource' | 'summary' | 'tenantId' | 'metadata'>
+  input: Pick<RequestAuditLogAnnotation, 'action' | 'resource' | 'summary' | 'workspaceId' | 'metadata'>
 ): void {
   request.auditLog = {
     ...(request.auditLog ?? {}),
     ...(input.action ? { action: input.action } : {}),
     ...(input.resource ? { resource: input.resource } : {}),
     ...(input.summary ? { summary: input.summary } : {}),
-    ...(hasOwn(input, 'tenantId') ? { tenantId: input.tenantId ?? null } : {}),
+    ...(hasOwn(input, 'workspaceId') ? { workspaceId: input.workspaceId ?? null } : {}),
     metadata: {
       ...(request.auditLog?.metadata ?? {}),
       ...(input.metadata ?? {})
@@ -184,14 +184,14 @@ export function noteRequestAuditPermission(request: Request, permission: Permiss
   }
 }
 
-export async function getAuditLogs(limit = 500, input?: { tenantId?: string | null }): Promise<AuditLogEntry[]> {
+export async function getAuditLogs(limit = 500, input?: { workspaceId?: string | null }): Promise<AuditLogEntry[]> {
   const rows = await rootPrisma.auditLog.findMany({
-    where: input?.tenantId === undefined
+    where: input?.workspaceId === undefined
       ? undefined
-      : { tenantId: input.tenantId },
+      : { workspaceId: input.workspaceId },
     select: {
       id: true,
-      tenantId: true,
+      workspaceId: true,
       actorType: true,
       actorUserId: true,
       actorServiceAccountId: true,
@@ -222,17 +222,17 @@ export async function getAuditLogs(limit = 500, input?: { tenantId?: string | nu
   return rows.map(mapAuditLogRow)
 }
 
-export async function clearAuditLogs(input?: { tenantId?: string | null }): Promise<void> {
+export async function clearAuditLogs(input?: { workspaceId?: string | null }): Promise<void> {
   await rootPrisma.auditLog.deleteMany({
-    where: input?.tenantId === undefined
+    where: input?.workspaceId === undefined
       ? undefined
-      : { tenantId: input.tenantId }
+      : { workspaceId: input.workspaceId }
   })
 }
 
 /**
  * Deletes audit-log rows older than `AUDIT_LOG_RETENTION_DAYS`. Platform-wide
- * (all tenants) scheduled maintenance, so it uses rootPrisma; the `createdAt`
+ * (all workspaces) scheduled maintenance, so it uses rootPrisma; the `createdAt`
  * index keeps the delete cheap. Without this the table grew unbounded.
  */
 export async function pruneAuditLogs(): Promise<{ removed: number }> {
@@ -243,7 +243,7 @@ export async function pruneAuditLogs(): Promise<{ removed: number }> {
 
 export async function getRelatedAuditLogsForPrintJobs(
   jobs: RelatedPrintJobAuditInput[],
-  tenantId: string
+  workspaceId: string
 ): Promise<Map<string, AuditLogEntry[]>> {
   const results = new Map<string, AuditLogEntry[]>()
   for (const job of jobs) results.set(job.id, [])
@@ -255,12 +255,12 @@ export async function getRelatedAuditLogsForPrintJobs(
   )
   const rows = await rootPrisma.auditLog.findMany({
     where: {
-      tenantId,
+      workspaceId,
       createdAt: { gte: new Date(earliestStartedAt.getTime() - JOB_ACTIVITY_START_WINDOW_MS) }
     },
     select: {
       id: true,
-      tenantId: true,
+      workspaceId: true,
       actorType: true,
       actorUserId: true,
       actorServiceAccountId: true,
@@ -336,15 +336,15 @@ function deriveAuditDescriptor(
   if (path === '/api/auth/logout') {
     return { action: 'logout', resource: 'session', summary: 'Signed out of the current session.' }
   }
-  if (path === '/api/auth/switch-tenant') {
-    return { action: 'switch-tenant', resource: 'workspace', summary: 'Switched into a different tenant workspace.' }
+  if (path === '/api/auth/switch-workspace') {
+    return { action: 'switch-workspace', resource: 'workspace', summary: 'Switched into a different workspace.' }
   }
-  if (path === '/api/auth/tenant-context') {
+  if (path === '/api/auth/workspace-context') {
     return { action: 'switch-workspace', resource: 'workspace', summary: 'Changed the active platform workspace context.' }
   }
 
-  if (path.startsWith('/api/tenants')) {
-    return summarizeCrud(method, 'tenant')
+  if (path.startsWith('/api/workspaces')) {
+    return summarizeCrud(method, 'workspace')
   }
   if (path.startsWith('/api/settings')) {
     return summarizeCrud(method, 'settings')
@@ -402,8 +402,8 @@ function normalizeActorType(value: string): AuditActorType {
   return 'anonymous'
 }
 
-function hasAuditTenantOverride(annotation?: RequestAuditLogAnnotation): boolean {
-  return hasOwn(annotation, 'tenantId')
+function hasAuditWorkspaceOverride(annotation?: RequestAuditLogAnnotation): boolean {
+  return hasOwn(annotation, 'workspaceId')
 }
 
 function hasOwn<T extends object>(value: T | null | undefined, key: PropertyKey): boolean {
@@ -425,7 +425,7 @@ function mapAuditLogRow(row: AuditLogRowShape): AuditLogEntry {
     kind: 'audit',
     id: row.id,
     timestamp: row.createdAt.toISOString(),
-    tenantId: row.tenantId,
+    workspaceId: row.workspaceId,
     actorType: normalizeActorType(row.actorType),
     actorUserId: row.actorUserId,
     actorServiceAccountId: row.actorServiceAccountId,
@@ -452,7 +452,7 @@ function formatActorLabel(row: AuditLogRowShape): string | null {
 function deriveAuditLogLevel(row: Pick<AuditLogRowShape, 'action' | 'requestMethod' | 'statusCode'>): LogLevel {
   if (row.statusCode >= 500) return 'error'
   if (row.statusCode >= 400) return 'warn'
-  if (row.action === 'switch-tenant' || row.action === 'switch-workspace') return 'debug'
+  if (row.action === 'switch-workspace' || row.action === 'switch-workspace') return 'debug'
   if (!AUDITED_METHODS.has(row.requestMethod.toUpperCase())) return 'debug'
   return 'info'
 }

@@ -39,7 +39,7 @@ test('add does not open a local MQTT client for bridged printers', () => {
     throw new Error('bridged printers should not connect from the API process')
   })
 
-  printerManager.add(printer, 'tenant-1', 'bridge-1')
+  printerManager.add(printer, 'workspace-1', 'bridge-1')
 
   assert.equal(connect.mock.callCount(), 0)
   assert.equal(printerManager.getPrinter(printer.id)?.id, printer.id)
@@ -233,7 +233,7 @@ test('ingestBridgeReport reuses the API parser pipeline for bridged status', () 
 })
 
 test('ingestBridgeReport retires a stale LAN connection warning once telemetry resumes', () => {
-  printerManager.add(printer, 'tenant-1', 'bridge-1')
+  printerManager.add(printer, 'workspace-1', 'bridge-1')
 
   // The periodic LAN probe flags a (false) rejection — e.g. a busy printer that
   // refused the probe's extra MQTT connection.
@@ -257,7 +257,7 @@ test('ingestBridgeReport retires a stale LAN connection warning once telemetry r
 })
 
 test('ingestBridgeReport ignores a report from a bridge that does not own the printer', () => {
-  printerManager.add(printer, 'tenant-1', 'bridge-1')
+  printerManager.add(printer, 'workspace-1', 'bridge-1')
 
   const statusEvents: string[] = []
   const onStatus = (status: { printerId: string }) => {
@@ -266,7 +266,7 @@ test('ingestBridgeReport ignores a report from a bridge that does not own the pr
   printerEvents.on('status', onStatus)
 
   try {
-    // A different bridge (e.g. another tenant's) reports for this printer id.
+    // A different bridge (e.g. another workspace's) reports for this printer id.
     printerManager.ingestBridgeReport(
       printer.id,
       { print: { gcode_state: 'RUNNING', subtask_name: 'Spoofed', mc_percent: 73 } },
@@ -281,7 +281,7 @@ test('ingestBridgeReport ignores a report from a bridge that does not own the pr
 })
 
 test('ingestBridgeReport emits job.started when a printer first reports pre-print activity', () => {
-  printerManager.add(printer, 'tenant-1', 'bridge-1')
+  printerManager.add(printer, 'workspace-1', 'bridge-1')
 
   const startedEvents: Array<{ printer: { id: string }; jobName: string }> = []
   const onStarted = (event: { printer: { id: string }; jobName: string }) => {
@@ -324,10 +324,10 @@ test('update resets bridge command sequencing when a printer moves to a differen
     return true
   }) as typeof bridgeSessionManager.sendCommand
 
-  printerManager.add(printer, 'tenant-1', 'bridge-1')
+  printerManager.add(printer, 'workspace-1', 'bridge-1')
   assert.equal(printerManager.publishCommand(printer.id, { print: { command: 'pause' } }), true)
 
-  printerManager.update({ ...printer, bridgeId: 'bridge-2' }, 'tenant-1', 'bridge-2')
+  printerManager.update({ ...printer, bridgeId: 'bridge-2' }, 'workspace-1', 'bridge-2')
   assert.equal(printerManager.publishCommand(printer.id, { print: { command: 'resume' } }), true)
 
   assert.deepEqual(sent, [
@@ -343,7 +343,7 @@ test('update resets bridge command sequencing when a printer moves to a differen
 })
 
 test('ingestBridgeReport suppresses status emits when the report carries no new information', () => {
-  printerManager.add(printer, 'tenant-1', 'bridge-1')
+  printerManager.add(printer, 'workspace-1', 'bridge-1')
 
   const statusEvents: Array<{ id: string }> = []
   const onStatus = (status: { printerId: string }) => {

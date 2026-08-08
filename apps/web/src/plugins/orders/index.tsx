@@ -16,6 +16,7 @@ export const ordersPlugin: WebPlugin = {
     {
       path: '/orders/*',
       navLabel: 'Orders',
+      navDescription: 'Production runs, the prints each one needs, and what is confirmed.',
       element: OrdersView
     }
   ]

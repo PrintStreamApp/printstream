@@ -583,7 +583,7 @@ function PrinterCardComponent({
   const footerPluginSlots = useMemo(
     () => webPluginRegistry
       .slots('printer.card.actions')
-      .filter((slot) => slot.runtimeSurfaces.includes('tenant'))
+      .filter((slot) => slot.runtimeSurfaces.includes('workspace'))
       .filter((slot) => isPluginActiveByName(slot.pluginName, apiPluginsByName, pluginStateQuery.data?.plugins != null)),
     [apiPluginsByName, pluginStateQuery.data?.plugins]
   )

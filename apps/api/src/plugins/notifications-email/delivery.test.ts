@@ -9,12 +9,12 @@ afterEach(() => {
   emailTransportRegistry.clear()
 })
 
-function tenantStore(subscribers: string[]): PluginSettingStore {
+function workspaceStore(subscribers: string[]): PluginSettingStore {
   const store: PluginSettingStore = {
     async get(key) { return key === 'subscribers' ? JSON.stringify(subscribers) : null },
     async set() {},
     async delete() {},
-    forTenant: () => store
+    forWorkspace: () => store
   }
   return store
 }
@@ -28,13 +28,13 @@ function buildContext(input: {
     async get() { return null },
     async set() {},
     async delete() {},
-    forTenant: () => tenantStore(input.subscribers)
+    forWorkspace: () => workspaceStore(input.subscribers)
   }
   return {
     settings,
     logger: { info() {}, warn() {}, error() {} },
     prisma: {
-      authTenantMembership: {
+      authWorkspaceMembership: {
         async findMany() {
           return input.members.map((member) => ({ user: { email: member.email } }))
         }
@@ -52,7 +52,7 @@ function buildContext(input: {
 
 function message(overrides: Partial<NotificationMessage> = {}): NotificationMessage {
   return {
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     title: 'Print finished',
     body: 'Benchy finished on Printer A',
     url: '/printers/p1',
@@ -99,11 +99,11 @@ test('no-op when there are no subscribers', async () => {
   assert.equal(sink.length, 0)
 })
 
-test('skips events without a tenant', async () => {
+test('skips events without a workspace', async () => {
   const sink: EmailInput[] = []
   captureTransport(sink)
   const handler = createEmailNotificationHandler(buildContext({ subscribers: ['u1'], members: [{ email: 'a@example.com' }] }))
-  await handler(message({ tenantId: undefined }))
+  await handler(message({ workspaceId: undefined }))
   assert.equal(sink.length, 0)
 })
 
@@ -119,8 +119,8 @@ test('user-targeted messages mail the target users directly, ignoring the digest
     ]
   }))
 
-  // Tenantless personal event (e.g. a reply to the user's suggestion).
-  await handler(message({ tenantId: undefined, targetUserIds: ['u7'] }))
+  // Workspaceless personal event (e.g. a reply to the user's suggestion).
+  await handler(message({ workspaceId: undefined, targetUserIds: ['u7'] }))
 
   assert.deepEqual(sink.map((m) => m.to), ['target@example.com'])
 })
@@ -135,7 +135,7 @@ test('messages flagged emailHandledExternally are not delivered by the email cha
   }))
 
   await handler(message({ emailHandledExternally: true }))
-  await handler(message({ tenantId: undefined, targetUserIds: ['u7'], emailHandledExternally: true }))
+  await handler(message({ workspaceId: undefined, targetUserIds: ['u7'], emailHandledExternally: true }))
 
   assert.equal(sink.length, 0)
 })

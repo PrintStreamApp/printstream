@@ -762,6 +762,15 @@ export const sceneEditSchema = z.object({
    * on Save like any other edit. No-op for an object whose mesh is already clean.
    */
   repairedObjectIds: z.array(z.number().int()).max(200).optional(),
+  /**
+   * Apply the shared settings repairs (`repairs/`: flush matrix, variant index, filament ids,
+   * inherits_group, object-level extruders) while baking, as the LAST project_settings /
+   * model_settings step so authoring always wins first. The staged, undoable twin of the API's
+   * repair route for hosts with no stored file behind the project (the public editor) — the user
+   * pressed Repair in the editor, the pin rides the edit, and nothing is written until they save.
+   * Every repair is inspect-gated and idempotent, so a healthy document is untouched.
+   */
+  repairSettings: z.boolean().optional(),
   /** Optional per-object-part filament overrides (material reassignment) for in-project objects. */
   partFilaments: z.array(sceneEditPartFilamentSchema).optional(),
   /** Optional per-part process overrides (process settings on individual parts of an object). */
@@ -836,6 +845,18 @@ export const sceneEditSchema = z.object({
    * source project's filaments are kept as-is.
    */
   filaments: z.array(sceneEditFilamentSchema).optional(),
+  /**
+   * Archive entries for project-embedded filament presets the user removed
+   * (`Metadata/filament_settings_N.config`).
+   *
+   * BambuStudio re-embeds every sidecar it finds on every save, so one it fabricated once — because
+   * a slot named a preset it could not bind — reappears in the user's filament dropdown forever, on
+   * every machine that opens the file. Dropping the entry is the only way out, and it is an
+   * EXPLICIT user action: an embedded preset can be the only surviving record of settings someone
+   * tuned, so an unreferenced one is still not ours to delete unasked. See
+   * `three-mf/embedded-presets.ts`.
+   */
+  removedEmbeddedPresets: z.array(z.string()).optional(),
   /**
    * Optional client-rendered plate previews (edited layout) to embed as each plate's
    * thumbnail in the sliced output, since the slicer CLI can't regenerate them here.
@@ -1205,6 +1226,42 @@ export const slicingJobResponseSchema = z.object({
 })
 export type SlicingJobResponse = z.infer<typeof slicingJobResponseSchema>
 
+/**
+ * In-flight work on one engine. Absent means nothing is happening.
+ *
+ * A FAILED state is reported rather than cleared, because reverting a failed
+ * install to plain "not installed" reads as the click having done nothing —
+ * which is how someone retries into the same error without ever seeing it.
+ */
+export const slicerEngineInstallStatusSchema = z.object({
+  state: z.enum(['installing', 'failed']),
+  /** 0-1 while downloading; absent for phases with no measurable total. */
+  fraction: z.number().min(0).max(1).optional(),
+  label: z.string(),
+  error: z.string().optional()
+})
+export type SlicerEngineInstallStatus = z.infer<typeof slicerEngineInstallStatusSchema>
+
+/**
+ * Which engines a workspace shows its users.
+ *
+ * `visibleIds: null` means all of them — a workspace that has never chosen must
+ * not be pinned to whatever the engine set happened to be when it was created.
+ * `available` is what the deployment actually has installed, so the surface can
+ * offer the full set rather than only what is already chosen.
+ */
+export const slicerEngineVisibilitySchema = z.object({
+  available: z.array(z.object({ id: z.string(), label: z.string() })),
+  visibleIds: z.array(z.string()).nullable()
+})
+export type SlicerEngineVisibility = z.infer<typeof slicerEngineVisibilitySchema>
+
+/** An empty list CLEARS the choice, restoring "show everything". */
+export const slicerEngineVisibilityUpdateSchema = z.object({
+  visibleIds: z.array(z.string().trim().min(1)).max(50)
+})
+export type SlicerEngineVisibilityUpdate = z.infer<typeof slicerEngineVisibilityUpdateSchema>
+
 export const slicingCapabilitiesSchema = z.object({
   configured: z.boolean(),
   healthy: z.boolean(),
@@ -1213,14 +1270,57 @@ export const slicingCapabilitiesSchema = z.object({
   targets: z.array(slicingTargetDescriptorSchema),
   maxConcurrentJobs: z.number().int().positive(),
   maxQueuedJobs: z.number().int().nonnegative(),
-  targetModes: z.array(slicingTargetModeSchema)
+  targetModes: z.array(slicingTargetModeSchema),
+  /**
+   * An engine being fetched right now, or null.
+   *
+   * On CAPABILITIES rather than only the engines route, which needs
+   * `settings.manage` and does not exist on the hosted plan. The person who
+   * needs this is whoever opened a slice dialog on a container that is still
+   * downloading its first engine — an ordinary user, who can read this and
+   * nothing else.
+   */
+  engineInstall: slicerEngineInstallStatusSchema.nullable().default(null)
 })
 export type SlicingCapabilities = z.infer<typeof slicingCapabilitiesSchema>
+
+
+export const slicerEngineSchema = z.object({
+  id: z.string().trim().min(1),
+  label: z.string(),
+  version: z.string(),
+  slicerName: z.string(),
+  /** Installable, but never chosen as the default. */
+  prerelease: z.boolean(),
+  /** True only when EVERY configured slicer instance has it. */
+  installed: z.boolean(),
+  downloadBytes: z.number().int().nonnegative(),
+  installBytes: z.number().int().nonnegative(),
+  status: slicerEngineInstallStatusSchema.nullable().default(null)
+})
+export type SlicerEngine = z.infer<typeof slicerEngineSchema>
+
+/**
+ * The engine manager's view of a deployment.
+ *
+ * `available: false` means the question could not be answered — no slicer
+ * configured, or an instance did not respond. Distinct from an empty list,
+ * because telling an operator nothing is installed when a sidecar is merely
+ * restarting invites reinstalling gigabytes that are already there.
+ */
+export const slicerEngineListResponseSchema = z.object({
+  available: z.boolean(),
+  defaultTargetId: z.string().trim().min(1).nullable().default(null),
+  engines: z.array(slicerEngineSchema).default([]),
+  /** False where no engine can run on the slicer's platform (Linux on ARM). */
+  platformSupported: z.boolean().default(false)
+})
+export type SlicerEngineListResponse = z.infer<typeof slicerEngineListResponseSchema>
 
 /**
  * Wire contract for a single resolved profile file sent to the standalone
  * slicer with a slice request. The API produces these (resolved against the
- * tenant's profiles) and the slicer materialises them as CLI `--load-*` args.
+ * workspace's profiles) and the slicer materialises them as CLI `--load-*` args.
  */
 export const slicingPresetFileSchema = z.object({
   id: z.string().trim().min(1),

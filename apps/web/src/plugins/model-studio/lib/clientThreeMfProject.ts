@@ -73,7 +73,8 @@ function createProject(file: { name: string; size: number }, archive: ThreeMfArc
     // match it so both surfaces take the identical code path through the parser.
     entries.modelSettingsXml ? parseModelSettingsPlates(entries.modelSettingsXml, entries.projectSettingsJson) : [],
     entries.thumbnailPlateFiles,
-    entries.customGcodeXml
+    entries.customGcodeXml,
+    entries.modelSettingsXml
   )
 
   // Scenes are re-requested on every plate switch and re-parsing the root model XML is the

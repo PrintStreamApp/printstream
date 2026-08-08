@@ -2,7 +2,7 @@
  * Password sign-in route for the `auth-password` provider.
  *
  * Verifies an email/password pair, mints a browser session, and resolves the
- * post-sign-in tenant. Failures are deliberately indistinguishable (one generic
+ * post-sign-in workspace. Failures are deliberately indistinguishable (one generic
  * 401 for unknown email, missing credential, and wrong password) and a dummy
  * verify runs on the no-credential path so response timing does not leak whether
  * an account exists.
@@ -17,7 +17,7 @@ import { readAuthSessionMaxAgeSeconds } from '../../lib/auth-policy.js'
 import { readScopedAuthProviderEnabled, writeScopedAuthProviderSetupComplete } from '../../lib/auth-provider-state.js'
 import { badRequest, unauthorized } from '../../lib/http-error.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
-import { clearTenantContextCookie, setTenantContextCookie } from '../../lib/tenant-context.js'
+import { clearWorkspaceContextCookie, setWorkspaceContextCookie } from '../../lib/workspace-context.js'
 import { hashPassword, needsRehash, verifyPassword } from './password-hash.js'
 
 const SIGN_IN_FAILED_MESSAGE = 'Email or password is incorrect.'
@@ -44,7 +44,7 @@ export function registerAuthPasswordSignInRoutes(context: ApiPluginContext): voi
       resource: 'session',
       summary: 'Attempted to sign in with a password.',
       metadata: {
-        tenantId: parsed.data.tenantId ?? null
+        workspaceId: parsed.data.workspaceId ?? null
       }
     })
 
@@ -64,17 +64,17 @@ export function registerAuthPasswordSignInRoutes(context: ApiPluginContext): voi
             passwordHash: true
           }
         },
-        tenantMemberships: {
-          where: parsed.data.tenantId
+        workspaceMemberships: {
+          where: parsed.data.workspaceId
             ? {
-                tenantId: parsed.data.tenantId,
+                workspaceId: parsed.data.workspaceId,
                 loginDisabled: false
               }
             : {
                 loginDisabled: false
               },
           select: {
-            tenantId: true
+            workspaceId: true
           }
         }
       }
@@ -83,7 +83,7 @@ export function registerAuthPasswordSignInRoutes(context: ApiPluginContext): voi
     const credentialHash = user?.passwordCredential?.passwordHash ?? null
     // Always run a verify (real or dummy) before branching, to flatten timing.
     const passwordValid = await verifyPassword(credentialHash ?? (await getDummyHash()), parsed.data.password)
-    const eligible = !!user && (user.isPlatformUser || user.tenantMemberships.length > 0)
+    const eligible = !!user && (user.isPlatformUser || user.workspaceMemberships.length > 0)
 
     if (!user || !credentialHash || !eligible || !passwordValid) {
       throw unauthorized(SIGN_IN_FAILED_MESSAGE)
@@ -111,11 +111,11 @@ export function registerAuthPasswordSignInRoutes(context: ApiPluginContext): voi
       maxAgeSeconds: await readAuthSessionMaxAgeSeconds(context.prisma)
     })
     setAuthSessionCookie(response, session.secret, session.expiresAt)
-    const nextTenantId = resolvePostSignInTenantId(user, parsed.data.tenantId)
-    if (nextTenantId) {
-      setTenantContextCookie(response, nextTenantId)
+    const nextWorkspaceId = resolvePostSignInWorkspaceId(user, parsed.data.workspaceId)
+    if (nextWorkspaceId) {
+      setWorkspaceContextCookie(response, nextWorkspaceId)
     } else {
-      clearTenantContextCookie(response)
+      clearWorkspaceContextCookie(response)
     }
 
     response.json(passwordSignInResponseSchema.parse({
@@ -129,19 +129,19 @@ export function registerAuthPasswordSignInRoutes(context: ApiPluginContext): voi
   })
 }
 
-export function resolvePostSignInTenantId(
+export function resolvePostSignInWorkspaceId(
   user: {
     isPlatformUser: boolean
-    tenantMemberships: Array<{ tenantId: string }>
+    workspaceMemberships: Array<{ workspaceId: string }>
   },
-  requestedTenantId?: string
+  requestedWorkspaceId?: string
 ): string | null {
-  if (requestedTenantId && user.tenantMemberships.some((membership) => membership.tenantId === requestedTenantId)) {
-    return requestedTenantId
+  if (requestedWorkspaceId && user.workspaceMemberships.some((membership) => membership.workspaceId === requestedWorkspaceId)) {
+    return requestedWorkspaceId
   }
 
-  if (!user.isPlatformUser && user.tenantMemberships.length === 1) {
-    return user.tenantMemberships[0]?.tenantId ?? null
+  if (!user.isPlatformUser && user.workspaceMemberships.length === 1) {
+    return user.workspaceMemberships[0]?.workspaceId ?? null
   }
 
   return null

@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { FILAMENT_OPTIONS_WITH_VARIANT, PRINT_OPTIONS_WITH_VARIANT } from './variant-options.js'
-import { FILAMENT_PRESET_OPTIONS } from './generated/filament-preset-options.generated.js'
+import { FILAMENT_PRESET_OPTIONS, PRINTER_PRESET_OPTIONS, PRINT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
 
 /** Walk up from this file to the workspace root (the directory holding `packages/`). */
 function findWorkspaceRoot(): string | null {
@@ -68,6 +68,49 @@ test('the vendored variant-option sets still match BambuStudio', { skip: vendore
     assert.deepEqual(missing, [], `${name}: keys BambuStudio has that our mirror is missing`)
     assert.deepEqual(extra, [], `${name}: keys in our mirror that BambuStudio does not have`)
   }
+})
+
+/** The identifiers in a brace-delimited C++ list, with commented-out entries excluded. */
+function extractCppList(source: string, declaration: string): Set<string> {
+  const start = source.indexOf(declaration)
+  assert.notEqual(start, -1, `${declaration} not found — the vendored source changed shape`)
+  const open = source.indexOf('{', start)
+  const end = source.indexOf('};', open)
+  const body = source.slice(open + 1, end).replace(/\/\*[\s\S]*?\*\//g, '')
+  return new Set([...body.matchAll(/"([A-Za-z_0-9]+)"/g)].map((m) => m[1]!))
+}
+
+/** Metadata BambuStudio keeps in the same vectors; the generated lists are settings only. */
+const NON_SETTING = ['inherits', 'compatible_printers', 'compatible_printers_condition', 'compatible_prints', 'compatible_prints_condition']
+
+/**
+ * `Preset::printer_options()` is a CONCATENATION of three vectors, and the third — the extruder
+ * options — is where `nozzle_diameter`, `extruder_offset` and `extruder_colour` live. This test
+ * exists mostly to pin that: mirroring only the literal `s_Preset_printer_options` yields a list
+ * missing the single most load-bearing machine key, and the retarget filters its copy by this list,
+ * so the omission would silently stop writing the target machine's nozzle diameter.
+ */
+test('the vendored printer and process option lists still match BambuStudio', { skip: vendored ? false : 'tmp/bambustudio-src not vendored' }, () => {
+  const preset = readFileSync(join(root!, 'tmp/bambustudio-src/src/libslic3r/Preset.cpp'), 'utf8')
+  const printConfig = readFileSync(join(root!, 'tmp/bambustudio-src/src/libslic3r/PrintConfig.cpp'), 'utf8')
+
+  const printer = new Set([
+    ...extractCppList(preset, 's_Preset_printer_options'),
+    ...extractCppList(preset, 's_Preset_machine_limits_options'),
+    ...extractCppList(printConfig, 'm_extruder_option_keys =')
+  ])
+  for (const key of NON_SETTING) printer.delete(key)
+  assert.deepEqual([...printer].filter((key) => !PRINTER_PRESET_OPTIONS.has(key)), [], 'printer options BambuStudio carries that our list is missing')
+  assert.deepEqual([...PRINTER_PRESET_OPTIONS].filter((key) => !printer.has(key)), [], 'printer options in our list that BambuStudio does not carry')
+  // The concatenation, named. If these ever come from one vector the test above passes vacuously.
+  for (const key of ['nozzle_diameter', 'extruder_offset', 'extruder_colour']) {
+    assert.ok(PRINTER_PRESET_OPTIONS.has(key), `${key} comes from the extruder vector and must survive the merge`)
+  }
+
+  const print = extractCppList(preset, 's_Preset_print_options')
+  for (const key of NON_SETTING) print.delete(key)
+  assert.deepEqual([...print].filter((key) => !PRINT_PRESET_OPTIONS.has(key)), [], 'process options BambuStudio carries that our list is missing')
+  assert.deepEqual([...PRINT_PRESET_OPTIONS].filter((key) => !print.has(key)), [], 'process options in our list that BambuStudio does not carry')
 })
 
 /**

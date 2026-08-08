@@ -14,19 +14,19 @@ import {
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { notFound } from '../lib/http-error.js'
 import { printDispatcher } from '../lib/print-dispatcher.js'
-import { requireRequestTenantId, requireRouteParam } from '../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam } from '../lib/request-helpers.js'
 import { broadcastPrintDispatchChanged } from '../lib/ws-resource-events.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 
 export const printDispatchRouter = Router()
 
 printDispatchRouter.get('/', requireRequestPermission(JOBS_VIEW_PERMISSION), (request, response) => {
-  response.json({ jobs: printDispatcher.list(requireRequestTenantId(request)) })
+  response.json({ jobs: printDispatcher.list(requireRequestWorkspaceId(request)) })
 })
 
 printDispatchRouter.post('/:id/cancel', requireRequestPermission(PRINTS_DISPATCH_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
-  const job = await printDispatcher.cancel(tenantId, requireRouteParam(request.params.id, 'Dispatch job'))
+  const workspaceId = requireRequestWorkspaceId(request)
+  const job = await printDispatcher.cancel(workspaceId, requireRouteParam(request.params.id, 'Dispatch job'))
   if (!job) throw notFound('Dispatch job not found')
   annotateRequestAuditLog(request, {
     action: 'cancel-dispatch',
@@ -40,13 +40,13 @@ printDispatchRouter.post('/:id/cancel', requireRequestPermission(PRINTS_DISPATCH
       fileName: job.fileName
     }
   })
-  broadcastPrintDispatchChanged(tenantId)
+  broadcastPrintDispatchChanged(workspaceId)
   response.json({ job })
 })
 
 printDispatchRouter.post('/:id/retry', requireRequestPermission(PRINTS_DISPATCH_PERMISSION), (request, response) => {
-  const tenantId = requireRequestTenantId(request)
-  const job = printDispatcher.retry(tenantId, requireRouteParam(request.params.id, 'Dispatch job'))
+  const workspaceId = requireRequestWorkspaceId(request)
+  const job = printDispatcher.retry(workspaceId, requireRouteParam(request.params.id, 'Dispatch job'))
   if (!job) throw notFound('Dispatch job not found')
   annotateRequestAuditLog(request, {
     action: 'retry-dispatch',
@@ -60,6 +60,6 @@ printDispatchRouter.post('/:id/retry', requireRequestPermission(PRINTS_DISPATCH_
       fileName: job.fileName
     }
   })
-  broadcastPrintDispatchChanged(tenantId)
+  broadcastPrintDispatchChanged(workspaceId)
   response.json({ job })
 })

@@ -18,17 +18,17 @@ afterEach(() => {
   wsBroadcaster.broadcast = originalWsBroadcast
 })
 
-test('audit middleware records successful mutating requests with actor and tenant context', async () => {
+test('audit middleware records successful mutating requests with actor and workspace context', async () => {
   let capturedData: Record<string, unknown> | null = null
   let resolveLogged: (() => void) | null = null
   const logged = new Promise<void>((resolve) => {
     resolveLogged = resolve
   })
-  const logBroadcastTenantIds: Array<string | null> = []
+  const logBroadcastWorkspaceIds: Array<string | null> = []
 
-  wsBroadcaster.broadcast = ((event, tenantId) => {
+  wsBroadcaster.broadcast = ((event, workspaceId) => {
     if (event.type === 'resource.changed' && event.resource === 'logs') {
-      logBroadcastTenantIds.push(tenantId)
+      logBroadcastWorkspaceIds.push(workspaceId)
     }
   }) as typeof wsBroadcaster.broadcast
 
@@ -44,26 +44,26 @@ test('audit middleware records successful mutating requests with actor and tenan
     permissions: [],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/tenants`, { method: 'POST' })
+    const response = await fetch(`${baseUrl}/api/workspaces`, { method: 'POST' })
     assert.equal(response.status, 201)
   }, {
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
   })
 
   await logged
 
-  assert.deepEqual(logBroadcastTenantIds, ['tenant-1'])
+  assert.deepEqual(logBroadcastWorkspaceIds, ['workspace-1'])
   assert.deepEqual(capturedData, {
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     actorType: 'user',
     actorUserId: 'user-1',
     actorServiceAccountId: null,
     actorLabel: 'user:user-1',
     requestMethod: 'POST',
-    requestPath: '/api/tenants',
+    requestPath: '/api/workspaces',
     action: 'create',
-    resource: 'tenant',
-    summary: 'Created or submitted tenant.',
+    resource: 'workspace',
+    summary: 'Created or submitted workspace.',
     statusCode: 201,
     ipAddress: '127.0.0.1',
     metadataJson: null
@@ -75,7 +75,7 @@ test('getAuditLogs exposes stable actor ids alongside the display label', async 
 
   rootPrisma.auditLog.findMany = (async () => ([{
     id: 'audit-lookup-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     actorType: 'user',
     actorUserId: 'user-1',
     actorServiceAccountId: null,
@@ -110,7 +110,7 @@ test('getAuditLogs marks annotated GETs as debug activity', async () => {
 
   rootPrisma.auditLog.findMany = (async () => ([{
     id: 'audit-lookup-2',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     actorType: 'user',
     actorUserId: 'user-1',
     actorServiceAccountId: null,
@@ -147,7 +147,7 @@ test('audit middleware ignores read-only requests', async () => {
     permissions: [],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/tenants`)
+    const response = await fetch(`${baseUrl}/api/workspaces`)
     assert.equal(response.status, 200)
   })
 
@@ -180,7 +180,7 @@ test('audit middleware records annotated read-only requests', async () => {
   await logged
 
   assert.deepEqual(capturedData, {
-    tenantId: null,
+    workspaceId: null,
     actorType: 'user',
     actorUserId: 'user-1',
     actorServiceAccountId: null,
@@ -218,30 +218,30 @@ test('audit middleware can force workspace changes into platform-scoped logs', a
     permissions: [],
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/api/auth/tenant-context`, { method: 'POST' })
+    const response = await fetch(`${baseUrl}/api/auth/workspace-context`, { method: 'POST' })
     assert.equal(response.status, 204)
   }, {
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
   })
 
   await logged
 
   assert.deepEqual(capturedData, {
-    tenantId: null,
+    workspaceId: null,
     actorType: 'user',
     actorUserId: 'user-1',
     actorServiceAccountId: null,
     actorLabel: 'user:user-1',
     requestMethod: 'POST',
-    requestPath: '/api/auth/tenant-context',
+    requestPath: '/api/auth/workspace-context',
     action: 'switch-workspace',
     resource: 'workspace',
     summary: 'Changed the active workspace context.',
     statusCode: 204,
     ipAddress: '127.0.0.1',
     metadataJson: JSON.stringify({
-      sourceTenantId: 'tenant-1',
-      targetTenantId: 'tenant-2'
+      sourceWorkspaceId: 'workspace-1',
+      targetWorkspaceId: 'workspace-2'
     })
   })
 })
@@ -292,17 +292,17 @@ async function withAuditApp(
   auth: RequestAuthContext,
   run: (baseUrl: string) => Promise<void>,
   input: {
-    tenant?: { id: string; slug: string; name: string } | null
+    workspace?: { id: string; slug: string; name: string } | null
   } = {}
 ): Promise<void> {
   const app = express()
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = input.tenant ?? null
+    request.workspace = input.workspace ?? null
     next()
   })
   app.use(installAuditLogCapture())
-  app.get('/api/tenants', (_request, response) => {
+  app.get('/api/workspaces', (_request, response) => {
     response.status(200).json({ ok: true })
   })
   app.get('/api/library/file-1/download', (request, response) => {
@@ -321,20 +321,20 @@ async function withAuditApp(
     noteRequestAuditPermission(request, 'settings.manage')
     response.status(200).json({ ok: true })
   })
-  app.post('/api/auth/tenant-context', (request, response) => {
+  app.post('/api/auth/workspace-context', (request, response) => {
     annotateRequestAuditLog(request, {
       action: 'switch-workspace',
       resource: 'workspace',
-      tenantId: null,
+      workspaceId: null,
       summary: 'Changed the active workspace context.',
       metadata: {
-        sourceTenantId: request.tenant?.id ?? null,
-        targetTenantId: 'tenant-2'
+        sourceWorkspaceId: request.workspace?.id ?? null,
+        targetWorkspaceId: 'workspace-2'
       }
     })
     response.status(204).end()
   })
-  app.post('/api/tenants', (_request, response) => {
+  app.post('/api/workspaces', (_request, response) => {
     response.status(201).json({ ok: true })
   })
   app.post('/api/plugins/notifications-browser/dismissals', (request, response) => {

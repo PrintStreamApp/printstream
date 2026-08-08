@@ -34,6 +34,7 @@ $exePath = '${psQuote(input.exePath)}'
 $statusFile = '${psQuote(input.statusFile)}'
 $logsDir = '${psQuote(input.logsDir)}'
 $script:connectUrl = ''
+$script:workspaceUrl = ''
 $script:connectCode = ''
 $script:appUrl = ''
 
@@ -69,6 +70,11 @@ $codeItem.Visible = $false
 $connectItem = $menu.Items.Add('Open connect page')
 $connectItem.Visible = $false
 $connectItem.add_Click({ if ($script:connectUrl) { Start-Process $script:connectUrl } })
+# The paired counterpart of "Open connect page": once there is a workspace, the
+# thing an operator wants from the tray is that workspace, not a pairing code.
+$workspaceItem = $menu.Items.Add('Open workspace')
+$workspaceItem.Visible = $false
+$workspaceItem.add_Click({ if ($script:workspaceUrl) { Start-Process $script:workspaceUrl } })
 $copyCodeItem = $menu.Items.Add('Copy connect code')
 $copyCodeItem.Visible = $false
 $copyCodeItem.add_Click({ if ($script:connectCode) { Set-Clipboard -Value $script:connectCode } })
@@ -167,6 +173,8 @@ $timer.add_Tick({
     $connectItem.Visible = $false
     $copyCodeItem.Visible = $false
   }
+  $script:workspaceUrl = [string]$s.workspaceUrl
+  $workspaceItem.Visible = [bool]$s.workspaceUrl
   $text = $appName + ' - ' + $s.lifecycle
   $notify.Text = $text.Substring(0, [Math]::Min(63, $text.Length))
 })

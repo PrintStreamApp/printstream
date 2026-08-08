@@ -74,9 +74,14 @@ export async function readBridgeLibraryThreeMfIndex(filePath: string): Promise<B
   }
 
   let modelSettingsPlates: ModelSettingsPlateMetadata[] = []
+  // Raw document kept beside the parsed plates: the repair inspection reads object-level
+  // extruder bindings, which the plate metadata does not carry.
+  let modelSettingsXml: string | null = null
   try {
-    modelSettingsPlates = parseModelSettingsPlates((await readEntry(filePath, 'Metadata/model_settings.config')).toString('utf8'), projectSettingsJson)
+    modelSettingsXml = (await readEntry(filePath, 'Metadata/model_settings.config')).toString('utf8')
+    modelSettingsPlates = parseModelSettingsPlates(modelSettingsXml, projectSettingsJson)
   } catch {
+    modelSettingsXml = null
     modelSettingsPlates = []
   }
 
@@ -88,7 +93,7 @@ export async function readBridgeLibraryThreeMfIndex(filePath: string): Promise<B
   } catch {
     customGcodeXml = null
   }
-  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles, customGcodeXml)
+  const index = buildThreeMfIndex(xml, projectSettingsJson, modelSettingsPlates, thumbnailPlateFiles, customGcodeXml, modelSettingsXml)
   cache.set(filePath, { mtimeMs: info.mtimeMs, size: info.size, parserVersion: THREE_MF_PARSER_CACHE_VERSION, index })
   return index
 }

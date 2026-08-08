@@ -5,14 +5,14 @@ import { afterEach, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, LIBRARY_MANAGE_PERMISSION, PRINTERS_CONTROL_PERMISSION, PRINTERS_CONTROL_REFRESH_SCOPE, PRINTERS_VIEW_PERMISSION, TENANTS_MANAGE_PERMISSION, type AuthProviderCapabilities } from '@printstream/shared'
+import { AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION, LIBRARY_MANAGE_PERMISSION, PRINTERS_CONTROL_PERMISSION, PRINTERS_CONTROL_REFRESH_SCOPE, PRINTERS_VIEW_PERMISSION, WORKSPACES_MANAGE_PERMISSION, type AuthProviderCapabilities } from '@printstream/shared'
 import { authProviderRegistry } from './auth-registry.js'
 import { installAuthContext, requestHasPermission } from './auth-context.js'
 import { requireRequestPermission } from './authorization.js'
 import { HttpError } from './http-error.js'
 import { prisma, rootPrisma } from './prisma.js'
 import { PUBLIC_DEMO_GUEST_PERMISSIONS } from './public-demo-policy.js'
-import { getCurrentTenant, installTenantContext } from './tenant-context.js'
+import { getCurrentWorkspace, installWorkspaceContext } from './workspace-context.js'
 import { listAllWorkspaceSupportPermissions } from './support-access.js'
 
 const localAuthCapabilities: AuthProviderCapabilities = {
@@ -30,8 +30,8 @@ const originalServiceAccountFindUnique = prisma.authServiceAccount.findUnique
 const originalServiceAccountUpdateMany = prisma.authServiceAccount.updateMany
 const originalRootServiceAccountFindUnique = rootPrisma.authServiceAccount.findUnique
 const originalRootServiceAccountUpdateMany = rootPrisma.authServiceAccount.updateMany
-const originalTenantFindUnique = prisma.tenant.findUnique
-const originalRootTenantFindMany = rootPrisma.tenant.findMany
+const originalWorkspaceFindFirst = prisma.workspace.findFirst
+const originalRootWorkspaceFindMany = rootPrisma.workspace.findMany
 const originalRootSettingFindMany = rootPrisma.setting.findMany
 const originalRootSettingFindUnique = rootPrisma.setting.findUnique
 const originalSettingFindUnique = prisma.setting.findUnique
@@ -49,8 +49,8 @@ afterEach(() => {
   prisma.authServiceAccount.updateMany = originalServiceAccountUpdateMany
   rootPrisma.authServiceAccount.findUnique = originalRootServiceAccountFindUnique
   rootPrisma.authServiceAccount.updateMany = originalRootServiceAccountUpdateMany
-  prisma.tenant.findUnique = originalTenantFindUnique
-  rootPrisma.tenant.findMany = originalRootTenantFindMany
+  prisma.workspace.findFirst = originalWorkspaceFindFirst
+  rootPrisma.workspace.findMany = originalRootWorkspaceFindMany
   rootPrisma.setting.findMany = originalRootSettingFindMany
   rootPrisma.setting.findUnique = originalRootSettingFindUnique
   prisma.setting.findUnique = originalSettingFindUnique
@@ -61,13 +61,18 @@ afterEach(() => {
   }).authUserGroupMembership.findMany = originalAuthUserGroupMembershipFindMany
 })
 
-function mockTenantLookup(): void {
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string; id?: string } }) => {
+function mockWorkspaceLookup(): void {
+  // findFirst, not findUnique: resolution scopes out soft-deleted workspaces,
+  // which a unique lookup cannot express. The stub asserts the scope is present
+  // rather than merely accepting it — dropping it would let a deleted workspace
+  // be entered, which no test above would otherwise notice.
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string; id?: string; deletedAt?: null } }) => {
+    assert.equal(input.where.deletedAt, null, 'workspace resolution must exclude deleted workspaces')
     const slug = input.where.slug
-    if (slug === 'demo') return { id: 'tenant-demo', slug: 'demo', name: 'Public Demo' }
-    if (slug === 'acme') return { id: 'tenant-acme', slug: 'acme', name: 'Acme Co' }
+    if (slug === 'demo') return { id: 'workspace-demo', slug: 'demo', name: 'Public Demo' }
+    if (slug === 'acme') return { id: 'workspace-acme', slug: 'acme', name: 'Acme Co' }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
 }
 
 test('installAuthContext sets an anonymous auth context with runtime policy flags', async () => {
@@ -166,17 +171,17 @@ test('installAuthContext enables auth once a provider is setup-complete', async 
   }
 })
 
-test('installAuthContext resolves tenant-scoped auth enablement before auth middleware sets request tenant', async () => {
-  prisma.tenant.findUnique = ((async () => ({
-    id: 'tenant-1',
+test('installAuthContext resolves workspace-scoped auth enablement before auth middleware sets request workspace', async () => {
+  prisma.workspace.findFirst = ((async () => ({
+    id: 'workspace-1',
     slug: 'acme',
     name: 'Acme Co'
-  })) as unknown) as typeof prisma.tenant.findUnique
+  })) as unknown) as typeof prisma.workspace.findFirst
 
   authProviderRegistry.register(async () => ({
     id: 'auth-local',
     label: 'Local Auth',
-    enabled: getCurrentTenant()?.slug === 'acme',
+    enabled: getCurrentWorkspace()?.slug === 'acme',
     methods: ['passkey'],
     setupRequired: false,
     capabilities: localAuthCapabilities
@@ -193,7 +198,7 @@ test('installAuthContext resolves tenant-scoped auth enablement before auth midd
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/context`, {
       headers: {
-        'x-printstream-tenant': 'acme'
+        'x-printstream-workspace': 'acme'
       }
     })
 
@@ -211,8 +216,8 @@ test('installAuthContext resolves tenant-scoped auth enablement before auth midd
   }
 })
 
-test('installAuthContext grants explicit guest permissions for the public demo tenant', async () => {
-  mockTenantLookup()
+test('installAuthContext grants explicit guest permissions for the public demo workspace', async () => {
+  mockWorkspaceLookup()
 
   const app = express()
   app.use(installAuthContext({ demoMode: false }))
@@ -224,7 +229,7 @@ test('installAuthContext grants explicit guest permissions for the public demo t
   const address = server.address() as AddressInfo
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/context`, {
-      headers: { 'x-printstream-tenant': 'demo' }
+      headers: { 'x-printstream-workspace': 'demo' }
     })
 
     assert.equal(response.status, 200)
@@ -242,8 +247,8 @@ test('installAuthContext grants explicit guest permissions for the public demo t
   }
 })
 
-test('installAuthContext does not grant demo guest permissions to other anonymous tenants', async () => {
-  mockTenantLookup()
+test('installAuthContext does not grant demo guest permissions to other anonymous workspaces', async () => {
+  mockWorkspaceLookup()
 
   const app = express()
   app.use(installAuthContext({ demoMode: false }))
@@ -255,7 +260,7 @@ test('installAuthContext does not grant demo guest permissions to other anonymou
   const address = server.address() as AddressInfo
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/context`, {
-      headers: { 'x-printstream-tenant': 'acme' }
+      headers: { 'x-printstream-workspace': 'acme' }
     })
 
     assert.equal(response.status, 200)
@@ -272,12 +277,12 @@ test('installAuthContext does not grant demo guest permissions to other anonymou
   }
 })
 
-test('public demo guests use explicit permissions instead of the auth-disabled tenant bypass', async () => {
-  mockTenantLookup()
+test('public demo guests use explicit permissions instead of the auth-disabled workspace bypass', async () => {
+  mockWorkspaceLookup()
 
   const app = express()
   app.use(installAuthContext({ demoMode: false }))
-  app.use(installTenantContext())
+  app.use(installWorkspaceContext())
   app.get('/read', requireRequestPermission(PRINTERS_VIEW_PERMISSION), (_request, response) => {
     response.status(204).end()
   })
@@ -295,7 +300,7 @@ test('public demo guests use explicit permissions instead of the auth-disabled t
   const server = await listen(app)
   const address = server.address() as AddressInfo
   try {
-    const headers = { 'x-printstream-tenant': 'demo' }
+    const headers = { 'x-printstream-workspace': 'demo' }
     const readResponse = await fetch(`http://127.0.0.1:${address.port}/read`, { headers })
     const writeResponse = await fetch(`http://127.0.0.1:${address.port}/write`, { method: 'POST', headers })
 
@@ -338,15 +343,15 @@ test('installAuthContext resolves a signed-in user from the auth session cookie'
     user: {
       id: 'user-1',
       isPlatformUser: false,
-      tenantMemberships: [{
+      workspaceMemberships: [{
         loginDisabled: false,
-        tenant: {
-          id: 'tenant-1',
+        workspace: {
+          id: 'workspace-1',
           slug: 'acme',
           name: 'Acme Co'
         }
       }],
-      memberships: [{ group: { tenantId: 'tenant-1', permissions: [PRINTERS_CONTROL_PERMISSION] } }]
+      memberships: [{ group: { workspaceId: 'workspace-1', permissions: [PRINTERS_CONTROL_PERMISSION] } }]
     },
     serviceAccount: null
   })) as unknown) as typeof prisma.authSession.findUnique
@@ -372,8 +377,8 @@ test('installAuthContext resolves a signed-in user from the auth session cookie'
         type: 'user',
         userId: 'user-1',
         isPlatformUser: false,
-        tenant: {
-          id: 'tenant-1',
+        workspace: {
+          id: 'workspace-1',
           slug: 'acme',
           name: 'Acme Co'
         }
@@ -409,15 +414,15 @@ test('installAuthContext extends user session expiry and cookie on authenticated
     user: {
       id: 'user-1',
       isPlatformUser: false,
-      tenantMemberships: [{
+      workspaceMemberships: [{
         loginDisabled: false,
-        tenant: {
-          id: 'tenant-1',
+        workspace: {
+          id: 'workspace-1',
           slug: 'acme',
           name: 'Acme Co'
         }
       }],
-      memberships: [{ group: { tenantId: 'tenant-1', permissions: [PRINTERS_CONTROL_PERMISSION] } }]
+      memberships: [{ group: { workspaceId: 'workspace-1', permissions: [PRINTERS_CONTROL_PERMISSION] } }]
     },
     serviceAccount: null
   })) as unknown) as typeof prisma.authSession.findUnique
@@ -455,23 +460,23 @@ test('installAuthContext extends user session expiry and cookie on authenticated
   }
 })
 
-test('installAuthContext keeps auth enabled when tenant scope comes from the signed-in user session', async () => {
+test('installAuthContext keeps auth enabled when workspace scope comes from the signed-in user session', async () => {
   authProviderRegistry.register(async () => ({
     id: 'auth-local',
     label: 'Local Auth',
-    enabled: getCurrentTenant()?.slug === 'acme',
+    enabled: getCurrentWorkspace()?.slug === 'acme',
     methods: ['passkey'],
     setupRequired: false,
     capabilities: localAuthCapabilities
   }))
 
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string } }) => {
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string } }) => {
     if (input.where.slug === 'acme') {
-      return { id: 'tenant-1', slug: 'acme', name: 'Acme Co' }
+      return { id: 'workspace-1', slug: 'acme', name: 'Acme Co' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   prisma.authSession.findUnique = ((async () => ({
     id: 'session-1',
     revokedAt: null,
@@ -480,10 +485,10 @@ test('installAuthContext keeps auth enabled when tenant scope comes from the sig
     user: {
       id: 'user-1',
       isPlatformUser: false,
-      tenantMemberships: [{
+      workspaceMemberships: [{
         loginDisabled: false,
-        tenant: {
-          id: 'tenant-1',
+        workspace: {
+          id: 'workspace-1',
           slug: 'acme',
           name: 'Acme Co'
         }
@@ -506,7 +511,7 @@ test('installAuthContext keeps auth enabled when tenant scope comes from the sig
     const response = await fetch(`http://127.0.0.1:${address.port}/context`, {
       headers: {
         Cookie: 'printstream_auth=session-secret',
-        'x-printstream-tenant': 'acme'
+        'x-printstream-workspace': 'acme'
       }
     })
 
@@ -517,8 +522,8 @@ test('installAuthContext keeps auth enabled when tenant scope comes from the sig
         type: 'user',
         userId: 'user-1',
         isPlatformUser: false,
-        tenant: {
-          id: 'tenant-1',
+        workspace: {
+          id: 'workspace-1',
           slug: 'acme',
           name: 'Acme Co'
         }
@@ -533,23 +538,23 @@ test('installAuthContext keeps auth enabled when tenant scope comes from the sig
   }
 })
 
-test('installAuthContext strips platform-only permissions from tenant-scoped user sessions', async () => {
+test('installAuthContext strips platform-only permissions from workspace-scoped user sessions', async () => {
   authProviderRegistry.register(async () => ({
     id: 'auth-local',
     label: 'Local Auth',
-    enabled: getCurrentTenant()?.slug === 'acme',
+    enabled: getCurrentWorkspace()?.slug === 'acme',
     methods: ['passkey'],
     setupRequired: false,
     capabilities: localAuthCapabilities
   }))
 
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string } }) => {
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string } }) => {
     if (input.where.slug === 'acme') {
-      return { id: 'tenant-1', slug: 'acme', name: 'Acme Co' }
+      return { id: 'workspace-1', slug: 'acme', name: 'Acme Co' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   prisma.authSession.findUnique = ((async () => ({
     id: 'session-1',
     revokedAt: null,
@@ -558,15 +563,15 @@ test('installAuthContext strips platform-only permissions from tenant-scoped use
     user: {
       id: 'user-1',
       isPlatformUser: false,
-      tenantMemberships: [{
+      workspaceMemberships: [{
         loginDisabled: false,
-        tenant: {
-          id: 'tenant-1',
+        workspace: {
+          id: 'workspace-1',
           slug: 'acme',
           name: 'Acme Co'
         }
       }],
-      memberships: [{ group: { tenantId: 'tenant-1', permissions: [PRINTERS_CONTROL_PERMISSION, TENANTS_MANAGE_PERMISSION] } }]
+      memberships: [{ group: { workspaceId: 'workspace-1', permissions: [PRINTERS_CONTROL_PERMISSION, WORKSPACES_MANAGE_PERMISSION] } }]
     },
     serviceAccount: null
   })) as unknown) as typeof prisma.authSession.findUnique
@@ -584,7 +589,7 @@ test('installAuthContext strips platform-only permissions from tenant-scoped use
     const response = await fetch(`http://127.0.0.1:${address.port}/context`, {
       headers: {
         Cookie: 'printstream_auth=session-secret',
-        'x-printstream-tenant': 'acme'
+        'x-printstream-workspace': 'acme'
       }
     })
 
@@ -599,24 +604,24 @@ test('installAuthContext applies the workspace support permission allowlist for 
   authProviderRegistry.register(async () => ({
     id: 'auth-local',
     label: 'Local Auth',
-    enabled: getCurrentTenant()?.slug === 'acme',
+    enabled: getCurrentWorkspace()?.slug === 'acme',
     methods: ['passkey'],
     setupRequired: false,
     capabilities: localAuthCapabilities
   }))
 
-  prisma.tenant.findUnique = ((async (input: { where: { id?: string; slug?: string } }) => {
-    if (input.where.id === 'tenant-1' || input.where.slug === 'acme') {
-      return { id: 'tenant-1', slug: 'acme', name: 'Acme Co' }
+  prisma.workspace.findFirst = ((async (input: { where: { id?: string; slug?: string } }) => {
+    if (input.where.id === 'workspace-1' || input.where.slug === 'acme') {
+      return { id: 'workspace-1', slug: 'acme', name: 'Acme Co' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  rootPrisma.tenant.findMany = ((async () => ([{
-    id: 'tenant-1',
+  }) as unknown) as typeof prisma.workspace.findFirst
+  rootPrisma.workspace.findMany = ((async () => ([{
+    id: 'workspace-1',
     slug: 'acme',
     name: 'Acme Co'
-  }])) as unknown) as typeof rootPrisma.tenant.findMany
+  }])) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => []) as unknown) as typeof rootPrisma.setting.findMany
   rootPrisma.setting.findUnique = ((async () => ({
     value: JSON.stringify([PRINTERS_CONTROL_PERMISSION])
@@ -629,11 +634,11 @@ test('installAuthContext applies the workspace support permission allowlist for 
     user: {
       id: 'user-1',
       isPlatformUser: true,
-      tenantMemberships: [],
+      workspaceMemberships: [],
       memberships: [],
       platformMemberships: [{
         group: {
-          permissions: [PRINTERS_CONTROL_PERMISSION, TENANTS_MANAGE_PERMISSION]
+          permissions: [PRINTERS_CONTROL_PERMISSION, WORKSPACES_MANAGE_PERMISSION]
         }
       }]
     },
@@ -645,7 +650,7 @@ test('installAuthContext applies the workspace support permission allowlist for 
     }
   }).authUserGroupMembership.findMany = async () => [{
     group: {
-      permissions: [PRINTERS_CONTROL_PERMISSION, TENANTS_MANAGE_PERMISSION]
+      permissions: [PRINTERS_CONTROL_PERMISSION, WORKSPACES_MANAGE_PERMISSION]
     }
   }]
   prisma.authSession.updateMany = ((async () => ({ count: 1 })) as unknown) as typeof prisma.authSession.updateMany
@@ -661,7 +666,7 @@ test('installAuthContext applies the workspace support permission allowlist for 
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/context`, {
       headers: {
-        Cookie: 'printstream_auth=session-secret; printstream_tenant_context=tenant-1'
+        Cookie: 'printstream_auth=session-secret; printstream_workspace_context=workspace-1'
       }
     })
 
@@ -672,10 +677,10 @@ test('installAuthContext applies the workspace support permission allowlist for 
         type: 'user',
         userId: 'user-1',
         isPlatformUser: true,
-        tenant: null
+        workspace: null
       },
       permissions: [PRINTERS_CONTROL_PERMISSION],
-      platformPermissions: [TENANTS_MANAGE_PERMISSION],
+      platformPermissions: [WORKSPACES_MANAGE_PERMISSION],
       runtimePolicy: {
         demoMode: false
       }
@@ -689,25 +694,25 @@ test('installAuthContext lets platform support bypass ignore disabled workspace 
   authProviderRegistry.register(async () => ({
     id: 'auth-local',
     label: 'Local Auth',
-    enabled: getCurrentTenant()?.slug === 'acme',
+    enabled: getCurrentWorkspace()?.slug === 'acme',
     methods: ['passkey'],
     setupRequired: false,
     capabilities: localAuthCapabilities
   }))
 
-  prisma.tenant.findUnique = ((async (input: { where: { id?: string; slug?: string } }) => {
-    if (input.where.id === 'tenant-1' || input.where.slug === 'acme') {
-      return { id: 'tenant-1', slug: 'acme', name: 'Acme Co' }
+  prisma.workspace.findFirst = ((async (input: { where: { id?: string; slug?: string } }) => {
+    if (input.where.id === 'workspace-1' || input.where.slug === 'acme') {
+      return { id: 'workspace-1', slug: 'acme', name: 'Acme Co' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  rootPrisma.tenant.findMany = ((async () => ([{
-    id: 'tenant-1',
+  }) as unknown) as typeof prisma.workspace.findFirst
+  rootPrisma.workspace.findMany = ((async () => ([{
+    id: 'workspace-1',
     slug: 'acme',
     name: 'Acme Co'
-  }])) as unknown) as typeof rootPrisma.tenant.findMany
-  rootPrisma.setting.findMany = ((async () => [{ key: 'tenant:tenant-1:auth:supportAccessEnabled' }]) as unknown) as typeof rootPrisma.setting.findMany
+  }])) as unknown) as typeof rootPrisma.workspace.findMany
+  rootPrisma.setting.findMany = ((async () => [{ key: 'workspace:workspace-1:auth:supportAccessEnabled' }]) as unknown) as typeof rootPrisma.setting.findMany
   rootPrisma.setting.findUnique = ((async () => ({
     value: JSON.stringify([PRINTERS_CONTROL_PERMISSION])
   })) as unknown) as typeof rootPrisma.setting.findUnique
@@ -719,7 +724,7 @@ test('installAuthContext lets platform support bypass ignore disabled workspace 
     user: {
       id: 'user-1',
       isPlatformUser: true,
-      tenantMemberships: [],
+      workspaceMemberships: [],
       memberships: [],
       platformMemberships: [{
         group: {
@@ -751,7 +756,7 @@ test('installAuthContext lets platform support bypass ignore disabled workspace 
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/context`, {
       headers: {
-        Cookie: 'printstream_auth=session-secret; printstream_tenant_context=tenant-1'
+        Cookie: 'printstream_auth=session-secret; printstream_workspace_context=workspace-1'
       }
     })
 
@@ -768,25 +773,25 @@ test('installAuthContext keeps platform users inside auth-disabled workspaces ev
   authProviderRegistry.register(async () => ({
     id: 'auth-local',
     label: 'Local Auth',
-    enabled: getCurrentTenant() == null,
+    enabled: getCurrentWorkspace() == null,
     methods: ['passkey'],
     setupRequired: false,
     capabilities: localAuthCapabilities
   }))
 
-  prisma.tenant.findUnique = ((async (input: { where: { id?: string; slug?: string } }) => {
-    if (input.where.id === 'tenant-1' || input.where.slug === 'acme') {
-      return { id: 'tenant-1', slug: 'acme', name: 'Acme Co' }
+  prisma.workspace.findFirst = ((async (input: { where: { id?: string; slug?: string } }) => {
+    if (input.where.id === 'workspace-1' || input.where.slug === 'acme') {
+      return { id: 'workspace-1', slug: 'acme', name: 'Acme Co' }
     }
 
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  rootPrisma.tenant.findMany = ((async () => ([{
-    id: 'tenant-1',
+  }) as unknown) as typeof prisma.workspace.findFirst
+  rootPrisma.workspace.findMany = ((async () => ([{
+    id: 'workspace-1',
     slug: 'acme',
     name: 'Acme Co'
-  }])) as unknown) as typeof rootPrisma.tenant.findMany
-  rootPrisma.setting.findMany = ((async () => [{ key: 'tenant:tenant-1:auth:supportAccessEnabled' }]) as unknown) as typeof rootPrisma.setting.findMany
+  }])) as unknown) as typeof rootPrisma.workspace.findMany
+  rootPrisma.setting.findMany = ((async () => [{ key: 'workspace:workspace-1:auth:supportAccessEnabled' }]) as unknown) as typeof rootPrisma.setting.findMany
   prisma.authSession.findUnique = ((async () => ({
     id: 'session-1',
     revokedAt: null,
@@ -795,7 +800,7 @@ test('installAuthContext keeps platform users inside auth-disabled workspaces ev
     user: {
       id: 'user-1',
       isPlatformUser: true,
-      tenantMemberships: [],
+      workspaceMemberships: [],
       memberships: [],
       platformMemberships: []
     },
@@ -813,7 +818,7 @@ test('installAuthContext keeps platform users inside auth-disabled workspaces ev
   app.get('/context', (request, response) => {
     response.json({
       auth: request.auth,
-      tenant: request.tenant
+      workspace: request.workspace
     })
   })
 
@@ -822,14 +827,14 @@ test('installAuthContext keeps platform users inside auth-disabled workspaces ev
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/context`, {
       headers: {
-        Cookie: 'printstream_auth=session-secret; printstream_tenant_context=tenant-1'
+        Cookie: 'printstream_auth=session-secret; printstream_workspace_context=workspace-1'
       }
     })
 
     assert.equal(response.status, 200)
     const body = await response.json()
-    assert.deepEqual(body.tenant, {
-      id: 'tenant-1',
+    assert.deepEqual(body.workspace, {
+      id: 'workspace-1',
       slug: 'acme',
       name: 'Acme Co'
     })
@@ -886,7 +891,7 @@ test('installAuthContext resolves a service account from a bearer token', async 
   }
 })
 
-test('service-account bearer auth establishes tenant context without an explicit tenant hint', async () => {
+test('service-account bearer auth establishes workspace context without an explicit workspace hint', async () => {
   authProviderRegistry.register({
     id: 'auth-local',
     label: 'Local Auth',
@@ -898,9 +903,9 @@ test('service-account bearer auth establishes tenant context without an explicit
 
   rootPrisma.authServiceAccount.findUnique = ((async () => ({
     id: 'service-account-1',
-    tenantId: 'tenant-1',
-    tenant: {
-      id: 'tenant-1',
+    workspaceId: 'workspace-1',
+    workspace: {
+      id: 'workspace-1',
       slug: 'acme',
       name: 'Acme Co'
     },
@@ -912,12 +917,12 @@ test('service-account bearer auth establishes tenant context without an explicit
 
   const app = express()
   app.use(installAuthContext({ demoMode: false }))
-  app.use(installTenantContext())
+  app.use(installWorkspaceContext())
   app.get('/context', (request, response) => {
     response.json({
       auth: request.auth,
-      tenant: request.tenant,
-      currentTenant: getCurrentTenant()
+      workspace: request.workspace,
+      currentWorkspace: getCurrentWorkspace()
     })
   })
 
@@ -935,8 +940,8 @@ test('service-account bearer auth establishes tenant context without an explicit
         actor: {
           type: 'service-account',
           serviceAccountId: 'service-account-1',
-          tenant: {
-            id: 'tenant-1',
+          workspace: {
+            id: 'workspace-1',
             slug: 'acme',
             name: 'Acme Co'
           }
@@ -946,13 +951,13 @@ test('service-account bearer auth establishes tenant context without an explicit
           demoMode: false
         }
       },
-      tenant: {
-        id: 'tenant-1',
+      workspace: {
+        id: 'workspace-1',
         slug: 'acme',
         name: 'Acme Co'
       },
-      currentTenant: {
-        id: 'tenant-1',
+      currentWorkspace: {
+        id: 'workspace-1',
         slug: 'acme',
         name: 'Acme Co'
       }

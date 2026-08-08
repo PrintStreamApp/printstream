@@ -5,7 +5,7 @@ engine to convert 3MF projects into G-code. That engine is **not** part of
 PrintStream and is **not** an npm dependency — it is a separate program
 downloaded unmodified from its publisher and executed as an independent
 process (CLI), with data exchanged through files and standard I/O. See
-[`docker/install-slicer-targets.mjs`](docker/install-slicer-targets.mjs),
+[`src/engines/install.ts`](src/engines/install.ts),
 [`docker/slicer-targets.mjs`](docker/slicer-targets.mjs), and
 [`docker/bambu-studio-cli.sh`](docker/bambu-studio-cli.sh).
 

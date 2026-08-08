@@ -12,7 +12,7 @@
  * Failed/cancelled prints are not decremented — the partial amount consumed is
  * unknown, mirroring how production stats bucket waste separately.
  *
- * Runs outside a request context: `rootPrisma` with explicit tenant filters.
+ * Runs outside a request context: `rootPrisma` with explicit workspace filters.
  */
 import { trayIndexToAmsSlot, type Printer } from '@printstream/shared'
 import type { ApiPluginContext } from '../../plugin/types.js'
@@ -58,26 +58,26 @@ export function createConsumptionObserver(context: ApiPluginContext): (event: Jo
   }
 
   /** Decrement a tracked spool at a slot; returns true if one was updated. */
-  async function decrementSlot(tenantId: string, printerId: string, amsId: number, slotId: number | null, grams: number, jobId: string): Promise<boolean> {
+  async function decrementSlot(workspaceId: string, printerId: string, amsId: number, slotId: number | null, grams: number, jobId: string): Promise<boolean> {
     if (!(grams > 0)) return false
     const spool = await rootPrisma.filamentSpool.findFirst({
-      where: { tenantId, loadedPrinterId: printerId, loadedAmsId: amsId, loadedSlotId: slotId, deletedAt: null }
+      where: { workspaceId, loadedPrinterId: printerId, loadedAmsId: amsId, loadedSlotId: slotId, deletedAt: null }
     })
     // Hybrid: printer-tracked (Bambu RFID) spools are synced from remain% elsewhere.
     if (!spool || spool.remainSource === 'printer') return false
     const next = Math.max(0, spool.remainingGrams - grams)
-    await rootPrisma.filamentSpool.updateMany({ where: { id: spool.id, tenantId }, data: { remainingGrams: next } })
-    await recordUsage(rootPrisma, tenantId, spool.id, { grams, source: 'print', jobId })
+    await rootPrisma.filamentSpool.updateMany({ where: { id: spool.id, workspaceId }, data: { remainingGrams: next } })
+    await recordUsage(rootPrisma, workspaceId, spool.id, { grams, source: 'print', jobId })
     return true
   }
 
   async function handle(event: JobFinishedEvent): Promise<void> {
     if (event.result !== 'success') return
-    const tenantId = printerManager.getTenantId(event.printer.id)
-    if (!tenantId || !(context.isEnabledForTenant?.(tenantId) ?? true)) return
+    const workspaceId = printerManager.getWorkspaceId(event.printer.id)
+    if (!workspaceId || !(context.isEnabledForWorkspace?.(workspaceId) ?? true)) return
 
     const job = await rootPrisma.printJob.findFirst({
-      where: { id: event.jobId, tenantId },
+      where: { id: event.jobId, workspaceId },
       select: {
         plate: true,
         amsMapping: true,
@@ -103,9 +103,9 @@ export function createConsumptionObserver(context: ApiPluginContext): (event: Jo
             if (grams == null || trayIndex == null) continue
             const slot = trayIndexToSlot(trayIndex)
             if (!slot) continue
-            if (await decrementSlot(tenantId, printerId, slot.amsId, slot.slotId, grams, event.jobId)) mutated = true
+            if (await decrementSlot(workspaceId, printerId, slot.amsId, slot.slotId, grams, event.jobId)) mutated = true
           }
-          if (mutated) broadcastSpoolsChanged(context, tenantId)
+          if (mutated) broadcastSpoolsChanged(context, workspaceId)
           return
         }
       } catch (error) {
@@ -117,13 +117,13 @@ export function createConsumptionObserver(context: ApiPluginContext): (event: Jo
     const aggregate = job.filamentUsedGrams != null ? Number(job.filamentUsedGrams) : null
     if (aggregate != null && aggregate > 0) {
       const trackedLoaded = await rootPrisma.filamentSpool.findMany({
-        where: { tenantId, loadedPrinterId: printerId, deletedAt: null, NOT: { remainSource: 'printer' } }
+        where: { workspaceId, loadedPrinterId: printerId, deletedAt: null, NOT: { remainSource: 'printer' } }
       })
       const spool = trackedLoaded.length === 1 ? trackedLoaded[0] : undefined
       if (spool) {
         const next = Math.max(0, spool.remainingGrams - aggregate)
-        await rootPrisma.filamentSpool.updateMany({ where: { id: spool.id, tenantId }, data: { remainingGrams: next } })
-        await recordUsage(rootPrisma, tenantId, spool.id, { grams: aggregate, source: 'print', jobId: event.jobId })
+        await rootPrisma.filamentSpool.updateMany({ where: { id: spool.id, workspaceId }, data: { remainingGrams: next } })
+        await recordUsage(rootPrisma, workspaceId, spool.id, { grams: aggregate, source: 'print', jobId: event.jobId })
         mutated = true
       } else {
         context.logger.info('Skipped filament consumption: could not attribute grams to a single tracked spool', {
@@ -133,6 +133,6 @@ export function createConsumptionObserver(context: ApiPluginContext): (event: Jo
       }
     }
 
-    if (mutated) broadcastSpoolsChanged(context, tenantId)
+    if (mutated) broadcastSpoolsChanged(context, workspaceId)
   }
 }

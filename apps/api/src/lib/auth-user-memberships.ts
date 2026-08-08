@@ -1,9 +1,9 @@
 /**
- * Tenant-aware auth-user query helpers.
+ * Workspace-aware auth-user query helpers.
  *
- * Auth users are global identities. Tenant-specific sign-in state and
- * workspace access now live on `AuthTenantMembership`, while role grants stay
- * on tenant-scoped auth groups.
+ * Auth users are global identities. Workspace-specific sign-in state and
+ * workspace access now live on `AuthWorkspaceMembership`, while role grants stay
+ * on workspace-scoped auth groups.
  */
 import { Prisma, type AuthUser } from '@prisma/client'
 import type { AuthGroupSummary } from '@printstream/shared'
@@ -11,32 +11,32 @@ import { permissionsAreManageableByActor } from './auth-capabilities.js'
 import type { RequestAuthContext } from './auth-context.js'
 import { conflict, forbidden } from './http-error.js'
 import { prisma } from './prisma.js'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 
-export const NEVER_MATCH_TENANT_ID = '__never_match_tenant__'
+export const NEVER_MATCH_WORKSPACE_ID = '__never_match_workspace__'
 
-const tenantSummarySelect = {
+const workspaceSummarySelect = {
   id: true,
   slug: true,
   name: true
 } as const
 
-export function buildScopedAuthUserInclude(tenantId: string | null = getCurrentTenant()?.id ?? null) {
-  const groupTenantFilter = tenantId !== null ? { tenantId } : { tenantId: null as string | null }
-  const tenantMembershipFilter = tenantId !== null ? { tenantId } : { tenantId: NEVER_MATCH_TENANT_ID }
+export function buildScopedAuthUserInclude(workspaceId: string | null = getCurrentWorkspace()?.id ?? null) {
+  const groupWorkspaceFilter = workspaceId !== null ? { workspaceId } : { workspaceId: null as string | null }
+  const workspaceMembershipFilter = workspaceId !== null ? { workspaceId } : { workspaceId: NEVER_MATCH_WORKSPACE_ID }
   return {
-    tenantMemberships: {
-      where: tenantMembershipFilter,
+    workspaceMemberships: {
+      where: workspaceMembershipFilter,
       select: {
         loginDisabled: true,
-        tenant: {
-          select: tenantSummarySelect
+        workspace: {
+          select: workspaceSummarySelect
         }
       }
     },
     memberships: {
       where: {
-        group: groupTenantFilter
+        group: groupWorkspaceFilter
       },
       select: {
         group: {
@@ -61,13 +61,13 @@ export type ScopedAuthUserRow = Prisma.AuthUserGetPayload<{
   include: ReturnType<typeof buildScopedAuthUserInclude>
 }>
 
-export function buildManageableAuthUserWhere(id?: string, tenantId = getCurrentTenant()?.id ?? null): Prisma.AuthUserWhereInput {
-  if (tenantId) {
+export function buildManageableAuthUserWhere(id?: string, workspaceId = getCurrentWorkspace()?.id ?? null): Prisma.AuthUserWhereInput {
+  if (workspaceId) {
     return {
       ...(id ? { id } : {}),
-      tenantMemberships: {
+      workspaceMemberships: {
         some: {
-          tenantId
+          workspaceId
         }
       }
     }
@@ -79,13 +79,13 @@ export function buildManageableAuthUserWhere(id?: string, tenantId = getCurrentT
   }
 }
 
-export function buildCurrentAuthUserWhere(id: string, tenantId = getCurrentTenant()?.id ?? null): Prisma.AuthUserWhereInput {
-  if (tenantId) {
+export function buildCurrentAuthUserWhere(id: string, workspaceId = getCurrentWorkspace()?.id ?? null): Prisma.AuthUserWhereInput {
+  if (workspaceId) {
     return {
       id,
-      tenantMemberships: {
+      workspaceMemberships: {
         some: {
-          tenantId
+          workspaceId
         }
       }
     }
@@ -94,11 +94,11 @@ export function buildCurrentAuthUserWhere(id: string, tenantId = getCurrentTenan
   return { id }
 }
 
-export function readScopedAuthUserLoginDisabled(user: { tenantMemberships?: Array<{ loginDisabled: boolean }> }): boolean {
-  return user.tenantMemberships?.[0]?.loginDisabled ?? false
+export function readScopedAuthUserLoginDisabled(user: { workspaceMemberships?: Array<{ loginDisabled: boolean }> }): boolean {
+  return user.workspaceMemberships?.[0]?.loginDisabled ?? false
 }
 
-/** Effective permissions a scoped auth user holds via its (tenant-scoped) groups. */
+/** Effective permissions a scoped auth user holds via its (workspace-scoped) groups. */
 export function readScopedAuthUserGrantedPermissions(user: ScopedAuthUserRow): string[] {
   return Array.from(new Set(user.memberships.flatMap((membership) => membership.group.permissions)))
 }
@@ -123,9 +123,9 @@ export function assertCanManageScopedAuthUser(auth: RequestAuthContext, user: Sc
   throw forbidden('You cannot manage a user with permissions you do not have.')
 }
 
-export function buildEnabledTenantMembershipWhere(tenantId: string): Prisma.AuthTenantMembershipWhereInput {
+export function buildEnabledWorkspaceMembershipWhere(workspaceId: string): Prisma.AuthWorkspaceMembershipWhereInput {
   return {
-    tenantId,
+    workspaceId,
     loginDisabled: false
   }
 }
@@ -183,21 +183,21 @@ export function toSortedGroupSummaries(groups: Array<{ id: string; key: string |
  * Persists a managed auth-user create as a single transaction and returns the
  * created/reused user id.
  *
- * Mirrors the one-account model: with no tenant context the row is a platform
- * user (created or promoted, never duplicated); with tenant context it adds (or
- * requires the absence of) an `AuthTenantMembership`. Tenant-local group grants
+ * Mirrors the one-account model: with no workspace context the row is a platform
+ * user (created or promoted, never duplicated); with workspace context it adds (or
+ * requires the absence of) an `AuthWorkspaceMembership`. Workspace-local group grants
  * are attached in the same transaction. Callers own validation, permission
  * checks, audit logging, hydration, and unique-constraint handling.
  */
 export async function createManagedAuthUser(input: {
-  tenantId: string | null
+  workspaceId: string | null
   email: string
   displayName: string | null
   groupIds: string[]
 }): Promise<string> {
-  const { tenantId, email, displayName, groupIds } = input
+  const { workspaceId, email, displayName, groupIds } = input
   return prisma.$transaction(async (tx) => {
-    if (!tenantId) {
+    if (!workspaceId) {
       const existingUser = await tx.authUser.findFirst({
         where: {
           email: {
@@ -261,11 +261,11 @@ export async function createManagedAuthUser(input: {
           }
         })).id
 
-    const existingMembership = await tx.authTenantMembership.findUnique({
+    const existingMembership = await tx.authWorkspaceMembership.findUnique({
       where: {
-        userId_tenantId: {
+        userId_workspaceId: {
           userId,
-          tenantId
+          workspaceId
         }
       },
       select: {
@@ -277,10 +277,10 @@ export async function createManagedAuthUser(input: {
       throw conflict('An auth user with that email already exists in this workspace.')
     }
 
-    await tx.authTenantMembership.create({
+    await tx.authWorkspaceMembership.create({
       data: {
         userId,
-        tenantId
+        workspaceId
       }
     })
 
@@ -300,17 +300,17 @@ export async function createManagedAuthUser(input: {
 /**
  * Removes a managed auth user as a single transaction.
  *
- * With no tenant context this deletes the global `AuthUser` outright. With
- * tenant context it removes only that tenant's group memberships and tenant
+ * With no workspace context this deletes the global `AuthUser` outright. With
+ * workspace context it removes only that workspace's group memberships and workspace
  * membership, then deletes the global user only once it is not a platform user
- * and has no remaining tenant memberships. Reads the active tenant at call time
+ * and has no remaining workspace memberships. Reads the active workspace at call time
  * to match the caller's request context. Callers own permission checks,
  * lockout guards, audit logging, and the post-delete broadcast.
  */
 export async function deleteManagedAuthUser(userId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    const tenantId = getCurrentTenant()?.id ?? null
-    if (!tenantId) {
+    const workspaceId = getCurrentWorkspace()?.id ?? null
+    if (!workspaceId) {
       await tx.authUser.delete({ where: { id: userId } })
       return
     }
@@ -319,16 +319,16 @@ export async function deleteManagedAuthUser(userId: string): Promise<void> {
       where: {
         userId,
         group: {
-          tenantId
+          workspaceId
         }
       }
     })
 
-    await tx.authTenantMembership.delete({
+    await tx.authWorkspaceMembership.delete({
       where: {
-        userId_tenantId: {
+        userId_workspaceId: {
           userId,
-          tenantId
+          workspaceId
         }
       }
     })
@@ -339,13 +339,13 @@ export async function deleteManagedAuthUser(userId: string): Promise<void> {
         isPlatformUser: true,
         _count: {
           select: {
-            tenantMemberships: true
+            workspaceMemberships: true
           }
         }
       }
     })
 
-    if (remainingUser && !remainingUser.isPlatformUser && remainingUser._count.tenantMemberships === 0) {
+    if (remainingUser && !remainingUser.isPlatformUser && remainingUser._count.workspaceMemberships === 0) {
       await tx.authUser.delete({ where: { id: userId } })
     }
   })

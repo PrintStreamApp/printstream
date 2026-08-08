@@ -61,7 +61,7 @@ export function SlicerDeveloperModeCard() {
         setDeviceOverride(null)
       }}
     >
-      <GeneralSettingSelectRow label="Default setting" helper="Shared default applied to devices that do not have their own override.">
+      <GeneralSettingSelectRow label="Default setting" helper="Shared with everyone in this workspace, and applied to devices that do not have their own override.">
         <Select<SharedValue>
           value={sharedSelectValue}
           disabled={!canManageSettings || updateGeneralSettings.isPending}
@@ -75,7 +75,7 @@ export function SlicerDeveloperModeCard() {
         </Select>
       </GeneralSettingSelectRow>
 
-      <GeneralSettingSelectRow label="This device" helper="Saved in this browser only. Choose follow default to inherit the shared setting.">
+      <GeneralSettingSelectRow label="This device" helper="Saved in this browser and applied in every workspace on it. Choose follow default to inherit the shared setting.">
         <Select<DeviceValue>
           value={deviceSelectValue}
           onChange={(_event, value) => {

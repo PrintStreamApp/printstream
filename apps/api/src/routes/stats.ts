@@ -1,28 +1,28 @@
 /**
- * Tenant stats summary route.
+ * Workspace stats summary route.
  *
- * Exposes setup-readiness and high-level workspace metrics for the tenant
+ * Exposes setup-readiness and high-level workspace metrics for the workspace
  * stats page.
  */
 import { Router } from 'express'
-import { isPrinterActiveJobStage, tenantStatsResponseSchema, type TenantStatsResponse } from '@printstream/shared'
+import { isPrinterActiveJobStage, workspaceStatsResponseSchema, type WorkspaceStatsResponse } from '@printstream/shared'
 import { buildFilamentSummary } from '../lib/filament-summary.js'
 import { isManagedBridgeMode } from '../lib/managed-bridge.js'
-import { readTenantPrintOutcomeBreakdown } from '../lib/print-outcome-breakdown.js'
+import { readWorkspacePrintOutcomeBreakdown } from '../lib/print-outcome-breakdown.js'
 import { prisma } from '../lib/prisma.js'
 import { isMissingColumnError } from '../lib/prisma-errors.js'
 import { printerManager } from '../lib/printer-manager.js'
-import { requireRequestTenantId } from '../lib/request-helpers.js'
-import { readTenantStatsActivityHistory } from '../lib/stats-activity-history.js'
-import { withTenantRequestContext } from '../lib/tenant-context.js'
+import { requireRequestWorkspaceId } from '../lib/request-helpers.js'
+import { readWorkspaceStatsActivityHistory } from '../lib/stats-activity-history.js'
+import { withWorkspaceRequestContext } from '../lib/workspace-context.js'
 
 function secondsToHours(seconds: number): number {
   return seconds / 3600
 }
 
-async function readTenantStatsRow() {
+async function readWorkspaceStatsRow() {
   try {
-    return await prisma.tenantStats.findFirst({
+    return await prisma.workspaceStats.findFirst({
       select: {
         totalPrints: true,
         successfulPrints: true,
@@ -44,9 +44,9 @@ async function readTenantStatsRow() {
     })
   } catch (error) {
     if (!isMissingColumnError(error)) throw error
-    console.warn('Falling back to legacy tenant stats query; failed/cancelled breakdown columns are missing')
+    console.warn('Falling back to legacy workspace stats query; failed/cancelled breakdown columns are missing')
     const [row, legacyBreakdown] = await Promise.all([
-      prisma.tenantStats.findFirst({
+      prisma.workspaceStats.findFirst({
         select: {
           totalPrints: true,
           successfulPrints: true,
@@ -58,7 +58,7 @@ async function readTenantStatsRow() {
           filamentUsedMeters: true,
         }
       }),
-      readTenantPrintOutcomeBreakdown()
+      readWorkspacePrintOutcomeBreakdown()
     ])
 
     return row == null
@@ -77,22 +77,22 @@ async function readTenantStatsRow() {
   }
 }
 
-export const tenantStatsRouter = Router()
+export const workspaceStatsRouter = Router()
 
-tenantStatsRouter.get('/', async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+workspaceStatsRouter.get('/', async (request, response) => {
+  const workspaceId = requireRequestWorkspaceId(request)
 
-  const [printerCount, bridgeCount, statsRow, activityLast30Days, unfinishedJobs] = await withTenantRequestContext(request.tenant ?? null, async () => await Promise.all([
+  const [printerCount, bridgeCount, statsRow, activityLast30Days, unfinishedJobs] = await withWorkspaceRequestContext(request.workspace ?? null, async () => await Promise.all([
     prisma.printer.count(),
     prisma.bridge.count(),
-    readTenantStatsRow(),
-    readTenantStatsActivityHistory(),
+    readWorkspaceStatsRow(),
+    readWorkspaceStatsActivityHistory(),
     prisma.printJob.findMany({ where: { finishedAt: null }, select: { printerId: true } })
   ]))
 
   const activePrinterIds = new Set<string>(unfinishedJobs.map((job) => job.printerId))
   for (const status of printerManager.snapshots()) {
-    if (printerManager.getTenantId(status.printerId) === tenantId && isPrinterActiveJobStage(status.stage)) {
+    if (printerManager.getWorkspaceId(status.printerId) === workspaceId && isPrinterActiveJobStage(status.stage)) {
       activePrinterIds.add(status.printerId)
     }
   }
@@ -136,14 +136,14 @@ tenantStatsRouter.get('/', async (request, response) => {
       description: 'Send a first print once the workspace has printers online so history and production stats can build up.',
       complete: totalPrints > 0
     }
-  ] satisfies TenantStatsResponse['quickStartItems']
+  ] satisfies WorkspaceStatsResponse['quickStartItems']
   // Managed-bridge installs own the bundled bridge themselves, so the operator
   // never "connects" one — drop that onboarding step.
   const quickStartItems = isManagedBridgeMode()
     ? allQuickStartItems.filter((item) => item.id !== 'connect-bridge')
     : allQuickStartItems
 
-  response.json(tenantStatsResponseSchema.parse({
+  response.json(workspaceStatsResponseSchema.parse({
     setupRequired,
     hasConnectedBridges,
     quickStartCompletedCount: quickStartItems.filter((item) => item.complete).length,
@@ -164,5 +164,5 @@ tenantStatsRouter.get('/', async (request, response) => {
       wastedPrintHours: failedPrintHours + cancelledPrintHours,
       ...filamentSummary
     }
-  } satisfies TenantStatsResponse))
+  } satisfies WorkspaceStatsResponse))
 })

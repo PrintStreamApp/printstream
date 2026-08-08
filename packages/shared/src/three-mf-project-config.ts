@@ -1,7 +1,7 @@
 /**
  * Extracts a 3MF project's embedded PROCESS and per-FILAMENT config from its flattened
  * `Metadata/project_settings.config` (a fully-merged JSON record). Pure — a parsed record in, a
- * structured result out — so both surfaces run it: the API's tenant resolve routes
+ * structured result out — so both surfaces run it: the API's workspace resolve routes
  * (`resolveProjectProcessConfig` / `resolveProjectFilamentConfig`) read the file server-side, and the
  * public 3MF editor runs it over the archive it unzipped in the browser (no server copy exists there).
  *

@@ -91,11 +91,11 @@ notificationsRouter.delete('/templates/:event', requireRequestPermission(SETTING
  * Platform-scope template endpoints. The event set is the deployment's
  * registered platform events (dynamic, unlike the printer-event enum), and
  * the templates live under the platform settings scope — so these routes are
- * platform-workspace only: a tenant-context request must not reach platform
- * configuration with tenant-scoped authority.
+ * platform-workspace only: a workspace-context request must not reach platform
+ * configuration with workspace-scoped authority.
  */
 function requirePlatformContext(request: import('express').Request): void {
-  if (request.tenant) {
+  if (request.workspace) {
     throw notFound('Platform notification templates are managed from the platform workspace.')
   }
 }

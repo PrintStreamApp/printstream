@@ -74,8 +74,8 @@ test('templates fall back to defaults, persist updates, and reset', async () => 
 
 test('emitPlatformNotification renders and fans out over the bus', async () => {
   stubEmptyStorage()
-  const received: Array<{ title: string; body: string; tenantId?: string }> = []
-  const listener = (event: { message: { title: string; body: string; tenantId?: string } }) => {
+  const received: Array<{ title: string; body: string; workspaceId?: string }> = []
+  const listener = (event: { message: { title: string; body: string; workspaceId?: string } }) => {
     received.push(event.message)
   }
   printerEvents.on('platform.notification', listener)
@@ -88,7 +88,7 @@ test('emitPlatformNotification renders and fans out over the bus', async () => {
   assert.equal(received.length, 1)
   assert.equal(received[0]?.title, 'Hello Nico')
   assert.equal(received[0]?.body, 'Body for Nico')
-  assert.equal(received[0]?.tenantId, undefined, 'platform messages carry no tenant')
+  assert.equal(received[0]?.workspaceId, undefined, 'platform messages carry no workspace')
 })
 
 test('emitPlatformNotification forwards targeting and email-suppression options', async () => {

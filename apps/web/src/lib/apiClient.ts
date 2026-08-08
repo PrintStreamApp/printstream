@@ -111,7 +111,7 @@ export async function apiFetch<T>(path: string, options: ApiClientOptions = {}):
       headers: {
         Accept: 'application/json',
         ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        ...(workspaceContext ? { 'X-PrintStream-Tenant': workspaceContext } : {}),
+        ...(workspaceContext ? { 'X-PrintStream-Workspace': workspaceContext } : {}),
         ...(options.headers ?? {})
       },
       signal: timeout?.signal ?? options.signal,

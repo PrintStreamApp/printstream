@@ -1,7 +1,7 @@
 /**
- * Tenant bridge management routes.
+ * Workspace bridge management routes.
  *
- * Owns the tenant-facing bridge surface: listing, connect/rename/delete, the
+ * Owns the workspace-facing bridge surface: listing, connect/rename/delete, the
  * connection test/ping, system-log and debug-capture retrieval, and update
  * check/start — all routed to the owning bridge through `bridgeSessionManager`.
  */
@@ -23,6 +23,7 @@ import {
   bridgeUpdateActionResponseSchema,
   bridgeUpdateActionResultSchema,
   bridgeStandaloneDownloadsResponseSchema,
+  STANDALONE_BRIDGE_DEFAULT_SERVER_URL,
   bridgeUpdateInstallParamsSchema,
   connectBridgeRequestSchema,
   updateBridgeRequestSchema
@@ -30,7 +31,7 @@ import {
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { getBridgeDebugCaptureStatus } from '../lib/bridge-debug-capture.js'
-import { pairBridgeToTenant } from '../lib/bridge-pairing.js'
+import { pairBridgeToWorkspace } from '../lib/bridge-pairing.js'
 import { listBridgeStandaloneDownloads } from '../lib/bridge-standalone-downloads.js'
 import { buildBridgeUpdateSummary, resolveBridgeAssetOrigin } from '../lib/bridge-update-policy.js'
 import { syncBridgePrinterConfig } from '../lib/bridge-printer-config.js'
@@ -40,7 +41,7 @@ import { conflict, notFound } from '../lib/http-error.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { toPrinterDto } from '../lib/printer-record.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
-import { readRequestOrigin, requireRequestTenantId, requireRouteParam } from '../lib/request-helpers.js'
+import { readRequestOrigin, requireRequestWorkspaceId, requireRouteParam } from '../lib/request-helpers.js'
 import { broadcastBridgesChanged, broadcastPrinterViewsChanged } from '../lib/ws-resource-events.js'
 
 export const bridgesRouter = express.Router()
@@ -58,9 +59,9 @@ const SELF_HOSTED_BUNDLE_UPDATE_MESSAGE =
 bridgesRouter.use(requireRequestPermission(SETTINGS_MANAGE_PERMISSION))
 
 bridgesRouter.get('/', async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const bridges = await prisma.bridge.findMany({
-    where: { tenantId },
+    where: { workspaceId },
     orderBy: { createdAt: 'asc' },
     select: {
       id: true,
@@ -96,32 +97,58 @@ bridgesRouter.get('/', async (request, response) => {
 })
 
 bridgesRouter.get('/downloads', (request, response) => {
+  const assetOrigin = resolveBridgeAssetOrigin(readRequestOrigin(request))
+  const serverUrlOverride = standaloneBridgeServerUrlOverride(assetOrigin)
+  const { downloads, unavailableReason } = listBridgeStandaloneDownloads({ assetOrigin, serverUrlOverride })
   response.json(bridgeStandaloneDownloadsResponseSchema.parse({
-    downloads: listBridgeStandaloneDownloads({ assetOrigin: resolveBridgeAssetOrigin(readRequestOrigin(request)) })
+    downloads,
+    unavailableReason,
+    serverUrlOverride
   }))
 })
 
+/**
+ * The `BRIDGE_SERVER_URL` a download from THIS origin has to be given, if any.
+ *
+ * The packaged executable carries one baked origin (the cloud) and cannot be
+ * varied per download, so a binary fetched from anywhere else registers with
+ * the cloud instead of the server that served it — silently, since it then
+ * prints a connect URL for the wrong host. Returning the origin here is what
+ * lets the download surface say so.
+ *
+ * Null when this server IS the baked default: telling a cloud customer to
+ * configure the value it already has adds a step whose only possible outcome is
+ * a typo. Null too when the origin cannot be resolved, because a guess here is
+ * worse than the existing default — a wrong URL fails to connect at all,
+ * whereas the default at least works for the common case.
+ */
+export function standaloneBridgeServerUrlOverride(assetOrigin: string | null): string | null {
+  if (!assetOrigin) return null
+  const normalize = (value: string): string => value.replace(/\/+$/, '').toLowerCase()
+  return normalize(assetOrigin) === normalize(STANDALONE_BRIDGE_DEFAULT_SERVER_URL) ? null : assetOrigin
+}
+
 bridgesRouter.post('/connect', async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const parsed = connectBridgeRequestSchema.parse(request.body)
   const existing = await rootPrisma.bridge.findUnique({
     where: { connectCode: parsed.connectCode },
     select: {
       id: true,
-      tenantId: true
+      workspaceId: true
     }
   })
 
   if (!existing) {
     throw notFound('Bridge connect code not found.')
   }
-  if (existing.tenantId) {
+  if (existing.workspaceId) {
     throw conflict('Bridge has already been connected to a workspace.')
   }
 
-  const { bridge, reattachedPrinterCount } = await pairBridgeToTenant({
+  const { bridge, reattachedPrinterCount } = await pairBridgeToWorkspace({
     bridgeId: existing.id,
-    tenantId,
+    workspaceId,
     name: parsed.name
   })
 
@@ -146,11 +173,11 @@ bridgesRouter.post('/connect', async (request, response) => {
 })
 
 bridgesRouter.patch('/:id', async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const bridgeId = requireRouteParam(request.params.id, 'id')
   const parsed = updateBridgeRequestSchema.parse(request.body)
   const previous = await prisma.bridge.findFirst({
-    where: { id: bridgeId, tenantId },
+    where: { id: bridgeId, workspaceId },
     select: { name: true }
   })
   const bridge = await prisma.bridge.update({
@@ -197,12 +224,12 @@ bridgesRouter.patch('/:id', async (request, response) => {
     }
   })
 
-  broadcastBridgesChanged(tenantId)
+  broadcastBridgesChanged(workspaceId)
   response.json(bridgeResponseSchema.parse({ bridge: toBridgeSummary(bridge) }))
 })
 
 bridgesRouter.post('/:id/test', async (request, response) => {
-  requireRequestTenantId(request)
+  requireRequestWorkspaceId(request)
   const bridgeId = requireRouteParam(request.params.id, 'id')
   const bridgeCount = await prisma.bridge.count({
     where: { id: bridgeId }
@@ -235,7 +262,7 @@ bridgesRouter.post('/:id/test', async (request, response) => {
 })
 
 bridgesRouter.get('/:id/logs', async (request, response) => {
-  requireRequestTenantId(request)
+  requireRequestWorkspaceId(request)
   const bridgeId = requireRouteParam(request.params.id, 'id')
   const bridgeCount = await prisma.bridge.count({
     where: { id: bridgeId }
@@ -265,11 +292,11 @@ bridgesRouter.get('/:id/logs', async (request, response) => {
  * these routes are thin RPC pass-throughs. The whole router is gated on
  * `SETTINGS_MANAGE_PERMISSION`, so no extra auth is needed here.
  */
-async function requireConnectedTenantBridge(request: express.Request): Promise<{ id: string; name: string }> {
-  const tenantId = requireRequestTenantId(request)
+async function requireConnectedWorkspaceBridge(request: express.Request): Promise<{ id: string; name: string }> {
+  const workspaceId = requireRequestWorkspaceId(request)
   const bridgeId = requireRouteParam(request.params.id, 'id')
   const bridge = await prisma.bridge.findFirst({
-    where: { id: bridgeId, tenantId },
+    where: { id: bridgeId, workspaceId },
     select: { id: true, name: true }
   })
   if (!bridge) {
@@ -282,7 +309,7 @@ async function requireConnectedTenantBridge(request: express.Request): Promise<{
 }
 
 bridgesRouter.post('/:id/debug-capture/start', async (request, response) => {
-  const bridge = await requireConnectedTenantBridge(request)
+  const bridge = await requireConnectedWorkspaceBridge(request)
   const params = bridgeDebugCaptureStartParamsSchema.parse(request.body ?? {})
   const result = bridgeDebugCaptureStatusResultSchema.parse(await bridgeSessionManager.requestRpc(
     bridge.id,
@@ -300,7 +327,7 @@ bridgesRouter.post('/:id/debug-capture/start', async (request, response) => {
 })
 
 bridgesRouter.post('/:id/debug-capture/stop', async (request, response) => {
-  const bridge = await requireConnectedTenantBridge(request)
+  const bridge = await requireConnectedWorkspaceBridge(request)
   const result = bridgeDebugCaptureStatusResultSchema.parse(await bridgeSessionManager.requestRpc(
     bridge.id,
     'debug.capture.stop',
@@ -317,7 +344,7 @@ bridgesRouter.post('/:id/debug-capture/stop', async (request, response) => {
 })
 
 bridgesRouter.get('/:id/debug-capture/download', async (request, response) => {
-  const bridge = await requireConnectedTenantBridge(request)
+  const bridge = await requireConnectedWorkspaceBridge(request)
   const capture = bridgeDebugCaptureReadResultSchema.parse(await bridgeSessionManager.requestRpc(
     bridge.id,
     'debug.capture.read',
@@ -346,7 +373,7 @@ bridgesRouter.get('/:id/debug-capture/download', async (request, response) => {
 })
 
 bridgesRouter.post('/:id/update/check', async (request, response) => {
-  const bridge = await loadTenantBridgeForUpdate(request)
+  const bridge = await loadWorkspaceBridgeForUpdate(request)
   if (isSelfHostedDeployment()) {
     response.json(bridgeUpdateActionResponseSchema.parse({
       accepted: false,
@@ -379,7 +406,7 @@ bridgesRouter.post('/:id/update/check', async (request, response) => {
 })
 
 bridgesRouter.post('/:id/update/start', async (request, response) => {
-  const bridge = await loadTenantBridgeForUpdate(request)
+  const bridge = await loadWorkspaceBridgeForUpdate(request)
   if (isSelfHostedDeployment()) {
     response.json(bridgeUpdateActionResponseSchema.parse({
       accepted: false,
@@ -437,18 +464,18 @@ bridgesRouter.post('/:id/update/start', async (request, response) => {
 })
 
 bridgesRouter.delete('/:id', async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const bridgeId = requireRouteParam(request.params.id, 'id')
   const bridge = await rootPrisma.bridge.findUnique({
     where: { id: bridgeId },
     select: {
       id: true,
       name: true,
-      tenantId: true
+      workspaceId: true
     }
   })
 
-  if (!bridge || bridge.tenantId !== tenantId) {
+  if (!bridge || bridge.workspaceId !== workspaceId) {
     throw notFound('Bridge not found.')
   }
 
@@ -470,34 +497,34 @@ bridgesRouter.delete('/:id', async (request, response) => {
   await rootPrisma.$transaction(async (transaction) => {
     await transaction.printer.updateMany({
       where: {
-        tenantId,
+        workspaceId,
         bridgeId
       },
       data: { bridgeId: null }
     })
     await transaction.bridge.update({
       where: { id: bridgeId },
-      data: { tenantId: null }
+      data: { workspaceId: null }
     })
   })
 
   for (const printer of attachedPrinters) {
-    printerManager.update(toPrinterDto({ ...printer, bridgeId: null }), tenantId, null)
+    printerManager.update(toPrinterDto({ ...printer, bridgeId: null }), workspaceId, null)
   }
 
-  if (bridgeSessionManager.setTenantId(bridgeId, null)) {
+  if (bridgeSessionManager.setWorkspaceId(bridgeId, null)) {
     bridgeSessionManager.sendMessage(bridgeId, {
       type: 'bridge.welcome',
       bridgeId,
       connected: false,
-      tenantId: null,
+      workspaceId: null,
       heartbeatIntervalSeconds: BRIDGE_HEARTBEAT_INTERVAL_SECONDS
     })
   }
 
   await syncBridgePrinterConfig(bridgeId)
-  broadcastBridgesChanged(tenantId)
-  broadcastPrinterViewsChanged(tenantId)
+  broadcastBridgesChanged(workspaceId)
+  broadcastPrinterViewsChanged(workspaceId)
   response.status(204).end()
 })
 
@@ -556,8 +583,8 @@ function resolveBridgeTestErrorMessage(error: unknown): string {
   return `Bridge test failed: ${error.message}`
 }
 
-async function loadTenantBridgeForUpdate(request: express.Request) {
-  requireRequestTenantId(request)
+async function loadWorkspaceBridgeForUpdate(request: express.Request) {
+  requireRequestWorkspaceId(request)
   const bridgeId = requireRouteParam(request.params.id, 'id')
   const bridge = await prisma.bridge.findUnique({
     where: { id: bridgeId },

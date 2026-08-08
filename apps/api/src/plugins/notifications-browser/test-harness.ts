@@ -2,8 +2,8 @@
  * Test-only Express harness for the notifications-browser plugin routes.
  * Registers the real plugin against in-memory settings and a stubbed Prisma
  * membership surface. Requests may pick their workspace scope per call via
- * the `x-test-tenant` header (`platform` selects the tenantless scope);
- * without it every request runs in the default `test-tenant` workspace.
+ * the `x-test-workspace` header (`platform` selects the workspaceless scope);
+ * without it every request runs in the default `test-workspace` workspace.
  */
 import express from 'express'
 import type { AddressInfo } from 'node:net'
@@ -14,7 +14,7 @@ import { PrinterEventBus } from '../../lib/printer-events.js'
 import { notificationsBrowserPlugin } from './index.js'
 
 export interface BrowserNotificationsAppOptions {
-  tenantMembers?: string[]
+  workspaceMembers?: string[]
 }
 
 export async function withBrowserNotificationsApp(
@@ -23,18 +23,18 @@ export async function withBrowserNotificationsApp(
   options: BrowserNotificationsAppOptions = {}
 ): Promise<void> {
   const memberIds = new Set(
-    options.tenantMembers ?? (auth.actor.type === 'user' ? [auth.actor.userId] : [])
+    options.workspaceMembers ?? (auth.actor.type === 'user' ? [auth.actor.userId] : [])
   )
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
-    const scope = typeof request.headers['x-test-tenant'] === 'string'
-      ? request.headers['x-test-tenant']
-      : 'test-tenant'
-    request.tenant = scope === 'platform'
+    const scope = typeof request.headers['x-test-workspace'] === 'string'
+      ? request.headers['x-test-workspace']
+      : 'test-workspace'
+    request.workspace = scope === 'platform'
       ? null
-      : { id: scope, slug: scope, name: `Tenant ${scope}` }
+      : { id: scope, slug: scope, name: `Workspace ${scope}` }
     next()
   })
 
@@ -53,7 +53,7 @@ export async function withBrowserNotificationsApp(
     pluginName: 'notifications-browser',
     logger: { info() {}, warn() {}, error() {} },
     prisma: {
-      authTenantMembership: {
+      authWorkspaceMembership: {
         async findFirst({ where }: { where: { userId: string } }) {
           return memberIds.has(where.userId) ? { userId: where.userId } : null
         },
@@ -69,13 +69,13 @@ export async function withBrowserNotificationsApp(
       async get(key) { return settings.get(key) ?? null },
       async set(key, value) { settings.set(key, value) },
       async delete(key) { settings.delete(key) },
-      forTenant(tenantId: string) {
-        const prefix = `tenant:${tenantId}:`
+      forWorkspace(workspaceId: string) {
+        const prefix = `workspace:${workspaceId}:`
         return {
           async get(key: string) { return settings.get(prefix + key) ?? null },
           async set(key: string, value: string) { settings.set(prefix + key, value) },
           async delete(key: string) { settings.delete(prefix + key) },
-          forTenant(): never { throw new Error('nested forTenant not supported') }
+          forWorkspace(): never { throw new Error('nested forWorkspace not supported') }
         }
       }
     },

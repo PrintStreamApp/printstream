@@ -41,3 +41,55 @@ export function smoothScrollToElement(element: Element): void {
   }
   window.requestAnimationFrame(step)
 }
+
+/**
+ * Shorter than a page jump: stepping a carousel one card is a small, repeatable
+ * move, and page-length easing makes it feel sluggish when clicked repeatedly.
+ */
+const CAROUSEL_DURATION_MS = 220
+
+/**
+ * Horizontally scroll a container to `targetLeft`, for the same reasons the
+ * vertical helper exists: `scrollTo({ behavior: 'smooth' })` is forced to
+ * instant wherever the environment reports `prefers-reduced-motion: reduce`,
+ * which some embedded browsers do by default, so carousel arrows snapped.
+ *
+ * Writing `scrollLeft` per frame animates everywhere and is unaffected by any
+ * ambient `scroll-behavior`, so there is no double-animation.
+ *
+ * **The caller must lift `scroll-snap-type` for the duration.** A mandatory
+ * snap re-snaps after every scroll write, which drags each intermediate frame
+ * straight to the target and turns this back into a jump. `onDone` exists so
+ * the caller can restore snapping once the animation lands.
+ */
+export function smoothScrollLeftTo(
+  scroller: Element,
+  targetLeft: number,
+  options: { durationMs?: number; onDone?: () => void } = {}
+): void {
+  const { durationMs = CAROUSEL_DURATION_MS, onDone } = options
+  if (typeof window === 'undefined') {
+    onDone?.()
+    return
+  }
+  const startLeft = scroller.scrollLeft
+  const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth)
+  const distance = Math.max(0, Math.min(targetLeft, maxLeft)) - startLeft
+  if (Math.abs(distance) < 1) {
+    onDone?.()
+    return
+  }
+
+  let startTime: number | null = null
+  const step = (now: number) => {
+    if (startTime === null) startTime = now
+    const progress = Math.min(1, (now - startTime) / durationMs)
+    scroller.scrollLeft = startLeft + distance * easeInOutQuad(progress)
+    if (progress < 1) {
+      window.requestAnimationFrame(step)
+      return
+    }
+    onDone?.()
+  }
+  window.requestAnimationFrame(step)
+}

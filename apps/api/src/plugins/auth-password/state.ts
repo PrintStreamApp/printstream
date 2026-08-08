@@ -8,9 +8,9 @@
 import {
   PASSWORD_POLICY,
   filterPermissionDefinitionsForPlatformContext,
-  filterPermissionDefinitionsForTenantContext,
+  filterPermissionDefinitionsForWorkspaceContext,
   filterPermissionsForPlatformContext,
-  filterPermissionsForTenantContext,
+  filterPermissionsForWorkspaceContext,
   permissionDefinitions,
   permissionValues,
   type PasswordAuthStatus
@@ -18,13 +18,13 @@ import {
 import { buildAuthManagementStatus } from '../../lib/auth-management-status.js'
 import { createAnonymousAuthContext } from '../../lib/auth-context.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
-import { getCurrentTenant } from '../../lib/tenant-context.js'
+import { getCurrentWorkspace } from '../../lib/workspace-context.js'
 
 export async function buildPasswordAuthStatus(
   prisma: AnyPrismaClient,
   input: { setupComplete?: boolean | null } = {}
 ): Promise<PasswordAuthStatus> {
-  const tenant = getCurrentTenant()
+  const workspace = getCurrentWorkspace()
   const authContext = createAnonymousAuthContext({
     authEnabled: false,
     demoMode: false
@@ -34,11 +34,11 @@ export async function buildPasswordAuthStatus(
     buildAuthManagementStatus(prisma, authContext),
     prisma.authPasswordCredential.count({
       where: {
-        user: tenant
+        user: workspace
           ? {
-              tenantMemberships: {
+              workspaceMemberships: {
                 some: {
-                  tenantId: tenant.id
+                  workspaceId: workspace.id
                 }
               }
             }
@@ -54,11 +54,11 @@ export async function buildPasswordAuthStatus(
 
   const initialAdminEmail = managementStatus.counts.users === 1 && !setupComplete
     ? (await prisma.authUser.findFirst({
-      where: tenant
+      where: workspace
         ? {
-            tenantMemberships: {
+            workspaceMemberships: {
               some: {
-                tenantId: tenant.id
+                workspaceId: workspace.id
               }
             }
           }
@@ -77,11 +77,11 @@ export async function buildPasswordAuthStatus(
   return {
     setupRequired: !hasUsers || !setupComplete,
     sessionDuration: managementStatus.sessionDuration,
-    permissions: tenant
-      ? filterPermissionsForTenantContext([...permissionValues])
+    permissions: workspace
+      ? filterPermissionsForWorkspaceContext([...permissionValues])
       : filterPermissionsForPlatformContext([...permissionValues]),
-    permissionDefinitions: tenant
-      ? filterPermissionDefinitionsForTenantContext(permissionDefinitions)
+    permissionDefinitions: workspace
+      ? filterPermissionDefinitionsForWorkspaceContext(permissionDefinitions)
       : filterPermissionDefinitionsForPlatformContext(permissionDefinitions),
     initialAdminEmail,
     counts: {

@@ -4,8 +4,8 @@ import { visibleLibraryFilesWhere } from './library-visibility.js'
 
 test('visibleLibraryFilesWhere merges the caller clause with hidden + recycled exclusion', () => {
   assert.deepEqual(
-    visibleLibraryFilesWhere({ tenantId: 'tenant-1', folderId: null }),
-    { tenantId: 'tenant-1', folderId: null, hidden: false, deletedAt: null }
+    visibleLibraryFilesWhere({ workspaceId: 'workspace-1', folderId: null }),
+    { workspaceId: 'workspace-1', folderId: null, hidden: false, deletedAt: null }
   )
 })
 

@@ -3,7 +3,7 @@
  *
  * On each changed printer status it:
  * - auto-adds RFID-tagged Bambu spools not yet in the library (when the
- *   per-tenant `autoAddBambuSpools` setting is on),
+ *   per-workspace `autoAddBambuSpools` setting is on),
  * - re-associates a known spool (matched by `bambuUuid`) with its current slot,
  * - syncs `remainingGrams` from the printer's reported remain% for
  *   printer-tracked spools (the Bambu half of the hybrid tracking model),
@@ -13,7 +13,7 @@
  * here — the AMS can only see RFID spools, so it must not clobber them.
  *
  * Runs outside any request context, so it uses `rootPrisma` with an explicit
- * tenant filter on every query. A per-printer signature skips DB work when the
+ * workspace filter on every query. A per-printer signature skips DB work when the
  * relevant slot state has not changed since the last frame.
  */
 import { resolveFilamentIdentity, type PrinterStatus } from '@printstream/shared'
@@ -97,22 +97,22 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
   }
 
   async function handle(status: PrinterStatus): Promise<void> {
-    const tenantId = printerManager.getTenantId(status.printerId)
-    if (!tenantId || !(context.isEnabledForTenant?.(tenantId) ?? true)) return
+    const workspaceId = printerManager.getWorkspaceId(status.printerId)
+    if (!workspaceId || !(context.isEnabledForWorkspace?.(workspaceId) ?? true)) return
 
     const presences = collectPresences(status)
     const sig = signature(presences)
     if (lastSignature.get(status.printerId) === sig) return
     lastSignature.set(status.printerId, sig)
 
-    const autoAdd = await loadAutoAddBambuSpools(context.settings, tenantId)
+    const autoAdd = await loadAutoAddBambuSpools(context.settings, workspaceId)
     let mutated = false
 
     const presentUuids = new Set(presences.map((p) => p.trayUuid))
 
     for (const presence of presences) {
       const existing = await rootPrisma.filamentSpool.findFirst({
-        where: { tenantId, bambuUuid: presence.trayUuid, deletedAt: null }
+        where: { workspaceId, bambuUuid: presence.trayUuid, deletedAt: null }
       })
 
       if (existing) {
@@ -196,11 +196,11 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
             meaningful = true
           }
         }
-        await rootPrisma.filamentSpool.updateMany({ where: { id: existing.id, tenantId }, data })
+        await rootPrisma.filamentSpool.updateMany({ where: { id: existing.id, workspaceId }, data })
         if (meaningful) mutated = true
         if (locationChanged && presence.slotId != null) {
           context.printerEvents.emit('ams-slot.filament-loaded', {
-            tenantId,
+            workspaceId,
             printerId: status.printerId,
             amsId: presence.amsId,
             slotId: presence.slotId,
@@ -230,7 +230,7 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
         })
         await rootPrisma.filamentSpool.create({
           data: {
-            tenantId,
+            workspaceId,
             brand: 'Bambu',
             filamentType: presence.filamentType ?? 'Unknown',
             materialSubtype: identity.subtype,
@@ -257,20 +257,20 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
     // that are no longer present at their slot. Manual (non-RFID) assignments
     // are left untouched — the AMS cannot observe them.
     const loadedHere = await rootPrisma.filamentSpool.findMany({
-      where: { tenantId, loadedPrinterId: status.printerId, deletedAt: null, NOT: { bambuUuid: null } }
+      where: { workspaceId, loadedPrinterId: status.printerId, deletedAt: null, NOT: { bambuUuid: null } }
     })
     for (const spool of loadedHere) {
       const stillPresent = spool.bambuUuid != null && presentUuids.has(spool.bambuUuid)
         && presences.some((p) => p.trayUuid === spool.bambuUuid && p.amsId === spool.loadedAmsId && p.slotId === spool.loadedSlotId)
       if (!stillPresent) {
         await rootPrisma.filamentSpool.updateMany({
-          where: { id: spool.id, tenantId },
+          where: { id: spool.id, workspaceId },
           data: { loadedPrinterId: null, loadedAmsId: null, loadedSlotId: null, loadedAt: null }
         })
         mutated = true
       }
     }
 
-    if (mutated) broadcastSpoolsChanged(context, tenantId)
+    if (mutated) broadcastSpoolsChanged(context, workspaceId)
   }
 }

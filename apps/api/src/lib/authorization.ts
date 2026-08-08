@@ -23,7 +23,7 @@ function shouldBypassPermissionEnforcement(request: Request, permission: Permiss
     return false
   }
 
-  if (request.tenant != null) {
+  if (request.workspace != null) {
     return true
   }
 

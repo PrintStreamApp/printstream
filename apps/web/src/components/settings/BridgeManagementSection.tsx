@@ -113,6 +113,8 @@ export function BridgeSettingsSection() {
           downloads={bridgeDownloads}
           detectedPlatformKey={detectedPlatformKey}
           serverUrl={bridgeServerUrl}
+          serverUrlOverride={downloadsQuery.data?.serverUrlOverride ?? null}
+          unavailableReason={downloadsQuery.data?.unavailableReason ?? null}
         />
       </Stack>
 

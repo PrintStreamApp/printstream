@@ -32,14 +32,14 @@ export const authQueryKeys = {
   serviceAccounts: (authScopeKey: string) => ['auth-service-accounts', authScopeKey] as const
 }
 
-export function resolveAuthScope(authBootstrap?: Pick<AuthBootstrap, 'tenant'> | null): {
-  authTenantId: string | undefined
+export function resolveAuthScope(authBootstrap?: Pick<AuthBootstrap, 'workspace'> | null): {
+  authWorkspaceId: string | undefined
   authScopeKey: string
 } {
-  const authTenantId = authBootstrap?.tenant?.id
+  const authWorkspaceId = authBootstrap?.workspace?.id
   return {
-    authTenantId,
-    authScopeKey: authTenantId ?? platformAuthScopeKey
+    authWorkspaceId,
+    authScopeKey: authWorkspaceId ?? platformAuthScopeKey
   }
 }
 

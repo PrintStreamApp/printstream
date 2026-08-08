@@ -2,8 +2,8 @@
  * Queue completion tracking. Reconciles queued items against real printer lifecycle
  * events so copies count down and failures surface for manual re-queue.
  *
- * Runs in the background (printer-event handlers have no tenant request context), so
- * it uses `rootPrisma` with an explicit `tenantId` taken from the event's printer.
+ * Runs in the background (printer-event handlers have no workspace request context), so
+ * it uses `rootPrisma` with an explicit `workspaceId` taken from the event's printer.
  * Items are matched fast by the tracked `PrintJob` id stored at dispatch, with an
  * orders-style printer + job-name fallback for reconciliation edge cases.
  */
@@ -14,7 +14,7 @@ import { broadcastQueueChanged } from '../../lib/ws-resource-events.js'
 import type { PluginLogger } from '../../plugin/types.js'
 
 interface QueueCompletionDeps {
-  isEnabledForTenant: (tenantId: string | null) => boolean
+  isEnabledForWorkspace: (workspaceId: string | null) => boolean
   logger: PluginLogger
 }
 
@@ -28,40 +28,40 @@ export interface QueueCompletionHandlers {
 
 export function createQueueCompletionHandlers(deps: QueueCompletionDeps): QueueCompletionHandlers {
   async function findItemForJob(
-    tenantId: string,
+    workspaceId: string,
     jobId: string,
     printerId: string,
     jobName: string,
     statuses: string[]
   ): Promise<{ id: string; quantity: number; completedCount: number } | null> {
     const byJob = await rootPrisma.queueItem.findFirst({
-      where: { tenantId, lastPrintJobId: jobId, status: { in: statuses } },
+      where: { workspaceId, lastPrintJobId: jobId, status: { in: statuses } },
       select: { id: true, quantity: true, completedCount: true }
     })
     if (byJob) return byJob
     return rootPrisma.queueItem.findFirst({
-      where: { tenantId, lastPrinterId: printerId, lastJobName: jobName, status: { in: statuses } },
+      where: { workspaceId, lastPrinterId: printerId, lastJobName: jobName, status: { in: statuses } },
       orderBy: { lastDispatchedAt: 'desc' },
       select: { id: true, quantity: true, completedCount: true }
     })
   }
 
   async function handleStarted(event: JobStartedEvent): Promise<void> {
-    const tenantId = printerManager.getTenantId(event.printer.id)
-    if (!tenantId || !deps.isEnabledForTenant(tenantId)) return
-    const item = await findItemForJob(tenantId, event.jobId, event.printer.id, event.jobName, ['dispatching'])
+    const workspaceId = printerManager.getWorkspaceId(event.printer.id)
+    if (!workspaceId || !deps.isEnabledForWorkspace(workspaceId)) return
+    const item = await findItemForJob(workspaceId, event.jobId, event.printer.id, event.jobName, ['dispatching'])
     if (!item) return
     await rootPrisma.queueItem.update({
       where: { id: item.id },
       data: { status: 'printing', lastPrintJobId: event.jobId }
     })
-    broadcastQueueChanged(tenantId)
+    broadcastQueueChanged(workspaceId)
   }
 
   async function handleFinished(event: JobFinishedEvent): Promise<void> {
-    const tenantId = printerManager.getTenantId(event.printer.id)
-    if (!tenantId || !deps.isEnabledForTenant(tenantId)) return
-    const item = await findItemForJob(tenantId, event.jobId, event.printer.id, event.jobName, ['dispatching', 'printing'])
+    const workspaceId = printerManager.getWorkspaceId(event.printer.id)
+    if (!workspaceId || !deps.isEnabledForWorkspace(workspaceId)) return
+    const item = await findItemForJob(workspaceId, event.jobId, event.printer.id, event.jobName, ['dispatching', 'printing'])
     if (!item) return
 
     if (event.result === 'success') {
@@ -84,7 +84,7 @@ export function createQueueCompletionHandlers(deps: QueueCompletionDeps): QueueC
         data: { status: 'failed', lastResult: event.result, lastFinishedAt: new Date() }
       })
     }
-    broadcastQueueChanged(tenantId)
+    broadcastQueueChanged(workspaceId)
   }
 
   // Listeners ignore the return value, but returning the promise (with its own catch)

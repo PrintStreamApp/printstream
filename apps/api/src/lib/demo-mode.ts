@@ -11,7 +11,7 @@ import {
 import type { Request } from 'express'
 import { forbidden } from './http-error.js'
 import { requestHasPermission } from './auth-context.js'
-import { isPublicDemoTenant } from './public-demo-policy.js'
+import { isPublicDemoWorkspace } from './public-demo-policy.js'
 
 export const DEMO_PRINTER_MUTATION_MESSAGE = 'Printer setup changes are disabled in the public demo.'
 export const DEMO_FILE_UPLOAD_MESSAGE = 'File uploads are disabled in the public demo.'
@@ -20,7 +20,7 @@ export const DEMO_AUTH_MUTATION_MESSAGE = 'Auth changes are disabled in the publ
 export const DEMO_PRINTER_MUTATION_BYPASS_PERMISSION = PRINTERS_MANAGE_PERMISSION
 
 export function requestHasDemoModeRestrictions(request: Request): boolean {
-  return request.auth.runtimePolicy.demoMode || isPublicDemoTenant(request.tenant ?? null)
+  return request.auth.runtimePolicy.demoMode || isPublicDemoWorkspace(request.workspace ?? null)
 }
 
 function assertDemoModeAllowsAction(request: Request, input: {

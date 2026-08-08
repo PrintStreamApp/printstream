@@ -13,7 +13,7 @@ import { bridgeSessionManager } from './bridge-session-manager.js'
 import { printerDiscovery } from './printer-discovery.js'
 import { attachWebSocketServer, wsBroadcaster } from './ws-server.js'
 import { printerManager } from './printer-manager.js'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 
 const localAuthCapabilities: AuthProviderCapabilities = {
   signIn: true,
@@ -27,7 +27,7 @@ const localAuthCapabilities: AuthProviderCapabilities = {
 const originalAuthSessionFindUnique = prisma.authSession.findUnique
 const originalAuthSessionUpdateMany = prisma.authSession.updateMany
 const originalAuthUserGroupMembershipFindMany = prisma.authUserGroupMembership.findMany
-const originalTenantFindUnique = prisma.tenant.findUnique
+const originalWorkspaceFindUnique = prisma.workspace.findFirst
 const originalPrinterFindMany = prisma.printer.findMany
 const originalPrinterFindFirst = prisma.printer.findFirst
 const originalRootServiceAccountFindUnique = rootPrisma.authServiceAccount.findUnique
@@ -43,7 +43,7 @@ afterEach(() => {
   prisma.authSession.findUnique = originalAuthSessionFindUnique
   prisma.authSession.updateMany = originalAuthSessionUpdateMany
   prisma.authUserGroupMembership.findMany = originalAuthUserGroupMembershipFindMany
-  prisma.tenant.findUnique = originalTenantFindUnique
+  prisma.workspace.findFirst = originalWorkspaceFindUnique
   prisma.printer.findMany = originalPrinterFindMany
   prisma.printer.findFirst = originalPrinterFindFirst
   rootPrisma.authServiceAccount.findUnique = originalRootServiceAccountFindUnique
@@ -85,7 +85,7 @@ test('websocket upgrade rejects anonymous clients once auth is enabled', async (
   }
 })
 
-test('websocket upgrade rejects bearer-authenticated service accounts without tenant context', async () => {
+test('websocket upgrade rejects bearer-authenticated service accounts without workspace context', async () => {
   authProviderRegistry.register({
     id: 'auth-local',
     label: 'Local Auth',
@@ -123,21 +123,21 @@ test('websocket upgrade rejects bearer-authenticated service accounts without te
   }
 })
 
-test('websocket replay only sends printer statuses for the selected tenant context', async () => {
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+test('websocket replay only sends printer statuses for the selected workspace context', async () => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  rootPrisma.printer.findMany = ((async (args: { where?: { tenantId?: string }; select?: { id: true } }) => {
-    if (args.where?.tenantId === 'tenant-1') {
+  }) as unknown) as typeof prisma.workspace.findFirst
+  rootPrisma.printer.findMany = ((async (args: { where?: { workspaceId?: string }; select?: { id: true } }) => {
+    if (args.where?.workspaceId === 'workspace-1') {
       return [{ id: 'printer-1' }]
     }
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
-  // Replay looks each tenant printer up by id (getStatus), not by scanning all
-  // snapshots — so only printer-1 (the tenant's printer per the findMany stub)
+  // Replay looks each workspace printer up by id (getStatus), not by scanning all
+  // snapshots — so only printer-1 (the workspace's printer per the findMany stub)
   // is ever requested here.
   mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
     ({ printerId, online: true, stage: 'printing' }) as never)
@@ -150,7 +150,7 @@ test('websocket replay only sends printer statuses for the selected tenant conte
     const address = server.address()
     assert(address && typeof address === 'object')
     const { socket, messages } = await connectWebSocketAndCollectMessages(`ws://127.0.0.1:${address.port}/ws`, {
-      'x-printstream-tenant': 'alpha'
+      'x-printstream-workspace': 'alpha'
     })
 
     await closeWebSocket(socket)
@@ -167,21 +167,21 @@ test('websocket replay only sends printer statuses for the selected tenant conte
   }
 })
 
-test('websocket replay honors the tenant query parameter for browser tab isolation', async () => {
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+test('websocket replay honors the workspace query parameter for browser tab isolation', async () => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  rootPrisma.printer.findMany = ((async (args: { where?: { tenantId?: string }; select?: { id: true } }) => {
-    if (args.where?.tenantId === 'tenant-1') {
+  }) as unknown) as typeof prisma.workspace.findFirst
+  rootPrisma.printer.findMany = ((async (args: { where?: { workspaceId?: string }; select?: { id: true } }) => {
+    if (args.where?.workspaceId === 'workspace-1') {
       return [{ id: 'printer-1' }]
     }
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
-  // Replay looks each tenant printer up by id (getStatus), not by scanning all
-  // snapshots — so only printer-1 (the tenant's printer per the findMany stub)
+  // Replay looks each workspace printer up by id (getStatus), not by scanning all
+  // snapshots — so only printer-1 (the workspace's printer per the findMany stub)
   // is ever requested here.
   mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
     ({ printerId, online: true, stage: 'printing' }) as never)
@@ -193,7 +193,7 @@ test('websocket replay honors the tenant query parameter for browser tab isolati
   try {
     const address = server.address()
     assert(address && typeof address === 'object')
-    const { socket, messages } = await connectWebSocketAndCollectMessages(`ws://127.0.0.1:${address.port}/ws?tenant=alpha`)
+    const { socket, messages } = await connectWebSocketAndCollectMessages(`ws://127.0.0.1:${address.port}/ws?workspace=alpha`)
 
     await closeWebSocket(socket)
 
@@ -209,15 +209,15 @@ test('websocket replay honors the tenant query parameter for browser tab isolati
   }
 })
 
-test('websocket replay only sends active printer FTPS state for the selected tenant context', async () => {
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+test('websocket replay only sends active printer FTPS state for the selected workspace context', async () => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  rootPrisma.printer.findMany = ((async (args: { where?: { tenantId?: string }; select?: { id: true } }) => {
-    if (args.where?.tenantId === 'tenant-1') {
+  }) as unknown) as typeof prisma.workspace.findFirst
+  rootPrisma.printer.findMany = ((async (args: { where?: { workspaceId?: string }; select?: { id: true } }) => {
+    if (args.where?.workspaceId === 'workspace-1') {
       return [{ id: 'printer-1' }]
     }
     return []
@@ -232,7 +232,7 @@ test('websocket replay only sends active printer FTPS state for the selected ten
   try {
     const address = server.address()
     assert(address && typeof address === 'object')
-    const { socket, messages } = await connectWebSocketAndCollectMessages(`ws://127.0.0.1:${address.port}/ws?tenant=alpha`)
+    const { socket, messages } = await connectWebSocketAndCollectMessages(`ws://127.0.0.1:${address.port}/ws?workspace=alpha`)
 
     await closeWebSocket(socket)
 
@@ -249,21 +249,21 @@ test('websocket replay only sends active printer FTPS state for the selected ten
   }
 })
 
-test('websocket auth change notification reaches affected tenant user and recycles the socket', async () => {
+test('websocket auth change notification reaches affected workspace user and recycles the socket', async () => {
   authProviderRegistry.register(() => ({
     id: 'auth-local',
     label: 'Local Auth',
-    enabled: getCurrentTenant()?.slug === 'alpha',
+    enabled: getCurrentWorkspace()?.slug === 'alpha',
     methods: ['passkey'],
     setupRequired: false,
     capabilities: localAuthCapabilities
   }))
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   prisma.authSession.findUnique = ((async () => ({
     id: 'session-1',
     revokedAt: null,
@@ -272,10 +272,10 @@ test('websocket auth change notification reaches affected tenant user and recycl
     user: {
       id: 'user-1',
       isPlatformUser: false,
-      tenantMemberships: [{
+      workspaceMemberships: [{
         loginDisabled: false,
-        tenant: {
-          id: 'tenant-1',
+        workspace: {
+          id: 'workspace-1',
           slug: 'alpha',
           name: 'Alpha'
         }
@@ -295,11 +295,11 @@ test('websocket auth change notification reaches affected tenant user and recycl
   try {
     const address = server.address()
     assert(address && typeof address === 'object')
-    const { socket } = await connectWebSocketWithFirstTextMessage(`ws://127.0.0.1:${address.port}/ws?tenant=alpha`, {
+    const { socket } = await connectWebSocketWithFirstTextMessage(`ws://127.0.0.1:${address.port}/ws?workspace=alpha`, {
       Cookie: 'printstream_auth=session-secret'
     })
 
-    wsBroadcaster.notifyAuthChanged({ userIds: ['user-1'], tenantId: 'tenant-1' })
+    wsBroadcaster.notifyAuthChanged({ userIds: ['user-1'], workspaceId: 'workspace-1' })
     const message = await waitForJsonMessage(socket, (payload) => payload.type === 'auth.changed')
     assert.deepEqual(JSON.parse(message), { type: 'auth.changed' })
     await waitForSocketClose(socket)
@@ -309,11 +309,11 @@ test('websocket auth change notification reaches affected tenant user and recycl
   }
 })
 
-test('websocket replay binds tenant-scoped user sessions to their session tenant without requiring a tenant header', async () => {
+test('websocket replay binds workspace-scoped user sessions to their session workspace without requiring a workspace header', async () => {
   authProviderRegistry.register(() => ({
     id: 'auth-local',
     label: 'Local Auth',
-    enabled: getCurrentTenant()?.slug === 'alpha',
+    enabled: getCurrentWorkspace()?.slug === 'alpha',
     methods: ['passkey'],
     setupRequired: false,
     capabilities: localAuthCapabilities
@@ -326,10 +326,10 @@ test('websocket replay binds tenant-scoped user sessions to their session tenant
     user: {
       id: 'user-1',
       isPlatformUser: false,
-      tenantMemberships: [{
+      workspaceMemberships: [{
         loginDisabled: false,
-        tenant: {
-          id: 'tenant-1',
+        workspace: {
+          id: 'workspace-1',
           slug: 'alpha',
           name: 'Alpha'
         }
@@ -339,14 +339,14 @@ test('websocket replay binds tenant-scoped user sessions to their session tenant
     serviceAccount: null
   })) as unknown) as typeof prisma.authSession.findUnique
   prisma.authSession.updateMany = ((async () => ({ count: 1 })) as unknown) as typeof prisma.authSession.updateMany
-  rootPrisma.printer.findMany = ((async (args: { where?: { tenantId?: string }; select?: { id: true } }) => {
-    if (args.where?.tenantId === 'tenant-1') {
+  rootPrisma.printer.findMany = ((async (args: { where?: { workspaceId?: string }; select?: { id: true } }) => {
+    if (args.where?.workspaceId === 'workspace-1') {
       return [{ id: 'printer-1' }]
     }
     return []
   }) as unknown) as typeof rootPrisma.printer.findMany
-  // Replay looks each tenant printer up by id (getStatus), not by scanning all
-  // snapshots — so only printer-1 (the tenant's printer per the findMany stub)
+  // Replay looks each workspace printer up by id (getStatus), not by scanning all
+  // snapshots — so only printer-1 (the workspace's printer per the findMany stub)
   // is ever requested here.
   mock.method(printerManagerPrototype, 'getStatus', (printerId: string) =>
     ({ printerId, online: true, stage: 'printing' }) as never)
@@ -376,7 +376,7 @@ test('websocket replay binds tenant-scoped user sessions to their session tenant
   }
 })
 
-test('websocket replay ignores stale tenant cookies when platform support access is disabled', async () => {
+test('websocket replay ignores stale workspace cookies when platform support access is disabled', async () => {
   authProviderRegistry.register({
     id: 'auth-local',
     label: 'Local Auth',
@@ -385,22 +385,22 @@ test('websocket replay ignores stale tenant cookies when platform support access
     setupRequired: false,
     capabilities: localAuthCapabilities
   })
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
-    if (args.where.id === 'tenant-1') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
+    if (args.where.id === 'workspace-1') {
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
-  rootPrisma.tenant.findMany = ((async () => ([{
-    id: 'tenant-1',
+  }) as unknown) as typeof prisma.workspace.findFirst
+  rootPrisma.workspace.findMany = ((async () => ([{
+    id: 'workspace-1',
     slug: 'alpha',
     name: 'Alpha'
-  }])) as unknown) as typeof rootPrisma.tenant.findMany
+  }])) as unknown) as typeof rootPrisma.workspace.findMany
   rootPrisma.setting.findMany = ((async () => ([{
-    key: 'tenant:tenant-1:auth:supportAccessEnabled',
+    key: 'workspace:workspace-1:auth:supportAccessEnabled',
     value: 'false'
   }])) as unknown) as typeof rootPrisma.setting.findMany
   prisma.authSession.findUnique = ((async () => ({
@@ -411,7 +411,7 @@ test('websocket replay ignores stale tenant cookies when platform support access
     user: {
       id: 'user-1',
       isPlatformUser: true,
-      tenantMemberships: [],
+      workspaceMemberships: [],
       memberships: []
     },
     serviceAccount: null
@@ -436,7 +436,7 @@ test('websocket replay ignores stale tenant cookies when platform support access
   try {
     const address = server.address()
     assert(address && typeof address === 'object')
-    const { socket, messages } = await connectWebSocketAndCollectMessages(`ws://127.0.0.1:${address.port}/ws?tenant=alpha`, {
+    const { socket, messages } = await connectWebSocketAndCollectMessages(`ws://127.0.0.1:${address.port}/ws?workspace=alpha`, {
       Cookie: 'printstream_auth=session-secret'
     }, 200)
 
@@ -452,13 +452,13 @@ test('websocket replay ignores stale tenant cookies when platform support access
   }
 })
 
-test('websocket discovered-printer replay only filters adopted serials inside the selected tenant', async () => {
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+test('websocket discovered-printer replay only filters adopted serials inside the selected workspace', async () => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   const printerQueries: Array<{ where?: unknown; select?: unknown }> = []
   rootPrisma.printer.findMany = ((async (args: { where?: unknown; select?: unknown }) => {
     printerQueries.push(args)
@@ -481,7 +481,7 @@ test('websocket discovered-printer replay only filters adopted serials inside th
     const address = server.address()
     assert(address && typeof address === 'object')
     const { socket, messages } = await connectWebSocketAndCollectMessages(`ws://127.0.0.1:${address.port}/ws`, {
-      'x-printstream-tenant': 'alpha'
+      'x-printstream-workspace': 'alpha'
     })
 
     await closeWebSocket(socket)
@@ -497,7 +497,7 @@ test('websocket discovered-printer replay only filters adopted serials inside th
     }])
     assert.deepEqual(
       printerQueries.find((query) => query.select && (query.select as { serial?: true }).serial === true)?.where,
-      { tenantId: 'tenant-1' }
+      { workspaceId: 'workspace-1' }
     )
   } finally {
     await attached.close()
@@ -514,16 +514,16 @@ test('websocket camera subscribe requires the camera.view permission', async () 
     setupRequired: false,
     capabilities: localAuthCapabilities
   })
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   rootPrisma.authServiceAccount.findUnique = ((async () => ({
     id: 'service-account-1',
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     lastUsedAt: null,
     revokedAt: null,
     memberships: [{ group: { permissions: ['printers.view'] } }]
@@ -540,7 +540,7 @@ test('websocket camera subscribe requires the camera.view permission', async () 
     assert(address && typeof address === 'object')
     const { socket } = await connectWebSocketWithFirstTextMessage(`ws://127.0.0.1:${address.port}/ws`, {
       Authorization: 'Bearer bhs_test_token',
-      'x-printstream-tenant': 'alpha'
+      'x-printstream-workspace': 'alpha'
     })
 
     socket.send(JSON.stringify({ type: 'camera.subscribe', printerId: 'printer-1' }))
@@ -558,7 +558,7 @@ test('websocket camera subscribe requires the camera.view permission', async () 
   }
 })
 
-test('websocket camera snapshot watch only allows printers in the selected tenant', async () => {
+test('websocket camera snapshot watch only allows printers in the selected workspace', async () => {
   authProviderRegistry.register({
     id: 'auth-local',
     label: 'Local Auth',
@@ -567,16 +567,16 @@ test('websocket camera snapshot watch only allows printers in the selected tenan
     setupRequired: false,
     capabilities: localAuthCapabilities
   })
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   rootPrisma.authServiceAccount.findUnique = ((async () => ({
     id: 'service-account-1',
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     lastUsedAt: null,
     revokedAt: null,
     memberships: [{ group: { permissions: ['camera.view'] } }]
@@ -598,7 +598,7 @@ test('websocket camera snapshot watch only allows printers in the selected tenan
     assert(address && typeof address === 'object')
     const { socket } = await connectWebSocketWithFirstTextMessage(`ws://127.0.0.1:${address.port}/ws`, {
       Authorization: 'Bearer bhs_test_token',
-      'x-printstream-tenant': 'alpha'
+      'x-printstream-workspace': 'alpha'
     })
 
     socket.send(JSON.stringify({ type: 'camera.snapshot.watch', printerId: 'printer-2' }))
@@ -608,7 +608,7 @@ test('websocket camera snapshot watch only allows printers in the selected tenan
       type: 'error',
       message: 'Printer not found.'
     })
-    assert.deepEqual(requestedWhere, { id: 'printer-2', tenantId: 'tenant-1' })
+    assert.deepEqual(requestedWhere, { id: 'printer-2', workspaceId: 'workspace-1' })
     assert.equal(watch.mock.callCount(), 0)
     await closeWebSocket(socket)
   } finally {
@@ -625,16 +625,16 @@ test('websocket camera subscribe ignores stale authorize results after unsubscri
     setupRequired: false,
     capabilities: localAuthCapabilities
   })
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   rootPrisma.authServiceAccount.findUnique = ((async () => ({
     id: 'service-account-1',
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     lastUsedAt: null,
     revokedAt: null,
     memberships: [{ group: { permissions: ['camera.view'] } }]
@@ -663,7 +663,7 @@ test('websocket camera subscribe ignores stale authorize results after unsubscri
     assert(address && typeof address === 'object')
     const { socket } = await connectWebSocketWithFirstTextMessage(`ws://127.0.0.1:${address.port}/ws`, {
       Authorization: 'Bearer bhs_test_token',
-      'x-printstream-tenant': 'alpha'
+      'x-printstream-workspace': 'alpha'
     })
 
     socket.send(JSON.stringify({ type: 'camera.subscribe', printerId: 'printer-1' }))
@@ -690,16 +690,16 @@ test('websocket camera snapshot watch ignores stale authorize results after unwa
     setupRequired: false,
     capabilities: localAuthCapabilities
   })
-  prisma.tenant.findUnique = ((async (args: { where: { slug?: string; id?: string } }) => {
+  prisma.workspace.findFirst = ((async (args: { where: { slug?: string; id?: string } }) => {
     if (args.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
   rootPrisma.authServiceAccount.findUnique = ((async () => ({
     id: 'service-account-1',
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     lastUsedAt: null,
     revokedAt: null,
     memberships: [{ group: { permissions: ['camera.view'] } }]
@@ -728,7 +728,7 @@ test('websocket camera snapshot watch ignores stale authorize results after unwa
     assert(address && typeof address === 'object')
     const { socket } = await connectWebSocketWithFirstTextMessage(`ws://127.0.0.1:${address.port}/ws`, {
       Authorization: 'Bearer bhs_test_token',
-      'x-printstream-tenant': 'alpha'
+      'x-printstream-workspace': 'alpha'
     })
 
     socket.send(JSON.stringify({ type: 'camera.snapshot.watch', printerId: 'printer-1' }))

@@ -22,18 +22,6 @@ COPY apps/slicer apps/slicer
 RUN npm install --include-workspace-root --workspace @printstream/slicer --workspace @printstream/shared
 RUN npm run build --workspace @printstream/shared && npm run build --workspace @printstream/slicer
 
-FROM base AS slicer-targets
-ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ca-certificates libfuse2 squashfs-tools \
-	&& rm -rf /var/lib/apt/lists/*
-COPY apps/slicer/docker/slicer-targets.mjs /usr/local/bin/slicer-targets.mjs
-COPY apps/slicer/docker/install-slicer-targets.mjs /usr/local/bin/install-slicer-targets.mjs
-COPY apps/slicer/docker/generate-bambustudio-full-profiles.mjs /usr/local/bin/generate-bambustudio-full-profiles.mjs
-COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/slicer-cli
-RUN chmod +x /usr/local/bin/slicer-cli \
-	&& node /usr/local/bin/install-slicer-targets.mjs /opt/printstream-slicers /usr/local/bin/slicer-cli
-
 # Build an x86-64 sysroot for the arm64 image. BambuStudio is x86-only, so on arm64
 # the slicer runs the same x86-64 CLI under qemu-user (mirroring the dev arm64 path) —
 # the sysroot supplies the x86-64 loader + GTK/WebKit/Mesa libs the AppImage does not
@@ -94,6 +82,10 @@ RUN set -eux; \
 		ln -sf /lib/x86_64-linux-gnu/libjavascriptcoregtk-4.1.so.0 /lib/x86_64-linux-gnu/libjavascriptcoregtk-4.0.so.18; \
 	fi; \
 	rm -rf /var/lib/apt/lists/*
+# Needed to UNPACK an engine, which now happens at runtime rather than at build.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends libfuse2 squashfs-tools \
+	&& rm -rf /var/lib/apt/lists/*
 # The launcher (bambu-studio-cli.sh) reads SLICER_QEMU_SYSROOT on arm64; harmless on amd64.
 ENV SLICER_QEMU_SYSROOT=/opt/printstream-slicer-x86root
 COPY --from=x86-sysroot /opt/printstream-slicer-x86root /opt/printstream-slicer-x86root
@@ -102,10 +94,25 @@ COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/shared/package.json packages/shared/package.json
 COPY --from=build /app/apps/slicer/dist apps/slicer/dist
 COPY --from=build /app/apps/slicer/package.json apps/slicer/package.json
-# Owned by the unprivileged `node` user (see USER below): the CLI launcher symlinks
-# generated profiles into the extracted slicer's resources/profiles/BBL at runtime,
-# so that tree must be writable by the runtime user.
-COPY --from=slicer-targets --chown=node:node /opt/printstream-slicers /opt/printstream-slicers
+# The engine manager reads the pinned engine list and download matrix from these
+# two, and the compiled `dist/engines/catalogue.js` resolves them as a RELATIVE
+# path out of `dist`. Copying `dist` alone therefore ships code that cannot
+# import its own data, and the service crash-loops on ERR_MODULE_NOT_FOUND.
+# They stay outside `src` on purpose: the image build bakes engines in from the
+# same files, so one list serves both. `runtime-assets.test.ts` fails if a new
+# such import is added without a COPY here.
+COPY apps/slicer/docker/slicer-targets.mjs apps/slicer/docker/slicer-targets.mjs
+COPY apps/slicer/docker/engine-assets.mjs apps/slicer/docker/engine-assets.mjs
+COPY apps/slicer/docker/generate-bambustudio-full-profiles.mjs apps/slicer/docker/generate-bambustudio-full-profiles.mjs
+# Engines are NOT baked in. They are downloaded by the same installer the native
+# app uses, into SLICER_TARGETS_FILE's directory — a bind mount, so the operator
+# chooses which disk carries them and a removal survives a container recreate.
+# Baking them cost 4 GB of image for a set the operator could not change: install
+# was impossible (it demanded a runtime closure this image neither ships nor
+# needs) and remove was undone by the next recreate.
+ENV SLICER_ENGINE_LAUNCH=container
+ENV SLICER_TARGETS_FILE=/data/engines/targets.json
+RUN mkdir -p /data/engines && chown -R node:node /data/engines
 COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/bambu-studio-cli
 COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/slicer-cli
 RUN chmod +x /usr/local/bin/bambu-studio-cli /usr/local/bin/slicer-cli
@@ -137,4 +144,4 @@ EXPOSE 4010
 # volume, then drops to `node` via gosu before exec'ing the CMD — so the slicer
 # itself never runs as root.
 ENTRYPOINT ["/usr/local/bin/slicer-entrypoint.sh"]
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/main.js"]

@@ -1,23 +1,23 @@
-import type { TenantSummary } from '@printstream/shared'
+import type { WorkspaceSummary } from '@printstream/shared'
 
 /**
- * Normalizes the access-scoped tenant workspace list returned by auth bootstrap
+ * Normalizes the access-scoped workspace list returned by auth bootstrap
  * so the UI does not show duplicate workspace entries.
  */
-export function listAccessibleTenantWorkspaces(tenants: ReadonlyArray<TenantSummary>): TenantSummary[] {
-  const seenTenantIds = new Set<string>()
-  const uniqueTenants: TenantSummary[] = []
+export function listAccessibleWorkspaces(workspaces: ReadonlyArray<WorkspaceSummary>): WorkspaceSummary[] {
+  const seenWorkspaceIds = new Set<string>()
+  const uniqueWorkspaces: WorkspaceSummary[] = []
 
-  for (const tenant of tenants) {
-    if (seenTenantIds.has(tenant.id)) {
+  for (const workspace of workspaces) {
+    if (seenWorkspaceIds.has(workspace.id)) {
       continue
     }
 
-    seenTenantIds.add(tenant.id)
-    uniqueTenants.push(tenant)
+    seenWorkspaceIds.add(workspace.id)
+    uniqueWorkspaces.push(workspace)
   }
 
-  return uniqueTenants.sort((left, right) => {
+  return uniqueWorkspaces.sort((left, right) => {
     const nameComparison = left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
     if (nameComparison !== 0) return nameComparison
 
@@ -29,22 +29,40 @@ export function listAccessibleTenantWorkspaces(tenants: ReadonlyArray<TenantSumm
 }
 
 export function countAccessibleWorkspaceChoices(input: {
-  tenants: ReadonlyArray<TenantSummary>
+  workspaces: ReadonlyArray<WorkspaceSummary>
   includePlatform: boolean
+  customerCount?: number
 }): number {
-  return listAccessibleTenantWorkspaces(input.tenants).length + (input.includePlatform ? 1 : 0)
+  return listAccessibleWorkspaces(input.workspaces).length
+    + (input.includePlatform ? 1 : 0)
+    + (input.customerCount ?? 0)
 }
 
+/**
+ * How many places this user could switch TO -- which decides whether the
+ * chooser is reachable at all.
+ *
+ * Counts billing accounts alongside workspaces because they are scopes in the
+ * same sense: the chooser lists them together, and someone who registered for a
+ * self-hosted licence has an account and no workspace. Counting workspaces
+ * alone made the chooser unreachable for exactly that person, so their one
+ * scope had no route to it and the page rendered empty.
+ *
+ * Unlike the platform entry, accounts count even with no workspace active: the
+ * platform is somewhere you RETURN to (hence its `activeWorkspaceId` guard),
+ * while an account is somewhere you may never have been.
+ */
 export function countSwitchableWorkspaceChoices(input: {
-  tenants: ReadonlyArray<TenantSummary>
+  workspaces: ReadonlyArray<WorkspaceSummary>
   includePlatform: boolean
-  activeTenantId: string | null
+  activeWorkspaceId: string | null
+  customerCount?: number
 }): number {
-  const uniqueTenants = listAccessibleTenantWorkspaces(input.tenants)
-  const tenantChoices = input.activeTenantId == null
-    ? uniqueTenants.length
-    : uniqueTenants.filter((tenant) => tenant.id !== input.activeTenantId).length
-  const platformChoices = input.includePlatform && input.activeTenantId != null ? 1 : 0
+  const uniqueWorkspaces = listAccessibleWorkspaces(input.workspaces)
+  const workspaceChoices = input.activeWorkspaceId == null
+    ? uniqueWorkspaces.length
+    : uniqueWorkspaces.filter((workspace) => workspace.id !== input.activeWorkspaceId).length
+  const platformChoices = input.includePlatform && input.activeWorkspaceId != null ? 1 : 0
 
-  return tenantChoices + platformChoices
+  return workspaceChoices + platformChoices + (input.customerCount ?? 0)
 }

@@ -10,7 +10,7 @@ import {
   type AuthSessionDuration,
   type AuthSessionDurationPreset
 } from '@printstream/shared'
-import { scopeSettingKey } from './tenant-settings.js'
+import { scopeSettingKey } from './workspace-settings.js'
 
 interface AuthPolicyStore {
   setting: {

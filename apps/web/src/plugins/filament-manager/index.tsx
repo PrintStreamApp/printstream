@@ -7,7 +7,7 @@
  * for the `autoAddBambuSpools` toggle, and the filament stats cards into the stats slot.
  *
  * Eager-loaded with the app shell. (The @mui/x-charts dependency the stats cards use is
- * already in the shell via the core printer/tenant stats, so this adds no bundle weight.)
+ * already in the shell via the core printer/workspace stats, so this adds no bundle weight.)
  *
  * Spool editing of AMS/external slots (pick-from-library / save-to-library) is
  * contributed separately into the slot editors via plugin slots.
@@ -36,6 +36,7 @@ export const filamentManagerPlugin: WebPlugin = {
     {
       path: '/filament/*',
       navLabel: 'Filament',
+      navDescription: 'Your spools, what each one has left, and what is running low.',
       navMobileIcon: <FilamentSpoolIcon />,
       element: FilamentView
     }

@@ -2,8 +2,8 @@
  * Server-side eligibility + dispatch-target resolution for the print-queue plugin.
  *
  * The actual material matching is the shared pure matcher; this module only assembles
- * its inputs from live server state: the tenant's connected printers (with model +
- * least-recently-used ordering for load-balancing) and the per-tenant queue settings,
+ * its inputs from live server state: the workspace's connected printers (with model +
+ * least-recently-used ordering for load-balancing) and the per-workspace queue settings,
  * then resolves which idle printer a manual dispatch should target and the AMS tray
  * mapping to send.
  */
@@ -18,7 +18,7 @@ import {
   type QueueSettings
 } from '@printstream/shared'
 import { printerManager } from '../../lib/printer-manager.js'
-import type { TenantScopedPrismaClient } from '../../lib/prisma.js'
+import type { WorkspaceScopedPrismaClient } from '../../lib/prisma.js'
 import type { PluginSettingStore } from '../../plugin/types.js'
 
 const SETTINGS_KEY = 'settings'
@@ -27,8 +27,8 @@ export interface ServerPrinterContext extends QueuePrinterContext {
   name: string
 }
 
-export async function loadQueueSettings(settings: PluginSettingStore, tenantId: string): Promise<QueueSettings> {
-  const raw = await settings.forTenant(tenantId).get(SETTINGS_KEY)
+export async function loadQueueSettings(settings: PluginSettingStore, workspaceId: string): Promise<QueueSettings> {
+  const raw = await settings.forWorkspace(workspaceId).get(SETTINGS_KEY)
   if (!raw) return queueSettingsSchema.parse({})
   try {
     return queueSettingsSchema.parse(JSON.parse(raw))
@@ -37,8 +37,8 @@ export async function loadQueueSettings(settings: PluginSettingStore, tenantId: 
   }
 }
 
-export async function saveQueueSettings(settings: PluginSettingStore, tenantId: string, value: QueueSettings): Promise<void> {
-  await settings.forTenant(tenantId).set(SETTINGS_KEY, JSON.stringify(value))
+export async function saveQueueSettings(settings: PluginSettingStore, workspaceId: string, value: QueueSettings): Promise<void> {
+  await settings.forWorkspace(workspaceId).set(SETTINGS_KEY, JSON.stringify(value))
 }
 
 export function toMatchOptions(settings: QueueSettings): QueueMatchOptions {
@@ -46,13 +46,13 @@ export function toMatchOptions(settings: QueueSettings): QueueMatchOptions {
 }
 
 /**
- * Build the live printer contexts for the current tenant, ordered to express the
+ * Build the live printer contexts for the current workspace, ordered to express the
  * configured load-balancing: `idle-lru` puts the least-recently-finished printer
  * first (so work spreads across the fleet), `sort-order` keeps the dashboard order.
  * Only printers with a live status snapshot (connected) are included.
  */
 export async function buildOrderedPrinterContexts(
-  prisma: TenantScopedPrismaClient,
+  prisma: WorkspaceScopedPrismaClient,
   settings: QueueSettings
 ): Promise<ServerPrinterContext[]> {
   const printers = await prisma.printer.findMany({
@@ -77,7 +77,7 @@ export async function buildOrderedPrinterContexts(
   })
 }
 
-async function readLastFinishedByPrinter(prisma: TenantScopedPrismaClient, printerIds: string[]): Promise<Map<string, number>> {
+async function readLastFinishedByPrinter(prisma: WorkspaceScopedPrismaClient, printerIds: string[]): Promise<Map<string, number>> {
   if (printerIds.length === 0) return new Map()
   const rows = await prisma.printJob.groupBy({
     by: ['printerId'],

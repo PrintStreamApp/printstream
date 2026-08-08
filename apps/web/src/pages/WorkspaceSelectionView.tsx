@@ -1,24 +1,62 @@
 import ApartmentRoundedIcon from '@mui/icons-material/ApartmentRounded'
 import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded'
+import CreditCardRoundedIcon from '@mui/icons-material/CreditCardRounded'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
 import { Card, CardContent, Chip, Stack, Typography } from '@mui/joy'
-import type { TenantSummary } from '@printstream/shared'
+import type { CustomerSummary, WorkspaceSummary } from '@printstream/shared'
+import { BILLING_SCOPE_LABEL } from '../lib/billingScope'
 import type { ReactNode } from 'react'
+import { BrandMark } from '../components/BrandMark'
+import { CONTEXT_CHOOSER_TITLE } from '../lib/workspaceRoute'
 
-/** Signed-in chooser for selecting the active workspace context. */
+/** Section heading in the chooser, separating scopes that are different things. */
+function ChoiceGroupLabel({ children }: { children: ReactNode }) {
+  return (
+    <Typography
+      level="body-xs"
+      textColor="text.tertiary"
+      sx={{ textTransform: 'uppercase', letterSpacing: '0.08em', mt: 0.5 }}
+    >
+      {children}
+    </Typography>
+  )
+}
+
+/**
+ * Signed-in chooser for the active scope.
+ *
+ * Three kinds of destination, and they are genuinely different things rather
+ * than one list with flags: a WORKSPACE runs printers, a BILLING account holds
+ * licences and the payment method, and the PLATFORM scope administers the
+ * deployment. Billing sits above the workspaces because a customer with several
+ * reaches it as often as any one of them, and below Platform because almost
+ * nobody has that.
+ *
+ * The default title names none of the three, for the same reason the tab that
+ * opens this page does not: the list holds cloud workspaces, the billing
+ * context and (for an operator) the platform context, so naming it after one
+ * mislabels the other two. The group heading below IS "Cloud workspaces" —
+ * that one covers only the cards it sits above. Both strings come from
+ * `workspaceRoute.ts` so the door and the room cannot disagree again.
+ */
 export function WorkspaceSelectionView({
-  tenantOptions,
+  workspaceOptions,
+  customerOptions = [],
   allowPlatformSelection = false,
   onPlatformSelect,
-  onTenantSelect,
+  onCustomerSelect,
+  onWorkspaceSelect,
   selectionPending = false,
-  title = 'Choose a workspace',
+  title = CONTEXT_CHOOSER_TITLE,
   description
 }: {
-  tenantOptions: ReadonlyArray<TenantSummary>
+  workspaceOptions: ReadonlyArray<WorkspaceSummary>
+  /** Empty unless the user was explicitly granted billing access, and in a public build. */
+  customerOptions?: ReadonlyArray<CustomerSummary>
   allowPlatformSelection?: boolean
   onPlatformSelect?: () => void
-  onTenantSelect: (tenantId: string) => void
+  onCustomerSelect?: (customerId: string) => void
+  onWorkspaceSelect: (workspaceId: string) => void
   selectionPending?: boolean
   title?: string
   description?: string
@@ -27,16 +65,41 @@ export function WorkspaceSelectionView({
     <Stack
       justifyContent="center"
       sx={{
+        /*
+          Reserves the space the shell is NOT using, so the choices sit centred
+          on an otherwise empty page.
+
+          The subtracted constants cover `AppShell`'s chrome above and below this
+          content: its own padding, the tab bar, the two 4-unit gaps in its
+          content column, and the footer. They are deliberately GENEROUS — the
+          previous 9rem/11rem were about the footer's height too small, which is
+          what pushed this page past the viewport and put a scrollbar on a screen
+          holding four cards.
+
+          Under-reserving is the safe direction and costs nothing: the shell root
+          is already `minHeight: 100vh` with `mt: auto` on the footer, so it
+          fills the viewport and pins the footer regardless of what this asks
+          for. Over-reserving is the only way to overflow. `100vh`, not `100dvh`,
+          to match the shell root this is measuring against — mixing the two
+          drifts by the mobile URL bar.
+        */
         minHeight: {
-          xs: 'calc(100dvh - var(--app-top-inset, 0px) - 11rem)',
-          sm: 'calc(100dvh - var(--app-top-inset, 0px) - 9rem)'
+          xs: 'calc(100vh - var(--app-top-inset, 0px) - var(--app-safe-bottom, 0px) - 16rem)',
+          sm: 'calc(100vh - var(--app-top-inset, 0px) - 14rem)'
         },
         py: { xs: 2, sm: 4 }
       }}
     >
       <Stack spacing={2} sx={{ width: '100%', maxWidth: 460, mx: 'auto' }}>
+        {/* Like sign-in, this stands outside the shell's chrome: no workspace is
+            active yet, so the logo bar that normally carries the brand is not
+            there. */}
+        <BrandMark />
         <Stack spacing={0.75}>
-          <Typography level="h2">{title}</Typography>
+          {/* `h3`, not `h2`: this is a page heading, and the conventions reserve
+              `h2` for auth/setup/marketing heroes. Next to the brand mark above
+              it, the hero size read as a second, louder title. */}
+          <Typography level="h3">{title}</Typography>
           {description ? (
             <Typography level="body-sm" textColor="text.tertiary">
               {description}
@@ -45,28 +108,81 @@ export function WorkspaceSelectionView({
         </Stack>
 
         <Stack spacing={1.25}>
+          {/*
+            Labelled for the same reason "Cloud workspaces" is: once both kinds
+            are on screen the reader has to be able to tell them apart, and
+            these two are the ones you ADMINISTER from rather than print in.
+            Suppressed when neither is present, so a customer with only
+            workspaces never sees a heading over nothing.
+          */}
+          {(allowPlatformSelection && onPlatformSelect) || (onCustomerSelect && customerOptions.length > 0) ? (
+            <ChoiceGroupLabel>Administrative workspaces</ChoiceGroupLabel>
+          ) : null}
+
           {allowPlatformSelection && onPlatformSelect ? (
             <WorkspaceChoiceCard
               icon={<ApartmentRoundedIcon />}
               title="Platform"
-              bodyDescription="Manage tenants and platform settings."
+              bodyDescription="Manage workspaces and platform settings."
               selectionPending={selectionPending}
               onClick={onPlatformSelect}
             />
           ) : null}
 
-          {tenantOptions.map((tenant) => (
+          {/*
+            No group heading and no per-account name: the card IS the scope, and
+            almost everyone has exactly one. The account used to be titled by a
+            display name copied off its owner at creation, which then went stale
+            the moment they renamed themselves and told the reader nothing the
+            card does not.
+          */}
+          {onCustomerSelect ? customerOptions.map((account) => (
             <WorkspaceChoiceCard
-              key={tenant.id}
-              icon={<BusinessRoundedIcon />}
-              title={tenant.name}
-              inlineDescription={tenant.description?.trim() || undefined}
-              userCount={tenant.userCount}
-              printerCount={tenant.printerCount}
+              key={account.id}
+              icon={<CreditCardRoundedIcon />}
+              title={BILLING_SCOPE_LABEL}
+              bodyDescription="License keys, cloud plans, payment method, and invoices."
               selectionPending={selectionPending}
-              onClick={() => onTenantSelect(tenant.id)}
+              onClick={() => onCustomerSelect(account.id)}
+            />
+          )) : null}
+
+          {/*
+            Labelled only when there is something above to distinguish them
+            from: a user with one workspace and no billing access should not be
+            given a heading over a single card.
+
+            "Cloud workspaces" once there IS something above, because what is
+            above is the account that also holds SELF-HOSTED licences. The
+            distinction only exists where both are on screen.
+          */}
+          {(onCustomerSelect && customerOptions.length > 0) || allowPlatformSelection ? (
+            <ChoiceGroupLabel>Cloud workspaces</ChoiceGroupLabel>
+          ) : null}
+          {workspaceOptions.map((workspace) => (
+            <WorkspaceChoiceCard
+              key={workspace.id}
+              icon={<BusinessRoundedIcon />}
+              title={workspace.name}
+              inlineDescription={workspace.description?.trim() || undefined}
+              userCount={workspace.userCount}
+              printerCount={workspace.printerCount}
+              selectionPending={selectionPending}
+              onClick={() => onWorkspaceSelect(workspace.id)}
             />
           ))}
+
+          {/*
+            A real state, not an error: registration creates an ACCOUNT, so a new
+            customer arrives here with nothing to enter yet. Points at the one
+            place that can fix it rather than leaving a page with no next step.
+          */}
+          {workspaceOptions.length === 0 && onCustomerSelect && customerOptions.length > 0 ? (
+            <Typography level="body-sm" textColor="text.tertiary" sx={{ textAlign: 'center', px: 2 }}>
+              No cloud workspaces yet. Create one from {BILLING_SCOPE_LABEL}, or use your account for a
+              self-hosted license instead.
+            </Typography>
+          ) : null}
         </Stack>
       </Stack>
     </Stack>

@@ -8,7 +8,7 @@
  * a handful. The symptom is the worst kind — the repair reports success, the banner clears, and the
  * saved file is untouched.
  *
- * The tenant route resolves this server-side against the workspace catalogue. This is the same
+ * The workspace route resolves this server-side against the workspace catalogue. This is the same
  * operation for the public editor, whose "catalogue" is the browser store plus the anonymous
  * built-in endpoint.
  *

@@ -44,6 +44,7 @@ import { usePromptDialog } from './PromptDialogProvider'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { SquareMediaFrame } from './SquareMediaFrame'
 import { StoragePrintModal } from './StoragePrintModal'
+import { ListSkeleton } from '../components/ListSkeleton'
 
 /** Three-dot vertical glyph. Inlined here to avoid importing back into the pages layer. */
 function MoreVertIcon() {
@@ -458,7 +459,7 @@ export function PrinterStorageModal({
                 )}
 
                 {listQuery.isLoading && (
-                  <Typography level="body-sm" textColor="text.tertiary">Loading…</Typography>
+                  <ListSkeleton rows={2} />
                 )}
                 {listQuery.isError && (
                   <Typography level="body-sm" color="danger">

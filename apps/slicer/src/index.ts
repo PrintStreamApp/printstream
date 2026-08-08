@@ -2,7 +2,7 @@
  * Standalone slicer runtime.
  *
  * This process is intentionally separate from the API and bridge. The API
- * handles tenants, permissions, queueing, and library persistence; this
+ * handles workspaces, permissions, queueing, and library persistence; this
  * service owns multi-version slicer CLI execution.
  */
 import express from 'express'
@@ -32,6 +32,11 @@ import {
 import yauzl, { type Entry } from 'yauzl'
 import yazl from 'yazl'
 import { env } from './env.js'
+import { findCatalogueEngine, listCatalogue } from './engines/catalogue.js'
+import { anyInstallStatus, beginInstall, failInstall, finishInstall, installStatus, isInstalling, reportInstall } from './engines/progress.js'
+import { ensureEnginesInstalled } from './engines/ensure-engines.js'
+import { installEngine, removeEngine } from './engines/install.js'
+import { readManifest as readEngineManifest } from './engines/manifest.js'
 import { terminateSlicerChild } from './terminate-child.js'
 import { outputSignalsSliceComplete } from './slice-progress.js'
 import { appendCappedTail, appendOutput, appendStructuredOutput } from './slice-output.js'
@@ -83,14 +88,103 @@ app.use((request, response, next) => {
   next()
 })
 
+/**
+ * Engine management.
+ *
+ * Lives here rather than in the API because this service already OWNS the
+ * engines: it holds the manifest, resolves targets from it, and spawns their
+ * CLIs. Putting install/remove anywhere else would mean a second component
+ * reaching around this one to change state it is responsible for.
+ *
+ * Behind the same bearer token as every other route: these spawn downloads and
+ * delete directories, so they are strictly more privileged than slicing, never
+ * less.
+ */
+app.get('/engines', async (_request, response) => {
+  const [manifest, catalogue] = [await readEngineManifest(), listCatalogue()]
+  const installed = new Set(manifest.targets.map((target) => target.id))
+  response.json({
+    defaultTargetId: manifest.defaultTargetId,
+    engines: catalogue.map((engine) => ({
+      id: engine.id,
+      label: engine.label,
+      version: engine.version,
+      slicerName: engine.slicerName,
+      prerelease: engine.prerelease,
+      installed: installed.has(engine.id),
+      downloadBytes: engine.asset.bytes,
+      installBytes: engine.installBytes,
+      // Null unless something is happening right now. A FAILED record is kept
+      // deliberately: reverting to plain "not installed" reads as the click
+      // having done nothing.
+      status: installStatus(engine.id)
+    })),
+    // Named so a UI can say WHY a host offers nothing, rather than showing an
+    // empty list that reads as a loading failure.
+    platformSupported: catalogue.length > 0
+  })
+})
+
+app.post('/engines/:id/install', (request, response) => {
+  const id = String(request.params.id ?? '')
+  if (!findCatalogueEngine(id)) {
+    response.status(404).json({ error: `No installable engine named ${id} on this platform.` })
+    return
+  }
+  // Already running: answer the same 202 rather than starting a second download
+  // of the same gigabyte because someone clicked twice.
+  if (isInstalling(id)) {
+    response.status(202).json({ status: installStatus(id) })
+    return
+  }
+
+  // Started, not awaited. An engine is 220-470 MB and unpacks to over a
+  // gigabyte; holding the request open ties the outcome to a socket staying up,
+  // and a slow link becomes a caller waiting on a timeout long enough to look
+  // like a broken app. Progress is read back from GET /engines, the same shape
+  // slicing jobs already use.
+  beginInstall(id)
+  void installEngine({
+    id,
+    onProgress: (progress) => {
+      const fraction = progress.totalBytes ? (progress.receivedBytes ?? 0) / progress.totalBytes : undefined
+      reportInstall(id, progress.label, fraction)
+    }
+  }).then(
+    () => finishInstall(id),
+    (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[engines] install of ${id} failed:`, message)
+      failInstall(id, message)
+    }
+  )
+  response.status(202).json({ status: installStatus(id) })
+})
+
+app.delete('/engines/:id', async (request, response, next) => {
+  try {
+    await removeEngine(String(request.params.id ?? ''))
+    response.status(204).end()
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.get('/health', async (_request, response) => {
   const registry = await getSlicerTargetRegistry()
   const defaultTarget = resolveSlicerTarget(registry)
+  // The in-flight install rides on HEALTH, not just the admin-only engines
+  // route: a fresh container has no engine, and the person who notices is
+  // whoever tried to slice — who cannot read the engines route at all.
+  const installing = anyInstallStatus()
   response.json({
     name: defaultTarget?.label ?? 'PrintStream slicer',
     configured: registry.targets.length > 0,
     defaultTargetId: registry.defaultTargetId,
-    targets: getPublicSlicerTargets(registry)
+    targets: getPublicSlicerTargets(registry),
+    engineInstall: installing
+      ? { state: installing.state, label: installing.label, fraction: installing.fraction }
+      : null
   })
 })
 
@@ -658,7 +752,7 @@ async function getSupportedCliFlags(
   if (cached) return cached
 
   const helpText = await new Promise<string>((resolve, reject) => {
-    const child = spawn(slicerTarget.cliPath, ['--help'], {
+    const child = spawn(slicerTarget.cliPath, [...slicerTarget.cliArgsPrefix, '--help'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -754,7 +848,7 @@ async function executeCli(input: {
     await new Promise<void>((resolve, reject) => {
       let stderrCombined = ''
       let stdoutCombined = ''
-      const child = spawn(input.slicerTarget.cliPath, args, {
+      const child = spawn(input.slicerTarget.cliPath, [...input.slicerTarget.cliArgsPrefix, ...args], {
         // `detached` makes the child its own process-group leader so termination can
         // signal the whole group — BambuStudio spawns helper processes under Xvfb
         // that a bare child.kill() would orphan.
@@ -2001,16 +2095,63 @@ async function prewarmBuiltinProfiles(): Promise<void> {
   }
 }
 
-void sweepStaleWorkDirs()
-void prewarmBuiltinProfiles()
-http.createServer({ maxHeaderSize: SLICE_MAX_HEADER_BYTES }, app).listen(env.SLICER_PORT, () => {
-  console.log(`PrintStream slicer listening on ${env.SLICER_PORT}`)
-  if (!env.SLICER_SERVICE_TOKEN) {
-    // The slicer spawns native CLI binaries on uploaded input. With no token it
-    // accepts any caller, so it MUST stay on a private/loopback-only network
-    // (the default compose keeps it on an internal network). Warn loudly so an
-    // operator who widens the bind doesn't unknowingly expose an unauthenticated
-    // code-execution service — set SLICER_SERVICE_TOKEN to require auth.
-    console.warn('[slicer] SLICER_SERVICE_TOKEN is not set: running WITHOUT authentication. Keep this service on a private/loopback-only network, or set SLICER_SERVICE_TOKEN to require a bearer token.')
+/** A running slicer server: the port it actually bound, and how to stop it. */
+export interface SlicerServerHandle {
+  /** The bound port. Resolved, not requested — `port: 0` picks a free one. */
+  port: number
+  close(): Promise<void>
+}
+
+/**
+ * Start the slicer HTTP server.
+ *
+ * Exported as a function rather than run on import so the same service can be
+ * hosted two ways: as its own container (`main.ts`, what the image runs) and
+ * **in-process inside the native self-hosted app**, which has no sidecar to run
+ * and starts this on loopback beside its in-box bridge. Both get identical
+ * behaviour because it is one server, not two implementations.
+ *
+ * @param options.port overrides `SLICER_PORT`. Pass 0 to bind a free port and
+ * read it back from the handle — what an in-process host wants, since it then
+ * points `SLICER_SERVICE_URL` at itself and never has to reserve a fixed one.
+ * @param options.background sweeps stale work dirs and prewarms the builtin
+ * profile cache. On by default; a caller that starts several servers in one
+ * process would otherwise duplicate the work.
+ */
+export function startSlicerServer(options: {
+  port?: number
+  background?: boolean
+} = {}): Promise<SlicerServerHandle> {
+  if (options.background ?? true) {
+    void sweepStaleWorkDirs()
+    void prewarmBuiltinProfiles()
+    // After the sweep: the container ships no engines, so whatever this host is
+    // configured to have gets fetched here. Never awaited — see the module.
+    void ensureEnginesInstalled(env.SLICER_PRELOAD_ENGINES)
   }
-})
+  const requestedPort = options.port ?? env.SLICER_PORT
+  const server = http.createServer({ maxHeaderSize: SLICE_MAX_HEADER_BYTES }, app)
+  return new Promise<SlicerServerHandle>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(requestedPort, () => {
+      server.removeListener('error', reject)
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : requestedPort
+      console.log(`PrintStream slicer listening on ${port}`)
+      if (!env.SLICER_SERVICE_TOKEN) {
+        // The slicer spawns native CLI binaries on uploaded input. With no token it
+        // accepts any caller, so it MUST stay on a private/loopback-only network
+        // (the default compose keeps it on an internal network). Warn loudly so an
+        // operator who widens the bind doesn't unknowingly expose an unauthenticated
+        // code-execution service — set SLICER_SERVICE_TOKEN to require auth.
+        console.warn('[slicer] SLICER_SERVICE_TOKEN is not set: running WITHOUT authentication. Keep this service on a private/loopback-only network, or set SLICER_SERVICE_TOKEN to require a bearer token.')
+      }
+      resolve({
+        port,
+        close: () => new Promise<void>((done, fail) => {
+          server.close((error) => (error ? fail(error) : done()))
+        })
+      })
+    })
+  })
+}

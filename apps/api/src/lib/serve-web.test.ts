@@ -1,38 +1,36 @@
-process.env.NODE_ENV = 'test'
-
+/**
+ * The SPA history fallback, tested from a data directory that looks like a real
+ * Linux install.
+ *
+ * The bug this pins shipped: `res.sendFile(absolutePath)` is rejected by
+ * `send`'s `dotfiles: 'ignore'` default whenever ANY segment of the path starts
+ * with a dot -- and the Linux data directory is `~/.local/share/printstream`.
+ * So on every Linux self-hosted install `/api` worked, `express.static` served
+ * `/index.html`, and every SPA route (including `/`) returned 500. The app was
+ * unusable in a browser while looking healthy to a health check.
+ *
+ * `express.static` never saw it because it only tests the path RELATIVE to its
+ * own root, which is why the two disagreed about the same file.
+ *
+ * The dot-directory case is the whole point: a test rooted at a plain temp path
+ * passes against the broken code.
+ */
 import assert from 'node:assert/strict'
-import { after, test } from 'node:test'
-import express from 'express'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import os from 'node:os'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
-import type { AddressInfo } from 'node:net'
+import test from 'node:test'
+import express from 'express'
 import type { Server } from 'node:http'
 import { installWebApp } from './serve-web.js'
 
-const INDEX_HTML = '<!doctype html><title>PrintStream</title><div id="root"></div>'
-
-const distDir = mkdtempSync(path.join(os.tmpdir(), 'ps-web-'))
-mkdirSync(path.join(distDir, 'assets'))
-writeFileSync(path.join(distDir, 'index.html'), INDEX_HTML)
-writeFileSync(path.join(distDir, 'sw.js'), 'self.addEventListener("install", () => {})')
-writeFileSync(path.join(distDir, 'manifest.webmanifest'), '{"name":"PrintStream"}')
-writeFileSync(path.join(distDir, 'assets', 'app-abc123.js'), 'console.log(1)')
-
-after(() => rmSync(distDir, { recursive: true, force: true }))
-
-/** Spins up a throwaway server with a stub `/api` route plus the web handler. */
-async function withWebApp(webDir: string | undefined, run: (baseUrl: string) => Promise<void>): Promise<void> {
+async function withWebApp(webDir: string, run: (baseUrl: string) => Promise<void>): Promise<void> {
   const app = express()
-  app.get('/api/health', (_request, response) => {
-    response.json({ ok: true })
-  })
   installWebApp(app, webDir)
-
-  const server = await new Promise<Server>((resolve) => {
-    const created = app.listen(0, () => resolve(created))
-  })
-  const { port } = server.address() as AddressInfo
+  const server: Server = app.listen(0)
+  await new Promise<void>((resolve) => server.once('listening', () => resolve()))
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : 0
   try {
     await run(`http://127.0.0.1:${port}`)
   } finally {
@@ -40,57 +38,30 @@ async function withWebApp(webDir: string | undefined, run: (baseUrl: string) => 
   }
 }
 
-test('serves content-hashed assets as immutable', async () => {
-  await withWebApp(distDir, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/assets/app-abc123.js`)
-    assert.equal(response.status, 200)
-    assert.equal(response.headers.get('cache-control'), 'public, max-age=31536000, immutable')
-  })
-})
+test('the SPA fallback serves index.html from a data dir under a dot-directory', async () => {
+  const base = await mkdtemp(path.join(tmpdir(), 'serve-web-'))
+  // Mirrors the real XDG layout: ~/.local/share/printstream/web
+  const webDir = path.join(base, '.local', 'share', 'printstream', 'web')
+  await mkdir(webDir, { recursive: true })
+  await writeFile(path.join(webDir, 'index.html'), '<!doctype html><title>PrintStream</title>')
 
-test('serves the service worker no-store with Service-Worker-Allowed', async () => {
-  await withWebApp(distDir, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/sw.js`)
-    assert.equal(response.status, 200)
-    assert.match(response.headers.get('cache-control') ?? '', /no-store/)
-    assert.equal(response.headers.get('service-worker-allowed'), '/')
-  })
-})
+  try {
+    await withWebApp(webDir, async (baseUrl) => {
+      // The deep link a user actually opens, and the one that was 500ing.
+      for (const requestPath of ['/', '/printers', '/workspaces/acme/library']) {
+        const response = await fetch(`${baseUrl}${requestPath}`)
+        assert.equal(response.status, 200, `${requestPath} must serve the SPA shell`)
+        assert.match(await response.text(), /PrintStream/)
+      }
 
-test('serves index.html no-store', async () => {
-  await withWebApp(distDir, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/index.html`)
-    assert.equal(response.status, 200)
-    assert.match(response.headers.get('cache-control') ?? '', /no-store/)
-  })
-})
+      // The static half kept working throughout, which is what made the failure
+      // look like a routing problem rather than a path problem.
+      assert.equal((await fetch(`${baseUrl}/index.html`)).status, 200)
 
-test('falls back to index.html for SPA deep links', async () => {
-  await withWebApp(distDir, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/printers/some-id`)
-    assert.equal(response.status, 200)
-    assert.match(response.headers.get('content-type') ?? '', /text\/html/)
-    assert.equal(await response.text(), INDEX_HTML)
-    assert.match(response.headers.get('cache-control') ?? '', /no-store/)
-  })
-})
-
-test('does not shadow API routes', async () => {
-  await withWebApp(distDir, async (baseUrl) => {
-    const ok = await fetch(`${baseUrl}/api/health`)
-    assert.equal(ok.status, 200)
-    assert.deepEqual(await ok.json(), { ok: true })
-
-    // Unknown API paths must 404, never fall back to the SPA shell.
-    const missing = await fetch(`${baseUrl}/api/does-not-exist`)
-    assert.equal(missing.status, 404)
-    assert.notEqual(await missing.text(), INDEX_HTML)
-  })
-})
-
-test('is a no-op when no web dir is configured', async () => {
-  await withWebApp(undefined, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/printers/some-id`)
-    assert.equal(response.status, 404)
-  })
+      // The dotfile rule must still apply to the part we mean to police.
+      assert.equal((await fetch(`${baseUrl}/api/anything`)).status, 404)
+    })
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
 })

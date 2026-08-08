@@ -7,7 +7,7 @@
  * refetch. These helpers keep the payloads consistent.
  */
 import { wsBroadcaster } from './ws-server.js'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 
 type ResourceName =
   | 'bridges'
@@ -17,6 +17,7 @@ type ResourceName =
   | 'logs'
   | 'orders'
   | 'printer.views'
+  | 'billing'
   | 'notification.templates'
   | 'plugin.settings'
   | 'plugins'
@@ -30,63 +31,72 @@ export function broadcastResourceChange(input: {
   resource: ResourceName
   printerId?: string
   pluginName?: string
-  tenantId?: string | null
+  workspaceId?: string | null
 }): void {
-  const tenantId = input.tenantId !== undefined ? input.tenantId : (getCurrentTenant()?.id ?? null)
+  const workspaceId = input.workspaceId !== undefined ? input.workspaceId : (getCurrentWorkspace()?.id ?? null)
   wsBroadcaster.broadcast({
     type: 'resource.changed',
     resource: input.resource,
     printerId: input.printerId,
     pluginName: input.pluginName
-  }, tenantId)
+  }, workspaceId)
 }
 
-export function broadcastJobsChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'jobs', tenantId })
+/**
+ * A workspace's plan changed. Broadcast on the webhook, so a browser sitting on
+ * the post-checkout screen learns the plan is live from the SERVER rather than
+ * from Paddle's client-side "completed".
+ */
+export function broadcastBillingChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'billing', workspaceId })
 }
 
-export function broadcastDeleteOperationsChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'delete-operations', tenantId })
+export function broadcastJobsChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'jobs', workspaceId })
 }
 
-export function broadcastBridgesChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'bridges', tenantId })
+export function broadcastDeleteOperationsChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'delete-operations', workspaceId })
 }
 
-export function broadcastLibraryChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'library', tenantId })
+export function broadcastBridgesChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'bridges', workspaceId })
 }
 
-export function broadcastLogsChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'logs', tenantId })
+export function broadcastLibraryChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'library', workspaceId })
 }
 
-export function broadcastOrdersChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'orders', tenantId })
+export function broadcastLogsChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'logs', workspaceId })
 }
 
-export function broadcastNotificationTemplatesChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'notification.templates', tenantId })
+export function broadcastOrdersChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'orders', workspaceId })
 }
 
-export function broadcastPluginSettingsChanged(pluginName: string, tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'plugin.settings', pluginName, tenantId })
+export function broadcastNotificationTemplatesChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'notification.templates', workspaceId })
 }
 
-export function broadcastPluginsChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'plugins', tenantId })
+export function broadcastPluginSettingsChanged(pluginName: string, workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'plugin.settings', pluginName, workspaceId })
 }
 
-export function broadcastPrintDispatchChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'print-dispatch', tenantId })
+export function broadcastPluginsChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'plugins', workspaceId })
 }
 
-export function broadcastQueueChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'print-queue', tenantId })
+export function broadcastPrintDispatchChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'print-dispatch', workspaceId })
 }
 
-export function broadcastSlicingChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'slicing', tenantId })
+export function broadcastQueueChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'print-queue', workspaceId })
+}
+
+export function broadcastSlicingChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'slicing', workspaceId })
 }
 
 /**
@@ -94,14 +104,14 @@ export function broadcastSlicingChanged(tenantId?: string | null): void {
  * {@link broadcastSlicingChanged} so a slice's sub-second progress stream does not invalidate the
  * (slow) profiles query — only profile mutations do.
  */
-export function broadcastSlicingPresetsChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'slicing.profiles', tenantId })
+export function broadcastSlicingPresetsChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'slicing.profiles', workspaceId })
 }
 
-export function broadcastPrinterViewsChanged(tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'printer.views', tenantId })
+export function broadcastPrinterViewsChanged(workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'printer.views', workspaceId })
 }
 
-export function broadcastPrinterStorageChanged(printerId: string, tenantId?: string | null): void {
-  broadcastResourceChange({ resource: 'printer.storage', printerId, tenantId })
+export function broadcastPrinterStorageChanged(printerId: string, workspaceId?: string | null): void {
+  broadcastResourceChange({ resource: 'printer.storage', printerId, workspaceId })
 }

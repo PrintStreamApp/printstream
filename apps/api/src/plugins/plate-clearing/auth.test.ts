@@ -17,7 +17,7 @@ import { HttpError } from '../../lib/http-error.js'
 import { prisma } from '../../lib/prisma.js'
 import { plateClearingPlugin } from './index.js'
 
-// Per-printer routes authorize through the tenant-scoped singleton prisma; report the
+// Per-printer routes authorize through the workspace-scoped singleton prisma; report the
 // test printer as owned so the gate passes (the fake context.prisma only covers the
 // plugin's own queries).
 const originalScopedPrinterFindUnique = prisma.printer.findUnique
@@ -115,7 +115,7 @@ async function withPlateClearingApp(
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+    request.workspace = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
     next()
   })
 
@@ -129,12 +129,12 @@ async function withPlateClearingApp(
     response.status(500).json({ error: 'Internal server error' })
   })
 
-  const tenantSettings = new Map<string, Map<string, string>>()
+  const workspaceSettings = new Map<string, Map<string, string>>()
   const makeStore = (map: Map<string, string>) => ({
     async get(key: string) { return map.get(key) ?? null },
     async set(key: string, value: string) { map.set(key, value) },
     async delete(key: string) { map.delete(key) },
-    forTenant() { throw new Error('nested forTenant not supported') }
+    forWorkspace() { throw new Error('nested forWorkspace not supported') }
   })
   await plateClearingPlugin.register({
     pluginName: 'plate-clearing',
@@ -149,9 +149,9 @@ async function withPlateClearingApp(
     router,
     settings: {
       ...makeStore(new Map<string, string>()),
-      forTenant(tenantId: string) {
-        let map = tenantSettings.get(tenantId)
-        if (!map) { map = new Map(); tenantSettings.set(tenantId, map) }
+      forWorkspace(workspaceId: string) {
+        let map = workspaceSettings.get(workspaceId)
+        if (!map) { map = new Map(); workspaceSettings.set(workspaceId, map) }
         return makeStore(map)
       }
     },

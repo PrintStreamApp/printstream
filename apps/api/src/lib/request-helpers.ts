@@ -8,9 +8,38 @@ import { Readable } from 'node:stream'
 import type { NextFunction, Request, Response } from 'express'
 import type { Multer } from 'multer'
 import { MulterError } from 'multer'
+import path from 'node:path'
 import { badRequest } from './http-error.js'
 
 const gzipAsync = promisify(gzip)
+
+/**
+ * Send a file that lives under `dir`, by name rather than by absolute path.
+ *
+ * Use this instead of `response.sendFile(absolutePath)` for anything we read off
+ * our own disk. `send`'s `dotfiles: 'ignore'` default rejects a path with ANY
+ * dot-segment in it, and it inspects the WHOLE path it is given -- so an
+ * absolute path 404s purely because of where the install happens to live. That
+ * is not hypothetical: the Linux data directory is `~/.local/share/printstream`
+ * (XDG), so on every Linux self-hosted install the SPA fallback and the bridge
+ * release downloads returned 404 while the same files served fine through
+ * `express.static`, which only ever tests the path RELATIVE to its own root.
+ *
+ * Passing `root` restores that behaviour: the dotfile rule then applies to
+ * `fileName`, which is what we actually mean to police, and it confines the send
+ * to `dir` as a bonus.
+ *
+ * `fileName` must already be validated by the caller when it comes from a
+ * request -- this constrains traversal but is not a substitute for that check.
+ */
+export function sendFileFromDir(
+  response: Response,
+  dir: string,
+  fileName: string,
+  callback?: (error: Error | null) => void
+): void {
+  response.sendFile(fileName, { root: path.resolve(dir) }, callback)
+}
 
 /** Bytes per write when handing the body to the socket. See {@link sendModelBuffer}. */
 const MODEL_BODY_CHUNK_BYTES = 64 * 1024
@@ -77,11 +106,11 @@ export function requireRouteParam(value: string | string[] | undefined, name: st
   throw badRequest(`Missing route parameter: ${name}`)
 }
 
-export function requireRequestTenantId(request: Request): string {
-  if (request.tenant?.id) {
-    return request.tenant.id
+export function requireRequestWorkspaceId(request: Request): string {
+  if (request.workspace?.id) {
+    return request.workspace.id
   }
-  throw badRequest('Tenant context is required')
+  throw badRequest('Workspace context is required')
 }
 
 export function readRequestLocale(request: Request): string | null {

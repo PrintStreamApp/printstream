@@ -35,7 +35,7 @@ export function LogsView() {
   return <LogsPanel />
 }
 
-export function LogsPanel({ embedded = false, surface = 'tenant' }: { embedded?: boolean; surface?: 'platform' | 'tenant' }) {
+export function LogsPanel({ embedded = false, surface = 'workspace' }: { embedded?: boolean; surface?: 'platform' | 'workspace' }) {
   const queryClient = useQueryClient()
   const { confirm } = usePromptDialog()
   const kindOptions: LogKind[] = surface === 'platform' ? ['audit'] : ['audit', 'system']
@@ -97,7 +97,7 @@ export function LogsPanel({ embedded = false, surface = 'tenant' }: { embedded?:
   return (
     <Stack spacing={2}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-        <Typography level={embedded ? 'title-md' : 'h3'}>{surface === 'platform' ? 'Platform logs' : 'Tenant logs'}</Typography>
+        <Typography level={embedded ? 'title-md' : 'h3'}>{surface === 'platform' ? 'Platform logs' : 'Workspace logs'}</Typography>
         <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
           <Button size="sm" variant="plain" startDecorator={<RefreshRoundedIcon />} onClick={() => logsQuery.refetch()}>Refresh</Button>
           <Button
@@ -108,8 +108,8 @@ export function LogsPanel({ embedded = false, surface = 'tenant' }: { embedded?:
             loading={clear.isPending}
             onClick={async () => {
               const confirmed = await confirm({
-                title: surface === 'platform' ? 'Clear platform logs?' : 'Clear tenant logs?',
-                description: surface === 'platform' ? 'Clear all platform logs?' : 'Clear all tenant logs?',
+                title: surface === 'platform' ? 'Clear platform logs?' : 'Clear workspace logs?',
+                description: surface === 'platform' ? 'Clear all platform logs?' : 'Clear all workspace logs?',
                 confirmLabel: 'Clear logs',
                 color: 'danger'
               })
@@ -231,7 +231,7 @@ export function LogsPanel({ embedded = false, surface = 'tenant' }: { embedded?:
           }}
         >
           <Typography level="body-sm" textColor="text.tertiary" sx={{ p: 1.5 }}>
-            {surface === 'platform' ? 'No platform log entries yet.' : 'No tenant log entries yet.'}
+            {surface === 'platform' ? 'No platform log entries yet.' : 'No workspace log entries yet.'}
           </Typography>
         </Sheet>
       )}

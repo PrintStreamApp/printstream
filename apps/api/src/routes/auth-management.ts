@@ -59,7 +59,7 @@ import {
   updateAuthUserRequestSchema,
   updateCurrentAuthUserRequestSchema,
   isPermissionVisibleInPlatformContext,
-  isPermissionVisibleInTenantContext,
+  isPermissionVisibleInWorkspaceContext,
   resolveImpliedPermissions,
   type Permission
 } from '@printstream/shared'
@@ -74,7 +74,7 @@ import { readAuthSessionDuration, writeAuthSessionDuration } from '../lib/auth-p
 import {
   buildAuthUserEmailUpdateData,
   buildCurrentAuthUserWhere,
-  buildEnabledTenantMembershipWhere,
+  buildEnabledWorkspaceMembershipWhere,
   buildManageableAuthUserWhere,
   buildScopedAuthUserInclude,
   createManagedAuthUser,
@@ -83,13 +83,15 @@ import {
   toAuthUserDto,
   toSortedGroupSummaries,
   type ScopedAuthUserRow,
-  NEVER_MATCH_TENANT_ID
+  NEVER_MATCH_WORKSPACE_ID
 } from '../lib/auth-user-memberships.js'
 import { requireRouteParam } from '../lib/request-helpers.js'
 import { hashServiceAccountToken, readRequestAuthSessionSecretHash, requireRecentUserSession } from '../lib/auth-session.js'
 import { assertAuthMutationsAllowed } from '../lib/demo-mode.js'
-import { getCurrentTenant } from '../lib/tenant-context.js'
+import { getCurrentWorkspace } from '../lib/workspace-context.js'
+import { protectedWorkspaceMemberReason } from '../lib/workspace-owner-guard.js'
 import { AUTHENTICATION_REQUIRED_MESSAGE, assertRequestPermission, requireAuthenticatedCurrentUser, requireAuthenticatedRequestPermission, requireRequestPermission } from '../lib/authorization.js'
+import { assertWorkspaceMayAddPerson, joinWorkspaceOrganisation, listOrganisationCandidates } from '../lib/workspace-invite-policy.js'
 import { badRequest, conflict, forbidden, notFound, unauthorized } from '../lib/http-error.js'
 import { prisma } from '../lib/prisma.js'
 import { isUniqueConstraintError } from '../lib/prisma-errors.js'
@@ -253,7 +255,7 @@ authManagementRouter.post('/groups', requireRequestPermission(AUTH_ROLES_CREATE_
   const parsed = createAuthGroupRequestSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest('Invalid auth group payload.')
   await requireRecentAuthManagementVerification(request)
-  const tenantId = getCurrentTenant()?.id ?? null
+  const workspaceId = getCurrentWorkspace()?.id ?? null
   const permissions = expandWithImpliedPermissions(parsed.data.permissions)
   assertContextVisiblePermissions(permissions)
   assertRequestPermission(request, AUTH_ROLES_ASSIGN_PERMISSION)
@@ -261,7 +263,7 @@ authManagementRouter.post('/groups', requireRequestPermission(AUTH_ROLES_CREATE_
 
   const created = await prisma.authGroup.create({
     data: {
-      tenantId,
+      workspaceId,
       key: null,
       name: parsed.data.name,
       description: parsed.data.description ?? null,
@@ -375,11 +377,30 @@ authManagementRouter.get('/users', requireAuthenticatedRequestPermission(AUTH_US
   }))
 })
 
+/**
+ * People already in this workspace's organisation who are not in it yet.
+ *
+ * Lets the add-user dialog offer a pick list instead of asking for an email
+ * that may typo into a stranger. Empty in a public build, which has no
+ * organisations, so the dialog falls back to the email field it always had.
+ *
+ * Gated on the same permission as adding: knowing who is in the organisation is
+ * only useful to someone who can act on it.
+ */
+authManagementRouter.get(
+  '/users/organisation-candidates',
+  requireAuthenticatedRequestPermission(AUTH_USERS_CREATE_PERMISSION),
+  async (_request, response) => {
+    const candidates = await listOrganisationCandidates(getCurrentWorkspace()?.id ?? null)
+    response.json({ candidates })
+  }
+)
+
 authManagementRouter.post('/users', requireAuthenticatedRequestPermission(AUTH_USERS_CREATE_PERMISSION), async (request, response) => {
   const parsed = createManagedAuthUserRequestSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest('Invalid auth user payload.')
 
-  const tenantId = getCurrentTenant()?.id ?? null
+  const workspaceId = getCurrentWorkspace()?.id ?? null
   const groupIds = parsed.data.groupIds
 
   if (groupIds.length > 0) {
@@ -393,13 +414,26 @@ authManagementRouter.post('/users', requireAuthenticatedRequestPermission(AUTH_U
   const email = parsed.data.email.trim().toLowerCase()
   const displayName = parsed.data.displayName?.trim() || null
 
+  // The account owner can stop workspace admins introducing people the
+  // organisation has never seen. Deliberately not a workspace permission: a
+  // workspace admin holds `auth.roles.edit` and could grant one back to
+  // themselves, so the restriction sits above workspace roles.
+  //
+  // Assigning someone already IN the organisation is untouched — that is the
+  // day-to-day act this must not get in the way of.
+  await assertWorkspaceMayAddPerson(workspaceId, email)
+
   try {
     const createdUserId = await createManagedAuthUser({
-      tenantId,
+      workspaceId,
       email,
       displayName,
       groupIds
     })
+    // A workspace member is a member of that workspace's organisation. Applied
+    // here, on the write, so the two can never disagree — and one-directional:
+    // this does not put anyone in a workspace, nor grant them any billing.
+    await joinWorkspaceOrganisation(workspaceId, createdUserId)
 
     const hydratedUser = await prisma.authUser.findFirst({
       where: buildManageableAuthUserWhere(createdUserId),
@@ -444,9 +478,7 @@ authManagementRouter.patch('/users/:userId/groups', requireAuthenticatedRequestP
   assertCanManageAuthUser(request, existing)
   const groups = await readExistingScopedGroups(parsed.data.groupIds)
   assertCanAssignAuthGroups(request, groups)
-  await assertAdminLockoutNotTriggered(request, existing, {
-    nextGroupIds: parsed.data.groupIds
-  })
+  await assertMembershipChangeAllowed(request, existing, { nextGroupIds: parsed.data.groupIds })
   await syncUserGroupMemberships(userId, parsed.data.groupIds)
 
   const updated = await prisma.authUser.findFirst({
@@ -488,22 +520,20 @@ authManagementRouter.patch('/users/:userId', requireAuthenticatedCurrentUser(), 
     throw conflict('You cannot disable the account you are currently using.')
   }
 
-  if (!getCurrentTenant() && parsed.data.loginDisabled !== undefined) {
+  if (!getCurrentWorkspace() && parsed.data.loginDisabled !== undefined) {
     throw badRequest('Workspace context is required to change sign-in status.')
   }
 
-  await assertAdminLockoutNotTriggered(request, existing, {
-    nextLoginDisabled: parsed.data.loginDisabled
-  })
+  await assertMembershipChangeAllowed(request, existing, { nextLoginDisabled: parsed.data.loginDisabled })
 
   try {
     await prisma.$transaction(async (tx) => {
-      if (parsed.data.loginDisabled !== undefined && getCurrentTenant()?.id) {
-        await tx.authTenantMembership.update({
+      if (parsed.data.loginDisabled !== undefined && getCurrentWorkspace()?.id) {
+        await tx.authWorkspaceMembership.update({
           where: {
-            userId_tenantId: {
+            userId_workspaceId: {
               userId,
-              tenantId: getCurrentTenant()!.id
+              workspaceId: getCurrentWorkspace()!.id
             }
           },
           data: {
@@ -555,9 +585,7 @@ authManagementRouter.delete('/users/:userId', requireAuthenticatedRequestPermiss
     throw conflict('You cannot delete the account you are currently using.')
   }
 
-  await assertAdminLockoutNotTriggered(request, user, {
-    deleting: true
-  })
+  await assertMembershipChangeAllowed(request, user, { deleting: true })
 
   annotateRequestAuditLog(request, {
     action: 'delete-auth-user',
@@ -651,7 +679,7 @@ authManagementRouter.post('/users/:userId/sessions/:sessionId/revoke', requireAu
 })
 
 authManagementRouter.get('/service-accounts', requireAuthenticatedRequestPermission(AUTH_SERVICE_ACCOUNTS_VIEW_PERMISSION), async (_request, response) => {
-  if (!getCurrentTenant()) {
+  if (!getCurrentWorkspace()) {
     response.json(authServiceAccountListResponseSchema.parse({ serviceAccounts: [] }))
     return
   }
@@ -678,11 +706,11 @@ authManagementRouter.post('/service-accounts', requireAuthenticatedRequestPermis
 
   const groups = await readExistingScopedGroups(parsed.data.groupIds)
   assertCanAssignAuthGroups(request, groups)
-  const tenantId = requireTenantId()
+  const workspaceId = requireWorkspaceId()
   const token = createServiceAccountToken()
   const created = await prisma.authServiceAccount.create({
     data: {
-      tenantId,
+      workspaceId,
       name: parsed.data.name,
       tokenHash: hashServiceAccountToken(token),
       tokenPrefix: createServiceAccountTokenPrefix(token),
@@ -867,45 +895,104 @@ function assertUserUpdatePermissions(
   }
 }
 
+/**
+ * Describes a pending membership change, for the guards that must vet it.
+ *
+ * `nextGroupIds === undefined` means "not changing roles" — distinct from an
+ * empty array, which means "remove every role".
+ */
+interface MembershipChange {
+  nextGroupIds?: string[]
+  nextLoginDisabled?: boolean
+  deleting?: boolean
+}
+
+/**
+ * Whether this change would take away what protects the user: their admin role,
+ * their ability to sign in, or their existence.
+ *
+ * Computed ONCE and shared by both guards below. It used to be written out in
+ * each of them — the same `nextGroupIds !== undefined && !memberships.some(...)`
+ * expression, differing only in whether the admin key was read from a local
+ * variable — so a fix to one (a group id from another workspace, a renamed admin
+ * key, a nested-group role) would have silently left the other on the old
+ * behaviour, firing one guard and not the other on the same request.
+ */
+function changeRemovesProtection(user: AuthUserRow, change: MembershipChange): boolean {
+  if (change.deleting) return true
+  if (change.nextLoginDisabled === true) return true
+  return change.nextGroupIds !== undefined && !user.memberships.some(
+    (membership) => membership.group.key === ADMIN_GROUP_KEY && change.nextGroupIds?.includes(membership.group.id)
+  )
+}
+
+/**
+ * Vet a membership change against both protections, in the order whose message
+ * the caller should see first.
+ *
+ * One entry point because the two guards were always called back to back with
+ * the same argument, and a fourth membership-mutating route would otherwise get
+ * whichever one its author remembered. Lockout first: "you would lock yourself
+ * out" is about the actor and is the more actionable of the two.
+ */
+async function assertMembershipChangeAllowed(
+  request: Request,
+  user: AuthUserRow,
+  change: MembershipChange
+): Promise<void> {
+  await assertAdminLockoutNotTriggered(request, user, change)
+  await assertProtectedMemberNotStranded(user, change)
+}
+
+/**
+ * Refuse a change that would strip the account owner of access to a workspace
+ * their account owns.
+ *
+ * Distinct from `assertAdminLockoutNotTriggered`, which protects the LAST admin
+ * whoever they are: this protects a specific person regardless of how many other
+ * admins exist, because a workspace admin who is not the owner must not be able
+ * to lock the payer out of what they are being billed for. Both run, and either
+ * may fire.
+ *
+ * Only the changes that actually strand them: a role edit that leaves them an
+ * admin, or any other field on their user, is none of this guard's business.
+ */
+async function assertProtectedMemberNotStranded(user: AuthUserRow, change: MembershipChange): Promise<void> {
+  if (!changeRemovesProtection(user, change)) return
+
+  const reason = await protectedWorkspaceMemberReason(getCurrentWorkspace()?.id ?? null, user.id)
+  if (reason) throw conflict(reason)
+}
+
 async function assertAdminLockoutNotTriggered(
   request: Request,
   user: AuthUserRow,
-  change: {
-    nextGroupIds?: string[]
-    nextLoginDisabled?: boolean
-    deleting?: boolean
-  }
+  change: MembershipChange
 ): Promise<void> {
   if (!isEnabledAdminUser(user)) {
     return
   }
 
-  const tenantId = getCurrentTenant()?.id ?? null
-  if (tenantId && !shouldPreventTenantSelfLockout(request, user.id)) {
+  const workspaceId = getCurrentWorkspace()?.id ?? null
+  if (workspaceId && !shouldPreventWorkspaceSelfLockout(request, user.id)) {
     return
   }
 
-  const adminKey = ADMIN_GROUP_KEY
-  const removesAdminRole = change.nextGroupIds !== undefined && !user.memberships.some(
-    (membership) => membership.group.key === adminKey && change.nextGroupIds?.includes(membership.group.id)
-  )
-  const disablesLogin = change.nextLoginDisabled === true
-
-  if (!change.deleting && !removesAdminRole && !disablesLogin) {
+  if (!changeRemovesProtection(user, change)) {
     return
   }
 
   const otherEnabledAdminCount = await prisma.authUser.count({
-    where: tenantId
+    where: workspaceId
       ? {
           id: { not: user.id },
-          tenantMemberships: {
-            some: buildEnabledTenantMembershipWhere(tenantId)
+          workspaceMemberships: {
+            some: buildEnabledWorkspaceMembershipWhere(workspaceId)
           },
           memberships: {
             some: {
               group: {
-                tenantId,
+                workspaceId,
                 key: ADMIN_GROUP_KEY
               }
             }
@@ -917,7 +1004,7 @@ async function assertAdminLockoutNotTriggered(
           memberships: {
             some: {
               group: {
-                tenantId: null,
+                workspaceId: null,
                 key: ADMIN_GROUP_KEY
               }
             }
@@ -973,9 +1060,9 @@ function assertCanAssignPermissions(request: Request, permissions: readonly stri
 }
 
 async function ensureScopedBuiltInAuthGroups(): Promise<void> {
-  const tenantId = getCurrentTenant()?.id
-  if (tenantId) {
-    await ensureBuiltInAuthGroups(prisma, tenantId)
+  const workspaceId = getCurrentWorkspace()?.id
+  if (workspaceId) {
+    await ensureBuiltInAuthGroups(prisma, workspaceId)
     return
   }
 
@@ -1003,12 +1090,12 @@ async function listGroupUserIds(groupId: string): Promise<string[]> {
 }
 
 async function syncUserGroupMemberships(userId: string, groupIds: string[]): Promise<void> {
-  const tenantId = getCurrentTenant()?.id ?? null
+  const workspaceId = getCurrentWorkspace()?.id ?? null
   await prisma.authUserGroupMembership.deleteMany({
     where: {
       userId,
       group: {
-        tenantId
+        workspaceId
       }
     }
   })
@@ -1032,8 +1119,8 @@ function toAuthGroupDto(request: Request, row: AuthGroupWithCounts) {
     key: row.key,
     name: row.name,
     description: row.description,
-    permissions: getCurrentTenant()
-      ? row.permissions.filter((permission) => isPermissionVisibleInTenantContext(permission as Parameters<typeof isPermissionVisibleInTenantContext>[0]))
+    permissions: getCurrentWorkspace()
+      ? row.permissions.filter((permission) => isPermissionVisibleInWorkspaceContext(permission as Parameters<typeof isPermissionVisibleInWorkspaceContext>[0]))
       : row.permissions.filter((permission) => isPermissionVisibleInPlatformContext(permission as Parameters<typeof isPermissionVisibleInPlatformContext>[0])),
     isSystem: row.isSystem,
     canManage: permissionsAreManageableByActor(request.auth, row.permissions),
@@ -1058,15 +1145,15 @@ function expandWithImpliedPermissions(permissions: Permission[]): Permission[] {
 }
 
 function assertContextVisiblePermissions(permissions: readonly string[]): void {
-  const tenant = getCurrentTenant()
+  const workspace = getCurrentWorkspace()
   const hidden = permissions.some((permission) => {
-    const knownPermission = permission as Parameters<typeof isPermissionVisibleInTenantContext>[0]
-    return tenant
-      ? !isPermissionVisibleInTenantContext(knownPermission)
+    const knownPermission = permission as Parameters<typeof isPermissionVisibleInWorkspaceContext>[0]
+    return workspace
+      ? !isPermissionVisibleInWorkspaceContext(knownPermission)
       : !isPermissionVisibleInPlatformContext(knownPermission)
   })
   if (hidden) {
-    throw badRequest(tenant
+    throw badRequest(workspace
       ? 'One or more permissions are not available in this workspace.'
       : 'One or more permissions are not available for platform roles.')
   }
@@ -1108,8 +1195,8 @@ function createServiceAccountTokenPrefix(token: string): string {
 }
 
 function isEnabledAdminUser(user: AuthUserRow): boolean {
-  const tenantId = getCurrentTenant()?.id ?? null
-  if (!tenantId) {
+  const workspaceId = getCurrentWorkspace()?.id ?? null
+  if (!workspaceId) {
     return user.isPlatformUser && user.memberships.some((membership) => membership.group.key === ADMIN_GROUP_KEY)
   }
 
@@ -1120,30 +1207,30 @@ function isCurrentActorUser(request: Request, userId: string): boolean {
   return request.auth.actor.type === 'user' && request.auth.actor.userId === userId
 }
 
-function shouldPreventTenantSelfLockout(request: Request, userId: string): boolean {
+function shouldPreventWorkspaceSelfLockout(request: Request, userId: string): boolean {
   if (!isCurrentActorUser(request, userId)) return false
   return !(request.auth.actor.type === 'user' && request.auth.actor.isPlatformUser)
 }
 
-function requireTenantId(): string {
-  const tenantId = getCurrentTenant()?.id
-  if (tenantId) {
-    return tenantId
+function requireWorkspaceId(): string {
+  const workspaceId = getCurrentWorkspace()?.id
+  if (workspaceId) {
+    return workspaceId
   }
-  throw badRequest('Tenant context is required.')
+  throw badRequest('Workspace context is required.')
 }
 
 function buildScopedAuthGroupWhere(id?: string): Prisma.AuthGroupWhereInput {
-  const tenantId = getCurrentTenant()?.id ?? null
+  const workspaceId = getCurrentWorkspace()?.id ?? null
   return {
     ...(id ? { id } : {}),
-    tenantId
+    workspaceId
   }
 }
 
 function buildScopedAuthServiceAccountWhere(id?: string): Prisma.AuthServiceAccountWhereInput {
   return {
     ...(id ? { id } : {}),
-    tenantId: getCurrentTenant()?.id ?? NEVER_MATCH_TENANT_ID
+    workspaceId: getCurrentWorkspace()?.id ?? NEVER_MATCH_WORKSPACE_ID
   }
 }

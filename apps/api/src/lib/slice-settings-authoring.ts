@@ -50,7 +50,7 @@ import { readEntry, rewriteThreeMfEntries } from './three-mf-internal.js'
 const PROJECT_SETTINGS_ENTRY = 'Metadata/project_settings.config'
 
 export interface AuthorSliceSettingsInput {
-  tenantId: string
+  workspaceId: string
   slicerTargetId: string | null | undefined
   target: SlicingTarget
   /** The project so far in the rewrite chain. Not modified; a new file is written. */
@@ -171,7 +171,7 @@ async function resolveProcessConfig(input: AuthorSliceSettingsInput): Promise<Pr
   try {
     // Skips `project:` presets, which have no separate file — those fall through to null so the
     // project keeps the embedded process that IS the preset.
-    const [file] = await resolveSlicingPresetFiles(input.tenantId, [
+    const [file] = await resolveSlicingPresetFiles(input.workspaceId, [
       { id: input.target.processProfileId, kind: 'process' }
     ])
     if (!file) return null
@@ -194,7 +194,7 @@ async function resolveFilamentConfig(
 ): Promise<{ config: ProcessConfig; name: string } | null> {
   if (!mapping.profileId) return null
   try {
-    const [file] = await resolveSlicingPresetFiles(input.tenantId, [
+    const [file] = await resolveSlicingPresetFiles(input.workspaceId, [
       { id: mapping.profileId, kind: 'filament' }
     ])
     if (!file) return null

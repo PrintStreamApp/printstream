@@ -59,6 +59,14 @@ export type WsPrinterFtpActivityEvent = z.infer<typeof wsPrinterFtpActivityEvent
 export const wsResourceChangedEventSchema = z.object({
   type: z.literal('resource.changed'),
   resource: z.enum([
+    /**
+     * A workspace's plan changed (checkout confirmed, cancelled, comped). Emitted
+     * from the Paddle webhook, which is the ONLY moment the plan actually flips --
+     * `checkout.completed` fires in the buyer's browser and means only that Paddle
+     * accepted the card, so a client that trusted it would show Pro before the
+     * server agreed.
+     */
+    'billing',
     'bridges',
     'delete-operations',
     'jobs',
@@ -78,7 +86,7 @@ export const wsResourceChangedEventSchema = z.object({
     // query is not refetched sub-second for the duration of a slice. Distinct from 'slicing', which
     // fires on every job state/progress change and invalidates only the jobs list.
     'slicing.profiles',
-    // Support conversations (cloud messaging): broadcast platform-wide (tenantId null) because
+    // Support conversations (cloud messaging): broadcast platform-wide (workspaceId null) because
     // both the workspace participant and platform-workspace clients must refresh unread state.
     'support'
   ]),

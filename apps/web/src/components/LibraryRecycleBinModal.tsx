@@ -20,6 +20,7 @@ import { BackAwareModal as Modal } from './BackAwareModal'
 import { EmptyState } from './EmptyState'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { usePromptDialog } from './PromptDialogProvider'
+import { ListSkeleton } from '../components/ListSkeleton'
 
 export function LibraryRecycleBinModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient()
@@ -70,7 +71,7 @@ export function LibraryRecycleBinModal({ onClose }: { onClose: () => void }) {
         </Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           {binQuery.isLoading ? (
-            <Typography level="body-sm" textColor="text.tertiary">Loading…</Typography>
+            <ListSkeleton rows={2} />
           ) : files.length === 0 ? (
             <EmptyState
               icon={<RestoreFromTrashRoundedIcon />}

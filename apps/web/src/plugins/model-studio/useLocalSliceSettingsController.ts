@@ -1,7 +1,7 @@
 /**
  * Produces the editor's `SliceSettingsController` for a host with NO server behind it — the public
  * 3MF editor. `SliceFileModal` builds the same controller from live workspace data (printers, AMS
- * trays, tenant presets, dispatch); this builds the half that is about the PROJECT (slicer target,
+ * trays, workspace presets, dispatch); this builds the half that is about the PROJECT (slicer target,
  * printer model + nozzle + plate, process preset, and materials) from what a local host can reach:
  * the anonymous catalogue (`/api/public/slicing/*`) plus the user's browser-stored presets.
  *
@@ -50,8 +50,9 @@ import { useMaterialSlots } from '../../components/library/useMaterialSlots'
 import { useProcessProfileSelection } from '../../components/library/useProcessProfileSelection'
 import type { ClientThreeMfProject } from './lib/clientThreeMfProject'
 import { deriveProjectCarryOverrides } from '../../lib/processCarryOverrides'
-import { buildLocalProcessConfigResolver } from './lib/localProcessResolver'
-import { buildLocalFilamentConfigResolver } from './lib/localFilamentResolver'
+import { createBuiltinPresetCache } from './lib/builtinPresetCache'
+import { resolveBuiltinProcessViaApi, buildLocalProcessConfigResolver } from './lib/localProcessResolver'
+import { resolveBuiltinFilamentViaApi, buildLocalFilamentConfigResolver } from './lib/localFilamentResolver'
 import { useUnchangedProjectFilamentPresetIds } from '../../components/library/useBakedPresetChanges'
 import { localBakedIndex, localSliceLibraryFile } from './lib/localSliceFile'
 import { listLocalSlicingPresets } from './lib/localSlicingPresets'
@@ -205,16 +206,33 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
   // dialog does not re-fire its load effect while the catalogue settles.
   const processProfilesRef = useRef(processProfiles)
   processProfilesRef.current = processProfiles
+  // One cache per open project. A BUILT-IN preset resolves from the slicer image, so its config is a
+  // pure function of (presetId, targetId) and cannot change while the tab is open — yet the badge,
+  // the repair, the save's authoring pass and every parent lookup each resolved independently, and
+  // a project whose slots share a preset resolved it once per slot. See `builtinPresetCache.ts`.
+  // `project` is a deliberate RESET KEY, not a value the factory reads: it is what
+  // discards one project's cache when another opens. eslint sees an unused dep and
+  // suggests dropping it, which would make the cache outlive the project it belongs to.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const builtinCache = useMemo(() => createBuiltinPresetCache(), [project])
+  const resolveBuiltinProcess = useMemo(
+    () => builtinCache.memoize('process', resolveBuiltinProcessViaApi),
+    [builtinCache]
+  )
+  const resolveBuiltinFilament = useMemo(
+    () => builtinCache.memoize('filament', resolveBuiltinFilamentViaApi),
+    [builtinCache]
+  )
   const resolveProcessConfig = useCallback<ProcessConfigResolver>(
-    (request) => buildLocalProcessConfigResolver({ project, processProfiles: processProfilesRef.current })(request),
-    [project]
+    (request) => buildLocalProcessConfigResolver({ project, processProfiles: processProfilesRef.current, resolveBuiltin: resolveBuiltinProcess })(request),
+    [project, resolveBuiltinProcess]
   )
   // Same shape for filament: stable identity, live catalogue through a ref.
   const filamentProfilesRef = useRef(unfilteredFilamentProfiles)
   filamentProfilesRef.current = unfilteredFilamentProfiles
   const resolveFilamentConfig = useCallback<FilamentConfigResolver>(
-    (request) => buildLocalFilamentConfigResolver({ project, filamentProfiles: filamentProfilesRef.current })(request),
-    [project]
+    (request) => buildLocalFilamentConfigResolver({ project, filamentProfiles: filamentProfilesRef.current, resolveBuiltin: resolveBuiltinFilament })(request),
+    [project, resolveBuiltinFilament]
   )
   // Which project presets say nothing their installed twin does not — so the picker can present
   // them as the system preset, the way BambuStudio does. Declared AFTER the resolver because it
@@ -379,7 +397,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     requiresSinglePlate: false,
     canOpenThreeDimensionalPreview: false,
     isMobileViewport,
-    tenantSlug: undefined,
+    workspaceSlug: undefined,
     navigate: NOOP_NAVIGATE,
     onClose,
     slicerTargets,

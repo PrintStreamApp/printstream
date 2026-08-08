@@ -4,14 +4,15 @@ import type { AuthBootstrap } from '@printstream/shared'
 import { resolvePostAuthRedirectPath } from './postAuthRedirect'
 
 function buildBootstrap(overrides: Partial<AuthBootstrap> = {}): AuthBootstrap {
-  const { memberTenants = [], availableTenants = [], ...rest } = overrides
+  const { memberWorkspaces = [], availableWorkspaces = [], customers = [], ...rest } = overrides
 
   return {
     authEnabled: true,
     platformAuthEnabled: true,
     setupRequired: false,
-    tenant: null,
-    tenantHasConnectedBridges: false,
+    workspace: null,
+    workspaceHasConnectedBridges: false,
+    customers,
     providers: [],
     actor: { type: 'user', userId: 'user-1', isPlatformUser: false },
     permissions: [],
@@ -20,35 +21,35 @@ function buildBootstrap(overrides: Partial<AuthBootstrap> = {}): AuthBootstrap {
       canManageAuthProviders: true,
       canManageSettings: false,
       canManageSupportAccess: false,
-      canManageTenants: false,
+      canManageWorkspaces: false,
       canManagePlugins: false,
       canViewLogs: false
     },
     runtimePolicy: { demoMode: false, managedBridge: false, selfHosted: false },
     ...rest,
-    memberTenants,
-    availableTenants
+    memberWorkspaces,
+    availableWorkspaces
   }
 }
 
-test('resolvePostAuthRedirectPath ignores legacy unscoped tenant redirect paths', () => {
+test('resolvePostAuthRedirectPath ignores legacy unscoped workspace redirect paths', () => {
   assert.equal(resolvePostAuthRedirectPath(buildBootstrap(), '/jobs?filter=mine'), '/workspaces')
 })
 
-test('resolvePostAuthRedirectPath keeps a scoped tenant redirect for multi-workspace users', () => {
+test('resolvePostAuthRedirectPath keeps a scoped workspace redirect for multi-workspace users', () => {
   assert.equal(resolvePostAuthRedirectPath(buildBootstrap({
-    memberTenants: [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta' }
+    memberWorkspaces: [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta' }
     ]
   }), '/workspaces/beta/jobs?filter=mine'), '/workspaces/beta/jobs?filter=mine')
 })
 
-test('resolvePostAuthRedirectPath sends multi-workspace users to the chooser before unscoped tenant pages', () => {
+test('resolvePostAuthRedirectPath sends multi-workspace users to the chooser before unscoped workspace pages', () => {
   assert.equal(resolvePostAuthRedirectPath(buildBootstrap({
-    memberTenants: [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
-      { id: 'tenant-2', slug: 'beta', name: 'Beta' }
+    memberWorkspaces: [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+      { id: 'workspace-2', slug: 'beta', name: 'Beta' }
     ]
   }), '/jobs?filter=mine'), '/workspaces')
 })
@@ -56,8 +57,8 @@ test('resolvePostAuthRedirectPath sends multi-workspace users to the chooser bef
 test('resolvePostAuthRedirectPath sends platform users with multiple choices to the chooser', () => {
   assert.equal(resolvePostAuthRedirectPath(buildBootstrap({
     actor: { type: 'user', userId: 'user-1', isPlatformUser: true },
-    memberTenants: [
-      { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+    memberWorkspaces: [
+      { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     ]
   })), '/workspaces')
 })
@@ -80,16 +81,16 @@ test('resolvePostAuthRedirectPath does not preserve root as an app redirect', ()
     actor: { type: 'user', userId: 'user-1', isPlatformUser: true }
   }), '/'), '/platform')
   assert.equal(resolvePostAuthRedirectPath(buildBootstrap({
-    memberTenants: [{ id: 'tenant-1', slug: 'alpha', name: 'Alpha' }]
+    memberWorkspaces: [{ id: 'workspace-1', slug: 'alpha', name: 'Alpha' }]
   }), '/'), '/workspaces/alpha')
 })
 
-test('resolvePostAuthRedirectPath sends single-tenant users to their scoped workspace', () => {
+test('resolvePostAuthRedirectPath sends single-workspace users to their scoped workspace', () => {
   assert.equal(resolvePostAuthRedirectPath(buildBootstrap({
-    memberTenants: [{ id: 'tenant-1', slug: 'alpha', name: 'Alpha' }]
+    memberWorkspaces: [{ id: 'workspace-1', slug: 'alpha', name: 'Alpha' }]
   })), '/workspaces/alpha')
   assert.equal(resolvePostAuthRedirectPath(buildBootstrap({
-    memberTenants: [{ id: 'tenant-1', slug: 'alpha', name: 'Alpha' }]
+    memberWorkspaces: [{ id: 'workspace-1', slug: 'alpha', name: 'Alpha' }]
   }), '/jobs?filter=mine'), '/workspaces/alpha')
 })
 

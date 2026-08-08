@@ -42,7 +42,7 @@ test('hintOnline reconnects offline copies on the reporting bridge and skips onl
   const offlineOne = makePrinter('printer-offline-1', 'SERIAL123')
   const offlineTwo = makePrinter('printer-offline-2', 'SERIAL123')
   const otherSerial = makePrinter('printer-other', 'SERIAL999')
-  // Same serial, different tenant/bridge: must never be touched by bridge-1's hint.
+  // Same serial, different workspace/bridge: must never be touched by bridge-1's hint.
   const otherBridge = makePrinter('printer-other-bridge', 'SERIAL123')
 
   printerManagerState.managed.set(online.id, { printer: online, status: { online: true } })

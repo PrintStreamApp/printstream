@@ -16,7 +16,7 @@ const stubPrisma = usePrismaStubs()
 
 type DispatchJobStateFixture = {
   id: string
-  tenantId: string
+  workspaceId: string
   printerId: string
   printerName: string
   fileId: string
@@ -69,7 +69,7 @@ function dispatchJobs() {
 function buildDispatchFixture(overrides: Partial<DispatchJobStateFixture> = {}): DispatchJobStateFixture {
   return {
     id: 'dispatch-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     printerId: 'printer-1',
     printerName: 'Printer 1',
     fileId: 'file-1',
@@ -187,7 +187,7 @@ test('cancel aborts an in-flight upload and flags the job without finishing it',
   ;(fixture as unknown as { abortController: AbortController }).abortController = controller
   jobs.set('dispatch-uploading', fixture)
   try {
-    const result = await printDispatcher.cancel('tenant-1', 'dispatch-uploading')
+    const result = await printDispatcher.cancel('workspace-1', 'dispatch-uploading')
     // The transfer's AbortSignal fires so the FTPS upload stops mid-stream...
     assert.equal(controller.signal.aborted, true)
     // ...and the job is flagged, but stays 'uploading' until runJob observes the abort
@@ -210,7 +210,7 @@ test('cancel marks a failed dispatch as cancelled and closes its tracked history
     finishedAt: null,
     printerId: 'printer-1',
     jobName: 'Failed cube',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     sourceType: 'library',
     fileId: 'file-1',
     plate: 1
@@ -219,11 +219,11 @@ test('cancel marks a failed dispatch as cancelled and closes its tracked history
     updates.push(input)
     return { id: input.where.id }
   })
-  stubPrisma(rootPrisma.printer, 'findUnique', async () => ({ tenantId: 'tenant-1' }))
+  stubPrisma(rootPrisma.printer, 'findUnique', async () => ({ workspaceId: 'workspace-1' }))
 
   jobs.set('dispatch-failed', {
     id: 'dispatch-failed',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     printerId: 'printer-1',
     printerName: 'Printer 1',
     fileId: 'file-1',
@@ -268,7 +268,7 @@ test('cancel marks a failed dispatch as cancelled and closes its tracked history
   })
 
   try {
-    const job = await printDispatcher.cancel('tenant-1', 'dispatch-failed')
+    const job = await printDispatcher.cancel('workspace-1', 'dispatch-failed')
 
     assert.ok(job)
     assert.equal(job?.status, 'cancelled')
@@ -294,13 +294,13 @@ test('stop() cancels queued jobs, aborts in-flight uploads, and leaves sent prin
     finishedAt: null,
     printerId: 'printer-1',
     jobName: 'Queued cube',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     sourceType: 'library',
     fileId: 'file-1',
     plate: 1
   }))
   stubPrisma(rootPrisma.printJob, 'update', async (input: { where: { id: string } }) => ({ id: input.where.id }))
-  stubPrisma(rootPrisma.printer, 'findUnique', async () => ({ tenantId: 'tenant-1' }))
+  stubPrisma(rootPrisma.printer, 'findUnique', async () => ({ workspaceId: 'workspace-1' }))
 
   const controller = new AbortController()
   const uploading = buildDispatchFixture({ id: 'stop-uploading', printerId: 'printer-up', status: 'uploading' })
@@ -344,7 +344,7 @@ test('assertBridgeAllowsPrinting rejects dispatch through a bridge that needs up
   for (const status of ['updateRequired', 'runnerUpdateRequired', 'unsupported']) {
     stubPrisma(rootPrisma.bridge, 'findFirst', async () => ({ name: 'Home', updateStatus: status }))
     await assert.rejects(
-      () => printDispatcher.assertBridgeAllowsPrinting('bridge-1', 'tenant-1'),
+      () => printDispatcher.assertBridgeAllowsPrinting('bridge-1', 'workspace-1'),
       (error) => error instanceof HttpError && /needs to be updated/i.test(error.message),
       `status ${status} should block dispatch`
     )
@@ -361,7 +361,7 @@ test('assertBridgeAllowsPrinting never blocks on a self-hosted bundle, even for 
     for (const status of ['updateRequired', 'runnerUpdateRequired', 'unsupported']) {
       stubPrisma(rootPrisma.bridge, 'findFirst', async () => ({ name: 'Home', updateStatus: status }))
       await assert.doesNotReject(
-        () => printDispatcher.assertBridgeAllowsPrinting('bridge-1', 'tenant-1'),
+        () => printDispatcher.assertBridgeAllowsPrinting('bridge-1', 'workspace-1'),
         `self-hosted should not block on status ${status}`
       )
     }
@@ -376,7 +376,7 @@ test('assertBridgeAllowsPrinting allows compatible or unevaluated bridges', asyn
   for (const updateStatus of ['current', 'updateAvailable', 'updateHeldBack', 'imageUpdateRequired', null, undefined]) {
     stubPrisma(rootPrisma.bridge, 'findFirst', async () => ({ name: 'Home', updateStatus }))
     await assert.doesNotReject(
-      () => printDispatcher.assertBridgeAllowsPrinting('bridge-1', 'tenant-1'),
+      () => printDispatcher.assertBridgeAllowsPrinting('bridge-1', 'workspace-1'),
       `status ${String(updateStatus)} should not block dispatch`
     )
   }

@@ -22,9 +22,9 @@ function createApiPlugin(input: Partial<ApiPluginInfo> & Pick<ApiPluginInfo, 'na
     source: 'builtin',
     installed: true,
     enabled: true,
-    runtimeSurfaces: ['tenant'],
-    managerSurfaces: ['platform', 'tenant'],
-    tenantAccess: 'controlled',
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled',
     availableInCurrentContext: true,
     ...input
   }
@@ -42,7 +42,7 @@ test('shouldRenderPluginSettingsPanel hides disabled plugin panels and routes no
       name: 'notifications-browser',
       runtimeSurfaces: ['platform'],
       managerSurfaces: ['platform'],
-      tenantAccess: 'none'
+      workspaceAccess: 'none'
     }),
     web: panelPlugin
   }
@@ -84,13 +84,13 @@ test('mergePlugins combines api and web metadata and keeps notification channels
       name: 'notifications-ntfy',
       runtimeSurfaces: ['platform'],
       managerSurfaces: ['platform'],
-      tenantAccess: 'none'
+      workspaceAccess: 'none'
     }),
     createApiPlugin({
       name: 'notifications-browser',
       runtimeSurfaces: ['platform'],
       managerSurfaces: ['platform'],
-      tenantAccess: 'none'
+      workspaceAccess: 'none'
     })
   ]
   const webPlugins: WebPlugin[] = [
@@ -155,7 +155,7 @@ test('getNewlyDisabledPluginNames only reports fresh enabled-to-disabled transit
       name: 'notifications-browser',
       runtimeSurfaces: ['platform'],
       managerSurfaces: ['platform'],
-      tenantAccess: 'none'
+      workspaceAccess: 'none'
     })
   ]
   const next: ApiPluginInfo[] = [
@@ -173,34 +173,34 @@ test('getNewlyDisabledPluginNames only reports fresh enabled-to-disabled transit
       enabled: false,
       runtimeSurfaces: ['platform'],
       managerSurfaces: ['platform'],
-      tenantAccess: 'none'
+      workspaceAccess: 'none'
     })
   ]
 
   assert.deepEqual(getNewlyDisabledPluginNames(previous, next), ['firmware-updates'])
 })
 
-test('getNewlyDisabledPluginNamesForSnapshot ignores tenant-scope changes', () => {
-  const tenantOnePlugins: ApiPluginInfo[] = [
+test('getNewlyDisabledPluginNamesForSnapshot ignores workspace-scope changes', () => {
+  const workspaceOnePlugins: ApiPluginInfo[] = [
     createApiPlugin({ name: 'firmware-updates', enabled: true }),
     createApiPlugin({ name: 'orders', enabled: true })
   ]
-  const tenantTwoPlugins: ApiPluginInfo[] = [
+  const workspaceTwoPlugins: ApiPluginInfo[] = [
     createApiPlugin({ name: 'firmware-updates', enabled: false }),
     createApiPlugin({ name: 'orders', enabled: true })
   ]
 
   assert.deepEqual(
     getNewlyDisabledPluginNamesForSnapshot(
-      { scopeKey: 'tenant-1', plugins: tenantOnePlugins },
-      { scopeKey: 'tenant-2', plugins: tenantTwoPlugins }
+      { scopeKey: 'workspace-1', plugins: workspaceOnePlugins },
+      { scopeKey: 'workspace-2', plugins: workspaceTwoPlugins }
     ),
     []
   )
   assert.deepEqual(
     getNewlyDisabledPluginNamesForSnapshot(
-      { scopeKey: 'tenant-2', plugins: tenantOnePlugins },
-      { scopeKey: 'tenant-2', plugins: tenantTwoPlugins }
+      { scopeKey: 'workspace-2', plugins: workspaceOnePlugins },
+      { scopeKey: 'workspace-2', plugins: workspaceTwoPlugins }
     ),
     ['firmware-updates']
   )

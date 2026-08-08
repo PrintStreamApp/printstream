@@ -354,7 +354,7 @@ test('slicer client carries every schema field through, including the support fl
           layerHeight: 0.2,
           updatedAt: null
         },
-        // A custom preset from the slicer would shadow tenant storage; still dropped.
+        // A custom preset from the slicer would shadow workspace storage; still dropped.
         { id: 'custom:nope', source: 'custom', kind: 'filament', name: 'Not the slicer’s to own' },
         // A malformed entry must not blank the whole catalogue.
         { id: '', source: 'builtin', kind: 'filament', name: '' }

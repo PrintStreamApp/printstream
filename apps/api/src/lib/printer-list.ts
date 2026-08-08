@@ -11,9 +11,9 @@ import type { Printer } from '@printstream/shared'
 import type { AnyPrismaClient } from './prisma.js'
 import { toPublicPrinterDto } from './printer-record.js'
 
-export async function listPrinters(prisma: AnyPrismaClient, tenantId?: string): Promise<Printer[]> {
+export async function listPrinters(prisma: AnyPrismaClient, workspaceId?: string): Promise<Printer[]> {
   const rows = await prisma.printer.findMany({
-    where: tenantId ? { tenantId } : undefined,
+    where: workspaceId ? { workspaceId } : undefined,
     orderBy: { position: 'asc' }
   })
   return rows.map(toPublicPrinterDto)

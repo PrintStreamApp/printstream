@@ -28,7 +28,11 @@ test('invalidateLibraryQueries refreshes the library slices but never the editor
     ['filament-baked-changes'],
     // Held at staleTime Infinity and keyed by file id, so only an explicit bust refreshes it —
     // and its value reaches a slice request, not just a badge.
-    ['slice-project-process-carry']
+    ['slice-project-process-carry'],
+    // Single-file metadata DTOs (name, version counter, repair flags) — NOT a scene cache.
+    // Skipping it left the editor's repair banner gating on pre-repair flags, so a successful
+    // repair read as having done nothing.
+    ['library-file']
   ])
   // Load-bearing absence. The editor reads its project from an archive downloaded ONCE per
   // session, so refetching these after a save re-reads the PRE-save bytes and stores them as

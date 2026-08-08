@@ -4,7 +4,7 @@
  *
  * Mirrors the general-settings shape used by theme, landing page, and slicer developer mode: a
  * **workspace-wide shared default** persisted server-side in `GeneralSettings`
- * (`editorShowBedModel` / `editorSidebarSide`, via `/api/settings`, tenant-scoped) plus an optional
+ * (`editorShowBedModel` / `editorSidebarSide`, via `/api/settings`, workspace-scoped) plus an optional
  * **per-device override** in browser localStorage. The effective value is `override ?? sharedDefault`.
  *
  * Both tiers matter here: a workspace can set the house layout while one machine still differs — a
@@ -17,7 +17,7 @@
  * Query cache App.tsx owns, so this adds no extra fetch.
  *
  * Both tiers are **per workspace**. The shared default already is (`/api/settings` is
- * tenant-scoped), and the device override is keyed by workspace slug to match: each workspace sets
+ * workspace-scoped), and the device override is keyed by workspace slug to match: each workspace sets
  * its own default, so an override shared across workspaces would silently shadow a default it was
  * never chosen against. This mirrors the nav-order and landing-page overrides.
  */
@@ -31,7 +31,7 @@ import { apiFetch } from './apiClient'
 
 /**
  * Marks a host that has no workspace behind it — the public editor, where a file comes from the
- * user's disk and there is no tenant, no `/api/settings`, and nobody to set a house default.
+ * user's disk and there is no workspace, no `/api/settings`, and nobody to set a house default.
  *
  * The two-tier model is meaningless there: "workspace default vs this device" collapses to just
  * "this device". Under this scope the shared query never runs (it would 401), the effective value is
@@ -72,7 +72,7 @@ function parseNullableSide(raw: string): EditorSidebarSideSetting | null {
  */
 function useWorkspaceKeySuffix(): string {
   const deviceOnly = useViewportSettingsDeviceOnly()
-  const slug = useAuthBootstrapQuery().data?.tenant?.slug
+  const slug = useAuthBootstrapQuery().data?.workspace?.slug
   // A server-less host keys on its own name rather than `ambient`: it is not "signed in without a
   // workspace", it is a different surface, and sharing a key would let one shadow the other.
   if (deviceOnly) return 'local'

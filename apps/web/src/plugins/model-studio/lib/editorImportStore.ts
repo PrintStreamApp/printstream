@@ -7,7 +7,7 @@
  * one interface both answers implement:
  *
  *  - {@link createApiImportStore} (`editorImports.ts`) uploads to `POST /api/editor/imports`, which
- *    parses server-side and keeps the mesh in a tenant-keyed LRU. The bake resolves ids from there,
+ *    parses server-side and keeps the mesh in a workspace-keyed LRU. The bake resolves ids from there,
  *    so {@link EditorImportStore.importsForBake} has nothing to hand over.
  *  - `createLocalImportStore` (`localImportStore.ts`) parses in the tab and holds the geometry
  *    itself, because the public editor has no session and the file must not leave the machine. Its

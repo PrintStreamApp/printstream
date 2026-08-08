@@ -31,7 +31,7 @@
  * (both already resolve the parent for the changed-vs-preset badge); `three-mf/bake-documents.ts`
  * writes it into the saved project.
  */
-import { FILAMENT_PRESET_OPTIONS } from './generated/filament-preset-options.generated.js'
+import { FILAMENT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
 import { filamentConfigValuesEqual, filamentSettingsCatalog } from './filament-settings.js'
 import type { ProcessConfig } from './process-settings.js'
 

@@ -61,7 +61,7 @@ async function postExport(body: unknown): Promise<{ status: number; text: string
   app.use(express.json({ limit: '10mb' }))
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = { id: 'tenant-1', slug: 'dev', name: 'Dev' }
+    request.workspace = { id: 'workspace-1', slug: 'dev', name: 'Dev' }
     next()
   })
   app.use('/api/editor', editorRouter)

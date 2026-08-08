@@ -42,19 +42,19 @@ function StoredValue({ storageKey }: { storageKey: string }) {
 }
 
 test('useLocalStorageState reloads changed keys without overwriting the next key first', async () => {
-  window.localStorage.setItem('tenant-a', 'alpha')
-  window.localStorage.setItem('tenant-b', 'bravo')
+  window.localStorage.setItem('workspace-a', 'alpha')
+  window.localStorage.setItem('workspace-b', 'bravo')
 
-  const view = render(<StoredValue storageKey="tenant-a" />)
+  const view = render(<StoredValue storageKey="workspace-a" />)
   assert.equal(view.getByRole('button').textContent, 'alpha')
 
   fireEvent.click(view.getByRole('button'))
-  await waitFor(() => assert.equal(window.localStorage.getItem('tenant-a'), 'updated'))
+  await waitFor(() => assert.equal(window.localStorage.getItem('workspace-a'), 'updated'))
 
-  view.rerender(<StoredValue storageKey="tenant-b" />)
+  view.rerender(<StoredValue storageKey="workspace-b" />)
 
   await waitFor(() => assert.equal(view.getByRole('button').textContent, 'bravo'))
-  assert.equal(window.localStorage.getItem('tenant-b'), 'bravo')
+  assert.equal(window.localStorage.getItem('workspace-b'), 'bravo')
 })
 
 /**

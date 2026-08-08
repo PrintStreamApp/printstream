@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
-import type { TenantSummary } from '@printstream/shared'
+import type { WorkspaceSummary } from '@printstream/shared'
 import { installJsdomGlobals } from '../test-utils/jsdom'
 
 const dom = installJsdomGlobals()
@@ -19,14 +19,14 @@ after(() => {
   dom.window.close()
 })
 
-function tenant(id: string, name: string): TenantSummary {
+function workspace(id: string, name: string): WorkspaceSummary {
   return { id, slug: id, name }
 }
 
 test('ConnectBridgeView warns when the deep link has no code', () => {
   const view = render(
     <CssVarsProvider>
-      <ConnectBridgeView code={null} workspaces={[tenant('a', 'A')]} activeTenantId={null} pending={false} onConnect={() => {}} />
+      <ConnectBridgeView code={null} workspaces={[workspace('a', 'A')]} activeWorkspaceId={null} pending={false} onConnect={() => {}} />
     </CssVarsProvider>
   )
 
@@ -39,8 +39,8 @@ test('ConnectBridgeView prompts for a workspace when several are accessible', ()
     <CssVarsProvider>
       <ConnectBridgeView
         code="ABCD1234"
-        workspaces={[tenant('a', 'Workspace A'), tenant('b', 'Workspace B')]}
-        activeTenantId={null}
+        workspaces={[workspace('a', 'Workspace A'), workspace('b', 'Workspace B')]}
+        activeWorkspaceId={null}
         pending={false}
         onConnect={(id) => selected.push(id)}
       />
@@ -58,8 +58,8 @@ test('ConnectBridgeView connects straight through to a single workspace', async 
     <CssVarsProvider>
       <ConnectBridgeView
         code="ABCD1234"
-        workspaces={[tenant('solo', 'Only Workspace')]}
-        activeTenantId={null}
+        workspaces={[workspace('solo', 'Only Workspace')]}
+        activeWorkspaceId={null}
         pending={false}
         onConnect={(id) => selected.push(id)}
       />
@@ -76,7 +76,7 @@ test('ConnectBridgeView falls back to the active workspace when no list is avail
       <ConnectBridgeView
         code="ABCD1234"
         workspaces={[]}
-        activeTenantId="active"
+        activeWorkspaceId="active"
         pending={false}
         onConnect={(id) => selected.push(id)}
       />

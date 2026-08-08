@@ -13,7 +13,7 @@ function mesh(maxX: number): ImportedMesh {
 }
 
 test('stageImport summarizes a single-solid import as one part named after the import', () => {
-  const summary = stageImport({ tenantId: 't1', name: 'Widget', format: 'stl', mesh: mesh(10) })
+  const summary = stageImport({ workspaceId: 't1', name: 'Widget', format: 'stl', mesh: mesh(10) })
   assert.equal(summary.parts.length, 1)
   assert.equal(summary.parts[0]?.name, 'Widget')
   assert.equal(summary.parts[0]?.triangleCount, 1)
@@ -28,7 +28,7 @@ test('stageImport summarizes a multi-solid import as one part per named solid', 
       { name: 'Hole modifier 1', mesh: mesh(5) }
     ]
   }
-  const summary = stageImport({ tenantId: 't1', name: 'CHM Cylinder', format: 'step', mesh: merged })
+  const summary = stageImport({ workspaceId: 't1', name: 'CHM Cylinder', format: 'step', mesh: merged })
   assert.deepEqual(summary.parts.map((part) => part.name), ['Cylinder', 'Hole modifier 1'])
   assert.equal(summary.parts.length, 2)
 })

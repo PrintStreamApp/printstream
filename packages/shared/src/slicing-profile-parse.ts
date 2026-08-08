@@ -46,6 +46,33 @@ export function isZipArchiveBytes(bytes: Uint8Array): boolean {
   return (c === 0x03 && d === 0x04) || (c === 0x05 && d === 0x06) || (c === 0x07 && d === 0x08)
 }
 
+/**
+ * The only `from` values BambuStudio's CLI will load a preset with.
+ *
+ * `load_config_file` in `BambuStudio.cpp` rejects anything else outright — including the EMPTY
+ * string its own `CreatePresetsDialog` writes — and the rejection kills the whole run with
+ * CLI_CONFIG_FILE_ERROR (-5, surfacing as exit 251), not just the offending preset. Note the
+ * asymmetric casing: `system` must be lowercase, while `User` and `user` are both accepted.
+ */
+export const CLI_SUPPORTED_PRESET_FROM_VALUES = ['system', 'User', 'user'] as const
+
+/** Whether `value` is a `from` the CLI will accept. Absent and empty both fail. */
+export function isCliSupportedPresetFrom(value: unknown): boolean {
+  return typeof value === 'string' && (CLI_SUPPORTED_PRESET_FROM_VALUES as readonly string[]).includes(value)
+}
+
+/**
+ * Stamp a CLI-loadable `from` onto a preset record, in place.
+ *
+ * A preset with no `from` is not a hypothetical: presets minted by our OWN settings dialogs carry
+ * `name` + `type` and nothing else, so every slice that loads one dies at exit 251. Callers pass
+ * the provenance to fall back to — `system` for a shipped catalogue preset, `User` for anything a
+ * user uploaded or saved.
+ */
+export function ensureCliSupportedPresetFrom(record: Record<string, unknown>, fallback: 'system' | 'User'): void {
+  if (!isCliSupportedPresetFrom(record.from)) record.from = fallback
+}
+
 export function parseProfileJson(content: string, fallbackKind?: SlicingPresetKind): { raw: Record<string, unknown>; kind: SlicingPresetKind; name: string } {
   let raw: unknown
   try {
@@ -60,6 +87,10 @@ export function parseProfileJson(content: string, fallbackKind?: SlicingPresetKi
   if (!name) throw new Error('Profile must include a name')
   if (isInternalBambuStudioResourceName(name)) throw new Error('Profile is a BambuStudio helper resource, not a slicing preset')
   record.type = kind
+  // Everything reaching this parser is a preset the USER supplied or saved, so it is a User preset
+  // by definition. Normalized at INGEST as well as at slice time because the stored copy is what
+  // the editor and the CLI both read back.
+  ensureCliSupportedPresetFrom(record, 'User')
   return { raw: record, kind, name }
 }
 

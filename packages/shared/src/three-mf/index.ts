@@ -24,6 +24,7 @@
  */
 export * from './bake-documents.js'
 export * from './bake.js'
+export * from './embedded-presets.js'
 export * from './entries.js'
 export * from './imported-mesh.js'
 export * from './index-dto.js'

@@ -5,7 +5,8 @@
  */
 import { z } from 'zod'
 import { permissionDefinitionSchema, permissionSchema } from './permissions.js'
-import { tenantSummarySchema } from './tenants.js'
+import { customerSummarySchema } from './customers.js'
+import { workspaceSummarySchema } from './workspaces.js'
 
 const uniquePermissionArraySchema = z.array(permissionSchema).refine(
   (permissions) => new Set(permissions).size === permissions.length,
@@ -93,7 +94,7 @@ export const authRuntimePolicySchema = z.object({
   managedBridge: z.boolean().default(false),
   /**
    * Self-hosted (open-source) deployment: the cloud-only private surface
-   * (platform tenant administration, marketing) is absent. The web app uses this
+   * (platform workspace administration, marketing) is absent. The web app uses this
    * to hide those surfaces even when their modules happen to be present (e.g. a
    * developer running the full private tree from source with `SELF_HOSTED=true`).
    * In a real public build the private modules are stripped, so this is also
@@ -109,12 +110,30 @@ export const authBootstrapCapabilitiesSchema = z.object({
   canManageAuthProviders: z.boolean(),
   canManageSettings: z.boolean(),
   canManageSupportAccess: z.boolean(),
-  canManageTenants: z.boolean(),
+  canManageWorkspaces: z.boolean(),
   canManagePlugins: z.boolean(),
   canViewLogs: z.boolean()
 })
 
 export type AuthBootstrapCapabilities = z.infer<typeof authBootstrapCapabilitiesSchema>
+
+/**
+ * Someone in the workspace's organisation who is not in the workspace yet.
+ *
+ * Core because the add-user dialog is core; populated only by the cloud, and
+ * empty everywhere else.
+ */
+export const organisationCandidateSchema = z.object({
+  userId: z.string(),
+  email: z.string(),
+  displayName: z.string().nullable()
+})
+export type OrganisationCandidate = z.infer<typeof organisationCandidateSchema>
+
+export const organisationCandidateListResponseSchema = z.object({
+  candidates: z.array(organisationCandidateSchema).default([])
+})
+export type OrganisationCandidateListResponse = z.infer<typeof organisationCandidateListResponseSchema>
 
 export const authBootstrapSchema = z.object({
   authEnabled: z.boolean(),
@@ -122,10 +141,21 @@ export const authBootstrapSchema = z.object({
   setupRequired: z.boolean(),
   providers: z.array(authProviderBootstrapSchema),
   actor: authActorSummarySchema,
-  tenant: tenantSummarySchema.nullable().default(null),
-  memberTenants: z.array(tenantSummarySchema).default([]),
-  availableTenants: z.array(tenantSummarySchema).default([]),
-  tenantHasConnectedBridges: z.boolean().default(false),
+  workspace: workspaceSummarySchema.nullable().default(null),
+  memberWorkspaces: z.array(workspaceSummarySchema).default([]),
+  availableWorkspaces: z.array(workspaceSummarySchema).default([]),
+  /**
+   * Billing scopes this user may switch into, alongside their workspaces and
+   * (for platform users) the platform scope.
+   *
+   * Empty for anyone without explicit billing access — which is everyone until
+   * an account owner grants it, because being added to a workspace must never
+   * hand someone the payment method. Empty in a public build too: an OSS install
+   * has no billing relationship at all, so the switcher simply has nothing extra
+   * to offer and behaves exactly as it did before this existed.
+   */
+  customers: z.array(customerSummarySchema).default([]),
+  workspaceHasConnectedBridges: z.boolean().default(false),
   permissions: z.array(permissionSchema),
   capabilities: authBootstrapCapabilitiesSchema,
   runtimePolicy: authRuntimePolicySchema
@@ -288,7 +318,14 @@ export const bootstrapLocalAdminResponseSchema = z.object({
     key: z.string().nullable(),
     name: z.string()
   }),
-  invite: authUserInviteResultSchema,
+  /**
+   * The emailed code, when one was issued. Null once the claim signs the new
+   * admin in directly — there is nothing left to verify, and emailing a live
+   * credential nobody needs is worse than not sending it.
+   */
+  invite: authUserInviteResultSchema.nullable(),
+  /** Whether a session was started; false means sign in the ordinary way. */
+  authenticated: z.boolean(),
   setupRequired: z.boolean()
 })
 
@@ -346,7 +383,7 @@ const authRedirectPathSchema = z.string().trim().min(1).max(512).refine((value) 
 
 export const emailCodeRequestRequestSchema = z.object({
   email: z.string().trim().email().max(320),
-  tenantId: z.string().trim().min(1).optional(),
+  workspaceId: z.string().trim().min(1).optional(),
   redirectTo: authRedirectPathSchema.optional(),
   timeZone: z.string().trim().min(1).max(100).optional()
 })
@@ -355,8 +392,8 @@ export type EmailCodeRequestRequest = z.infer<typeof emailCodeRequestRequestSche
 
 export const emailCodeRequestResponseSchema = z.object({
   delivered: z.boolean(),
-  requiresTenantSelection: z.boolean().default(false),
-  tenants: z.array(tenantSummarySchema).default([]),
+  requiresWorkspaceSelection: z.boolean().default(false),
+  workspaces: z.array(workspaceSummarySchema).default([]),
   expiresAt: z.string().datetime().nullable(),
   previewCode: z.string().nullable().optional()
 })
@@ -365,7 +402,7 @@ export type EmailCodeRequestResponse = z.infer<typeof emailCodeRequestResponseSc
 
 export const emailCodeVerifyRequestSchema = z.object({
   email: z.string().trim().email().max(320),
-  tenantId: z.string().trim().min(1).optional(),
+  workspaceId: z.string().trim().min(1).optional(),
   code: z.string().trim().min(1).max(64)
 })
 
@@ -441,7 +478,7 @@ export type PasswordAuthStatus = z.infer<typeof passwordAuthStatusSchema>
 export const passwordSignInRequestSchema = z.object({
   email: z.string().trim().email().max(320),
   password: submittedPasswordSchema,
-  tenantId: z.string().trim().min(1).optional(),
+  workspaceId: z.string().trim().min(1).optional(),
   redirectTo: authRedirectPathSchema.optional()
 })
 
@@ -515,7 +552,7 @@ export type PasswordResetAvailability = z.infer<typeof passwordResetAvailability
 
 export const passwordResetRequestSchema = z.object({
   email: z.string().trim().email().max(320),
-  tenantId: z.string().trim().min(1).optional()
+  workspaceId: z.string().trim().min(1).optional()
 })
 
 export type PasswordResetRequest = z.infer<typeof passwordResetRequestSchema>
@@ -531,22 +568,22 @@ export const passwordResetVerifyRequestSchema = z.object({
   email: z.string().trim().email().max(320),
   code: z.string().trim().min(1).max(128),
   newPassword: passwordValueSchema,
-  tenantId: z.string().trim().min(1).optional()
+  workspaceId: z.string().trim().min(1).optional()
 })
 
 export type PasswordResetVerifyRequest = z.infer<typeof passwordResetVerifyRequestSchema>
 
-export const switchTenantRequestSchema = z.object({
-  tenantId: z.string().trim().min(1)
+export const switchWorkspaceRequestSchema = z.object({
+  workspaceId: z.string().trim().min(1)
 })
 
-export type SwitchTenantRequest = z.infer<typeof switchTenantRequestSchema>
+export type SwitchWorkspaceRequest = z.infer<typeof switchWorkspaceRequestSchema>
 
-export const selectTenantContextRequestSchema = z.object({
-  tenantId: z.string().trim().min(1).nullable()
+export const selectWorkspaceContextRequestSchema = z.object({
+  workspaceId: z.string().trim().min(1).nullable()
 })
 
-export type SelectTenantContextRequest = z.infer<typeof selectTenantContextRequestSchema>
+export type SelectWorkspaceContextRequest = z.infer<typeof selectWorkspaceContextRequestSchema>
 
 export const authGroupSchema = z.object({
   id: z.string(),

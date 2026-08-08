@@ -15,10 +15,12 @@
  */
 import type { LibraryFile, ThreeMfIndex } from '@printstream/shared'
 import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
+import { LOCAL_SLICE_FILE_ID } from '../../../lib/localSliceFileId'
 import type { ClientThreeMfProject } from './clientThreeMfProject'
 
-/** Synthetic id for the single project a local host has open; stable so query keys don't churn. */
-export const LOCAL_SLICE_FILE_ID = 'local-project'
+// Re-exported, not defined here: core hooks must be able to recognise this id and core cannot
+// import from a plugin. See `lib/localSliceFileId.ts` for why the distinction is load-bearing.
+export { LOCAL_SLICE_FILE_ID } from '../../../lib/localSliceFileId'
 
 /** The baked index the slice helpers read, mapped from the in-tab parse. */
 export function localBakedIndex(project: ClientThreeMfProject): ThreeMfIndex {

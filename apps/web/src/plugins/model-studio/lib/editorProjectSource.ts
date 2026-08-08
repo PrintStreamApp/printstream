@@ -17,6 +17,7 @@
  * caller owns the caching, keys, and abort signals.
  */
 import type { LibraryThreeMfScene, PrinterModel, ThreeMfIndex } from '@printstream/shared'
+import { readEmbeddedProjectPresets, type EmbeddedProjectPreset } from './embeddedProjectPresets'
 import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
 import { buildApiUrl } from '../../../lib/apiUrl'
 import { getBrowserEnv } from '../../../lib/browserEnv'
@@ -72,6 +73,15 @@ export interface EditorProjectSource {
   loadEntry(entryPath: string, signal?: AbortSignal): Promise<Uint8Array>
   /** A plate's embedded PNG preview, or null when the plate has none. */
   plateThumbnailUrl(plateIndex: number): string | null
+  /**
+   * The filament presets this project carries INSIDE itself, each flagged used or not.
+   *
+   * Optional: a source that cannot enumerate archive entries returns none, which is also the right
+   * answer for a project that has none. Not part of the 3MF INDEX on purpose — the index is cached
+   * per file version, so a field there costs a parser-version bump and a re-parse of every stored
+   * project, for data only an open editor can act on.
+   */
+  loadEmbeddedPresets?(): Promise<EmbeddedProjectPreset[]>
   /**
    * Release what the source holds (object URLs, the inflated archive). Only the creator of a
    * source may call this — a host that supplies its own owns its lifetime.
@@ -148,6 +158,8 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
     // the next render, which the index landing already triggers.
     plateThumbnailUrl: (plateIndex) => opened?.plateThumbnailUrl(plateIndex) ?? null,
 
+    loadEmbeddedPresets: async () => readEmbeddedProjectPresets((await open()).archive),
+
     // Releases the archive and revokes its object URLs, and leaves the source RE-OPENABLE on
     // purpose — see `generation`.
     dispose: () => {
@@ -171,6 +183,7 @@ export function createLocalProjectSource(project: ClientThreeMfProject): EditorP
     // anything it does not recognise, so an unknown value degrades rather than throws.
     loadScene: async (plateIndex, printerModel) => project.sceneForPlate(plateIndex, printerModel as PrinterModel | null),
     loadEntry: (entryPath) => project.loadEntryBytes(entryPath),
-    plateThumbnailUrl: (plateIndex) => project.plateThumbnailUrl(plateIndex)
+    plateThumbnailUrl: (plateIndex) => project.plateThumbnailUrl(plateIndex),
+    loadEmbeddedPresets: async () => readEmbeddedProjectPresets(project.archive)
   }
 }

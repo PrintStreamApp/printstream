@@ -2,7 +2,7 @@
  * A slice-settings controller for a host with no server behind it.
  *
  * The library builds its controller inside `SliceFileModal` from live workspace data — printers,
- * AMS trays, the tenant's custom presets, slice dispatch. The public editor has none of that, but it
+ * AMS trays, the workspace's custom presets, slice dispatch. The public editor has none of that, but it
  * DOES need the half of the controller that is about the project itself: which slicer target, which
  * printer model and nozzle, which process and filament presets, and the project's materials.
  *

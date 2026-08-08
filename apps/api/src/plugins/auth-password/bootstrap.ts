@@ -24,7 +24,8 @@ import {
 import { badRequest, conflict } from '../../lib/http-error.js'
 import { isUniqueConstraintError } from '../../lib/prisma-errors.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
-import { clearTenantContextCookie, getCurrentTenant, setTenantContextCookie } from '../../lib/tenant-context.js'
+import { clearWorkspaceContextCookie, getCurrentWorkspace, setWorkspaceContextCookie } from '../../lib/workspace-context.js'
+import { joinWorkspaceOrganisation } from '../../lib/workspace-invite-policy.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
 import { hashPassword } from './password-hash.js'
 
@@ -60,7 +61,7 @@ export function registerAuthPasswordBootstrapRoutes(
 
     const email = parsed.data.email.trim().toLowerCase()
     const displayName = parsed.data.displayName?.trim() || null
-    const tenant = getCurrentTenant()
+    const workspace = getCurrentWorkspace()
     // Hash before opening the transaction — argon2id is intentionally slow and
     // should not hold a database transaction open.
     const passwordHash = await services.hashPassword(parsed.data.password)
@@ -70,8 +71,8 @@ export function registerAuthPasswordBootstrapRoutes(
       const created = await context.prisma.$transaction(async (tx) => {
         let bootstrapGroup: { id: string; key: string | null; name: string } | null = null
 
-        if (tenant) {
-          await ensureBuiltInAuthGroups(tx, tenant.id)
+        if (workspace) {
+          await ensureBuiltInAuthGroups(tx, workspace.id)
         } else {
           await ensureBuiltInPlatformAuthGroups(tx)
         }
@@ -80,29 +81,29 @@ export function registerAuthPasswordBootstrapRoutes(
           data: {
             email,
             displayName,
-            isPlatformUser: !tenant
+            isPlatformUser: !workspace
           }
         })
 
-        if (tenant) {
-          await tx.authTenantMembership.create({
+        if (workspace) {
+          await tx.authWorkspaceMembership.create({
             data: {
               userId: user.id,
-              tenantId: tenant.id
+              workspaceId: workspace.id
             }
           })
 
           const adminGroup = await tx.authGroup.findUnique({
             where: {
-              tenantId_key: {
-                tenantId: tenant.id,
+              workspaceId_key: {
+                workspaceId: workspace.id,
                 key: 'admin'
               }
             }
           })
 
           if (!adminGroup) {
-            throw conflict('Tenant admin role is not available yet.')
+            throw conflict('Workspace admin role is not available yet.')
           }
 
           await tx.authUserGroupMembership.create({
@@ -120,7 +121,7 @@ export function registerAuthPasswordBootstrapRoutes(
         } else {
           const platformAdminGroup = await tx.authGroup.findFirst({
             where: {
-              tenantId: null,
+              workspaceId: null,
               key: PLATFORM_ADMIN_GROUP_KEY
             }
           })
@@ -156,6 +157,12 @@ export function registerAuthPasswordBootstrapRoutes(
         }
       })
       createdUserId = created.user.id
+      // A workspace membership implies an organisation membership in that
+      // workspace's customer. This is the FIRST admin of a workspace, so without
+      // it the one person who can administer it is missing from the customer's
+      // People list. Best-effort and a no-op where there is no customer, which
+      // is the self-hosted first-run case this path mostly serves.
+      if (workspace) await joinWorkspaceOrganisation(workspace.id, created.user.id)
 
       await writeScopedAuthProviderSetupComplete(context.settings, true)
 
@@ -168,10 +175,10 @@ export function registerAuthPasswordBootstrapRoutes(
           maxAgeSeconds: await readAuthSessionMaxAgeSeconds(context.prisma)
         })
         setAuthSessionCookie(response, session.secret, session.expiresAt)
-        if (tenant) {
-          setTenantContextCookie(response, tenant.id)
+        if (workspace) {
+          setWorkspaceContextCookie(response, workspace.id)
         } else {
-          clearTenantContextCookie(response)
+          clearWorkspaceContextCookie(response)
         }
         authenticated = true
       } catch (sessionError) {
@@ -190,7 +197,7 @@ export function registerAuthPasswordBootstrapRoutes(
         metadata: {
           userId: created.user.id,
           email: created.user.email,
-          tenantId: tenant?.id ?? null
+          workspaceId: workspace?.id ?? null
         }
       })
 
@@ -222,7 +229,7 @@ async function rollbackInitialAdminBootstrap(context: ApiPluginContext, userId: 
     await context.prisma.$transaction(async (tx) => {
       await tx.authPasswordCredential.deleteMany({ where: { userId } })
       await tx.authUserGroupMembership.deleteMany({ where: { userId } })
-      await tx.authTenantMembership.deleteMany({ where: { userId } })
+      await tx.authWorkspaceMembership.deleteMany({ where: { userId } })
       await tx.authUser.delete({ where: { id: userId } })
     })
   } catch (rollbackError) {

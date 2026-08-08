@@ -25,22 +25,22 @@ const printer: Printer = {
   updatedAt: new Date(0).toISOString()
 }
 
-const originalTenantFindUnique = rootPrisma.tenant.findUnique
-const originalGetTenantId = printerManager.getTenantId
+const originalWorkspaceFindUnique = rootPrisma.workspace.findUnique
+const originalGetWorkspaceId = printerManager.getWorkspaceId
 const originalGetPrinter = printerManager.getPrinter
 const originalGetLastJobName = printerManager.getLastJobName
 
 test.after(() => {
-  rootPrisma.tenant.findUnique = originalTenantFindUnique
-  printerManager.getTenantId = originalGetTenantId
+  rootPrisma.workspace.findUnique = originalWorkspaceFindUnique
+  printerManager.getWorkspaceId = originalGetWorkspaceId
   printerManager.getPrinter = originalGetPrinter
   printerManager.getLastJobName = originalGetLastJobName
   resetNotificationTemplateCacheForTests()
 })
 
 test.beforeEach(() => {
-  rootPrisma.tenant.findUnique = originalTenantFindUnique
-  printerManager.getTenantId = originalGetTenantId
+  rootPrisma.workspace.findUnique = originalWorkspaceFindUnique
+  printerManager.getWorkspaceId = originalGetWorkspaceId
   printerManager.getPrinter = originalGetPrinter
   printerManager.getLastJobName = originalGetLastJobName
   resetNotificationTemplateCacheForTests()
@@ -79,8 +79,8 @@ test('subscribePrinterNotifications skips started messages by default', async ()
 
 test('subscribePrinterNotifications formats enabled started messages from bus events', async () => {
   setNotificationTemplateOverrideForTests('job.started', { enabled: true })
-  printerManager.getTenantId = (() => 'tenant-1') as typeof printerManager.getTenantId
-  rootPrisma.tenant.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.tenant.findUnique
+  printerManager.getWorkspaceId = (() => 'workspace-1') as typeof printerManager.getWorkspaceId
+  rootPrisma.workspace.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.workspace.findUnique
   const bus = new PrinterEventBus()
   const message = await new Promise<NotificationMessage>((resolve) => {
     const dispose = subscribePrinterNotifications(bus, (next) => {
@@ -99,20 +99,20 @@ test('subscribePrinterNotifications formats enabled started messages from bus ev
 })
 
 test('subscribePrinterNotifications formats bridge.crashed messages from bus events', async () => {
-  rootPrisma.tenant.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.tenant.findUnique
+  rootPrisma.workspace.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.workspace.findUnique
   const bus = new PrinterEventBus()
   const message = await new Promise<NotificationMessage>((resolve) => {
     const dispose = subscribePrinterNotifications(bus, (next) => {
       dispose()
       resolve(next)
     })
-    bus.emit('bridge.crashed', { bridgeId: 'bridge-1', bridgeName: 'Store', tenantId: 'tenant-1', recentCrashCount: 4 })
+    bus.emit('bridge.crashed', { bridgeId: 'bridge-1', bridgeName: 'Store', workspaceId: 'workspace-1', recentCrashCount: 4 })
   })
 
   assert.equal(message.category, 'bridge.crashed')
   assert.equal(message.level, 'error')
   assert.match(message.title, /Store/)
-  assert.equal(message.tenantId, 'tenant-1')
+  assert.equal(message.workspaceId, 'workspace-1')
   assert.equal(message.tag, 'bridge:bridge-1:crash')
   assert.equal(message.url, '/workspaces/default/settings/bridges')
 })
@@ -122,15 +122,15 @@ test('subscribePrinterNotifications suppresses bridge.crashed when the template 
   const bus = new PrinterEventBus()
   const received: NotificationMessage[] = []
   const dispose = subscribePrinterNotifications(bus, (message) => { received.push(message) })
-  bus.emit('bridge.crashed', { bridgeId: 'bridge-1', bridgeName: 'Store', tenantId: 'tenant-1', recentCrashCount: 1 })
+  bus.emit('bridge.crashed', { bridgeId: 'bridge-1', bridgeName: 'Store', workspaceId: 'workspace-1', recentCrashCount: 1 })
   await new Promise((resolve) => setImmediate(resolve))
   dispose()
   assert.equal(received.length, 0)
 })
 
 test('subscribePrinterNotifications formats finished messages and cleanup unsubscribes listeners', async () => {
-  printerManager.getTenantId = (() => 'tenant-1') as typeof printerManager.getTenantId
-  rootPrisma.tenant.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.tenant.findUnique
+  printerManager.getWorkspaceId = (() => 'workspace-1') as typeof printerManager.getWorkspaceId
+  rootPrisma.workspace.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.workspace.findUnique
   const bus = new PrinterEventBus()
   const received: NotificationMessage[] = []
   const dispose = subscribePrinterNotifications(bus, (message) => {
@@ -163,10 +163,10 @@ test('subscribePrinterNotifications formats finished messages and cleanup unsubs
   assert.equal(received[0]?.url, '/workspaces/default/printers/printer-1')
 })
 
-test('subscribePrinterNotifications falls back to workspace selection when the tenant slug is unavailable', async () => {
+test('subscribePrinterNotifications falls back to workspace selection when the workspace slug is unavailable', async () => {
   setNotificationTemplateOverrideForTests('job.started', { enabled: true })
-  printerManager.getTenantId = (() => 'tenant-1') as typeof printerManager.getTenantId
-  rootPrisma.tenant.findUnique = ((async () => null) as unknown) as typeof rootPrisma.tenant.findUnique
+  printerManager.getWorkspaceId = (() => 'workspace-1') as typeof printerManager.getWorkspaceId
+  rootPrisma.workspace.findUnique = ((async () => null) as unknown) as typeof rootPrisma.workspace.findUnique
   const bus = new PrinterEventBus()
   const message = await new Promise<NotificationMessage>((resolve) => {
     const dispose = subscribePrinterNotifications(bus, (next) => {
@@ -179,14 +179,14 @@ test('subscribePrinterNotifications falls back to workspace selection when the t
   assert.equal(message.url, '/workspaces')
 })
 
-test('subscribePrinterNotifications skips tenants rejected by the runtime enablement filter', async () => {
+test('subscribePrinterNotifications skips workspaces rejected by the runtime enablement filter', async () => {
   setNotificationTemplateOverrideForTests('job.started', { enabled: true })
   const bus = new PrinterEventBus()
   const received: NotificationMessage[] = []
   const dispose = subscribePrinterNotifications(bus, (message) => {
     received.push(message)
   }, {
-    shouldHandleTenantId: () => false
+    shouldHandleWorkspaceId: () => false
   })
 
   bus.emit('print-job.started', { jobId: 'job-1', printer, jobName: 'Ignored job' })
@@ -216,10 +216,10 @@ test('pause and error templates are enabled with snapshots by default', () => {
 })
 
 test('subscribePrinterNotifications formats pause and error messages from status transitions without repeating the same error', async () => {
-  printerManager.getTenantId = (() => 'tenant-1') as typeof printerManager.getTenantId
+  printerManager.getWorkspaceId = (() => 'workspace-1') as typeof printerManager.getWorkspaceId
   printerManager.getPrinter = ((printerId: string) => (printerId === printer.id ? printer : undefined)) as typeof printerManager.getPrinter
   printerManager.getLastJobName = (() => 'Calibration cube') as typeof printerManager.getLastJobName
-  rootPrisma.tenant.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.tenant.findUnique
+  rootPrisma.workspace.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.workspace.findUnique
   const bus = new PrinterEventBus()
   const received: NotificationMessage[] = []
   const dispose = subscribePrinterNotifications(bus, (message) => {
@@ -261,10 +261,10 @@ test('subscribePrinterNotifications formats pause and error messages from status
 })
 
 function stubNotificationLookups() {
-  printerManager.getTenantId = (() => 'tenant-1') as typeof printerManager.getTenantId
+  printerManager.getWorkspaceId = (() => 'workspace-1') as typeof printerManager.getWorkspaceId
   printerManager.getPrinter = ((printerId: string) => (printerId === printer.id ? printer : undefined)) as typeof printerManager.getPrinter
   printerManager.getLastJobName = (() => 'Calibration cube') as typeof printerManager.getLastJobName
-  rootPrisma.tenant.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.tenant.findUnique
+  rootPrisma.workspace.findUnique = ((async () => ({ slug: 'default' })) as unknown) as typeof rootPrisma.workspace.findUnique
 }
 
 const HMS_A = { code: '0300-0100-0001', message: 'Nozzle issue' }

@@ -8,7 +8,7 @@ import type { RegisteredAuthProvider } from '../../lib/auth-registry.js'
 import { HttpError } from '../../lib/http-error.js'
 import { PrinterEventBus } from '../../lib/printer-events.js'
 import { prisma } from '../../lib/prisma.js'
-import { installTenantContext } from '../../lib/tenant-context.js'
+import { installWorkspaceContext } from '../../lib/workspace-context.js'
 import { createAuthOauthPlugin } from './index.js'
 
 test('auth-oauth authorize redirects to the provider authorization endpoint with PKCE state cookies', async () => {
@@ -52,7 +52,7 @@ test('auth-oauth authorize redirects to the provider authorization endpoint with
       },
       async set() {},
       async delete() {},
-      forTenant() { return this },
+      forWorkspace() { return this },
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
@@ -134,7 +134,7 @@ test('auth-oauth provider metadata clears setupRequired once the workspace setup
       },
       async set() {},
       async delete() {},
-      forTenant() { return this },
+      forWorkspace() { return this },
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
@@ -155,18 +155,18 @@ test('auth-oauth provider metadata clears setupRequired once the workspace setup
   })
 })
 
-test('auth-oauth config reads and writes tenant-scoped settings independently from platform settings', async () => {
+test('auth-oauth config reads and writes workspace-scoped settings independently from platform settings', async () => {
   const router = express.Router()
-  const originalTenantFindUnique = prisma.tenant.findUnique
+  const originalWorkspaceFindUnique = prisma.workspace.findFirst
   const reads: string[] = []
   const writes: Array<{ key: string; value: string }> = []
 
-  prisma.tenant.findUnique = ((async (input: { where: { slug?: string } }) => {
+  prisma.workspace.findFirst = ((async (input: { where: { slug?: string } }) => {
     if (input.where.slug === 'alpha') {
-      return { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      return { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }
     return null
-  }) as unknown) as typeof prisma.tenant.findUnique
+  }) as unknown) as typeof prisma.workspace.findFirst
 
   const plugin = createAuthOauthPlugin({
     async ensureDefaultGroups() {},
@@ -184,11 +184,11 @@ test('auth-oauth config reads and writes tenant-scoped settings independently fr
       async get(key) {
         reads.push(key)
         switch (key) {
-          case 'tenant:tenant-1:displayName': return 'Tenant SSO'
-          case 'tenant:tenant-1:issuerUrl': return 'https://tenant-issuer.example'
-          case 'tenant:tenant-1:clientId': return 'tenant-client'
-          case 'tenant:tenant-1:clientSecret': return 'tenant-secret'
-          case 'tenant:tenant-1:scopes': return JSON.stringify(['openid', 'email'])
+          case 'workspace:workspace-1:displayName': return 'Workspace SSO'
+          case 'workspace:workspace-1:issuerUrl': return 'https://workspace-issuer.example'
+          case 'workspace:workspace-1:clientId': return 'workspace-client'
+          case 'workspace:workspace-1:clientSecret': return 'workspace-secret'
+          case 'workspace:workspace-1:scopes': return JSON.stringify(['openid', 'email'])
           case 'displayName': return 'Legacy Platform SSO'
           default: return null
         }
@@ -197,7 +197,7 @@ test('auth-oauth config reads and writes tenant-scoped settings independently fr
         writes.push({ key, value })
       },
       async delete() {},
-      forTenant() { return this },
+      forWorkspace() { return this },
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
@@ -216,7 +216,7 @@ test('auth-oauth config reads and writes tenant-scoped settings independently fr
     }
     next()
   })
-  app.use(installTenantContext())
+  app.use(installWorkspaceContext())
   app.use('/api/plugins/auth-oauth', router)
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof HttpError) {
@@ -232,16 +232,16 @@ test('auth-oauth config reads and writes tenant-scoped settings independently fr
     const baseUrl = `http://127.0.0.1:${address.port}/api/plugins/auth-oauth/config`
     const headers = {
       'Content-Type': 'application/json',
-      'x-printstream-tenant': 'alpha'
+      'x-printstream-workspace': 'alpha'
     }
 
     const getResponse = await fetch(baseUrl, { headers })
     assert.equal(getResponse.status, 200)
     assert.deepEqual(await getResponse.json(), {
       configured: true,
-      displayName: 'Tenant SSO',
-      issuerUrl: 'https://tenant-issuer.example',
-      clientId: 'tenant-client',
+      displayName: 'Workspace SSO',
+      issuerUrl: 'https://workspace-issuer.example',
+      clientId: 'workspace-client',
       clientSecretConfigured: true,
       scopes: ['openid', 'email']
     })
@@ -251,10 +251,10 @@ test('auth-oauth config reads and writes tenant-scoped settings independently fr
       method: 'PUT',
       headers,
       body: JSON.stringify({
-        displayName: 'Updated Tenant SSO',
-        issuerUrl: 'https://tenant-issuer-2.example',
-        clientId: 'tenant-client-2',
-        clientSecret: 'tenant-secret-2',
+        displayName: 'Updated Workspace SSO',
+        issuerUrl: 'https://workspace-issuer-2.example',
+        clientId: 'workspace-client-2',
+        clientSecret: 'workspace-secret-2',
         scopes: ['openid', 'profile', 'email']
       })
     })
@@ -263,15 +263,15 @@ test('auth-oauth config reads and writes tenant-scoped settings independently fr
     assert.deepEqual(
       writes.map((entry) => entry.key),
       [
-        'tenant:tenant-1:displayName',
-        'tenant:tenant-1:issuerUrl',
-        'tenant:tenant-1:clientId',
-        'tenant:tenant-1:clientSecret',
-        'tenant:tenant-1:scopes'
+        'workspace:workspace-1:displayName',
+        'workspace:workspace-1:issuerUrl',
+        'workspace:workspace-1:clientId',
+        'workspace:workspace-1:clientSecret',
+        'workspace:workspace-1:scopes'
       ]
     )
   } finally {
-    prisma.tenant.findUnique = originalTenantFindUnique
+    prisma.workspace.findFirst = originalWorkspaceFindUnique
     await close(server)
   }
 })

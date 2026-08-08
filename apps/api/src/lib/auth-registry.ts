@@ -5,7 +5,7 @@
  * can expose a stable discovery endpoint without importing any plugin code.
  */
 import type { AuthBootstrap, AuthMethod, AuthProviderBootstrap, AuthProviderCapabilities } from '@printstream/shared'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 import { isManagedBridgeMode } from './managed-bridge.js'
 import { isSelfHostedDeployment } from './deployment-mode.js'
 
@@ -59,17 +59,21 @@ class AuthProviderRegistry {
 
   async buildBootstrap(input: { demoMode: boolean }): Promise<AuthBootstrapBase> {
     const providers = await this.resolveProviders()
-    const tenant = getCurrentTenant()
+    const workspace = getCurrentWorkspace()
     const authEnabled = providers.some((provider) => provider.enabled && !provider.setupRequired)
     return {
       authEnabled,
       platformAuthEnabled: authEnabled,
       setupRequired: !authEnabled && providers.some((provider) => provider.enabled && provider.setupRequired),
       providers: await this.list(),
-      tenant,
-      memberTenants: [],
-      availableTenants: [],
-      tenantHasConnectedBridges: false,
+      workspace,
+      memberWorkspaces: [],
+      availableWorkspaces: [],
+      // Placeholder like the workspace lists above: the bootstrap ROUTE overwrites
+      // all three with the real answers, which this has no request context to
+      // compute.
+      customers: [],
+      workspaceHasConnectedBridges: false,
       runtimePolicy: {
         demoMode: input.demoMode,
         managedBridge: isManagedBridgeMode(),

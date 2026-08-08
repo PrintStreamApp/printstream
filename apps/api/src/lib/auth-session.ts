@@ -11,16 +11,16 @@ import {
   AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION,
   AUTH_RECENT_VERIFICATION_REQUIRED_MESSAGE,
   filterPermissionsForPlatformContext,
-  filterPermissionsForTenantContext,
+  filterPermissionsForWorkspaceContext,
   type Permission
 } from '@printstream/shared'
 import { rootPrisma, type AnyPrismaClient } from './prisma.js'
-import { env } from './env.js'
+import { clientOrigins } from './client-origins.js'
 import { forbidden, unauthorized } from './http-error.js'
 import type { RequestAuthContext } from './auth-context.js'
-import { getCurrentTenant, type RequestTenantSummary } from './tenant-context.js'
+import { getCurrentWorkspace, type RequestWorkspaceSummary } from './workspace-context.js'
 import { isSupportAccessAllowed, readSupportAccessPermissions } from './support-access.js'
-import { listDisabledTenantIds } from './tenant-availability.js'
+import { listDisabledWorkspaceIds } from './workspace-availability.js'
 import { readAuthSessionMaxAgeSeconds } from './auth-policy.js'
 
 export const AUTH_SESSION_COOKIE_NAME = 'printstream_auth'
@@ -30,12 +30,12 @@ const SERVICE_ACCOUNT_LAST_USED_UPDATE_INTERVAL_MS = 5 * 60 * 1000
 
 interface SessionUserMembership {
   group: {
-    tenantId: string | null
+    workspaceId: string | null
     permissions: string[]
   }
 }
 
-interface SessionTenantRecord {
+interface SessionWorkspaceRecord {
   id: string
   slug: string
   name: string
@@ -45,12 +45,12 @@ interface SessionTenantRecord {
 interface SessionUserRecord {
   id: string
   isPlatformUser: boolean
-  tenantMemberships: Array<{
+  workspaceMemberships: Array<{
     loginDisabled: boolean
-    tenant: SessionTenantRecord
+    workspace: SessionWorkspaceRecord
   }>
   memberships: SessionUserMembership[]
-  /** Shared-table group memberships where tenantId = null. Used for platform permission resolution. */
+  /** Shared-table group memberships where workspaceId = null. Used for platform permission resolution. */
   platformMemberships?: SessionUserMembership[]
 }
 
@@ -62,8 +62,8 @@ interface SessionServiceAccountMembership {
 
 interface SessionServiceAccountRecord {
   id: string
-  tenantId: string
-  tenant: SessionTenantRecord
+  workspaceId: string
+  workspace: SessionWorkspaceRecord
   lastUsedAt?: Date | null
   revokedAt: Date | null
   memberships: SessionServiceAccountMembership[]
@@ -131,7 +131,7 @@ export async function resolveRequestAuthFromSession(
 ): Promise<RequestAuthContext> {
   const sessionSecret = readCookie(request.headers.cookie ?? '', AUTH_SESSION_COOKIE_NAME)
   if (!sessionSecret) return anonymous
-  const requestTenant = getCurrentTenant()
+  const requestWorkspace = getCurrentWorkspace()
 
   const session = await prisma.authSession.findUnique({
     where: { secretHash: hashSessionSecret(sessionSecret) },
@@ -140,10 +140,10 @@ export async function resolveRequestAuthFromSession(
         select: {
           id: true,
           isPlatformUser: true,
-          tenantMemberships: {
+          workspaceMemberships: {
             select: {
               loginDisabled: true,
-              tenant: {
+              workspace: {
                 select: {
                   id: true,
                   slug: true,
@@ -156,7 +156,7 @@ export async function resolveRequestAuthFromSession(
             select: {
               group: {
                 select: {
-                  tenantId: true,
+                  workspaceId: true,
                   permissions: true
                 }
               }
@@ -167,8 +167,8 @@ export async function resolveRequestAuthFromSession(
       serviceAccount: {
         select: {
           id: true,
-          tenantId: true,
-          tenant: {
+          workspaceId: true,
+          workspace: {
             select: {
               id: true,
               slug: true,
@@ -196,46 +196,46 @@ export async function resolveRequestAuthFromSession(
 
   await refreshUserSessionActivity(prisma, session, sessionSecret, response)
 
-  const disabledTenantIds = await listDisabledTenantIds({
-    tenantIds: [
-      ...(session.user?.tenantMemberships.map((membership) => membership.tenant.id) ?? []),
-      ...(session.serviceAccount?.tenantId ? [session.serviceAccount.tenantId] : [])
+  const disabledWorkspaceIds = await listDisabledWorkspaceIds({
+    workspaceIds: [
+      ...(session.user?.workspaceMemberships.map((membership) => membership.workspace.id) ?? []),
+      ...(session.serviceAccount?.workspaceId ? [session.serviceAccount.workspaceId] : [])
     ]
   })
 
   if (session.user) {
     const user = {
       ...session.user,
-      tenantMemberships: session.user.tenantMemberships.map((membership) => ({
+      workspaceMemberships: session.user.workspaceMemberships.map((membership) => ({
         ...membership,
-        tenant: {
-          ...membership.tenant,
-          disabled: disabledTenantIds.has(membership.tenant.id)
+        workspace: {
+          ...membership.workspace,
+          disabled: disabledWorkspaceIds.has(membership.workspace.id)
         }
       }))
     }
-    // Platform users keep their platform roles even while operating inside a tenant workspace.
+    // Platform users keep their platform roles even while operating inside a workspace.
     if (user.isPlatformUser) {
       const platformMemberships = await prisma.authUserGroupMembership.findMany({
         where: {
           userId: user.id,
-          group: { tenantId: null }
+          group: { workspaceId: null }
         },
         select: {
-          group: { select: { tenantId: true, permissions: true } }
+          group: { select: { workspaceId: true, permissions: true } }
         }
       })
-      return await buildUserAuthContext({ ...user, platformMemberships }, anonymous, requestTenant)
+      return await buildUserAuthContext({ ...user, platformMemberships }, anonymous, requestWorkspace)
     }
-    return await buildUserAuthContext(user, anonymous, requestTenant)
+    return await buildUserAuthContext(user, anonymous, requestWorkspace)
   }
 
   if (session.serviceAccount) {
     return buildServiceAccountAuthContext({
       ...session.serviceAccount,
-      tenant: {
-        ...session.serviceAccount.tenant,
-        disabled: disabledTenantIds.has(session.serviceAccount.tenant.id)
+      workspace: {
+        ...session.serviceAccount.workspace,
+        disabled: disabledWorkspaceIds.has(session.serviceAccount.workspace.id)
       }
     }, anonymous)
   }
@@ -251,8 +251,8 @@ export async function resolveRequestAuth(
 ): Promise<RequestAuthContext> {
   const bearerToken = readRequestBearerToken(request)
   if (bearerToken) {
-    // Service-account tokens establish tenant identity themselves, so their
-    // lookup cannot depend on an already-selected tenant-scoped Prisma context.
+    // Service-account tokens establish workspace identity themselves, so their
+    // lookup cannot depend on an already-selected workspace-scoped Prisma context.
     const serviceAccountContext = await resolveRequestAuthFromServiceAccountToken(
       rootPrisma as unknown as AuthSessionStore,
       bearerToken,
@@ -270,24 +270,35 @@ export async function resolveRequestAuth(
 async function buildUserAuthContext(
   user: SessionUserRecord,
   anonymous: RequestAuthContext,
-  requestTenant: RequestTenantSummary | null
+  requestWorkspace: RequestWorkspaceSummary | null
 ): Promise<RequestAuthContext> {
-  const tenantMemberships = user.tenantMemberships ?? []
-  const enabledTenantMemberships = tenantMemberships.filter((membership) => !membership.loginDisabled && !membership.tenant.disabled)
-  const activeTenantMembership = requestTenant
-    ? tenantMemberships.find((membership) => membership.tenant.id === requestTenant.id) ?? null
-    : (!user.isPlatformUser && enabledTenantMemberships.length === 1 ? enabledTenantMemberships[0] ?? null : null)
-  const hasEnabledTenantAccess = enabledTenantMemberships.length > 0
+  const workspaceMemberships = user.workspaceMemberships ?? []
+  const enabledWorkspaceMemberships = workspaceMemberships.filter((membership) => !membership.loginDisabled && !membership.workspace.disabled)
+  const activeWorkspaceMembership = requestWorkspace
+    ? workspaceMemberships.find((membership) => membership.workspace.id === requestWorkspace.id) ?? null
+    : (!user.isPlatformUser && enabledWorkspaceMemberships.length === 1 ? enabledWorkspaceMemberships[0] ?? null : null)
+  const hasEnabledWorkspaceAccess = enabledWorkspaceMemberships.length > 0
 
-  if (!user.isPlatformUser && !hasEnabledTenantAccess) {
+  // Locked out, as distinct from having nowhere to be. A user whose every
+  // membership is login-disabled or whose every workspace is disabled has been
+  // deliberately shut out, and their session must read as signed-out.
+  //
+  // Belonging to NO workspace is not that: registering for a self-hosted licence
+  // creates an account and no workspace, and the billing scope is a real place
+  // for that person to be. Reading them as anonymous made their own sign-in
+  // dead-end -- the cookie was set and every request came back unauthenticated.
+  // They arrive with no permissions, because permissions are workspace-scoped
+  // and there is no workspace; the account surfaces authorise on billing
+  // membership instead (`billing-scope-access.ts`).
+  if (!user.isPlatformUser && workspaceMemberships.length > 0 && !hasEnabledWorkspaceAccess) {
     return anonymous
   }
 
-  const activeTenant = activeTenantMembership && !activeTenantMembership.loginDisabled && !activeTenantMembership.tenant.disabled
-    ? activeTenantMembership.tenant
+  const activeWorkspace = activeWorkspaceMembership && !activeWorkspaceMembership.loginDisabled && !activeWorkspaceMembership.workspace.disabled
+    ? activeWorkspaceMembership.workspace
     : null
-  const activeTenantMemberships = activeTenant
-    ? user.memberships.filter((membership) => membership.group.tenantId === activeTenant.id)
+  const activeWorkspaceMemberships = activeWorkspace
+    ? user.memberships.filter((membership) => membership.group.workspaceId === activeWorkspace.id)
     : []
   const platformPermissions = user.isPlatformUser
     ? collectPermissions(
@@ -298,11 +309,11 @@ async function buildUserAuthContext(
       )
     : []
   const platformBypassesSupportAccess = platformPermissions.includes(AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION)
-  const platformUserSupportAccessAllowed = user.isPlatformUser && requestTenant
-    ? await isSupportAccessAllowed({ tenantId: requestTenant.id, bypassSupportAccess: platformBypassesSupportAccess })
+  const platformUserSupportAccessAllowed = user.isPlatformUser && requestWorkspace
+    ? await isSupportAccessAllowed({ workspaceId: requestWorkspace.id, bypassSupportAccess: platformBypassesSupportAccess })
     : false
-  const platformUserTenantPermissions = user.isPlatformUser && requestTenant && platformUserSupportAccessAllowed
-    ? await readSupportAccessPermissions({ tenantId: requestTenant.id, bypassSupportAccess: platformBypassesSupportAccess })
+  const platformUserWorkspacePermissions = user.isPlatformUser && requestWorkspace && platformUserSupportAccessAllowed
+    ? await readSupportAccessPermissions({ workspaceId: requestWorkspace.id, bypassSupportAccess: platformBypassesSupportAccess })
     : []
 
   return {
@@ -311,25 +322,25 @@ async function buildUserAuthContext(
       type: 'user',
       userId: user.id,
       isPlatformUser: user.isPlatformUser,
-      tenant: toTenantSummary(activeTenant)
+      workspace: toWorkspaceSummary(activeWorkspace)
     },
     ...(user.isPlatformUser ? { platformPermissions } : {}),
     permissions: user.isPlatformUser
-      ? (requestTenant && platformUserSupportAccessAllowed ? platformUserTenantPermissions : platformPermissions)
-      : activeTenant
-        ? collectPermissions(activeTenantMemberships, true)
+      ? (requestWorkspace && platformUserSupportAccessAllowed ? platformUserWorkspacePermissions : platformPermissions)
+      : activeWorkspace
+        ? collectPermissions(activeWorkspaceMemberships, true)
         : []
   }
 }
 
 function buildServiceAccountAuthContext(serviceAccount: SessionServiceAccountRecord, anonymous: RequestAuthContext): RequestAuthContext {
-  if (serviceAccount.revokedAt || !serviceAccount.tenantId || !serviceAccount.tenant || serviceAccount.tenant.disabled) return anonymous
+  if (serviceAccount.revokedAt || !serviceAccount.workspaceId || !serviceAccount.workspace || serviceAccount.workspace.disabled) return anonymous
   return {
     ...anonymous,
     actor: {
       type: 'service-account',
       serviceAccountId: serviceAccount.id,
-      tenant: toTenantSummary(serviceAccount.tenant)
+      workspace: toWorkspaceSummary(serviceAccount.workspace)
     },
     permissions: collectPermissions(serviceAccount.memberships, true)
   }
@@ -337,16 +348,16 @@ function buildServiceAccountAuthContext(serviceAccount: SessionServiceAccountRec
 
 function collectPermissions(
   memberships: Array<{ group: { permissions: string[] } }>,
-  tenantScoped: boolean
+  workspaceScoped: boolean
 ): Permission[] {
   return readAvailablePermissions(
     Array.from(new Set(memberships.flatMap((membership) => membership.group.permissions))) as Permission[],
-    tenantScoped
+    workspaceScoped
   )
 }
 
-function readAvailablePermissions(permissions: readonly Permission[], tenantScoped: boolean): Permission[] {
-  return tenantScoped ? filterPermissionsForTenantContext([...permissions]) : filterPermissionsForPlatformContext([...permissions])
+function readAvailablePermissions(permissions: readonly Permission[], workspaceScoped: boolean): Permission[] {
+  return workspaceScoped ? filterPermissionsForWorkspaceContext([...permissions]) : filterPermissionsForPlatformContext([...permissions])
 }
 
 async function resolveRequestAuthFromServiceAccountToken(
@@ -359,8 +370,8 @@ async function resolveRequestAuthFromServiceAccountToken(
     where: { tokenHash: hashServiceAccountToken(token) },
     select: {
       id: true,
-      tenantId: true,
-      tenant: {
+      workspaceId: true,
+      workspace: {
         select: {
           id: true,
           slug: true,
@@ -389,15 +400,15 @@ async function resolveRequestAuthFromServiceAccountToken(
   return buildServiceAccountAuthContext(serviceAccount, anonymous)
 }
 
-function toTenantSummary(tenant: SessionTenantRecord | null): RequestTenantSummary | null {
-  if (!tenant) {
+function toWorkspaceSummary(workspace: SessionWorkspaceRecord | null): RequestWorkspaceSummary | null {
+  if (!workspace) {
     return null
   }
 
   return {
-    id: tenant.id,
-    slug: tenant.slug,
-    name: tenant.name
+    id: workspace.id,
+    slug: workspace.slug,
+    name: workspace.name
   }
 }
 
@@ -571,11 +582,7 @@ function shouldUseSecureCookies(response: Response): boolean {
     return false
   }
 
-  return env.CLIENT_ORIGIN
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .some((value) => {
+  return clientOrigins().some((value) => {
       try {
         return new URL(value).protocol === 'https:'
       } catch {

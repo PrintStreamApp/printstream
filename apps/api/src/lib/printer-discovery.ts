@@ -3,7 +3,7 @@
  *
  * Bridges own LAN SSDP discovery. They periodically push their current
  * snapshot to the API over the bridge session, and this module keeps the
- * aggregated per-bridge cache plus tenant-scoped dismissals that back the
+ * aggregated per-bridge cache plus workspace-scoped dismissals that back the
  * Add Printer UI and WS replay.
  */
 
@@ -39,7 +39,7 @@ const defaultDeps: PrinterDiscoveryDeps = {
 
 export class PrinterDiscovery {
   private readonly entriesByBridge = new Map<string, Map<string, DiscoveryEntry>>()
-  private readonly dismissedTenantIds = new Map<string, Set<string>>()
+  private readonly dismissedWorkspaceIds = new Map<string, Set<string>>()
   private readonly reconcileTasks = new Map<string, Promise<void>>()
   private readonly recoveryHints = new Map<string, number>()
 
@@ -104,14 +104,14 @@ export class PrinterDiscovery {
   }
 
   /**
-   * Drop per-tenant dismissals for serials no longer discovered on any bridge.
-   * Without this, `dismissedTenantIds` grows unbounded (serial × dismissing tenant)
+   * Drop per-workspace dismissals for serials no longer discovered on any bridge.
+   * Without this, `dismissedWorkspaceIds` grows unbounded (serial × dismissing workspace)
    * over the process lifetime as discovered printers age out, matching the
    * `recoveryHints` reconciliation already done above.
    */
   private pruneDismissalsForAbsentSerials(): void {
-    for (const [serial] of this.dismissedTenantIds) {
-      if (!this.hasSerial(serial)) this.dismissedTenantIds.delete(serial)
+    for (const [serial] of this.dismissedWorkspaceIds) {
+      if (!this.hasSerial(serial)) this.dismissedWorkspaceIds.delete(serial)
     }
   }
 
@@ -119,29 +119,29 @@ export class PrinterDiscovery {
     this.entriesByBridge.clear()
     this.reconcileTasks.clear()
     this.recoveryHints.clear()
-    this.dismissedTenantIds.clear()
+    this.dismissedWorkspaceIds.clear()
   }
 
   /** Return a snapshot of currently-known bridge-fed discoveries. */
-  list(input: { tenantId?: string | null; bridgeIds?: readonly string[] | null } = {}): DiscoveredPrinter[] {
+  list(input: { workspaceId?: string | null; bridgeIds?: readonly string[] | null } = {}): DiscoveredPrinter[] {
     return this.selectEntries(input).map((entry) => this.toDto(entry))
   }
 
   /** Look up the current discovered record for a specific serial. */
   get(
     serial: string,
-    tenantId: string | null = null,
+    workspaceId: string | null = null,
     bridgeIds: readonly string[] | null = null
   ): DiscoveredPrinter | undefined {
-    return this.list({ tenantId, bridgeIds }).find((entry) => entry.serial === serial)
+    return this.list({ workspaceId, bridgeIds }).find((entry) => entry.serial === serial)
   }
 
-  /** Hide a discovered entry for a single tenant without affecting others. */
-  dismiss(serial: string, tenantId: string): void {
-    const dismissed = this.dismissedTenantIds.get(serial) ?? new Set<string>()
-    if (dismissed.has(tenantId)) return
-    dismissed.add(tenantId)
-    this.dismissedTenantIds.set(serial, dismissed)
+  /** Hide a discovered entry for a single workspace without affecting others. */
+  dismiss(serial: string, workspaceId: string): void {
+    const dismissed = this.dismissedWorkspaceIds.get(serial) ?? new Set<string>()
+    if (dismissed.has(workspaceId)) return
+    dismissed.add(workspaceId)
+    this.dismissedWorkspaceIds.set(serial, dismissed)
     this.broadcastChange()
   }
 
@@ -156,7 +156,7 @@ export class PrinterDiscovery {
     for (const entries of this.entriesByBridge.values()) {
       removed = entries.delete(serial) || removed
     }
-    this.dismissedTenantIds.delete(serial)
+    this.dismissedWorkspaceIds.delete(serial)
     this.recoveryHints.delete(serial)
     if (removed) {
       this.broadcastChange()
@@ -200,7 +200,7 @@ export class PrinterDiscovery {
   }
 
   private selectEntries(input: {
-    tenantId?: string | null
+    workspaceId?: string | null
     bridgeIds?: readonly string[] | null
   }): DiscoveryEntry[] {
     const bridgeIds = input.bridgeIds ? new Set(input.bridgeIds) : null
@@ -209,7 +209,7 @@ export class PrinterDiscovery {
     for (const [bridgeId, entries] of this.entriesByBridge) {
       if (bridgeIds && !bridgeIds.has(bridgeId)) continue
       for (const entry of entries.values()) {
-        if (input.tenantId && this.dismissedTenantIds.get(entry.serial)?.has(input.tenantId)) continue
+        if (input.workspaceId && this.dismissedWorkspaceIds.get(entry.serial)?.has(input.workspaceId)) continue
         const current = visibleBySerial.get(entry.serial)
         if (!current || current.lastSeen < entry.lastSeen) {
           visibleBySerial.set(entry.serial, entry)

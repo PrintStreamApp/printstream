@@ -1,15 +1,15 @@
 import type { AuthBootstrap } from '@printstream/shared'
-import { countAccessibleWorkspaceChoices, listAccessibleTenantWorkspaces } from './workspaceAccess'
-import { buildPlatformWorkspacePath, buildTenantWorkspacePath, buildWorkspaceSelectionPath, isPlatformWorkspacePath, parseWorkspacePathname } from './workspaceRoute'
+import { countAccessibleWorkspaceChoices, listAccessibleWorkspaces } from './workspaceAccess'
+import { buildPlatformWorkspacePath, buildWorkspacePath, buildWorkspaceSelectionPath, isPlatformWorkspacePath, parseWorkspacePathname } from './workspaceRoute'
 
 /** Chooses the first stable route to land on after a successful browser sign-in. */
 export function resolvePostAuthRedirectPath(bootstrap: AuthBootstrap, redirectPath?: string): string {
   const canUsePlatformWorkspace = bootstrap.actor.type === 'user' && Boolean(bootstrap.actor.isPlatformUser)
-  const predictableTenantSlug = resolvePredictableTenantSlug(bootstrap, canUsePlatformWorkspace)
-  const workspaceChoiceCount = bootstrap.tenant
+  const predictableWorkspaceSlug = resolvePredictableWorkspaceSlug(bootstrap, canUsePlatformWorkspace)
+  const workspaceChoiceCount = bootstrap.workspace
     ? 0
     : countAccessibleWorkspaceChoices({
-        tenants: bootstrap.memberTenants,
+        workspaces: bootstrap.memberWorkspaces,
         includePlatform: canUsePlatformWorkspace
       })
 
@@ -22,21 +22,21 @@ export function resolvePostAuthRedirectPath(bootstrap: AuthBootstrap, redirectPa
     return buildWorkspaceSelectionPath()
   }
 
-  if (predictableTenantSlug) {
-    return buildTenantWorkspacePath(predictableTenantSlug, '/')
+  if (predictableWorkspaceSlug) {
+    return buildWorkspacePath(predictableWorkspaceSlug, '/')
   }
 
   return canUsePlatformWorkspace ? buildPlatformWorkspacePath() : buildWorkspaceSelectionPath()
 }
 
-function resolvePredictableTenantSlug(bootstrap: AuthBootstrap, canUsePlatformWorkspace: boolean): string | null {
-  if (bootstrap.tenant?.slug) {
-    return bootstrap.tenant.slug
+function resolvePredictableWorkspaceSlug(bootstrap: AuthBootstrap, canUsePlatformWorkspace: boolean): string | null {
+  if (bootstrap.workspace?.slug) {
+    return bootstrap.workspace.slug
   }
 
-  const tenantOptions = listAccessibleTenantWorkspaces(bootstrap.memberTenants)
-  if (!canUsePlatformWorkspace && tenantOptions.length === 1) {
-    return tenantOptions[0]?.slug ?? null
+  const workspaceOptions = listAccessibleWorkspaces(bootstrap.memberWorkspaces)
+  if (!canUsePlatformWorkspace && workspaceOptions.length === 1) {
+    return workspaceOptions[0]?.slug ?? null
   }
 
   return null
@@ -47,7 +47,7 @@ function resolveExplicitRedirectPath(redirectPath: string | undefined): string |
     return null
   }
 
-  if (parseWorkspacePathname(redirectPath).tenantSlug) {
+  if (parseWorkspacePathname(redirectPath).workspaceSlug) {
     return redirectPath
   }
 

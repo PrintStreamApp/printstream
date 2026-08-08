@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readWorkspaceContextHeader, readWorkspaceContextHint } from './workspaceContext'
 
-test('readWorkspaceContextHint uses tenant slugs from workspace routes', () => {
+test('readWorkspaceContextHint uses workspace slugs from workspace routes', () => {
   withBrowserPath('/workspaces/Alpha/printers', () => {
-    assert.deepEqual(readWorkspaceContextHint(), { type: 'tenant', slug: 'alpha' })
+    assert.deepEqual(readWorkspaceContextHint(), { type: 'workspace', slug: 'alpha' })
     assert.equal(readWorkspaceContextHeader(), 'alpha')
   })
 })

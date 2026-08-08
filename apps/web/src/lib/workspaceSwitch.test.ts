@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { isTenantWorkspaceLandingReady, resolveDefaultWorkspaceRoute, resolveTenantRouteRedirect, resolveTenantWorkspaceLandingPath, resolveWorkspaceSwitchDestination, shouldClearPendingWorkspaceRoute } from './workspaceSwitch'
+import { isWorkspaceLandingReady, resolveDefaultWorkspaceRoute, resolveWorkspaceRouteRedirect, resolveWorkspaceLandingPath, resolveWorkspaceSwitchDestination, shouldClearPendingWorkspaceRoute } from './workspaceSwitch'
 
 const baseInput = {
   currentPath: '/printers',
   defaultPath: '/',
   inPlatformMode: false,
   canUsePlatformWorkspace: false,
-  hasTenantContext: true,
+  hasWorkspaceContext: true,
   canViewPrinters: true,
   canViewLibrary: true,
   canViewJobs: true,
@@ -17,14 +17,14 @@ const baseInput = {
   pluginStateReady: true
 }
 
-test('resolveWorkspaceSwitchDestination falls back to tenant root from tenant routes', () => {
+test('resolveWorkspaceSwitchDestination falls back to workspace root from workspace routes', () => {
   assert.equal(resolveWorkspaceSwitchDestination({
     ...baseInput,
     currentPath: '/jobs'
   }), '/')
 })
 
-test('resolveWorkspaceSwitchDestination keeps the root overview route in tenant mode', () => {
+test('resolveWorkspaceSwitchDestination keeps the root overview route in workspace mode', () => {
   assert.equal(resolveWorkspaceSwitchDestination({
     ...baseInput,
     currentPath: '/',
@@ -39,25 +39,25 @@ test('resolveWorkspaceSwitchDestination keeps the explicit platform overview rou
     defaultPath: '/platform',
     inPlatformMode: true,
     canUsePlatformWorkspace: true,
-    hasTenantContext: false
+    hasWorkspaceContext: false
   }), '/platform')
 })
 
-test('resolveWorkspaceSwitchDestination falls back to tenant root when switching away from a platform-only page', () => {
+test('resolveWorkspaceSwitchDestination falls back to workspace root when switching away from a platform-only page', () => {
   assert.equal(resolveWorkspaceSwitchDestination({
     ...baseInput,
-    currentPath: '/platform/tenants'
+    currentPath: '/platform/workspaces'
   }), '/')
 })
 
-test('resolveWorkspaceSwitchDestination falls back to tenant root from settings routes', () => {
+test('resolveWorkspaceSwitchDestination falls back to workspace root from settings routes', () => {
   assert.equal(resolveWorkspaceSwitchDestination({
     ...baseInput,
     currentPath: '/settings/auth/roles'
   }), '/')
 })
 
-test('resolveWorkspaceSwitchDestination falls back to tenant root from plugin routes', () => {
+test('resolveWorkspaceSwitchDestination falls back to workspace root from plugin routes', () => {
   assert.equal(resolveWorkspaceSwitchDestination({
     ...baseInput,
     currentPath: '/orders/active',
@@ -65,7 +65,7 @@ test('resolveWorkspaceSwitchDestination falls back to tenant root from plugin ro
   }), '/')
 })
 
-test('resolveWorkspaceSwitchDestination falls back to tenant root from unknown routes without waiting for plugin state', () => {
+test('resolveWorkspaceSwitchDestination falls back to workspace root from unknown routes without waiting for plugin state', () => {
   assert.equal(resolveWorkspaceSwitchDestination({
     ...baseInput,
     currentPath: '/orders/active',
@@ -73,19 +73,19 @@ test('resolveWorkspaceSwitchDestination falls back to tenant root from unknown r
   }), '/')
 })
 
-test('resolveTenantRouteRedirect waits for auth bootstrap before redirecting tenant routes away', () => {
-  assert.equal(resolveTenantRouteRedirect({
+test('resolveWorkspaceRouteRedirect waits for auth bootstrap before redirecting workspace routes away', () => {
+  assert.equal(resolveWorkspaceRouteRedirect({
     authBootstrapReady: false,
-    hasTenantContext: false,
-    tenantlessRedirect: '/workspaces'
+    hasWorkspaceContext: false,
+    workspacelessRedirect: '/workspaces'
   }), null)
 })
 
-test('resolveTenantRouteRedirect redirects tenant routes once bootstrap confirms there is no tenant context', () => {
-  assert.equal(resolveTenantRouteRedirect({
+test('resolveWorkspaceRouteRedirect redirects workspace routes once bootstrap confirms there is no workspace context', () => {
+  assert.equal(resolveWorkspaceRouteRedirect({
     authBootstrapReady: true,
-    hasTenantContext: false,
-    tenantlessRedirect: '/workspaces'
+    hasWorkspaceContext: false,
+    workspacelessRedirect: '/workspaces'
   }), '/workspaces')
 })
 
@@ -109,37 +109,50 @@ test('shouldClearPendingWorkspaceRoute waits for an actual route change', () => 
   }), true)
 })
 
-test('resolveDefaultWorkspaceRoute scopes tenant app routes when a tenant is already active', () => {
+test('resolveDefaultWorkspaceRoute scopes workspace app routes when a workspace is already active', () => {
   assert.equal(resolveDefaultWorkspaceRoute({
-    activeTenantSlug: 'alpha',
+    activeWorkspaceSlug: 'alpha',
     defaultPath: '/'
   }), '/workspaces/alpha')
 
   assert.equal(resolveDefaultWorkspaceRoute({
-    activeTenantSlug: 'alpha',
+    activeWorkspaceSlug: 'alpha',
     defaultPath: '/jobs?filter=mine'
   }), '/workspaces/alpha/jobs?filter=mine')
 })
 
-test('resolveDefaultWorkspaceRoute preserves non-tenant workspace fallbacks', () => {
+test('resolveDefaultWorkspaceRoute preserves non-workspace fallbacks', () => {
   assert.equal(resolveDefaultWorkspaceRoute({
-    activeTenantSlug: 'alpha',
+    activeWorkspaceSlug: 'alpha',
     defaultPath: '/workspaces'
   }), '/workspaces')
 
   assert.equal(resolveDefaultWorkspaceRoute({
-    activeTenantSlug: 'alpha',
+    activeWorkspaceSlug: 'alpha',
     defaultPath: '/platform'
   }), '/platform')
 
   assert.equal(resolveDefaultWorkspaceRoute({
-    activeTenantSlug: null,
+    activeWorkspaceSlug: null,
     defaultPath: '/'
   }), '/')
 })
 
-test('resolveTenantWorkspaceLandingPath returns the selected tenant page when it is allowed', () => {
-  assert.equal(resolveTenantWorkspaceLandingPath({
+test('resolveDefaultWorkspaceRoute sends unscoped workspace pages to the chooser', () => {
+  // Regression: with no active workspace these used to resolve bare, match no
+  // route, and fall through the catch-all to the marketing home page -- which
+  // is what "Switch workspace" did before the chooser became the landing point.
+  for (const path of ['/get-started', '/printers', '/library', '/jobs']) {
+    assert.equal(
+      resolveDefaultWorkspaceRoute({ activeWorkspaceSlug: null, defaultPath: path }),
+      '/workspaces',
+      `${path} must not be emitted without a workspace slug`
+    )
+  }
+})
+
+test('resolveWorkspaceLandingPath returns the selected workspace page when it is allowed', () => {
+  assert.equal(resolveWorkspaceLandingPath({
     preferredPage: '/jobs',
     canViewPrinters: true,
     canViewLibrary: true,
@@ -148,7 +161,7 @@ test('resolveTenantWorkspaceLandingPath returns the selected tenant page when it
     enabledPluginBasePaths: []
   }), '/jobs')
 
-  assert.equal(resolveTenantWorkspaceLandingPath({
+  assert.equal(resolveWorkspaceLandingPath({
     preferredPage: '/settings',
     canViewPrinters: true,
     canViewLibrary: true,
@@ -158,8 +171,8 @@ test('resolveTenantWorkspaceLandingPath returns the selected tenant page when it
   }), '/settings')
 })
 
-test('resolveTenantWorkspaceLandingPath allows enabled plugin pages', () => {
-  assert.equal(resolveTenantWorkspaceLandingPath({
+test('resolveWorkspaceLandingPath allows enabled plugin pages', () => {
+  assert.equal(resolveWorkspaceLandingPath({
     preferredPage: '/orders',
     canViewPrinters: true,
     canViewLibrary: true,
@@ -169,8 +182,8 @@ test('resolveTenantWorkspaceLandingPath allows enabled plugin pages', () => {
   }), '/orders')
 })
 
-test('resolveTenantWorkspaceLandingPath falls back to the first available tenant page', () => {
-  assert.equal(resolveTenantWorkspaceLandingPath({
+test('resolveWorkspaceLandingPath falls back to the first available workspace page', () => {
+  assert.equal(resolveWorkspaceLandingPath({
     preferredPage: '/library',
     canViewPrinters: false,
     canViewLibrary: false,
@@ -179,7 +192,7 @@ test('resolveTenantWorkspaceLandingPath falls back to the first available tenant
     enabledPluginBasePaths: []
   }), '/jobs')
 
-  assert.equal(resolveTenantWorkspaceLandingPath({
+  assert.equal(resolveWorkspaceLandingPath({
     preferredPage: '/orders',
     canViewPrinters: true,
     canViewLibrary: false,
@@ -188,7 +201,7 @@ test('resolveTenantWorkspaceLandingPath falls back to the first available tenant
     enabledPluginBasePaths: []
   }), '/printers')
 
-  assert.equal(resolveTenantWorkspaceLandingPath({
+  assert.equal(resolveWorkspaceLandingPath({
     preferredPage: '/settings',
     canViewPrinters: false,
     canViewLibrary: false,
@@ -198,8 +211,8 @@ test('resolveTenantWorkspaceLandingPath falls back to the first available tenant
   }), '/printers')
 })
 
-test('resolveTenantWorkspaceLandingPath uses printers as the final fallback when landing state is ambiguous', () => {
-  assert.equal(resolveTenantWorkspaceLandingPath({
+test('resolveWorkspaceLandingPath uses printers as the final fallback when landing state is ambiguous', () => {
+  assert.equal(resolveWorkspaceLandingPath({
     preferredPage: '/orders',
     canViewPrinters: false,
     canViewLibrary: false,
@@ -209,62 +222,62 @@ test('resolveTenantWorkspaceLandingPath uses printers as the final fallback when
   }), '/printers')
 })
 
-test('isTenantWorkspaceLandingReady waits for tenant-scoped auth state before resolving a tenant landing route', () => {
-  assert.equal(isTenantWorkspaceLandingReady({
-    routeTenantSlug: 'alpha',
-    activeTenantSlug: null,
+test('isWorkspaceLandingReady waits for workspace-scoped auth state before resolving a workspace landing route', () => {
+  assert.equal(isWorkspaceLandingReady({
+    routeWorkspaceSlug: 'alpha',
+    activeWorkspaceSlug: null,
     authBootstrapReady: false,
     sharedSettingsReady: true,
     deviceLandingPageOverrideLoaded: true
   }), false)
 
-  assert.equal(isTenantWorkspaceLandingReady({
-    routeTenantSlug: 'alpha',
-    activeTenantSlug: 'beta',
+  assert.equal(isWorkspaceLandingReady({
+    routeWorkspaceSlug: 'alpha',
+    activeWorkspaceSlug: 'beta',
     authBootstrapReady: true,
     sharedSettingsReady: true,
     deviceLandingPageOverrideLoaded: true
   }), false)
 
-  assert.equal(isTenantWorkspaceLandingReady({
-    routeTenantSlug: 'alpha',
-    activeTenantSlug: 'alpha',
+  assert.equal(isWorkspaceLandingReady({
+    routeWorkspaceSlug: 'alpha',
+    activeWorkspaceSlug: 'alpha',
     authBootstrapReady: true,
     sharedSettingsReady: true,
     deviceLandingPageOverrideLoaded: true
   }), true)
 })
 
-test('isTenantWorkspaceLandingReady allows non-tenant routes to proceed once settings state is available', () => {
+test('isWorkspaceLandingReady allows non-workspace routes to proceed once settings state is available', () => {
   // Pre-bootstrap the landing redirect must hold: navigating without
   // workspace context loops `/` -> bare page path -> catch-all -> `/`.
-  assert.equal(isTenantWorkspaceLandingReady({
-    routeTenantSlug: null,
-    activeTenantSlug: null,
+  assert.equal(isWorkspaceLandingReady({
+    routeWorkspaceSlug: null,
+    activeWorkspaceSlug: null,
     authBootstrapReady: false,
     sharedSettingsReady: false,
     deviceLandingPageOverrideLoaded: false
   }), false)
 
-  assert.equal(isTenantWorkspaceLandingReady({
-    routeTenantSlug: null,
-    activeTenantSlug: null,
+  assert.equal(isWorkspaceLandingReady({
+    routeWorkspaceSlug: null,
+    activeWorkspaceSlug: null,
     authBootstrapReady: true,
     sharedSettingsReady: false,
     deviceLandingPageOverrideLoaded: false
   }), true)
 
-  assert.equal(isTenantWorkspaceLandingReady({
-    routeTenantSlug: null,
-    activeTenantSlug: 'alpha',
+  assert.equal(isWorkspaceLandingReady({
+    routeWorkspaceSlug: null,
+    activeWorkspaceSlug: 'alpha',
     authBootstrapReady: true,
     sharedSettingsReady: false,
     deviceLandingPageOverrideLoaded: true
   }), false)
 
-  assert.equal(isTenantWorkspaceLandingReady({
-    routeTenantSlug: null,
-    activeTenantSlug: 'alpha',
+  assert.equal(isWorkspaceLandingReady({
+    routeWorkspaceSlug: null,
+    activeWorkspaceSlug: 'alpha',
     authBootstrapReady: true,
     sharedSettingsReady: true,
     deviceLandingPageOverrideLoaded: true

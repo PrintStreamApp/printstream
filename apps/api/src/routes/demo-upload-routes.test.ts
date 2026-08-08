@@ -12,12 +12,12 @@ import { libraryRouter } from './library.js'
 import { printersRouter } from './printers.js'
 import { HttpError } from '../lib/http-error.js'
 
-const TEST_TENANT = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
 const DEMO_UPLOAD_MAX_BYTES = 15 * 1024 * 1024
 
 test('library chunked upload init allows small temporary uploads in demo mode', async () => {
   await withUploadTestServer(libraryRouter, {
-    tenant: TEST_TENANT,
+    workspace: TEST_WORKSPACE,
     demoMode: true
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/uploads`, {
@@ -40,7 +40,7 @@ test('library chunked upload init allows small temporary uploads in demo mode', 
 
 test('library upload rejects files larger than 15 MB in demo mode', async () => {
   await withUploadTestServer(libraryRouter, {
-    tenant: TEST_TENANT,
+    workspace: TEST_WORKSPACE,
     demoMode: true
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/uploads`, {
@@ -62,7 +62,7 @@ test('plugin upload returns 403 in demo mode', async () => {
   await withUploadTestServer(adminPluginsRouter, {
     authEnabled: true,
     permissions: [PLUGINS_MANAGE_PERMISSION],
-    tenant: null,
+    workspace: null,
     demoMode: true
   }, async (baseUrl) => {
     const form = new FormData()
@@ -100,7 +100,7 @@ test('plugin upload guard blocks hosted deployments and passes self-hosted ones'
 
 test('printer storage upload returns 403 in demo mode', async () => {
   await withUploadTestServer(printersRouter, {
-    tenant: TEST_TENANT,
+    workspace: TEST_WORKSPACE,
     demoMode: true
   }, async (baseUrl) => {
     const form = new FormData()
@@ -117,7 +117,7 @@ async function withUploadTestServer(
   auth: {
     authEnabled?: boolean
     permissions?: Permission[]
-    tenant: typeof TEST_TENANT | null
+    workspace: typeof TEST_WORKSPACE | null
     demoMode?: boolean
   },
   run: (baseUrl: string) => Promise<void>
@@ -125,7 +125,7 @@ async function withUploadTestServer(
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
-    request.tenant = auth.tenant
+    request.workspace = auth.workspace
     request.auth = {
       authEnabled: auth.authEnabled ?? false,
       actor: { type: 'user', userId: 'user-1' },

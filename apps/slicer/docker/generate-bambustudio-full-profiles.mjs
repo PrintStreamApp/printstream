@@ -200,7 +200,7 @@ function sanitizeFileName(value) {
 }
 
 // Run as a CLI when invoked directly (not when imported). Must stay at the end of
-// the module: it awaits generateFullProfiles during module evaluation, so every
+// the module: it CALLS generateFullProfiles during module evaluation, so every
 // module-level binding it depends on (e.g. INCLUDE_SKIP_KEYS) has to be initialized
 // first. Hoisting this block above those declarations reintroduces a TDZ crash.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
@@ -208,5 +208,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.error('Usage: generate-bambustudio-full-profiles.mjs <resources/profiles> [outputDir]')
     process.exit(2)
   }
-  await generateFullProfiles(profilesRoot, outputRoot)
+  // Awaited inside an IIFE rather than at the top level, because the engine
+  // installer imports `generateFullProfiles` from here and the native app's SEA
+  // build bundles that path as CJS -- a format esbuild cannot emit top-level
+  // await into, so the whole `apps/server` package build fails.
+  //
+  // The `catch` is not optional: top-level await turned a rejection into a
+  // non-zero exit for free, and without it a failed generation would report
+  // success to the Dockerfile step that runs this.
+  void generateFullProfiles(profilesRoot, outputRoot).catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
 }

@@ -12,11 +12,11 @@ import { pluginRegistry } from '../plugin/registry.js'
 import { HttpError } from '../lib/http-error.js'
 
 const originalListCatalog = pluginRegistry.listCatalog.bind(pluginRegistry)
-const originalSetTenantEnabled = pluginRegistry.setTenantEnabled.bind(pluginRegistry)
+const originalSetWorkspaceEnabled = pluginRegistry.setWorkspaceEnabled.bind(pluginRegistry)
 
 afterEach(() => {
   pluginRegistry.listCatalog = originalListCatalog
-  pluginRegistry.setTenantEnabled = originalSetTenantEnabled
+  pluginRegistry.setWorkspaceEnabled = originalSetWorkspaceEnabled
 })
 
 test('plugin catalog stays accessible while auth is disabled', async () => {
@@ -51,10 +51,10 @@ test('plugin catalog requires authentication once auth is enabled', async () => 
   })
 })
 
-test('tenant plugin toggles require settings.manage permission', async () => {
-  pluginRegistry.setTenantEnabled = (async () => {
+test('workspace plugin toggles require settings.manage permission', async () => {
+  pluginRegistry.setWorkspaceEnabled = (async () => {
     throw new Error('should not be called')
-  }) as typeof pluginRegistry.setTenantEnabled
+  }) as typeof pluginRegistry.setWorkspaceEnabled
 
   await withPluginCatalogApp({
     authEnabled: true,
@@ -71,14 +71,14 @@ test('tenant plugin toggles require settings.manage permission', async () => {
     assert.equal(response.status, 403)
     assert.deepEqual(await response.json(), { error: 'You do not have permission to perform this action.' })
   }, {
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
   })
 })
 
-test('tenant plugin toggles reject platform-workspace requests', async () => {
-  pluginRegistry.setTenantEnabled = (async () => {
+test('workspace plugin toggles reject platform-workspace requests', async () => {
+  pluginRegistry.setWorkspaceEnabled = (async () => {
     throw new Error('should not be called')
-  }) as typeof pluginRegistry.setTenantEnabled
+  }) as typeof pluginRegistry.setWorkspaceEnabled
 
   await withPluginCatalogApp({
     authEnabled: true,
@@ -93,26 +93,26 @@ test('tenant plugin toggles reject platform-workspace requests', async () => {
     })
 
     assert.equal(response.status, 403)
-    assert.deepEqual(await response.json(), { error: 'Switch to a tenant workspace to manage plugins for this workspace.' })
+    assert.deepEqual(await response.json(), { error: 'Switch to a workspace to manage plugins for this workspace.' })
   })
 })
 
-test('tenant settings managers can toggle workspace plugins', async () => {
-  let call: { name: string; tenantId: string; enabled: boolean } | null = null
-  pluginRegistry.setTenantEnabled = (async (name, tenantId, enabled) => {
-    call = { name, tenantId, enabled }
+test('workspace settings managers can toggle workspace plugins', async () => {
+  let call: { name: string; workspaceId: string; enabled: boolean } | null = null
+  pluginRegistry.setWorkspaceEnabled = (async (name, workspaceId, enabled) => {
+    call = { name, workspaceId, enabled }
     return {
       name,
       source: 'builtin',
       installed: true,
       enabled,
       platformEnabled: null,
-      runtimeSurfaces: ['tenant'],
-      managerSurfaces: ['platform', 'tenant'],
-      tenantAccess: 'controlled',
+      runtimeSurfaces: ['workspace'],
+      managerSurfaces: ['platform', 'workspace'],
+      workspaceAccess: 'controlled',
       availableInCurrentContext: true
     }
-  }) as typeof pluginRegistry.setTenantEnabled
+  }) as typeof pluginRegistry.setWorkspaceEnabled
 
   await withPluginCatalogApp({
     authEnabled: true,
@@ -134,31 +134,31 @@ test('tenant settings managers can toggle workspace plugins', async () => {
         installed: true,
         enabled: false,
         platformEnabled: null,
-        runtimeSurfaces: ['tenant'],
-        managerSurfaces: ['platform', 'tenant'],
-        tenantAccess: 'controlled',
+        runtimeSurfaces: ['workspace'],
+        managerSurfaces: ['platform', 'workspace'],
+        workspaceAccess: 'controlled',
         availableInCurrentContext: true
       }
     })
   }, {
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
   })
 
-  assert.deepEqual(call, { name: 'orders', tenantId: 'tenant-1', enabled: false })
+  assert.deepEqual(call, { name: 'orders', workspaceId: 'workspace-1', enabled: false })
 })
 
 function withPluginCatalogApp(
   auth: RequestAuthContext,
   run: (baseUrl: string) => Promise<void>,
   input: {
-    tenant?: { id: string; slug: string; name: string } | null
+    workspace?: { id: string; slug: string; name: string } | null
   } = {}
 ): Promise<void> {
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = input.tenant ?? null
+    request.workspace = input.workspace ?? null
     next()
   })
   app.use(pluginCatalogRouter)

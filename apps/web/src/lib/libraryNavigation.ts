@@ -1,5 +1,5 @@
 import type { LibraryFolder } from '@printstream/shared'
-import { buildTenantWorkspacePath } from './workspaceRoute'
+import { buildWorkspacePath } from './workspaceRoute'
 
 const LIBRARY_ROUTE = '/library'
 
@@ -80,20 +80,20 @@ export function fromBridgeFolderId(folderId: string): string {
   return folderId.slice('bridge:'.length)
 }
 
-export function buildLibraryFolderRoute(tenantSlug: string, folderId: string | null, bridgeId: string | null): string {
+export function buildLibraryFolderRoute(workspaceSlug: string, folderId: string | null, bridgeId: string | null): string {
   const path = folderId ? `${LIBRARY_ROUTE}/${encodeURIComponent(folderId)}` : LIBRARY_ROUTE
   const route = bridgeId ? `${path}?bridge=${encodeURIComponent(bridgeId)}` : path
-  return buildTenantWorkspacePath(tenantSlug, route)
+  return buildWorkspacePath(workspaceSlug, route)
 }
 
 /** Static path segment for the "Favorite Files" view (its own route, so it is bookmarkable + in history). */
 export const LIBRARY_FAVORITES_SEGMENT = 'favorites'
 
 /** Route for the favorites view — a flat, cross-folder list of the user's starred files. */
-export function buildLibraryFavoritesRoute(tenantSlug: string, bridgeId: string | null): string {
+export function buildLibraryFavoritesRoute(workspaceSlug: string, bridgeId: string | null): string {
   const path = `${LIBRARY_ROUTE}/${LIBRARY_FAVORITES_SEGMENT}`
   const route = bridgeId ? `${path}?bridge=${encodeURIComponent(bridgeId)}` : path
-  return buildTenantWorkspacePath(tenantSlug, route)
+  return buildWorkspacePath(workspaceSlug, route)
 }
 
 /** Whether a pathname is the favorites view route (`.../library/favorites`). */

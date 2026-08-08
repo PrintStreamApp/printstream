@@ -29,7 +29,7 @@ export function createEmailNotificationHandler(context: ApiPluginContext) {
 
     const recipients = message.targetUserIds && message.targetUserIds.length > 0
       ? await resolveTargetedRecipients(context, message.targetUserIds)
-      : await resolveScopeSubscriberRecipients(context, message.tenantId)
+      : await resolveScopeSubscriberRecipients(context, message.workspaceId)
     if (recipients.length === 0) return
 
     const html = buildEmailHtml(message)
@@ -47,13 +47,13 @@ export function createEmailNotificationHandler(context: ApiPluginContext) {
 /** The scope's opted-in subscribers, resolved to their account emails. */
 async function resolveScopeSubscriberRecipients(
   context: ApiPluginContext,
-  tenantId: string | null | undefined
+  workspaceId: string | null | undefined
 ): Promise<string[]> {
-  const scope = messageNotificationScope(context, tenantId)
+  const scope = messageNotificationScope(context, workspaceId)
   const subscriberIds = await readEmailSubscribers(scope.settings)
   if (subscriberIds.length === 0) return []
-  return scope.tenantId
-    ? await resolveTenantRecipients(context, scope.tenantId, subscriberIds)
+  return scope.workspaceId
+    ? await resolveWorkspaceRecipients(context, scope.workspaceId, subscriberIds)
     : await resolvePlatformRecipients(context, subscriberIds)
 }
 
@@ -71,10 +71,10 @@ async function resolveTargetedRecipients(context: ApiPluginContext, targetUserId
   return [...new Set(users.map((user) => user.email).filter((email): email is string => Boolean(email)))]
 }
 
-/** Opted-in members of the tenant, filtered to current enabled memberships. */
-async function resolveTenantRecipients(context: ApiPluginContext, tenantId: string, subscriberIds: string[]): Promise<string[]> {
-  const members = await context.prisma.authTenantMembership.findMany({
-    where: { tenantId, userId: { in: subscriberIds }, loginDisabled: false },
+/** Opted-in members of the workspace, filtered to current enabled memberships. */
+async function resolveWorkspaceRecipients(context: ApiPluginContext, workspaceId: string, subscriberIds: string[]): Promise<string[]> {
+  const members = await context.prisma.authWorkspaceMembership.findMany({
+    where: { workspaceId, userId: { in: subscriberIds }, loginDisabled: false },
     select: { user: { select: { email: true } } }
   })
   return [...new Set(

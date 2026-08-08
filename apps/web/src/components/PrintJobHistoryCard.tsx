@@ -8,7 +8,7 @@ import { resolveProjectFilamentColorName } from '../lib/filamentColor'
 import { formatJobDispatchDetails } from '../lib/jobHistory'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { formatDateTime, formatSecondsDuration } from '../lib/time'
-import { buildTenantWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
+import { buildWorkspacePath, parseWorkspacePathname } from '../lib/workspaceRoute'
 import { JobHistoryMedia } from './JobHistoryMedia'
 
 export function PrintJobHistoryCard({
@@ -170,7 +170,7 @@ export function PrinterRouteButton({
 }) {
   const navigate = useNavigate()
   const location = useLocation()
-  const tenantSlug = parseWorkspacePathname(location.pathname).tenantSlug
+  const workspaceSlug = parseWorkspacePathname(location.pathname).workspaceSlug
 
   return (
     <Box
@@ -181,7 +181,7 @@ export function PrinterRouteButton({
           onNavigate(printerId)
           return
         }
-        if (tenantSlug) navigate(buildTenantWorkspacePath(tenantSlug, `/printers/${printerId}`))
+        if (workspaceSlug) navigate(buildWorkspacePath(workspaceSlug, `/printers/${printerId}`))
       }}
       sx={{
         p: 0,

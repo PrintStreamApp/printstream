@@ -29,19 +29,19 @@ afterEach(() => {
   const manager = printerManager as unknown as {
     managed: Map<string, unknown>
     bridgeIds: Map<string, string | null>
-    tenantIds: Map<string, string>
+    workspaceIds: Map<string, string>
     pendingOfflineTimers: Map<string, ReturnType<typeof setTimeout>>
   }
   for (const timer of manager.pendingOfflineTimers.values()) clearTimeout(timer)
   manager.pendingOfflineTimers.clear()
   manager.managed.clear()
   manager.bridgeIds.clear()
-  manager.tenantIds.clear()
+  manager.workspaceIds.clear()
 })
 
 /** Register the printer on a bridge, bring it online, and start capturing offline emits. */
 function setupOnlinePrinter() {
-  printerManager.add(printer, 'tenant-1', 'bridge-1')
+  printerManager.add(printer, 'workspace-1', 'bridge-1')
   printerManager.ingestBridgeStatus({ printerId: printer.id, online: true } as PrinterStatus, 'bridge-1')
   assert.equal(printerManager.getStatus(printer.id)?.online, true, 'precondition: printer is online')
 

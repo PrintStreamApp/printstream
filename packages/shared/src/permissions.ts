@@ -1,12 +1,15 @@
 /**
  * Permission catalog shared by the API and web client: the canonical list of
  * permission keys and finer-grained scopes, their human-facing definitions,
- * tenant/platform visibility filters, prerequisite implications, and the
+ * workspace/platform visibility filters, prerequisite implications, and the
  * scope-to-permission fallback map.
  */
 import { z } from 'zod'
 
 export const permissionValues = [
+  'accounts.create',
+  'accounts.people.manage',
+  'accounts.view',
   'auth.access.view',
   'auth.bypassSupportAccess',
   'auth.manageSupportAccess',
@@ -44,6 +47,10 @@ export const permissionValues = [
   'library.manage',
   'library.upload',
   'library.view',
+  'licenses.issue',
+  'licenses.revealKey',
+  'licenses.revoke',
+  'licenses.view',
   'plugins.manage',
   'printerStorage.download',
   'printerStorage.view',
@@ -53,8 +60,8 @@ export const permissionValues = [
   'printers.view',
   'prints.dispatch',
   'settings.manage',
-  'tenants.disable',
-  'tenants.manage'
+  'workspaces.disable',
+  'workspaces.manage'
 ] as const
 
 export const permissionSchema = z.enum(permissionValues)
@@ -84,6 +91,22 @@ export const permissionDefinitionSchema = z.object({
 })
 
 export type PermissionDefinition = z.infer<typeof permissionDefinitionSchema>
+
+/**
+ * Customer accounts and self-hosted licences, as an OPERATOR sees them.
+ *
+ * Platform-only, and deliberately granular: these gate real money and other
+ * people's credentials. Before them the licence routes checked only the
+ * `isPlatformUser` boolean, so the built-in Support role — defined with no
+ * permissions at all — could reveal, revoke and issue any customer's key.
+ */
+export const ACCOUNTS_CREATE_PERMISSION: Permission = 'accounts.create'
+export const ACCOUNTS_PEOPLE_MANAGE_PERMISSION: Permission = 'accounts.people.manage'
+export const ACCOUNTS_VIEW_PERMISSION: Permission = 'accounts.view'
+export const LICENSES_ISSUE_PERMISSION: Permission = 'licenses.issue'
+export const LICENSES_REVEAL_KEY_PERMISSION: Permission = 'licenses.revealKey'
+export const LICENSES_REVOKE_PERMISSION: Permission = 'licenses.revoke'
+export const LICENSES_VIEW_PERMISSION: Permission = 'licenses.view'
 
 export const AUTH_ACCESS_VIEW_PERMISSION: Permission = 'auth.access.view'
 export const AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION: Permission = 'auth.bypassSupportAccess'
@@ -130,18 +153,35 @@ export const PRINTERS_MANAGE_PERMISSION: Permission = 'printers.manage'
 export const PRINTERS_VIEW_PERMISSION: Permission = 'printers.view'
 export const PRINTS_DISPATCH_PERMISSION: Permission = 'prints.dispatch'
 export const SETTINGS_MANAGE_PERMISSION: Permission = 'settings.manage'
-export const TENANTS_DISABLE_PERMISSION: Permission = 'tenants.disable'
-export const TENANTS_MANAGE_PERMISSION: Permission = 'tenants.manage'
+// The permission STRINGS stay `tenants.*`: they are stored in every
+// `AuthGroup.permissions` array, so renaming them would revoke these
+// capabilities from existing groups.
+export const WORKSPACES_DISABLE_PERMISSION: Permission = 'workspaces.disable'
+export const WORKSPACES_MANAGE_PERMISSION: Permission = 'workspaces.manage'
 
-const tenantHiddenPermissions = new Set<Permission>([
+const workspaceHiddenPermissions = new Set<Permission>([
+  ACCOUNTS_CREATE_PERMISSION,
+  ACCOUNTS_PEOPLE_MANAGE_PERMISSION,
+  ACCOUNTS_VIEW_PERMISSION,
+  LICENSES_ISSUE_PERMISSION,
+  LICENSES_REVEAL_KEY_PERMISSION,
+  LICENSES_REVOKE_PERMISSION,
+  LICENSES_VIEW_PERMISSION,
   AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION,
   BILLING_MANAGE_PERMISSION,
   PLUGINS_MANAGE_PERMISSION,
-  TENANTS_DISABLE_PERMISSION,
-  TENANTS_MANAGE_PERMISSION
+  WORKSPACES_DISABLE_PERMISSION,
+  WORKSPACES_MANAGE_PERMISSION
 ])
 
 const platformVisiblePermissions = new Set<Permission>([
+  ACCOUNTS_CREATE_PERMISSION,
+  ACCOUNTS_PEOPLE_MANAGE_PERMISSION,
+  ACCOUNTS_VIEW_PERMISSION,
+  LICENSES_ISSUE_PERMISSION,
+  LICENSES_REVEAL_KEY_PERMISSION,
+  LICENSES_REVOKE_PERMISSION,
+  LICENSES_VIEW_PERMISSION,
   AUTH_ACCESS_VIEW_PERMISSION,
   AUTH_BYPASS_SUPPORT_ACCESS_PERMISSION,
   BILLING_MANAGE_PERMISSION,
@@ -170,22 +210,22 @@ const platformVisiblePermissions = new Set<Permission>([
   AUTH_USERS_VIEW_PERMISSION,
   AUTH_USERS_VIEW_SESSIONS_PERMISSION,
   SETTINGS_MANAGE_PERMISSION,
-  TENANTS_DISABLE_PERMISSION,
-  TENANTS_MANAGE_PERMISSION
+  WORKSPACES_DISABLE_PERMISSION,
+  WORKSPACES_MANAGE_PERMISSION
 ])
 
-export function isPermissionVisibleInTenantContext(permission: Permission): boolean {
-  return !tenantHiddenPermissions.has(permission)
+export function isPermissionVisibleInWorkspaceContext(permission: Permission): boolean {
+  return !workspaceHiddenPermissions.has(permission)
 }
 
-export function filterPermissionsForTenantContext(permissions: readonly Permission[]): Permission[] {
-  return permissions.filter(isPermissionVisibleInTenantContext)
+export function filterPermissionsForWorkspaceContext(permissions: readonly Permission[]): Permission[] {
+  return permissions.filter(isPermissionVisibleInWorkspaceContext)
 }
 
-export function filterPermissionDefinitionsForTenantContext(
+export function filterPermissionDefinitionsForWorkspaceContext(
   definitions: readonly PermissionDefinition[]
 ): PermissionDefinition[] {
-  return definitions.filter((definition) => isPermissionVisibleInTenantContext(definition.key))
+  return definitions.filter((definition) => isPermissionVisibleInWorkspaceContext(definition.key))
 }
 
 export function isPermissionVisibleInPlatformContext(permission: Permission): boolean {
@@ -266,7 +306,7 @@ const permissionImplications = new Map<Permission, readonly Permission[]>([
   [AUTH_PROVIDERS_MANAGE_PERMISSION, [AUTH_ACCESS_VIEW_PERMISSION]],
   [AUTH_SESSION_POLICY_MANAGE_PERMISSION, [AUTH_ACCESS_VIEW_PERMISSION]],
   [AUTH_MANAGE_SUPPORT_ACCESS_PERMISSION, [AUTH_ACCESS_VIEW_PERMISSION]],
-  [TENANTS_DISABLE_PERMISSION, [TENANTS_MANAGE_PERMISSION]],
+  [WORKSPACES_DISABLE_PERMISSION, [WORKSPACES_MANAGE_PERMISSION]],
   // Library
   [LIBRARY_UPLOAD_PERMISSION, [LIBRARY_VIEW_PERMISSION]],
   [LIBRARY_DOWNLOAD_PERMISSION, [LIBRARY_VIEW_PERMISSION]],
@@ -333,6 +373,41 @@ export function getPermissionDependents(permission: Permission): Permission[] {
 }
 
 export const permissionDefinitions: PermissionDefinition[] = [
+  {
+    key: ACCOUNTS_VIEW_PERMISSION,
+    label: 'View Customer Accounts',
+    description: 'See customer accounts, who owns them, and the people on them.'
+  },
+  {
+    key: ACCOUNTS_CREATE_PERMISSION,
+    label: 'Create Customer Accounts',
+    description: 'Create an account on a customer\'s behalf, including a sign-in for its owner.'
+  },
+  {
+    key: ACCOUNTS_PEOPLE_MANAGE_PERMISSION,
+    label: 'Manage Account People',
+    description: 'Add or remove people on a customer account and change who holds billing.'
+  },
+  {
+    key: LICENSES_VIEW_PERMISSION,
+    label: 'View Licenses',
+    description: 'See issued self-hosted license keys, who holds them, and their status.'
+  },
+  {
+    key: LICENSES_REVEAL_KEY_PERMISSION,
+    label: 'Reveal License Keys',
+    description: 'Show the full signed key for an issued license. The key is a credential.'
+  },
+  {
+    key: LICENSES_ISSUE_PERMISSION,
+    label: 'Issue Licenses',
+    description: 'Grant a self-hosted license with no payment behind it, and re-send an issued key.'
+  },
+  {
+    key: LICENSES_REVOKE_PERMISSION,
+    label: 'Revoke Licenses',
+    description: 'Mark an issued license revoked so it is not re-signed or re-sent.'
+  },
   {
     key: AUTH_ACCESS_VIEW_PERMISSION,
     label: 'View Access Management',
@@ -544,19 +619,19 @@ export const permissionDefinitions: PermissionDefinition[] = [
     description: 'Change global application settings and administrative configuration.'
   },
   {
-    key: TENANTS_DISABLE_PERMISSION,
-    label: 'Disable Tenants',
-    description: 'Disable or re-enable tenant workspaces so they cannot be entered until restored.'
+    key: WORKSPACES_DISABLE_PERMISSION,
+    label: 'Disable Workspaces',
+    description: 'Disable or re-enable workspaces so they cannot be entered until restored.'
   },
   {
-    key: TENANTS_MANAGE_PERMISSION,
-    label: 'Manage Tenants',
-    description: 'Create, update, and administer tenant workspaces and their cloud-hosted routing.'
+    key: WORKSPACES_MANAGE_PERMISSION,
+    label: 'Manage Workspaces',
+    description: 'Create, update, and administer workspaces and their cloud-hosted routing.'
   },
   {
     key: BILLING_MANAGE_PERMISSION,
     label: 'Manage Billing',
-    description: 'View every tenant\'s subscription and plan, and comp or override a plan.'
+    description: 'View every workspace\'s subscription and plan, and comp or override a plan.'
   },
   {
     key: BILLING_MANAGE_OWN_PERMISSION,

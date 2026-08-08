@@ -44,7 +44,7 @@ export type EditorSidebarSideSetting = z.infer<typeof editorSidebarSideSchema>
  * `slicerDeveloperMode` reveals BambuStudio's developer-mode (`develop`-tier)
  * options in the process-settings editor; it is the workspace-wide default that
  * a per-device override (browser localStorage) can shadow.
- * `landingPage` controls which tenant page opens first when the app enters a workspace.
+ * `landingPage` controls which workspace page opens first when the app enters a workspace.
  * `quickStartDismissed` hides the Get started page once a workspace is set up;
  * until then that page is the workspace's default landing page.
  * `supportAccessEnabled` allows support users to enter the current workspace.

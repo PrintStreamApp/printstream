@@ -1,6 +1,6 @@
 /**
  * Workspace-scoping for the React Query cache. Every key holding server data is
- * scoped by a string derived from the current URL — `tenant:<slug>` for a
+ * scoped by a string derived from the current URL — `workspace:<slug>` for a
  * workspace, `platform` for the platform workspace, or `ambient` when neither
  * applies. `workspaceQueryKeys` builds the scoped keys; `usePrinterWebSocket`
  * and the invalidation helpers key off the same scope.
@@ -13,8 +13,8 @@
 import { isPlatformWorkspacePath, parseWorkspacePathname } from './workspaceRoute'
 
 export function resolveWorkspaceScopeKey(pathname: string): string {
-  const { tenantSlug } = parseWorkspacePathname(pathname)
-  if (tenantSlug) return `tenant:${tenantSlug}`
+  const { workspaceSlug } = parseWorkspacePathname(pathname)
+  if (workspaceSlug) return `workspace:${workspaceSlug}`
   if (isPlatformWorkspacePath(pathname)) return 'platform'
   return 'ambient'
 }

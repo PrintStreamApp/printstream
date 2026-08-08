@@ -11,7 +11,7 @@
  *
  * WHY IN THE BROWSER: the model studio is our own BambuStudio GUI, so it authors what it saves.
  * Both hosts already own a `FilamentConfigResolver` for the material tune dialog and the
- * changed-vs-preset badge (the tenant `/api/slicing/profiles/resolve-filament` route, and
+ * changed-vs-preset badge (the workspace `/api/slicing/profiles/resolve-filament` route, and
  * `localFilamentResolver` for the public editor), so this needs no new endpoint and no server round
  * trip the editor was not already making.
  *

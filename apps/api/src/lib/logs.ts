@@ -7,14 +7,14 @@
  * is out of scope for v1, but a "Logs" tab is needed for diagnostics.
  */
 import type { SystemLogEntry } from '@printstream/shared'
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 import { getCorrelationId } from './request-context.js'
 
 const MAX_ENTRIES = 1000
 const buffer: SystemLogEntry[] = []
 
 function record(level: SystemLogEntry['level'], args: unknown[]): void {
-  const tenant = getCurrentTenant()
+  const workspace = getCurrentWorkspace()
   const message = args
     .map((value) => {
       if (typeof value === 'string') return value
@@ -26,7 +26,7 @@ function record(level: SystemLogEntry['level'], args: unknown[]): void {
       }
     })
     .join(' ')
-  buffer.push({ kind: 'system', timestamp: new Date().toISOString(), level, message, tenantId: tenant?.id ?? null, correlationId: getCorrelationId() })
+  buffer.push({ kind: 'system', timestamp: new Date().toISOString(), level, message, workspaceId: workspace?.id ?? null, correlationId: getCorrelationId() })
   if (buffer.length > MAX_ENTRIES) buffer.shift()
 }
 
@@ -49,35 +49,35 @@ export function installLogCapture(): void {
 }
 
 /**
- * Append a structured system log entry with an explicit tenant scope. Use this
- * for events detected OUTSIDE a request/tenant context (e.g. a bridge crash
+ * Append a structured system log entry with an explicit workspace scope. Use this
+ * for events detected OUTSIDE a request/workspace context (e.g. a bridge crash
  * report arriving over the bridge session): the console-capture path reads the
- * ambient tenant, which is null off-request, so a bare `console.*` line would be
- * invisible to the owning tenant's Logs view. Callers own their own live-refresh
+ * ambient workspace, which is null off-request, so a bare `console.*` line would be
+ * invisible to the owning workspace's Logs view. Callers own their own live-refresh
  * broadcast (`broadcastLogsChanged`).
  */
-export function pushSystemLog(entry: { level: SystemLogEntry['level']; message: string; tenantId: string | null }): void {
+export function pushSystemLog(entry: { level: SystemLogEntry['level']; message: string; workspaceId: string | null }): void {
   buffer.push({
     kind: 'system',
     timestamp: new Date().toISOString(),
     level: entry.level,
     message: entry.message,
-    tenantId: entry.tenantId,
+    workspaceId: entry.workspaceId,
     correlationId: null
   })
   if (buffer.length > MAX_ENTRIES) buffer.shift()
 }
 
-export function getLogs(limit = 500, input?: { tenantId?: string }): SystemLogEntry[] {
-  const entries = input?.tenantId
-    ? buffer.filter((entry) => entry.tenantId === input.tenantId)
+export function getLogs(limit = 500, input?: { workspaceId?: string }): SystemLogEntry[] {
+  const entries = input?.workspaceId
+    ? buffer.filter((entry) => entry.workspaceId === input.workspaceId)
     : buffer
   if (limit >= entries.length) return [...entries]
   return entries.slice(entries.length - limit)
 }
 
-export function clearLogs(input?: { tenantId?: string }): void {
-  if (!input?.tenantId) {
+export function clearLogs(input?: { workspaceId?: string }): void {
+  if (!input?.workspaceId) {
     buffer.length = 0
     return
   }
@@ -85,7 +85,7 @@ export function clearLogs(input?: { tenantId?: string }): void {
   let writeIndex = 0
   for (let readIndex = 0; readIndex < buffer.length; readIndex += 1) {
     const entry = buffer[readIndex]
-    if (!entry || entry.tenantId === input.tenantId) {
+    if (!entry || entry.workspaceId === input.workspaceId) {
       continue
     }
     buffer[writeIndex] = entry

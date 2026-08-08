@@ -34,7 +34,7 @@ import {
   isNilSettingValue
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
-import { resolveTenantFilamentConfig } from './tenantFilamentResolver'
+import { resolveWorkspaceFilamentConfig } from './workspaceFilamentResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
 import { BackAwareModal } from '../BackAwareModal'
 import { DialogSection } from '../DialogSection'
@@ -79,7 +79,7 @@ export interface FilamentSettingsDialogProps {
    */
   applyScope?: 'project' | 'slice' | 'preset'
   /**
-   * How the dialog resolves a preset's base config. Defaults to the TENANT route
+   * How the dialog resolves a preset's base config. Defaults to the WORKSPACE route
    * (`/api/slicing/profiles/resolve-filament`). The public 3MF editor passes an anonymous resolver
    * (built-in presets via `/api/public/slicing/...`; project filaments from the in-tab 3MF slot), so
    * it can run with no workspace. Additive — omitting it preserves the exact library behaviour.
@@ -145,7 +145,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     setLoading(true)
     setError(null)
     setBaseConfig(null)
-    const resolve = (resolveConfig ?? resolveTenantFilamentConfig)({
+    const resolve = (resolveConfig ?? resolveWorkspaceFilamentConfig)({
       filamentProfileId,
       targetId: slicerTargetId || null,
       sourceFileId: sourceFileId || null,

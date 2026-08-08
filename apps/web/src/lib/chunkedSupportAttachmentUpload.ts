@@ -184,7 +184,7 @@ async function uploadChunk(
       Accept: 'application/json',
       'Content-Type': 'application/octet-stream',
       'X-Upload-Offset': String(offset),
-      ...(workspaceContext ? { 'X-PrintStream-Tenant': workspaceContext } : {})
+      ...(workspaceContext ? { 'X-PrintStream-Workspace': workspaceContext } : {})
     },
     body: chunk
   })

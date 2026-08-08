@@ -20,13 +20,13 @@ import { LogsPanel } from './LogsView'
 
 type PlatformSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'auth-users' | 'auth-roles'
 
-const PLATFORM_NOTIFICATIONS_DESCRIPTION = 'Platform event notifications for operators: beta signups, new workspaces, and your delivery opt-in.'
+const PLATFORM_NOTIFICATIONS_DESCRIPTION = 'Platform event notifications for operators: new workspaces, support messages, suggestions, and your delivery opt-in.'
 
 /**
  * Dedicated workspace for platform-wide operations.
  *
  * The theme props mirror the workspace Settings view: the shared value is
- * the platform-scoped `/api/settings` record (the API stores tenantless
+ * the platform-scoped `/api/settings` record (the API stores workspaceless
  * requests under a `platform:` key prefix) and the device override is the
  * platform-specific localStorage key owned by App.
  */
@@ -108,7 +108,7 @@ export function PlatformView({
           {canManagePlugins && (
             <PlatformOverviewCard
               title="Plugins"
-              description="Manage platform-only plugins and control which tenant plugins are available in each workspace."
+              description="Manage platform-only plugins and control which workspace plugins are available in each workspace."
               onAction={() => navigate('/platform/settings/plugins')}
             />
           )}
@@ -144,6 +144,7 @@ export function PlatformView({
           )}
 
           <ThemeSettingCard
+            sharedScopeLabel="the platform workspace"
             sharedAppTheme={sharedAppTheme}
             deviceAppThemeOverride={deviceAppThemeOverride}
             canManageSettings={canManageSettings}
@@ -208,7 +209,7 @@ export function PlatformView({
                     authProviders,
                     authSetupRequired: authBootstrapQuery.data?.setupRequired ?? false,
                     authBootstrapReady: authBootstrapQuery.isSuccess,
-                    authTenantId: undefined,
+                    authWorkspaceId: undefined,
                     authScopeKey,
                     authHost: 'settings',
                     actorType: authBootstrapQuery.data?.actor.type ?? 'anonymous',
@@ -262,7 +263,7 @@ export function PlatformView({
               { label: 'Platform settings', onClick: () => navigate('/platform/settings') },
               { label: 'Plugins' }
             ]}
-            description="Manage platform-only plugins and control which tenant plugins are available in each workspace."
+            description="Manage platform-only plugins and control which workspace plugins are available in each workspace."
           />
           <PluginManagerSection surface="platform" />
         </Stack>

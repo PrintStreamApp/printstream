@@ -1,6 +1,6 @@
 /**
  * BambuStudio profile-metadata extraction helpers shared by the API
- * (`apps/api/src/lib/slicing-profiles.ts`) and the standalone slicer worker
+ * (`apps/api/src/lib/slicing-presets.ts`) and the standalone slicer worker
  * (`apps/slicer/src/index.ts`). Both read the same BambuStudio preset JSON to
  * derive the filtering metadata surfaced in the slice dialog, so the parsers
  * must agree byte-for-byte. The single source of truth lives here.

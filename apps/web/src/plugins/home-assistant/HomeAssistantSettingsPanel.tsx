@@ -33,7 +33,7 @@ import {
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { getBrowserEnv } from '../../lib/browserEnv'
-import { buildTenantWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
+import { buildWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
 
 const CUSTOM_COMPONENT_PATH = 'integrations/home-assistant/custom_components/printstream'
 const CUSTOM_COMPONENT_TARGET = 'custom_components/printstream'
@@ -68,7 +68,7 @@ function CodeBlock({ code }: { code: string }) {
 export function HomeAssistantSettingsPanel() {
   const navigate = useNavigate()
   const location = useLocation()
-  const tenantSlug = parseWorkspacePathname(location.pathname).tenantSlug
+  const workspaceSlug = parseWorkspacePathname(location.pathname).workspaceSlug
   const queryClient = useQueryClient()
   const [copiedValue, setCopiedValue] = useState<'base' | 'token' | null>(null)
   const [revealedToken, setRevealedToken] = useState<HomeAssistantCreateAccessTokenResponse | null>(null)
@@ -252,7 +252,7 @@ export function HomeAssistantSettingsPanel() {
                 color="neutral"
                 startDecorator={<LinkRoundedIcon />}
                 onClick={() => {
-                  if (tenantSlug) navigate(buildTenantWorkspacePath(tenantSlug, '/settings/authentication'))
+                  if (workspaceSlug) navigate(buildWorkspacePath(workspaceSlug, '/settings/authentication'))
                 }}
               >
                 Review in Authentication

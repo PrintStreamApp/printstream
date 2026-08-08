@@ -12,8 +12,8 @@ import { authProviderRegistry } from './auth-registry.js'
 import { prisma } from './prisma.js'
 import { resolveRequestAuth } from './auth-session.js'
 import { applyPublicDemoGuestAuth } from './public-demo-policy.js'
-import type { RequestTenantSummary } from './tenant-context.js'
-import { getCurrentTenant, resolveEffectiveTenantForAuth, withResolvedTenantRequestContext, withTenantRequestContext } from './tenant-context.js'
+import type { RequestWorkspaceSummary } from './workspace-context.js'
+import { getCurrentWorkspace, resolveEffectiveWorkspaceForAuth, withResolvedWorkspaceRequestContext, withWorkspaceRequestContext } from './workspace-context.js'
 
 export interface AnonymousAuthActor {
   type: 'anonymous'
@@ -23,13 +23,13 @@ export interface UserAuthActor {
   type: 'user'
   userId: string
   isPlatformUser?: boolean
-  tenant?: RequestTenantSummary | null
+  workspace?: RequestWorkspaceSummary | null
 }
 
 export interface ServiceAccountAuthActor {
   type: 'service-account'
   serviceAccountId: string
-  tenant?: RequestTenantSummary | null
+  workspace?: RequestWorkspaceSummary | null
 }
 
 export type RequestAuthActor = AnonymousAuthActor | UserAuthActor | ServiceAccountAuthActor
@@ -40,7 +40,7 @@ export interface RequestRuntimePolicy {
 
 export interface RequestAuthContext {
   authEnabled: boolean
-  /** Anonymous visitor admitted to the reserved public demo tenant. */
+  /** Anonymous visitor admitted to the reserved public demo workspace. */
   publicDemoGuest?: boolean
   actor: RequestAuthActor
   permissions: Permission[]
@@ -70,23 +70,23 @@ export function installAuthContext(input: { demoMode: boolean }) {
         demoMode: input.demoMode,
         authEnabled: false
       })
-      const resolvedAuth = await withResolvedTenantRequestContext(_request, async () => {
+      const resolvedAuth = await withResolvedWorkspaceRequestContext(_request, async () => {
         const auth = await resolveRequestAuth(prisma, _request, anonymous, _response)
-        const requestTenant = getCurrentTenant()
+        const requestWorkspace = getCurrentWorkspace()
         return {
-          auth: applyPublicDemoGuestAuth(auth, requestTenant),
-          requestTenant
+          auth: applyPublicDemoGuestAuth(auth, requestWorkspace),
+          requestWorkspace
         }
       })
-      const requestTenantAuthEnabled = resolvedAuth.requestTenant
-        ? await withTenantRequestContext(resolvedAuth.requestTenant, async () => await authProviderRegistry.hasEnabledProviders())
+      const requestWorkspaceAuthEnabled = resolvedAuth.requestWorkspace
+        ? await withWorkspaceRequestContext(resolvedAuth.requestWorkspace, async () => await authProviderRegistry.hasEnabledProviders())
         : false
-      const effectiveTenant = await resolveEffectiveTenantForAuth(resolvedAuth.auth, resolvedAuth.requestTenant, {
-        requestTenantAuthEnabled
+      const effectiveWorkspace = await resolveEffectiveWorkspaceForAuth(resolvedAuth.auth, resolvedAuth.requestWorkspace, {
+        requestWorkspaceAuthEnabled
       })
-      const authEnabled = await withTenantRequestContext(effectiveTenant, async () => await authProviderRegistry.hasEnabledProviders())
-      await withTenantRequestContext(effectiveTenant, async () => {
-        _request.tenant = effectiveTenant
+      const authEnabled = await withWorkspaceRequestContext(effectiveWorkspace, async () => await authProviderRegistry.hasEnabledProviders())
+      await withWorkspaceRequestContext(effectiveWorkspace, async () => {
+        _request.workspace = effectiveWorkspace
         _request.auth = {
           ...resolvedAuth.auth,
           authEnabled

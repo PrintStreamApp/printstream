@@ -3,19 +3,49 @@
  * promoted bridge build. Installs without a promoted build or published
  * standalone fragments (e.g. self-hosted, Docker-bridge-only) yield an empty
  * list, which the web UI treats as "no download section".
+ *
+ * A server only ever offers ITS OWN bridge: the promoted build must be the one
+ * this server's commit expects, or nothing is offered. See
+ * `describeBridgeReleaseConsistency`.
  */
-import type { BridgeStandaloneDownload } from '@printstream/shared'
-import { getBridgeReleaseManifest } from './bridge-update-policy.js'
+import { stampDownloadFileNameWithOrigin, type BridgeStandaloneDownload } from '@printstream/shared'
+import { describeBridgeReleaseConsistency, getBridgeReleaseManifest } from './bridge-update-policy.js'
+
+/**
+ * Why there is nothing to download, when the reason is not simply "no build".
+ *
+ * Returned alongside the list rather than left to the caller to infer: an empty
+ * download section reads as "this deployment has no standalone bridge", which is
+ * a different and much less alarming statement than "this server's bridge build
+ * is missing". Distinguishing them is the whole point of withholding.
+ */
+export interface BridgeStandaloneDownloadsResult {
+  downloads: BridgeStandaloneDownload[]
+  unavailableReason: string | null
+}
 
 export function listBridgeStandaloneDownloads(
-  options: { releasesDir?: string, assetOrigin?: string | null } = {}
-): BridgeStandaloneDownload[] {
+  options: { releasesDir?: string, assetOrigin?: string | null, serverUrlOverride?: string | null } = {}
+): BridgeStandaloneDownloadsResult {
+  // Checked BEFORE the manifest is read, so a mismatched build is never
+  // formatted into a link — an offered download is an installed bridge.
+  const consistency = describeBridgeReleaseConsistency(
+    options.releasesDir ? { releasesDir: options.releasesDir } : {}
+  )
+  if (!consistency.matches) {
+    return {
+      downloads: [],
+      unavailableReason:
+        'The bridge build published here does not match this server. It will reappear once a deploy promotes the matching build.'
+    }
+  }
+
   const manifest = getBridgeReleaseManifest(undefined, {
     ...(options.releasesDir ? { releasesDir: options.releasesDir } : {}),
     assetOrigin: options.assetOrigin ?? null
   })
   const build = manifest.current
-  if (!build) return []
+  if (!build) return { downloads: [], unavailableReason: null }
 
   const downloads: BridgeStandaloneDownload[] = []
   for (const [platformKey, binary] of Object.entries(build.binaries ?? {})) {
@@ -28,12 +58,18 @@ export function listBridgeStandaloneDownloads(
       buildRevision: build.buildRevision,
       releasedAt: build.releasedAt,
       url,
-      fileName: fileNameFromUrl(url, platformKey, build.sourceFingerprint),
+      // Stamped only when this server is NOT the origin baked into the binary:
+      // a cloud download keeps its plain name, since the default is already
+      // right and a decorated filename would be noise on every customer's disk.
+      fileName: options.serverUrlOverride
+        ? stampDownloadFileNameWithOrigin(fileNameFromUrl(url, platformKey, build.sourceFingerprint), options.serverUrlOverride)
+        : fileNameFromUrl(url, platformKey, build.sourceFingerprint),
       sizeBytes: binary.sizeBytes,
       sha256: binary.sha256
     })
   }
-  return downloads.sort((left, right) => left.platformKey.localeCompare(right.platformKey))
+  downloads.sort((left, right) => left.platformKey.localeCompare(right.platformKey))
+  return { downloads, unavailableReason: null }
 }
 
 function fileNameFromUrl(url: string, platformKey: string, sourceFingerprint: string): string {

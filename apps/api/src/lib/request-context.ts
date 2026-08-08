@@ -7,8 +7,8 @@
  * the fact. The id is also echoed back on the `X-Request-Id` response header
  * and in error bodies so a user-reported failure maps straight to server logs.
  *
- * Kept separate from `tenant-context.ts`: this wraps the request *outermost*
- * (before auth/tenant resolution) so even rate-limit/auth/tenant failures are
+ * Kept separate from `workspace-context.ts`: this wraps the request *outermost*
+ * (before auth/workspace resolution) so even rate-limit/auth/workspace failures are
  * correlated, and it has no database or auth dependencies.
  */
 import { AsyncLocalStorage } from 'node:async_hooks'

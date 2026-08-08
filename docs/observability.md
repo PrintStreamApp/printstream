@@ -66,17 +66,17 @@ Bridges run next to the printers and, in the cloud topology, sit behind NAT —
 they cannot be scraped directly. Instead each bridge pushes a small snapshot
 over its existing, already-authenticated bridge→API WebSocket session (on the
 heartbeat cadence, ~15s), and the API re-exposes it here labelled by
-`bridge_id` and `tenant_id`. No inbound route to the bridge is needed, and the
+`bridge_id` and `workspace_id`. No inbound route to the bridge is needed, and the
 bridge carries no telemetry runtime of its own. A bridge's series clear when its
 session ends (or after ~90s without an update).
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `printstream_bridge_printers_monitored` | gauge | `bridge_id`, `tenant_id` | Printers the bridge is monitoring. |
-| `printstream_bridge_printers_connected` | gauge | `bridge_id`, `tenant_id` | Monitored printers with a live MQTT connection (a signal the API cannot see on its own). |
-| `printstream_bridge_event_loop_lag_seconds` | gauge | `bridge_id`, `tenant_id` | Bridge process mean event-loop delay. |
-| `printstream_bridge_memory_rss_bytes` | gauge | `bridge_id`, `tenant_id` | Bridge process resident memory. |
-| `printstream_bridge_api_reconnects` | counter | `bridge_id`, `tenant_id` | Cumulative bridge→API reconnects (resets on bridge restart — a flapping-link signal). |
+| `printstream_bridge_printers_monitored` | gauge | `bridge_id`, `workspace_id` | Printers the bridge is monitoring. |
+| `printstream_bridge_printers_connected` | gauge | `bridge_id`, `workspace_id` | Monitored printers with a live MQTT connection (a signal the API cannot see on its own). |
+| `printstream_bridge_event_loop_lag_seconds` | gauge | `bridge_id`, `workspace_id` | Bridge process mean event-loop delay. |
+| `printstream_bridge_memory_rss_bytes` | gauge | `bridge_id`, `workspace_id` | Bridge process resident memory. |
+| `printstream_bridge_api_reconnects` | counter | `bridge_id`, `workspace_id` | Cumulative bridge→API reconnects (resets on bridge restart — a flapping-link signal). |
 
 ### Running Prometheus + Grafana (example)
 

@@ -1,7 +1,7 @@
 /**
  * Home Assistant token lifecycle helpers.
  *
- * The Home Assistant integration uses a plugin-owned, tenant-scoped service
+ * The Home Assistant integration uses a plugin-owned, workspace-scoped service
  * account so the plugin can guide setup, detect deleted or revoked access,
  * and regenerate a replacement token without sending users through the full
  * auth-management UI.
@@ -21,13 +21,13 @@ import {
   type Permission
 } from '@printstream/shared'
 import { hashServiceAccountToken } from '../../lib/auth-session.js'
-import type { TenantScopedPrismaClient } from '../../lib/prisma.js'
+import type { WorkspaceScopedPrismaClient } from '../../lib/prisma.js'
 import type { PluginSettingStore } from '../../plugin/types.js'
 
 const HOME_ASSISTANT_SERVICE_ACCOUNT_ID_SETTING = 'serviceAccountId'
 const HOME_ASSISTANT_AUTH_GROUP_KEY = 'home_assistant'
 const HOME_ASSISTANT_AUTH_GROUP_NAME = 'Home Assistant'
-const HOME_ASSISTANT_AUTH_GROUP_DESCRIPTION = 'Used by the Home Assistant plugin to issue a tenant-scoped automation token.'
+const HOME_ASSISTANT_AUTH_GROUP_DESCRIPTION = 'Used by the Home Assistant plugin to issue a workspace-scoped automation token.'
 const HOME_ASSISTANT_SERVICE_ACCOUNT_NAME = 'Home Assistant'
 
 type ManagedServiceAccountRow = {
@@ -64,7 +64,7 @@ const HOME_ASSISTANT_RECOMMENDED_PERMISSIONS = expandWithImpliedPermissions([
 ])
 
 export async function readHomeAssistantAccessStatus(
-  prisma: TenantScopedPrismaClient,
+  prisma: WorkspaceScopedPrismaClient,
   settings: PluginSettingStore
 ): Promise<HomeAssistantAccessStatus> {
   const trackedServiceAccountId = await settings.get(HOME_ASSISTANT_SERVICE_ACCOUNT_ID_SETTING)
@@ -111,11 +111,11 @@ export async function readHomeAssistantAccessStatus(
 }
 
 export async function createHomeAssistantAccessToken(
-  prisma: TenantScopedPrismaClient,
+  prisma: WorkspaceScopedPrismaClient,
   settings: PluginSettingStore,
-  tenantId: string
+  workspaceId: string
 ): Promise<{ serviceAccount: HomeAssistantManagedServiceAccount; token: string }> {
-  await ensureHomeAssistantAuthGroup(prisma, tenantId)
+  await ensureHomeAssistantAuthGroup(prisma, workspaceId)
 
   const previousServiceAccountId = await settings.get(HOME_ASSISTANT_SERVICE_ACCOUNT_ID_SETTING)
   if (previousServiceAccountId) {
@@ -140,7 +140,7 @@ export async function createHomeAssistantAccessToken(
   const token = createServiceAccountToken()
   const created = await prisma.authServiceAccount.create({
     data: {
-      tenantId,
+      workspaceId,
       name: HOME_ASSISTANT_SERVICE_ACCOUNT_NAME,
       tokenHash: hashServiceAccountToken(token),
       tokenPrefix: createServiceAccountTokenPrefix(token),
@@ -148,8 +148,8 @@ export async function createHomeAssistantAccessToken(
         create: {
           group: {
             connect: {
-              tenantId_key: {
-                tenantId,
+              workspaceId_key: {
+                workspaceId,
                 key: HOME_ASSISTANT_AUTH_GROUP_KEY
               }
             }
@@ -179,16 +179,16 @@ function toManagedServiceAccountDto(serviceAccount: ManagedServiceAccountRow): H
   }
 }
 
-async function ensureHomeAssistantAuthGroup(prisma: TenantScopedPrismaClient, tenantId: string): Promise<void> {
+async function ensureHomeAssistantAuthGroup(prisma: WorkspaceScopedPrismaClient, workspaceId: string): Promise<void> {
   await prisma.authGroup.upsert({
     where: {
-      tenantId_key: {
-        tenantId,
+      workspaceId_key: {
+        workspaceId,
         key: HOME_ASSISTANT_AUTH_GROUP_KEY
       }
     },
     create: {
-      tenantId,
+      workspaceId,
       key: HOME_ASSISTANT_AUTH_GROUP_KEY,
       name: HOME_ASSISTANT_AUTH_GROUP_NAME,
       description: HOME_ASSISTANT_AUTH_GROUP_DESCRIPTION,

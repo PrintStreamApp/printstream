@@ -46,11 +46,11 @@ import {
   resolveLibraryFileToLocalPath
 } from '../../lib/bridge-library-files.js'
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
-import { requireRequestTenantId, requireRouteParam } from '../../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam } from '../../lib/request-helpers.js'
 import { enqueueLibraryPrint } from '../../lib/library-printing.js'
 import { broadcastOrdersChanged, broadcastPrintDispatchChanged } from '../../lib/ws-resource-events.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
-import { getCurrentTenant } from '../../lib/tenant-context.js'
+import { getCurrentWorkspace } from '../../lib/workspace-context.js'
 import { readPlateIndex, type ThreeMfIndex } from '../../lib/three-mf.js'
 import { createOrderQueueLinkHandlers } from './queue-link.js'
 
@@ -138,23 +138,23 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
         const variants = await Promise.all(
           parsed.data.variants.map((variant, position) => resolveTemplateVariant(context.prisma, services, variant, position, context.logger))
         )
-        const tenantId = requireTenantId()
+        const workspaceId = requireWorkspaceId()
 
         const created = await context.prisma.orderTemplate.create({
           data: {
-            tenantId,
+            workspaceId,
             name: parsed.data.name,
             code: normalizeNullableText(parsed.data.code),
             description: normalizeNullableText(parsed.data.description),
             notesTemplate: normalizeNullableText(parsed.data.notesTemplate),
             variants: {
               create: variants.map((variant) => ({
-                tenantId,
+                workspaceId,
                 name: variant.name,
                 position: variant.position,
                 items: {
                   create: variant.items.map((item) => ({
-                    tenantId,
+                    workspaceId,
                     ...item
                   }))
                 }
@@ -192,7 +192,7 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
           : null
 
         await context.prisma.$transaction(async (tx) => {
-          const tenantId = requireTenantId()
+          const workspaceId = requireWorkspaceId()
           await tx.orderTemplate.update({
             where: { id: existing.id },
             data: {
@@ -210,12 +210,12 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
               data: {
                 variants: {
                   create: variants.map((variant) => ({
-                    tenantId,
+                    workspaceId,
                     name: variant.name,
                     position: variant.position,
                     items: {
                       create: variant.items.map((item) => ({
-                        tenantId,
+                        workspaceId,
                         ...item
                       }))
                     }
@@ -291,11 +291,11 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
           selectedVariants,
           parsed.data.printFilamentOverrides
         )
-        const tenantId = requireTenantId()
+        const workspaceId = requireWorkspaceId()
 
         const created = await context.prisma.order.create({
           data: {
-            tenantId,
+            workspaceId,
             templateId: template.id,
             templateName: template.name,
             templateCode: template.code,
@@ -306,7 +306,7 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
               : normalizeNullableText(template.notesTemplate),
             selectedVariants: {
               create: selectedVariants.map(({ variant, quantity }, position) => ({
-                tenantId,
+                workspaceId,
                 templateVariantId: variant.id,
                 templateVariantName: variant.name,
                 quantity,
@@ -316,7 +316,7 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
             prints: {
               create: buildOrderPrintsFromTemplateVariants(
                 selectedVariants,
-                tenantId,
+                workspaceId,
                 printFilamentOverridesByTemplatePrintId
               )
             }
@@ -430,7 +430,7 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
         const libraryFile = await context.prisma.libraryFile.findUnique({ where: { id: synced.libraryFileId } })
         if (!libraryFile) throw notFound('The library file for this order print is no longer available')
 
-        const tenantId = requireRequestTenantId(request)
+        const workspaceId = requireRequestWorkspaceId(request)
         // Unsliced project 3MF items dispatch a sliced output produced by the
         // client's slice-then-print flow; the order item keeps referencing the
         // source 3MF. Sync-by-name still works because the started print is
@@ -439,7 +439,7 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
         let dispatchFile = libraryFile
         if (slicedFileId) {
           const sliced = await context.prisma.libraryFile.findUnique({ where: { id: slicedFileId } })
-          if (!sliced || sliced.tenantId !== tenantId) {
+          if (!sliced || sliced.workspaceId !== workspaceId) {
             throw notFound('The sliced file for this order print is no longer available')
           }
           if (!isDirectPrintableFileName(sliced.name)) {
@@ -453,7 +453,7 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
         const job = await services.enqueueLibraryPrint({
           fileId: dispatchFile.id,
           ...printInput
-        }, tenantId)
+        }, workspaceId)
 
         await context.prisma.orderPrint.update({
           where: { id: synced.id },
@@ -489,8 +489,8 @@ export function createOrdersPlugin(deps: Partial<OrdersPluginDeps> = {}): ApiPlu
             jobId: job.printJobId
           }
         })
-        broadcastPrintDispatchChanged(tenantId)
-        broadcastOrdersChanged(tenantId)
+        broadcastPrintDispatchChanged(workspaceId)
+        broadcastOrdersChanged(workspaceId)
         response.status(202).json({
           job,
           order: await readOrder(context.prisma, order.id)
@@ -777,7 +777,7 @@ function buildOrderPrintsFromTemplateVariants(
     }
     quantity: number
   }>,
-  tenantId: string,
+  workspaceId: string,
   printFilamentOverridesByTemplatePrintVariantCopyKey: ReadonlyMap<string, ThreeMfProjectFilament[]>
 ) {
   let groupPosition = 0
@@ -791,7 +791,7 @@ function buildOrderPrintsFromTemplateVariants(
         const notes = normalizeNullableText(item.notes)
 
         return Array.from({ length: sequenceCount }, (_value, index) => ({
-          tenantId,
+          workspaceId,
           templatePrintId: item.id,
           templateVariantId: variant.id,
           templateVariantName: variant.name,
@@ -1252,13 +1252,13 @@ function parseStoredProjectFilaments(value: unknown): ThreeMfProjectFilament[] |
   return normalizeProjectFilaments(parsed.data)
 }
 
-function requireTenantId(): string {
-  const tenantId = getCurrentTenant()?.id
-  if (tenantId) {
-    return tenantId
+function requireWorkspaceId(): string {
+  const workspaceId = getCurrentWorkspace()?.id
+  if (workspaceId) {
+    return workspaceId
   }
 
-  throw badRequest('Tenant context is required.')
+  throw badRequest('Workspace context is required.')
 }
 
 function normalizePrintResult(value: string | null): 'success' | 'failed' | 'cancelled' | null {

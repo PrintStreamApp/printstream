@@ -26,7 +26,7 @@ through the `SceneEdit` contract and the baked 3MF on disk.
 | --- | --- | --- |
 | **Editor** | web | `apps/web/src/plugins/model-studio/` — `EditorView.tsx` (3D editor), `lib/editorModel.ts` (the editable scene model + `buildSceneEdit`), `lib/editorProjectSource.ts` (where the project is READ from — see below), `lib/threeMfScene.ts` (scene→Three.js), `lib/editorImports.ts`, `lib/meshCut.ts` (Cut tool: plane cut + capped halves staged as imports) |
 | **Editor** | api | `routes/editor.ts` (save, staged imports, and the no-persist `POST /export-3mf` download bake), `lib/import-store.ts`, `lib/mesh-import.ts` (STL parse + STEP tessellation), `lib/three-mf-mesh-extract.ts` (3MF geometry import: first non-empty plate → one part per placed part, helper volumes CARRIED with their subtype but excluded from the merged mesh + re-centring, group re-centred on origin); `lib/three-mf-scene-builder.ts` (`buildEditedThreeMf`) |
-| **Slicing** | web | the slice UI in `components/library/` — `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings, shares `components/settings/SettingValueField.tsx`) — plus `components/ProcessSettingsDialog.tsx` and `components/PerObjectSettingsDialog.tsx` |
+| **Slicing** | web | the slice UI in `components/library/` — `SliceFileModal.tsx`, `SliceSettingsPanel.tsx` (`SliceSettingsController`; materials render as compact one-line swatch rows), `MaterialEditDialog.tsx` (the expanded per-material type/preset/color inputs, reached from a swatch row via `MaterialSwatchButton.tsx`, whose menu also assigns the printer's loaded materials directly), `FilamentSettingsDialog.tsx` (material settings, shares `components/settings/SettingValueField.tsx`) — plus `components/ProcessSettingsDialog.tsx` plus the per-object settings surfaces inside `SliceSettingsPanel.tsx` and the editor's `editorPanels.tsx` |
 | **Slicing** | api | `routes/slicing.ts`, `lib/slicing-jobs.ts`, `lib/slicer-client.ts`, `lib/slicing-presets.ts` |
 | **Slicing** | slicer | `apps/slicer/**` — the standalone BambuStudio CLI service (profile resolution, machine-switch, output metadata) |
 | **Shared 3MF model** | shared | `packages/shared/src/slicing.ts` (`SceneEdit`, slicing job contracts), the scene/index schemas in `printer.ts` |
@@ -583,11 +583,39 @@ model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outpu
   a deterministic SIGSEGV at ~71% ("Detect overhangs for auto-lift", CLI exit 139). An ABSENT
   matrix is safe (absence is one of the recompute triggers), so it is deliberately not flagged.
   Projects already saved with the defect are NOT healed at rest — the shared index parser flags
-  them (`needsSettingsRepair` on the 3MF index and the `LibraryFile` DTO), the editor shows a
-  banner on open, `SliceFileModal` blocks the library-flow slice with a named reason, and both
-  offer the user an explicit Repair (`POST /api/library/:id/repair-settings`, which lands the
-  corrected project as a NEW library version). An editor slice needs no gate: its bake re-authors
-  project settings through `applyFilamentList` and is therefore already correct.
+  them (`needsSettingsRepair` on the 3MF index and the `LibraryFile` DTO), the editor shows the
+  repair banner on open (staged repair + save), and the print-prep dialog BLOCKS its slice/print
+  submit with the advisory pointing at the editor. An editor slice needs no gate: its bake
+  re-authors project settings through `applyFilamentList` and is therefore already correct.
+- **An object's material must be written at OBJECT level in `model_settings.config`, not only on
+  its `<part>`.** For an INLINE-MESH object (one part reusing the object's own id — the shape the
+  bake used to write for replaced/imported objects) the CLI does not honor the part-level
+  `extruder`, so the object silently prints with **filament 1** whatever its parts say — A/B-proven
+  on a real project (plate objects assigned material 2 sliced as PLA until the object entry was
+  added, then as PETG). In the COMPONENTS layout the CLI binds part-level entries fine (measured:
+  a mixed-material components object with no object entry sliced each part correctly). Desktop
+  BambuStudio writes the extruder at both levels, and the bake now does too (the imported-object
+  writers in `bake-documents.ts`, and `applyPartFilamentOverrides` keeps the object entry in step
+  whenever a reassignment leaves every filament-carrying part on one slot). Files saved before
+  this carry the part-only shape; `repairs/object-extruder.ts` detects them (`objectExtruder`
+  reason) and the staged repair adds the missing entry at save time. Parts DISAGREEING is still derivable when
+  every carrying part has its own entry — more than one part means components layout (3MF objects
+  are mesh XOR components), each volume overrides the object slot, so the first part's value is
+  engine-inert and merely restores the BambuStudio shape. The one genuinely ambiguous case is
+  MIXED coverage (a carrying part with no entry inherits the object slot): those objects are
+  reported by name, never written — giving their uncovered parts a material in the editor lets the
+  next repair derive cleanly.
+- **ONE repair model: repairs happen in the editor, staged and undoable.** Wherever an editor is
+  open — workspace or public — the notice's Repair pins `settingsRepairStaged` in the editor state
+  as an undoable edit (`SceneEdit.repairSettings`), and the bake applies the shared `repairs/`
+  implementations as its LAST project_settings / model_settings step — authoring always wins
+  first, every repair is inspect-gated, and a healthy document rides through untouched. Nothing is
+  written until the user saves, and undo restores the banner. There is NO instant server-side
+  repair: a surface with no editor session (the print-prep dialog) blocks its submit on
+  `needsSettingsRepair` and its advisory points at the editor, because a flagged file is repaired
+  deliberately, never printed through slice-time fix-ups the user never sees. An archived version
+  stays advisory everywhere: repairing it means restoring it first, a decision the user makes
+  knowingly.
 - **A project newer than the engine is refused, not degraded.** BambuStudio compares the 3MF's
   version against its own **major.minor only** and exits `CLI_FILE_VERSION_NOT_SUPPORTED` (-24,
   process exit 232) before loading anything, so no preset or retry can rescue the slice. The shared

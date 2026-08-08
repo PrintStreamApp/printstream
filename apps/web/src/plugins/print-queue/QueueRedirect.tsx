@@ -5,9 +5,9 @@
  * keep this unlisted route redirecting to /jobs instead of letting those 404 to home.
  */
 import { Navigate, useParams } from 'react-router-dom'
-import { buildTenantWorkspacePath } from '../../lib/workspaceRoute'
+import { buildWorkspacePath } from '../../lib/workspaceRoute'
 
 export function QueueRedirect() {
-  const { tenantSlug } = useParams<{ tenantSlug: string }>()
-  return <Navigate to={tenantSlug ? buildTenantWorkspacePath(tenantSlug, '/jobs') : '/jobs'} replace />
+  const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
+  return <Navigate to={workspaceSlug ? buildWorkspacePath(workspaceSlug, '/jobs') : '/jobs'} replace />
 }

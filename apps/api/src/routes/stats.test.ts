@@ -5,41 +5,41 @@ import { afterEach, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { tenantStatsRouter } from './stats.js'
+import { workspaceStatsRouter } from './stats.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { env } from '../lib/env.js'
 import { HttpError } from '../lib/http-error.js'
 import { prisma } from '../lib/prisma.js'
 import { printerManager } from '../lib/printer-manager.js'
-import type { RequestTenantSummary } from '../lib/tenant-context.js'
+import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
 
-const TEST_TENANT = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' } as const
+const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' } as const
 
 const originalPrinterCount = prisma.printer.count
 const originalPrinterFindMany = prisma.printer.findMany
 const originalBridgeCount = prisma.bridge.count
-const originalTenantStatsFindFirst = prisma.tenantStats.findFirst
+const originalWorkspaceStatsFindFirst = prisma.workspaceStats.findFirst
 const originalPrintJobFindMany = prisma.printJob.findMany
 const originalPrintJobGroupBy = prisma.printJob.groupBy
 const originalSnapshots = printerManager.snapshots
-const originalGetTenantId = printerManager.getTenantId
+const originalGetWorkspaceId = printerManager.getWorkspaceId
 
 afterEach(() => {
   prisma.printer.count = originalPrinterCount
   prisma.printer.findMany = originalPrinterFindMany
   prisma.bridge.count = originalBridgeCount
-  prisma.tenantStats.findFirst = originalTenantStatsFindFirst
+  prisma.workspaceStats.findFirst = originalWorkspaceStatsFindFirst
   prisma.printJob.findMany = originalPrintJobFindMany
   prisma.printJob.groupBy = originalPrintJobGroupBy
   printerManager.snapshots = originalSnapshots
-  printerManager.getTenantId = originalGetTenantId
+  printerManager.getWorkspaceId = originalGetWorkspaceId
 })
 
 test('stats returns quick start when the workspace still needs bridge and printer setup', async () => {
   prisma.printer.count = (async () => 0) as typeof prisma.printer.count
   prisma.printer.findMany = (async () => []) as typeof prisma.printer.findMany
   prisma.bridge.count = (async () => 0) as typeof prisma.bridge.count
-  prisma.tenantStats.findFirst = (async () => ({
+  prisma.workspaceStats.findFirst = (async () => ({
     totalPrints: 0,
     successfulPrints: 0,
     failedPrints: 0,
@@ -56,7 +56,7 @@ test('stats returns quick start when the workspace still needs bridge and printe
     successfulFilamentUsedMeters: 0,
     failedFilamentUsedMeters: 0,
     cancelledFilamentUsedMeters: 0
-  })) as unknown as typeof prisma.tenantStats.findFirst
+  })) as unknown as typeof prisma.workspaceStats.findFirst
   prisma.printJob.findMany = (async () => []) as typeof prisma.printJob.findMany
   printerManager.snapshots = (() => []) as typeof printerManager.snapshots
 
@@ -67,7 +67,7 @@ test('stats returns quick start when the workspace still needs bridge and printe
       permissions: [],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/stats`)
 
@@ -136,7 +136,7 @@ test('stats omits the connect-bridge quick start item in managed-bridge mode', a
   prisma.printer.count = (async () => 0) as typeof prisma.printer.count
   prisma.printer.findMany = (async () => []) as typeof prisma.printer.findMany
   prisma.bridge.count = (async () => 1) as typeof prisma.bridge.count
-  prisma.tenantStats.findFirst = (async () => null) as unknown as typeof prisma.tenantStats.findFirst
+  prisma.workspaceStats.findFirst = (async () => null) as unknown as typeof prisma.workspaceStats.findFirst
   prisma.printJob.findMany = (async () => []) as typeof prisma.printJob.findMany
   printerManager.snapshots = (() => []) as typeof printerManager.snapshots
 
@@ -148,7 +148,7 @@ test('stats omits the connect-bridge quick start item in managed-bridge mode', a
         permissions: [],
         runtimePolicy: { demoMode: false }
       },
-      tenant: TEST_TENANT
+      workspace: TEST_WORKSPACE
     }, async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/stats`)
 
@@ -169,7 +169,7 @@ test('stats returns live stats for a ready workspace', async () => {
     { createdAt: buildActivityDate(1) }
   ])) as unknown as typeof prisma.printer.findMany
   prisma.bridge.count = (async () => 1) as typeof prisma.bridge.count
-  prisma.tenantStats.findFirst = (async () => ({
+  prisma.workspaceStats.findFirst = (async () => ({
     totalPrints: 12,
     successfulPrints: 9,
     failedPrints: 2,
@@ -186,7 +186,7 @@ test('stats returns live stats for a ready workspace', async () => {
     successfulFilamentUsedMeters: 0,
     failedFilamentUsedMeters: 0,
     cancelledFilamentUsedMeters: 0
-  })) as unknown as typeof prisma.tenantStats.findFirst
+  })) as unknown as typeof prisma.workspaceStats.findFirst
   prisma.printJob.findMany = (async (args?: unknown) => {
     if ((args as { where?: { finishedAt?: null } } | undefined)?.where?.finishedAt === null) {
       return [{ printerId: 'printer-2' }]
@@ -201,10 +201,10 @@ test('stats returns live stats for a ready workspace', async () => {
     { printerId: 'printer-1', stage: 'printing' },
     { printerId: 'printer-2', stage: 'idle' }
   ]) as typeof printerManager.snapshots
-  printerManager.getTenantId = ((printerId: string) => {
-    if (printerId === 'printer-1' || printerId === 'printer-2') return 'tenant-1'
+  printerManager.getWorkspaceId = ((printerId: string) => {
+    if (printerId === 'printer-1' || printerId === 'printer-2') return 'workspace-1'
     return undefined
-  }) as typeof printerManager.getTenantId
+  }) as typeof printerManager.getWorkspaceId
 
   await withStatsApp({
     auth: {
@@ -213,7 +213,7 @@ test('stats returns live stats for a ready workspace', async () => {
       permissions: [],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/stats`)
 
@@ -283,7 +283,7 @@ test('stats falls back to legacy filament totals when breakdown columns are miss
     { createdAt: buildActivityDate(12) }
   ])) as unknown as typeof prisma.printer.findMany
   prisma.bridge.count = (async () => 1) as typeof prisma.bridge.count
-  prisma.tenantStats.findFirst = (async () => {
+  prisma.workspaceStats.findFirst = (async () => {
     callCount += 1
     if (callCount === 1) throw { code: 'P2022' }
     return {
@@ -296,7 +296,7 @@ test('stats falls back to legacy filament totals when breakdown columns are miss
       filamentUsedGrams: 800,
       filamentUsedMeters: 25
     }
-  }) as unknown as typeof prisma.tenantStats.findFirst
+  }) as unknown as typeof prisma.workspaceStats.findFirst
   prisma.printJob.groupBy = (async () => ([
     {
       result: 'success',
@@ -333,7 +333,7 @@ test('stats falls back to legacy filament totals when breakdown columns are miss
       permissions: [],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/stats`)
 
@@ -399,17 +399,17 @@ test('stats falls back to legacy filament totals when breakdown columns are miss
 })
 
 async function withStatsApp(
-  input: { auth: RequestAuthContext; tenant?: RequestTenantSummary | null },
+  input: { auth: RequestAuthContext; workspace?: RequestWorkspaceSummary | null },
   run: (baseUrl: string) => Promise<void>
 ): Promise<void> {
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = input.auth
-    request.tenant = input.tenant ?? null
+    request.workspace = input.workspace ?? null
     next()
   })
-  app.use('/api/stats', tenantStatsRouter)
+  app.use('/api/stats', workspaceStatsRouter)
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof HttpError) {
       response.status(error.statusCode).json({ error: error.message })

@@ -2,8 +2,8 @@
  * Guards for server-side outbound HTTP fetches (SSRF hardening).
  *
  * Several features fetch a URL the API itself requests on the server: the ntfy
- * topic a tenant configures, the firmware binary scraped from Bambu's download
- * page, etc. Without a guard, an operator/tenant-supplied URL can point the API
+ * topic a workspace configures, the firmware binary scraped from Bambu's download
+ * page, etc. Without a guard, an operator/workspace-supplied URL can point the API
  * at loopback, link-local, or the cloud metadata endpoint (169.254.169.254) and
  * use it as a request proxy into the trust boundary.
  *

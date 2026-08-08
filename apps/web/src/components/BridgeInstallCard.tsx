@@ -9,8 +9,9 @@
  * installs); a dev placeholder download set can be passed in to preview the
  * native packages.
  */
-import { Button, Card, CardContent, Chip, DialogTitle, Dropdown, ListDivider, ListItem, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Card, CardContent, Chip, DialogTitle, Dropdown, ListDivider, ListItem, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy'
 import React from 'react'
+import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import ArrowDropDownRoundedIcon from '@mui/icons-material/ArrowDropDownRounded'
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import type { BridgeStandaloneDownload } from '@printstream/shared'
@@ -20,10 +21,17 @@ import { BridgeDockerDialog } from './BridgeDockerDialog'
 import { CopyableCodeBlock } from './CopyableCodeBlock'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 
-export function BridgeInstallCard({ downloads, detectedPlatformKey, serverUrl }: {
+export function BridgeInstallCard({ downloads, detectedPlatformKey, serverUrl, serverUrlOverride, unavailableReason }: {
   downloads: BridgeStandaloneDownload[]
   detectedPlatformKey: string | null
   serverUrl: string
+  /**
+   * Passed to the installer when this server is NOT the origin baked into the
+   * executable; null on the cloud, where the binary is already correct.
+   */
+  serverUrlOverride: string | null
+  /** Why there is nothing to download, when the reason is not "no build here". */
+  unavailableReason: string | null
 }) {
   const [selected, setSelected] = React.useState<BridgeStandaloneDownload | null>(null)
   const [dockerOpen, setDockerOpen] = React.useState(false)
@@ -84,10 +92,27 @@ export function BridgeInstallCard({ downloads, detectedPlatformKey, serverUrl }:
             <Typography level="body-sm" textColor="text.tertiary">Build {downloadBuildLabel(downloads[0]!)}</Typography>
           ) : null}
         </Stack>
+        {/* Says WHY rather than leaving an install menu with only Docker in it.
+            A server whose promoted bridge is not its own would otherwise look
+            like a product that ships no native installers. */}
+        {unavailableReason ? (
+          <Alert
+            variant="soft"
+            color="warning"
+            startDecorator={<WarningAmberRoundedIcon />}
+            sx={{ mt: 1 }}
+          >
+            {unavailableReason}
+          </Alert>
+        ) : null}
       </CardContent>
 
       {selected ? (
-        <BridgeInstallDialog download={selected} onClose={() => setSelected(null)} />
+        <BridgeInstallDialog
+          download={selected}
+          serverUrlOverride={serverUrlOverride}
+          onClose={() => setSelected(null)}
+        />
       ) : null}
       {dockerOpen ? (
         <BridgeDockerDialog serverUrl={serverUrl} onClose={() => setDockerOpen(false)} />
@@ -97,7 +122,11 @@ export function BridgeInstallCard({ downloads, detectedPlatformKey, serverUrl }:
 }
 
 /** Per-platform install steps and the actual download button. */
-function BridgeInstallDialog({ download, onClose }: { download: BridgeStandaloneDownload; onClose: () => void }) {
+function BridgeInstallDialog({ download, serverUrlOverride, onClose }: {
+  download: BridgeStandaloneDownload
+  serverUrlOverride: string | null
+  onClose: () => void
+}) {
   return (
     <BackAwareModal open onClose={onClose}>
       <ScrollableModalDialog sx={{ width: { xs: '100%', sm: 480 } }}>
@@ -107,7 +136,11 @@ function BridgeInstallDialog({ download, onClose }: { download: BridgeStandalone
             <Typography level="body-sm" textColor="text.tertiary">
               Build {downloadBuildLabel(download)} · {formatDownloadSize(download.sizeBytes)}
             </Typography>
-            <BridgeInstallHint platformKey={download.platformKey} fileName={download.fileName} />
+            <BridgeInstallHint
+              platformKey={download.platformKey}
+              fileName={download.fileName}
+              serverUrlOverride={serverUrlOverride}
+            />
           </Stack>
         </ScrollableDialogBody>
         <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 1.5 }}>
@@ -126,22 +159,65 @@ function BridgeInstallDialog({ download, onClose }: { download: BridgeStandalone
   )
 }
 
-/** Post-download install guidance for one platform. */
-function BridgeInstallHint({ platformKey, fileName }: { platformKey: string; fileName: string }) {
+/**
+ * Post-download install guidance for one platform.
+ *
+ * `serverUrlOverride` changes the SHAPE of the Windows instruction, not just its
+ * text: the executable bakes in the cloud origin, so a download from anywhere
+ * else has to pass `--server-url`, and a double-click cannot. Left to the
+ * ordinary instruction it would install successfully and register with the
+ * cloud — a wrong outcome that reports itself as a right one.
+ */
+function BridgeInstallHint({ platformKey, fileName, serverUrlOverride }: {
+  platformKey: string
+  fileName: string
+  serverUrlOverride: string | null
+}) {
   const os = platformKey.split('-')[0]
+  const serverUrlFlag = serverUrlOverride ? ` --server-url ${serverUrlOverride}` : ''
+
   if (os === 'win32') {
     return (
-      <Typography level="body-sm">
-        Double-click the downloaded file to install (approve the administrator prompt).
-      </Typography>
+      <Stack spacing={0.5}>
+        <Typography level="body-sm">
+          Double-click the downloaded file to install (approve the administrator prompt).
+        </Typography>
+        {/* The download's filename carries the server, and the installer reads
+            it — so the ordinary double-click joins THIS server with nothing to
+            type. (Windows' Mark of the Web is only a backstop: setup strips it
+            before elevating, since SmartScreen refuses to elevate a marked exe,
+            so it is gone by the second attempt.) The fallback is spelled out
+            because the NAME is not guaranteed either — a browser appends " (1)"
+            to a duplicate download, and users rename things — and a silent fall
+            back to the cloud is exactly the confusion this flow exists to
+            prevent. */}
+        {serverUrlOverride ? (
+          <>
+            <Typography level="body-sm" textColor="text.tertiary">
+              It joins this server automatically, from its filename — keep the name as downloaded.
+              If it reports a different server, install from a terminal instead:
+            </Typography>
+            <CopyableCodeBlock text={`.\\${fileName} setup${serverUrlFlag}`} copyAriaLabel="Copy command" />
+          </>
+        ) : null}
+      </Stack>
     )
   }
+
   return (
     <Stack spacing={0.5}>
+      {/* No filename caveat here, unlike Windows: this command passes
+          --server-url outright when it matters, so the name is just the name.
+          The flag is kept rather than leaning on the stamped filename because
+          the user is copying a command either way, and an explicit argument
+          survives a rename the filename mechanism would not. */}
       <Typography level="body-sm">
         In a terminal, in the folder you downloaded to, make it executable and run the installer:
       </Typography>
-      <CopyableCodeBlock text={`chmod +x ${fileName}\nsudo ./${fileName} setup`} copyAriaLabel="Copy command" />
+      <CopyableCodeBlock
+        text={`chmod +x ${fileName}\nsudo ./${fileName} setup${serverUrlFlag}`}
+        copyAriaLabel="Copy command"
+      />
     </Stack>
   )
 }

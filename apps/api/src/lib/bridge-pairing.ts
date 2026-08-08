@@ -4,7 +4,7 @@
  * Attaching a dormant bridge record to a workspace is the same sequence whether
  * it happens interactively (an operator enters a connect code, `bridges.ts`) or
  * automatically (a managed bridge presents its provisioning secret at
- * registration, `bridge-runtime.ts`): set the tenant, reclaim any printers and
+ * registration, `bridge-runtime.ts`): set the workspace, reclaim any printers and
  * library files orphaned by a previous detach, hand the live session its
  * workspace, and fan out the resource-changed events. Centralizing it here keeps
  * the two entry points from drifting.
@@ -60,44 +60,44 @@ const PAIRED_BRIDGE_SELECT = {
 /**
  * Attaches the bridge to a workspace and performs every side effect that has to
  * accompany it. The caller is responsible for any pre-checks (connect-code
- * lookup, already-paired conflict, tenant resolution).
+ * lookup, already-paired conflict, workspace resolution).
  */
-export async function pairBridgeToTenant(options: {
+export async function pairBridgeToWorkspace(options: {
   bridgeId: string
-  tenantId: string
+  workspaceId: string
   name?: string
 }) {
-  const { bridgeId, tenantId, name } = options
+  const { bridgeId, workspaceId, name } = options
 
   const bridge = await rootPrisma.bridge.update({
     where: { id: bridgeId },
     data: {
-      tenantId,
+      workspaceId,
       ...(name ? { name } : {})
     },
     select: PAIRED_BRIDGE_SELECT
   })
 
-  const reattachedPrinters = await recoverBridgePrinterAssignments({ tenantId, bridgeId })
-  const reassignedLibrary = await recoverBridgeLibraryAssignments({ tenantId, bridgeId })
+  const reattachedPrinters = await recoverBridgePrinterAssignments({ workspaceId, bridgeId })
+  const reassignedLibrary = await recoverBridgeLibraryAssignments({ workspaceId, bridgeId })
 
-  if (bridgeSessionManager.setTenantId(bridgeId, tenantId)) {
+  if (bridgeSessionManager.setWorkspaceId(bridgeId, workspaceId)) {
     bridgeSessionManager.sendMessage(bridgeId, {
       type: 'bridge.welcome',
       bridgeId,
       connected: true,
-      tenantId,
+      workspaceId,
       heartbeatIntervalSeconds: BRIDGE_HEARTBEAT_INTERVAL_SECONDS
     })
     await syncBridgePrinterConfig(bridgeId)
   }
 
-  broadcastBridgesChanged(tenantId)
+  broadcastBridgesChanged(workspaceId)
   if (recoveredBridgeLibraryAssignmentCount(reassignedLibrary) > 0) {
-    broadcastLibraryChanged(tenantId)
+    broadcastLibraryChanged(workspaceId)
   }
   if (reattachedPrinters.length > 0) {
-    broadcastPrinterViewsChanged(tenantId)
+    broadcastPrinterViewsChanged(workspaceId)
   }
 
   return { bridge, reattachedPrinterCount: reattachedPrinters.length }

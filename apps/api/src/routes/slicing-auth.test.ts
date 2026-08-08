@@ -9,11 +9,11 @@ import { JOBS_VIEW_PERMISSION } from '@printstream/shared'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { HttpError } from '../lib/http-error.js'
 import { savePrintJobThumbnail } from '../lib/print-job-thumbnails.js'
-import { type RequestTenantSummary } from '../lib/tenant-context.js'
+import { type RequestWorkspaceSummary } from '../lib/workspace-context.js'
 import { slicingJobs } from '../lib/slicing-jobs.js'
 import { slicingRouter } from './slicing.js'
 
-const TEST_TENANT = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' } as const
+const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' } as const
 
 const originalGetThumbnailInfo = slicingJobs.getThumbnailInfo
 const originalSetThumbnailPath = slicingJobs.setThumbnailPath
@@ -23,7 +23,7 @@ afterEach(() => {
   slicingJobs.setThumbnailPath = originalSetThumbnailPath
 })
 
-test('slicing job thumbnail route serves persisted thumbnails for authorized tenants', async () => {
+test('slicing job thumbnail route serves persisted thumbnails for authorized workspaces', async () => {
   const thumbnailPath = await savePrintJobThumbnail('slicing-job-1', Buffer.from('png'))
   slicingJobs.getThumbnailInfo = (() => ({
     thumbnailPath,
@@ -40,7 +40,7 @@ test('slicing job thumbnail route serves persisted thumbnails for authorized ten
       permissions: [JOBS_VIEW_PERMISSION],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/slicing/jobs/slicing-job-1/thumbnail`)
 
@@ -51,14 +51,14 @@ test('slicing job thumbnail route serves persisted thumbnails for authorized ten
 })
 
 async function withSlicingApp(
-  input: { auth: RequestAuthContext; tenant?: RequestTenantSummary | null },
+  input: { auth: RequestAuthContext; workspace?: RequestWorkspaceSummary | null },
   run: (baseUrl: string) => Promise<void>
 ): Promise<void> {
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = input.auth
-    request.tenant = input.tenant ?? null
+    request.workspace = input.workspace ?? null
     next()
   })
   app.use('/api/slicing', slicingRouter)

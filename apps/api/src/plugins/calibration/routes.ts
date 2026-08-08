@@ -15,7 +15,7 @@ import type { ApiPluginContext } from '../../plugin/types.js'
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { badRequest, notFound } from '../../lib/http-error.js'
-import { requireRequestTenantId, requireRouteParam } from '../../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam } from '../../lib/request-helpers.js'
 import { toCalibrationResultDto, toCalibrationRunDto, toCalibrationRunParameters } from './dto.js'
 import { deleteResult, deleteRun, getRun, listResults, listRuns } from './store.js'
 import { printRun, saveRunResult, startRun, submitMeasurement, syncSliceStatus, type CalibrationRunManagerDeps } from './run-manager.js'
@@ -24,18 +24,18 @@ export function registerCalibrationRoutes(context: ApiPluginContext, deps: Calib
   const { router, prisma } = context
 
   router.get('/runs', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
-    const rows = await listRuns(prisma, tenantId)
-    const synced = await Promise.all(rows.map((row) => syncSliceStatus(prisma, tenantId, row)))
+    const workspaceId = requireRequestWorkspaceId(request)
+    const rows = await listRuns(prisma, workspaceId)
+    const synced = await Promise.all(rows.map((row) => syncSliceStatus(prisma, workspaceId, row)))
     response.json({ runs: synced.map(toCalibrationRunDto) })
   })
 
   router.post('/runs', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
     const parsed = createCalibrationRunSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid calibration request')
-    const tenantId = requireRequestTenantId(request)
-    const tenant = request.tenant ?? { id: tenantId, slug: tenantId, name: tenantId }
-    const run = await startRun(deps, prisma, tenantId, tenant, parsed.data)
+    const workspaceId = requireRequestWorkspaceId(request)
+    const workspace = request.workspace ?? { id: workspaceId, slug: workspaceId, name: workspaceId }
+    const run = await startRun(deps, prisma, workspaceId, workspace, parsed.data)
     annotateRequestAuditLog(request, {
       action: 'start-calibration',
       resource: 'calibration run',
@@ -46,58 +46,58 @@ export function registerCalibrationRoutes(context: ApiPluginContext, deps: Calib
   })
 
   router.get('/runs/:id', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
-    const run = await getRun(prisma, tenantId, requireRouteParam(request.params.id, 'Calibration run id'))
+    const workspaceId = requireRequestWorkspaceId(request)
+    const run = await getRun(prisma, workspaceId, requireRouteParam(request.params.id, 'Calibration run id'))
     if (!run) throw notFound('Calibration run not found')
-    response.json({ run: toCalibrationRunDto(await syncSliceStatus(prisma, tenantId, run)) })
+    response.json({ run: toCalibrationRunDto(await syncSliceStatus(prisma, workspaceId, run)) })
   })
 
   router.post('/runs/:id/print', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const runId = requireRouteParam(request.params.id, 'Calibration run id')
-    await printRun(deps, prisma, tenantId, runId)
+    await printRun(deps, prisma, workspaceId, runId)
     annotateRequestAuditLog(request, { action: 'print-calibration', resource: 'calibration run', summary: 'Dispatched a calibration print.', metadata: { runId } })
-    response.status(202).json({ run: toCalibrationRunDto((await getRun(prisma, tenantId, runId))!) })
+    response.status(202).json({ run: toCalibrationRunDto((await getRun(prisma, workspaceId, runId))!) })
   })
 
   router.post('/runs/:id/measurement', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
     const parsed = submitCalibrationMeasurementSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid measurement')
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const runId = requireRouteParam(request.params.id, 'Calibration run id')
-    const run = await getRun(prisma, tenantId, runId)
+    const run = await getRun(prisma, workspaceId, runId)
     if (!run) throw notFound('Calibration run not found')
     const parameters = toCalibrationRunParameters(run)
-    const value = await submitMeasurement(prisma, tenantId, runId, parsed.data.measurement, parameters)
-    response.json({ run: toCalibrationRunDto((await getRun(prisma, tenantId, runId))!), value })
+    const value = await submitMeasurement(prisma, workspaceId, runId, parsed.data.measurement, parameters)
+    response.json({ run: toCalibrationRunDto((await getRun(prisma, workspaceId, runId))!), value })
   })
 
   router.post('/runs/:id/save', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
     const parsed = saveCalibrationResultSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid save request')
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const runId = requireRouteParam(request.params.id, 'Calibration run id')
-    await saveRunResult(deps, prisma, tenantId, runId, parsed.data)
+    await saveRunResult(deps, prisma, workspaceId, runId, parsed.data)
     annotateRequestAuditLog(request, { action: 'save-calibration', resource: 'calibration result', summary: 'Saved a calibration result.', metadata: { runId, scope: parsed.data.scope } })
-    response.json({ run: toCalibrationRunDto((await getRun(prisma, tenantId, runId))!) })
+    response.json({ run: toCalibrationRunDto((await getRun(prisma, workspaceId, runId))!) })
   })
 
   router.delete('/runs/:id', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const runId = requireRouteParam(request.params.id, 'Calibration run id')
-    await deleteRun(prisma, tenantId, runId)
+    await deleteRun(prisma, workspaceId, runId)
     response.status(204).end()
   })
 
   router.get('/results', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
-    const rows = await listResults(prisma, tenantId)
+    const workspaceId = requireRequestWorkspaceId(request)
+    const rows = await listResults(prisma, workspaceId)
     response.json({ results: rows.map(toCalibrationResultDto) })
   })
 
   router.delete('/results/:id', requireRequestPermission(PRINTERS_CONTROL_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
-    await deleteResult(prisma, tenantId, requireRouteParam(request.params.id, 'Calibration result id'))
+    const workspaceId = requireRequestWorkspaceId(request)
+    await deleteResult(prisma, workspaceId, requireRouteParam(request.params.id, 'Calibration result id'))
     response.status(204).end()
   })
 }

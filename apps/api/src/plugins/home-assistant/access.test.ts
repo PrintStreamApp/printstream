@@ -17,8 +17,8 @@ test('home assistant access status reports missing when no token has been create
 test('creating a home assistant access token tracks the new service account and revokes the previous one', async () => {
   const harness = createHarness()
 
-  const first = await createHomeAssistantAccessToken(harness.prisma as never, harness.settings, 'tenant-1')
-  const second = await createHomeAssistantAccessToken(harness.prisma as never, harness.settings, 'tenant-1')
+  const first = await createHomeAssistantAccessToken(harness.prisma as never, harness.settings, 'workspace-1')
+  const second = await createHomeAssistantAccessToken(harness.prisma as never, harness.settings, 'workspace-1')
   const status = await readHomeAssistantAccessStatus(harness.prisma as never, harness.settings)
 
   assert.match(first.token, /^bhs_/)
@@ -32,7 +32,7 @@ test('creating a home assistant access token tracks the new service account and 
 
 test('home assistant access status reports deleted when the tracked service account disappears', async () => {
   const harness = createHarness()
-  const created = await createHomeAssistantAccessToken(harness.prisma as never, harness.settings, 'tenant-1')
+  const created = await createHomeAssistantAccessToken(harness.prisma as never, harness.settings, 'workspace-1')
 
   harness.serviceAccounts.delete(created.serviceAccount.id)
 
@@ -45,7 +45,7 @@ test('home assistant access status reports deleted when the tracked service acco
 function createHarness() {
   const settingsStore = new Map<string, string>()
   const groups = new Map<string, {
-    tenantId: string
+    workspaceId: string
     key: string
     name: string
     description: string | null
@@ -56,7 +56,7 @@ function createHarness() {
   }>()
   const serviceAccounts = new Map<string, {
     id: string
-    tenantId: string
+    workspaceId: string
     name: string
     tokenHash: string
     tokenPrefix: string
@@ -70,9 +70,9 @@ function createHarness() {
   const prisma = {
     authGroup: {
       async upsert(args: {
-        where: { tenantId_key: { tenantId: string; key: string } }
+        where: { workspaceId_key: { workspaceId: string; key: string } }
         create: {
-          tenantId: string
+          workspaceId: string
           key: string
           name: string
           description: string
@@ -90,7 +90,7 @@ function createHarness() {
           isRemovable: boolean
         }
       }) {
-        const key = `${args.where.tenantId_key.tenantId}:${args.where.tenantId_key.key}`
+        const key = `${args.where.workspaceId_key.workspaceId}:${args.where.workspaceId_key.key}`
         const existing = groups.get(key)
         if (existing) {
           const updated = {
@@ -102,7 +102,7 @@ function createHarness() {
         }
 
         const created = {
-          tenantId: args.create.tenantId,
+          workspaceId: args.create.workspaceId,
           key: args.create.key,
           name: args.create.name,
           description: args.create.description,
@@ -137,7 +137,7 @@ function createHarness() {
       },
       async create(args: {
         data: {
-          tenantId: string
+          workspaceId: string
           name: string
           tokenHash: string
           tokenPrefix: string
@@ -145,8 +145,8 @@ function createHarness() {
             create: {
               group: {
                 connect: {
-                  tenantId_key: {
-                    tenantId: string
+                  workspaceId_key: {
+                    workspaceId: string
                     key: string
                   }
                 }
@@ -160,14 +160,14 @@ function createHarness() {
         const now = new Date(`2026-05-10T00:00:0${nextId}Z`)
         const row = {
           id,
-          tenantId: args.data.tenantId,
+          workspaceId: args.data.workspaceId,
           name: args.data.name,
           tokenHash: args.data.tokenHash,
           tokenPrefix: args.data.tokenPrefix,
           revokedAt: null,
           createdAt: now,
           updatedAt: now,
-          groupKey: `${args.data.memberships.create.group.connect.tenantId_key.tenantId}:${args.data.memberships.create.group.connect.tenantId_key.key}`
+          groupKey: `${args.data.memberships.create.group.connect.workspaceId_key.workspaceId}:${args.data.memberships.create.group.connect.workspaceId_key.key}`
         }
         serviceAccounts.set(id, row)
         return toServiceAccountRow(row)
@@ -194,7 +194,7 @@ function createHarness() {
 
   function toServiceAccountRow(row: {
     id: string
-    tenantId: string
+    workspaceId: string
     name: string
     tokenHash: string
     tokenPrefix: string
@@ -235,7 +235,7 @@ function createHarness() {
       async delete(key: string) {
         settingsStore.delete(key)
       },
-      forTenant() {
+      forWorkspace() {
         return this
       }
     },

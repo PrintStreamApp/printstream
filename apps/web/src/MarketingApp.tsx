@@ -7,6 +7,12 @@
  * Supplies its own Joy theme + chrome CSS vars (App's `CssVarsProvider` lives inside App, which
  * this branch never mounts) and renders the private marketing module's routes + footer. The
  * open-source build ships no marketing module, so `Root` never mounts this.
+ *
+ * It DOES resolve auth, despite being the light branch. Marketing CTAs swap on sign-in state
+ * ("Login" becomes "Open app"), and this branch used to assert signed-OUT outright -- so a
+ * signed-in reader landing on /pricing was told to log in, and saw it correct itself only if
+ * something later mounted the full app. One small JSON call is the price of not lying about it;
+ * until it settles, `authPending` keeps the CTAs on a neutral state rather than either answer.
  */
 import { useEffect } from 'react'
 import Box from '@mui/joy/Box'
@@ -14,10 +20,13 @@ import CssBaseline from '@mui/joy/CssBaseline'
 import { CssVarsProvider } from '@mui/joy/styles'
 import { Route, Routes } from 'react-router-dom'
 import { PublicShell } from './components/PublicShell'
+import { ScrollReset } from './components/ScrollReset'
+import { useAuthBootstrapQuery } from './lib/authQuery'
 import { marketingModule } from './lib/privateModules'
 import { dismissSplashScreenImmediately } from './lib/splashScreen'
 import { buildChromeCssVars } from './theme/buildTheme'
 import { defaultChrome, theme } from './theme/theme'
+import { customerApiBase } from './lib/customerRoutes'
 
 // Where the "enter app" CTAs point on a cold marketing load. Navigating here leaves the marketing
 // fast-path, so `Root` mounts the full app, which then resolves real auth + workspace destination.
@@ -37,13 +46,27 @@ export default function MarketingApp() {
   }, [])
 
   const routes = marketingModule?.routes ?? []
-  const context = { isAuthenticated: false, appHref: APP_ENTRY, accountHref: APP_ENTRY, demoLandingRoute: '' }
+  const authBootstrapQuery = useAuthBootstrapQuery({ suppressGlobalErrorToast: true })
+  const actorType = authBootstrapQuery.data?.actor?.type ?? 'anonymous'
+  const context = {
+    isAuthenticated: actorType !== 'anonymous',
+    authPending: authBootstrapQuery.isPending,
+    appHref: APP_ENTRY,
+    accountHref: APP_ENTRY,
+    // No account here means no billing scope to route a purchase at; the CTA
+    // falls back to its workspace-scoped path, as it did before.
+    customerBasePath: authBootstrapQuery.data?.customers?.[0]
+      ? customerApiBase(authBootstrapQuery.data.customers[0].id)
+      : null,
+    demoLandingRoute: ''
+  }
 
   return (
     <CssVarsProvider theme={theme} defaultMode="dark">
       <CssBaseline />
       <Box sx={chromeVars}>
         <PublicShell footer={marketingModule?.Footer ? <marketingModule.Footer /> : undefined}>
+          <ScrollReset />
           <Routes>
             {routes.map((route) => (
               <Route key={route.path} path={route.path} element={route.render(context)} />

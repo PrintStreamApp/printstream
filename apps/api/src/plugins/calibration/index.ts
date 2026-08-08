@@ -34,15 +34,15 @@ function firstNozzleDiameter(raw: string | null): string {
 }
 
 const deps: CalibrationRunManagerDeps = {
-  async resolvePrinter(db, tenantId, printerId) {
+  async resolvePrinter(db, workspaceId, printerId) {
     const printer = await db.printer.findFirst({
-      where: { id: printerId, tenantId },
+      where: { id: printerId, workspaceId },
       select: { id: true, model: true, bridgeId: true, currentNozzleDiameters: true, currentPlateType: true }
     })
     if (!printer) throw Object.assign(new Error('Target printer not found'), { statusCode: 404 })
     return { id: printer.id, model: printer.model, bridgeId: printer.bridgeId, nozzleDiameter: firstNozzleDiameter(printer.currentNozzleDiameters), currentPlateType: printer.currentPlateType }
   },
-  async resolveSlotFilament(_db, tenantId, printerId, amsId, slotId) {
+  async resolveSlotFilament(_db, workspaceId, printerId, amsId, slotId) {
     const status = printerManager.getStatus(printerId)
     const slot = status?.ams.find((unit) => unit.unitId === amsId)?.slots.find((entry) => entry.slot === slotId)
     // Prefer the tracked spool's rich identity (brand/colour/subtype + spoolId, so the run can be
@@ -50,7 +50,7 @@ const deps: CalibrationRunManagerDeps = {
     // live tray for the fields it reports when no spool is tracked. The colour fallback derives a
     // human label from the tray's colour hex ("White", or the hex itself) — never `trayName`,
     // which is a material sub-brand / raw tray code (e.g. "A00-B9"), not a colour.
-    const spool = await slotFilamentResolvers.resolve({ tenantId, printerId, amsId, slotId })
+    const spool = await slotFilamentResolvers.resolve({ workspaceId, printerId, amsId, slotId })
     return {
       spoolId: spool?.spoolId ?? null,
       brand: spool?.brand ?? null,
@@ -134,9 +134,9 @@ export const calibrationPlugin: ApiPlugin = {
 
     const onPrintFinished = (event: { printer: { id: string }; result: 'success' | 'failed' | 'cancelled' }) => {
       if (event.result !== 'success') return
-      const tenantId = printerManager.getTenantId(event.printer.id)
-      if (!tenantId) return
-      void handlePrintFinished(rootPrisma, tenantId, event.printer.id, null).catch((error) => {
+      const workspaceId = printerManager.getWorkspaceId(event.printer.id)
+      if (!workspaceId) return
+      void handlePrintFinished(rootPrisma, workspaceId, event.printer.id, null).catch((error) => {
         context.logger.warn('Failed to advance calibration run on print finish', error instanceof Error ? error.message : error)
       })
     }
@@ -144,10 +144,10 @@ export const calibrationPlugin: ApiPlugin = {
 
     // When a filament is loaded into a slot, apply its saved pressure-advance value.
     const onFilamentLoaded = (event: {
-      tenantId: string; printerId: string; amsId: number; slotId: number; spoolId: string
+      workspaceId: string; printerId: string; amsId: number; slotId: number; spoolId: string
       brand: string | null; filamentType: string | null; materialSubtype: string | null; colorName: string | null
     }) => {
-      if (!(context.isEnabledForTenant?.(event.tenantId) ?? true)) return
+      if (!(context.isEnabledForWorkspace?.(event.workspaceId) ?? true)) return
       void autoApplyOnLoad(deps, rootPrisma, event).catch((error) => {
         context.logger.warn('Failed to auto-apply saved calibration on filament load', error instanceof Error ? error.message : error)
       })

@@ -1,4 +1,5 @@
 import BadgeRoundedIcon from '@mui/icons-material/BadgeRounded'
+import ForumRoundedIcon from '@mui/icons-material/ForumRounded'
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded'
 import DevicesRoundedIcon from '@mui/icons-material/DevicesRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
@@ -8,7 +9,6 @@ import ShieldRoundedIcon from '@mui/icons-material/ShieldRounded'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
 import { Alert, Box, Button, Card, CardContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy'
 import {
-  BILLING_MANAGE_OWN_PERMISSION,
   extractErrorMessage,
   type AuthSessionListResponse,
   type AuthUserResponse,
@@ -26,6 +26,13 @@ import { PageSectionHeading, pageSectionStackSpacing } from '../components/dashb
 import { SectionNav, type SectionNavEntry } from '../components/dashboard/SectionNav'
 import { mobileSectionNavReserveSpace, sectionScrollMarginTop } from '../components/dashboard/SectionNav.constants'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
+import { AccountDestinationCard } from './AccountDestinationCard'
+import {
+  accountSlotHasContent,
+  ACCOUNT_MESSAGES_SUBPATH,
+  buildAccountPath,
+  ACCOUNT_MESSAGES_SLOT
+} from '../lib/accountSlots'
 import { AuthSessionList } from './AuthSessionList'
 
 /**
@@ -51,24 +58,17 @@ export function CurrentAccountPanel({
   const actorType = authBootstrapQuery.data?.actor.type ?? 'anonymous'
   const isAuthenticatedUser = actorType === 'user'
   const isSupportUser = isAuthenticatedUser && (authBootstrapQuery.data?.actor.isPlatformUser ?? false)
-  const hasTenantContext = authBootstrapQuery.data?.tenant != null
-  // Billing is workspace-scoped, so it belongs to the workspace the account
-  // route is viewing — not the personal account. Surface it to any member who
-  // can manage this workspace's plan, including a platform user who is also a
-  // member here (they still get the personal-account redirect below, but their
-  // own workspace's billing must not be swallowed by that interstitial).
-  const canManageOwnBilling = (authBootstrapQuery.data?.permissions ?? []).includes(BILLING_MANAGE_OWN_PERMISSION)
-  const showsBillingSection = isAuthenticatedUser && hasTenantContext && canManageOwnBilling
+  const hasWorkspaceContext = authBootstrapQuery.data?.workspace != null
   const isPlatformAccountRoute = isPlatformWorkspacePath(location.pathname)
-  const shouldOpenPlatformAccount = isSupportUser && hasTenantContext && !isPlatformAccountRoute
+  const shouldOpenPlatformAccount = isSupportUser && hasWorkspaceContext && !isPlatformAccountRoute
   const authProviders = authBootstrapQuery.data?.providers ?? []
   const hasEnabledAuthProvider = authProviders.some((provider) => provider.enabled)
 
   const openPlatformAccountMutation = useMutation({
     meta: { suppressGlobalErrorToast: true },
-    mutationFn: () => apiFetch<void>('/api/auth/tenant-context', {
+    mutationFn: () => apiFetch<void>('/api/auth/workspace-context', {
       method: 'POST',
-      body: { tenantId: null }
+      body: { workspaceId: null }
     }),
     onSuccess: async () => {
       await Promise.all([
@@ -214,18 +214,32 @@ export function CurrentAccountPanel({
     })
   }
 
-  const billingSection = showsBillingSection ? (
-    <Box id="billing" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
-      <StaticPluginSlot name="account.billing" />
+  /**
+   * Messages is the only destination card left, and only for people who have no
+   * other way in.
+   *
+   * There is no billing card: the account's own scope ("Billing and licensing")
+   * is a destination in the context switcher now, so a card here duplicated a
+   * button the shell already shows on every page.
+   *
+   * There is no messages card for an OPERATOR either: the platform nav carries
+   * its own Messages tab, so the card restated a tab they can already see. It
+   * stays for everyone else, whose workspaces do not all have that tab.
+   *
+   * It renders only when a plugin fills the slot — empty in a public build,
+   * where the route does not exist and the card would be a dead end.
+   */
+  const showsMessagesDestination = !isSupportUser && accountSlotHasContent(ACCOUNT_MESSAGES_SLOT)
+  const destinationsSection = showsMessagesDestination ? (
+    <Box sx={{ scrollMarginTop: sectionScrollMarginTop }}>
+      <AccountDestinationCard
+        to={buildAccountPath(location.pathname, ACCOUNT_MESSAGES_SUBPATH)}
+        icon={<ForumRoundedIcon />}
+        title="Messages"
+        description="Your conversations with the PrintStream team: questions, feedback, and bug reports."
+      />
     </Box>
   ) : null
-
-  // Cloud support messaging (empty in OSS/self-hosted builds).
-  const messagesSection = (
-    <Box id="messages" sx={{ scrollMarginTop: sectionScrollMarginTop }}>
-      <StaticPluginSlot name="account.support" />
-    </Box>
-  )
 
   if (shouldOpenPlatformAccount) {
     return (
@@ -238,8 +252,7 @@ export function CurrentAccountPanel({
           </Alert>
         )}
 
-        {billingSection}
-        {messagesSection}
+        {destinationsSection}
 
         <PageSectionHeading
           icon={<ManageAccountsRoundedIcon />}
@@ -333,9 +346,7 @@ export function CurrentAccountPanel({
         </Stack>
       </Box>
 
-      {billingSection}
-
-      {messagesSection}
+      {destinationsSection}
 
       {isAuthenticatedUser && (
         <Box id="profile" sx={{ scrollMarginTop: sectionScrollMarginTop }}>

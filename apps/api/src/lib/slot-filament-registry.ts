@@ -9,7 +9,7 @@
  * owning plugin or reaching into its tables.
  *
  * The registry is best-effort and optional: with no resolver registered (the
- * owning plugin absent or disabled for the tenant) `resolve` returns `null` and
+ * owning plugin absent or disabled for the workspace) `resolve` returns `null` and
  * consumers fall back to whatever they can observe on their own. A resolver that
  * throws is treated as "no answer" so one plugin's failure never breaks another.
  */
@@ -25,7 +25,7 @@ export interface SlotFilamentIdentity {
 }
 
 export interface SlotFilamentQuery {
-  tenantId: string
+  workspaceId: string
   printerId: string
   amsId: number
   slotId: number

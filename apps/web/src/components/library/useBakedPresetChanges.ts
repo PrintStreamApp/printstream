@@ -24,6 +24,7 @@ import {
   type ResolveProcessConfigResponse
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
+import { serverSourceFileId } from '../../lib/localSliceFileId'
 import type { ProcessConfigResolver } from '../ProcessSettingsDialog'
 import type { FilamentConfigResolver } from './FilamentSettingsDialog'
 
@@ -38,8 +39,8 @@ export function useFilamentChangedCount(input: {
   overrides: ProcessConfig
   /**
    * Anonymous resolver (public 3MF editor). When present the baseline is resolved through it rather
-   * than the tenant route — and WITHOUT requiring a server `sourceFileId`, since it reads the project
-   * filament's slot from the in-tab 3MF. Absent → the tenant route as before.
+   * than the workspace route — and WITHOUT requiring a server `sourceFileId`, since it reads the project
+   * filament's slot from the in-tab 3MF. Absent → the workspace route as before.
    */
   resolveConfig?: FilamentConfigResolver
 }): number {
@@ -48,9 +49,13 @@ export function useFilamentChangedCount(input: {
   // value emits a heal override (the dialog writes the preset's value rather than deleting the
   // key), so a fully reset material showed a badge over a dialog reporting nothing changed. The
   // count has to compare VALUES to have the healing property the header promises.
+  // A SERVER file, not just a truthy id: a host with no workspace synthesizes one
+  // (`LOCAL_SLICE_FILE_ID`) so the shared machinery works, and reading that as "there is a file to
+  // resolve against" is what made the public editor call the WORKSPACE route and take a 403.
+  const serverFileId = serverSourceFileId(input.sourceFileId)
   const enabled = Boolean(input.filamentProfileId)
     && Boolean(input.slicerTargetId)
-    && Boolean(input.resolveConfig || input.sourceFileId || !input.filamentProfileId?.startsWith(PROJECT_PROFILE_PREFIX))
+    && Boolean(input.resolveConfig || serverFileId || !input.filamentProfileId?.startsWith(PROJECT_PROFILE_PREFIX))
   const query = useQuery({
     queryKey: ['filament-baked-changes', input.slicerTargetId, input.filamentProfileId, input.sourceFileId, input.projectFilamentId, Boolean(input.resolveConfig)],
     enabled,
@@ -105,7 +110,8 @@ export function useUnchangedProjectFilamentPresetIds(input: {
   presets: Array<{ filamentProfileId: string; projectFilamentId: number }>
   resolveConfig?: FilamentConfigResolver
 }): Set<string> {
-  const canResolve = Boolean(input.slicerTargetId) && Boolean(input.resolveConfig || input.sourceFileId)
+  // Same rule as the badge above: a synthetic local id is not a server file.
+  const canResolve = Boolean(input.slicerTargetId) && Boolean(input.resolveConfig || serverSourceFileId(input.sourceFileId))
   const results = useQueries({
     queries: input.presets.map((preset) => ({
       // Deliberately the SAME key the per-material badge uses, so the two share one fetch.
@@ -151,8 +157,8 @@ export function useProcessChangedCount(input: {
   overrides: ProcessConfig
   /**
    * Anonymous resolver (public 3MF editor). When present the baseline is resolved through it rather
-   * than the tenant route — and WITHOUT requiring a server `sourceFileId`, since it reads a project
-   * preset from the in-tab 3MF. Absent → the tenant route as before.
+   * than the workspace route — and WITHOUT requiring a server `sourceFileId`, since it reads a project
+   * preset from the in-tab 3MF. Absent → the workspace route as before.
    */
   resolveConfig?: ProcessConfigResolver
   /**
@@ -165,8 +171,8 @@ export function useProcessChangedCount(input: {
 }): number {
   const isProjectPreset = Boolean(input.processProfileId?.startsWith(PROJECT_PROFILE_PREFIX))
   // A project preset can differ from its parent; a builtin/custom can't differ from itself, so it
-  // never fetches. The tenant path needs a server file; the resolver path reads the in-tab archive.
-  const enabled = isProjectPreset && Boolean(input.slicerTargetId) && Boolean(input.resolveConfig || input.sourceFileId)
+  // never fetches. The workspace path needs a server file; the resolver path reads the in-tab archive.
+  const enabled = isProjectPreset && Boolean(input.slicerTargetId) && Boolean(input.resolveConfig || serverSourceFileId(input.sourceFileId))
   const query = useQuery({
     queryKey: ['process-baked-changes', input.slicerTargetId, input.processProfileId, input.sourceFileId, Boolean(input.resolveConfig)],
     enabled,

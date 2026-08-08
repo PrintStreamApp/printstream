@@ -10,6 +10,7 @@ import {
 import { extractErrorMessage } from '@printstream/shared'
 import { Root } from './Root'
 import { PromptDialogProvider } from './components/PromptDialogProvider'
+import { shouldRetryQuery } from './lib/queryRetry'
 import { getBrowserEnv } from './lib/browserEnv'
 import { registerAppServiceWorker } from './lib/appUpdate'
 import { shouldSuppressGlobalErrorToast, shouldSuppressPassiveAuthQueryError } from './lib/queryErrorToast'
@@ -108,7 +109,9 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 5_000,
-      refetchOnWindowFocus: false
+      refetchOnWindowFocus: false,
+      // Never retry a request the server REFUSED — see `queryRetry.ts` for why.
+      retry: shouldRetryQuery
     }
   },
   queryCache: new QueryCache({ onError: reportQueryError }),

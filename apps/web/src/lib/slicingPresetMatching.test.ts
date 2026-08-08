@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, SlicingPresetSummary, ThreeMfFilament, ThreeMfIndex, ThreeMfProjectFilament } from '@printstream/shared'
-import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildBakedFilamentProfileSelection, buildFilamentMappings, buildProjectSlicingPresets, extractMachineProfilePrinterModelOptions, buildSliceDialogProjectFilaments, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
+import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
 
 function materialOption(overrides: Partial<SliceMaterialOption> & { id: string }): SliceMaterialOption {
   return {
@@ -665,4 +665,95 @@ test('redundant-project-preset candidates match the installed twin by alias', ()
   )
   // No installed twin -> not a candidate, because there is nothing to fall back to.
   assert.deepEqual(buildRedundantProjectPresetCandidates(projectProfiles, [], index), [])
+})
+
+// The same, with the shape a real 3MF actually produces: the slot carries the raw
+// `filament_settings_id` alongside the display name. The previous fixture omitted
+// it, so this path was never exercised against a suffixed preset -- which is how a
+// change to what project presets are NAMED could silently stop the redundancy
+// check finding any twin at all.
+test('redundant-project-preset candidates still match when the slot carries its raw preset name', () => {
+  const installed: SlicingPresetSummary = {
+    id: 'builtin:filament:petg-hf-h2d', source: 'builtin', kind: 'filament',
+    name: 'Bambu PETG HF @BBL H2D 0.4 nozzle', filamentType: 'PETG', filamentVendor: 'Bambu Lab'
+  }
+  const index = {
+    projectFilaments: [{
+      id: 1,
+      filamentName: 'Bambu PETG HF',
+      filamentPresetName: 'Bambu PETG HF @BBL H2D 0.4 nozzle',
+      filamentType: 'PETG',
+      color: null,
+      nozzleId: null,
+      chamberTemperature: null
+    }]
+  } as unknown as ThreeMfIndex
+  const projectProfiles = buildProjectSlicingPresets(index, 'filament')
+
+  assert.deepEqual(
+    buildRedundantProjectPresetCandidates(projectProfiles, [installed], index),
+    [{ filamentProfileId: projectProfiles[0]!.id, projectFilamentId: 1 }]
+  )
+})
+
+// Two slots whose presets differ only past the `@` are TWO presets. Minting them
+// from the display name collapsed them into one, so one slot's authored settings
+// were served from the other's preset.
+test('two slots sharing an alias but not a preset stay distinct', () => {
+  const index = {
+    projectFilaments: [
+      { id: 1, filamentName: 'Bambu PLA Basic', filamentPresetName: 'Bambu PLA Basic @BBL H2D', filamentType: 'PLA', color: null, nozzleId: null },
+      { id: 2, filamentName: 'Bambu PLA Basic', filamentPresetName: 'Bambu PLA Basic @BBL H2D - 55 degree plate', filamentType: 'PLA', color: null, nozzleId: null }
+    ]
+  } as unknown as ThreeMfIndex
+
+  const presets = buildProjectSlicingPresets(index, 'filament')
+  assert.equal(presets.length, 2, 'each distinct filament_settings_id is its own preset')
+  assert.equal(new Set(presets.map((preset) => preset.id)).size, 2)
+})
+
+/**
+ * A slot naming a preset the user does NOT have must still bind to the PROJECT's
+ * own preset, which carries the settings the file was authored with. Regression:
+ * project presets were minted from `filamentName` (a DISPLAY name, `@BBL...`
+ * stripped) while the resolver looks them up by `filamentPresetName` (the raw
+ * `filament_settings_id`). The two never matched for any suffixed preset, so the
+ * project preset lost every time and an uninstalled one fell all the way through
+ * to the machine default -- a stock preset, silently, with the project's own
+ * settings neither shown nor applied.
+ */
+test("a slot whose preset is not installed binds to the project's own preset, not a stock one", () => {
+  const bakedIndex = {
+    projectFilaments: [
+      {
+        id: 1,
+        filamentName: 'Bambu PLA Basic',
+        filamentPresetName: 'Bambu PLA Basic @BBL H2D - 55 degree plate',
+        filamentType: 'PLA',
+        isSupport: false,
+        color: '#101010',
+        nozzleId: null
+      }
+    ],
+    plates: []
+  } as unknown as ThreeMfIndex
+
+  // The catalogue has the stock parent but NOT the user's derived preset.
+  const installed: SlicingPresetSummary[] = [{
+    id: 'builtin:filament:bambu-pla-basic',
+    source: 'builtin',
+    kind: 'filament',
+    name: 'Bambu PLA Basic @BBL H2D',
+    filamentType: 'PLA',
+    updatedAt: null
+  }]
+
+  const projectPresets = buildProjectSlicingPresets(bakedIndex, 'filament')
+  const selection = buildBakedFilamentProfileSelection(bakedIndex, [...projectPresets, ...installed])
+
+  assert.equal(
+    selection[1],
+    projectPresets[0]?.id,
+    'the slot must bind to the project preset carrying its authored settings'
+  )
 })

@@ -9,7 +9,7 @@
  * Destinations are a per-scope recipients list (shared team webhooks for
  * broadcast notifications, self-bound personal webhooks for the requesting
  * user's targeted messages — see `lib/notification-recipients.ts`). Each
- * tenant stores its list via `context.settings.forTenant(tenantId)`, the
+ * workspace stores its list via `context.settings.forWorkspace(workspaceId)`, the
  * platform workspace in the plugin's base store; a pre-list `webhookUrl`
  * setting keeps working as an implicit shared entry until first write.
  */
@@ -59,8 +59,8 @@ export const notificationsDiscordPlugin: ApiPlugin = {
           message,
           pluginName: context.pluginName,
           prisma: context.prisma,
-          settingsForScope: (tenantId) => tenantId ? context.settings.forTenant(tenantId) : context.settings,
-          isEnabledForTenant: (tenantId) => context.isEnabledForTenant?.(tenantId) ?? true
+          settingsForScope: (workspaceId) => workspaceId ? context.settings.forWorkspace(workspaceId) : context.settings,
+          isEnabledForWorkspace: (workspaceId) => context.isEnabledForWorkspace?.(workspaceId) ?? true
         })
         if (urls.length === 0) return
         const payload = buildDiscordPayload(message)
@@ -85,7 +85,7 @@ export const notificationsDiscordPlugin: ApiPlugin = {
       },
       {
         onError: (error) => context.logger.warn('failed to publish Discord notification', error)
-        // No shouldHandleTenantId gate: targeted messages may fan out beyond
+        // No shouldHandleWorkspaceId gate: targeted messages may fan out beyond
         // the event's own scope, so the resolver enforces plugin enablement
         // per DELIVERY scope instead of per event scope.
       }

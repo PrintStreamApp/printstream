@@ -30,7 +30,6 @@ import {
   isProjectSlicingPresetId,
   normalizeFilamentVendorLabel,
   printerModelSchema,
-  PROJECT_SLICING_PRESET_ID_PREFIX,
   resolveDisplayFilamentType
 } from '@printstream/shared'
 import {
@@ -118,7 +117,15 @@ export function buildProjectSlicingPresets(bakedIndex: ThreeMfIndex | null, kind
   if (kind === 'process') return buildProjectSlicingPresetList(kind, bakedIndex.processProfileName ? [bakedIndex.processProfileName] : [])
   const byName = new Map<string, SlicingPresetSummary>()
   for (const filament of bakedIndex.projectFilaments) {
-    const name = filament.filamentName?.trim()
+    // The RAW `filament_settings_id`, not the display name beside it. That one is
+    // lossy in a way that destroys identity: it strips `@BBL...`, so a built-in
+    // ("Bambu PLA Basic @BBL H2D") and a preset inheriting it ("... - 55 degree
+    // plate") both collapse to "Bambu PLA Basic". Two consequences, both bugs:
+    // the slots COLLAPSE INTO ONE preset here, and the resolver -- which looks a
+    // project preset up by the raw name -- never matches, so the project's own
+    // preset loses and an uninstalled one falls through to the machine default.
+    // Display code strips the suffix at render time; identity keeps it.
+    const name = (filament.filamentPresetName ?? filament.filamentName)?.trim()
     if (!name || byName.has(name)) continue
     byName.set(name, {
       id: buildProjectSlicingPresetId(kind, name),
@@ -165,19 +172,23 @@ export function buildRedundantProjectPresetCandidates(
   bakedIndex: ThreeMfIndex | null
 ): Array<{ filamentProfileId: string; projectFilamentId: number }> {
   if (!bakedIndex) return []
-  // Compare alias to alias. Note WHY, because the original note here had it backwards: a 3MF's
-  // `filament_settings_id` is NOT an alias — BambuStudio writes the full preset name with its
-  // machine suffix ("Bambu PLA Basic @BBL H2D"), which is exactly the string it later looks up. The
-  // alias appears on our side because `cleanFilamentName` strips that suffix while parsing, so a
-  // project profile is built from an already-shortened name and only ever matches a shortened one.
-  // Alias matching is therefore right for THIS function (both sides are aliases) but must never be
-  // mistaken for how a slot BINDS to a preset — that reads `filamentPresetName` and matches
+  // Compare alias to alias, running BOTH sides through the same formatter. A 3MF's
+  // `filament_settings_id` is not an alias — BambuStudio writes the full name with
+  // its machine suffix ("Bambu PLA Basic @BBL H2D") — and project presets are now
+  // minted from exactly that, so neither side is pre-shortened and only the
+  // formatter makes them comparable. Widening to the alias is right HERE, where the
+  // question is "is there an installed twin worth diffing against". It must never
+  // be mistaken for how a slot BINDS to a preset, which matches the raw name
   // exactly, because two presets can share an alias and differ only past the `@`.
-  const installedNames = new Set(installedProfiles.map((profile) => normalizedProfileText(formatSlicingPresetBrandedName(profile))))
+  const alias = (profile: SlicingPresetSummary) => normalizedProfileText(formatSlicingPresetBrandedName(profile))
+  const installedNames = new Set(installedProfiles.map(alias))
   const candidates: Array<{ filamentProfileId: string; projectFilamentId: number }> = []
   for (const profile of projectProfiles) {
-    if (!installedNames.has(normalizedProfileText(profile.name))) continue
-    const slot = bakedIndex.projectFilaments.find((filament) => (filament.filamentName ?? '').trim() === profile.name)
+    if (!installedNames.has(alias(profile))) continue
+    // Raw to raw: the profile carries the slot's `filament_settings_id` verbatim.
+    const slot = bakedIndex.projectFilaments.find(
+      (filament) => ((filament.filamentPresetName ?? filament.filamentName) ?? '').trim() === profile.name
+    )
     if (slot) candidates.push({ filamentProfileId: profile.id, projectFilamentId: slot.id })
   }
   return candidates

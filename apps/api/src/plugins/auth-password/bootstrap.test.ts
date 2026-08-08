@@ -12,7 +12,7 @@ import { verifyPassword } from './password-hash.js'
 
 type GroupRecord = {
   id: string
-  tenantId?: string | null
+  workspaceId?: string | null
   key: string | null
   name: string
   description: string | null
@@ -66,8 +66,8 @@ test('password bootstrap creates the initial admin with a credential and signs t
       },
       $transaction: async <T>(run: (tx: unknown) => Promise<T>) => run({
         authGroup: {
-          async findFirst(input: { where: { tenantId?: string | null; key?: string } }) {
-            return groups.find((group) => group.tenantId === input.where.tenantId && group.key === input.where.key) ?? null
+          async findFirst(input: { where: { workspaceId?: string | null; key?: string } }) {
+            return groups.find((group) => group.workspaceId === input.where.workspaceId && group.key === input.where.key) ?? null
           },
           async create(args: { data: GroupRecord }) {
             const next = { ...args.data, createdAt, updatedAt: createdAt }
@@ -114,7 +114,7 @@ test('password bootstrap creates the initial admin with a credential and signs t
         settingWrites.push({ key, value })
       },
       async delete() {},
-      forTenant() { return this }
+      forWorkspace() { return this }
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
@@ -179,7 +179,7 @@ test('password bootstrap rejects creating a second initial admin', async () => {
       },
       async set() {},
       async delete() {},
-      forTenant() { return this }
+      forWorkspace() { return this }
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },

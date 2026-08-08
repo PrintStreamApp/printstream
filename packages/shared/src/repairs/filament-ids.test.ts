@@ -9,9 +9,18 @@ import { test } from 'node:test'
 import { inspectProjectFilamentIds, repairFilamentIds, filamentIdForPresetName } from './filament-ids'
 import { collectSettingsRepairReasons } from './index'
 
-const BROKEN = {
-  // A physics sentinel keeps this a project whose ONLY defect is the ids (see filament-physics.ts).
+// EVERY physics sentinel, so the ids stay this project's ONLY defect (see filament-physics.ts —
+// detection there is blunt, and any missing sentinel would add `filamentPhysics` to the reasons).
+const PHYSICS = {
   nozzle_temperature: ['245', '245', '220'],
+  nozzle_temperature_initial_layer: ['245', '245', '220'],
+  filament_flow_ratio: ['0.95', '0.95', '0.98'],
+  filament_density: ['1.27', '1.27', '1.26'],
+  filament_diameter: ['1.75', '1.75', '1.75']
+}
+
+const BROKEN = {
+  ...PHYSICS,
   filament_settings_id: [
     'Bambu PETG HF @BBL H2D 0.4 nozzle',
     'Bambu PETG HF @BBL H2D 0.4 nozzle',
@@ -67,7 +76,7 @@ test('an unmatched preset is left alone and reported, never guessed', () => {
 })
 
 test('a consistent project is not flagged, and an empty id is not a contradiction', () => {
-  const consistent = { nozzle_temperature: ['245', '245', '220'], filament_settings_id: BROKEN.filament_settings_id, filament_ids: ['GFG02', 'GFG02', 'GFA00'] }
+  const consistent = { ...PHYSICS, filament_settings_id: BROKEN.filament_settings_id, filament_ids: ['GFG02', 'GFG02', 'GFA00'] }
   assert.equal(inspectProjectFilamentIds(JSON.stringify(consistent))?.inconsistent, false)
   assert.deepEqual(collectSettingsRepairReasons(JSON.stringify(consistent)), [])
 

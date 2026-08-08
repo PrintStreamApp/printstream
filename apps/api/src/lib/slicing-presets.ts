@@ -1,8 +1,8 @@
 /**
- * Tenant-scoped BambuStudio slicing profile persistence.
+ * Workspace-scoped BambuStudio slicing profile persistence.
  *
  * Custom profile JSON is stored in the existing Setting table using a
- * tenant-qualified key. Built-in profile summaries come from the slicer
+ * workspace-qualified key. Built-in profile summaries come from the slicer
  * worker, while custom profile contents are resolved here before a job is
  * submitted to the worker.
  */
@@ -28,7 +28,8 @@ import {
 import { badRequest, notFound } from './http-error.js'
 import { rootPrisma } from './prisma.js'
 
-const SETTINGS_KEY_PREFIX = 'tenant.slicing.profiles.'
+// Persisted key prefix on every saved custom preset; not renamed with the code.
+const SETTINGS_KEY_PREFIX = 'workspace.slicing.profiles.'
 
 const storedSlicingPresetSchema = z.object({
   id: z.string().trim().min(1),
@@ -44,7 +45,7 @@ type StoredSlicingPreset = z.infer<typeof storedSlicingPresetSchema>
  *
  * Defined by EXCLUSION on purpose. Listing the metadata keys instead meant every
  * field added to `slicingPresetSummarySchema` had to be added here, to the merge,
- * and to the pick — and missing one silently dropped it from custom (tenant-uploaded)
+ * and to the pick — and missing one silently dropped it from custom (workspace-uploaded)
  * presets while builtin presets carried it (issue #66). Inverting it puts the
  * maintenance burden on the small, stable identity set, so a new metadata field
  * flows through with no change here at all.
@@ -60,8 +61,8 @@ export interface ResolvedSlicingPresetFile {
   content?: string
 }
 
-export async function listCustomSlicingPresets(tenantId: string, inheritedProfiles: SlicingPresetSummary[] = []): Promise<SlicingPresetSummary[]> {
-  const profiles = await readProfiles(tenantId)
+export async function listCustomSlicingPresets(workspaceId: string, inheritedProfiles: SlicingPresetSummary[] = []): Promise<SlicingPresetSummary[]> {
+  const profiles = await readProfiles(workspaceId)
   const customByName = new Map(profiles.map((profile) => [buildProfileLookupKey(profile.kind, profile.name), profile]))
   const inheritedByName = new Map(inheritedProfiles.map((profile) => [buildProfileLookupKey(profile.kind, profile.name), profile]))
   return profiles.map((profile) => toSummary(profile, customByName, inheritedByName))
@@ -78,16 +79,16 @@ export interface CreateCustomSlicingPresetsResult {
   conflicts: string[]
 }
 
-export async function createCustomSlicingPreset(tenantId: string, input: UploadSlicingPreset): Promise<SlicingPresetSummary> {
-  const { profiles } = await createCustomSlicingPresets(tenantId, input)
+export async function createCustomSlicingPreset(workspaceId: string, input: UploadSlicingPreset): Promise<SlicingPresetSummary> {
+  const { profiles } = await createCustomSlicingPresets(workspaceId, input)
   const profile = profiles[0]
   if (!profile) throw badRequest('Uploaded profile file did not contain any slicing presets')
   return profile
 }
 
-export async function createCustomSlicingPresets(tenantId: string, input: UploadSlicingPreset): Promise<CreateCustomSlicingPresetsResult> {
+export async function createCustomSlicingPresets(workspaceId: string, input: UploadSlicingPreset): Promise<CreateCustomSlicingPresetsResult> {
   const uploadedProfiles = await extractUploadedProfiles(input)
-  const existingProfiles = await readProfiles(tenantId)
+  const existingProfiles = await readProfiles(workspaceId)
   const now = new Date().toISOString()
   const createdProfiles = uploadedProfiles.map((uploadedProfile) => {
     const parsedJson = parseProfileJson(uploadedProfile.content, uploadedProfile.kind)
@@ -110,7 +111,7 @@ export async function createCustomSlicingPresets(tenantId: string, input: Upload
   // Overwrite any existing custom preset with the same kind + name rather than keeping duplicates.
   const retained = existingProfiles.filter((profile) => !createdKeys.has(buildProfileLookupKey(profile.kind, profile.name)))
   const nextProfiles = [...retained, ...createdProfiles]
-  await writeProfiles(tenantId, nextProfiles)
+  await writeProfiles(workspaceId, nextProfiles)
   const customByName = new Map(nextProfiles.map((profile) => [buildProfileLookupKey(profile.kind, profile.name), profile]))
   return {
     profiles: createdProfiles.map((profile) => toSummary(profile, customByName, new Map())),
@@ -119,15 +120,15 @@ export async function createCustomSlicingPresets(tenantId: string, input: Upload
   }
 }
 
-export async function deleteCustomSlicingPreset(tenantId: string, profileId: string): Promise<void> {
-  const profiles = await readProfiles(tenantId)
+export async function deleteCustomSlicingPreset(workspaceId: string, profileId: string): Promise<void> {
+  const profiles = await readProfiles(workspaceId)
   const next = profiles.filter((profile) => profile.id !== profileId)
   if (next.length === profiles.length) throw notFound('Slicing profile not found')
-  await writeProfiles(tenantId, next)
+  await writeProfiles(workspaceId, next)
 }
 
-export async function resolveSlicingPresetFiles(tenantId: string, profileIds: Array<{ id: string | null | undefined; kind: SlicingPresetKind }>): Promise<ResolvedSlicingPresetFile[]> {
-  const customProfiles = await readProfiles(tenantId)
+export async function resolveSlicingPresetFiles(workspaceId: string, profileIds: Array<{ id: string | null | undefined; kind: SlicingPresetKind }>): Promise<ResolvedSlicingPresetFile[]> {
+  const customProfiles = await readProfiles(workspaceId)
   const resolved: ResolvedSlicingPresetFile[] = []
   for (const requested of profileIds) {
     const id = requested.id?.trim()
@@ -148,24 +149,24 @@ export async function resolveSlicingPresetFiles(tenantId: string, profileIds: Ar
   return resolved
 }
 
-async function readProfiles(tenantId: string): Promise<StoredSlicingPreset[]> {
-  const setting = await rootPrisma.setting.findUnique({ where: { key: buildSettingsKey(tenantId) } })
+async function readProfiles(workspaceId: string): Promise<StoredSlicingPreset[]> {
+  const setting = await rootPrisma.setting.findUnique({ where: { key: buildSettingsKey(workspaceId) } })
   if (!setting) return []
   const parsed = z.array(storedSlicingPresetSchema).safeParse(JSON.parse(setting.value))
   if (!parsed.success) return []
   return parsed.data
 }
 
-async function writeProfiles(tenantId: string, profiles: StoredSlicingPreset[]): Promise<void> {
+async function writeProfiles(workspaceId: string, profiles: StoredSlicingPreset[]): Promise<void> {
   await rootPrisma.setting.upsert({
-    where: { key: buildSettingsKey(tenantId) },
-    create: { key: buildSettingsKey(tenantId), value: JSON.stringify(profiles) },
+    where: { key: buildSettingsKey(workspaceId) },
+    create: { key: buildSettingsKey(workspaceId), value: JSON.stringify(profiles) },
     update: { value: JSON.stringify(profiles) }
   })
 }
 
-function buildSettingsKey(tenantId: string): string {
-  return `${SETTINGS_KEY_PREFIX}${tenantId}`
+function buildSettingsKey(workspaceId: string): string {
+  return `${SETTINGS_KEY_PREFIX}${workspaceId}`
 }
 
 function toSummary(

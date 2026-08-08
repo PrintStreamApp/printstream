@@ -14,7 +14,7 @@
  */
 import { Router } from 'express'
 import type { NextFunction, Request, Response } from 'express'
-import { PLUGINS_MANAGE_PERMISSION, updateTenantPluginAvailabilitySchema } from '@printstream/shared'
+import { PLUGINS_MANAGE_PERMISSION, updateWorkspacePluginAvailabilitySchema } from '@printstream/shared'
 import multer from 'multer'
 import os from 'node:os'
 import path from 'node:path'
@@ -38,8 +38,8 @@ export const adminPluginsRouter = Router()
 adminPluginsRouter.use((request, _response, next) => {
   try {
     assertRequestPermission(request, PLUGINS_MANAGE_PERMISSION)
-    if (request.tenant) {
-      throw forbidden('Switch to the platform workspace to manage plugin installation and tenant availability.')
+    if (request.workspace) {
+      throw forbidden('Switch to the platform workspace to manage plugin installation and workspace availability.')
     }
     next()
   } catch (error) {
@@ -160,13 +160,13 @@ adminPluginsRouter.post('/:name/uninstall', requireSelfHostedPluginAdministratio
   response.json({ plugin: null })
 })
 
-adminPluginsRouter.put('/:name/tenant-availability', async (request, response) => {
-  const parsed = updateTenantPluginAvailabilitySchema.safeParse(request.body)
-  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid tenant availability payload')
+adminPluginsRouter.put('/:name/workspace-availability', async (request, response) => {
+  const parsed = updateWorkspacePluginAvailabilitySchema.safeParse(request.body)
+  if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid workspace availability payload')
 
-  const info = await pluginRegistry.setTenantAvailability(request.params.name, parsed.data)
+  const info = await pluginRegistry.setWorkspaceAvailability(request.params.name, parsed.data)
   annotateRequestAuditLog(request, {
-    action: 'update-plugin-tenant-availability',
+    action: 'update-plugin-workspace-availability',
     resource: 'plugin',
     summary: `Updated workspace availability for plugin ${info.name} (allowed=${parsed.data.allowed}, enabled by default=${parsed.data.enabledByDefault}).`,
     metadata: {
@@ -181,7 +181,7 @@ adminPluginsRouter.put('/:name/tenant-availability', async (request, response) =
 /**
  * External plugin installs are a self-hosted capability only: on the hosted
  * cloud every plugin ships with the codebase, and operator-uploaded code must
- * not run in the multi-tenant deployment. Exported with an injectable check
+ * not run in the multi-workspace deployment. Exported with an injectable check
  * so both branches stay testable regardless of the test run's SELF_HOSTED.
  */
 /**

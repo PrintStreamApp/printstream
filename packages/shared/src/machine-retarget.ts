@@ -17,6 +17,7 @@
  * (`filament_nozzle_map`, extruder variants, …). See docs/project-printer-retarget.md.
  */
 import { processSettingsCatalog } from './process-settings.js'
+import { PRINTER_PRESET_OPTIONS, PRINT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
 import { repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
 import { buildFilamentVariantRows } from './filament-variant-index.js'
 import { rebindProjectFilamentPhysics, type FilamentSlotRebind } from './filament-rebind.js'
@@ -104,6 +105,14 @@ export function retargetProjectSettingsToMachine(
   const next: ProfileRecord = { ...projectSettings }
   for (const [key, value] of Object.entries(machineProfile)) {
     if (NON_SETTING_PROFILE_KEYS.has(key)) continue
+    // Only what BambuStudio itself considers part of a printer preset. A resolved profile also
+    // carries LEGACY keys the vendor has since renamed or dropped (`extruder_clearance_radius` ->
+    // `extruder_clearance_max_radius`, `z_lift_type`, `extruder_height_gap`,
+    // `deretract_speed_extruder_change`), and copying them wholesale wrote four keys into every
+    // retargeted project that neither the source file nor a BambuStudio save contains — one of them
+    // a per-extruder array at the WRONG length (5 entries on a 2-extruder machine), which is the
+    // shape that segfaults BambuStudio mid-slice when it indexes by extruder.
+    if (!PRINTER_PRESET_OPTIONS.has(key)) continue
     next[key] = normalizeProfileValueForProject(key, cloneValue(value), projectSettings[key])
   }
   next.printer_settings_id = target.printerSettingsId
@@ -168,6 +177,8 @@ export function applyProcessProfileToProjectSettings(
   const next: ProfileRecord = { ...projectSettings }
   for (const [key, value] of Object.entries(processProfile)) {
     if (NON_SETTING_PROFILE_KEYS.has(key)) continue
+    // Same allow-list rule as the machine retarget, for the same reason.
+    if (!PRINT_PRESET_OPTIONS.has(key)) continue
     next[key] = cloneValue(value)
   }
   const name = typeof processProfile.name === 'string' ? processProfile.name.trim() : ''
@@ -186,7 +197,7 @@ export function applyProcessProfileToProjectSettings(
 
 /**
  * Everything a machine retarget needs, already RESOLVED. Assembling this is where the two editor
- * hosts differ — the api resolves through the slicer plus the tenant's preset files, the browser
+ * hosts differ — the api resolves through the slicer plus the workspace's preset files, the browser
  * through `/api/public/slicing/resolve-*` — and applying it is where they must not.
  */
 export interface MachineRetargetPlan {
@@ -384,8 +395,19 @@ export function repairEstimateModeProjectSettings(settings: ProfileRecord, machi
     })
   }
 
-  if (volumeTypes.length > 0) {
-    next.filament_volume_map = volumeTypes.map(mapNozzleVolumeTypeToIndex)
+  // Per FILAMENT, like `filament_nozzle_map` above — NOT per extruder. `volumeTypes` is the
+  // machine's `default_nozzle_volume_type`, one entry per extruder, so mapping it directly wrote a
+  // 2-entry map for a 3-filament project. Same defect `filament_nozzle_map` carried, same
+  // consequence: BambuStudio reads a filament's entry past the end of the vector. Each filament
+  // takes the volume type of the nozzle it is assigned to.
+  if (volumeTypes.length > 0 && filamentCount > 0) {
+    const nozzleMap = stringArray(next.filament_nozzle_map)
+    next.filament_volume_map = Array.from({ length: filamentCount }, (_unused, index) => {
+      // `physical_extruder_map` maps extruder POSITION -> nozzle id, so invert it to find the
+      // extruder this filament's nozzle belongs to. An unmapped nozzle falls back to extruder 0.
+      const extruderIndex = Math.max(physicalExtruderMap.indexOf(nozzleMap[index] ?? '0'), 0)
+      return mapNozzleVolumeTypeToIndex(volumeTypes[Math.min(extruderIndex, volumeTypes.length - 1)] ?? 'Standard')
+    })
   }
 
   // Only REBUILT when the existing value cannot describe the new machine — i.e. it is missing or has

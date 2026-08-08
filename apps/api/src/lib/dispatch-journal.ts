@@ -67,7 +67,7 @@ const RECONCILABLE_STATUSES: readonly DispatchJournalStatus[] = ['queued', 'uplo
 
 export interface DispatchJournalSeed {
   id: string
-  tenantId: string
+  workspaceId: string
   printerId: string
   jobName: string
   fileName: string
@@ -94,7 +94,7 @@ export async function recordDispatchEnqueued(seed: DispatchJournalSeed): Promise
     await enqueueJournalWrite(seed.id, () => rootPrisma.dispatchJob.create({
       data: {
         id: seed.id,
-        tenantId: seed.tenantId,
+        workspaceId: seed.workspaceId,
         printerId: seed.printerId,
         status: 'queued',
         jobName: seed.jobName,
@@ -144,7 +144,7 @@ export async function markDispatchStartAttempted(id: string): Promise<void> {
 
 /**
  * Boot reconcile: mark every pre-publish, non-terminal journal row as `interrupted`.
- * Platform-wide (all tenants) — a deliberate startup operation. Returns the count.
+ * Platform-wide (all workspaces) — a deliberate startup operation. Returns the count.
  * Mirrors {@link isReconcilableDispatch}; the two MUST stay in sync.
  */
 export async function reconcileInterruptedDispatches(): Promise<number> {

@@ -1,12 +1,12 @@
 /**
  * Derives the workspace the current page is in (from the URL) and turns it into
- * the `X-PrintStream-Tenant` request header that `apiClient` attaches to every
+ * the `X-PrintStream-Workspace` request header that `apiClient` attaches to every
  * request, so the API scopes the response to the right workspace.
  *
  * The `'none'` sentinel is deliberate: in a browser with no workspace in the
  * path, `readWorkspaceContextHeader` returns `'none'` (sent as the header) rather
  * than null (header omitted), so the API is explicitly told "no workspace" and
- * does NOT fall back to an ambient tenant. Header omitted only outside a browser
+ * does NOT fall back to an ambient workspace. Header omitted only outside a browser
  * (no window), where there is nothing to scope.
  */
 import { isPlatformWorkspacePath, parseWorkspacePathname } from './workspaceRoute'
@@ -16,12 +16,12 @@ const NO_WORKSPACE_CONTEXT_VALUE = 'none'
 
 export type WorkspaceContextHint =
   | { type: 'platform' }
-  | { type: 'tenant'; slug: string }
+  | { type: 'workspace'; slug: string }
 
 export function readWorkspaceContextHint(): WorkspaceContextHint | null {
   if (typeof window === 'undefined') return null
-  const routeTenantSlug = parseWorkspacePathname(window.location.pathname).tenantSlug
-  if (routeTenantSlug) return { type: 'tenant', slug: routeTenantSlug }
+  const routeWorkspaceSlug = parseWorkspacePathname(window.location.pathname).workspaceSlug
+  if (routeWorkspaceSlug) return { type: 'workspace', slug: routeWorkspaceSlug }
   if (isPlatformWorkspacePath(window.location.pathname)) return { type: 'platform' }
   return null
 }

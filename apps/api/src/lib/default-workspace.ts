@@ -1,23 +1,25 @@
 /**
  * First-run default workspace bootstrap.
  *
- * Self-hosted installs have no tenant-administration UI, so a fresh
+ * Self-hosted installs have no workspace-administration UI, so a fresh
  * database would otherwise have zero workspaces and nowhere to land after
- * sign-in. On startup, if no tenant exists yet, create one (with its
+ * sign-in. On startup, if no workspace exists yet, create one (with its
  * built-in auth groups) using `DEFAULT_WORKSPACE_SLUG` / `_NAME`.
  *
- * Multi-tenant (cloud) deployments that manage tenants explicitly can opt
- * out with `AUTO_CREATE_DEFAULT_WORKSPACE=false`; existing databases are
- * never touched because any existing tenant short-circuits the bootstrap.
+ * Whether it runs at all is DERIVED from the deployment (see below): neither
+ * side has to set `AUTO_CREATE_DEFAULT_WORKSPACE`, which exists only as an
+ * override. Existing databases are never touched, because any existing
+ * workspace short-circuits the bootstrap.
  */
 import { ensureBuiltInAuthGroups } from './default-auth-groups.js'
 import { env } from './env.js'
+import { isSelfHostedDeployment } from './deployment-mode.js'
 import { rootPrisma } from './prisma.js'
 
 interface DefaultWorkspaceDeps {
   enabled?: boolean
   client?: {
-    tenant: {
+    workspace: {
       count(): Promise<number>
       create(args: {
         data: { slug: string; name: string }
@@ -25,28 +27,32 @@ interface DefaultWorkspaceDeps {
       }): Promise<{ id: string; slug: string }>
     }
   }
-  ensureGroups?: (client: unknown, tenantId: string) => Promise<void>
+  ensureGroups?: (client: unknown, workspaceId: string) => Promise<void>
 }
 
 /** Returns the created workspace slug, or null when nothing was created. */
 export async function ensureDefaultWorkspace(deps: DefaultWorkspaceDeps = {}): Promise<string | null> {
-  const enabled = deps.enabled ?? env.AUTO_CREATE_DEFAULT_WORKSPACE
+  // Unset derives from the deployment: a self-hosted install should come up
+  // usable with zero configuration, while the cloud's workspaces only ever come
+  // from signups — its empty database is first-run, and auto-minting a "My
+  // Workspace" there put a stray workspace in front of the platform operator.
+  const enabled = deps.enabled ?? env.AUTO_CREATE_DEFAULT_WORKSPACE ?? isSelfHostedDeployment()
   const client = deps.client ?? rootPrisma
-  const ensureGroups = deps.ensureGroups ?? ((groupClient, tenantId) =>
-    ensureBuiltInAuthGroups(groupClient as typeof rootPrisma, tenantId))
+  const ensureGroups = deps.ensureGroups ?? ((groupClient, workspaceId) =>
+    ensureBuiltInAuthGroups(groupClient as typeof rootPrisma, workspaceId))
   if (!enabled) return null
 
-  const existing = await client.tenant.count()
+  const existing = await client.workspace.count()
   if (existing > 0) return null
 
-  const tenant = await client.tenant.create({
+  const workspace = await client.workspace.create({
     data: {
       slug: env.DEFAULT_WORKSPACE_SLUG,
       name: env.DEFAULT_WORKSPACE_NAME
     },
     select: { id: true, slug: true }
   })
-  await ensureGroups(client, tenant.id)
-  console.log(`Created default workspace "${tenant.slug}" (no tenants existed yet).`)
-  return tenant.slug
+  await ensureGroups(client, workspace.id)
+  console.log(`Created default workspace "${workspace.slug}" (no workspaces existed yet).`)
+  return workspace.slug
 }

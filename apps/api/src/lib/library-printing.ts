@@ -35,21 +35,21 @@ export interface LibraryPrintSource extends SnapshotLibraryFile {
 
 interface LibraryFilePrintRow extends SnapshotLibraryFile {
   fileId?: string
-  tenantId: string
+  workspaceId: string
   folderId: string | null
   hidden: boolean
   sourceProjectFileId?: string | null
   sliceSettingsJson?: string | null
 }
 
-export async function enqueueLibraryPrint(input: PrintFromLibrary, tenantId: string): Promise<PrintDispatchJob> {
-  return enqueueLibraryPrintSource(input, await resolveLibraryPrintSource(input.fileId, tenantId))
+export async function enqueueLibraryPrint(input: PrintFromLibrary, workspaceId: string): Promise<PrintDispatchJob> {
+  return enqueueLibraryPrintSource(input, await resolveLibraryPrintSource(input.fileId, workspaceId))
 }
 
 /** Resolve a library file id to a connected print source (preferring a connected duplicate when the
  *  owning bridge is offline), or throw 'File not found'. Shared by real dispatch and dry-run validation. */
-async function resolveLibraryPrintSource(fileId: string, tenantId: string): Promise<LibraryPrintSource> {
-  const file = await prisma.libraryFile.findFirst({ where: { id: fileId, tenantId } })
+async function resolveLibraryPrintSource(fileId: string, workspaceId: string): Promise<LibraryPrintSource> {
+  const file = await prisma.libraryFile.findFirst({ where: { id: fileId, workspaceId } })
   if (!file) throw notFound('File not found')
   return toLibraryPrintSource(await resolveConnectedLibrarySource(file))
 }
@@ -60,8 +60,8 @@ async function resolveLibraryPrintSource(fileId: string, tenantId: string): Prom
  * Throws the same HttpErrors `enqueueLibraryPrint` would (e.g. 'File missing on bridge'), so a "dry run"
  * surfaces exactly what a real Start would hit. Used by the print-queue dry-run/"Check" action.
  */
-export async function validateLibraryPrint(input: PrintFromLibrary, tenantId: string): Promise<void> {
-  await assertLibraryPrintSourceReady(input, await resolveLibraryPrintSource(input.fileId, tenantId))
+export async function validateLibraryPrint(input: PrintFromLibrary, workspaceId: string): Promise<void> {
+  await assertLibraryPrintSourceReady(input, await resolveLibraryPrintSource(input.fileId, workspaceId))
 }
 
 async function resolveConnectedLibrarySource(file: LibraryFilePrintRow): Promise<LibraryFilePrintRow> {
@@ -69,7 +69,7 @@ async function resolveConnectedLibrarySource(file: LibraryFilePrintRow): Promise
 
   const candidates = await prisma.libraryFile.findMany({
     where: visibleLibraryFilesWhere({
-      tenantId: file.tenantId,
+      workspaceId: file.workspaceId,
       folderId: file.folderId,
       name: file.name,
       kind: file.kind,
@@ -96,7 +96,7 @@ async function resolveConnectedLibrarySource(file: LibraryFilePrintRow): Promise
 function toLibraryPrintSource(file: LibraryFilePrintRow): LibraryPrintSource {
   return {
     fileId: file.fileId ?? file.id,
-    tenantId: file.tenantId,
+    workspaceId: file.workspaceId,
     name: file.name,
     ownerBridgeId: file.ownerBridgeId,
     storedPath: file.storedPath,
@@ -128,7 +128,7 @@ export async function enqueueLibraryPrintSource(
     const plateName = resolveRequestedPlateName(source.name, index, input.plate)
     const snapshot = await ensureLibrarySnapshotRecord({
       id: source.id,
-      tenantId: source.tenantId,
+      workspaceId: source.workspaceId,
       name: source.name,
       ownerBridgeId: source.ownerBridgeId,
       storedPath: source.storedPath,
@@ -167,7 +167,7 @@ async function assertLibraryPrintSourceReady(input: PrintFromLibrary, source: Li
     throw badRequest('Only .gcode or .gcode.3mf files can be printed directly')
   }
 
-  const printer = await prisma.printer.findFirst({ where: { id: input.printerId, tenantId: source.tenantId } })
+  const printer = await prisma.printer.findFirst({ where: { id: input.printerId, workspaceId: source.workspaceId } })
   if (!printer) throw notFound('Printer not found')
   if (!printerManager.getPrinter(printer.id)) throw notFound('Printer not found or not connected')
 

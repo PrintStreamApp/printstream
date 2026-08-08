@@ -31,7 +31,7 @@ import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { env } from '../../lib/env.js'
 import { printerManager } from '../../lib/printer-manager.js'
-import { assertTenantOwnsPrinter, requireTenantOwnedConnectedPrinter } from '../../lib/printer-access.js'
+import { assertWorkspaceOwnsPrinter, requireWorkspaceOwnedConnectedPrinter } from '../../lib/printer-access.js'
 import { listPrinterDirectory, uploadFileToPrinter } from '../../lib/printer-ftp.js'
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
 import { assertSafeOutboundUrl } from '../../lib/outbound-url-guard.js'
@@ -116,10 +116,10 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
     }
 
     const broadcast = (printerId: string, state: UploadState): void => {
-      // A null tenantId fans out to every connected client across all tenants, so skip
-      // the broadcast rather than leak when the printer's tenant can't be resolved.
-      const tenantId = printerManager.getTenantId(printerId)
-      if (!tenantId) return
+      // A null workspaceId fans out to every connected client across all workspaces, so skip
+      // the broadcast rather than leak when the printer's workspace can't be resolved.
+      const workspaceId = printerManager.getWorkspaceId(printerId)
+      if (!workspaceId) return
       context.ws.broadcast({
         type: 'plugin.event',
         pluginName: 'firmware-updates',
@@ -133,7 +133,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
           firmwareFilename: state.firmwareFilename,
           firmwareVersion: state.firmwareVersion
         }
-      }, tenantId)
+      }, workspaceId)
     }
 
     const refreshFirmwareStatus = async (
@@ -475,7 +475,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
 
     context.router.get('/updates/:printerId', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
-      await assertTenantOwnsPrinter(printerId)
+      await assertWorkspaceOwnsPrinter(printerId)
       const report = await buildReport(printerId)
       if (!report) throw notFound('Printer not found')
       response.json(report)
@@ -483,9 +483,9 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
 
     context.router.post('/updates/:printerId/upload', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
-      // Firmware upload is a safety-relevant SD write — gate on tenant ownership, not
+      // Firmware upload is a safety-relevant SD write — gate on workspace ownership, not
       // just the bare printer id from the manager.
-      const printer = await requireTenantOwnedConnectedPrinter(printerId)
+      const printer = await requireWorkspaceOwnedConnectedPrinter(printerId)
 
       const status = printerManager.getStatus(printerId)
       if (status?.sdCardPresent === false) {
@@ -534,7 +534,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
 
     context.router.post('/updates/:printerId/upload/cancel', requireRequestPermission(PRINTERS_MANAGE_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
-      await assertTenantOwnsPrinter(printerId)
+      await assertWorkspaceOwnsPrinter(printerId)
       const printerName = printerManager.getPrinter(printerId)?.name ?? printerId
       const state = stateFor(printerId)
       if (!isActiveUploadState(state)) {
@@ -561,7 +561,7 @@ export const firmwareUpdatesPlugin: ApiPlugin = {
 
     context.router.get('/updates/:printerId/upload/status', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (request, response) => {
       const printerId = requireRouteParam(request.params.printerId, 'printerId')
-      await assertTenantOwnsPrinter(printerId)
+      await assertWorkspaceOwnsPrinter(printerId)
       response.json(await reconcileUploadState(printerId))
     })
   }

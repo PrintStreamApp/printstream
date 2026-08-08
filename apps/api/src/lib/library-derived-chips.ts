@@ -37,15 +37,43 @@ export interface DerivedChips {
   projectVersion?: string | null
 }
 
-export function serializeDerivedChips(chips: DerivedChips): string {
-  return JSON.stringify(chips)
+/**
+ * Persisted envelope: the chips PLUS the file version they describe.
+ *
+ * The source path is part of the cache key, not decoration. `storedPath` is per-VERSION, so
+ * comparing it is what makes a new version invalidate the chips — see {@link parseDerivedChips}.
+ * Legacy rows hold a bare `DerivedChips` object with no envelope; those parse as stale and re-warm.
+ */
+interface PersistedDerivedChips {
+  sourcePath: string
+  chips: DerivedChips
 }
 
-/** Parse persisted chips, returning null when absent or built by an older parser version. */
-export function parseDerivedChips(json: string | null | undefined, version: number | null | undefined): DerivedChips | null {
+export function serializeDerivedChips(chips: DerivedChips, sourcePath: string): string {
+  return JSON.stringify({ sourcePath, chips } satisfies PersistedDerivedChips)
+}
+
+/**
+ * Parse persisted chips, returning null when absent, built by an older parser version, or derived
+ * from a DIFFERENT version of the file.
+ *
+ * The version stamp alone is NOT a sufficient staleness test, and treating it as one was a real
+ * bug: saving a new version (a settings repair, a re-upload) leaves `derivedChipsVersion` equal to
+ * the current constant, so every `cacheOnly` surface kept serving the PREVIOUS version's chips
+ * indefinitely — a repaired project still advertising `needsSettingsRepair`, so the repair looked
+ * like it had failed. Nothing clears this cache on write, by design: the test is what must be
+ * blunt, so a writer that forgets cannot reintroduce the staleness.
+ */
+export function parseDerivedChips(
+  json: string | null | undefined,
+  version: number | null | undefined,
+  sourcePath: string
+): DerivedChips | null {
   if (!json || version !== LIBRARY_DERIVED_CHIPS_VERSION) return null
   try {
-    return JSON.parse(json) as DerivedChips
+    const parsed = JSON.parse(json) as Partial<PersistedDerivedChips>
+    if (typeof parsed?.sourcePath !== 'string' || !parsed.chips) return null
+    return parsed.sourcePath === sourcePath ? parsed.chips : null
   } catch {
     return null
   }
@@ -77,7 +105,9 @@ export function warmLibraryFileDerivedChips(
   inFlightDerivations.add(file.id)
   void Promise.resolve()
     .then(() => deps.deriveChips(file))
-    .then((chips) => deps.persist(file.id, serializeDerivedChips(chips), LIBRARY_DERIVED_CHIPS_VERSION))
+    // Stamped with the path the chips were DERIVED from, not whatever the row says afterwards: a
+    // version saved while this warm was in flight must invalidate the result, not inherit its id.
+    .then((chips) => deps.persist(file.id, serializeDerivedChips(chips, file.storedPath), LIBRARY_DERIVED_CHIPS_VERSION))
     .catch((error) => deps.log?.(`[library] failed to warm derived chips for ${file.id}`, error))
     .finally(() => inFlightDerivations.delete(file.id))
 }

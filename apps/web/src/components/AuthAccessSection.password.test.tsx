@@ -30,7 +30,7 @@ test('AuthAccessSection overview renders the user and role management entries', 
       statusLoading={false}
       statusError={null}
       authProviders={[buildPasswordProvider()]}
-      authScopeKey="tenant-1"
+      authScopeKey="workspace-1"
       canManageSupportAccess
       mode="overview"
       onOpenUsers={() => {}}

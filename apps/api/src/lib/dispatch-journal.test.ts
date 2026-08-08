@@ -45,7 +45,7 @@ test('terminal dispatches are not reconcilable', () => {
 test('recordDispatchEnqueued swallows DB errors (best-effort, must not break a print)', async () => {
   dispatchJob.create = (async () => { throw new Error('db down') }) as never
   await assert.doesNotReject(() => recordDispatchEnqueued({
-    id: 'd1', tenantId: 't1', printerId: 'p1', jobName: 'job', fileName: 'f.3mf', remoteName: 'f.gcode.3mf'
+    id: 'd1', workspaceId: 't1', printerId: 'p1', jobName: 'job', fileName: 'f.3mf', remoteName: 'f.gcode.3mf'
   }))
 })
 
@@ -71,7 +71,7 @@ test('a late-committing enqueue INSERT cannot clobber a terminal UPDATE (writes 
   dispatchJob.update = (async () => { calls.push('update') }) as never
 
   const enqueued = recordDispatchEnqueued({
-    id: 'd9', tenantId: 't1', printerId: 'p1', jobName: 'job', fileName: 'f.3mf', remoteName: 'f.gcode.3mf'
+    id: 'd9', workspaceId: 't1', printerId: 'p1', jobName: 'job', fileName: 'f.3mf', remoteName: 'f.gcode.3mf'
   })
   const terminal = recordDispatchStatus('d9', 'failed', { error: 'boom', finishedAt: new Date() })
 

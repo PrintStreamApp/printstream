@@ -39,7 +39,7 @@ test('AppShell opens the workspace chooser from the shell action', () => {
   )
 
   const chooserButton = view.getByRole('button', {
-    name: 'Choose workspace. Current workspace: Alpha workspace'
+    name: 'Switch context. Currently in: Alpha workspace'
   })
   assert.ok(view.getByText('Alpha workspace'))
   fireEvent.click(chooserButton)
@@ -152,8 +152,10 @@ test('AppShell can render a chooser shell without nav tabs or workspace footer l
   )
 
   assert.equal(view.queryByText('Printers'), null)
-  assert.equal(view.queryByText('Workspace'), null)
-  assert.equal(view.queryByRole('button', { name: /Choose workspace/i }), null)
+  // The chooser's eyebrow. "Context", since what it names may be a workspace,
+  // the billing account, or the platform.
+  assert.equal(view.queryByText('Context'), null)
+  assert.equal(view.queryByRole('button', { name: /Switch context/i }), null)
   assert.ok(view.getByText('Choose a workspace'))
 })
 

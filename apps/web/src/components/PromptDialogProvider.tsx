@@ -52,6 +52,26 @@ export interface TextPromptDialogOptions {
   initialSelection?: { start: number; end: number }
   normalizeValue?: (value: string) => string
   validateValue?: (value: string) => string | null
+  /**
+   * Submit through the server and let IT decide whether the value is acceptable.
+   *
+   * Return null to accept (the dialog closes and the promise resolves with the
+   * value), or a message to reject — the dialog stays open, shows the message,
+   * and keeps what the user typed.
+   *
+   * This exists because the alternative is shipping the server's rule to the
+   * browser twice. A rename that must not collide was checked against a list of
+   * existing names sent to the page, which is a partial copy of a constraint the
+   * database already enforces: it cannot see anything outside what was fetched,
+   * and it goes stale the moment someone else takes the name. With this, the
+   * only authority is the endpoint, and the dialog just repeats what it said —
+   * beside the field, rather than as an alert on the surface behind it after the
+   * dialog has closed and taken the typed value with it.
+   *
+   * `validateValue` still runs first and is for what the browser can settle on
+   * its own (empty, too long). Do not put a server rule in it.
+   */
+  submitValue?: (value: string) => Promise<string | null>
 }
 
 interface PromptDialogContextValue {
@@ -84,6 +104,11 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
   const activeDialogRef = useRef<PendingDialog | null>(null)
   const queuedDialogsRef = useRef<PendingDialog[]>([])
   const [promptValue, setPromptValue] = useState('')
+  // What the SERVER said about the value, kept apart from `validateValue`'s
+  // answer: one is recomputed on every keystroke, the other survives until the
+  // user changes what was rejected.
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
   const showNextDialog = useCallback(() => {
     const nextDialog = queuedDialogsRef.current.shift() ?? null
@@ -141,6 +166,8 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     promptSelectionAppliedRef.current = false
+    setSubmitError(null)
+    setSubmitting(false)
     if (!isTextPromptDialog(activeDialog)) {
       setPromptValue('')
       return
@@ -172,9 +199,39 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
     ? activeDialog.options.normalizeValue ?? ((value: string) => value)
     : null
   const normalizedPromptValue = promptNormalize ? promptNormalize(promptValue) : ''
-  const promptError = isTextPromptDialog(activeDialog)
+  const validationError = isTextPromptDialog(activeDialog)
     ? activeDialog.options.validateValue?.(normalizedPromptValue) ?? null
     : null
+  // Validation first: a value the browser can already tell is wrong should not
+  // be reported with a stale answer from the last attempt.
+  const promptError = validationError ?? submitError
+
+  /**
+   * Submitting is what CLOSES the dialog, not the click — a server that rejects
+   * the value keeps it open with the message and everything the user typed.
+   */
+  const submitPromptDialog = useCallback(async () => {
+    const dialog = activeDialogRef.current
+    if (dialog?.kind !== 'text' || submitting) return
+    const normalize = dialog.options.normalizeValue ?? ((value: string) => value)
+    const value = normalize(promptValue)
+    if (dialog.options.validateValue?.(value)) return
+    if (!dialog.options.submitValue) {
+      closeTextPromptDialog(value)
+      return
+    }
+    setSubmitting(true)
+    try {
+      const rejection = await dialog.options.submitValue(value)
+      if (rejection) {
+        setSubmitError(rejection)
+        return
+      }
+      closeTextPromptDialog(value)
+    } finally {
+      setSubmitting(false)
+    }
+  }, [closeTextPromptDialog, promptValue, submitting])
 
   const contextValue = useMemo<PromptDialogContextValue>(() => ({ confirm, promptText }), [confirm, promptText])
 
@@ -203,8 +260,7 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
             variant="outlined"
             onSubmit={(event) => {
               event.preventDefault()
-              if (promptError) return
-              closeTextPromptDialog(normalizedPromptValue)
+              void submitPromptDialog()
             }}
             sx={{ width: { xs: '95vw', sm: 480 }, maxWidth: '95vw' }}
           >
@@ -219,7 +275,10 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
                 value={promptValue}
                 placeholder={activeDialog.options.placeholder}
                 onFocus={handlePromptFocus}
-                onChange={(event) => setPromptValue(event.target.value)}
+                // Clearing the server's answer on edit, because it was about the
+                // value that WAS in the field. Leaving it up would tell the user
+                // their new name is taken before anything had asked.
+                onChange={(event) => { setSubmitError(null); setPromptValue(event.target.value) }}
               />
             </FormControl>
             {promptError ? (
@@ -228,10 +287,24 @@ export function PromptDialogProvider({ children }: { children: ReactNode }) {
               </Alert>
             ) : null}
             <DialogActions>
-              <Button variant="plain" color="neutral" onClick={() => closeTextPromptDialog(null)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                disabled={submitting}
+                onClick={() => closeTextPromptDialog(null)}
+              >
                 {activeDialog.options.cancelLabel ?? 'Cancel'}
               </Button>
-              <Button type="submit" color={activeDialog.options.color ?? 'primary'} disabled={promptError != null}>
+              {/* Disabled on the VALIDATION error only. A rejected submit leaves
+                  its message up while the value is unchanged, and disabling on
+                  that would strand the user: retrying the same value is a
+                  legitimate move when the name was freed in between. */}
+              <Button
+                type="submit"
+                color={activeDialog.options.color ?? 'primary'}
+                loading={submitting}
+                disabled={validationError != null}
+              >
                 {activeDialog.options.confirmLabel ?? 'Save'}
               </Button>
             </DialogActions>

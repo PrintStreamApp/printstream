@@ -53,7 +53,10 @@ services:
       NODE_ENV: production
       API_PORT: 4000
       DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/printstream?schema=public}
-      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:8080}
+      # Only needed when the web app is served from a DIFFERENT origin than the
+      # API (a split topology with your own web tier). This single-container
+      # stack serves both from one origin, where browsers never consult CORS.
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-}
       # Other durable stores default to siblings of this path, so it must stay
       # on the mounted volume rather than the container filesystem.
       LIBRARY_DIR: /data/library
@@ -71,13 +74,13 @@ services:
       PLUGINS_DIR: /data/plugins
       DISCOVERY_PORT: ${DISCOVERY_PORT:-2021}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
-      # Managed-bridge mode: the bundled bridge auto-pairs into this workspace
-      # on first start and the Bridges settings page is hidden — a single-bridge,
-      # start-up-and-go self-host. The API auto-generates a provisioning token
-      # at MANAGED_BRIDGE_TOKEN_FILE on the shared `printstream-provision` volume
-      # and the bridge reads it from the same path; no operator secret needed.
-      # Set MANAGED_BRIDGE=false to manage bridges by hand (the connect-code
-      # flow), e.g. when running a bridge on another host.
+      # Managed-bridge mode, ON by default for this single-host stack: the
+      # bundled bridge auto-pairs on first start and the Bridges settings page
+      # is hidden — nothing to configure, no secret, no pairing step. The API
+      # auto-generates a provisioning token at MANAGED_BRIDGE_TOKEN_FILE on the
+      # shared `printstream-provision` volume and the bridge reads it from the
+      # same path. Set MANAGED_BRIDGE=false only to manage bridges by hand
+      # (multiple bridges, or a bridge on another host).
       MANAGED_BRIDGE: ${MANAGED_BRIDGE:-true}
       MANAGED_BRIDGE_TOKEN_FILE: /run/provision/managed-bridge-token
       NTFY_TOPIC_URL: ${NTFY_TOPIC_URL:-}
@@ -87,9 +90,12 @@ services:
       # allow its origin via CSP_ANALYTICS_ORIGIN.
       CSP_ENFORCE: ${CSP_ENFORCE:-}
       CSP_ANALYTICS_ORIGIN: ${CSP_ANALYTICS_ORIGIN:-}
-      # Single nginx hop in front; trust X-Forwarded-* from it so
-      # `req.ip` and `req.protocol` reflect the real client.
-      TRUST_PROXY: "1"
+      # ONLY when you put a reverse proxy in front: set to the number of hops
+      # (e.g. 1 for a single nginx) so `req.ip`/`req.protocol` reflect the real
+      # client. This stack exposes the port directly, and trusting
+      # X-Forwarded-* with no proxy lets clients spoof their address to the
+      # rate limiter — so it stays off by default.
+      TRUST_PROXY: ${TRUST_PROXY:-}
     healthcheck:
       # Readiness (DB-aware): keeps dependents from starting against a DB-less API.
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/api/health/ready"]
@@ -126,10 +132,20 @@ services:
       SLICER_WORK_DIR: /work
       SLICER_BAMBUSTUDIO_HOME_DIR: /work/bambustudio-home
       SLICER_BAMBUSTUDIO_DATA_DIR: /work/bambustudio-data
+      # Engines to fetch on first start: a comma-separated list of ids, or
+      # `all`. Unset means just the current default (~530 MB), which is what
+      # most installs want — add others in Settings, then Slicing.
+      SLICER_PRELOAD_ENGINES: ${SLICER_PRELOAD_ENGINES:-}
     ports:
       - "${SLICER_BIND_HOST:-127.0.0.1}:${SLICER_BIND_PORT:-4010}:4010"
     volumes:
       - printstream-slicer-work:/work
+      # Slicing engines (Bambu Studio builds), downloaded on demand rather than
+      # baked into the image. A BIND mount, not a named volume, so you choose
+      # which disk carries them: each engine is roughly 530 MB installed, and the
+      # first start downloads one before slicing works. Add and remove them in
+      # Settings; what you install here survives image updates.
+      - ./data/slicer-engines:/data/engines
     networks:
       - slicer-internal
 

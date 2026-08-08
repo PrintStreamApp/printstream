@@ -1,18 +1,18 @@
 /**
  * WebSocket invalidation helpers for effective-auth changes.
  */
-import { getCurrentTenant } from './tenant-context.js'
+import { getCurrentWorkspace } from './workspace-context.js'
 import { wsBroadcaster } from './ws-server.js'
 
-export function broadcastAuthChangedForUsers(userIds: readonly string[], tenantId?: string | null): void {
+export function broadcastAuthChangedForUsers(userIds: readonly string[], workspaceId?: string | null): void {
   if (userIds.length === 0) return
-  const currentTenantId = tenantId !== undefined ? tenantId : getCurrentTenant()?.id
+  const currentWorkspaceId = workspaceId !== undefined ? workspaceId : getCurrentWorkspace()?.id
   wsBroadcaster.notifyAuthChanged({
     userIds,
-    ...(currentTenantId !== undefined ? { tenantId: currentTenantId } : {})
+    ...(currentWorkspaceId !== undefined ? { workspaceId: currentWorkspaceId } : {})
   })
 }
 
-export function broadcastAuthChangedForTenant(tenantId: string | null | undefined = getCurrentTenant()?.id ?? null): void {
-  wsBroadcaster.notifyAuthChanged({ tenantId })
+export function broadcastAuthChangedForWorkspace(workspaceId: string | null | undefined = getCurrentWorkspace()?.id ?? null): void {
+  wsBroadcaster.notifyAuthChanged({ workspaceId })
 }

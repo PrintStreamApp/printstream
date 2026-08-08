@@ -22,7 +22,6 @@ after(() => {
 })
 
 function renderAlert(props: {
-  fileId?: string
   reasons: ThreeMfSettingsRepairReason[]
   onRepairInEditor?: () => void
   repairInEditorError?: string | null
@@ -51,7 +50,7 @@ function renderAlert(props: {
  */
 test('filamentPhysics offers a Repair action when the host can repair', () => {
   let saved = 0
-  renderAlert({ fileId: 'file-1', reasons: ['filamentPhysics'], onRepairInEditor: () => { saved += 1 } })
+  renderAlert({ reasons: ['filamentPhysics'], onRepairInEditor: () => { saved += 1 } })
 
   const button = screen.getByRole('button', { name: /repair/i })
   fireEvent.click(button)
@@ -60,10 +59,10 @@ test('filamentPhysics offers a Repair action when the host can repair', () => {
 
 /** A host with no repair path must not grow a button that would do nothing. */
 test('filamentPhysics renders advisory-only when the host cannot repair', () => {
-  renderAlert({ fileId: 'file-1', reasons: ['filamentPhysics'] })
+  renderAlert({ reasons: ['filamentPhysics'] })
 
   assert.equal(screen.queryByRole('button', { name: /repair/i }), null)
-  assert.ok(screen.getByText(/Saving this project writes them back/i))
+  assert.ok(screen.getByText(/Saving this project from the editor writes them back/i))
 })
 
 /**
@@ -76,18 +75,34 @@ test('a project with no stored file still warns, without the route button', () =
 
   assert.equal(screen.queryByRole('button', { name: /repair/i }), null)
   assert.ok(screen.getByText(/don’t match its printer/i))
-  assert.ok(screen.getByText(/Open it from your library to repair it/i))
+  assert.ok(screen.getByText(/Open it in the editor and press Repair, then save the project/i))
 })
 
 /**
- * Mixed defects keep the ROUTE button: the in-editor repair only covers the physics half, so
- * dropping the button here would leave the other defect unrepairable.
+ * ONE repair model wherever an editor session exists: mixed defects stage EVERYTHING behind one
+ * button (the byte repairs synchronously, the physics restore through the same click), even for a
+ * stored library file. The route's instant-write button is reserved for surfaces with no session.
  */
-test('filamentPhysics mixed with a route-repairable defect keeps the route button', () => {
-  renderAlert({ fileId: 'file-1', reasons: ['filamentPhysics', 'filamentIds'], onRepairInEditor: () => {} })
+test('mixed defects with an editor session stage everything behind one button', () => {
+  let staged = 0
+  renderAlert({ reasons: ['filamentPhysics', 'filamentIds'], onRepairInEditor: () => { staged += 1 } })
 
-  assert.ok(screen.getByRole('button', { name: /repair/i }))
+  fireEvent.click(screen.getByRole('button', { name: /repair/i }))
+  assert.equal(staged, 1)
   assert.ok(screen.getByText(/need repairing/i))
+  assert.ok(screen.getByText(/stages the fix as an edit/i))
+})
+
+/**
+ * There is NO instant repair anywhere: a surface with no editor session (the print-prep dialog)
+ * renders the advisory pointing at the editor, and the dialog itself blocks printing the flagged
+ * file. A button here would either write bytes behind the user's back or report "nothing to do".
+ */
+test('a surface without an editor session gets the advisory, never a button', () => {
+  renderAlert({ reasons: ['filamentIds'] })
+
+  assert.equal(screen.queryByRole('button', { name: /repair/i }), null)
+  assert.ok(screen.getByText(/Open it in the editor and press Repair, then save the project/i))
 })
 
 /**
@@ -96,7 +111,6 @@ test('filamentPhysics mixed with a route-repairable defect keeps the route butto
  */
 test('a failed in-editor repair replaces the body with its reason', () => {
   renderAlert({
-    fileId: 'file-1',
     reasons: ['filamentPhysics'],
     onRepairInEditor: () => {},
     repairInEditorError: 'We couldn\u2019t match material 3 to a known preset, so nothing was changed.'
@@ -112,7 +126,6 @@ test('a failed in-editor repair replaces the body with its reason', () => {
  */
 test('a failed in-editor repair is visually distinct, not just different text', () => {
   const { container } = renderAlert({
-    fileId: 'file-1',
     reasons: ['filamentPhysics'],
     onRepairInEditor: () => {},
     repairInEditorError: 'Material 3 could not be matched.'

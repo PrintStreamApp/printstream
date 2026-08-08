@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { WebPushDelivery } from './push.js'
 
-test('tenant-scoped delivery loads subscriptions without overriding shared VAPID keys', async () => {
+test('workspace-scoped delivery loads subscriptions without overriding shared VAPID keys', async () => {
   const settingsStore = new Map<string, string>([
     ['subscriptions', JSON.stringify([{
       endpoint: 'https://push.example.test/subscription',
@@ -18,7 +18,7 @@ test('tenant-scoped delivery loads subscriptions without overriding shared VAPID
     async get(key) { return settingsStore.get(key) ?? null },
     async set(key, value) { settingsStore.set(key, value) },
     async delete(key) { settingsStore.delete(key) },
-    forTenant(): never { throw new Error('nested forTenant not supported') }
+    forWorkspace(): never { throw new Error('nested forWorkspace not supported') }
   }, {
     info() {},
     warn() {},

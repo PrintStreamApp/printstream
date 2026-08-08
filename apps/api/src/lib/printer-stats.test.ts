@@ -32,7 +32,7 @@ const statsRowBase = {
 function stubPrinterLookup() {
   stub(prisma.printer, 'findFirst', async () => ({
     id: 'printer-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     serial: 'SERIAL-1'
   }))
 }
@@ -85,7 +85,7 @@ test('setManualPrinterStats stores absolute values and converts hours to seconds
   })
 
   await setManualPrinterStats({
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     printerSerial: 'SERIAL-1',
     manualPrints: 42,
     manualPrintHours: 10.5
@@ -93,7 +93,7 @@ test('setManualPrinterStats stores absolute values and converts hours to seconds
 
   assert.ok(capturedArgs)
   assert.deepEqual(capturedArgs.where, {
-    tenantId_printerSerial: { tenantId: 'tenant-1', printerSerial: 'SERIAL-1' }
+    workspaceId_printerSerial: { workspaceId: 'workspace-1', printerSerial: 'SERIAL-1' }
   })
   assert.equal(capturedArgs.create.manualTotalPrints, 42)
   assert.equal(capturedArgs.create.manualPrintDurationSeconds, 37800)
@@ -109,7 +109,7 @@ test('setManualPrinterStats leaves omitted fields untouched on update', async ()
   })
 
   await setManualPrinterStats({
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     printerSerial: 'SERIAL-1',
     manualPrintHours: 2
   })

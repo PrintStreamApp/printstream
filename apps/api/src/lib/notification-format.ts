@@ -11,13 +11,13 @@
  * Adding new notification triggers (job started, error, etc) only
  * needs a new branch here; every channel picks them up automatically.
  *
- * ## Tenant scoping
+ * ## Workspace scoping
  *
- * Each formatted `NotificationMessage` includes a `tenantId` resolved
+ * Each formatted `NotificationMessage` includes a `workspaceId` resolved
  * from the printer manager's cached mapping. Delivery plugins use this
- * to look up the correct per-tenant configuration (webhook URL, push
- * subscriptions, etc.) and to filter events so Tenant A's channel
- * never receives Tenant B's notifications.
+ * to look up the correct per-workspace configuration (webhook URL, push
+ * subscriptions, etc.) and to filter events so Workspace A's channel
+ * never receives Workspace B's notifications.
  */
 import { randomUUID } from 'node:crypto'
 import {
@@ -152,7 +152,7 @@ async function formatJobFinished(event: JobFinishedEvent): Promise<NotificationM
     timestamp: nowIso(),
     printerId: event.printer.id,
     printerName: event.printer.name,
-    tenantId: printerManager.getTenantId(event.printer.id),
+    workspaceId: printerManager.getWorkspaceId(event.printer.id),
     // One per printer: lets browser/Discord-style clients replace the
     // previous "started" notification with the "finished" one.
     tag: `printer:${event.printer.id}:job`,
@@ -178,7 +178,7 @@ async function formatJobStarted(event: JobStartedEvent): Promise<NotificationMes
     timestamp: nowIso(),
     printerId: event.printer.id,
     printerName: event.printer.name,
-    tenantId: printerManager.getTenantId(event.printer.id),
+    workspaceId: printerManager.getWorkspaceId(event.printer.id),
     tag: `printer:${event.printer.id}:job`,
     url,
     imageUrl: imageUrl ?? undefined
@@ -203,7 +203,7 @@ async function formatJobPaused(event: JobPausedEvent): Promise<NotificationMessa
     timestamp: nowIso(),
     printerId: event.printer.id,
     printerName: event.printer.name,
-    tenantId: printerManager.getTenantId(event.printer.id),
+    workspaceId: printerManager.getWorkspaceId(event.printer.id),
     tag: `printer:${event.printer.id}:job`,
     url,
     imageUrl: imageUrl ?? undefined
@@ -229,7 +229,7 @@ async function formatJobError(event: JobErrorEvent): Promise<NotificationMessage
     timestamp: nowIso(),
     printerId: event.printer.id,
     printerName: event.printer.name,
-    tenantId: printerManager.getTenantId(event.printer.id),
+    workspaceId: printerManager.getWorkspaceId(event.printer.id),
     tag: `printer:${event.printer.id}:job`,
     url,
     imageUrl: imageUrl ?? undefined
@@ -239,7 +239,7 @@ async function formatJobError(event: JobErrorEvent): Promise<NotificationMessage
 async function formatBridgeCrashed(event: {
   bridgeId: string
   bridgeName: string
-  tenantId: string | null
+  workspaceId: string | null
   recentCrashCount: number
 }): Promise<NotificationMessage | null> {
   const rendered = renderNotificationTemplate('bridge.crashed', {
@@ -254,34 +254,34 @@ async function formatBridgeCrashed(event: {
     title: rendered.title,
     body: rendered.body,
     timestamp: nowIso(),
-    tenantId: event.tenantId ?? undefined,
+    workspaceId: event.workspaceId ?? undefined,
     // Collapse repeated crash notices for the same bridge on channels that honor tags.
     tag: `bridge:${event.bridgeId}:crash`,
-    url: await resolveBridgeNotificationUrl(event.tenantId)
+    url: await resolveBridgeNotificationUrl(event.workspaceId)
   }
 }
 
-async function resolveBridgeNotificationUrl(tenantId: string | null): Promise<string> {
-  if (!tenantId) return '/workspaces'
-  const tenant = await rootPrisma.tenant.findUnique({
-    where: { id: tenantId },
+async function resolveBridgeNotificationUrl(workspaceId: string | null): Promise<string> {
+  if (!workspaceId) return '/workspaces'
+  const workspace = await rootPrisma.workspace.findUnique({
+    where: { id: workspaceId },
     select: { slug: true }
   })
-  return tenant?.slug ? `/workspaces/${tenant.slug}/settings/bridges` : '/workspaces'
+  return workspace?.slug ? `/workspaces/${workspace.slug}/settings/bridges` : '/workspaces'
 }
 
 async function resolvePrinterNotificationUrl(printerId: string): Promise<string> {
-  const tenantId = printerManager.getTenantId(printerId)
-  if (!tenantId) {
+  const workspaceId = printerManager.getWorkspaceId(printerId)
+  if (!workspaceId) {
     return '/workspaces'
   }
 
-  const tenant = await rootPrisma.tenant.findUnique({
-    where: { id: tenantId },
+  const workspace = await rootPrisma.workspace.findUnique({
+    where: { id: workspaceId },
     select: { slug: true }
   })
 
-  return tenant?.slug ? `/workspaces/${tenant.slug}/printers/${printerId}` : '/workspaces'
+  return workspace?.slug ? `/workspaces/${workspace.slug}/printers/${printerId}` : '/workspaces'
 }
 
 /**
@@ -297,7 +297,7 @@ export function subscribePrinterNotifications(
   handler: NotificationHandler,
   options: {
     onError?: (error: unknown) => void
-    shouldHandleTenantId?: (tenantId: string | null) => boolean
+    shouldHandleWorkspaceId?: (workspaceId: string | null) => boolean
   } = {}
 ): () => void {
   const printerStates = new Map<string, PrinterNotificationState>()
@@ -313,8 +313,8 @@ export function subscribePrinterNotifications(
   const onJobFinished = (event: JobFinishedEvent) => {
     void (async () => {
       try {
-        const tenantId = printerManager.getTenantId(event.printer.id) ?? null
-        if (options.shouldHandleTenantId && !options.shouldHandleTenantId(tenantId)) return
+        const workspaceId = printerManager.getWorkspaceId(event.printer.id) ?? null
+        if (options.shouldHandleWorkspaceId && !options.shouldHandleWorkspaceId(workspaceId)) return
         const message = await formatJobFinished(event)
         if (message) await safeHandler(message)
       } catch (error) {
@@ -325,8 +325,8 @@ export function subscribePrinterNotifications(
   const onJobStarted = (event: JobStartedEvent) => {
     void (async () => {
       try {
-        const tenantId = printerManager.getTenantId(event.printer.id) ?? null
-        if (options.shouldHandleTenantId && !options.shouldHandleTenantId(tenantId)) return
+        const workspaceId = printerManager.getWorkspaceId(event.printer.id) ?? null
+        if (options.shouldHandleWorkspaceId && !options.shouldHandleWorkspaceId(workspaceId)) return
         const message = await formatJobStarted(event)
         if (message) await safeHandler(message)
       } catch (error) {
@@ -363,8 +363,8 @@ export function subscribePrinterNotifications(
 
     void (async () => {
       try {
-        const tenantId = printerManager.getTenantId(status.printerId) ?? null
-        if (options.shouldHandleTenantId && !options.shouldHandleTenantId(tenantId)) return
+        const workspaceId = printerManager.getWorkspaceId(status.printerId) ?? null
+        if (options.shouldHandleWorkspaceId && !options.shouldHandleWorkspaceId(workspaceId)) return
         const printer = printerManager.getPrinter(status.printerId)
         if (!printer) return
         const jobName = readNotificationJobName(status)
@@ -396,12 +396,12 @@ export function subscribePrinterNotifications(
   const onBridgeCrashed = (event: {
     bridgeId: string
     bridgeName: string
-    tenantId: string | null
+    workspaceId: string | null
     recentCrashCount: number
   }) => {
     void (async () => {
       try {
-        if (options.shouldHandleTenantId && !options.shouldHandleTenantId(event.tenantId)) return
+        if (options.shouldHandleWorkspaceId && !options.shouldHandleWorkspaceId(event.workspaceId)) return
         const message = await formatBridgeCrashed(event)
         if (message) await safeHandler(message)
       } catch (error) {
@@ -413,9 +413,9 @@ export function subscribePrinterNotifications(
   const onPlatformNotification = (event: { message: NotificationMessage }) => {
     void (async () => {
       try {
-        // Platform-scope messages carry no tenant; channels deliver them
+        // Platform-scope messages carry no workspace; channels deliver them
         // through their platform configuration when enabled there.
-        if (options.shouldHandleTenantId && !options.shouldHandleTenantId(event.message.tenantId ?? null)) return
+        if (options.shouldHandleWorkspaceId && !options.shouldHandleWorkspaceId(event.message.workspaceId ?? null)) return
         await safeHandler(event.message)
       } catch (error) {
         options.onError?.(error)

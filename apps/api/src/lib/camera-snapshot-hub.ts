@@ -45,7 +45,7 @@ interface WatchEntry {
 }
 
 export interface CameraSnapshotBroadcaster {
-  broadcastSnapshotUpdated(printerId: string, capturedAt: number, tenantId?: string | null): void
+  broadcastSnapshotUpdated(printerId: string, capturedAt: number, workspaceId?: string | null): void
 }
 
 type PrinterEventSubscriber = Pick<PrinterEventBus, 'on' | 'off'>

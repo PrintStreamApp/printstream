@@ -17,7 +17,7 @@ import { collectPresences, signature } from './status-sync.js'
 function makeRow(overrides: Partial<SpoolRowWithPrinter> = {}): SpoolRowWithPrinter {
   const base = {
     id: 'spool-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     createdAt: new Date('2026-06-01T00:00:00.000Z'),
     updatedAt: new Date('2026-06-02T00:00:00.000Z'),
     deletedAt: null,

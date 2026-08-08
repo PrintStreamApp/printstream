@@ -218,8 +218,38 @@ export const bridgeStandaloneDownloadSchema = z.object({
 
 export type BridgeStandaloneDownload = z.infer<typeof bridgeStandaloneDownloadSchema>
 
+/**
+ * The origin a packaged bridge assumes when its config file names none.
+ *
+ * Baked into the standalone executable, so it cannot be varied per download —
+ * the artifact is content-addressed and signed by CI, and rewriting it would
+ * break the fingerprint the update mechanism compares. Shared so the server can
+ * tell whether ITS origin is the one the binary would pick on its own.
+ */
+export const STANDALONE_BRIDGE_DEFAULT_SERVER_URL = 'https://printstream.app'
+
 export const bridgeStandaloneDownloadsResponseSchema = z.object({
-  downloads: z.array(bridgeStandaloneDownloadSchema)
+  downloads: z.array(bridgeStandaloneDownloadSchema),
+  /**
+   * The `BRIDGE_SERVER_URL` this server needs written into `bridge.env`, or
+   * null when the executable's built-in default already points here.
+   *
+   * Null is the ordinary cloud case and renders NO extra step: a customer
+   * downloading from printstream.app gets a binary that is already correct, and
+   * an instruction to configure what is already configured invites them to
+   * mistype it. Non-null is every other deployment — a staging host, and any
+   * self-hosted server, whose bridges would otherwise register with the cloud.
+   */
+  serverUrlOverride: z.string().url().nullable().default(null),
+  /**
+   * Why the list is empty, when it is empty for a REASON rather than because
+   * this deployment simply has no standalone bridge.
+   *
+   * Those two look identical on screen and mean very different things, and the
+   * silent version is the dangerous one: a server whose promoted bridge does not
+   * match it would otherwise present as a product without native installers.
+   */
+  unavailableReason: z.string().nullable().default(null)
 })
 
 export type BridgeStandaloneDownloadsResponse = z.infer<typeof bridgeStandaloneDownloadsResponseSchema>
@@ -236,3 +266,118 @@ export const updateBridgeRequestSchema = z.object({
 })
 
 export type UpdateBridgeRequest = z.infer<typeof updateBridgeRequestSchema>
+/**
+ * Marker separating a bridge filename from the origin it was downloaded from.
+ *
+ * Deliberately unmistakable: the rest of the name is a fingerprint and a
+ * platform key, both of which contain hyphens, so a shorter separator could be
+ * produced by an ordinary name and misread as an origin.
+ */
+const FILE_NAME_ORIGIN_MARKER = '--from--'
+
+/**
+ * Encodes an origin into something legal in a filename.
+ *
+ * `:` and `/` are illegal or awkward on Windows and in shells, so `://` becomes
+ * `--` and a port's `:` becomes `_`.
+ *
+ * **`https` is implied and omitted; `http` is spelled out.** These names are
+ * long and the user is told to keep them, so the scheme is dead weight in the
+ * case that covers every cloud, staging, and TLS-terminated self-host. It
+ * cannot be dropped outright, though: a self-hosted server on plain http is
+ * normal on a LAN, and assuming https there yields a bridge that cannot reach
+ * its own server. Keeping the marker only for the exception buys the shorter
+ * name without that failure — and, incidentally, still decodes the older
+ * `https--` names, which are on disks already.
+ *
+ * **A subdomain of the default host is written as its label alone**, so
+ * `https://staging.printstream.app` stamps as `staging`. That covers every
+ * deployment of ours that is not production (production is the baked default and
+ * is never stamped at all), which is the only case these names are routinely
+ * read in. The suffix is DERIVED from the default server URL rather than written
+ * out again, so the two cannot disagree — and anything that is not such a
+ * subdomain, notably a self-hoster's own domain, still carries its full host.
+ * Without that fallback the short form would silently resolve
+ * `printstream.acme.com` to `acme.printstream.app`.
+ */
+const IMPLIED_FILE_NAME_SCHEME = 'https://'
+const DEFAULT_FILE_NAME_HOST = new URL(STANDALONE_BRIDGE_DEFAULT_SERVER_URL).host
+
+export function encodeOriginForFileName(origin: string): string {
+  try {
+    const url = new URL(origin)
+    const suffix = `.${DEFAULT_FILE_NAME_HOST}`
+    if (url.protocol === 'https:' && !url.port && url.host.endsWith(suffix)) {
+      const label = url.host.slice(0, -suffix.length)
+      // One label only: `a.b.printstream.app` would decode back as the single
+      // label `a.b`, and a dot in the token is what marks a full host.
+      if (label && !label.includes('.')) return label
+    }
+  } catch {
+    // Not parseable as a URL — fall through to the literal encoding, which the
+    // decoder will reject rather than turning into a plausible wrong origin.
+  }
+  const encoded = origin.replace('://', '--').replaceAll(':', '_')
+  return encoded.startsWith('https--') ? encoded.slice('https--'.length) : encoded
+}
+
+/** Inverse of {@link encodeOriginForFileName}; null when the token is not an origin. */
+export function decodeOriginFromFileName(token: string): string | null {
+  // Anchored, not a contains-check: `--` is legal INSIDE a hostname (every
+  // punycode label carries one, e.g. `xn--bcher-kva.de`), so only a leading
+  // `http--`/`https--` can be the scheme separator.
+  const explicitScheme = /^https?--/.test(token)
+  // A bare label — no scheme, no dot, no port — is a subdomain of the default
+  // host. Checked before the full-host path because that path requires a dot,
+  // which is exactly what distinguishes the two forms.
+  const bareLabel = !explicitScheme && !token.includes('.') && !token.includes('_')
+  const restored = explicitScheme
+    ? token.replace('--', '://').replaceAll('_', ':')
+    : bareLabel
+      ? `${IMPLIED_FILE_NAME_SCHEME}${token}.${DEFAULT_FILE_NAME_HOST}`
+      : `${IMPLIED_FILE_NAME_SCHEME}${token.replaceAll('_', ':')}`
+  try {
+    const url = new URL(restored)
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
+    // A bare token used to be rejected by `new URL` for having no scheme; now
+    // that one is supplied, any junk word parses as a host. Require a dot on
+    // that path so garbage stays garbage. Safe for the origins that reach it:
+    // no CA issues certificates for single-label names, so an https origin
+    // always has one — and a single-label intranet host is necessarily http,
+    // which takes the explicit branch above and is not checked here.
+    if (!explicitScheme && !bareLabel && !url.hostname.includes('.')) return null
+    return url.origin
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Stamps a download's origin into its filename, before any extension.
+ *
+ * The filename is the one piece of provenance that survives everything the
+ * installer does to the file: Windows' own Mark of the Web is deleted by setup
+ * before it elevates (SmartScreen refuses to elevate a marked executable), so a
+ * retry after a failed install has already lost it — and retrying is exactly
+ * what someone does after a failed install.
+ */
+export function stampDownloadFileNameWithOrigin(fileName: string, origin: string): string {
+  const extension = fileName.endsWith('.exe') ? '.exe' : ''
+  const base = extension ? fileName.slice(0, -extension.length) : fileName
+  return `${base}${FILE_NAME_ORIGIN_MARKER}${encodeOriginForFileName(origin)}${extension}`
+}
+
+/**
+ * Recovers the origin a stamped bridge filename carries, or null.
+ *
+ * Tolerates the `(1)` a browser appends when the file already exists, because a
+ * second download attempt is common and silently falling back to the cloud is
+ * the failure this exists to prevent.
+ */
+export function readOriginFromDownloadFileName(fileName: string): string | null {
+  const withoutExtension = fileName.endsWith('.exe') ? fileName.slice(0, -'.exe'.length) : fileName
+  const deduped = withoutExtension.replace(/\s*\(\d+\)\s*$/u, '')
+  const markerAt = deduped.lastIndexOf(FILE_NAME_ORIGIN_MARKER)
+  if (markerAt === -1) return null
+  return decodeOriginFromFileName(deduped.slice(markerAt + FILE_NAME_ORIGIN_MARKER.length))
+}

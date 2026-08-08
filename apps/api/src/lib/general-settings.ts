@@ -7,7 +7,7 @@
 import type { AppLandingPageSetting, AppThemeSetting, GeneralSettings, UpdateGeneralSettingsInput } from '@printstream/shared'
 import { DEFAULT_APP_LANDING_PAGE, appLandingPageSettingSchema, appThemeSettingSchema, generalSettingsSchema } from '@printstream/shared'
 import { prisma } from './prisma.js'
-import { scopeSettingKey } from './tenant-settings.js'
+import { scopeSettingKey } from './workspace-settings.js'
 import { listAllWorkspaceSupportPermissions, serializeSupportAccessPermissions, SUPPORT_ACCESS_ENABLED_SETTING_KEY, SUPPORT_ACCESS_PERMISSIONS_SETTING_KEY } from './support-access.js'
 
 const APP_THEME_KEY = 'app:general:theme'

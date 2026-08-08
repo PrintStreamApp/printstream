@@ -35,7 +35,7 @@ import { readPrintJobThumbnail } from '../lib/print-job-thumbnails.js'
 import { deletePrintJobSnapshot } from '../lib/print-job-snapshots.js'
 import { readPrintJobSnapshot } from '../lib/print-job-snapshots.js'
 import { assertRequestPermission, requireRequestPermission } from '../lib/authorization.js'
-import { requireRequestTenantId, requireRouteParam } from '../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam } from '../lib/request-helpers.js'
 import { broadcastJobsChanged, broadcastPrintDispatchChanged } from '../lib/ws-resource-events.js'
 import { parseAmsMapping, reprintJobFromRow, toPrintJobKind } from '../lib/print-reprint.js'
 
@@ -93,11 +93,11 @@ interface ModernJobRow extends JobRowBase {
 
 jobsRouter.get('/:id/thumbnail', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
   const jobId = requireRouteParam(request.params.id, 'Job id')
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const row = await prisma.printJob.findFirst({
     where: {
       id: jobId,
-      printer: { tenantId }
+      printer: { workspaceId }
     },
     select: {
       fileId: true,
@@ -127,11 +127,11 @@ jobsRouter.get('/:id/thumbnail', requireRequestPermission(JOBS_VIEW_PERMISSION),
 
 jobsRouter.get('/:id/snapshot', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
   const jobId = requireRouteParam(request.params.id, 'Job id')
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const row = await prisma.printJob.findFirst({
     where: {
       id: jobId,
-      printer: { tenantId }
+      printer: { workspaceId }
     },
     select: { snapshotPath: true }
   })
@@ -148,14 +148,14 @@ jobsRouter.get('/:id/snapshot', requireRequestPermission(JOBS_VIEW_PERMISSION), 
 
 jobsRouter.get('/', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
   const printerId = typeof request.query.printerId === 'string' ? request.query.printerId : undefined
-  const tenantId = requireRequestTenantId(request)
-  const rows = await listJobs(tenantId, printerId)
+  const workspaceId = requireRequestWorkspaceId(request)
+  const rows = await listJobs(workspaceId, printerId)
   const activityByJobId = await getRelatedAuditLogsForPrintJobs(rows.map((row) => ({
     id: row.id,
     printerId: row.printerId,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt
-  })), tenantId)
+  })), workspaceId)
   response.json({
     jobs: await Promise.all(rows.map(async (row) => await toPrintJobDto(row, activityByJobId.get(row.id) ?? [])))
   })
@@ -163,11 +163,11 @@ jobsRouter.get('/', requireRequestPermission(JOBS_VIEW_PERMISSION), async (reque
 
 jobsRouter.delete('/:id', requireRequestPermission(JOBS_DELETE_PERMISSION), async (request, response) => {
   const jobId = requireRouteParam(request.params.id, 'Job id')
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const row = await prisma.printJob.findFirst({
     where: {
       id: jobId,
-      printer: { tenantId }
+      printer: { workspaceId }
     },
     select: {
       id: true,
@@ -193,13 +193,13 @@ jobsRouter.delete('/:id', requireRequestPermission(JOBS_DELETE_PERMISSION), asyn
     row.thumbnailPath ? deletePrintJobThumbnail(row.thumbnailPath) : Promise.resolve(),
     row.snapshotPath ? deletePrintJobSnapshot(row.snapshotPath) : Promise.resolve()
   ])
-  broadcastJobsChanged(tenantId)
+  broadcastJobsChanged(workspaceId)
   response.status(204).end()
 })
 
 jobsRouter.post('/:id/reprint', async (request, response) => {
   const jobId = requireRouteParam(request.params.id, 'Job id')
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const parsed = reprintJobSchema.safeParse(request.body ?? {})
   if (!parsed.success) {
     throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid re-print payload')
@@ -208,7 +208,7 @@ jobsRouter.post('/:id/reprint', async (request, response) => {
   const row = await prisma.printJob.findFirst({
     where: {
       id: jobId,
-      printer: { tenantId }
+      printer: { workspaceId }
     },
     include: { printer: true }
   })
@@ -218,7 +218,7 @@ jobsRouter.post('/:id/reprint', async (request, response) => {
   const result = await reprintJobFromRow({
     row,
     overrides: parsed.data,
-    tenantId,
+    workspaceId,
     assertPermission: (kind) => {
       if (kind === 'calibration') {
         assertRequestPermission(request, PRINTERS_CONTROL_CALIBRATE_SCOPE)
@@ -261,15 +261,15 @@ jobsRouter.post('/:id/reprint', async (request, response) => {
       jobKind: result.kind
     }
   })
-  broadcastPrintDispatchChanged(tenantId)
+  broadcastPrintDispatchChanged(workspaceId)
   response.status(202).json({ job })
 })
 
-async function listJobs(tenantId: string, printerId: string | undefined): Promise<Array<ModernJobRow | LegacyJobRow>> {
+async function listJobs(workspaceId: string, printerId: string | undefined): Promise<Array<ModernJobRow | LegacyJobRow>> {
   try {
     return await prisma.printJob.findMany({
       where: {
-        printer: { tenantId },
+        printer: { workspaceId },
         ...(printerId ? { printerId } : {})
       },
       select: {
@@ -326,7 +326,7 @@ async function listJobs(tenantId: string, printerId: string | undefined): Promis
   } catch (error) {
     if (!isMissingColumnError(error)) throw error
     console.warn('Falling back to legacy jobs query; newer PrintJob columns are missing')
-    return await listJobsLegacy(tenantId, printerId)
+    return await listJobsLegacy(workspaceId, printerId)
   }
 }
 
@@ -394,7 +394,7 @@ async function resolveJobProjectFilamentChips(row: PrintJobRow) {
   }
 }
 
-async function listJobsLegacy(tenantId: string, printerId: string | undefined): Promise<LegacyJobRow[]> {
+async function listJobsLegacy(workspaceId: string, printerId: string | undefined): Promise<LegacyJobRow[]> {
   const printerFilter = printerId
     ? Prisma.sql`AND job."printerId" = ${printerId}`
     : Prisma.empty
@@ -422,7 +422,7 @@ async function listJobsLegacy(tenantId: string, printerId: string | undefined): 
     INNER JOIN "Printer" printer ON printer."id" = job."printerId"
     LEFT JOIN "LibraryFile" file ON file."id" = job."fileId"
     WHERE 1 = 1
-    AND printer."tenantId" = ${tenantId}
+    AND printer."workspaceId" = ${workspaceId}
     ${printerFilter}
     ORDER BY job."finishedAt" DESC NULLS FIRST, job."startedAt" DESC
     LIMIT 100

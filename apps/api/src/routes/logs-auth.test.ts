@@ -65,7 +65,7 @@ test('logs clear returns 403 without settings.manage permission', async () => {
   })
 })
 
-test('tenant logs allow tenant settings managers without platform tenant-management permission', async () => {
+test('workspace logs allow workspace settings managers without platform workspace-management permission', async () => {
   await withLogsApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
@@ -78,7 +78,7 @@ test('tenant logs allow tenant settings managers without platform tenant-managem
     assert.equal(response.status, 200)
     assert.ok(Array.isArray(body.entries))
   }, {
-    tenant: { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+    workspace: { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
   })
 })
 
@@ -86,7 +86,7 @@ async function withLogsApp(
   auth: RequestAuthContext,
   run: (baseUrl: string) => Promise<void>,
   input: {
-    tenant?: { id: string; slug: string; name: string } | null
+    workspace?: { id: string; slug: string; name: string } | null
   } = {}
 ): Promise<void> {
   rootPrisma.auditLog.findMany = (async () => []) as typeof rootPrisma.auditLog.findMany
@@ -95,7 +95,7 @@ async function withLogsApp(
   const app = express()
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = input.tenant ?? null
+    request.workspace = input.workspace ?? null
     next()
   })
   app.use('/api/logs', logsRouter)

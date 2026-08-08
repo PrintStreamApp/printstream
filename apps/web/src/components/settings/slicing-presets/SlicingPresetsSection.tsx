@@ -6,8 +6,14 @@
  * material preset. Each tab owns its own search, filters, selection and paging
  * (`SlicingPresetKindPanel`); this shell owns only the query, the upload card and the tabs.
  *
- * Rendered inside `components/library/SlicingPresetsDialog.tsx`, which titles the surface and is a
- * scroll container of its own — hence no heading here, and the sticky props passed to the toolbar.
+ * Rendered in TWO places, and titled by neither of them: `SlicingPresetsDialog` (opened from the
+ * editor's gear and the slice sidebar's Manage buttons) and Settings, then Slicing. Hence no
+ * heading here, and the sticky props — the dialog is its own scroll container, the settings page
+ * is not.
+ *
+ * Deliberately the same component in both rather than a settings copy: curating presets and
+ * picking one mid-edit are different jobs, but they are the same LIST, and two managers is how one
+ * of them ends up missing a filter the other grew.
  */
 import React from 'react'
 import { Alert, Chip, Stack, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy'

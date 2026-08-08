@@ -31,15 +31,18 @@ export function processIsElevated(): boolean {
  * (3+). Best-effort and silent; there is an unavoidable brief flash before it
  * runs (the OS shows the console before any of our code does).
  */
-export function hideOwnConsoleWindow(): void {
-  if (process.platform !== 'win32') return
-  const script = [
+export function buildHideOwnConsoleScript(): string {
+  return [
     "$t = Add-Type -PassThru -Name ConsoleHide -Namespace PsSetup -MemberDefinition '[System.Runtime.InteropServices.DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow(); [System.Runtime.InteropServices.DllImport(\"user32.dll\")] public static extern bool ShowWindow(System.IntPtr h, int n); [System.Runtime.InteropServices.DllImport(\"kernel32.dll\")] public static extern int GetConsoleProcessList(int[] buffer, int count);'",
     '$buffer = New-Object int[] 8',
     '$count = $t::GetConsoleProcessList($buffer, 8)',
     'if ($count -le 2) { [void]$t::ShowWindow($t::GetConsoleWindow(), 0) }'
   ].join('; ')
-  runCommand('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { allowFailure: true })
+}
+
+export function hideOwnConsoleWindow(): void {
+  if (process.platform !== 'win32') return
+  runCommand('powershell', ['-NoProfile', '-NonInteractive', '-Command', buildHideOwnConsoleScript()], { allowFailure: true })
 }
 
 /**
@@ -192,20 +195,43 @@ exit $script:result
  * executable — locked by this uninstaller and any leftover tray process — so a
  * detached, hidden PowerShell waits, kills any remaining `<exeBaseName>`
  * processes to release the lock, then retries the delete. This is why uninstall
- * does not ask the operator to delete the program folder by hand. Best-effort.
+ * does not ask the operator to delete the program folder by hand.
+ *
+ * **Best-effort, but no longer silent.** Every step suppressed its errors, so a
+ * failure left ~100 MB of executable in Program Files with nothing written
+ * anywhere — found only by looking. It now retries for a minute rather than ten
+ * seconds (an antivirus scan of a 100 MB binary outlasts the old window easily)
+ * and, if it still cannot delete, records why under %TEMP%. %TEMP% and not the
+ * app's own logs directory: a purging uninstall has just deleted that.
  */
-export function scheduleWindowsInstallDirCleanup(installDir: string, exeBaseName: string): void {
+export function buildInstallDirCleanupScript(installDir: string, exeBaseName: string): string {
   const dir = installDir.replaceAll("'", "''")
   const name = exeBaseName.replaceAll("'", "''")
-  const script = [
+  const logName = `${exeBaseName.replaceAll("'", "''")}-uninstall-cleanup.log`
+  return [
     'Start-Sleep -Seconds 4',
     `Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
-    'for ($i = 0; $i -lt 20; $i++) {',
+    '$err = $null',
+    // 120 x 500ms = a minute. The old ten seconds was not enough for a
+    // real-time antivirus scan to finish with a ~100 MB executable and let go.
+    'for ($i = 0; $i -lt 120; $i++) {',
     `  if (-not (Test-Path -LiteralPath '${dir}')) { break }`,
-    `  Remove-Item -LiteralPath '${dir}' -Recurse -Force -ErrorAction SilentlyContinue`,
+    // try/catch on ONE entry: the array is joined with '; ', and a semicolon
+    // between the two blocks makes PowerShell reject the try as unterminated.
+    `  try { Remove-Item -LiteralPath '${dir}' -Recurse -Force -ErrorAction Stop; break } catch { $err = $_.Exception.Message }`,
     '  Start-Sleep -Milliseconds 500',
+    '}',
+    // Only on failure: a successful uninstall should leave nothing behind,
+    // including a log nobody will ever delete.
+    `if (Test-Path -LiteralPath '${dir}') {`,
+    `  $line = ((Get-Date).ToString('s')) + ' could not remove ${dir}: ' + $err`,
+    `  Add-Content -LiteralPath (Join-Path $env:TEMP '${logName}') -Value $line -ErrorAction SilentlyContinue`,
     '}'
   ].join('; ')
+}
+
+export function scheduleWindowsInstallDirCleanup(installDir: string, exeBaseName: string): void {
+  const script = buildInstallDirCleanupScript(installDir, exeBaseName)
   try {
     spawn('powershell', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], {
       detached: true,
@@ -229,11 +255,11 @@ export function scheduleWindowsInstallDirCleanup(installDir: string, exeBaseName
  * spawn) if the ScheduledTasks cmdlets are unavailable or the task could not be
  * created/run.
  */
-export function launchTrayInUserSessionWindows(execute: string, argument: string, taskName: string): boolean {
+export function buildUserSessionTrayScript(execute: string, argument: string, taskName: string): string {
   const quotedExe = execute.replaceAll("'", "''")
   const quotedArg = argument.replaceAll("'", "''")
   const quotedTask = taskName.replaceAll("'", "''")
-  const script = [
+  return [
     `$a = New-ScheduledTaskAction -Execute '${quotedExe}' -Argument '${quotedArg}'`,
     '$p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Limited',
     '$t = New-ScheduledTask -Action $a -Principal $p',
@@ -242,6 +268,10 @@ export function launchTrayInUserSessionWindows(execute: string, argument: string
     'Start-Sleep -Seconds 2',
     `Unregister-ScheduledTask -TaskName '${quotedTask}' -Confirm:$false`
   ].join('; ')
+}
+
+export function launchTrayInUserSessionWindows(execute: string, argument: string, taskName: string): boolean {
+  const script = buildUserSessionTrayScript(execute, argument, taskName)
   const result = runCommand('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { allowFailure: true })
   return result !== null
 }

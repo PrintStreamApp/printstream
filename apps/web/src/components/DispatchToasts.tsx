@@ -9,7 +9,7 @@ import { apiFetch } from '../lib/apiClient'
 import { isActiveDispatchJob, selectVisibleDispatchJobs } from '../lib/dispatchToastVisibility'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
-import { buildTenantWorkspacePath, buildWorkspaceSelectionPath, parseWorkspacePathname } from '../lib/workspaceRoute'
+import { buildWorkspacePath, buildWorkspaceSelectionPath, parseWorkspacePathname } from '../lib/workspaceRoute'
 import { toast } from '../lib/toast'
 import { StatusToast, StatusToastDismissButton } from './StatusToast'
 
@@ -19,8 +19,8 @@ const FINISHED_AUTO_DISMISS_MS = 5_000
 export function DispatchToasts() {
   const navigate = useNavigate()
   const location = useLocation()
-  const tenantSlug = parseWorkspacePathname(location.pathname).tenantSlug
-  const jobsPath = tenantSlug ? buildTenantWorkspacePath(tenantSlug, '/jobs') : buildWorkspaceSelectionPath()
+  const workspaceSlug = parseWorkspacePathname(location.pathname).workspaceSlug
+  const jobsPath = workspaceSlug ? buildWorkspacePath(workspaceSlug, '/jobs') : buildWorkspaceSelectionPath()
   const queryClient = useQueryClient()
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set())
   const dispatchQuery = usePrintDispatchJobs({ idleRefetchInterval: 10_000 })

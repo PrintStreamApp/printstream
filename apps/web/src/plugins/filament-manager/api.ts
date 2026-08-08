@@ -56,7 +56,7 @@ export function useSpoolsQuery(enabled = true) {
  * Loaded-spool lookup for the core `slotFilamentIdentity` registry: joins the
  * spool list by loaded location (printer + AMS + slot) and returns the spool's
  * identity fields in the canonical resolver's shape. Registered from the
- * plugin's `init`; `enabled` (plugin active for the tenant) gates the fetch.
+ * plugin's `init`; `enabled` (plugin active for the workspace) gates the fetch.
  */
 export function useLoadedSpoolIdentityLookup(enabled: boolean): SlotFilamentIdentityLookup {
   const spoolsQuery = useSpoolsQuery(enabled)

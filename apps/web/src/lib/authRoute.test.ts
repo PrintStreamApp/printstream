@@ -6,8 +6,8 @@ test('shouldShowAccountTab keeps the account tab for signed-in users even when t
   assert.equal(shouldShowAccountTab({
     authBootstrapReady: true,
     actorType: 'user',
-    activeTenantId: null,
-    memberTenantIds: new Set()
+    activeWorkspaceId: null,
+    memberWorkspaceIds: new Set()
   }), true)
 })
 
@@ -15,8 +15,8 @@ test('shouldShowAccountTab keeps the account tab for users with a direct members
   assert.equal(shouldShowAccountTab({
     authBootstrapReady: true,
     actorType: 'user',
-    activeTenantId: 'tenant-1',
-    memberTenantIds: new Set(['tenant-1'])
+    activeWorkspaceId: 'workspace-1',
+    memberWorkspaceIds: new Set(['workspace-1'])
   }), true)
 })
 
@@ -24,8 +24,8 @@ test('shouldShowAccountTab hides the account tab for platform users visiting a w
   assert.equal(shouldShowAccountTab({
     authBootstrapReady: true,
     actorType: 'user',
-    activeTenantId: 'tenant-2',
-    memberTenantIds: new Set(['tenant-1'])
+    activeWorkspaceId: 'workspace-2',
+    memberWorkspaceIds: new Set(['workspace-1'])
   }), false)
 })
 
@@ -33,8 +33,8 @@ test('shouldShowAccountTab hides the account tab for non-user actors', () => {
   assert.equal(shouldShowAccountTab({
     authBootstrapReady: true,
     actorType: 'anonymous',
-    activeTenantId: null,
-    memberTenantIds: new Set()
+    activeWorkspaceId: null,
+    memberWorkspaceIds: new Set()
   }), false)
 })
 
@@ -42,8 +42,8 @@ test('shouldShowAccountTab hides the account tab while bootstrap is still loadin
   assert.equal(shouldShowAccountTab({
     authBootstrapReady: false,
     actorType: 'user',
-    activeTenantId: null,
-    memberTenantIds: new Set()
+    activeWorkspaceId: null,
+    memberWorkspaceIds: new Set()
   }), false)
 })
 
@@ -90,7 +90,7 @@ test('resolveAuthRouteState renders auth when platform providers exist but none 
   }), 'auth')
 })
 
-test('resolveAuthRouteState skips inline setup for tenant-scoped auth', () => {
+test('resolveAuthRouteState skips inline setup for workspace-scoped auth', () => {
   assert.equal(resolveAuthRouteState({
     authBootstrapReady: true,
     authEnabled: false,
@@ -100,7 +100,7 @@ test('resolveAuthRouteState skips inline setup for tenant-scoped auth', () => {
   }), 'redirect')
 })
 
-test('resolveProtectedRouteState keeps tenant routes mounted during tenant-scoped auth setup', () => {
+test('resolveProtectedRouteState keeps workspace routes mounted during workspace-scoped auth setup', () => {
   assert.equal(resolveProtectedRouteState({
     authBootstrapReady: true,
     authEnabled: false,
@@ -156,15 +156,15 @@ test('resolvePublicRootRouteState keeps the marketing page available for signed-
 
 test('shouldUsePlatformAuthTheme keeps platform auth screens on the platform theme before the first platform Admin exists', () => {
   assert.equal(shouldUsePlatformAuthTheme({
-    hasTenantContext: false,
+    hasWorkspaceContext: false,
     canUsePlatformWorkspace: false,
     authRouteState: 'auth'
   }), true)
 })
 
-test('shouldUsePlatformAuthTheme keeps tenant auth screens on the tenant theme', () => {
+test('shouldUsePlatformAuthTheme keeps workspace auth screens on the workspace theme', () => {
   assert.equal(shouldUsePlatformAuthTheme({
-    hasTenantContext: true,
+    hasWorkspaceContext: true,
     canUsePlatformWorkspace: false,
     authRouteState: 'auth'
   }), false)
@@ -172,7 +172,7 @@ test('shouldUsePlatformAuthTheme keeps tenant auth screens on the tenant theme',
 
 test('shouldUsePlatformAuthTheme keeps the platform workspace on the platform theme once accessible', () => {
   assert.equal(shouldUsePlatformAuthTheme({
-    hasTenantContext: false,
+    hasWorkspaceContext: false,
     canUsePlatformWorkspace: true,
     authRouteState: 'redirect'
   }), true)
@@ -183,22 +183,22 @@ test('shouldShowWorkspaceSwitcher hides the workspace switcher while auth screen
   assert.equal(shouldShowWorkspaceSwitcher({ authRouteState: 'loading' }), false)
 })
 
-test('shouldShowWorkspaceSwitcher stays visible when the current route is not tenant-scoped', () => {
+test('shouldShowWorkspaceSwitcher stays visible when the current route is not workspace-scoped', () => {
   assert.equal(shouldShowWorkspaceSwitcher({ authRouteState: 'redirect' }), true)
 })
 
-test('shouldShowWorkspaceSwitcher stays visible on valid tenant-scoped routes', () => {
+test('shouldShowWorkspaceSwitcher stays visible on valid workspace-scoped routes', () => {
   assert.equal(shouldShowWorkspaceSwitcher({
     authRouteState: 'redirect',
-    requestedTenantSlug: 'alpha',
-    activeTenantSlug: 'alpha'
+    requestedWorkspaceSlug: 'alpha',
+    activeWorkspaceSlug: 'alpha'
   }), true)
 })
 
-test('shouldShowWorkspaceSwitcher stays visible when the tenant slug is invalid or unauthorized', () => {
+test('shouldShowWorkspaceSwitcher stays visible when the workspace slug is invalid or unauthorized', () => {
   assert.equal(shouldShowWorkspaceSwitcher({
     authRouteState: 'redirect',
-    requestedTenantSlug: 'alpha',
-    activeTenantSlug: null
+    requestedWorkspaceSlug: 'alpha',
+    activeWorkspaceSlug: null
   }), true)
 })

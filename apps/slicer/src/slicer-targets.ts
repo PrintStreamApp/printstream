@@ -19,11 +19,23 @@ const runtimeSlicerTargetSchema = slicingTargetDescriptorSchema.extend({
   appDir: z.string().trim().min(1).optional(),
   profileDir: z.string().trim().min(1),
   cliArgsTemplate: z.string().trim().min(1).optional(),
+  /**
+   * Arguments placed BEFORE the slice arguments on every invocation.
+   *
+   * Exists for hosts that cannot spawn the engine binary directly. The native
+   * self-hosted Linux app runs it through its own sysroot's dynamic loader
+   * (`ld-linux --library-path … <binary>`) so the install does not resolve GTK
+   * and WebKit against the host, which on a headless server has neither. A
+   * wrapper script would do the same job, but generating one reintroduces shell
+   * quoting on a path where an argument may contain spaces — and Windows has no
+   * shell to rely on.
+   */
+  cliArgsPrefix: z.array(z.string()).default([]),
   /** Bundled from a Bambu PRE-release; never selected by default. */
   prerelease: z.boolean().optional()
 })
 
-const runtimeSlicerTargetsFileSchema = z.object({
+export const runtimeSlicerTargetsFileSchema = z.object({
   defaultTargetId: z.string().trim().min(1).nullable().optional(),
   targets: z.array(runtimeSlicerTargetSchema)
 })
@@ -44,6 +56,21 @@ const temporarilyDisabledTargetFamilies = new Set<RuntimeSlicerTarget['family']>
 export function getSlicerTargetRegistry(): Promise<RuntimeSlicerTargetRegistry> {
   registryPromise ??= loadSlicerTargetRegistry()
   return registryPromise
+}
+
+/**
+ * Drop the memoised registry so the next read re-loads the manifest.
+ *
+ * Engines used to be baked in at image build time, so reading the manifest once
+ * per process was right. They can now be added and removed while the service
+ * runs, and without this an install completes, writes its target, and changes
+ * nothing anyone can see until a restart.
+ *
+ * Call after any manifest write, never speculatively: re-loading rebuilds the
+ * per-target capability probes, which spawn the CLI.
+ */
+export function invalidateSlicerTargetRegistry(): void {
+  registryPromise = null
 }
 
 export function getPublicSlicerTargets(registry: RuntimeSlicerTargetRegistry): SlicingTargetDescriptor[] {
@@ -115,6 +142,9 @@ function loadLegacyRegistry(): RuntimeSlicerTargetRegistry {
     id: 'legacy-bambustudio',
     label: 'Bambu Studio (legacy)',
     family: slicerFamilySchema.enum.bambustudio,
+    // The legacy env-configured target spawns its CLI directly; only a manifest
+    // target (the native app's) needs a prefix.
+    cliArgsPrefix: [],
     version: 'legacy',
     slicerName: 'Bambu Studio',
     supportsEstimateModeMachineSwitch: false,
@@ -218,7 +248,7 @@ function getIncompatibleRuntimeVersions(binaryPath: string): string[] {
 }
 
 function detectEstimateModeMachineSwitchSupport(target: RuntimeSlicerTarget): boolean {
-  const probe = spawnSync(target.cliPath, ['--help'], {
+  const probe = spawnSync(target.cliPath, [...target.cliArgsPrefix, '--help'], {
     encoding: 'utf8',
     timeout: 10_000,
     maxBuffer: 1024 * 1024,

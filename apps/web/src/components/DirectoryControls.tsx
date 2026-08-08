@@ -1,5 +1,5 @@
 /**
- * Shared sort/view-mode types for directory-style views (library, tenants, jobs,
+ * Shared sort/view-mode types for directory-style views (library, workspaces, jobs,
  * pickers, …). The controls themselves live in `DirectoryToolbar.tsx`
  * (`DirectorySortMenu`, `DirectoryGroupingMenu`, `DirectoryPageSizeMenu`,
  * `DirectoryPrimaryToolbar`) and `ViewModeToggle.tsx`.

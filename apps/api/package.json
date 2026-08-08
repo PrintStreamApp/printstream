@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./server": "./dist/server.js"
+    "./server": "./dist/server.js",
+    "./license-origin": "./dist/lib/license-origin.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -17,8 +18,8 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
-    "prisma:baseline": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > prisma/baseline.sql",
-    "db:reset-auth": "tsx scripts/dev/reset-auth.ts"
+    "db:reset-auth": "tsx scripts/dev/reset-auth.ts",
+    "db:seed:dev": "tsx scripts/dev/seed-dev.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",

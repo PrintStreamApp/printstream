@@ -46,7 +46,7 @@ import { useControlledMenuClickAway } from '../hooks/useControlledMenuClickAway'
 import { shouldShowNoConnectedPrintersEmptyState } from '../lib/printersEmptyState'
 import { usePlateClearingSync } from '../lib/plateClearing'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
-import { buildTenantWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspaceRoute'
+import { buildWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspaceRoute'
 import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, matchesPrinterSearch, filterPrintersForView, sortPrintersForView, groupPrintersForOverview, parseStoredOptionalString, serializeStoredOptionalString, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings, parsePrinterGroupBy, parsePrinterOverviewPageSize, sameStringSet, PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS, type PrinterGroupBy } from '../lib/printersViewHelpers'
 import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, PRINTER_HISTORY_SORT_DIR_KEY, PRINTER_HISTORY_RESULT_FILTER_KEY, PRINTER_HISTORY_PAGE_SIZE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
@@ -56,6 +56,7 @@ import { PrinterCardContentSettingsModal } from '../components/printers/PrinterC
 import { PrinterFormModal, LocalFilePrintGate, type PrinterFormValues } from '../components/printers/PrinterFormModal'
 import { PrinterOverviewToolbar } from '../components/printers/PrinterOverviewToolbar'
 import { LibraryPickerModal } from '../components/printers/LibraryPickerModal'
+import { ListSkeleton } from '../components/ListSkeleton'
 
 type SliceFlowSubmitInput = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[0]
 type SliceFlowSubmitAction = Parameters<ComponentProps<typeof SliceFileModal>['onSubmit']>[1]
@@ -97,13 +98,13 @@ export function PrintersView() {
   const { confirm } = usePromptDialog()
   const { demoMode } = useRuntimePolicy()
   const navigate = useNavigate()
-  const { tenantSlug, printerId: routePrinterId } = useParams<{ tenantSlug: string; printerId: string }>()
+  const { workspaceSlug, printerId: routePrinterId } = useParams<{ workspaceSlug: string; printerId: string }>()
   const workspacePath = useCallback((path: string) => (
-    tenantSlug ? buildTenantWorkspacePath(tenantSlug, path) : buildWorkspaceSelectionPath()
-  ), [tenantSlug])
+    workspaceSlug ? buildWorkspacePath(workspaceSlug, path) : buildWorkspaceSelectionPath()
+  ), [workspaceSlug])
   const authBootstrapQuery = useAuthBootstrapQuery()
   const workspacePreferenceScopeKey = authBootstrapQuery.data
-    ? authBootstrapQuery.data.tenant?.id ?? 'platform'
+    ? authBootstrapQuery.data.workspace?.id ?? 'platform'
     : 'pending'
   const printerViewsQueryKey = useMemo(
     () => ['printer-views', workspacePreferenceScopeKey] as const,
@@ -306,8 +307,8 @@ export function PrintersView() {
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   const showNoConnectedBridgesPlaceholder = authBootstrapQuery.isSuccess
     && !singlePrinterView
-    && authBootstrapQuery.data?.tenant != null
-    && !authBootstrapQuery.data.tenantHasConnectedBridges
+    && authBootstrapQuery.data?.workspace != null
+    && !authBootstrapQuery.data.workspaceHasConnectedBridges
 
   const printersQuery = useQuery({
     queryKey: ['printers'],
@@ -1031,8 +1032,8 @@ export function PrintersView() {
         </Stack>
       )}
 
-      {authBootstrapQuery.isLoading && <Typography>Loading…</Typography>}
-      {printersQuery.isLoading && canViewPrinters && <Typography>Loading…</Typography>}
+      {authBootstrapQuery.isLoading && <ListSkeleton rows={3} />}
+      {printersQuery.isLoading && canViewPrinters && <ListSkeleton rows={3} />}
       {printersQuery.error && <Typography color="danger">{(printersQuery.error as Error).message}</Typography>}
 
       {authBootstrapQuery.isSuccess && !canViewPrinters && (

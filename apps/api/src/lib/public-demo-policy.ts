@@ -1,9 +1,9 @@
 /**
- * Tenant-scoped public demo access policy.
+ * Workspace-scoped public demo access policy.
  *
- * A public demo tenant is not a normal auth-disabled tenant. Anonymous visitors
+ * A public demo workspace is not a normal auth-disabled workspace. Anonymous visitors
  * get an explicit read-mostly permission set so route authorization keeps using
- * permissions instead of falling through the auth-disabled tenant bypass.
+ * permissions instead of falling through the auth-disabled workspace bypass.
  */
 import {
   AUTH_ACCESS_VIEW_PERMISSION,
@@ -15,11 +15,11 @@ import {
   PRINTERS_VIEW_PERMISSION,
   PRINTER_STORAGE_DOWNLOAD_PERMISSION,
   PRINTER_STORAGE_VIEW_PERMISSION,
-  PUBLIC_DEMO_TENANT_SLUG,
+  PUBLIC_DEMO_WORKSPACE_SLUG,
   type Permission
 } from '@printstream/shared'
 import type { RequestAuthContext } from './auth-context.js'
-import type { RequestTenantSummary } from './tenant-context.js'
+import type { RequestWorkspaceSummary } from './workspace-context.js'
 
 export const PUBLIC_DEMO_GUEST_PERMISSIONS: readonly Permission[] = [
   AUTH_ACCESS_VIEW_PERMISSION,
@@ -33,15 +33,15 @@ export const PUBLIC_DEMO_GUEST_PERMISSIONS: readonly Permission[] = [
   LIBRARY_DOWNLOAD_PERMISSION
 ]
 
-export function isPublicDemoTenant(tenant: RequestTenantSummary | null): boolean {
-  return tenant?.slug === PUBLIC_DEMO_TENANT_SLUG
+export function isPublicDemoWorkspace(workspace: RequestWorkspaceSummary | null): boolean {
+  return workspace?.slug === PUBLIC_DEMO_WORKSPACE_SLUG
 }
 
 export function applyPublicDemoGuestAuth(
   auth: RequestAuthContext,
-  tenant: RequestTenantSummary | null
+  workspace: RequestWorkspaceSummary | null
 ): RequestAuthContext {
-  if (auth.actor.type !== 'anonymous' || !isPublicDemoTenant(tenant)) {
+  if (auth.actor.type !== 'anonymous' || !isPublicDemoWorkspace(workspace)) {
     return auth
   }
 

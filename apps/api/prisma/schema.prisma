@@ -3,7 +3,7 @@
 // is settled.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   // The native single-file (SEA) self-hosted build has no Prisma CLI and no
   // download step at install time, so every shipping target's query engine must
   // be generated up front and embedded per build. `native` keeps the dev
@@ -17,59 +17,211 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Tenant {
-  id          String   @id @default(cuid())
-  slug        String   @unique
-  name        String
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+/// The CUSTOMER: one payment method, one Paddle customer, one invoice stream.
+///
+/// Owns any number of cloud workspaces (`Workspace`) and any number of self-hosted
+/// licences (`License`), and those counts are independent — three workspaces and
+/// no licence, or one licence and no workspace, are both ordinary. Billing was
+/// welded to a single workspace before this existed, so a customer with two
+/// workspaces had two payment methods, and a licence (which runs on hardware we
+/// cannot see) had to pick a workspace to live in.
+///
+/// Pricing stays PER WORKSPACE: each cloud workspace keeps its own
+/// `WorkspaceSubscription` at unchanged prices, and this only aggregates payment.
+/// It does not pool entitlements — printer allowances remain per workspace, and
+/// changing that would be a repricing.
+///
+/// Cloud-only: an OSS/self-hosted install has no billing relationship at all and
+/// leaves every workspace unattached.
+///
+/// NAMES: one entity, two words, depending on who is looking. To us it is a
+/// CUSTOMER — that is what the platform lists — and the model follows the
+/// surface it is administered from. To the customer it is their ORGANISATION
+/// (the People list) reached through a scope called "Billing and licensing",
+/// because nobody should be told they are a customer record. Neither
+/// user-facing word is wrong; do not rename them to match this one.
+///
+/// Not to be confused with `paddleCustomerId`, which is Paddle's own customer
+/// record for the same party.
+model Customer {
+  id                    String    @id @default(cuid())
+  /// Display name, seeded from the owner at creation. Not an identity key.
+  name                  String
+  /// The user who owns the billing relationship. Kept nullable so deleting a
+  /// user never destroys the account their workspaces and licences hang off;
+  /// ownership is reassigned instead.
+  ownerUserId           String?
+  /// THE Paddle customer for everything on this account. A workspace must never
+  /// carry its own — that is exactly what made two workspaces mean two payment
+  /// methods.
+  paddleCustomerId      String?   @unique
+  /// Whether a workspace admin may bring someone NEW into this organisation, or
+  /// only assign people who are already in it.
+  ///
+  /// Lives here, above workspaces, because it has to bind the people it
+  /// restricts. A workspace admin holds `auth.roles.edit`, so any permission an
+  /// owner strips from a workspace role that admin can grant straight back — a
+  /// workspace-level control cannot restrain workspace admins. This one they
+  /// cannot reach.
+  ///
+  /// Default true: the existing flow is that a workspace admin adds people by
+  /// email, and an owner who has never thought about this should not find their
+  /// team unable to work.
+  allowWorkspaceInvites Boolean   @default(true)
+  /// When an operator retired this account, or null while it is live.
+  ///
+  /// Soft: nothing is deleted, and restoring clears this one field. A dormant
+  /// account's owner can still SIGN IN, deliberately — the point of keeping
+  /// them out of the product rather than out of the door is that their invoices
+  /// and payment records stay reachable, which is what someone needs after they
+  /// stop paying.
+  ///
+  /// What dormancy withholds is USE: every workspace on the account reads as
+  /// disabled (derived in `workspace-availability.ts`, never copied onto the
+  /// workspaces themselves, so restoring cannot un-disable one that was already
+  /// disabled on its own), and licences stop being re-signed. A PERPETUAL key
+  /// already issued keeps verifying offline — see `license-refresh.ts`; that is
+  /// a property of offline verification, not something dormancy can revoke.
+  dormantAt             DateTime?
+  /// Who retired it, and why. A dormant account with no explanation is
+  /// indistinguishable from a mistake months later.
+  dormantByUserId       String?
+  dormantReason         String?
+  /// Whether the CUSTOMER may reactivate themselves from their own billing
+  /// scope. True for the ordinary case — they stopped paying and later want
+  /// back, which should not need a support ticket. An operator retiring an
+  /// account for abuse clears it, otherwise the account could undo the very
+  /// decision that retired it.
+  dormantSelfRestorable Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  printers           Printer[]
-  bridges            Bridge[]
-  jobs               PrintJob[]
-  dispatchJobs       DispatchJob[]
-  libraryFiles       LibraryFile[]
-  libraryFileVersions LibraryFileVersion[]
-  libraryDownloadLinks LibraryDownloadLink[]
-  libraryFolders     LibraryFolder[]
-  libraryFileReplicas LibraryFileReplica[]
-  libraryFileFavorites LibraryFileFavorite[]
-  printerViews       PrinterView[]
-  authMemberships    AuthTenantMembership[]
-  authGroups         AuthGroup[]
-  authServiceAccounts AuthServiceAccount[]
-  orderTemplates     OrderTemplate[]
-  orderTemplateVariants OrderTemplateVariant[]
-  orderTemplatePrints OrderTemplatePrint[]
-  orders             Order[]
-  orderVariantSelections OrderVariantSelection[]
-  orderPrints        OrderPrint[]
-  filamentSpools     FilamentSpool[]
-  filamentSpoolUsages FilamentSpoolUsage[]
-  calibrationRuns    CalibrationRun[]
-  calibrationResults CalibrationResult[]
-  queueItems         QueueItem[]
-  auditLogs          AuditLog[]
-  stats              TenantStats?
-  printerStats       PrinterStats[]
-  subscription       TenantSubscription?
-  licenses           License[]
+  owner       AuthUser?            @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
+  workspaces  Workspace[]
+  licenses    License[]
+  memberships CustomerMembership[]
 
-  @@unique([name])
+  @@index([ownerUserId])
+  /// Dormancy-aware queries filter on this, and the platform list sorts by it.
+  @@index([dormantAt])
 }
 
-/// Per-tenant cloud billing state, synced from Paddle via webhooks. Cloud-only:
-/// unused in self-hosted single-tenant installs, and plan enforcement degrades
+/// A person's place in a customer's ORGANISATION.
+///
+/// The billing account is the org: people belong to it, and workspaces sit
+/// inside it. Being an org member is what makes someone assignable to its
+/// workspaces; it does not by itself grant any workspace, and it does not grant
+/// billing.
+///
+/// **The row IS the membership.** Its existence is what puts someone in the
+/// organisation; `billingRole` is an independent capability layered on top, not
+/// an alternative to belonging. Someone with billing is always a member, and a
+/// member may hold any number of workspaces — the two never trade off.
+///
+/// That separation is deliberate. Encoding both in one enum (`owner | billing |
+/// member`) made `member` read as the opposite of `billing`, as though holding
+/// billing took a person out of the organisation, which was never true and is
+/// the kind of naming that produces real bugs once someone reasons from the
+/// value names instead of the code.
+///
+/// Ownership is NOT a role: it is `Customer.ownerUserId`, so it lives in
+/// one place. The owner's row always carries `billingRole = 'billing'`.
+///
+/// Billing is a role here rather than a consequence of a workspace role, so
+/// adding someone as a workspace admin never hands them the card.
+model CustomerMembership {
+  id          String   @id @default(cuid())
+  customerId  String
+  userId      String
+  /// "billing" (may see and manage billing) or "none". Independent of the
+  /// membership itself, which is the row's existence, and of any workspace role.
+  billingRole String   @default("none")
+  createdAt   DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  user     AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, userId])
+  @@index([userId])
+}
+
+model Workspace {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  name        String
+  description String?
+  /// The customer this workspace is billed to. Nullable because an OSS install
+  /// has no billing relationship, and because the column is backfilled: every
+  /// existing workspace got an account of its own, reproducing the one-workspace
+  /// -one-relationship behaviour it already had.
+  customerId  String?
+  /// Soft delete. Set when an owner deletes the workspace; the rows stay so a
+  /// platform admin can restore them, and a retention sweep removes them for
+  /// good after `WORKSPACE_DELETED_RETENTION_DAYS`.
+  ///
+  /// Deleting a workspace cascades printers, jobs, library rows and their
+  /// stored BYTES — none of which come back — so the delete a user performs is
+  /// deliberately not that delete. It is a window in which a mistake is still
+  /// recoverable, and only the sweep is irreversible.
+  ///
+  /// **Every listing must exclude these**, through `visibleWorkspacesWhere`
+  /// rather than a filter each caller remembers: a soft delete that leaks into
+  /// one listing is worse than none, because the workspace reads as gone while
+  /// still being reachable.
+  deletedAt   DateTime?
+  /// Who deleted it, for the platform admin deciding whether to restore. Null
+  /// when the actor is gone or the row predates this column.
+  deletedById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  printers               Printer[]
+  bridges                Bridge[]
+  jobs                   PrintJob[]
+  dispatchJobs           DispatchJob[]
+  libraryFiles           LibraryFile[]
+  libraryFileVersions    LibraryFileVersion[]
+  libraryDownloadLinks   LibraryDownloadLink[]
+  libraryFolders         LibraryFolder[]
+  libraryFileReplicas    LibraryFileReplica[]
+  libraryFileFavorites   LibraryFileFavorite[]
+  printerViews           PrinterView[]
+  authMemberships        AuthWorkspaceMembership[]
+  authGroups             AuthGroup[]
+  authServiceAccounts    AuthServiceAccount[]
+  orderTemplates         OrderTemplate[]
+  orderTemplateVariants  OrderTemplateVariant[]
+  orderTemplatePrints    OrderTemplatePrint[]
+  orders                 Order[]
+  orderVariantSelections OrderVariantSelection[]
+  orderPrints            OrderPrint[]
+  filamentSpools         FilamentSpool[]
+  filamentSpoolUsages    FilamentSpoolUsage[]
+  calibrationRuns        CalibrationRun[]
+  calibrationResults     CalibrationResult[]
+  queueItems             QueueItem[]
+  auditLogs              AuditLog[]
+  stats                  WorkspaceStats?
+  printerStats           PrinterStats[]
+  subscription           WorkspaceSubscription?
+  customer               Customer?                 @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@unique([name])
+  @@index([customerId])
+  /// The sweep scans by deletion time; every listing filters on it being null.
+  @@index([deletedAt])
+}
+
+/// Per-workspace cloud billing state, synced from Paddle via webhooks. Cloud-only:
+/// unused in self-hosted single-workspace installs, and plan enforcement degrades
 /// to "unlimited" when the private billing module is absent.
-model TenantSubscription {
+model WorkspaceSubscription {
   id                   String    @id @default(cuid())
-  tenantId             String    @unique
-  /// "free" | "pro" — the tenant's current plan.
+  workspaceId          String    @unique
+  /// "free" | "pro" — the workspace's current plan.
   plan                 String    @default("free")
   /// Paddle subscription status: active | trialing | past_due | paused | canceled.
   status               String    @default("active")
-  paddleCustomerId     String?
   paddleSubscriptionId String?   @unique
   /// Paddle price id for the recurring base/per-printer item currently applied.
   priceId              String?
@@ -88,20 +240,18 @@ model TenantSubscription {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@index([paddleCustomerId])
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 /// Vendor-issued self-hosted license keys (cloud-only issuer state) — the
 /// authoritative record behind every key in a customer's hands. Harmless/unused
 /// in self-hosted or OSS deployments, which only ever hold the signed token.
 ///
-/// Tenancy is deliberately loose: `tenantId` is set only for
+/// Tenancy is deliberately loose: `workspaceId` is set only for
 /// `source = "subscription"` keys (a workspace's Pro plan extended to its own
 /// self-hosted install) and is null for `purchase`/`community` keys, which are
 /// bought or granted by people who may have no workspace at all. It is
-/// therefore NOT tenant-scoped in `TENANT_SCOPED_MODELS` — every access here is
+/// therefore NOT workspace-scoped in `WORKSPACE_SCOPED_MODELS` — every access here is
 /// a deliberate platform-wide issuer operation via `rootPrisma`.
 ///
 /// Lifecycle: rows are never deleted. Ending a subscription flips `status` to
@@ -120,10 +270,23 @@ model License {
   /// (backed by a live Pro plan, refreshed while it lasts), or "community"
   /// (free, non-commercial, perpetual). Drives whether refresh re-signs it.
   source              String    @default("purchase")
-  /// The workspace whose Pro subscription backs this key; null for
-  /// purchase/community keys, which are not tied to a workspace.
-  tenantId            String?
+  /// The CUSTOMER who holds this licence. Null only for a key issued
+  /// anonymously before purchases required an account, which stays claimable.
+  ///
+  /// Replaced `workspaceId`: a licence runs on hardware we do not host and has no
+  /// relationship to any cloud workspace, so making it pick one to live in was
+  /// wrong. Nothing may infer a workspace from a licence or the reverse — they
+  /// are siblings under the account, not a hierarchy.
+  customerId          String?
   licensee            String
+  /// What the holder calls this key, e.g. "Shop floor" — null for the keys that
+  /// predate naming, and for any the buyer did not name.
+  ///
+  /// Display only, never identity: an account may hold several self-hosted
+  /// subscriptions, and two "Self-hosted Pro license" cards showing the same
+  /// allowance are indistinguishable when deciding which one to release from a
+  /// dead machine. Not unique — a duplicate name is the holder's business.
+  name                String?
   email               String?
   /// The signed license token (PSL1.*) delivered to the customer.
   key                 String
@@ -146,17 +309,84 @@ model License {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  tenant              Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  /// The installation this key is bound to, claimed on first activation.
+  ///
+  /// A licence covers ONE install. Without this, `license-enforcement.ts` counts
+  /// each install's own printers against the same key, so a 3-printer
+  /// entitlement silently becomes 3 per install. Null until first activation, so
+  /// a key can be moved to a new machine by clearing it.
+  installationId      String?
+  /// When that binding was claimed, for support answering "why is my other box refusing this key".
+  installationBoundAt DateTime?
+
+  customer               Customer?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  selfHostedSubscription SelfHostedSubscription?
 
   @@index([email])
-  @@index([tenantId])
+  @@index([installationId])
+  @@index([customerId])
   @@index([paddleCustomerId])
+}
+
+/// The metered subscription behind ONE self-hosted licence.
+///
+/// Self-hosted Pro is a separate product from cloud Pro at the same price, so it
+/// needs its own subscription: `WorkspaceSubscription` is keyed by workspace and
+/// a self-hosted install has none. One row per LICENCE, not per customer,
+/// because a licence is bound to a single installation — a customer running two
+/// sites buys two, each metered on its own fleet.
+///
+/// **Lifecycle:** created when the self-hosted Pro checkout completes, updated by
+/// the Paddle subscription webhooks, and deleted only with the licence it pays
+/// for (`onDelete: Cascade`). Cancelling leaves the row with a terminal status
+/// rather than removing it, so the licence can explain why it stopped renewing.
+///
+/// **Tenancy:** account-scoped via the licence's customer, never workspace-scoped
+/// — it deliberately has no `workspaceId`, and must not be added to
+/// `WORKSPACE_SCOPED_MODELS`.
+///
+/// `printerQuantity` is the BILLED number of printers beyond the included
+/// allotment, and it is authoritative: the install asks the cloud to change it
+/// and the answer is what gets signed into the key. The install never reports a
+/// count of its own, because on the Docker build that number is whatever the
+/// customer's copy chooses to send.
+/// Self-hosted Pro's metered subscription — a DIFFERENT product from cloud Pro
+/// at the same price, which is why it is not a `WorkspaceSubscription`.
+///
+/// Tenancy: none. It hangs off a `License`, which belongs to a `Customer`, and
+/// deliberately has no `workspaceId` — a self-hosted install has no workspace,
+/// and letting one be inferred is what previously gave a cloud plan a
+/// self-hosted key for free.
+///
+/// Lifecycle: created by the Paddle `subscription.*` webhook on first
+/// activation, cascade-deleted with its licence, and never soft-deleted. A
+/// lapsed subscription keeps its row (billing evidence) with a non-live
+/// `status`; the licence is marked revoked rather than shortened, so the install
+/// runs out the window already signed into its token.
+///
+/// `printerQuantity` is LIVE, not a snapshot: it is the count Paddle is billing
+/// right now, and it is authoritative over anything the install reports. See
+/// `self-hosted-subscription.ts`.
+model SelfHostedSubscription {
+  id                   String    @id @default(cuid())
+  licenseId            String    @unique
+  status               String    @default("active")
+  paddleSubscriptionId String?   @unique
+  priceId              String?
+  printerQuantity      Int       @default(0)
+  currentPeriodEnd     DateTime?
+  canceledAt           DateTime?
+  scheduledCancelAt    DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  license License @relation(fields: [licenseId], references: [id], onDelete: Cascade)
 }
 
 /// A Bambu printer registered to a workspace. The central vendor-identity
 /// table; most other tables key off it. Serials are NOT globally unique — the
 /// same physical printer can be registered in two workspaces, so identity is
-/// `(tenantId, serial)` (see the `@@unique`), never `serial` alone. `bridgeId`
+/// `(workspaceId, serial)` (see the `@@unique`), never `serial` alone. `bridgeId`
 /// is nullable and `SetNull`: it names the bridge that currently owns LAN
 /// access to this printer, and survives that bridge being removed. `model`
 /// defaults to "unknown" until discovery/status resolves the real model.
@@ -164,82 +394,82 @@ model License {
 /// hardware snapshot. `accessCode` is the LAN access code — a secret: never log
 /// it or surface it to the browser beyond where strictly required.
 model Printer {
-  id         String   @id @default(cuid())
-  tenantId   String
-  bridgeId   String?
-  name       String
-  host       String
-  serial     String
-  accessCode String
-  model      String   @default("unknown")
-  currentPlateType String?
+  id                     String   @id @default(cuid())
+  workspaceId            String
+  bridgeId               String?
+  name                   String
+  host                   String
+  serial                 String
+  accessCode             String
+  model                  String   @default("unknown")
+  currentPlateType       String?
   currentNozzleDiameters String?
-  position   Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  position               Int      @default(0)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bridge     Bridge?  @relation(fields: [bridgeId], references: [id], onDelete: SetNull)
-  jobs       PrintJob[]
-  dispatchJobs DispatchJob[]
-  startedOrderPrints OrderPrint[] @relation("OrderPrintStartedPrinter")
+  workspace            Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  bridge               Bridge?         @relation(fields: [bridgeId], references: [id], onDelete: SetNull)
+  jobs                 PrintJob[]
+  dispatchJobs         DispatchJob[]
+  startedOrderPrints   OrderPrint[]    @relation("OrderPrintStartedPrinter")
   loadedFilamentSpools FilamentSpool[] @relation("FilamentSpoolLoadedPrinter")
-  queueItemTargets   QueueItem[] @relation("QueueItemTargetPrinter")
-  queueItemLastRuns  QueueItem[] @relation("QueueItemLastPrinter")
+  queueItemTargets     QueueItem[]     @relation("QueueItemTargetPrinter")
+  queueItemLastRuns    QueueItem[]     @relation("QueueItemLastPrinter")
 
-  @@unique([tenantId, serial])
-  @@index([tenantId, bridgeId, position])
-  @@index([tenantId, position])
+  @@unique([workspaceId, serial])
+  @@index([workspaceId, bridgeId, position])
+  @@index([workspaceId, position])
 }
 
 /// A bridge runtime that owns LAN access to a set of printers and the library
-/// files on that LAN. `tenantId` is nullable and `SetNull`: a bridge can be
+/// files on that LAN. `workspaceId` is nullable and `SetNull`: a bridge can be
 /// dormant/unpaired (not yet attached to a workspace, or detached when its
 /// workspace is deleted). A returning physical bridge re-binds to its existing
 /// row by `installationId` (see that field) so a credential reset does not orphan
 /// its printers and library. The update/crash-health columns track self-update
 /// state and self-reported crash health for the bridge-standalone distribution.
 model Bridge {
-  id         String   @id @default(cuid())
-  tenantId   String?
-  name       String
-  connectCode  String?  @unique
-  runtimeTokenHash String?
+  id                     String    @id @default(cuid())
+  workspaceId            String?
+  name                   String
+  connectCode            String?   @unique
+  runtimeTokenHash       String?
   // Durable per-install identity the bridge persists across credential resets, so a
   // returning physical bridge re-binds to this row (keeping its printers and library)
   // instead of registering as a duplicate. High-entropy secret; never surfaced to the
   // browser. Contract: bridgeRuntimeRegistrationRequest in @printstream/shared.
-  installationId String? @unique
-  version    String?
-  buildRevision String?
-  sourceFingerprint String?
-  releaseFingerprint String?
-  protocolVersion Int?
-  runnerAbiVersion String?
-  updateChannel String @default("stable")
-  updateStatus String?
+  installationId         String?   @unique
+  version                String?
+  buildRevision          String?
+  sourceFingerprint      String?
+  releaseFingerprint     String?
+  protocolVersion        Int?
+  runnerAbiVersion       String?
+  updateChannel          String    @default("stable")
+  updateStatus           String?
   latestAvailableVersion String?
-  lastUpdateCheckAt DateTime?
-  lastUpdateError String?
-  lastSeenAt DateTime?
+  lastUpdateCheckAt      DateTime?
+  lastUpdateError        String?
+  lastSeenAt             DateTime?
   // Self-reported crash health: the bridge reports when its previous run died
   // without a clean shutdown. `recentCrashCount` is the bridge's own rolling-window
   // count; `lastCrashNotifiedAt` throttles the user notification across restarts.
   // See bridge crash-tracker + apps/api/src/lib/bridge-crash-reports.ts.
-  lastCrashAt DateTime?
-  lastCrashReason String?
-  recentCrashCount Int @default(0)
-  lastCrashNotifiedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  lastCrashAt            DateTime?
+  lastCrashReason        String?
+  recentCrashCount       Int       @default(0)
+  lastCrashNotifiedAt    DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  tenant                Tenant?             @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  printers              Printer[]
-  ownedLibraryFiles     LibraryFile[]       @relation("LibraryFileOwnerBridge")
-  ownedLibraryFolders   LibraryFolder[]     @relation("LibraryFolderOwnerBridge")
-  libraryFileReplicas   LibraryFileReplica[]
+  workspace           Workspace?           @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  printers            Printer[]
+  ownedLibraryFiles   LibraryFile[]        @relation("LibraryFileOwnerBridge")
+  ownedLibraryFolders LibraryFolder[]      @relation("LibraryFolderOwnerBridge")
+  libraryFileReplicas LibraryFileReplica[]
 
-  @@index([tenantId, createdAt])
+  @@index([workspaceId, createdAt])
   @@index([runtimeTokenHash])
 }
 
@@ -249,54 +479,54 @@ model Bridge {
 /// is "unknown" until a finish event resolves it to "success" | "failed" |
 /// "cancelled"; `sourceType` is "library" | "calibration" | "external".
 /// `taskId` is the printer-reported correlation key that ties a reserved row to
-/// the running job. Durable stats (TenantStats/PrinterStats/PlatformStats) are
+/// the running job. Durable stats (WorkspaceStats/PrinterStats/PlatformStats) are
 /// rolled up at finish and are NOT reverted when a job row is later deleted —
 /// deleting history does not rewrite the aggregates.
 model PrintJob {
-  id              String    @id @default(cuid())
-  tenantId        String
-  printerId       String
-  taskId          String?
-  printerFilePath String?
-  jobName         String
-  sourceType      String    @default("library")
-  calibrationOption Int?
-  fileId          String?
-  fileName        String?
-  fileSizeBytes   Int?
+  id                     String    @id @default(cuid())
+  workspaceId            String
+  printerId              String
+  taskId                 String?
+  printerFilePath        String?
+  jobName                String
+  sourceType             String    @default("library")
+  calibrationOption      Int?
+  fileId                 String?
+  fileName               String?
+  fileSizeBytes          Int?
   // Re-slice provenance, copied off the printed library file at dispatch so it
   // survives that file being deleted: the preserved project 3MF handed to the
   // slicer, plus the settings that produced this print. Null for prints of a
   // file that was never sliced here (direct uploads, external starts).
-  sourceProjectFileId String?
-  sliceSettingsJson   String?
-  plate           Int?
-  useAms          Boolean?
-  bedLevel        Boolean?
-  amsMapping      String?
-  progressPercent Int?
-  startedAt       DateTime  @default(now())
-  finishedAt      DateTime?
-  durationSeconds Int?
-  result          String    @default("unknown")
-  thumbnailPath   String?
-  snapshotPath    String?
-  filamentUsedGrams Decimal? @db.Decimal(14, 3)
-  filamentUsedMeters Decimal? @db.Decimal(14, 3)
+  sourceProjectFileId    String?
+  sliceSettingsJson      String?
+  plate                  Int?
+  useAms                 Boolean?
+  bedLevel               Boolean?
+  amsMapping             String?
+  progressPercent        Int?
+  startedAt              DateTime  @default(now())
+  finishedAt             DateTime?
+  durationSeconds        Int?
+  result                 String    @default("unknown")
+  thumbnailPath          String?
+  snapshotPath           String?
+  filamentUsedGrams      Decimal?  @db.Decimal(14, 3)
+  filamentUsedMeters     Decimal?  @db.Decimal(14, 3)
   printerStatsRecordedAt DateTime?
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  printer         Printer   @relation(fields: [printerId], references: [id], onDelete: Cascade)
-  file            LibraryFile? @relation("PrintJobFile", fields: [fileId], references: [id], onDelete: SetNull)
-  sourceProject   LibraryFile? @relation("PrintJobSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
-  orderPrints     OrderPrint[] @relation("OrderPrintLastJob")
-  queueItems      QueueItem[]  @relation("QueueItemLastJob")
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  printer       Printer      @relation(fields: [printerId], references: [id], onDelete: Cascade)
+  file          LibraryFile? @relation("PrintJobFile", fields: [fileId], references: [id], onDelete: SetNull)
+  sourceProject LibraryFile? @relation("PrintJobSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
+  orderPrints   OrderPrint[] @relation("OrderPrintLastJob")
+  queueItems    QueueItem[]  @relation("QueueItemLastJob")
 
-  @@index([tenantId, printerId, startedAt])
-  @@index([tenantId, printerId, finishedAt, startedAt])
-  @@index([tenantId, printerId, taskId])
-  @@index([tenantId, finishedAt, printerId])
-  @@index([tenantId, fileId])
+  @@index([workspaceId, printerId, startedAt])
+  @@index([workspaceId, printerId, finishedAt, startedAt])
+  @@index([workspaceId, printerId, taskId])
+  @@index([workspaceId, finishedAt, printerId])
+  @@index([workspaceId, fileId])
 }
 
 /// Durable journal of the print-dispatch lifecycle (queued -> uploading -> start
@@ -308,67 +538,70 @@ model PrintJob {
 /// up); rows with it set may have started a real print and must be left to the
 /// status recorder (see the dispatcher's rob-1 restart contract).
 model DispatchJob {
-  id                     String    @id
-  tenantId               String
-  printerId              String
-  status                 String    @default("queued")
-  jobName                String
-  fileName               String
+  id                      String    @id
+  workspaceId             String
+  printerId               String
+  status                  String    @default("queued")
+  jobName                 String
+  fileName                String
   /// Printer-SD file name the upload targets; used to clean orphaned bytes on reconnect.
-  remoteName             String
-  error                  String?
+  remoteName              String
+  error                   String?
   /// Set immediately before the MQTT start command is published — the rob-1 boundary.
   startCommandAttemptedAt DateTime?
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
-  finishedAt             DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  finishedAt              DateTime?
 
-  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  printer                Printer   @relation(fields: [printerId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  printer   Printer   @relation(fields: [printerId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId, printerId, status])
+  @@index([workspaceId, printerId, status])
   @@index([printerId, status])
 }
 
-/// Durable per-workspace print-stats rollup (one row per tenant), incremented
+/// Durable per-workspace print-stats rollup (one row per workspace), incremented
 /// at job finish rather than scanned from `PrintJob` at read time. The
 /// successful/failed/cancelled split mirrors `PrintJob.result`; "wasted" is the
 /// sum over failed AND cancelled prints (time and filament spent on prints that
 /// did not succeed). Not reverted when a job row is deleted.
-model TenantStats {
-  tenantId            String   @id
-  totalPrints         Int      @default(0)
-  successfulPrints    Int      @default(0)
-  failedPrints        Int      @default(0)
-  cancelledPrints     Int      @default(0)
-  successfulPrintDurationSeconds Int @default(0)
-  failedPrintDurationSeconds Int @default(0)
-  cancelledPrintDurationSeconds Int @default(0)
-  wastedPrintDurationSeconds Int @default(0)
-  trackedFilamentPrints Int    @default(0)
-  filamentUsedGrams   Decimal  @default(0) @db.Decimal(14, 3)
-  successfulFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
-  failedFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
-  cancelledFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
-  wastedFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
-  filamentUsedMeters  Decimal  @default(0) @db.Decimal(14, 3)
-  successfulFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
-  failedFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
-  cancelledFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
-  wastedFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+model WorkspaceStats {
+  workspaceId                    String   @id
+  totalPrints                    Int      @default(0)
+  successfulPrints               Int      @default(0)
+  failedPrints                   Int      @default(0)
+  cancelledPrints                Int      @default(0)
+  successfulPrintDurationSeconds Int      @default(0)
+  failedPrintDurationSeconds     Int      @default(0)
+  cancelledPrintDurationSeconds  Int      @default(0)
+  wastedPrintDurationSeconds     Int      @default(0)
+  trackedFilamentPrints          Int      @default(0)
+  filamentUsedGrams              Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedGrams    Decimal  @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedGrams        Decimal  @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedGrams     Decimal  @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedGrams        Decimal  @default(0) @db.Decimal(14, 3)
+  filamentUsedMeters             Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedMeters   Decimal  @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedMeters       Decimal  @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedMeters    Decimal  @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedMeters       Decimal  @default(0) @db.Decimal(14, 3)
+  createdAt                      DateTime @default(now())
+  /// `@default(now())` matters at the DATABASE level: the stats trigger
+  /// functions insert this row without naming `updatedAt`, so a schema built
+  /// without the default rejects the insert outright.
+  updatedAt                      DateTime @default(now()) @updatedAt
 
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 /// Deployment-wide stats rollup — a single row (fixed `id`) aggregating every
-/// workspace, incremented alongside the per-tenant rollup. Same counter split as
-/// TenantStats ("wasted" = failed + cancelled). Read via `rootPrisma` for the
+/// workspace, incremented alongside the per-workspace rollup. Same counter split as
+/// WorkspaceStats ("wasted" = failed + cancelled). Read via `rootPrisma` for the
 /// platform overview.
 model PlatformStats {
   id                             String   @id
-  tenantCount                    Int      @default(0)
+  workspaceCount                 Int      @default(0)
   userCount                      Int      @default(0)
   printerCount                   Int      @default(0)
   totalPrints                    Int      @default(0)
@@ -388,49 +621,55 @@ model PlatformStats {
   cancelledFilamentUsedMeters    Decimal  @default(0) @db.Decimal(14, 3)
   wastedFilamentUsedMeters       Decimal  @default(0) @db.Decimal(14, 3)
   createdAt                      DateTime @default(now())
-  updatedAt                      DateTime @updatedAt
+  /// `@default(now())` matters at the DATABASE level: the stats trigger
+  /// functions insert this row without naming `updatedAt`, so a schema built
+  /// without the default rejects the insert outright.
+  updatedAt                      DateTime @default(now()) @updatedAt
 }
 
-/// Durable per-printer stats rollup. Keyed by `(tenantId, printerSerial)`, NOT
+/// Durable per-printer stats rollup. Keyed by `(workspaceId, printerSerial)`, NOT
 /// by printer id, on purpose: keying on the serial means the stats survive a
 /// printer row being deleted and re-added (same physical machine keeps its
-/// history). Same successful/failed/cancelled/"wasted" split as TenantStats;
+/// history). Same successful/failed/cancelled/"wasted" split as WorkspaceStats;
 /// `manual*` columns hold user-entered pre-PrintStream usage kept separate from
 /// tracked counters (see the field comment).
 model PrinterStats {
-  tenantId              String
-  printerSerial         String
+  workspaceId                    String
+  printerSerial                  String
   // User-entered usage from outside PrintStream's tracking (e.g. hours the printer
   // ran before it was added). Kept separate from the tracked counters so automatic
   // recording never mixes with manual adjustments; readers add them into totals.
-  manualTotalPrints     Int      @default(0)
-  manualPrintDurationSeconds Int @default(0)
-  totalPrints           Int      @default(0)
-  successfulPrints      Int      @default(0)
-  failedPrints          Int      @default(0)
-  cancelledPrints       Int      @default(0)
-  successfulPrintDurationSeconds Int @default(0)
-  failedPrintDurationSeconds Int @default(0)
-  cancelledPrintDurationSeconds Int @default(0)
-  wastedPrintDurationSeconds Int @default(0)
-  trackedFilamentPrints Int      @default(0)
-  filamentUsedGrams     Decimal  @default(0) @db.Decimal(14, 3)
-  successfulFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
-  failedFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
-  cancelledFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
-  wastedFilamentUsedGrams Decimal @default(0) @db.Decimal(14, 3)
-  filamentUsedMeters    Decimal  @default(0) @db.Decimal(14, 3)
-  successfulFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
-  failedFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
-  cancelledFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
-  wastedFilamentUsedMeters Decimal @default(0) @db.Decimal(14, 3)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  manualTotalPrints              Int      @default(0)
+  manualPrintDurationSeconds     Int      @default(0)
+  totalPrints                    Int      @default(0)
+  successfulPrints               Int      @default(0)
+  failedPrints                   Int      @default(0)
+  cancelledPrints                Int      @default(0)
+  successfulPrintDurationSeconds Int      @default(0)
+  failedPrintDurationSeconds     Int      @default(0)
+  cancelledPrintDurationSeconds  Int      @default(0)
+  wastedPrintDurationSeconds     Int      @default(0)
+  trackedFilamentPrints          Int      @default(0)
+  filamentUsedGrams              Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedGrams    Decimal  @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedGrams        Decimal  @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedGrams     Decimal  @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedGrams        Decimal  @default(0) @db.Decimal(14, 3)
+  filamentUsedMeters             Decimal  @default(0) @db.Decimal(14, 3)
+  successfulFilamentUsedMeters   Decimal  @default(0) @db.Decimal(14, 3)
+  failedFilamentUsedMeters       Decimal  @default(0) @db.Decimal(14, 3)
+  cancelledFilamentUsedMeters    Decimal  @default(0) @db.Decimal(14, 3)
+  wastedFilamentUsedMeters       Decimal  @default(0) @db.Decimal(14, 3)
+  createdAt                      DateTime @default(now())
+  /// `@default(now())` matters at the DATABASE level: the stats trigger
+  /// functions insert this row without naming `updatedAt`, so a schema built
+  /// without the default rejects the insert outright.
+  updatedAt                      DateTime @default(now()) @updatedAt
 
-  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  @@id([tenantId, printerSerial])
-  @@index([tenantId, updatedAt])
+  @@id([workspaceId, printerSerial])
+  @@index([workspaceId, updatedAt])
 }
 
 /// A file in a workspace's model library (the current content; prior contents
@@ -443,18 +682,18 @@ model PrinterStats {
 /// `visibleLibraryFilesWhere` (`lib/library-visibility.ts`) so hidden and
 /// recycled rows never leak into listings or name matching.
 model LibraryFile {
-  id            String   @id @default(cuid())
-  tenantId      String
-  ownerBridgeId String?
-  name          String
-  storedPath    String
-  sizeBytes     Int
-  kind          String
-  thumbnailPath String?
-  uploadedAt    DateTime @default(now())
-  currentVersionNumber Int @default(1)
-  folderId      String?
-  snapshotKey   String?  @unique
+  id                        String    @id @default(cuid())
+  workspaceId               String
+  ownerBridgeId             String?
+  name                      String
+  storedPath                String
+  sizeBytes                 Int
+  kind                      String
+  thumbnailPath             String?
+  uploadedAt                DateTime  @default(now())
+  currentVersionNumber      Int       @default(1)
+  folderId                  String?
+  snapshotKey               String?   @unique
   // Hidden files are persisted on disk so previously-printed jobs can
   // still be re-dispatched, but they don't appear in the user-facing
   // library listing. Some hidden files are transient one-off uploads,
@@ -463,19 +702,19 @@ model LibraryFile {
   // (`sourceProjectFileId`). `snapshotKey` is only populated for the
   // retained snapshot variant (and is its content-dedupe key); transient
   // hidden files keep it null and are eligible for periodic cleanup.
-  hidden        Boolean  @default(false)
+  hidden                    Boolean   @default(false)
   // Recycle bin: soft-deleted files keep their bytes + version history and
   // stay restorable until the cleanup task hard-deletes them after the
   // retention window (LIBRARY_RECYCLE_RETENTION_DAYS).
-  deletedAt     DateTime?
+  deletedAt                 DateTime?
   // What created the row: 'upload' | 'slice' | 'scaffold' | 'snapshot'.
   // Null on rows created before origin tracking. Drives transient-file
   // cleanup (unsaved sliced outputs age out faster than uploads).
-  origin        String?
+  origin                    String?
   // Actor attribution for the current content (denormalized for display;
   // the audit log remains the authoritative record).
-  createdById   String?
-  createdByName String?
+  createdById               String?
+  createdByName             String?
   // Set when the current content was produced by restoring an older
   // version; holds that source version's number.
   restoredFromVersionNumber Int?
@@ -484,47 +723,47 @@ model LibraryFile {
   // `derivedChipsJson` is the serialized chip bundle; `derivedChipsVersion` is the
   // parser version it was built with, so a parser bump invalidates it. Lazily
   // populated on inspect; null until first computed.
-  derivedChipsJson    String?
-  derivedChipsVersion Int?
+  derivedChipsJson          String?
+  derivedChipsVersion       Int?
   // Denormalized print-history rollup, maintained by the print-job recorder when a
   // print targeting this file is recorded (backfilled from PrintJob on migration).
   // Powers the "most printed" / "last printed" library sorts server-side so they
   // order correctly before the recency cap, without a per-listing PrintJob groupBy.
-  printCount    Int      @default(0)
-  lastPrintedAt DateTime?
+  printCount                Int       @default(0)
+  lastPrintedAt             DateTime?
   // Re-slice provenance for a sliced output (origin='slice'): the preserved
   // project 3MF exactly as it was handed to the slicer — a hidden, immutable,
   // content-deduped snapshot row — and the settings that produced this output.
   // Set on the output, never on the project snapshot itself. Null on uploads and
   // on outputs sliced before project preservation shipped; the UI treats null as
   // "re-slice unavailable" rather than re-deriving anything.
-  sourceProjectFileId String?
-  sliceSettingsJson   String?
+  sourceProjectFileId       String?
+  sliceSettingsJson         String?
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ownerBridge   Bridge?  @relation("LibraryFileOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
-  folder        LibraryFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  sourceProject LibraryFile?   @relation("LibraryFileSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
-  slicedOutputs LibraryFile[]  @relation("LibraryFileSourceProject")
-  replicas      LibraryFileReplica[]
-  jobs          PrintJob[]     @relation("PrintJobFile")
-  sourceProjectJobs PrintJob[] @relation("PrintJobSourceProject")
-  versions      LibraryFileVersion[]
-  downloadLinks LibraryDownloadLink[]
-  favorites     LibraryFileFavorite[]
+  workspace           Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerBridge         Bridge?               @relation("LibraryFileOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
+  folder              LibraryFolder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  sourceProject       LibraryFile?          @relation("LibraryFileSourceProject", fields: [sourceProjectFileId], references: [id], onDelete: SetNull)
+  slicedOutputs       LibraryFile[]         @relation("LibraryFileSourceProject")
+  replicas            LibraryFileReplica[]
+  jobs                PrintJob[]            @relation("PrintJobFile")
+  sourceProjectJobs   PrintJob[]            @relation("PrintJobSourceProject")
+  versions            LibraryFileVersion[]
+  downloadLinks       LibraryDownloadLink[]
+  favorites           LibraryFileFavorite[]
   orderTemplatePrints OrderTemplatePrint[]
-  orderPrints   OrderPrint[]
-  queueItems    QueueItem[]
+  orderPrints         OrderPrint[]
+  queueItems          QueueItem[]
 
-  @@index([tenantId, uploadedAt])
-  @@index([tenantId, folderId])
-  @@index([tenantId, ownerBridgeId, folderId])
-  @@index([tenantId, hidden, uploadedAt])
-  @@index([tenantId, ownerBridgeId, folderId, name, hidden, uploadedAt])
-  @@index([tenantId, deletedAt])
+  @@index([workspaceId, uploadedAt])
+  @@index([workspaceId, folderId])
+  @@index([workspaceId, ownerBridgeId, folderId])
+  @@index([workspaceId, hidden, uploadedAt])
+  @@index([workspaceId, ownerBridgeId, folderId, name, hidden, uploadedAt])
+  @@index([workspaceId, deletedAt])
   // Backs the most-printed / last-printed sorts within a bridge folder.
-  @@index([tenantId, ownerBridgeId, folderId, hidden, printCount], map: "LibraryFile_tenant_bridge_folder_printCount_idx")
-  @@index([tenantId, ownerBridgeId, folderId, hidden, lastPrintedAt], map: "LibraryFile_tenant_bridge_folder_lastPrintedAt_idx")
+  @@index([workspaceId, ownerBridgeId, folderId, hidden, printCount], map: "LibraryFile_workspace_bridge_folder_printCount_idx")
+  @@index([workspaceId, ownerBridgeId, folderId, hidden, lastPrintedAt], map: "LibraryFile_workspace_bridge_folder_lastPrintedAt_idx")
 }
 
 /// Per-user "favorite" star on a library file. Personal (not shared across the
@@ -533,47 +772,47 @@ model LibraryFile {
 /// the actor is anonymous — a non-null value keeps the unique constraint sound
 /// (Postgres would otherwise allow duplicate NULL-user rows). Intentionally no FK to
 /// AuthUser so favorites work in both auth-enabled (cloud) and no-auth installs;
-/// cleanup rides on the LibraryFile / Tenant cascades.
+/// cleanup rides on the LibraryFile / Workspace cascades.
 model LibraryFileFavorite {
   id            String   @id @default(cuid())
-  tenantId      String
+  workspaceId   String
   userId        String
   libraryFileId String
   createdAt     DateTime @default(now())
 
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   libraryFile LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
 
   @@unique([userId, libraryFileId])
-  @@index([tenantId, userId])
+  @@index([workspaceId, userId])
   @@index([libraryFileId])
 }
 
 model LibraryFileVersion {
-  id            String   @id @default(cuid())
-  tenantId      String
-  libraryFileId String
-  ownerBridgeId String?
-  folderId      String?
-  name          String
-  storedPath    String
-  sizeBytes     Int
-  kind          String   @default("other")
-  thumbnailPath String?
-  uploadedAt    DateTime
-  versionNumber Int
-  createdAt     DateTime @default(now())
+  id                        String   @id @default(cuid())
+  workspaceId               String
+  libraryFileId             String
+  ownerBridgeId             String?
+  folderId                  String?
+  name                      String
+  storedPath                String
+  sizeBytes                 Int
+  kind                      String   @default("other")
+  thumbnailPath             String?
+  uploadedAt                DateTime
+  versionNumber             Int
+  createdAt                 DateTime @default(now())
   // Actor attribution + restore provenance, copied from the LibraryFile row
   // at the moment this version was archived.
-  createdById   String?
-  createdByName String?
+  createdById               String?
+  createdByName             String?
   restoredFromVersionNumber Int?
 
-  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  libraryFile   LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  libraryFile LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
 
   @@unique([libraryFileId, versionNumber])
-  @@index([tenantId, libraryFileId, versionNumber])
+  @@index([workspaceId, libraryFileId, versionNumber])
 }
 
 /// Short-lived, unauthenticated download grant for a single library file.
@@ -584,15 +823,15 @@ model LibraryFileVersion {
 /// once `expiresAt` passes.
 model LibraryDownloadLink {
   id            String   @id @default(cuid())
-  tenantId      String
+  workspaceId   String
   libraryFileId String
   tokenHash     String   @unique
   expiresAt     DateTime
   createdAt     DateTime @default(now())
   createdById   String?
 
-  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  libraryFile   LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  libraryFile LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
 
   @@index([expiresAt])
   @@index([libraryFileId])
@@ -603,23 +842,23 @@ model LibraryDownloadLink {
 /// `LIBRARY_DIR` (the folder is purely a metadata grouping). A null
 /// `parentId` is a top-level folder.
 model LibraryFolder {
-  id        String   @id @default(cuid())
-  tenantId  String
+  id            String   @id @default(cuid())
+  workspaceId   String
   ownerBridgeId String?
-  name      String
-  parentId  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  name          String
+  parentId      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ownerBridge Bridge?       @relation("LibraryFolderOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
-  parent    LibraryFolder?  @relation("LibraryFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children  LibraryFolder[] @relation("LibraryFolderTree")
-  files     LibraryFile[]
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerBridge Bridge?         @relation("LibraryFolderOwnerBridge", fields: [ownerBridgeId], references: [id], onDelete: SetNull)
+  parent      LibraryFolder?  @relation("LibraryFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children    LibraryFolder[] @relation("LibraryFolderTree")
+  files       LibraryFile[]
 
-  @@unique([tenantId, parentId, name])
-  @@index([tenantId, ownerBridgeId, parentId])
-  @@index([tenantId, parentId])
+  @@unique([workspaceId, parentId, name])
+  @@index([workspaceId, ownerBridgeId, parentId])
+  @@index([workspaceId, parentId])
 }
 
 /// A copy of a library file's bytes materialized onto a specific bridge (one row
@@ -628,40 +867,40 @@ model LibraryFolder {
 /// `expiresAt`/`lastAccessedAt`. `status` starts "pending" and reaches "ready"
 /// once the bytes are fetched and verified (`contentHash`/`lastVerifiedAt`);
 /// `errorMessage` records a failed materialization. Cascades away with the file,
-/// bridge, or tenant.
+/// bridge, or workspace.
 model LibraryFileReplica {
-  id             String   @id @default(cuid())
-  tenantId       String
+  id             String    @id @default(cuid())
+  workspaceId    String
   libraryFileId  String
   bridgeId       String
   storedPath     String
   contentHash    String?
   sizeBytes      Int
-  replicaKind    String   @default("cache")
-  status         String   @default("pending")
+  replicaKind    String    @default("cache")
+  status         String    @default("pending")
   lastVerifiedAt DateTime?
   lastAccessedAt DateTime?
   expiresAt      DateTime?
   errorMessage   String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  libraryFile    LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
-  bridge         Bridge      @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  libraryFile LibraryFile @relation(fields: [libraryFileId], references: [id], onDelete: Cascade)
+  bridge      Bridge      @relation(fields: [bridgeId], references: [id], onDelete: Cascade)
 
   @@unique([libraryFileId, bridgeId])
-  @@index([tenantId, bridgeId, status])
-  @@index([tenantId, expiresAt])
+  @@index([workspaceId, bridgeId, status])
+  @@index([workspaceId, expiresAt])
 }
 
 /// Generic key/value store for all settings — there is no per-feature settings
-/// table. The `key` carries the scope as a prefix (`lib/tenant-settings.ts`):
-/// `tenant:<tenantId>:<name>` for a workspace setting, `platform:<name>` for a
-/// tenantless platform-scope setting, and `plugin:<pluginName>:...` for a
-/// plugin's scoped store (the plugin `settings` API, per-tenant via a further
+/// table. The `key` carries the scope as a prefix (`lib/workspace-settings.ts`):
+/// `tenant:<workspaceId>:<name>` for a workspace setting, `platform:<name>` for a
+/// workspaceless platform-scope setting, and `plugin:<pluginName>:...` for a
+/// plugin's scoped store (the plugin `settings` API, per-workspace via a further
 /// `tenant:`/`platform:` segment). `value` is a string (JSON-encoded when the
-/// setting is structured). Not a tenant relation — scoping lives in the key.
+/// setting is structured). Not a workspace relation — scoping lives in the key.
 model Setting {
   key   String @id
   value String
@@ -675,7 +914,7 @@ model Setting {
 /// required JSON blob of per-card display toggles.
 model PrinterView {
   id                   String   @id @default(cuid())
-  tenantId             String
+  workspaceId          String
   name                 String
   printerIds           String?
   cardsPerRow          Int      @default(3)
@@ -690,10 +929,10 @@ model PrinterView {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, name])
-  @@index([tenantId, name])
+  @@unique([workspaceId, name])
+  @@index([workspaceId, name])
 }
 
 /// Externally installed plugins (uploaded archives or, eventually, store
@@ -716,134 +955,136 @@ model Plugin {
 }
 
 /// A person's identity, GLOBAL to the deployment — an AuthUser is not owned by a
-/// workspace. Which workspaces they belong to lives in `AuthTenantMembership`,
+/// workspace. Which workspaces they belong to lives in `AuthWorkspaceMembership`,
 /// their roles in `AuthUserGroupMembership`, and their credentials in the
 /// per-provider credential tables. `isPlatformUser` marks an operator account
 /// (platform-scope access). Email is unique deployment-wide.
 model AuthUser {
-  id            String                   @id @default(cuid())
-  email         String
-  displayName   String?
-  isPlatformUser  Boolean                  @default(false)
-  createdAt     DateTime                 @default(now())
-  updatedAt     DateTime                 @updatedAt
+  id             String   @id @default(cuid())
+  email          String
+  displayName    String?
+  isPlatformUser Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  tenantMemberships AuthTenantMembership[]
-  memberships   AuthUserGroupMembership[]
-  passkeys      AuthPasskeyCredential[]
-  passwordCredential AuthPasswordCredential?
-  emailCodeTokens AuthEmailCodeToken[]
-  sessions      AuthSession[]
-  auditLogs     AuditLog[]
+  workspaceMemberships AuthWorkspaceMembership[]
+  customers            Customer[]
+  customerMemberships  CustomerMembership[]
+  memberships          AuthUserGroupMembership[]
+  passkeys             AuthPasskeyCredential[]
+  passwordCredential   AuthPasswordCredential?
+  emailCodeTokens      AuthEmailCodeToken[]
+  sessions             AuthSession[]
+  auditLogs            AuditLog[]
 
   @@unique([email])
   @@index([email])
   @@index([createdAt])
 }
 
-model AuthTenantMembership {
+model AuthWorkspaceMembership {
   userId        String
-  tenantId      String
-  loginDisabled Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  workspaceId   String
+  loginDisabled Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  user          AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  @@id([userId, tenantId])
-  @@index([tenantId, createdAt])
-  @@index([tenantId, loginDisabled])
+  @@id([userId, workspaceId])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, loginDisabled])
 }
 
-/// A role: a named permission bundle. `tenantId` is nullable ON PURPOSE — a null
-/// tenant is a platform-wide / system group (e.g. the built-in platform roles),
-/// which is why AuthGroup is a hand-scoped `TENANT_SCOPED_EXCEPTION_MODELS` entry
+/// A role: a named permission bundle. `workspaceId` is nullable ON PURPOSE — a null
+/// workspace is a platform-wide / system group (e.g. the built-in platform roles),
+/// which is why AuthGroup is a hand-scoped `WORKSPACE_SCOPED_EXCEPTION_MODELS` entry
 /// rather than auto-scoped. `permissions` is the flat permission-string array;
 /// `isSystem`/`isEditable`/`isRemovable` protect the built-in presets from being
 /// renamed, re-permissioned, or deleted.
 model AuthGroup {
-  id          String                            @id @default(cuid())
-  tenantId    String?
+  id          String   @id @default(cuid())
+  workspaceId String?
   key         String?
   name        String
   description String?
   permissions String[]
-  isSystem    Boolean                           @default(false)
-  isEditable  Boolean                           @default(true)
-  isRemovable Boolean                           @default(true)
-  createdAt   DateTime                          @default(now())
-  updatedAt   DateTime                          @updatedAt
+  isSystem    Boolean  @default(false)
+  isEditable  Boolean  @default(true)
+  isRemovable Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  tenant                    Tenant?                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace                 Workspace?                          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   userMemberships           AuthUserGroupMembership[]
   serviceAccountMemberships AuthServiceAccountGroupMembership[]
 
-  @@unique([tenantId, key])
-  @@unique([tenantId, name])
-  @@index([tenantId, key])
-  @@index([tenantId, createdAt])
+  @@unique([workspaceId, key])
+  @@unique([workspaceId, name])
+  @@index([workspaceId, key])
+  @@index([workspaceId, createdAt])
 }
 
 model AuthUserGroupMembership {
   userId    String
   groupId   String
-  createdAt DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  user      AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  group     AuthGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group AuthGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@id([userId, groupId])
   @@index([groupId])
 }
 
 model AuthServiceAccount {
-  id          String                             @id @default(cuid())
-  tenantId    String
+  id          String    @id @default(cuid())
+  workspaceId String
   name        String
-  tokenHash   String                             @unique
-  tokenPrefix String                             @unique
+  tokenHash   String    @unique
+  tokenPrefix String    @unique
   lastUsedAt  DateTime?
   revokedAt   DateTime?
-  createdAt   DateTime                           @default(now())
-  updatedAt   DateTime                           @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  tenant      Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace   Workspace                           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   memberships AuthServiceAccountGroupMembership[]
   sessions    AuthSession[]
   auditLogs   AuditLog[]
 
-  @@index([tenantId, createdAt])
-  @@index([tenantId, revokedAt])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, revokedAt])
 }
 
 model AuthServiceAccountGroupMembership {
   serviceAccountId String
   groupId          String
-  createdAt        DateTime           @default(now())
+  createdAt        DateTime @default(now())
 
-  serviceAccount   AuthServiceAccount @relation(fields: [serviceAccountId], references: [id], onDelete: Cascade)
-  group            AuthGroup          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  serviceAccount AuthServiceAccount @relation(fields: [serviceAccountId], references: [id], onDelete: Cascade)
+  group          AuthGroup          @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@id([serviceAccountId, groupId])
   @@index([groupId])
 }
 
 model AuthPasskeyCredential {
-  id             String    @id @default(cuid())
-  userId         String
-  credentialId   String    @unique
-  publicKey      Bytes
-  transports     String[]
-  counter        Int       @default(0)
-  aaguid         String?
-  backedUp       Boolean   @default(false)
-  nickname       String?
-  lastUsedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id           String    @id @default(cuid())
+  userId       String
+  credentialId String    @unique
+  publicKey    Bytes
+  transports   String[]
+  counter      Int       @default(0)
+  aaguid       String?
+  backedUp     Boolean   @default(false)
+  nickname     String?
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  user           AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -866,17 +1107,14 @@ model AuthPasswordCredential {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  user                AuthUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 /// A one-time email sign-in / verification code (only its SHA-256 `tokenHash` is
-/// stored). `consumedAt` marks single use; `expiresAt` bounds its life. The
-/// `@@map("AuthMagicLinkToken")` keeps the original physical table name after the
-/// model was renamed from magic-link to email-code, so no table migration was
-/// needed — do not drop the map.
+/// stored). `consumedAt` marks single use; `expiresAt` bounds its life.
 model AuthEmailCodeToken {
   id         String    @id @default(cuid())
-  userId      String?
+  userId     String?
   email      String
   tokenHash  String    @unique
   redirectTo String?
@@ -884,11 +1122,10 @@ model AuthEmailCodeToken {
   consumedAt DateTime?
   createdAt  DateTime  @default(now())
 
-  user       AuthUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user AuthUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([email, expiresAt])
   @@index([userId, expiresAt])
-  @@map("AuthMagicLinkToken")
 }
 
 /// A live session, polymorphic over its subject: exactly one of `userId` or
@@ -896,18 +1133,18 @@ model AuthEmailCodeToken {
 /// Only the `secretHash` of the session secret is stored. `revokedAt`/`expiresAt`
 /// end it; `lastSeenAt` drives idle-timeout policy.
 model AuthSession {
-  id               String               @id @default(cuid())
-  secretHash       String               @unique
+  id               String    @id @default(cuid())
+  secretHash       String    @unique
   userId           String?
   serviceAccountId String?
   userAgent        String?
   expiresAt        DateTime
   lastSeenAt       DateTime?
   revokedAt        DateTime?
-  createdAt        DateTime             @default(now())
+  createdAt        DateTime  @default(now())
 
-  user             AuthUser?            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  serviceAccount   AuthServiceAccount?  @relation(fields: [serviceAccountId], references: [id], onDelete: Cascade)
+  user           AuthUser?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceAccount AuthServiceAccount? @relation(fields: [serviceAccountId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
   @@index([serviceAccountId, expiresAt])
@@ -915,35 +1152,35 @@ model AuthSession {
 }
 
 /// Durable audit trail: one row per mutating/privileged request (baseline row
-/// auto-created, enriched via `annotateRequestAuditLog`). `tenantId` is nullable
+/// auto-created, enriched via `annotateRequestAuditLog`). `workspaceId` is nullable
 /// for platform-scope events. The actor is polymorphic — `actorUserId` or
 /// `actorServiceAccountId` (both `SetNull` so the log outlives the actor), with
 /// `actorLabel` a display snapshot. `metadataJson` is free-form per-action detail
 /// and MUST NOT contain secrets (tokens, access/connect codes, webhook/push URLs,
 /// raw bodies) — only safe identifiers.
 model AuditLog {
-  id                 String               @id @default(cuid())
-  tenantId           String?
-  actorType          String
-  actorUserId        String?
+  id                    String   @id @default(cuid())
+  workspaceId           String?
+  actorType             String
+  actorUserId           String?
   actorServiceAccountId String?
-  actorLabel         String?
-  requestMethod      String
-  requestPath        String
-  action             String
-  resource           String
-  summary            String
-  statusCode         Int
-  ipAddress          String?
-  metadataJson       String?
-  createdAt          DateTime             @default(now())
+  actorLabel            String?
+  requestMethod         String
+  requestPath           String
+  action                String
+  resource              String
+  summary               String
+  statusCode            Int
+  ipAddress             String?
+  metadataJson          String?
+  createdAt             DateTime @default(now())
 
-  tenant             Tenant?              @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  actorUser          AuthUser?            @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  workspace           Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  actorUser           AuthUser?           @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
   actorServiceAccount AuthServiceAccount? @relation(fields: [actorServiceAccountId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
-  @@index([tenantId, createdAt])
+  @@index([workspaceId, createdAt])
   @@index([actorUserId, createdAt])
   @@index([actorServiceAccountId, createdAt])
   @@index([action, createdAt])
@@ -952,10 +1189,10 @@ model AuditLog {
 /// A reusable order definition owned by the `orders` plugin: a template holds
 /// one or more `OrderTemplateVariant`s, each listing the required prints
 /// (`OrderTemplatePrint` = a library file + plate + quantity). Placing an order
-/// snapshots a template into a concrete `Order` (see that model). Tenant-scoped.
+/// snapshots a template into a concrete `Order` (see that model). Workspace-scoped.
 model OrderTemplate {
   id            String   @id @default(cuid())
-  tenantId      String
+  workspaceId   String
   name          String
   code          String?
   description   String?
@@ -963,52 +1200,52 @@ model OrderTemplate {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  variants      OrderTemplateVariant[]
-  orders        Order[]
+  workspace Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  variants  OrderTemplateVariant[]
+  orders    Order[]
 
-  @@index([tenantId, name])
-  @@index([tenantId, createdAt])
+  @@index([workspaceId, name])
+  @@index([workspaceId, createdAt])
 }
 
 model OrderTemplateVariant {
-  id            String   @id @default(cuid())
-  tenantId      String
-  templateId    String
-  name          String
-  position      Int
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id          String   @id @default(cuid())
+  workspaceId String
+  templateId  String
+  name        String
+  position    Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  template      OrderTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  items         OrderTemplatePrint[]
+  workspace       Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  template        OrderTemplate           @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  items           OrderTemplatePrint[]
   orderSelections OrderVariantSelection[]
-  orderPrints   OrderPrint[]
+  orderPrints     OrderPrint[]
 
-  @@index([tenantId, templateId, position])
+  @@index([workspaceId, templateId, position])
 }
 
 model OrderTemplatePrint {
-  id              String   @id @default(cuid())
-  tenantId        String
+  id                String   @id @default(cuid())
+  workspaceId       String
   templateVariantId String
-  libraryFileId   String?
-  libraryFileName String
-  plate           Int
-  quantity        Int
-  notes           String?
-  position        Int
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  libraryFileId     String?
+  libraryFileName   String
+  plate             Int
+  quantity          Int
+  notes             String?
+  position          Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  variant         OrderTemplateVariant @relation(fields: [templateVariantId], references: [id], onDelete: Cascade)
-  libraryFile     LibraryFile?        @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
-  orderPrints     OrderPrint[]
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  variant     OrderTemplateVariant @relation(fields: [templateVariantId], references: [id], onDelete: Cascade)
+  libraryFile LibraryFile?         @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
+  orderPrints OrderPrint[]
 
-  @@index([tenantId, templateVariantId, position])
-  @@index([tenantId, libraryFileId])
+  @@index([workspaceId, templateVariantId, position])
+  @@index([workspaceId, libraryFileId])
 }
 
 /// A placed order: a template snapshotted into concrete work. `templateId` is a
@@ -1018,45 +1255,45 @@ model OrderTemplatePrint {
 /// variants+quantities are `OrderVariantSelection`s; the individual print units
 /// are `OrderPrint`s.
 model Order {
-  id                  String   @id @default(cuid())
-  tenantId            String
+  id                  String    @id @default(cuid())
+  workspaceId         String
   templateId          String?
   templateName        String
   templateCode        String?
   templateDescription String?
   name                String
   notes               String?
-  status              String   @default("active")
+  status              String    @default("active")
   completedAt         DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  tenant              Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  template            OrderTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  selectedVariants    OrderVariantSelection[]
-  prints              OrderPrint[]
+  workspace        Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  template         OrderTemplate?          @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  selectedVariants OrderVariantSelection[]
+  prints           OrderPrint[]
 
-  @@index([tenantId, templateId])
-  @@index([tenantId, status, createdAt])
+  @@index([workspaceId, templateId])
+  @@index([workspaceId, status, createdAt])
 }
 
 model OrderVariantSelection {
-  id                 String   @id @default(cuid())
-  tenantId           String
-  orderId            String
-  templateVariantId  String?
+  id                  String   @id @default(cuid())
+  workspaceId         String
+  orderId             String
+  templateVariantId   String?
   templateVariantName String
-  quantity           Int
-  position           Int
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  quantity            Int
+  position            Int
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  order              Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  templateVariant    OrderTemplateVariant? @relation(fields: [templateVariantId], references: [id], onDelete: SetNull)
+  workspace       Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  order           Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  templateVariant OrderTemplateVariant? @relation(fields: [templateVariantId], references: [id], onDelete: SetNull)
 
-  @@index([tenantId, orderId, position])
-  @@index([tenantId, templateVariantId])
+  @@index([workspaceId, orderId, position])
+  @@index([workspaceId, templateVariantId])
 }
 
 /// One print unit within an order — the row the workflow acts on. `libraryFileName`
@@ -1069,46 +1306,46 @@ model OrderVariantSelection {
 /// (see `syncOrderPrintState` in the orders plugin); `projectFilamentOverrides`
 /// is a JSON per-print filament remap.
 model OrderPrint {
-  id                 String    @id @default(cuid())
-  tenantId           String
-  orderId            String
-  templatePrintId    String?
-  templateVariantId  String?
-  templateVariantName String?
+  id                       String    @id @default(cuid())
+  workspaceId              String
+  orderId                  String
+  templatePrintId          String?
+  templateVariantId        String?
+  templateVariantName      String?
   projectFilamentOverrides Json?
-  libraryFileId      String?
-  libraryFileName    String
-  plate              Int
-  notes              String?
-  groupPosition      Int
-  sequenceNumber     Int
-  sequenceCount      Int
-  status             String    @default("pending")
-  completionSource   String?
-  attemptCount       Int       @default(0)
-  startedPrinterId   String?
-  startedAt          DateTime?
-  lastPrintJobId     String?
-  lastPrintResult    String?
-  lastPrintFinishedAt DateTime?
-  completedAt        DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  libraryFileId            String?
+  libraryFileName          String
+  plate                    Int
+  notes                    String?
+  groupPosition            Int
+  sequenceNumber           Int
+  sequenceCount            Int
+  status                   String    @default("pending")
+  completionSource         String?
+  attemptCount             Int       @default(0)
+  startedPrinterId         String?
+  startedAt                DateTime?
+  lastPrintJobId           String?
+  lastPrintResult          String?
+  lastPrintFinishedAt      DateTime?
+  completedAt              DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
-  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  order              Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  templatePrint      OrderTemplatePrint? @relation(fields: [templatePrintId], references: [id], onDelete: SetNull)
-  templateVariant    OrderTemplateVariant? @relation(fields: [templateVariantId], references: [id], onDelete: SetNull)
-  libraryFile        LibraryFile?       @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
-  startedPrinter     Printer?           @relation("OrderPrintStartedPrinter", fields: [startedPrinterId], references: [id], onDelete: SetNull)
-  lastPrintJob       PrintJob?          @relation("OrderPrintLastJob", fields: [lastPrintJobId], references: [id], onDelete: SetNull)
+  workspace       Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  order           Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  templatePrint   OrderTemplatePrint?   @relation(fields: [templatePrintId], references: [id], onDelete: SetNull)
+  templateVariant OrderTemplateVariant? @relation(fields: [templateVariantId], references: [id], onDelete: SetNull)
+  libraryFile     LibraryFile?          @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
+  startedPrinter  Printer?              @relation("OrderPrintStartedPrinter", fields: [startedPrinterId], references: [id], onDelete: SetNull)
+  lastPrintJob    PrintJob?             @relation("OrderPrintLastJob", fields: [lastPrintJobId], references: [id], onDelete: SetNull)
 
-  @@index([tenantId, orderId, groupPosition, sequenceNumber])
-  @@index([tenantId, status, startedAt])
-  @@index([tenantId, templateVariantId])
-  @@index([tenantId, libraryFileId])
-  @@index([tenantId, startedPrinterId])
-  @@index([tenantId, lastPrintJobId])
+  @@index([workspaceId, orderId, groupPosition, sequenceNumber])
+  @@index([workspaceId, status, startedAt])
+  @@index([workspaceId, templateVariantId])
+  @@index([workspaceId, libraryFileId])
+  @@index([workspaceId, startedPrinterId])
+  @@index([workspaceId, lastPrintJobId])
 }
 
 /// A physical filament spool tracked in a workspace's inventory (the
@@ -1116,68 +1353,68 @@ model OrderPrint {
 /// keyed by `bambuUuid`; other spools are entered manually. `remainingGrams` is
 /// the canonical "amount left": synced from the printer's reported remain% for
 /// Bambu spools, decremented from per-job consumption for the rest (see
-/// `FilamentSpoolUsage`). Tenant-scoped, soft-deletable (recycle) and separately
+/// `FilamentSpoolUsage`). Workspace-scoped, soft-deletable (recycle) and separately
 /// archivable (used up but kept for history), mirroring `LibraryFile`.
 model FilamentSpool {
-  id              String    @id @default(cuid())
-  tenantId        String
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  workspaceId String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   // Recycle bin: restorable until the retention window hard-deletes the row.
-  deletedAt       DateTime?
+  deletedAt   DateTime?
   // Retired / used up but intentionally kept for history; still listable under a filter.
-  archivedAt      DateTime?
+  archivedAt  DateTime?
 
   // Material identity
-  brand           String?
-  filamentType    String                          // PLA, PETG, ABS, ...
-  materialSubtype String?                          // e.g. "PLA Silk", "PLA Basic"
-  colorName       String?                          // resolved or custom display name
-  colorHex        String?                          // primary color, #RRGGBB
-  colorsJson      String?                          // multi-color palette as JSON #RRGGBB[]
+  brand             String?
+  filamentType      String // PLA, PETG, ABS, ...
+  materialSubtype   String? // e.g. "PLA Silk", "PLA Basic"
+  colorName         String? // resolved or custom display name
+  colorHex          String? // primary color, #RRGGBB
+  colorsJson        String? // multi-color palette as JSON #RRGGBB[]
   // Preset / RFID identity
-  trayInfoIdx     String?                          // Bambu filament preset id (e.g. "GFA00")
-  bambuUuid       String?                          // RFID serial (tray_uuid); auto-add dedupe key
+  trayInfoIdx       String? // Bambu filament preset id (e.g. "GFA00")
+  bambuUuid         String? // RFID serial (tray_uuid); auto-add dedupe key
   // Slicing preset (filament profile NAME from the catalogue) this spool slices
   // with — the BambuStudio "pick an existing preset for third-party filament"
   // step, done once on the spool. Null = auto-match at slice time.
   slicingPresetName String?
-  serial          String?                          // manual serial for non-Bambu spools
-  nozzleTempMin   Int?
-  nozzleTempMax   Int?
-  diameterMm      Float     @default(1.75)
+  serial            String? // manual serial for non-Bambu spools
+  nozzleTempMin     Int?
+  nozzleTempMax     Int?
+  diameterMm        Float   @default(1.75)
 
   // Quantity tracking
-  netWeightGrams  Int       @default(1000)         // full-spool net filament weight
-  spoolCoreGrams  Int?                             // empty core weight, for scale-based measuring
-  remainingGrams  Float     @default(1000)         // canonical amount left
-  remainSource    String    @default("manual")     // 'printer' | 'tracked' | 'manual'
+  netWeightGrams Int    @default(1000) // full-spool net filament weight
+  spoolCoreGrams Int? // empty core weight, for scale-based measuring
+  remainingGrams Float  @default(1000) // canonical amount left
+  remainSource   String @default("manual") // 'printer' | 'tracked' | 'manual'
 
   // Provenance / cost
-  costCents       Int?
-  currency        String?
-  purchasedAt     DateTime?
-  vendor          String?
-  notes           String?
+  costCents   Int?
+  currency    String?
+  purchasedAt DateTime?
+  vendor      String?
+  notes       String?
 
   // Current location: which printer/slot it is loaded into, if any.
   loadedPrinterId String?
-  loadedAmsId     Int?                             // AMS unit id, or 254/255 for external virtual trays
-  loadedSlotId    Int?                             // slot within the AMS unit; null for external spools
+  loadedAmsId     Int? // AMS unit id, or 254/255 for external virtual trays
+  loadedSlotId    Int? // slot within the AMS unit; null for external spools
   loadedAt        DateTime?
-  lastSeenAt      DateTime?                         // last time confirmed present in a slot
+  lastSeenAt      DateTime? // last time confirmed present in a slot
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  loadedPrinter   Printer?  @relation("FilamentSpoolLoadedPrinter", fields: [loadedPrinterId], references: [id], onDelete: SetNull)
-  usage           FilamentSpoolUsage[]
+  workspace     Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  loadedPrinter Printer?             @relation("FilamentSpoolLoadedPrinter", fields: [loadedPrinterId], references: [id], onDelete: SetNull)
+  usage         FilamentSpoolUsage[]
 
-  @@index([tenantId, deletedAt])
-  @@index([tenantId, filamentType])
-  @@index([tenantId, brand])
-  @@index([tenantId, loadedPrinterId])
+  @@index([workspaceId, deletedAt])
+  @@index([workspaceId, filamentType])
+  @@index([workspaceId, brand])
+  @@index([workspaceId, loadedPrinterId])
   // bambuUuid is not unique: a recycled/archived row may share the RFID of a
   // re-added spool, so auto-add dedupes among non-deleted rows in app code.
-  @@index([tenantId, bambuUuid])
+  @@index([workspaceId, bambuUuid])
 }
 
 /// Append-only consumption ledger for a spool: one row per print that drew from
@@ -1186,20 +1423,20 @@ model FilamentSpool {
 /// (kept even if that row is later pruned) so usage history survives, mirroring
 /// how production stats are not reverted on job deletion.
 model FilamentSpoolUsage {
-  id          String    @id @default(cuid())
-  tenantId    String
+  id          String   @id @default(cuid())
+  workspaceId String
   spoolId     String
   jobId       String?
   grams       Float
-  source      String    @default("print")          // 'print' | 'manual' | 'rfid-sync'
+  source      String   @default("print") // 'print' | 'manual' | 'rfid-sync'
   note        String?
-  recordedAt  DateTime  @default(now())
+  recordedAt  DateTime @default(now())
 
-  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  spool       FilamentSpool @relation(fields: [spoolId], references: [id], onDelete: Cascade)
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  spool     FilamentSpool @relation(fields: [spoolId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId, spoolId, recordedAt])
-  @@index([tenantId, jobId])
+  @@index([workspaceId, spoolId, recordedAt])
+  @@index([workspaceId, jobId])
 }
 
 /// One run of a slicer-generated calibration print (the `calibration` plugin):
@@ -1212,12 +1449,12 @@ model FilamentSpoolUsage {
 /// `slicingJobId`, `outputFileId`) are soft references — the run survives a
 /// printer/spool/file delete as history, mirroring `FilamentSpoolUsage.jobId`.
 model CalibrationRun {
-  id              String    @id @default(cuid())
-  tenantId        String
+  id              String   @id @default(cuid())
+  workspaceId     String
   /// 'pressureAdvance' | 'flowRatio'.
   kind            String
   /// 'slicing' | 'readyToPrint' | 'printing' | 'awaitingResult' | 'saved' | 'discarded' | 'failed'.
-  status          String    @default("slicing")
+  status          String   @default("slicing")
   // Target printer + AMS slot the test filament is loaded in.
   printerId       String?
   printerModel    String
@@ -1239,14 +1476,14 @@ model CalibrationRun {
   // Result: the user's raw measurement and the value computed from it.
   measuredJson    Json?
   resultValue     Float?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId, status, createdAt])
-  @@index([tenantId, printerId])
-  @@index([tenantId, spoolId])
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, printerId])
+  @@index([workspaceId, spoolId])
 }
 
 /// A saved calibration value applied automatically when its filament is used
@@ -1258,8 +1495,8 @@ model CalibrationRun {
 /// generality). `spoolId`/`runId` are soft references. Dedupe (one result per
 /// target) is enforced in the store, not by a DB unique across nullable columns.
 model CalibrationResult {
-  id              String    @id @default(cuid())
-  tenantId        String
+  id              String   @id @default(cuid())
+  workspaceId     String
   /// 'pressureAdvance' | 'flowRatio'.
   kind            String
   /// K value (pressureAdvance) or flow ratio (flowRatio).
@@ -1277,13 +1514,13 @@ model CalibrationResult {
   colorName       String?
   // Provenance: the run that produced this value.
   runId           String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  @@index([tenantId, kind, printerModel, nozzleDiameter])
-  @@index([tenantId, spoolId])
+  @@index([workspaceId, kind, printerModel, nozzleDiameter])
+  @@index([workspaceId, spoolId])
 }
 
 /// A queued print waiting to be dispatched (the `print-queue` plugin). One shared,
@@ -1296,22 +1533,22 @@ model CalibrationResult {
 /// dispatch lifecycle (queued|held|dispatching|printing|done|failed); per-printer
 /// eligibility is computed live (not persisted) from the shared matcher.
 model QueueItem {
-  id                    String   @id @default(cuid())
-  tenantId              String
+  id                    String    @id @default(cuid())
+  workspaceId           String
   libraryFileId         String?
   fileName              String
   // Source kind for display: 'gcode' | '3mf'.
-  kind                  String   @default("gcode")
+  kind                  String    @default("gcode")
   // 1-based plate index inside a multi-plate 3MF.
-  plateIndex            Int      @default(1)
+  plateIndex            Int       @default(1)
   plateName             String?
   // First-class copies: the row stays queued until completedCount reaches quantity.
-  quantity              Int      @default(1)
-  completedCount        Int      @default(0)
+  quantity              Int       @default(1)
+  completedCount        Int       @default(0)
   // Fractional rank for cheap drag-reorder without renumbering siblings.
-  sortKey               Float    @default(0)
+  sortKey               Float     @default(0)
   // Hybrid targeting: 'any' | 'printer' | 'model'.
-  targetKind            String   @default("any")
+  targetKind            String    @default("any")
   targetPrinterId       String?
   targetModel           String?
   // Serialized PrintFromLibrary print options (useAms, bedLevel, flowCalibration, ...).
@@ -1327,7 +1564,7 @@ model QueueItem {
   // for display in the queue list (matches what the file would show when printed).
   plateType             String?
   nozzleDiametersJson   String?
-  status                String   @default("queued")
+  status                String    @default("queued")
   label                 String?
   createdById           String?
   // Optional link to the order print this item was queued for (the orders plugin).
@@ -1345,30 +1582,30 @@ model QueueItem {
   lastResult            String?
   lastDispatchedAt      DateTime?
   lastFinishedAt        DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  tenant                Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  libraryFile           LibraryFile? @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
-  targetPrinter         Printer?     @relation("QueueItemTargetPrinter", fields: [targetPrinterId], references: [id], onDelete: SetNull)
-  lastPrinter           Printer?     @relation("QueueItemLastPrinter", fields: [lastPrinterId], references: [id], onDelete: SetNull)
-  lastPrintJob          PrintJob?    @relation("QueueItemLastJob", fields: [lastPrintJobId], references: [id], onDelete: SetNull)
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  libraryFile   LibraryFile? @relation(fields: [libraryFileId], references: [id], onDelete: SetNull)
+  targetPrinter Printer?     @relation("QueueItemTargetPrinter", fields: [targetPrinterId], references: [id], onDelete: SetNull)
+  lastPrinter   Printer?     @relation("QueueItemLastPrinter", fields: [lastPrinterId], references: [id], onDelete: SetNull)
+  lastPrintJob  PrintJob?    @relation("QueueItemLastJob", fields: [lastPrintJobId], references: [id], onDelete: SetNull)
 
-  @@index([tenantId, status, sortKey])
-  @@index([tenantId, sortKey])
-  @@index([tenantId, libraryFileId])
-  @@index([tenantId, targetPrinterId])
-  @@index([tenantId, lastPrinterId])
-  @@index([tenantId, lastPrintJobId])
-  @@index([tenantId, orderPrintId])
+  @@index([workspaceId, status, sortKey])
+  @@index([workspaceId, sortKey])
+  @@index([workspaceId, libraryFileId])
+  @@index([workspaceId, targetPrinterId])
+  @@index([workspaceId, lastPrinterId])
+  @@index([workspaceId, lastPrintJobId])
+  @@index([workspaceId, orderPrintId])
 }
 
 /// A two-way support conversation between a workspace user and the platform
-/// team (cloud-only messaging). Not tenant-owned — platform admins read these
-/// across tenants via `rootPrisma`; the participant/tenant columns are
+/// team (cloud-only messaging). Not workspace-owned — platform admins read these
+/// across workspaces via `rootPrisma`; the participant/workspace columns are
 /// point-in-time snapshots (no FKs) so a conversation outlives the account or
-/// workspace it came from. `tenantId` is deliberately unscoped (see
-/// TENANT_SCOPED_MODELS exceptions). Unused in self-hosted, which emails
+/// workspace it came from. `workspaceId` is deliberately unscoped (see
+/// WORKSPACE_SCOPED_MODELS exceptions). Unused in self-hosted, which emails
 /// help/feedback instead of messaging.
 model SupportConversation {
   id                 String    @id @default(cuid())
@@ -1380,8 +1617,8 @@ model SupportConversation {
   userId             String?
   userEmail          String?
   userName           String?
-  tenantId           String?
-  tenantName         String?
+  workspaceId        String?
+  workspaceName      String?
   resolvedAt         DateTime?
   /// Platform operator handling this conversation (claim), with a display-name
   /// snapshot for lists. Unclaimed conversations notify every operator;
@@ -1419,7 +1656,7 @@ model SupportMessage {
   userAgent      String?
   createdAt      DateTime @default(now())
 
-  conversation SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation SupportConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   attachments  SupportAttachment[]
   pendingEmail SupportPendingEmail?
 
@@ -1482,7 +1719,7 @@ model SupportAttachment {
   @@index([createdAt])
 }
 
-/// Product suggestion board post (cloud-only). Not tenant-owned — the board is
+/// Product suggestion board post (cloud-only). Not workspace-owned — the board is
 /// platform-wide and shared by every cloud workspace, accessed via `rootPrisma`.
 /// `authorName` is a display snapshot so posts survive account deletion.
 /// `status` is the platform team's triage state (a `suggestionStatusSchema`
@@ -1531,8 +1768,8 @@ model SuggestionComment {
   body         String
   createdAt    DateTime @default(now())
 
-  suggestion Suggestion         @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
-  parent     SuggestionComment? @relation("SuggestionCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  suggestion Suggestion          @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  parent     SuggestionComment?  @relation("SuggestionCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies    SuggestionComment[] @relation("SuggestionCommentReplies")
 
   @@index([suggestionId, createdAt])
@@ -1543,22 +1780,22 @@ model SuggestionComment {
 /// beta (cloud-only; managed by platform admins, accessed via `rootPrisma`).
 /// The code itself is stored displayable (`XXXX-XXXX`) — it is a distribution
 /// gate, not a credential; brute force is bounded by the register rate limit.
-/// `usedByTenantId` is a plain snapshot (no FK) so the audit trail survives
-/// tenant deletion. Harmless/unused in self-hosted or OSS deployments.
+/// `usedByWorkspaceId` is a plain snapshot (no FK) so the audit trail survives
+/// workspace deletion. Harmless/unused in self-hosted or OSS deployments.
 model BetaInviteCode {
-  id             String    @id @default(cuid())
-  code           String    @unique
+  id                String    @id @default(cuid())
+  code              String    @unique
   /// Operator note about who the code was issued to.
-  note           String?
-  disabled       Boolean   @default(false)
-  expiresAt      DateTime?
-  createdAt      DateTime  @default(now())
-  usedAt         DateTime?
-  usedByEmail    String?
-  usedByTenantId String?
+  note              String?
+  disabled          Boolean   @default(false)
+  expiresAt         DateTime?
+  createdAt         DateTime  @default(now())
+  usedAt            DateTime?
+  usedByEmail       String?
+  usedByWorkspaceId String?
   /// Set when the code was auto-issued to a beta signup; duplicate signups
   /// for the same address re-send this code instead of minting another.
-  issuedToEmail  String?
+  issuedToEmail     String?
 
   pendingRegistrations PendingRegistration[]
 
@@ -1569,21 +1806,30 @@ model BetaInviteCode {
 /// An in-flight self-registration awaiting email-code confirmation
 /// (cloud-only). The workspace, user, and membership are only created when
 /// the emailed code is verified, so a mistyped address never burns the invite
-/// code or leaves an orphan tenant. Rows are short-lived and cleaned up
+/// code or leaves an orphan workspace. Rows are short-lived and cleaned up
 /// opportunistically on each registration start.
+/// A registration mid-email-verification. Registration creates an ACCOUNT and
+/// nothing else -- what it is used for (a cloud workspace, a self-hosted
+/// subscription, a licence) is chosen on the get-started page afterwards, so
+/// nothing workspace-shaped is carried here any more.
+///
+/// Lifecycle: rows live minutes (REGISTRATION_TTL), are consumed on completion,
+/// and are opportunistically swept on the next /start. Tenancy: none; this
+/// precedes the user existing.
 model PendingRegistration {
-  id            String   @id @default(cuid())
-  email         String
-  displayName   String?
-  workspaceName String
-  inviteCodeId  String
+  id           String   @id @default(cuid())
+  email        String
+  displayName  String?
+  /// Legacy beta invite code claimed by this registration, when one was given.
+  /// Null since registration opened: most sign-ups now carry no code at all.
+  inviteCodeId String?
   /// SHA-256 of the emailed confirmation code (never stored in cleartext).
-  codeHash      String
-  attemptCount  Int      @default(0)
-  expiresAt     DateTime
-  createdAt     DateTime @default(now())
+  codeHash     String
+  attemptCount Int      @default(0)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
 
-  inviteCode BetaInviteCode @relation(fields: [inviteCodeId], references: [id], onDelete: Cascade)
+  inviteCode BetaInviteCode? @relation(fields: [inviteCodeId], references: [id], onDelete: Cascade)
 
   @@index([email, expiresAt])
 }

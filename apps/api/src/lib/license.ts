@@ -74,7 +74,8 @@ export function readLicenseStatus(token: string | null | undefined, nowSeconds =
       expiresAt: null,
       updatesExpired: false,
       updatesUntil: null,
-      maxPrinters: null
+      maxPrinters: null,
+      metered: false
     }
   }
   const expired = payload.expiresAt != null && payload.expiresAt < nowSeconds
@@ -86,6 +87,12 @@ export function readLicenseStatus(token: string | null | undefined, nowSeconds =
     expiresAt: payload.expiresAt,
     updatesExpired: payload.updatesUntil != null && payload.updatesUntil < nowSeconds,
     updatesUntil: payload.updatesUntil,
-    maxPrinters: payload.maxPrinters
+    maxPrinters: payload.maxPrinters,
+    // A capped key with a run window is a subscription key, and a subscription
+    // key is metered: the install raises its own allowance by adding a printer.
+    // Read off the token rather than from the cloud so it is still right on an
+    // install that cannot reach us -- and it must not be, so a Lifetime or
+    // community key (no window) or an uncapped one never claims to be billed.
+    metered: !expired && payload.expiresAt != null && payload.maxPrinters != null
   }
 }

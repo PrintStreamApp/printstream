@@ -53,7 +53,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
   const autoOpen = props.autoOpen === true
   const hostOnClose = typeof props.onClose === 'function' ? (props.onClose as () => void) : undefined
   const [open, setOpen] = useState(autoOpen)
-  // This host HAS a workspace, so its manager is the tenant one. The public editor supplies its own
+  // This host HAS a workspace, so its manager is the workspace one. The public editor supplies its own
   // browser-storage manager instead — see `LocalEditorSurface`.
   const presetManager = useCallback(
     (managerProps: { open: boolean; onClose: () => void }) => <SlicingPresetsDialog {...managerProps} />,

@@ -42,7 +42,7 @@ import { discardHiddenSlicedOutput, persistLibraryFileFromLocalPath } from '../l
 import { detectImportFormat, meshToBinaryStl, parseImportedMesh, type ImportedMesh } from '../lib/mesh-import.js'
 import { extractThreeMfImportMesh } from '../lib/three-mf-mesh-extract.js'
 import { prisma } from '../lib/prisma.js'
-import { requireRequestTenantId, requireRouteParam, sendModelBuffer, singleUploadWithLimit } from '../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam, sendModelBuffer, singleUploadWithLimit } from '../lib/request-helpers.js'
 import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails, rekeyReplacedObjectOverrides } from '../lib/three-mf.js'
 
 const MAX_IMPORT_UPLOAD_BYTES = 256 * 1024 * 1024
@@ -83,7 +83,7 @@ editorRouter.post(
   requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
   uploadImportFile('file'),
   async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const file = request.file
     if (!file) throw badRequest('No file uploaded')
     const format = detectImportFormat(file.originalname)
@@ -94,7 +94,7 @@ editorRouter.post(
       ? await extractThreeMfMeshFromBuffer(file.buffer)
       : await parseImportedMesh(file.buffer, format)
     const name = path.parse(file.originalname).name || 'Imported model'
-    const staged = stageImport({ tenantId, name, format, mesh })
+    const staged = stageImport({ workspaceId, name, format, mesh })
     response.status(201).json({ import: staged satisfies StagedImport })
   }
 )
@@ -103,12 +103,12 @@ editorRouter.post(
   '/imports/from-library',
   requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
   async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const parsed = stageImportFromLibrarySchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid import request')
 
     const libraryFile = await prisma.libraryFile.findFirst({
-      where: { id: parsed.data.libraryFileId, tenantId },
+      where: { id: parsed.data.libraryFileId, workspaceId },
       select: { id: true, name: true, ownerBridgeId: true, storedPath: true }
     })
     if (!libraryFile) throw notFound('Library file not found')
@@ -122,7 +122,7 @@ editorRouter.post(
       ? await extractThreeMfImportMesh(localPath, parsed.data.objectId != null ? { objectId: parsed.data.objectId } : undefined)
       : await parseImportedMesh(await readFile(localPath), format)
     const name = path.parse(libraryFile.name).name || 'Imported model'
-    const staged = stageImport({ tenantId, name, format, mesh })
+    const staged = stageImport({ workspaceId, name, format, mesh })
     response.status(201).json({ import: staged satisfies StagedImport })
   }
 )
@@ -131,9 +131,9 @@ editorRouter.get(
   '/imports/:importId/mesh',
   requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
   async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const importId = requireRouteParam(request.params.importId, 'Import id')
-    const record = getStagedImport(importId, tenantId)
+    const record = getStagedImport(importId, workspaceId)
     if (!record) throw notFound('Imported model not found or expired')
     // `?part=N` streams the Nth named solid of a multi-solid import; without it (or for a
     // single-solid import) the merged mesh is returned.
@@ -169,26 +169,26 @@ function parseArrangedBody<T>(schema: { safeParse: (body: unknown) => z.SafePars
  * Resolve an explicit content base — the bytes the editor pinned at open — to something
  * `resolveLibraryFileToLocalPath` can read.
  *
- * Tenant-scoped like every other lookup here, but deliberately NOT scoped to the save target: the
+ * Workspace-scoped like every other lookup here, but deliberately NOT scoped to the save target: the
  * whole point of the field is that the two can diverge (see `contentBase` in the shared schema).
  * A pinned base that no longer exists is a hard error rather than a silent fall back to the
  * target's current bytes, because falling back would quietly resume the save-onto-last-save
  * chaining this exists to stop.
  */
 async function resolvePinnedContentBase(
-  tenantId: string,
+  workspaceId: string,
   contentBase: { fileId: string; versionId?: string | null }
 ): Promise<{ ownerBridgeId: string | null; storedPath: string }> {
   if (contentBase.versionId) {
     const version = await prisma.libraryFileVersion.findFirst({
-      where: { id: contentBase.versionId, tenantId, libraryFileId: contentBase.fileId },
+      where: { id: contentBase.versionId, workspaceId, libraryFileId: contentBase.fileId },
       select: { ownerBridgeId: true, storedPath: true }
     })
     if (!version) throw notFound('The version this project was opened from is no longer available')
     return version
   }
   const file = await prisma.libraryFile.findFirst({
-    where: { id: contentBase.fileId, tenantId },
+    where: { id: contentBase.fileId, workspaceId },
     select: { ownerBridgeId: true, storedPath: true }
   })
   if (!file) throw notFound('The file this project was opened from is no longer available')
@@ -203,7 +203,7 @@ async function resolvePinnedContentBase(
  * the retarget artifact's directory is returned via `extraCleanupDirs` for the same rm.
  */
 async function bakeArrangedThreeMf(
-  tenantId: string,
+  workspaceId: string,
   input: ExportArrangedThreeMf,
   workDir: string,
   fileName: string
@@ -212,7 +212,7 @@ async function bakeArrangedThreeMf(
 
   const baseFile = baseFileId
     ? await prisma.libraryFile.findFirst({
-      where: { id: baseFileId, tenantId },
+      where: { id: baseFileId, workspaceId },
       select: { id: true, name: true, ownerBridgeId: true, storedPath: true, folderId: true }
     })
     : null
@@ -223,7 +223,7 @@ async function bakeArrangedThreeMf(
   // edited result becomes a NEW version — the old version is never mutated.
   const baseVersion = baseVersionId
     ? await prisma.libraryFileVersion.findFirst({
-      where: { id: baseVersionId, tenantId, libraryFileId: baseFileId ?? undefined },
+      where: { id: baseVersionId, workspaceId, libraryFileId: baseFileId ?? undefined },
       select: { id: true, ownerBridgeId: true, storedPath: true }
     })
     : null
@@ -240,7 +240,7 @@ async function bakeArrangedThreeMf(
   // are then thrown away turned "the scaffold is gone" into a hard 404 on every subsequent save —
   // a save that had no need of those bytes in the first place.
   const pinnedBase = input.contentBase && !input.ignoreBaseContent
-    ? await resolvePinnedContentBase(tenantId, input.contentBase)
+    ? await resolvePinnedContentBase(workspaceId, input.contentBase)
     : null
 
   // `ignoreBaseContent` keeps the base file as the save TARGET (name/folder/bridge, resolved
@@ -249,7 +249,7 @@ async function bakeArrangedThreeMf(
   // project, which is what forced the editor to re-mount on the saved file after every save.
   const baseSource = input.ignoreBaseContent ? null : (pinnedBase ?? baseVersion ?? baseFile)
   const basePath = baseSource ? await resolveLibraryFileToLocalPath(baseSource) : null
-  const imports = resolveSceneEditImports(tenantId, sceneEdit)
+  const imports = resolveSceneEditImports(workspaceId, sceneEdit)
 
   const outputPath = path.join(workDir, 'arranged.3mf')
   const extraCleanupDirs: string[] = []
@@ -276,7 +276,7 @@ async function bakeArrangedThreeMf(
   // overrides still ride slice requests either way.
   if (filamentSettingOverrides && Object.keys(filamentSettingOverrides).length > 0) {
     const overriddenPath = await persistFilamentSettingOverrides({
-      tenantId,
+      workspaceId,
       arrangedPath: workingPath,
       fileName,
       slicerTargetId,
@@ -308,7 +308,7 @@ async function bakeArrangedThreeMf(
     // topology). Both need the machine authored in — we are the source of truth for the 3MF, so a
     // saved project must define its own machine rather than leaning on slice-time fallbacks.
     bakedPath = await retargetSavedProjectMachine({
-      tenantId,
+      workspaceId,
       arrangedPath: workingPath,
       fileName,
       slicerTargetId,
@@ -324,7 +324,7 @@ async function bakeArrangedThreeMf(
     // project's own machine preset so the file heals at rest instead of staying unsliceable.
     // Best-effort — null means "not needed or not possible" and the save proceeds unchanged.
     const healedPath = await healSavedProjectMachineTopology({
-      tenantId,
+      workspaceId,
       arrangedPath: workingPath,
       fileName,
       slicerTargetId,
@@ -343,7 +343,7 @@ editorRouter.post(
   '/save',
   requireRequestPermission(LIBRARY_UPLOAD_PERMISSION),
   async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const parsed = parseArrangedBody(saveArrangedThreeMfSchema, request.body, 'save')
     const { mode, baseFileId } = parsed
 
@@ -355,7 +355,7 @@ editorRouter.post(
       // but the newVersion branch needs the base file's name — resolved inside the bake — so
       // compute the saveAs form here and patch the newVersion form after.
       const saveAsName = parsed.name && !parsed.name.toLowerCase().endsWith('.3mf') ? `${parsed.name}.3mf` : parsed.name
-      const baked = await bakeArrangedThreeMf(tenantId, parsed, workDir, mode === 'newVersion' ? 'edited.3mf' : saveAsName!)
+      const baked = await bakeArrangedThreeMf(workspaceId, parsed, workDir, mode === 'newVersion' ? 'edited.3mf' : saveAsName!)
       extraCleanupDirs = baked.extraCleanupDirs
 
       const target = mode === 'newVersion'
@@ -368,7 +368,7 @@ editorRouter.post(
       const sizeBytes = (await stat(baked.bakedPath)).size
 
       const { file: created, archivedVersionId } = await persistLibraryFileFromLocalPath({
-        tenantId,
+        workspaceId,
         sourcePath: baked.bakedPath,
         fileName: target.name,
         sizeBytes,
@@ -414,14 +414,14 @@ editorRouter.post(
   '/export-3mf',
   requireRequestPermission(LIBRARY_DOWNLOAD_PERMISSION),
   async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const parsed = parseArrangedBody(exportArrangedThreeMfSchema, request.body, 'export')
     const fileName = parsed.name && !parsed.name.toLowerCase().endsWith('.3mf') ? `${parsed.name}.3mf` : (parsed.name ?? 'export.3mf')
 
     const workDir = await mkdtemp(path.join(tmpdir(), 'printstream-editor-export-'))
     let extraCleanupDirs: string[] = []
     try {
-      const baked = await bakeArrangedThreeMf(tenantId, parsed, workDir, fileName)
+      const baked = await bakeArrangedThreeMf(workspaceId, parsed, workDir, fileName)
       extraCleanupDirs = baked.extraCleanupDirs
       const bytes = await readFile(baked.bakedPath)
 
@@ -452,7 +452,7 @@ const newProjectSchema = z.object({
  * file is created when they Save; the scaffold is discarded on close (see /scaffold/:id/discard).
  */
 editorRouter.post('/new-project', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const parsed = newProjectSchema.safeParse(request.body ?? {})
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid new project request')
   const rawName = parsed.data.name?.trim() || 'Untitled'
@@ -473,7 +473,7 @@ editorRouter.post('/new-project', requireRequestPermission(LIBRARY_UPLOAD_PERMIS
     )
     const sizeBytes = (await stat(outputPath)).size
     const { file: created } = await persistLibraryFileFromLocalPath({
-      tenantId,
+      workspaceId,
       sourcePath: outputPath,
       fileName,
       sizeBytes,
@@ -500,9 +500,9 @@ editorRouter.post('/new-project', requireRequestPermission(LIBRARY_UPLOAD_PERMIS
 
 /** Discard a new-project scaffold the user abandoned (only deletes while still hidden). */
 editorRouter.post('/scaffold/:id/discard', requireRequestPermission(LIBRARY_UPLOAD_PERMISSION), async (request, response) => {
-  const tenantId = requireRequestTenantId(request)
+  const workspaceId = requireRequestWorkspaceId(request)
   const fileId = requireRouteParam(request.params.id, 'File id')
-  const row = await prisma.libraryFile.findFirst({ where: { id: fileId, tenantId }, select: { id: true, name: true } })
+  const row = await prisma.libraryFile.findFirst({ where: { id: fileId, workspaceId }, select: { id: true, name: true } })
   if (!row) throw notFound('Project not found')
   const discarded = await discardHiddenSlicedOutput(fileId)
   // Destructive (POST verb): an abandoned new-project scaffold is deleted.

@@ -26,7 +26,7 @@ test('startCalibrationJob registers pending history metadata and emits an intern
   printerEvents.on('print.job.starting', onDispatchStarting)
   mock.method(printerManager, 'publishCommand', () => true)
   Object.defineProperty(rootPrisma.printer, 'findUnique', {
-    value: async () => ({ tenantId: 'tenant-1' }),
+    value: async () => ({ workspaceId: 'workspace-1' }),
     configurable: true
   })
   Object.defineProperty(rootPrisma.printJob, 'findUnique', {

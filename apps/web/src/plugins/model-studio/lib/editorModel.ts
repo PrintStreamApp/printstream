@@ -17,7 +17,6 @@ import type {
   LibraryThreeMfPrimeTower,
   LibraryThreeMfScene,
   LibraryThreeMfSceneInstance,
-  ProcessConfig,
   SceneEdit,
   SceneEditImportPartFilament,
   SceneEditPartFilament,
@@ -242,6 +241,13 @@ export interface EditorState {
    * the arrays it feeds are positional (see `repairs/restore-filament-physics.ts`).
    */
   repairedFilamentConfigs?: Record<number, RepairedFilamentPreset>
+  /**
+   * The user pressed the staged settings Repair this session — the in-editor twin of the API's
+   * repair route, for hosts with no stored file behind the project (the public editor). Emitted
+   * as `SceneEdit.repairSettings`; the bake applies the shared repairs while saving. Lives in the
+   * undo-cloned state so undo takes the repair back and the banner returns.
+   */
+  settingsRepairStaged?: boolean
   /** Seam-brush counterpart of {@link EditorState.supportPaint} (`paint_seam` codes). */
   seamPaint?: Record<string, Record<number, string>>
   /** Colour-brush counterpart of {@link EditorState.supportPaint} (`paint_color` codes). */
@@ -281,6 +287,14 @@ export interface EditorState {
    * {@link buildSceneEdit}. Object-level (shared by every instance), like {@link EditorState.addedParts}.
    */
   repairedObjectIds?: number[]
+  /**
+   * Archive entries for project-embedded filament presets the user removed this session.
+   *
+   * Session state, like every other edit: undoable (cloned by {@link cloneEditorState}), applied
+   * only on save. See `three-mf/embedded-presets.ts` for why removal is an explicit action and why
+   * a preset a slot still names is never offered.
+   */
+  removedEmbeddedPresets?: string[]
   /**
    * Per-PART process overrides made this session (process settings on one part of an object,
    * separate from the object's overall overrides), keyed by {@link supportPaintKey}
@@ -978,6 +992,12 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     addedParts: collectAddedParts(state),
     meshReplacements: collectMeshReplacements(state),
     repairedObjectIds: collectRepairedObjectIds(state),
+    repairSettings: state.settingsRepairStaged ? true : undefined,
+    // Complete state, not a diff: the whole set of removals the session has made. An empty set is
+    // emitted as undefined so an untouched project's save carries nothing about them.
+    removedEmbeddedPresets: state.removedEmbeddedPresets && state.removedEmbeddedPresets.length > 0
+      ? [...state.removedEmbeddedPresets]
+      : undefined,
     repairedImportIds: collectRepairedImportIds(state),
     objectClones: collectObjectClones(state)
   }
@@ -1788,6 +1808,8 @@ export function cloneEditorState(state: EditorState): EditorState {
         }
       : {}),
     ...(state.repairedObjectIds ? { repairedObjectIds: [...state.repairedObjectIds] } : {}),
+    ...(state.settingsRepairStaged ? { settingsRepairStaged: true } : {}),
+    ...(state.removedEmbeddedPresets ? { removedEmbeddedPresets: [...state.removedEmbeddedPresets] } : {}),
     ...(state.objectClones ? { objectClones: { ...state.objectClones } } : {}),
     ...(state.addedParts
       ? {

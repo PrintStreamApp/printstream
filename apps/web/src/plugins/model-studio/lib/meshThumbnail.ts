@@ -152,16 +152,16 @@ function getRenderer(): StlRenderer {
   return renderer
 }
 
-function tenantHeaders(): Record<string, string> {
+function workspaceHeaders(): Record<string, string> {
   const workspaceContext = readWorkspaceContextHeader()
-  return workspaceContext ? { 'X-PrintStream-Tenant': workspaceContext } : {}
+  return workspaceContext ? { 'X-PrintStream-Workspace': workspaceContext } : {}
 }
 
 async function fetchStlBytes(fileId: string, signal?: AbortSignal): Promise<ArrayBuffer> {
   const response = await fetch(buildApiUrl(`/api/library/${encodeURIComponent(fileId)}/mesh`), {
     method: 'GET',
     credentials: 'include',
-    headers: tenantHeaders(),
+    headers: workspaceHeaders(),
     signal
   })
   if (!response.ok) {
@@ -200,7 +200,7 @@ function uploadRenderedThumbnail(file: LibraryFile, dataUrl: string): void {
         {
           method: 'PUT',
           credentials: 'include',
-          headers: { 'Content-Type': 'image/png', ...tenantHeaders() },
+          headers: { 'Content-Type': 'image/png', ...workspaceHeaders() },
           body: png
         }
       )

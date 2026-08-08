@@ -15,7 +15,7 @@ import { PrinterEventBus } from '../../lib/printer-events.js'
 import { printerManager } from '../../lib/printer-manager.js'
 import { prisma } from '../../lib/prisma.js'
 
-// Per-printer routes authorize through the tenant-scoped singleton prisma; report the
+// Per-printer routes authorize through the workspace-scoped singleton prisma; report the
 // test printer as owned so the gate passes and these tests exercise the handler/perm
 // logic they target (not the new ownership 404).
 const originalScopedPrinterFindUnique = prisma.printer.findUnique

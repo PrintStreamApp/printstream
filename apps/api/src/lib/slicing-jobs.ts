@@ -44,7 +44,7 @@ import { buildEditedThreeMf, createObjectCustomizedThreeMf, embedPlateThumbnails
 import { healUnweldedThreeMfMeshes } from './three-mf-mesh-weld.js'
 import { resolveSceneEditImports } from './import-store.js'
 import type { ResolvedSlicingPresetFile } from './slicing-presets.js'
-import { withTenantRequestContext, type RequestTenantSummary } from './tenant-context.js'
+import { withWorkspaceRequestContext, type RequestWorkspaceSummary } from './workspace-context.js'
 import { broadcastSlicingChanged } from './ws-resource-events.js'
 import { clientSessions } from './client-sessions.js'
 import { recordSliceJob } from './metrics.js'
@@ -58,8 +58,8 @@ const INTERRUPTED_SLICING_MESSAGE = 'Slicing was interrupted by a server restart
 
 interface SlicingJobState {
   id: string
-  tenantId: string
-  tenant: RequestTenantSummary
+  workspaceId: string
+  workspace: RequestWorkspaceSummary
   sourceFileId: string
   sourceFileName: string
   sourcePath: string
@@ -96,8 +96,8 @@ interface PersistedSlicingJobsState {
 
 interface PersistedSlicingJobState {
   id: string
-  tenantId: string
-  tenant: RequestTenantSummary
+  workspaceId: string
+  workspace: RequestWorkspaceSummary
   sourceFileId: string
   sourceFileName: string
   sourcePath: string
@@ -131,8 +131,8 @@ export type ResolveSlicingSource = (input: { sourceFileId: string; sourcePath: s
  * re-resolves and re-fetches from the current library file, so a job that
  * outlived an API restart (fresh volume) or a source delete/replace doesn't fail
  * with an opaque ENOENT. Throws a clear, requeue-able message when the source can
- * no longer be resolved. Runs inside the job's tenant context (run() wraps it),
- * so the tenant-scoped client applies.
+ * no longer be resolved. Runs inside the job's workspace context (run() wraps it),
+ * so the workspace-scoped client applies.
  */
 export async function resolveSlicingSourcePath(input: { sourceFileId: string; sourcePath: string }): Promise<string> {
   try {
@@ -209,17 +209,17 @@ export class SlicingJobs {
    * system line). The complete log stays on `GET /jobs/:id`. Active jobs keep everything — their
    * progress frames ARE stdout.
    */
-  list(tenantId: string): SlicingJob[] {
+  list(workspaceId: string): SlicingJob[] {
     this.recomputeQueuePositions()
     return Array.from(this.jobs.values())
-      .filter((job) => job.tenantId === tenantId)
+      .filter((job) => job.workspaceId === workspaceId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((job) => (isActiveSlicingJobState(job) ? toDto(job) : toFinishedListDto(job)))
   }
 
-  get(tenantId: string, jobId: string): SlicingJob {
+  get(workspaceId: string, jobId: string): SlicingJob {
     const job = this.jobs.get(jobId)
-    if (!job || job.tenantId !== tenantId) throw notFound('Slicing job not found')
+    if (!job || job.workspaceId !== workspaceId) throw notFound('Slicing job not found')
     this.recomputeQueuePositions()
     return toDto(job)
   }
@@ -229,17 +229,17 @@ export class SlicingJobs {
    * library file folds it into that row — follow-up actions (e.g. "Print"
    * after saving) must dispatch the surviving file id.
    */
-  setOutputFile(tenantId: string, jobId: string, output: { id: string; name: string }): void {
+  setOutputFile(workspaceId: string, jobId: string, output: { id: string; name: string }): void {
     const job = this.jobs.get(jobId)
-    if (!job || job.tenantId !== tenantId) throw notFound('Slicing job not found')
+    if (!job || job.workspaceId !== workspaceId) throw notFound('Slicing job not found')
     job.outputFileId = output.id
     job.outputFileName = output.name
     this.schedulePersist()
   }
 
   enqueue(input: {
-    tenantId: string
-    tenant: RequestTenantSummary
+    workspaceId: string
+    workspace: RequestWorkspaceSummary
     sourceFileId: string
     sourceFileName: string
     sourcePath: string
@@ -258,8 +258,8 @@ export class SlicingJobs {
     const now = new Date()
     const job: SlicingJobState = {
       id: randomUUID(),
-      tenantId: input.tenantId,
-      tenant: input.tenant,
+      workspaceId: input.workspaceId,
+      workspace: input.workspace,
       sourceFileId: input.sourceFileId,
       sourceFileName: input.sourceFileName,
       sourcePath: input.sourcePath,
@@ -293,13 +293,13 @@ export class SlicingJobs {
     this.recomputeQueuePositions()
     this.pumpQueue()
     this.schedulePersist()
-    broadcastSlicingChanged(job.tenantId)
+    broadcastSlicingChanged(job.workspaceId)
     return toDto(job)
   }
 
-  cancel(tenantId: string, jobId: string): SlicingJob {
+  cancel(workspaceId: string, jobId: string): SlicingJob {
     const job = this.jobs.get(jobId)
-    if (!job || job.tenantId !== tenantId) throw notFound('Slicing job not found')
+    if (!job || job.workspaceId !== workspaceId) throw notFound('Slicing job not found')
     if (job.status === 'ready' || job.status === 'failed' || job.status === 'cancelled') return toDto(job)
     job.cancelRequested = true
     job.controller?.abort()
@@ -312,7 +312,7 @@ export class SlicingJobs {
       this.logJobEvent(job, 'warn', 'Cancellation requested for active slicing job')
     }
     this.schedulePersist()
-    broadcastSlicingChanged(job.tenantId)
+    broadcastSlicingChanged(job.workspaceId)
     return toDto(job)
   }
 
@@ -320,7 +320,7 @@ export class SlicingJobs {
    * Cancel every still-running job started by a browser tab that has closed for good.
    *
    * Called by the `client-sessions.ts` departure signal, which is already grace-delayed — a reload
-   * or a flaky socket never reaches here. Deliberately NOT tenant-scoped: the caller is a socket
+   * or a flaky socket never reaches here. Deliberately NOT workspace-scoped: the caller is a socket
    * lifecycle, not a request, and the owner id was minted by the tab that also created the job, so
    * it selects exactly that tab's own work and nothing else. Terminal jobs are left alone: the
    * output of a finished slice belongs to the user, not to the tab that happened to start it.
@@ -330,13 +330,13 @@ export class SlicingJobs {
       if (job.request.ownerClientId !== ownerClientId) continue
       if (job.status === 'ready' || job.status === 'failed' || job.status === 'cancelled') continue
       this.logJobEvent(job, 'warn', 'Cancelling slicing job: the tab that started it closed')
-      this.cancel(job.tenantId, job.id)
+      this.cancel(job.workspaceId, job.id)
     }
   }
 
-  async delete(tenantId: string, jobId: string): Promise<SlicingJob> {
+  async delete(workspaceId: string, jobId: string): Promise<SlicingJob> {
     const job = this.jobs.get(jobId)
-    if (!job || job.tenantId !== tenantId) throw notFound('Slicing job not found')
+    if (!job || job.workspaceId !== workspaceId) throw notFound('Slicing job not found')
     if (job.status === 'queued' || job.status === 'preparing' || job.status === 'slicing' || job.status === 'saving') {
       throw conflict('Cannot delete an active slicing job')
     }
@@ -347,18 +347,18 @@ export class SlicingJobs {
     }
     this.recomputeQueuePositions()
     this.schedulePersist()
-    broadcastSlicingChanged(job.tenantId)
+    broadcastSlicingChanged(job.workspaceId)
     return dto
   }
 
-  getThumbnailInfo(tenantId: string, jobId: string): {
+  getThumbnailInfo(workspaceId: string, jobId: string): {
     thumbnailPath: string | null
     sourceFileId: string
     outputFileId: string | null
     plate: number
   } {
     const job = this.jobs.get(jobId)
-    if (!job || job.tenantId !== tenantId) throw notFound('Slicing job not found')
+    if (!job || job.workspaceId !== workspaceId) throw notFound('Slicing job not found')
     return {
       thumbnailPath: job.thumbnailPath,
       sourceFileId: job.sourceFileId,
@@ -367,9 +367,9 @@ export class SlicingJobs {
     }
   }
 
-  setThumbnailPath(tenantId: string, jobId: string, thumbnailPath: string): void {
+  setThumbnailPath(workspaceId: string, jobId: string, thumbnailPath: string): void {
     const job = this.jobs.get(jobId)
-    if (!job || job.tenantId !== tenantId) throw notFound('Slicing job not found')
+    if (!job || job.workspaceId !== workspaceId) throw notFound('Slicing job not found')
     if (job.thumbnailPath === thumbnailPath) return
     job.thumbnailPath = thumbnailPath
     this.schedulePersist()
@@ -395,7 +395,7 @@ export class SlicingJobs {
   }
 
   private async run(job: SlicingJobState): Promise<void> {
-    await withTenantRequestContext(job.tenant, async () => {
+    await withWorkspaceRequestContext(job.workspace, async () => {
       const controller = new AbortController()
       const progressController = new AbortController()
       let observedOutputCount = 0
@@ -456,7 +456,7 @@ export class SlicingJobs {
         }
         const info = await stat(result.artifactPath)
         const { file: saved } = await this.persistArtifact({
-          tenantId: job.tenantId,
+          workspaceId: job.workspaceId,
           sourcePath: result.artifactPath,
           fileName: job.outputFileName,
           sizeBytes: info.size,
@@ -510,7 +510,7 @@ export class SlicingJobs {
         job.activeSlicerJobId = null
         this.recomputeQueuePositions()
         this.schedulePersist()
-        broadcastSlicingChanged(job.tenantId)
+        broadcastSlicingChanged(job.workspaceId)
         this.pumpQueue()
       }
     })
@@ -540,7 +540,7 @@ export class SlicingJobs {
       // single-plate object selection below, so the two paths are mutually exclusive.
       const sceneEdit = job.request.sceneEdit
       if (sceneEdit) {
-        const imports = resolveSceneEditImports(job.tenantId, sceneEdit)
+        const imports = resolveSceneEditImports(job.workspaceId, sceneEdit)
         const arrangedDir = await mkdtemp(path.join(tmpdir(), 'printstream-slice-arrange-'))
         const arrangedPath = path.join(arrangedDir, path.basename(job.sourceFileName) || 'source.3mf')
         rewrittenSourcePaths.push(arrangedPath)
@@ -628,7 +628,7 @@ export class SlicingJobs {
       // Best-effort — a slice that worked before must still work.
       {
         const authoredPath = await this.authorSliceSettings({
-          tenantId: job.tenantId,
+          workspaceId: job.workspaceId,
           slicerTargetId: job.request.slicerTargetId,
           target: job.request.target,
           projectPath: sourcePath,
@@ -715,7 +715,7 @@ export class SlicingJobs {
             const retryMessage = 'The slicer crashed mid-run; retrying'
             this.touch(job, retryMessage)
             this.logJobEvent(job, 'warn', retryMessage)
-            broadcastSlicingChanged(job.tenantId)
+            broadcastSlicingChanged(job.workspaceId)
             continue
           }
           const fallbackKinds = collectUnsupportedBuiltinProfileKinds(error)
@@ -750,7 +750,7 @@ export class SlicingJobs {
           const retryMessage = `Retrying without the incompatible built-in ${retryLabel} profile${retryKinds.length === 1 ? '' : 's'}`
           this.touch(job, retryMessage)
           this.logJobEvent(job, 'warn', retryMessage)
-          broadcastSlicingChanged(job.tenantId)
+          broadcastSlicingChanged(job.workspaceId)
         }
       }
     } finally {
@@ -800,7 +800,7 @@ export class SlicingJobs {
           observedOutputCount = poll.lines.length
           job.updatedAt = new Date()
           lastProgressUpdateAt = Date.now()
-          broadcastSlicingChanged(job.tenantId)
+          broadcastSlicingChanged(job.workspaceId)
         }
       } catch (error) {
         if (!signal.aborted) {
@@ -840,7 +840,7 @@ export class SlicingJobs {
     job.updatedAt = new Date()
     job.output.push({ stream: 'system', text: message, createdAt: job.updatedAt.toISOString() })
     this.schedulePersist()
-    broadcastSlicingChanged(job.tenantId)
+    broadcastSlicingChanged(job.workspaceId)
   }
 
   private setStatus(job: SlicingJobState, status: SlicingJobStatus, message: string): void {
@@ -849,7 +849,7 @@ export class SlicingJobs {
     this.logJobEvent(job, 'info', `${status}: ${message}`)
     this.recomputeQueuePositions()
     this.schedulePersist()
-    broadcastSlicingChanged(job.tenantId)
+    broadcastSlicingChanged(job.workspaceId)
   }
 
   private finish(job: SlicingJobState, status: 'ready' | 'failed' | 'cancelled', message: string): void {
@@ -916,7 +916,7 @@ export class SlicingJobs {
     if (!preparedProjectPath) return
     try {
       const projectFileId = await this.preserveProject({
-        tenantId: job.tenantId,
+        workspaceId: job.workspaceId,
         fileName: job.sourceFileName,
         preparedProjectPath,
         output: saved,
@@ -1072,8 +1072,8 @@ function slicedArtifactReadyMessage(request: CreateSlicingJob): string {
 function serializeSlicingJobState(job: SlicingJobState): PersistedSlicingJobState {
   return {
     id: job.id,
-    tenantId: job.tenantId,
-    tenant: job.tenant,
+    workspaceId: job.workspaceId,
+    workspace: job.workspace,
     sourceFileId: job.sourceFileId,
     sourceFileName: job.sourceFileName,
     sourcePath: job.sourcePath,
@@ -1098,7 +1098,7 @@ function serializeSlicingJobState(job: SlicingJobState): PersistedSlicingJobStat
 
 function hydratePersistedJob(persisted: PersistedSlicingJobState): SlicingJobState | null {
   if (!persisted || typeof persisted !== 'object') return null
-  if (typeof persisted.id !== 'string' || typeof persisted.tenantId !== 'string' || typeof persisted.sourceFileId !== 'string') return null
+  if (typeof persisted.id !== 'string' || typeof persisted.workspaceId !== 'string' || typeof persisted.sourceFileId !== 'string') return null
 
   const createdAt = parseTimestamp(persisted.createdAt)
   const updatedAt = parseTimestamp(persisted.updatedAt) ?? createdAt
@@ -1126,8 +1126,8 @@ function hydratePersistedJob(persisted: PersistedSlicingJobState): SlicingJobSta
 
   return {
     id: persisted.id,
-    tenantId: persisted.tenantId,
-    tenant: persisted.tenant,
+    workspaceId: persisted.workspaceId,
+    workspace: persisted.workspace,
     sourceFileId: persisted.sourceFileId,
     sourceFileName: persisted.sourceFileName,
     sourcePath: persisted.sourcePath,

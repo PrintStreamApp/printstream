@@ -38,7 +38,7 @@ async function waitForCondition(check: () => boolean, message: string): Promise<
 test('bridge session authenticates hello and answers RPC round-trips', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     runtimeTokenHash: hashBridgeRuntimeToken('runtime-token')
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   const bridgeUpdates: Array<{ data: { buildRevision?: string; sourceFingerprint?: string } }> = []
@@ -109,7 +109,7 @@ test('bridge session authenticates hello and answers RPC round-trips', async () 
 test('bridge session broadcasts bridge resource change when a bridge connects', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     version: '0.1.0',
     protocolVersion: 1,
     runnerAbiVersion: 'old-runner',
@@ -121,9 +121,9 @@ test('bridge session broadcasts bridge resource change when a bridge connects', 
   })) as unknown) as typeof rootPrisma.bridge.update
   rootPrisma.printer.findMany = ((async () => []) as unknown) as typeof rootPrisma.printer.findMany
 
-  const broadcasts: Array<{ event: unknown; tenantId: string | null }> = []
-  mock.method(wsBroadcaster, 'broadcast', (event: unknown, tenantId: string | null) => {
-    broadcasts.push({ event, tenantId })
+  const broadcasts: Array<{ event: unknown; workspaceId: string | null }> = []
+  mock.method(wsBroadcaster, 'broadcast', (event: unknown, workspaceId: string | null) => {
+    broadcasts.push({ event, workspaceId })
   })
 
   const httpServer = createServer()
@@ -163,11 +163,11 @@ test('bridge session broadcasts bridge resource change when a bridge connects', 
             resource: (entry.event as { resource?: string }).resource
           }
         : entry.event,
-      tenantId: entry.tenantId
+      workspaceId: entry.workspaceId
     })),
     [{
       event: { type: 'resource.changed', resource: 'bridges' },
-      tenantId: 'tenant-1'
+      workspaceId: 'workspace-1'
     }]
   )
 
@@ -187,7 +187,7 @@ test('bridge session broadcasts bridge resource change when a bridge connects', 
 test('bridge session broadcasts bridge resource change when a bridge disconnects', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     version: '0.1.0',
     protocolVersion: 1,
     runnerAbiVersion: 'node22-ffmpeg7-v1',
@@ -199,9 +199,9 @@ test('bridge session broadcasts bridge resource change when a bridge disconnects
   })) as unknown) as typeof rootPrisma.bridge.update
   rootPrisma.printer.findMany = ((async () => []) as unknown) as typeof rootPrisma.printer.findMany
 
-  const broadcasts: Array<{ event: unknown; tenantId: string | null }> = []
-  mock.method(wsBroadcaster, 'broadcast', (event: unknown, tenantId: string | null) => {
-    broadcasts.push({ event, tenantId })
+  const broadcasts: Array<{ event: unknown; workspaceId: string | null }> = []
+  mock.method(wsBroadcaster, 'broadcast', (event: unknown, workspaceId: string | null) => {
+    broadcasts.push({ event, workspaceId })
   })
 
   const httpServer = createServer()
@@ -230,7 +230,7 @@ test('bridge session broadcasts bridge resource change when a bridge disconnects
       if (payload.type === 'bridge.welcome') {
         connectBroadcastCount = broadcasts.filter((entry) => {
           const event = entry.event as { type?: string; resource?: string }
-          return event.type === 'resource.changed' && event.resource === 'bridges' && entry.tenantId === 'tenant-1'
+          return event.type === 'resource.changed' && event.resource === 'bridges' && entry.workspaceId === 'workspace-1'
         }).length
         socket.close()
       }
@@ -243,7 +243,7 @@ test('bridge session broadcasts bridge resource change when a bridge disconnects
   await waitForCondition(() => {
     const bridgeBroadcastCount = broadcasts.filter((entry) => {
       const event = entry.event as { type?: string; resource?: string }
-      return event.type === 'resource.changed' && event.resource === 'bridges' && entry.tenantId === 'tenant-1'
+      return event.type === 'resource.changed' && event.resource === 'bridges' && entry.workspaceId === 'workspace-1'
     }).length
     return bridgeBroadcastCount >= connectBroadcastCount + 1
   }, 'Expected bridge disconnect to broadcast another bridge resource change.')
@@ -263,7 +263,7 @@ test('bridge session broadcasts bridge resource change when a bridge disconnects
 test('bridge heartbeat persistence is throttled between bridge hello updates', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     runtimeTokenHash: hashBridgeRuntimeToken('runtime-token')
   })) as unknown) as typeof rootPrisma.bridge.findUnique
 
@@ -345,7 +345,7 @@ test('bridge heartbeat persistence is throttled between bridge hello updates', a
 test('bridge session forwards camera watch lifecycle and frame delivery', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     runtimeTokenHash: hashBridgeRuntimeToken('runtime-token')
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({
@@ -416,7 +416,7 @@ test('bridge session forwards camera watch lifecycle and frame delivery', async 
 test('bridge session forwards RPC progress updates before success', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     runtimeTokenHash: hashBridgeRuntimeToken('runtime-token')
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({
@@ -497,7 +497,7 @@ test('bridge session forwards RPC progress updates before success', async () => 
 test('bridge session forwards printer FTPS activity updates to the session manager', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     runtimeTokenHash: hashBridgeRuntimeToken('runtime-token')
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({
@@ -575,7 +575,7 @@ test('bridge session forwards printer FTPS activity updates to the session manag
 test('bridge session cancels timed-out RPC requests on the bridge runtime', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     runtimeTokenHash: hashBridgeRuntimeToken('runtime-token')
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({
@@ -645,7 +645,7 @@ test('bridge session cancels timed-out RPC requests on the bridge runtime', asyn
 test('bridge session sends cancel for explicitly cancelled RPC requests', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     runtimeTokenHash: hashBridgeRuntimeToken('runtime-token')
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({

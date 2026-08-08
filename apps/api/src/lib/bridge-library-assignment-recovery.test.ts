@@ -20,7 +20,7 @@ afterEach(() => {
   rootPrisma.libraryFileReplica.updateMany = originalLibraryFileReplicaUpdateMany
 })
 
-test('recoverBridgeLibraryAssignments moves bridge-owned library metadata to the new tenant', async () => {
+test('recoverBridgeLibraryAssignments moves bridge-owned library metadata to the new workspace', async () => {
   const calls: Array<[string, unknown]> = []
   rootPrisma.libraryFile.updateMany = ((async (args: unknown) => {
     calls.push(['files', args])
@@ -40,7 +40,7 @@ test('recoverBridgeLibraryAssignments moves bridge-owned library metadata to the
   }) as unknown) as typeof rootPrisma.libraryFileReplica.updateMany
 
   const result = await recoverBridgeLibraryAssignments({
-    tenantId: 'tenant-home',
+    workspaceId: 'workspace-home',
     bridgeId: 'bridge-home'
   })
 
@@ -55,30 +55,30 @@ test('recoverBridgeLibraryAssignments moves bridge-owned library metadata to the
     ['files', {
       where: {
         ownerBridgeId: 'bridge-home',
-        tenantId: { not: 'tenant-home' }
+        workspaceId: { not: 'workspace-home' }
       },
-      data: { tenantId: 'tenant-home' }
+      data: { workspaceId: 'workspace-home' }
     }],
     ['folders', {
       where: {
         ownerBridgeId: 'bridge-home',
-        tenantId: { not: 'tenant-home' }
+        workspaceId: { not: 'workspace-home' }
       },
-      data: { tenantId: 'tenant-home' }
+      data: { workspaceId: 'workspace-home' }
     }],
     ['versions', {
       where: {
         ownerBridgeId: 'bridge-home',
-        tenantId: { not: 'tenant-home' }
+        workspaceId: { not: 'workspace-home' }
       },
-      data: { tenantId: 'tenant-home' }
+      data: { workspaceId: 'workspace-home' }
     }],
     ['replicas', {
       where: {
         bridgeId: 'bridge-home',
-        tenantId: { not: 'tenant-home' }
+        workspaceId: { not: 'workspace-home' }
       },
-      data: { tenantId: 'tenant-home' }
+      data: { workspaceId: 'workspace-home' }
     }]
   ])
 })

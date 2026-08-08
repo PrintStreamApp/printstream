@@ -18,7 +18,7 @@ import { readEntry } from './three-mf.js'
 // (Re-resolution itself is covered by the resolveSlicingSourcePath tests.)
 const passthroughResolveSource: ResolveSlicingSource = async ({ sourcePath }) => sourcePath
 
-// The settings-authoring step reaches the slicer's profile resolver and the tenant's stored
+// The settings-authoring step reaches the slicer's profile resolver and the workspace's stored
 // presets, neither of which exists here. Its own behaviour is covered by
 // slice-settings-authoring.test.ts; returning null is the "nothing to author" path, so the chain
 // slices the file it already had. The test below drives the authored path explicitly.
@@ -75,8 +75,8 @@ test('slicing jobs surface live slicer output before the run finishes', async ()
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -85,7 +85,7 @@ test('slicing jobs surface live slicer output before the run finishes', async ()
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'slicing')
     assert.equal(current.output.some((entry) => entry.text === 'Processing layer 12/248'), true)
   })
@@ -93,7 +93,7 @@ test('slicing jobs surface live slicer output before the run finishes', async ()
   if (releaseRun) releaseRun()
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
     assert.equal(current.error, 'Slicing failed')
   })
@@ -123,8 +123,8 @@ test('slicing jobs log lifecycle changes and CLI output lines', async () => {
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -160,8 +160,8 @@ test('slicing jobs emit elapsed-time heartbeats when live output is unavailable'
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -170,14 +170,14 @@ test('slicing jobs emit elapsed-time heartbeats when live output is unavailable'
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.output.some((entry) => entry.text.includes('Slicing...')), true)
   })
 
   if (releaseRun) releaseRun()
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
   })
 })
@@ -206,8 +206,8 @@ test('a slice the slicer stops acknowledging fails with the real reason, not a h
   })) as unknown as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -216,10 +216,10 @@ test('a slice the slicer stops acknowledging fails with the real reason, not a h
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
   })
-  const finished = jobs.get('tenant-1', job.id)
+  const finished = jobs.get('workspace-1', job.id)
   assert.notEqual(finished.status, 'cancelled', 'a lost slice must not be blamed on the user')
   assert.match(finished.error ?? '', /slicer service restarted/i)
   assert.equal(aborted?.aborted, true, 'the slice request itself must be aborted, not left running')
@@ -247,8 +247,8 @@ test('slicing jobs reload persisted history after restart', async () => {
 
   const first = new SlicingJobs(options)
   const queued = first.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -258,7 +258,7 @@ test('slicing jobs reload persisted history after restart', async () => {
 
   try {
     await waitFor(async () => {
-      const current = first.get('tenant-1', queued.id)
+      const current = first.get('workspace-1', queued.id)
       assert.equal(current.status, 'failed')
     })
 
@@ -268,7 +268,7 @@ test('slicing jobs reload persisted history after restart', async () => {
     })
 
     const reloaded = new SlicingJobs(options)
-    const list = reloaded.list('tenant-1')
+    const list = reloaded.list('workspace-1')
     assert.equal(list.length, 1)
     assert.equal(list[0]?.id, queued.id)
     assert.equal(list[0]?.status, 'failed')
@@ -289,7 +289,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
       return {
         file: {
         id: 'hidden-output-file',
-        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
         ownerBridgeId: input.bridgeId,
         name: input.fileName,
         storedPath: 'hidden-output.gcode.3mf',
@@ -320,8 +320,8 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
   })) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -335,7 +335,7 @@ test('slicing jobs persist slice-to-print artifacts as hidden files', async () =
 
   try {
     await waitFor(async () => {
-      const current = jobs.get('tenant-1', job.id)
+      const current = jobs.get('workspace-1', job.id)
       assert.equal(current.status, 'ready')
       assert.equal(current.outputFileId, 'hidden-output-file')
       assert.equal(current.output.some((entry) => entry.text === 'Ready to print'), true)
@@ -386,8 +386,8 @@ test('a successful slice keeps the project it handed the engine, linked to the o
   })) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath,
@@ -397,7 +397,7 @@ test('a successful slice keeps the project it handed the engine, linked to the o
 
   try {
     await waitFor(async () => {
-      assert.equal(jobs.get('tenant-1', job.id).status, 'ready')
+      assert.equal(jobs.get('workspace-1', job.id).status, 'ready')
     })
     assert.equal(preserved.length, 1)
     assert.equal(preserved[0]?.bytes, 'prepared project bytes')
@@ -451,8 +451,8 @@ test('the project the engine slices is the project that gets kept', async () => 
   }) as unknown as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath,
@@ -462,7 +462,7 @@ test('the project the engine slices is the project that gets kept', async () => 
 
   try {
     await waitFor(async () => {
-      assert.equal(jobs.get('tenant-1', job.id).status, 'ready')
+      assert.equal(jobs.get('workspace-1', job.id).status, 'ready')
     })
     assert.equal(slicedPath, authoredPath, 'the engine reads the authored project, not the raw source')
     assert.deepEqual(preserved, ['the project WITH this slice\'s settings'], 'and that is what we keep')
@@ -499,8 +499,8 @@ test('a slice whose output is not persisted keeps no project', async () => {
   })) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath,
@@ -510,7 +510,7 @@ test('a slice whose output is not persisted keeps no project', async () => {
 
   try {
     await waitFor(async () => {
-      assert.equal(jobs.get('tenant-1', job.id).status, 'failed')
+      assert.equal(jobs.get('workspace-1', job.id).status, 'failed')
     })
     assert.equal(preserveCalls, 0)
   } finally {
@@ -538,8 +538,8 @@ test('the job list carries a finished job as its outcome line alone', async () =
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -548,16 +548,16 @@ test('the job list carries a finished job as its outcome line alone', async () =
   })
 
   await waitFor(async () => {
-    const whileActive = jobs.list('tenant-1').find((entry) => entry.id === job.id)
+    const whileActive = jobs.list('workspace-1').find((entry) => entry.id === job.id)
     assert.equal(whileActive?.output.some((line) => line.stream === 'stdout'), true, 'a running job keeps its progress frames')
   })
 
   if (releaseRun) releaseRun()
   await waitFor(async () => {
-    assert.equal(jobs.get('tenant-1', job.id).status, 'failed')
+    assert.equal(jobs.get('workspace-1', job.id).status, 'failed')
   })
 
-  const listed = jobs.list('tenant-1').find((entry) => entry.id === job.id)
+  const listed = jobs.list('workspace-1').find((entry) => entry.id === job.id)
   assert.equal(listed?.output.some((line) => line.stream !== 'system'), false, 'a finished job ships no engine log')
   assert.equal(listed?.output.length, 1, 'exactly its outcome, not every status line it passed through')
   assert.equal(listed?.output[0]?.text, 'Slicing failed', 'and that outcome is the last line, not the first')
@@ -567,7 +567,7 @@ test('the job list carries a finished job as its outcome line alone', async () =
     'the earlier status lines are dead weight once the job is over'
   )
   // The single-job route is still the full record, engine log included.
-  const full = jobs.get('tenant-1', job.id)
+  const full = jobs.get('workspace-1', job.id)
   assert.equal(full.output.some((line) => line.stream === 'stdout'), true)
   assert.equal(full.output.some((line) => line.text === 'Preparing the project'), true)
 })
@@ -585,8 +585,8 @@ test('closing the tab that started a slice cancels it, and leaves other tabs and
   }) as typeof slicerClient.run
 
   const enqueueFor = (ownerClientId: string | undefined) => jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -601,19 +601,19 @@ test('closing the tab that started a slice cancels it, and leaves other tabs and
 
   jobs.cancelForOwner('tab-1')
 
-  assert.equal(jobs.get('tenant-1', mine.id).cancelRequested, true)
-  assert.equal(jobs.get('tenant-1', theirs.id).cancelRequested, false, "another tab's slice is untouched")
-  assert.equal(jobs.get('tenant-1', unowned.id).cancelRequested, false, 'an unowned slice is untouched')
+  assert.equal(jobs.get('workspace-1', mine.id).cancelRequested, true)
+  assert.equal(jobs.get('workspace-1', theirs.id).cancelRequested, false, "another tab's slice is untouched")
+  assert.equal(jobs.get('workspace-1', unowned.id).cancelRequested, false, 'an unowned slice is untouched')
 
   if (releaseRun) releaseRun()
   await waitFor(async () => {
-    assert.equal(jobs.get('tenant-1', theirs.id).status, 'failed')
+    assert.equal(jobs.get('workspace-1', theirs.id).status, 'failed')
   })
 
   // A slice that already finished belongs to the user, not to the tab that started it.
-  const finishedStatus = jobs.get('tenant-1', theirs.id).status
+  const finishedStatus = jobs.get('workspace-1', theirs.id).status
   jobs.cancelForOwner('tab-2')
-  assert.equal(jobs.get('tenant-1', theirs.id).status, finishedStatus, 'a terminal job is never re-cancelled')
+  assert.equal(jobs.get('workspace-1', theirs.id).status, finishedStatus, 'a terminal job is never re-cancelled')
 })
 
 test('slicing jobs persist durable history thumbnails and clean them up on delete', async () => {
@@ -625,7 +625,7 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
     persistArtifact: async (input) => ({
       file: {
       id: 'output-file-1',
-      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
       ownerBridgeId: input.bridgeId,
       name: input.fileName,
       storedPath: 'output.gcode.3mf',
@@ -659,8 +659,8 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
   })) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -671,13 +671,13 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
   try {
     let thumbnailPath: string | null = null
     await waitFor(async () => {
-      const current = jobs.get('tenant-1', job.id)
+      const current = jobs.get('workspace-1', job.id)
       assert.equal(current.status, 'ready')
-      thumbnailPath = jobs.getThumbnailInfo('tenant-1', job.id).thumbnailPath
+      thumbnailPath = jobs.getThumbnailInfo('workspace-1', job.id).thumbnailPath
       assert.equal(typeof thumbnailPath, 'string')
     })
 
-    assert.deepEqual(jobs.getThumbnailInfo('tenant-1', job.id), {
+    assert.deepEqual(jobs.getThumbnailInfo('workspace-1', job.id), {
       thumbnailPath,
       sourceFileId: 'file-1',
       outputFileId: 'output-file-1',
@@ -691,7 +691,7 @@ test('slicing jobs persist durable history thumbnails and clean them up on delet
 
     assert.ok(thumbnailPath)
     assert.deepEqual(await readPrintJobThumbnail(thumbnailPath), Buffer.from('png'))
-    await jobs.delete('tenant-1', job.id)
+    await jobs.delete('workspace-1', job.id)
     assert.equal(await readPrintJobThumbnail(thumbnailPath), null)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -719,8 +719,8 @@ test('slicing jobs retry without incompatible builtin profiles after compatibili
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -733,7 +733,7 @@ test('slicing jobs retry without incompatible builtin profiles after compatibili
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
     assert.equal(runProfileCounts.length, 2)
     assert.equal(runJobIds.length, 2)
@@ -765,8 +765,8 @@ test('slicing jobs retry when compatibility fallback matches generated builtin:m
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -779,7 +779,7 @@ test('slicing jobs retry when compatibility fallback matches generated builtin:m
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
     assert.equal(runJobIds.length, 2)
     assert.notEqual(runJobIds[0], runJobIds[1])
@@ -810,8 +810,8 @@ test('slicing jobs retry without builtin machine/process after a settings-merge 
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -825,7 +825,7 @@ test('slicing jobs retry without builtin machine/process after a settings-merge 
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
     // The retry dropped the builtin machine + process (the incompatible pair) but kept the filament.
     assert.deepEqual(runProfileKinds, [
@@ -850,8 +850,8 @@ test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, 
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -863,7 +863,7 @@ test('slicing jobs retry a signal-death slicer exit once with unchanged inputs, 
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
     // Exactly one retry: two run attempts with distinct attempt job ids, then the crash surfaces.
     assert.equal(runJobIds.length, 2)
@@ -885,8 +885,8 @@ test('slicing jobs do not crash-retry ordinary non-signal slicer failures', asyn
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -898,7 +898,7 @@ test('slicing jobs do not crash-retry ordinary non-signal slicer failures', asyn
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
     assert.equal(runs, 1)
   })
@@ -929,8 +929,8 @@ test('slicing jobs preserve manual machine/profile selections on retry after bui
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -942,7 +942,7 @@ test('slicing jobs preserve manual machine/profile selections on retry after bui
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', job.id)
+    const current = jobs.get('workspace-1', job.id)
     assert.equal(current.status, 'failed')
     assert.equal(runJobIds.length, 2)
     assert.equal(runMachineProfileIds.length, 2)
@@ -997,8 +997,8 @@ test('slicing jobs rewrite project settings and retry when compatibility fallbac
   }) as typeof slicerClient.run
 
   const job = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath,
@@ -1008,7 +1008,7 @@ test('slicing jobs rewrite project settings and retry when compatibility fallbac
 
   try {
     await waitFor(async () => {
-      const current = jobs.get('tenant-1', job.id)
+      const current = jobs.get('workspace-1', job.id)
       assert.equal(current.status, 'failed')
       assert.equal(runJobIds.length, 2)
       assert.notEqual(runSourcePaths[0], runSourcePaths[1])
@@ -1038,8 +1038,8 @@ test('slicing jobs retry incompatible built-in machine profiles per job without 
   }) as typeof slicerClient.run
 
   const firstJob = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'part.3mf',
     sourcePath: '/tmp/part.3mf',
@@ -1051,14 +1051,14 @@ test('slicing jobs retry incompatible built-in machine profiles per job without 
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', firstJob.id)
+    const current = jobs.get('workspace-1', firstJob.id)
     assert.equal(current.status, 'failed')
     assert.equal(runJobIds.length, 2)
   })
 
   const secondJob = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-2',
     sourceFileName: 'part-2.3mf',
     sourcePath: '/tmp/part-2.3mf',
@@ -1070,7 +1070,7 @@ test('slicing jobs retry incompatible built-in machine profiles per job without 
   })
 
   await waitFor(async () => {
-    const current = jobs.get('tenant-1', secondJob.id)
+    const current = jobs.get('workspace-1', secondJob.id)
     assert.equal(current.status, 'failed')
     assert.equal(runJobIds.length, 4)
     assert.deepEqual(runProfileKinds, [
@@ -1121,8 +1121,8 @@ test('slicing jobs do not proactively rewrite process profiles on subsequent job
   }) as typeof slicerClient.run
 
   const firstJob = jobs.enqueue({
-    tenantId: 'tenant-1',
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     sourceFileId: 'file-1',
     sourceFileName: 'first.3mf',
     sourcePath: firstSourcePath,
@@ -1132,14 +1132,14 @@ test('slicing jobs do not proactively rewrite process profiles on subsequent job
 
   try {
     await waitFor(async () => {
-      const current = jobs.get('tenant-1', firstJob.id)
+      const current = jobs.get('workspace-1', firstJob.id)
       assert.equal(current.status, 'failed')
       assert.equal(runSourcePaths.length, 2)
     })
 
     const secondJob = jobs.enqueue({
-      tenantId: 'tenant-1',
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+      workspaceId: 'workspace-1',
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
       sourceFileId: 'file-2',
       sourceFileName: 'second.3mf',
       sourcePath: secondSourcePath,
@@ -1148,7 +1148,7 @@ test('slicing jobs do not proactively rewrite process profiles on subsequent job
     })
 
     await waitFor(async () => {
-      const current = jobs.get('tenant-1', secondJob.id)
+      const current = jobs.get('workspace-1', secondJob.id)
       assert.equal(current.status, 'failed')
       assert.equal(runSourcePaths.length, 4)
       assert.equal(runSourcePaths[2], secondSourcePath)

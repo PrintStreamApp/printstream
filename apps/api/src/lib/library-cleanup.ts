@@ -26,7 +26,7 @@
 import path from 'node:path'
 import { readdir, rm, stat } from 'node:fs/promises'
 import { env } from './env.js'
-import { PUBLIC_DEMO_TENANT_SLUG } from '@printstream/shared'
+import { PUBLIC_DEMO_WORKSPACE_SLUG } from '@printstream/shared'
 import { deleteLibraryFileBytes, pruneBridgeLibraryDerivedCache, pruneBridgeLibraryLocalCache } from './bridge-library-files.js'
 import { pruneDispatchJournal } from './dispatch-journal.js'
 import { pruneMeshThumbnailCache } from './mesh-thumbnail-cache.js'
@@ -37,6 +37,7 @@ import { pruneAuditLogs } from './audit-logs.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
 import { deletePrintJobSnapshot } from './print-job-snapshots.js'
 import { rootPrisma } from './prisma.js'
+import { pruneDeletedWorkspaces } from './workspace-cleanup.js'
 
 const RETENTION_DAYS = env.LIBRARY_TRANSIENT_RETENTION_DAYS
 const PRINT_JOB_THUMBNAIL_RETENTION_DAYS = env.PRINT_JOB_THUMBNAIL_RETENTION_DAYS
@@ -66,7 +67,7 @@ export async function pruneHiddenLibraryFiles(
       ownerBridgeId: true,
       storedPath: true,
       uploadedAt: true,
-      tenant: {
+      workspace: {
         select: {
           slug: true
         }
@@ -89,10 +90,10 @@ export async function pruneHiddenLibraryFiles(
 }
 
 function isHiddenLibraryFileExpired(
-  row: { uploadedAt: Date; tenant: { slug: string } | null },
+  row: { uploadedAt: Date; workspace: { slug: string } | null },
   defaultRetentionMs: number
 ): boolean {
-  const retentionMs = row.tenant?.slug === PUBLIC_DEMO_TENANT_SLUG
+  const retentionMs = row.workspace?.slug === PUBLIC_DEMO_WORKSPACE_SLUG
     ? DEMO_TRANSIENT_RETENTION_MS
     : defaultRetentionMs
   return row.uploadedAt.getTime() <= Date.now() - retentionMs
@@ -334,7 +335,7 @@ export async function prunePrintJobSnapshots(): Promise<{ removed: number }> {
  * Hard-delete dormant bridge registrations that were created but never connected.
  * POST /api/bridge-runtime/register is unauthenticated (it backs the connect-code
  * pairing flow), so an anonymous/empty call persists a Bridge row with
- * tenantId=null and a fresh unique connect code; without a reaper these
+ * workspaceId=null and a fresh unique connect code; without a reaper these
  * accumulate (table + connectCode-uniqueness bloat). A bridge that actually
  * connects sets lastSeenAt on its first heartbeat, so this only reaps rows that
  * registered and went nowhere past the retention window. A legitimate-but-
@@ -343,7 +344,7 @@ export async function prunePrintJobSnapshots(): Promise<{ removed: number }> {
 export async function pruneDormantBridges(): Promise<{ removed: number }> {
   const cutoff = new Date(Date.now() - DORMANT_BRIDGE_RETENTION_MS)
   const result = await rootPrisma.bridge.deleteMany({
-    where: { tenantId: null, lastSeenAt: null, createdAt: { lt: cutoff } }
+    where: { workspaceId: null, lastSeenAt: null, createdAt: { lt: cutoff } }
   })
   if (result.count > 0) {
     console.log(`[library-cleanup] pruned ${result.count} dormant bridge registration${result.count === 1 ? '' : 's'}`)
@@ -395,6 +396,15 @@ export async function runArtifactMaintenance(): Promise<void> {
   const removedBridgeLocalCopies = bridgeLocalCache.removedFiles + bridgeLocalCache.removedDirs
   if (removedBridgeLocalCopies > 0) {
     console.log(`[library-cleanup] pruned ${removedBridgeLocalCopies} unused bridge local file cop${removedBridgeLocalCopies === 1 ? 'y' : 'ies'}`)
+  }
+
+  // Workspaces whose restore window has passed. Here rather than on a timer of
+  // its own because it IS artifact maintenance: the hard delete takes the
+  // workspace's stored bytes with it.
+  try {
+    await pruneDeletedWorkspaces()
+  } catch (error) {
+    console.error('[library-cleanup] deleted-workspace sweep failed', error)
   }
 
   if (dispatchJournal.removed > 0) {

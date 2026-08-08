@@ -2,7 +2,7 @@
  * Host for first-party private web modules under `src/private/<name>/`.
  *
  * The private directory holds the closed-source cloud surface (marketing
- * site, platform tenant administration) and is stripped from the public
+ * site, platform workspace administration) and is stripped from the public
  * open-source export, so discovery uses `import.meta.glob` — an empty or
  * missing directory simply yields no modules and the app must render its
  * core fallbacks (see App.tsx).
@@ -19,13 +19,34 @@ import type { WebPlugin } from '../plugin/types'
 
 export interface PublicRouteContext {
   isAuthenticated: boolean
+  /**
+   * Auth is still being determined, so `isAuthenticated` means "not known yet"
+   * rather than "signed out".
+   *
+   * Marketing CTAs swap on sign-in state ("Login" becomes "Open app", a plan
+   * button becomes a purchase), and painting the signed-OUT branch first told a
+   * signed-in reader to log in and then changed its mind. False once settled,
+   * and false from the start where nobody is asking -- so a surface can render
+   * its neutral state while this is true instead of guessing.
+   */
+  authPending?: boolean
   /** Route into the app for the current actor (workspace landing or chooser). */
   appHref: string
   /**
    * Route to the actor's account page (billing lives there) — the workspace
-   * account when a tenant is active, otherwise the same as `appHref`.
+   * account when a workspace is active, otherwise the same as `appHref`.
    */
   accountHref: string
+  /**
+   * The signed-in actor's billing-account API base, or null.
+   *
+   * Marketing carries no workspace, so a purchase CTA on a public page cannot
+   * use a workspace-scoped endpoint -- for a buyer with no workspace at all
+   * (which is what registering for a self-hosted licence creates) it 403s.
+   * Null on a cold marketing load and for a signed-out visitor, who is sent to
+   * register first.
+   */
+  customerBasePath?: string | null
   /** Where the public demo entry should land. */
   demoLandingRoute: string
 }
@@ -48,20 +69,24 @@ export interface PrivateMarketingModule {
   Footer: ComponentType
 }
 
-export interface PlatformTenantsViewProps {
-  canDisableTenants: boolean
-  canManageTenants: boolean
-  accessibleTenantIds: ReadonlySet<string>
-  onOpenWorkspace: (tenantId: string) => void
+export interface PlatformWorkspacesViewProps {
+  canDisableWorkspaces: boolean
+  canManageWorkspaces: boolean
+  accessibleWorkspaceIds: ReadonlySet<string>
+  onOpenWorkspace: (workspaceId: string) => void
 }
 
 export interface PrivatePlatformAdminModule {
   /** Rendered at `/platform` (platform workspace landing). */
   OverviewView: ComponentType
-  /** Rendered at `/platform/tenants`. */
-  TenantsView: ComponentType<PlatformTenantsViewProps>
-  /** Rendered at `/platform/billing` (gated by `billing.manage`). */
-  BillingView: ComponentType
+  /** Rendered at `/platform/workspaces`. */
+  WorkspacesView: ComponentType<PlatformWorkspacesViewProps>
+  /** Rendered at `/platform/licenses` (issued self-hosted keys). */
+  LicensesView: ComponentType
+  /** Rendered at `/platform/customers` (the level above workspaces). */
+  CustomersView: ComponentType
+  /** One customer in full, inside the platform rather than their own scope. */
+  CustomerDetailView: ComponentType
   /** Rendered at `/platform/messages` (the support-messaging inbox). */
   MessagesView: ComponentType
   /** Rendered at `/platform/suggestions/*` (the shared suggestion board; footer-linked, no nav tab). */

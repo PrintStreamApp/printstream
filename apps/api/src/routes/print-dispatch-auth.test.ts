@@ -13,9 +13,9 @@ import { printDispatchRouter } from './print-dispatch.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { HttpError } from '../lib/http-error.js'
 import { printDispatcher } from '../lib/print-dispatcher.js'
-import type { RequestTenantSummary } from '../lib/tenant-context.js'
+import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
 
-const TEST_TENANT: RequestTenantSummary = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+const TEST_WORKSPACE: RequestWorkspaceSummary = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
 
 const originalList = printDispatcher.list
 const originalCancel = printDispatcher.cancel
@@ -39,7 +39,7 @@ test('dispatch queue requires authentication once auth is enabled', async () => 
   })
 })
 
-test('dispatch queue requires tenant context', async () => {
+test('dispatch queue requires workspace context', async () => {
   await withDispatchApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
@@ -49,21 +49,21 @@ test('dispatch queue requires tenant context', async () => {
     const response = await fetch(`${baseUrl}/api/print-dispatch`)
 
     assert.equal(response.status, 400)
-    assert.deepEqual(await response.json(), { error: 'Tenant context is required' })
+    assert.deepEqual(await response.json(), { error: 'Workspace context is required' })
   })
 })
 
-test('dispatch queue scopes results to the request tenant', async () => {
+test('dispatch queue scopes results to the request workspace', async () => {
   await withDispatchApp({
     authEnabled: true,
     actor: { type: 'user', userId: 'user-1' },
     permissions: [JOBS_VIEW_PERMISSION],
     runtimePolicy: { demoMode: false },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
-    let receivedTenantId: string | null = null
-    printDispatcher.list = (((tenantId: string) => {
-      receivedTenantId = tenantId
+    let receivedWorkspaceId: string | null = null
+    printDispatcher.list = (((workspaceId: string) => {
+      receivedWorkspaceId = workspaceId
       return []
     }) as unknown) as typeof printDispatcher.list
 
@@ -71,7 +71,7 @@ test('dispatch queue scopes results to the request tenant', async () => {
 
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { jobs: [] })
-    assert.equal(receivedTenantId, TEST_TENANT.id)
+    assert.equal(receivedWorkspaceId, TEST_WORKSPACE.id)
   })
 })
 
@@ -95,11 +95,11 @@ test('dispatch cancellation passes authorization with prints.dispatch permission
     actor: { type: 'user', userId: 'user-1' },
     permissions: [JOBS_VIEW_PERMISSION, PRINTS_DISPATCH_PERMISSION],
     runtimePolicy: { demoMode: false },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
-    let received: { tenantId: string; jobId: string } | null = null
-    printDispatcher.cancel = (((tenantId: string, jobId: string) => {
-      received = { tenantId, jobId }
+    let received: { workspaceId: string; jobId: string } | null = null
+    printDispatcher.cancel = (((workspaceId: string, jobId: string) => {
+      received = { workspaceId, jobId }
       return Promise.resolve(null)
     }) as unknown) as typeof printDispatcher.cancel
 
@@ -108,19 +108,19 @@ test('dispatch cancellation passes authorization with prints.dispatch permission
     assert.notEqual(response.status, 401)
     assert.notEqual(response.status, 403)
     assert.equal(response.status, 404)
-    assert.deepEqual(received, { tenantId: TEST_TENANT.id, jobId: 'job-1' })
+    assert.deepEqual(received, { workspaceId: TEST_WORKSPACE.id, jobId: 'job-1' })
   })
 })
 
 async function withDispatchApp(
-  input: RequestAuthContext & { tenant?: RequestTenantSummary | null },
+  input: RequestAuthContext & { workspace?: RequestWorkspaceSummary | null },
   run: (baseUrl: string) => Promise<void>
 ): Promise<void> {
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = input
-    request.tenant = input.tenant ?? null
+    request.workspace = input.workspace ?? null
     next()
   })
   app.use('/api/print-dispatch', printDispatchRouter)

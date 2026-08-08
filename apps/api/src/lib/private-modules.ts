@@ -2,7 +2,7 @@
  * Loader for first-party private modules under `src/private/<name>/`.
  *
  * The private directory holds closed-source functionality (the hosted
- * cloud deployment's marketing and tenant-administration surface) and is
+ * cloud deployment's marketing and workspace-administration surface) and is
  * stripped from the public open-source export, so the loader must treat a
  * missing directory as the normal case. Modules are discovered with a
  * filesystem scan instead of static imports precisely so the core compiles

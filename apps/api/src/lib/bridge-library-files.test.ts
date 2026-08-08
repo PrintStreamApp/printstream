@@ -240,7 +240,7 @@ test('ensureLibraryFileReplica stores a tracked dispatch replica on the target b
   })
 
   const storedPath = await ensureLibraryFileReplica({
-    tenantId: 'tenant-1',
+    workspaceId: 'workspace-1',
     libraryFileId: 'file-1',
     fileName: 'Part Tray.3mf',
     sourceBridgeId: 'bridge-source',

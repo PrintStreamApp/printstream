@@ -11,13 +11,13 @@ const stub = usePrismaStubs()
 const logger = { info() {}, warn() {}, error() {} }
 const printer = { id: 'printer-1' } as unknown as Printer
 
-function handlers(isEnabledForTenant: (tenantId: string | null) => boolean = () => true) {
-  return createQueueCompletionHandlers({ isEnabledForTenant, logger })
+function handlers(isEnabledForWorkspace: (workspaceId: string | null) => boolean = () => true) {
+  return createQueueCompletionHandlers({ isEnabledForWorkspace, logger })
 }
 
 function stubItem(item: { id: string; quantity: number; completedCount: number } | null) {
   const updates: Array<Record<string, unknown>> = []
-  stub(printerManager, 'getTenantId', () => 'tenant-1')
+  stub(printerManager, 'getWorkspaceId', () => 'workspace-1')
   stub(rootPrisma.queueItem, 'findFirst', async () => item)
   stub(rootPrisma.queueItem, 'update', async ({ data }: { data: Record<string, unknown> }) => {
     updates.push(data)
@@ -64,7 +64,7 @@ test('no matching queue item is a no-op', async () => {
   assert.equal(updates.length, 0)
 })
 
-test('events for a disabled tenant are ignored', async () => {
+test('events for a disabled workspace are ignored', async () => {
   const updates = stubItem({ id: 'q1', quantity: 1, completedCount: 0 })
   await handlers(() => false).onFinished({ jobId: 'job-1', printer, jobName: 'plate.gcode.3mf', result: 'success' })
   assert.equal(updates.length, 0)

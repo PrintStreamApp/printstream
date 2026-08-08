@@ -7,15 +7,15 @@
  *
  * Destinations are a per-scope recipients list (shared topics for broadcast
  * notifications, self-bound personal topics for the requesting user's
- * targeted messages — see `lib/notification-recipients.ts`). Each tenant
- * stores its list via `context.settings.forTenant(tenantId)`, the platform
+ * targeted messages — see `lib/notification-recipients.ts`). Each workspace
+ * stores its list via `context.settings.forWorkspace(workspaceId)`, the platform
  * workspace in the plugin's base store; a pre-list `topicUrl` setting keeps
  * working as an implicit shared entry.
  *
  * The server-wide `NTFY_TOPIC_URL` env is honored as a broadcast-only
  * fallback in single-box managed-bridge self-hosting (see
- * `globalTopicFallback`); in a multi-tenant cloud it is ignored, since one
- * shared topic would leak every un-configured tenant's notifications to a
+ * `globalTopicFallback`); in a multi-workspace cloud it is ignored, since one
+ * shared topic would leak every un-configured workspace's notifications to a
  * single operator topic.
  */
 import type { ApiPlugin } from '../../plugin/types.js'
@@ -32,10 +32,10 @@ const OUTBOUND_TIMEOUT_MS = 10_000
 
 /**
  * The server-wide `NTFY_TOPIC_URL` is a single shared topic. Honor it as a
- * fallback only in single-box managed-bridge self-hosting; in a multi-tenant
- * cloud it would silently fan every un-configured tenant's printer/job/error
- * text to one operator topic (a cross-tenant leak), so there delivery is
- * per-tenant only and requires explicitly configured recipients.
+ * fallback only in single-box managed-bridge self-hosting; in a multi-workspace
+ * cloud it would silently fan every un-configured workspace's printer/job/error
+ * text to one operator topic (a cross-workspace leak), so there delivery is
+ * per-workspace only and requires explicitly configured recipients.
  */
 function globalTopicFallback(): string | null {
   return isManagedBridgeMode() ? (env.NTFY_TOPIC_URL ?? null) : null
@@ -82,8 +82,8 @@ export const notificationsNtfyPlugin: ApiPlugin = {
           message,
           pluginName: context.pluginName,
           prisma: context.prisma,
-          settingsForScope: (tenantId) => tenantId ? context.settings.forTenant(tenantId) : context.settings,
-          isEnabledForTenant: (tenantId) => context.isEnabledForTenant?.(tenantId) ?? true,
+          settingsForScope: (workspaceId) => workspaceId ? context.settings.forWorkspace(workspaceId) : context.settings,
+          isEnabledForWorkspace: (workspaceId) => context.isEnabledForWorkspace?.(workspaceId) ?? true,
           fallbackUrl: globalTopicFallback()
         })
         if (urls.length === 0) return
@@ -129,7 +129,7 @@ export const notificationsNtfyPlugin: ApiPlugin = {
       },
       {
         onError: (error) => context.logger.warn('failed to publish ntfy notification', error)
-        // No shouldHandleTenantId gate: targeted messages may fan out beyond
+        // No shouldHandleWorkspaceId gate: targeted messages may fan out beyond
         // the event's own scope, so the resolver enforces plugin enablement
         // per DELIVERY scope instead of per event scope.
       }

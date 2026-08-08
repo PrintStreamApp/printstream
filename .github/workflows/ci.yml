@@ -38,3 +38,50 @@ jobs:
           # @printstream/bridge-runtime) through their dist/ entry points, which
           # don't exist yet on a fresh install.
           runCmd: npm run build && npm run validate
+
+  # The installer window and the tray are PowerShell programs written inside
+  # TypeScript template literals, so nothing above can see them: tsc and the
+  # linter both see a string. A syntax error there reaches a user as a window
+  # that never appears, and a lone backslash is eaten by the template literal —
+  # `'\s+'` becomes `'s+'`, which shipped once and would have replaced the letter
+  # "s" with a space in every message the installer printed.
+  #
+  # Rendered on Linux (the generators are plain TS) and parsed here, on the only
+  # runner that has a PowerShell parser to hand.
+  powershell-syntax:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the SEA runtime
+        run: npm run build --workspace @printstream/sea-runtime
+
+      - name: Render the generated PowerShell
+        run: node scripts/ci/render-powershell.mjs rendered-powershell
+
+      - name: Parse it
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem rendered-powershell -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errors)
+            if ($errors -and $errors.Count -gt 0) {
+              $failed = $true
+              foreach ($e in $errors) {
+                # Annotated so the failure points at the line, not just the file.
+                Write-Host "::error file=$($_.Name),line=$($e.Extent.StartLineNumber)::$($e.Message)"
+              }
+            } else {
+              Write-Host "ok  $($_.Name)"
+            }
+          }
+          if ($failed) { exit 1 }

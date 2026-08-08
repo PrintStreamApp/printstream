@@ -1,5 +1,5 @@
 /**
- * Per-printer lifetime stats keyed by tenant and printer serial.
+ * Per-printer lifetime stats keyed by workspace and printer serial.
  *
  * Stats are recorded once per finished print job and survive printer
  * removal/re-adoption because the physical printer identity is the serial,
@@ -7,7 +7,7 @@
  */
 import { isPrinterActiveJobStage, type PrinterStatsResponse } from '@printstream/shared'
 import { buildFilamentSummary } from './filament-summary.js'
-import { readTenantPrintOutcomeBreakdown } from './print-outcome-breakdown.js'
+import { readWorkspacePrintOutcomeBreakdown } from './print-outcome-breakdown.js'
 import { prisma, rootPrisma } from './prisma.js'
 import { isMissingColumnError } from './prisma-errors.js'
 import { printerManager } from './printer-manager.js'
@@ -38,7 +38,7 @@ export async function recordFinishedPrinterStats(jobId: string): Promise<void> {
   const printer = await rootPrisma.printer.findUnique({
     where: { id: job.printerId },
     select: {
-      tenantId: true,
+      workspaceId: true,
       serial: true
     }
   })
@@ -60,13 +60,13 @@ export async function recordFinishedPrinterStats(jobId: string): Promise<void> {
 
     await tx.printerStats.upsert({
       where: {
-        tenantId_printerSerial: {
-          tenantId: printer.tenantId,
+        workspaceId_printerSerial: {
+          workspaceId: printer.workspaceId,
           printerSerial: printer.serial
         }
       },
       create: {
-        tenantId: printer.tenantId,
+        workspaceId: printer.workspaceId,
         printerSerial: printer.serial,
         totalPrints: 1,
         successfulPrints: job.result === 'success' ? 1 : 0,
@@ -121,7 +121,7 @@ export async function recordFinishedPrinterStats(jobId: string): Promise<void> {
  * survives printer removal and re-adoption.
  */
 export async function setManualPrinterStats(input: {
-  tenantId: string
+  workspaceId: string
   printerSerial: string
   manualPrints?: number
   manualPrintHours?: number
@@ -129,13 +129,13 @@ export async function setManualPrinterStats(input: {
   const manualPrintDurationSeconds = input.manualPrintHours != null ? Math.round(input.manualPrintHours * 3600) : undefined
   await prisma.printerStats.upsert({
     where: {
-      tenantId_printerSerial: {
-        tenantId: input.tenantId,
+      workspaceId_printerSerial: {
+        workspaceId: input.workspaceId,
         printerSerial: input.printerSerial
       }
     },
     create: {
-      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
       printerSerial: input.printerSerial,
       manualTotalPrints: input.manualPrints ?? 0,
       manualPrintDurationSeconds: manualPrintDurationSeconds ?? 0
@@ -152,7 +152,7 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
     where: { id: printerId },
     select: {
       id: true,
-      tenantId: true,
+      workspaceId: true,
       serial: true
     }
   })
@@ -182,8 +182,8 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
   try {
     row = await prisma.printerStats.findUnique({
       where: {
-        tenantId_printerSerial: {
-          tenantId: printer.tenantId,
+        workspaceId_printerSerial: {
+          workspaceId: printer.workspaceId,
           printerSerial: printer.serial
         }
       },
@@ -214,8 +214,8 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
     const [legacyRow, legacyBreakdown] = await Promise.all([
       prisma.printerStats.findUnique({
         where: {
-          tenantId_printerSerial: {
-            tenantId: printer.tenantId,
+          workspaceId_printerSerial: {
+            workspaceId: printer.workspaceId,
             printerSerial: printer.serial
           }
         },
@@ -230,7 +230,7 @@ export async function readPrinterStats(printerId: string): Promise<PrinterStatsR
           filamentUsedMeters: true
         }
       }),
-      readTenantPrintOutcomeBreakdown({
+      readWorkspacePrintOutcomeBreakdown({
         printer: {
           is: { serial: printer.serial }
         }

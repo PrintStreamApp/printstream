@@ -29,7 +29,9 @@ import {
   startActivePrintObjectCache,
   stopActivePrintObjectCache
 } from './lib/active-print-objects.js'
+import { ensureBuiltInPlatformAuthGroups } from './lib/default-auth-groups.js'
 import { ensureDefaultWorkspace } from './lib/default-workspace.js'
+import { rootPrisma } from './lib/prisma.js'
 import { ensureManagedBridgeToken, isManagedBridgeMode } from './lib/managed-bridge.js'
 
 const httpServer = createServer(app)
@@ -83,6 +85,25 @@ void finalizeApp()
       await ensureDefaultWorkspace()
     } catch (error) {
       console.error('Failed to ensure default workspace', error)
+    }
+    // Re-apply the built-in PLATFORM roles on every boot, because a release that
+    // adds a permission to a built-in role has to reach deployments that already
+    // have those rows. Until this ran at startup the only thing that refreshed
+    // them was an operator opening Access Management — so a deploy adding
+    // `accounts.*` left the Admin role without it, and every route gated on the
+    // new permission answered 403 with nothing in the UI or the database to
+    // explain why. Observed on staging; see `default-auth-groups.ts`.
+    //
+    // Cheap and idempotent (three rows, one upsert each) and safe to repeat: the
+    // seeds are the source of truth for built-in roles, and custom roles are
+    // never touched. Workspace-scoped built-ins stay lazy on purpose — there is
+    // one set per workspace, so seeding them all here would grow with the
+    // deployment; they are re-applied per workspace on the same Access
+    // Management read.
+    try {
+      await ensureBuiltInPlatformAuthGroups(rootPrisma)
+    } catch (error) {
+      console.error('Failed to refresh built-in platform roles', error)
     }
     try {
       await loadNotificationTemplates()

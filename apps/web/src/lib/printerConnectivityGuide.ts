@@ -60,5 +60,7 @@ export const LAN_ONLY_MODE_TRADEOFF =
 export const MANAGED_BRIDGE_STEP: PrinterConnectivityStep = {
   id: 'bridge',
   title: 'Printer connectivity is built in',
-  body: 'This PrintStream server includes its own printer connection service, so there is nothing to install. Printers on the server’s local network are reached automatically.'
+  // "Nothing EXTRA": the reader has already installed the server itself, and
+  // saying "nothing to install" invites them to wonder what they just did.
+  body: 'This PrintStream server includes its own printer connection service, so there is nothing extra to install. Printers on the server’s local network are reached automatically.'
 }

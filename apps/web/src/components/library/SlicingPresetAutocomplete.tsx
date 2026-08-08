@@ -7,7 +7,7 @@
  * because real preset names ("0.20mm Balanced Strength @BBL H2D - Ryan") routinely outgrow
  * the control.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AutocompleteOption, Box, ListItemContent, Tooltip, Typography } from '@mui/joy'
 import { createFilterOptions } from '@mui/joy/Autocomplete'
 import type { SlicingPresetSummary } from '@printstream/shared'
@@ -43,8 +43,11 @@ export function SlicingPresetAutocomplete({
   const labels = useMemo(() => buildSlicingPresetLabels(profiles), [profiles])
   // Falls back to the bare alias for a value that is not in the list (a preset filtered out by the
   // current printer), which has no collision to resolve.
-  const labelFor = (profile: SlicingPresetSummary) => labels.get(profile.id) ?? formatSlicingPresetDisplayName(profile)
-  const filterByDisplayName = useMemo(() => makeFilter(labelFor), [labels])
+  const labelFor = useCallback(
+    (profile: SlicingPresetSummary) => labels.get(profile.id) ?? formatSlicingPresetDisplayName(profile),
+    [labels]
+  )
+  const filterByDisplayName = useMemo(() => makeFilter(labelFor), [labelFor])
   const valueDisplayName = value ? `${modified ? '* ' : ''}${labelFor(value)}` : ''
   const [inputValue, setInputValue] = useState(valueDisplayName)
 

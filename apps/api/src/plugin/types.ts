@@ -16,7 +16,7 @@
  * Built-in plugins live under `apps/api/src/plugins/<name>/` and are wired up
  * in `apps/api/src/plugin/builtin.ts`, where `pluginRegistry.register` sets
  * their install/enable defaults (`defaultEnabled`), runtime/manager surfaces,
- * and `tenantAccess`. A built-in plugin may own tenant-scoped Prisma models in
+ * and `workspaceAccess`. A built-in plugin may own workspace-scoped Prisma models in
  * the core schema (see the `orders` plugin); plugins persisting only small
  * config should use the `settings` store.
  *
@@ -28,12 +28,12 @@
  * uploaded plugin's `web` field is accepted but ignored for now.
  */
 import type { Router } from 'express'
-import type { PluginCatalogEntry, PluginManagementEntry, PluginSurface, PluginTenantAccess, PluginSource, TenantPluginAvailability } from '@printstream/shared'
+import type { PluginCatalogEntry, PluginManagementEntry, PluginSurface, PluginWorkspaceAccess, PluginSource, WorkspacePluginAvailability } from '@printstream/shared'
 import type { PrinterEventBus } from '../lib/printer-events.js'
 import type { RegisteredAuthProvider, RegisteredAuthProviderResolver } from '../lib/auth-registry.js'
 import type { PrintGuard } from '../lib/print-guards.js'
 import type { SlotFilamentResolver } from '../lib/slot-filament-registry.js'
-import type { TenantScopedPrismaClient } from '../lib/prisma.js'
+import type { WorkspaceScopedPrismaClient } from '../lib/prisma.js'
 import type { WsBroadcaster } from '../lib/ws-server.js'
 
 export interface PluginLogger {
@@ -48,27 +48,27 @@ export interface PluginSettingStore {
   delete(key: string): Promise<void>
   /**
    * Return a sub-store whose keys are automatically prefixed with the
-   * tenant ID. Use this for per-tenant configuration (webhook URLs,
-   * push subscriptions, etc.) so tenants cannot see or overwrite each
+   * workspace ID. Use this for per-workspace configuration (webhook URLs,
+   * push subscriptions, etc.) so workspaces cannot see or overwrite each
    * other's settings.
    */
-  forTenant(tenantId: string): PluginSettingStore
+  forWorkspace(workspaceId: string): PluginSettingStore
 }
 
 export interface ApiPluginContext {
   pluginName: string
   logger: PluginLogger
-  prisma: TenantScopedPrismaClient
+  prisma: WorkspaceScopedPrismaClient
   printerEvents: PrinterEventBus
   ws: WsBroadcaster
   /**
    * Whether this plugin is currently enabled for the given scope.
    * Background listeners and printer-event handlers should consult this
    * before doing scoped work outside the HTTP router. `null` asks about the
-   * platform (tenantless) scope: true when the plugin runs on the platform
+   * platform (workspaceless) scope: true when the plugin runs on the platform
    * surface and is platform-enabled.
    */
-  isEnabledForTenant?(tenantId: string | null): boolean
+  isEnabledForWorkspace?(workspaceId: string | null): boolean
   /**
    * Sub-router automatically mounted at `/api/plugins/<pluginName>`.
    * Plugins should attach any HTTP routes here rather than touching the
@@ -105,7 +105,7 @@ export interface ApiPluginContext {
    * Register a resolver that maps an AMS slot to the filament/spool loaded in
    * it. A plugin owning filament inventory registers one; other plugins consult
    * `slotFilamentResolvers` to learn a slot's spool without importing this one.
-   * The resolver is only consulted for tenants this plugin is enabled for, and
+   * The resolver is only consulted for workspaces this plugin is enabled for, and
    * is removed automatically when the plugin stops.
    */
   registerSlotFilamentResolver(resolver: SlotFilamentResolver): () => void
@@ -118,10 +118,10 @@ export interface ApiPlugin {
   description?: string
   runtimeSurfaces?: PluginSurface[]
   managerSurfaces?: PluginSurface[]
-  tenantAccess?: PluginTenantAccess
+  workspaceAccess?: PluginWorkspaceAccess
   register(context: ApiPluginContext): void | Promise<void>
 }
 
 export type PluginInfo = PluginManagementEntry
 export type PublicPluginInfo = PluginCatalogEntry
-export type { PluginSurface, PluginTenantAccess, PluginSource, TenantPluginAvailability }
+export type { PluginSurface, PluginWorkspaceAccess, PluginSource, WorkspacePluginAvailability }

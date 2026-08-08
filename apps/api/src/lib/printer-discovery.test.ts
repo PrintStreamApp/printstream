@@ -54,7 +54,7 @@ test('same-host rediscovery hints an offline adopted printer to reconnect', asyn
   assert.deepEqual(recoveryCalls, [{ serial: 'SERIAL123', bridgeId: 'bridge-1' }])
 })
 
-test('tenant-specific discovery dismissal hides entries only for that tenant', () => {
+test('workspace-specific discovery dismissal hides entries only for that workspace', () => {
   const discovery = new PrinterDiscovery({
     now: () => 1_000,
     async reconcileHost() {
@@ -66,15 +66,15 @@ test('tenant-specific discovery dismissal hides entries only for that tenant', (
   })
 
   discovery.setBridgePrinters('bridge-1', [makeDiscoveredPrinter()])
-  discovery.dismiss('SERIAL123', 'tenant-1')
+  discovery.dismiss('SERIAL123', 'workspace-1')
 
-  assert.deepEqual(discovery.list({ tenantId: 'tenant-1' }), [])
-  assert.equal(discovery.get('SERIAL123', 'tenant-1'), undefined)
-  assert.equal(discovery.list({ tenantId: 'tenant-2' }).length, 1)
-  assert.equal(discovery.get('SERIAL123', 'tenant-2')?.serial, 'SERIAL123')
+  assert.deepEqual(discovery.list({ workspaceId: 'workspace-1' }), [])
+  assert.equal(discovery.get('SERIAL123', 'workspace-1'), undefined)
+  assert.equal(discovery.list({ workspaceId: 'workspace-2' }).length, 1)
+  assert.equal(discovery.get('SERIAL123', 'workspace-2')?.serial, 'SERIAL123')
 })
 
-test('bridge filtering only returns entries discovered by the selected tenant bridges', () => {
+test('bridge filtering only returns entries discovered by the selected workspace bridges', () => {
   const discovery = new PrinterDiscovery({
     now: () => 1_000,
     async reconcileHost() {

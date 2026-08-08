@@ -27,26 +27,26 @@ export function registerBuiltinPlugins(): void {
   // closed-source and contributed cloud-only via the private web module
   // (`privateWebPlugins`, empty in OSS). Each section renders null unless its
   // provider appears in the auth bootstrap, so the API build gate decides what shows.
-  registerBuiltinPlugin(authPasswordWebPlugin, { runtimeSurfaces: ['platform', 'tenant'], managerSurfaces: ['platform'] })
-  registerBuiltinPlugin(authOauthWebPlugin, { runtimeSurfaces: ['platform', 'tenant'], managerSurfaces: ['platform'] })
+  registerBuiltinPlugin(authPasswordWebPlugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform'] })
+  registerBuiltinPlugin(authOauthWebPlugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform'] })
   for (const plugin of privateWebPlugins) {
-    registerBuiltinPlugin(plugin, { runtimeSurfaces: ['platform', 'tenant'], managerSurfaces: ['platform'] })
+    registerBuiltinPlugin(plugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform'] })
   }
-  registerBuiltinPlugin(modelStudioPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(notificationsNtfyPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(notificationsDiscordPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(notificationsBrowserPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(notificationsEmailWebPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
+  registerBuiltinPlugin(modelStudioPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(notificationsNtfyPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(notificationsDiscordPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(notificationsBrowserPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(notificationsEmailWebPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   // email-smtp is OSS-only: the API registers its backend only when self-hosted, so hide the
   // manager panel in cloud too (the web can only know at runtime via runtimePolicy.selfHosted).
-  registerBuiltinPlugin(emailSmtpWebPlugin, { runtimeSurfaces: ['platform', 'tenant'], managerSurfaces: ['platform', 'tenant'], selfHostedOnly: true })
-  registerBuiltinPlugin(plateClearingPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(firmwareUpdatesPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(ordersPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(filamentManagerPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(calibrationPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(printQueuePlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
-  registerBuiltinPlugin(homeAssistantWebPlugin, { runtimeSurfaces: ['tenant'], managerSurfaces: ['platform', 'tenant'] })
+  registerBuiltinPlugin(emailSmtpWebPlugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform', 'workspace'], selfHostedOnly: true })
+  registerBuiltinPlugin(plateClearingPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(firmwareUpdatesPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(ordersPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(filamentManagerPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(calibrationPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(printQueuePlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(homeAssistantWebPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   webPluginRegistry.runInitHooks()
 }
 

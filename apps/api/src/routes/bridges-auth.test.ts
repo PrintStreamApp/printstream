@@ -41,7 +41,7 @@ restorePrismaMethodsAfterEach([
   [rp.libraryFileReplica, 'updateMany'],
   [rp, '$transaction']
 ])
-const originalSetTenantId = bridgeSessionManager.setTenantId
+const originalSetWorkspaceId = bridgeSessionManager.setWorkspaceId
 const originalSendMessage = bridgeSessionManager.sendMessage
 const originalGetConnectionStats = bridgeSessionManager.getConnectionStats
 const originalRequestRpc = bridgeSessionManager.requestRpc
@@ -62,7 +62,7 @@ const unknownBridgeUpdate = {
 }
 
 afterEach(() => {
-  bridgeSessionManager.setTenantId = originalSetTenantId
+  bridgeSessionManager.setWorkspaceId = originalSetWorkspaceId
   bridgeSessionManager.sendMessage = originalSendMessage
   bridgeSessionManager.getConnectionStats = originalGetConnectionStats
   bridgeSessionManager.requestRpc = originalRequestRpc
@@ -108,7 +108,7 @@ test('bridge list requires authentication once auth is enabled', async () => {
   })
 })
 
-test('bridge list returns connected tenant bridges for settings managers', async () => {
+test('bridge list returns connected workspace bridges for settings managers', async () => {
   let bridgeFindManyArgs: unknown
   prisma.bridge.findMany = ((async (args: unknown) => {
     bridgeFindManyArgs = args
@@ -166,7 +166,7 @@ test('bridge list returns connected tenant bridges for settings managers', async
       ]
     })
     assert.deepEqual(bridgeFindManyArgs, {
-      where: { tenantId: 'tenant-1' },
+      where: { workspaceId: 'workspace-1' },
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
@@ -198,11 +198,11 @@ test('bridge list returns connected tenant bridges for settings managers', async
   })
 })
 
-test('bridge connect attaches a dormant bridge to the current tenant', async () => {
+test('bridge connect attaches a dormant bridge to the current workspace', async () => {
   mockBridgeLibraryRecovery()
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: null
+    workspaceId: null
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({
     id: 'bridge-1',
@@ -253,7 +253,7 @@ test('bridge connect notifies a connected bridge session that it is now connecte
   mockBridgeLibraryRecovery()
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: null
+    workspaceId: null
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({
     id: 'bridge-1',
@@ -265,11 +265,11 @@ test('bridge connect notifies a connected bridge session that it is now connecte
   })) as unknown) as typeof rootPrisma.bridge.update
 
   const outboundMessages: unknown[] = []
-  bridgeSessionManager.setTenantId = ((bridgeId: string, tenantId: string | null) => {
+  bridgeSessionManager.setWorkspaceId = ((bridgeId: string, workspaceId: string | null) => {
     assert.equal(bridgeId, 'bridge-1')
-    assert.equal(tenantId, 'tenant-1')
+    assert.equal(workspaceId, 'workspace-1')
     return true
-  }) as typeof bridgeSessionManager.setTenantId
+  }) as typeof bridgeSessionManager.setWorkspaceId
   bridgeSessionManager.sendMessage = ((bridgeId, message) => {
     assert.equal(bridgeId, 'bridge-1')
     outboundMessages.push(message)
@@ -293,16 +293,16 @@ test('bridge connect notifies a connected bridge session that it is now connecte
       type: 'bridge.welcome',
       bridgeId: 'bridge-1',
       connected: true,
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       heartbeatIntervalSeconds: 15
     }])
   })
 })
 
-test('bridge connect rehomes bridge-owned library metadata to the current tenant', async () => {
+test('bridge connect rehomes bridge-owned library metadata to the current workspace', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: null
+    workspaceId: null
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({
     id: 'bridge-1',
@@ -335,39 +335,39 @@ test('bridge connect rehomes bridge-owned library metadata to the current tenant
     ['files', {
       where: {
         ownerBridgeId: 'bridge-1',
-        tenantId: { not: 'tenant-1' }
+        workspaceId: { not: 'workspace-1' }
       },
-      data: { tenantId: 'tenant-1' }
+      data: { workspaceId: 'workspace-1' }
     }],
     ['folders', {
       where: {
         ownerBridgeId: 'bridge-1',
-        tenantId: { not: 'tenant-1' }
+        workspaceId: { not: 'workspace-1' }
       },
-      data: { tenantId: 'tenant-1' }
+      data: { workspaceId: 'workspace-1' }
     }],
     ['versions', {
       where: {
         ownerBridgeId: 'bridge-1',
-        tenantId: { not: 'tenant-1' }
+        workspaceId: { not: 'workspace-1' }
       },
-      data: { tenantId: 'tenant-1' }
+      data: { workspaceId: 'workspace-1' }
     }],
     ['replicas', {
       where: {
         bridgeId: 'bridge-1',
-        tenantId: { not: 'tenant-1' }
+        workspaceId: { not: 'workspace-1' }
       },
-      data: { tenantId: 'tenant-1' }
+      data: { workspaceId: 'workspace-1' }
     }]
   ])
 })
 
-test('bridge connect reattaches orphaned tenant printers when this is the only tenant bridge', async () => {
+test('bridge connect reattaches orphaned workspace printers when this is the only workspace bridge', async () => {
   mockBridgeLibraryRecovery()
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: null
+    workspaceId: null
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   rootPrisma.bridge.update = ((async () => ({
     id: 'bridge-1',
@@ -381,7 +381,7 @@ test('bridge connect reattaches orphaned tenant printers when this is the only t
   rootPrisma.printer.findMany = ((async () => ([
     {
       id: 'printer-1',
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       bridgeId: null,
       name: 'Printer One',
       host: 'printer-one.local',
@@ -439,7 +439,7 @@ test('bridge connect reattaches orphaned tenant printers when this is the only t
 
   assert.deepEqual(printerUpdateManyArgs, {
     where: {
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       id: { in: ['printer-1'] }
     },
     data: { bridgeId: 'bridge-1' }
@@ -450,7 +450,7 @@ test('bridge connect rejects bridges already connected to a workspace', async ()
   mockBridgeLibraryRecovery()
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-2'
+    workspaceId: 'workspace-2'
   })) as unknown) as typeof rootPrisma.bridge.findUnique
 
   await withBridgesApp({
@@ -687,12 +687,12 @@ test('bridge rename requires settings manage permission', async () => {
 test('bridge delete detaches the bridge and unassigns attached printers', async () => {
   rootPrisma.bridge.findUnique = ((async () => ({
     id: 'bridge-1',
-    tenantId: 'tenant-1'
+    workspaceId: 'workspace-1'
   })) as unknown) as typeof rootPrisma.bridge.findUnique
   prisma.printer.findMany = ((async () => [
     {
       id: 'printer-1',
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       bridgeId: 'bridge-1',
       name: 'Printer One',
       host: 'printer-one.local',
@@ -727,11 +727,11 @@ test('bridge delete detaches the bridge and unassigns attached printers', async 
   rootPrisma.$transaction = (((callback: (transaction: typeof rootPrisma) => Promise<unknown>) => callback(rootPrisma)) as unknown) as typeof rootPrisma.$transaction
 
   const outboundMessages: unknown[] = []
-  bridgeSessionManager.setTenantId = ((bridgeId: string, tenantId: string | null) => {
+  bridgeSessionManager.setWorkspaceId = ((bridgeId: string, workspaceId: string | null) => {
     assert.equal(bridgeId, 'bridge-1')
-    assert.equal(tenantId, null)
+    assert.equal(workspaceId, null)
     return true
-  }) as typeof bridgeSessionManager.setTenantId
+  }) as typeof bridgeSessionManager.setWorkspaceId
   bridgeSessionManager.sendMessage = ((bridgeId, message) => {
     assert.equal(bridgeId, 'bridge-1')
     outboundMessages.push(message)
@@ -754,20 +754,20 @@ test('bridge delete detaches the bridge and unassigns attached printers', async 
 
   assert.deepEqual(printerUpdateManyArgs, {
     where: {
-      tenantId: 'tenant-1',
+      workspaceId: 'workspace-1',
       bridgeId: 'bridge-1'
     },
     data: { bridgeId: null }
   })
   assert.deepEqual(bridgeUpdateArgs, {
     where: { id: 'bridge-1' },
-    data: { tenantId: null }
+    data: { workspaceId: null }
   })
   assert.deepEqual(outboundMessages, [{
     type: 'bridge.welcome',
     bridgeId: 'bridge-1',
     connected: false,
-    tenantId: null,
+    workspaceId: null,
     heartbeatIntervalSeconds: 15
   }])
 })
@@ -792,14 +792,14 @@ async function withBridgesApp(
   auth: RequestAuthContext,
   run: (baseUrl: string) => Promise<void>,
   input: {
-    tenant?: { id: string; slug: string; name: string } | null
+    workspace?: { id: string; slug: string; name: string } | null
   } = {}
 ): Promise<void> {
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = input.tenant ?? { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+    request.workspace = input.workspace ?? { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
     next()
   })
   app.use('/api/bridges', bridgesRouter)

@@ -14,7 +14,7 @@ function createApiPlugin(input: Partial<ApiPluginInfo> & Pick<ApiPluginInfo, 'na
     enabled: true,
     runtimeSurfaces: ['platform'],
     managerSurfaces: ['platform'],
-    tenantAccess: 'none',
+    workspaceAccess: 'none',
     availableInCurrentContext: true,
     ...input
   }

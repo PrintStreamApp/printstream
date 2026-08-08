@@ -23,6 +23,12 @@ export interface WebPluginRoute {
   /** Optional nav label. If omitted, the route is reachable but unlisted. */
   navLabel?: string
   /**
+   * What this tab is for, shown as its tooltip. The shell only tooltips a tab
+   * whose label is already visible when it has something further to say, so
+   * omit this rather than restating `navLabel`.
+   */
+  navDescription?: string
+  /**
    * Optional mobile bottom-nav icon for this route's tab. When omitted the
    * shell falls back to a generic plugin icon. Supply a custom icon so the tab
    * reads at a glance on phones.

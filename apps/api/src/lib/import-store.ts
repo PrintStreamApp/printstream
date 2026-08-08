@@ -1,5 +1,5 @@
 /**
- * Transient, tenant-scoped store for foreign geometry staged by the 3D editor.
+ * Transient, workspace-scoped store for foreign geometry staged by the 3D editor.
  *
  * When a user imports an STL/STEP (from disk or the library), it is parsed to a mesh and held here
  * keyed by a generated `importId`. The editor references the import by id in its `SceneEdit`; the
@@ -14,7 +14,7 @@ import type { ImportedObjectInput } from './three-mf.js'
 
 interface StagedImportRecord {
   importId: string
-  tenantId: string
+  workspaceId: string
   name: string
   format: StagedImportFormat
   mesh: ImportedMesh
@@ -53,14 +53,14 @@ function toSummary(record: StagedImportRecord): StagedImport {
 
 /** Stage a parsed mesh and return its summary (id + bounds + triangle count). */
 export function stageImport(input: {
-  tenantId: string
+  workspaceId: string
   name: string
   format: StagedImportFormat
   mesh: ImportedMesh
 }): StagedImport {
   const record: StagedImportRecord = {
     importId: randomUUID(),
-    tenantId: input.tenantId,
+    workspaceId: input.workspaceId,
     name: input.name,
     format: input.format,
     mesh: input.mesh
@@ -69,10 +69,10 @@ export function stageImport(input: {
   return toSummary(record)
 }
 
-/** Fetch a staged import's full record, scoped to the owning tenant. */
-export function getStagedImport(importId: string, tenantId: string): StagedImportRecord | null {
+/** Fetch a staged import's full record, scoped to the owning workspace. */
+export function getStagedImport(importId: string, workspaceId: string): StagedImportRecord | null {
   const record = store.get(importId)
-  if (!record || record.tenantId !== tenantId) return null
+  if (!record || record.workspaceId !== workspaceId) return null
   return record
 }
 
@@ -81,7 +81,7 @@ export function getStagedImport(importId: string, tenantId: string): StagedImpor
  * in. Throws `badRequest` if an instance references an import that is missing or expired so the
  * caller fails the save/slice rather than silently dropping geometry.
  */
-export function resolveSceneEditImports(tenantId: string, edit: SceneEdit): ImportedObjectInput[] {
+export function resolveSceneEditImports(workspaceId: string, edit: SceneEdit): ImportedObjectInput[] {
   const importIds = new Set<string>()
   for (const instance of edit.instances) {
     if (instance.importId) importIds.add(instance.importId)
@@ -93,7 +93,7 @@ export function resolveSceneEditImports(tenantId: string, edit: SceneEdit): Impo
   }
   const resolved: ImportedObjectInput[] = []
   for (const importId of importIds) {
-    const record = getStagedImport(importId, tenantId)
+    const record = getStagedImport(importId, workspaceId)
     if (!record) throw badRequest('An imported model is no longer available. Re-add it and try again.')
     const parts = record.mesh.parts && record.mesh.parts.length > 1 ? record.mesh.parts : undefined
     resolved.push({ importId: record.importId, name: record.name, mesh: record.mesh, parts })

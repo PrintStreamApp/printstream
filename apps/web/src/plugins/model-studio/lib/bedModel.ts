@@ -56,7 +56,7 @@ export async function loadBedModelGeometry(input: {
   slicerTargetId: string | null
   signal?: AbortSignal
   /**
-   * Endpoint to fetch the bed mesh from. Defaults to the tenant route; the public 3MF editor passes
+   * Endpoint to fetch the bed mesh from. Defaults to the workspace route; the public 3MF editor passes
    * the anonymous catalogue route (`/api/public/slicing/bed-model`), which needs no workspace.
    */
   basePath?: string

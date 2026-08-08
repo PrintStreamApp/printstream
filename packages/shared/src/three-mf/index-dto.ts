@@ -32,6 +32,11 @@ export function toThreeMfIndexDto(index: BridgeLibraryThreeMfIndex): ThreeMfInde
     compatiblePrinterModels: index.compatiblePrinterModels,
     supportFilamentIds: index.supportFilamentIds,
     printerProfileName: index.printerProfileName,
-    processProfileName: index.processProfileName
+    processProfileName: index.processProfileName,
+    // The repair flags belong to the VERSION whose bytes were parsed — this DTO is how an editor
+    // opened on an archived version learns that version is defective (the library DTO's flags
+    // describe the file's head, which may already be repaired).
+    needsSettingsRepair: index.needsSettingsRepair,
+    settingsRepairReasons: index.settingsRepairReasons
   }
 }

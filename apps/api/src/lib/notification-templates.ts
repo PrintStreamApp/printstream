@@ -28,7 +28,7 @@ import {
 import type { Printer } from '@printstream/shared'
 import { supportsChamberCamera } from './camera.js'
 import { prisma } from './prisma.js'
-import { getSettingScopePrefix, scopeSettingKey } from './tenant-settings.js'
+import { getSettingScopePrefix, scopeSettingKey } from './workspace-settings.js'
 
 interface TemplateBody {
   enabled: boolean

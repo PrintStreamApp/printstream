@@ -28,7 +28,7 @@
 import { canonicalBambuModelKey } from './bambu-model-keys.js'
 import { filamentKeyWidth, filamentVariantsPerSlot } from './variant-options.js'
 import { filamentSettingsCatalog, FILAMENT_SETTING_KEYS, isFilamentIdentitySettingKey } from './filament-settings.js'
-import { FILAMENT_PRESET_DEFAULTS } from './generated/filament-preset-options.generated.js'
+import { FILAMENT_PRESET_DEFAULTS } from './generated/preset-options.generated.js'
 import type { ProcessConfig } from './process-settings.js'
 import { extractFilamentOverriddenKeys } from './three-mf-project-config.js'
 
@@ -198,7 +198,7 @@ export interface FilamentRebindSelection {
  * (the slot keeps its values).
  *
  * Pure selection only — resolving each chosen preset's CONFIG is the caller's job, because the two
- * hosts reach it differently (the api through the slicer + its tenant preset files, the browser
+ * hosts reach it differently (the api through the slicer + its workspace preset files, the browser
  * through the anonymous resolve endpoint). Returns null when the record has no usable slot list,
  * which callers treat as "nothing to rebind".
  *

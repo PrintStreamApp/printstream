@@ -19,6 +19,7 @@ import {
   List, ListItem, Menu, MenuButton, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
 } from '@mui/joy'
 import AddRoundedIcon from '@mui/icons-material/AddRounded'
+import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import { Printer3dRoundedIcon } from '../Printer3dRoundedIcon'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
@@ -65,6 +66,8 @@ import { SlicingPresetAutocomplete } from './SlicingPresetAutocomplete'
 import { SettingsTuneButton } from '../SettingsTuneButton'
 import { PlateFilamentChangesSection, PlatePausesSection, type FilamentOption } from './PlateGcodeSections'
 import { StickySectionHeader } from './StickySectionHeader'
+import type { EmbeddedProjectPreset } from '@printstream/shared/three-mf'
+import { ProjectPresetsDialog } from './ProjectPresetsDialog'
 import { useFilamentChangedCount, useProcessChangedCount } from './useBakedPresetChanges'
 import type { ProcessConfigResolver } from '../ProcessSettingsDialog'
 import type { FilamentConfigResolver } from './FilamentSettingsDialog'
@@ -88,7 +91,7 @@ export interface SliceSettingsController {
   requiresSinglePlate: boolean
   canOpenThreeDimensionalPreview: boolean
   isMobileViewport: boolean
-  tenantSlug: string | undefined
+  workspaceSlug: string | undefined
   navigate: ReturnType<typeof useNavigate>
   onClose: () => void
   // Slicer
@@ -311,13 +314,13 @@ export interface SliceSettingsController {
   processEditListenerRef: React.MutableRefObject<(() => void) | null>
   /**
    * Anonymous process-config resolver (public 3MF editor only). When set, the process tune dialog
-   * and the "changed vs preset" badge resolve baselines through it instead of the tenant route, so
-   * they work with no workspace. Absent for the library host, which uses the tenant route.
+   * and the "changed vs preset" badge resolve baselines through it instead of the workspace route, so
+   * they work with no workspace. Absent for the library host, which uses the workspace route.
    */
   resolveConfig?: ProcessConfigResolver
   /**
    * How this host resolves a filament preset's config — the filament counterpart of `resolveConfig`.
-   * The library host passes `resolveTenantFilamentConfig`, the public 3MF editor its anonymous one,
+   * The library host passes `resolveWorkspaceFilamentConfig`, the public 3MF editor its anonymous one,
    * and either may pass `undefined` while its catalogue is still loading.
    *
    * REQUIRED (though nullable) on purpose. It was optional, and the library host simply never set
@@ -375,7 +378,7 @@ export interface SliceConfigSnapshot {
  * its own object list and G-code sections after this panel. Both modes share one
  * `controller` instance, so edits in either surface update the same state.
  */
-export function SliceSettingsPanel({ controller, mode, onManagePresets }: {
+export function SliceSettingsPanel({ controller, mode, onManagePresets, embeddedPresets, onRemoveEmbeddedPreset }: {
   controller: SliceSettingsController
   mode: 'simple' | 'editor'
   activePlateIndex?: number
@@ -385,6 +388,17 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets }: {
    * stored presets) and the slim prepare-print dialog render no button at all.
    */
   onManagePresets?: () => void
+  /**
+   * Presets the project carries inside itself, with a remover.
+   *
+   * A COMPONENT prop rather than a controller field, deliberately: this is project-FILE state the
+   * editor owns in `EditorState` (removals are undoable and apply on save), not slicing config, and
+   * the ~90-field controller is the wrong home for something only one host can act on. Un-defaulted
+   * like `onManagePresets` — the prepare-print dialog can see a project's presets but cannot save,
+   * so it passes nothing and the section does not render.
+   */
+  embeddedPresets?: readonly EmbeddedProjectPreset[]
+  onRemoveEmbeddedPreset?: (entryPath: string) => void
 }) {
   const {
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview,
@@ -440,6 +454,11 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets }: {
   // compact swatch row). Panel-local: both surfaces render their own panel instance.
   const [materialDialogFilamentId, setMaterialDialogFilamentId] = useState<number | null>(null)
   const [addingMaterial, setAddingMaterial] = useState(false)
+  const [projectPresetsOpen, setProjectPresetsOpen] = useState(false)
+  // Whether the Materials header carries the project-presets action, which decides where the
+  // `ml: 'auto'` push lives: with two actions it belongs on the FIRST of them, or both claim it and
+  // the pair splits across the header.
+  const hasProjectPresets = Boolean(embeddedPresets && onRemoveEmbeddedPreset && embeddedPresets.length > 0)
   const [printerPickerOpen, setPrinterPickerOpen] = useState(false)
   // Pre-open "changed values" badge for the process row: how far the FINAL sliced values
   // (embedded project config + session overrides) differ from the external preset.
@@ -747,13 +766,30 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets }: {
           <StickySectionHeader spacing={1}>
             <Typography level="title-sm">Materials</Typography>
             {/* Opens the picker; the slot is created only once a material is confirmed. */}
+            {/* Beside Add material, not as a section of its own: this is an occasional housekeeping
+                trip into the project file, not something to keep on screen while choosing materials.
+                Hidden when the project carries none — most do — so it is never a dead affordance,
+                and the count makes its presence the information. */}
+            {embeddedPresets && onRemoveEmbeddedPreset && embeddedPresets.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="plain"
+                color="neutral"
+                startDecorator={<InventoryRoundedIcon />}
+                sx={{ ml: 'auto' }}
+                onClick={() => setProjectPresetsOpen(true)}
+              >
+                Project presets ({embeddedPresets.length})
+              </Button>
+            )}
             {showMaterialEditing && (loadedMaterialsForAdd.length > 0 ? (
               // Same two choices the row swatch offers, for the same reason: a material the printer
               // is already holding should not have to be named by hand.
               <Dropdown>
                 {/* `color` is explicit: Joy's Button defaults to primary but MenuButton to neutral,
                     so without it the same button changed tone the moment a printer was selected. */}
-                <MenuButton size="sm" variant="soft" color="primary" startDecorator={<AddRoundedIcon />} sx={{ ml: 'auto' }}>
+                <MenuButton size="sm" variant="soft" color="primary" startDecorator={<AddRoundedIcon />} sx={{ ml: hasProjectPresets ? 0 : 'auto' }}>
                   Add material
                 </MenuButton>
                 <Menu
@@ -772,7 +808,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets }: {
                 </Menu>
               </Dropdown>
             ) : (
-              <Button type="button" size="sm" variant="soft" startDecorator={<AddRoundedIcon />} sx={{ ml: 'auto' }} onClick={() => setAddingMaterial(true)}>
+              <Button type="button" size="sm" variant="soft" startDecorator={<AddRoundedIcon />} sx={{ ml: hasProjectPresets ? 0 : 'auto' }} onClick={() => setAddingMaterial(true)}>
                 Add material
               </Button>
             ))}
@@ -1018,6 +1054,14 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets }: {
           onSelect={selectPrinter}
           onClose={() => setPrinterPickerOpen(false)}
           anyOption={{ label: 'Any printer', description: 'Slice for the selected model instead' }}
+        />
+      )}
+      {hasProjectPresets && (
+        <ProjectPresetsDialog
+          open={projectPresetsOpen}
+          onClose={() => setProjectPresetsOpen(false)}
+          presets={embeddedPresets ?? []}
+          onRemove={onRemoveEmbeddedPreset!}
         />
       )}
       {addingMaterial && (

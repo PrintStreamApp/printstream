@@ -338,7 +338,7 @@ function scoreIdentity(profile: SlicingPresetSummary, query: FilamentPresetQuery
   const trayFilamentId = query.trayInfoIdx?.trim()
   // A DERIVATIVE is excluded here, not merely outranked. A `filament_id` identifies the filament
   // PRODUCT, and every preset derived from that product inherits the id — six workspace presets in
-  // one test tenant carry GFA00 alongside the built-in "Bambu PLA Basic" — so the id cannot tell
+  // one test workspace carry GFA00 alongside the built-in "Bambu PLA Basic" — so the id cannot tell
   // them apart, and the winner fell to catalogue order (customs first). Picking a derivative applies
   // settings the user tuned for another situation to a slice they only said "this is the filament in
   // my AMS" about.

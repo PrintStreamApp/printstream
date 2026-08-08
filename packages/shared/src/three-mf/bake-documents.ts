@@ -25,6 +25,11 @@ import { isFilamentVariantOption } from '../variant-options.js'
 import { inspectProjectFilamentPhysics } from '../repairs/filament-physics.js'
 import { applyFilamentPresetBindings } from '../filament-preset-binding.js'
 import { restoreFilamentPhysics } from '../repairs/restore-filament-physics.js'
+import { repairModelSettingsObjectExtruders, setObjectLevelExtruderMetadata, sharedCarryingPartExtruderOfBlock } from '../repairs/object-extruder.js'
+import { inspectProjectFilamentIds, repairFilamentIds } from '../repairs/filament-ids.js'
+import { inspectProjectInheritsGroup, repairInheritsGroup } from '../repairs/inherits-group.js'
+import { inspectProjectFlushVolumesMatrix, repairFlushVolumesMatrix } from '../flush-volumes-matrix.js'
+import { inspectProjectFilamentSelfIndex, repairFilamentSelfIndex } from '../filament-variant-index.js'
 import { threeMfPartSubtypeCarriesFilament } from '../three-mf-part-subtype.js'
 import type {
   SceneEdit,
@@ -484,14 +489,17 @@ function renderImportedMeshObjectXml(
 
 /**
  * Render the matching `model_settings.config` `<object>` metadata for an imported mesh
- * object. `extruder` records the placing instance's filament so the part keeps its
- * material on reopen/preview (without it the part reads as "no filament" and renders
- * uncoloured).
+ * object. `extruder` records the placing instance's filament at BOTH levels, exactly as
+ * desktop BambuStudio writes it: the OBJECT-level entry is what the CLI slices by (a
+ * part-level entry alone is ignored for an inline-mesh object, which silently printed the
+ * object with filament 1 — A/B-verified on a real project), and the part-level entry is
+ * what keeps the part's material on reopen/preview.
  */
 function renderImportedModelSettingsObjectXml(objectId: number, name: string, extruder: number | null): string {
   return [
     `  <object id="${objectId}">`,
     `    <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
+    ...(extruder != null ? [`    <metadata key="extruder" value="${extruder}"/>`] : []),
     `    <part id="${objectId}" subtype="normal_part">`,
     `      <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
     ...(extruder != null ? [`      <metadata key="extruder" value="${extruder}"/>`] : []),
@@ -569,16 +577,19 @@ interface ImportedPartFileEntry {
  * Render the `model_settings.config` entry for a multi-solid import: one `<part subtype="normal_part">`
  * per solid (keyed by its component object id, named, carrying the placing instance's filament as
  * `extruder` so every part keeps a material). Mirrors {@link renderImportedModelSettingsObjectXml}
- * for the single-mesh case.
+ * for the single-mesh case, including the OBJECT-level `extruder` — the entry the CLI slices by;
+ * the per-part entries alone are not honored.
  */
 function renderImportedMultiPartModelSettingsXml(
   objectId: number,
   name: string,
+  objectExtruder: number | null,
   parts: Array<{ componentObjectId: number; name: string; extruder: number | null; processOverrides?: Record<string, string | string[]>; subtype?: string }>
 ): string {
   return [
     `  <object id="${objectId}">`,
     `    <metadata key="name" value="${escapeXmlAttribute(name)}"/>`,
+    ...(objectExtruder != null ? [`    <metadata key="extruder" value="${objectExtruder}"/>`] : []),
     ...parts.flatMap((part) => [
       `    <part id="${part.componentObjectId}" subtype="${escapeXmlAttribute(part.subtype ?? 'normal_part')}">`,
       `      <metadata key="name" value="${escapeXmlAttribute(part.name)}"/>`,
@@ -791,6 +802,7 @@ export function buildEditedThreeMfDocuments(
       settingsObjects.push(renderImportedMultiPartModelSettingsXml(
         objectId,
         imported.name,
+        objectExtruder,
         // Each solid keeps its own filament when assigned; otherwise it inherits the object's.
         multiParts.map((part, i) => ({
           componentObjectId: componentIds[i]!,
@@ -913,6 +925,15 @@ export function buildEditedThreeMfDocuments(
   // NOTE: the OLD-slot -> NEW-id part-extruder remap for a material add/remove happens on the
   // BASE model_settings BEFORE the bake-authored parts are injected (see above), so the imported
   // solids / added volumes / per-part reassignments keep the new-id extruders written for them.
+
+  // The model_settings half of the staged settings repair (object-level extruder bindings), LAST
+  // so it inspects the final part set every edit above produced. Same implementation as the API
+  // repair route; inspect-gated, so an unaffected document rides through untouched. Ambiguous
+  // objects (mixed part coverage) are left alone here exactly as the route leaves them — the
+  // banner re-derives from the saved file and reports them again.
+  if (edit.repairSettings) {
+    modelSettingsXml = repairModelSettingsObjectExtruders(modelSettingsXml).xml
+  }
 
   return { modelXml, modelSettingsXml, importIdToObjectId, partFileEntries, clonedObjectIds: cloned.resolvedIds }
 }
@@ -1060,11 +1081,20 @@ function setPartExtruderMetadata(partBlock: string, extruder: number): string {
   return partBlock.replace(/<\/part>/, `  ${metadata}\n    </part>`)
 }
 
+
 /**
  * Apply per-part filament reassignments by rewriting the matching `<part>`s' `extruder`
  * metadata inside `model_settings.config`. Filament is a property of the object's part, so
  * the change is keyed by objectId + the part's ORDINAL and affects every instance of that
  * object. Everything else in the document is left untouched.
+ *
+ * The OBJECT-level `extruder` follows the parts whenever they leave every filament-carrying part
+ * on ONE slot: that entry is what the CLI actually slices by, so leaving it stale (or absent, in
+ * an import-format object) silently prints the object with the old filament — the part-level
+ * entries alone are not honored (A/B-verified; see `repairs/object-extruder.ts` for the stored
+ * files this already happened to). Parts that DISAGREE leave the object entry alone: the object's
+ * own default is not derivable from a per-part divergence, exactly like BambuStudio changing one
+ * volume's filament without touching the object's.
  */
 function applyPartFilamentOverrides(
   modelSettingsXml: string,
@@ -1084,11 +1114,13 @@ function applyPartFilamentOverrides(
     const parts = extruderByObjectPart.get(objectId)
     if (!parts) return objectBlock
     let partIndex = -1
-    return objectBlock.replace(/<part\b([^>]*)>[\s\S]*?<\/part>/g, (partBlock) => {
+    const rewritten = objectBlock.replace(/<part\b([^>]*)>[\s\S]*?<\/part>/g, (partBlock) => {
       partIndex += 1
       const extruder = parts.get(partIndex)
       return extruder == null ? partBlock : setPartExtruderMetadata(partBlock, extruder)
     })
+    const shared = sharedCarryingPartExtruderOfBlock(rewritten)
+    return shared == null ? rewritten : setObjectLevelExtruderMetadata(rewritten, shared)
   })
 }
 
@@ -1521,6 +1553,27 @@ export function applyFilamentList(projectSettingsJson: string, filaments: SceneE
         differentSettings[0],
         ...Array.from({ length: newCount }, (_unused, i) => (slotMaterialChanged(i) ? '' : differentSettings[sourceFor(i) + 1])),
         differentSettings[oldCount + 1]
+      ]
+    }
+    // `inherits_group` has the SAME `[process, ...filament slots, machine]` layout and must be
+    // rebuilt with it. Leaving it at the OLD width is FATAL, not untidy: the CLI sizes its
+    // filament-system-name vector from THIS array (`current_filaments_system_name.resize(size - 2)`)
+    // and then indexes `filament_settings_id` with it, unguarded — so an entry left behind by a
+    // removed slot makes BambuStudio read past the end of the filament names and SIGSEGV while
+    // loading the project, before slicing starts (opaque exit 139). Seen in production: a project
+    // taken from 5 filaments to 1 kept 7 entries here and killed every slice of that file.
+    //
+    // `applyFilamentPresetBindings` also rebuilds this array, but only when at least one slot
+    // resolved a preset — the SIZE invariant has to hold regardless of whether it did.
+    const inheritsGroup = record.inherits_group
+    if (Array.isArray(inheritsGroup) && inheritsGroup.length === oldCount + 2) {
+      record.inherits_group = [
+        inheritsGroup[0],
+        // A slot whose material changed no longer inherits the old material's parent. Empty is the
+        // honest value and the CLI reads it as "this slot IS a system preset"; the binding pass
+        // fills in the real parent when it could resolve one.
+        ...Array.from({ length: newCount }, (_unused, i) => (slotMaterialChanged(i) ? '' : inheritsGroup[sourceFor(i) + 1])),
+        inheritsGroup[oldCount + 1]
       ]
     }
   }
@@ -1964,8 +2017,9 @@ export function serializeBrimEarPoints(brimEars: SceneEditObjectBrimEars[], mode
 
 /**
  * The ordered `project_settings.config` rewrites a SceneEdit calls for: the filament set
- * (add/remove materials) and per-slot dual-nozzle assignment, the plate type, and per-plate
- * prime-tower corners. Empty when the edit touches none of them.
+ * (add/remove materials) and per-slot dual-nozzle assignment, the plate type, per-plate
+ * prime-tower corners, and — last, so authoring always wins first — the staged settings repairs.
+ * Empty when the edit touches none of them.
  */
 export function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: string) => string> {
   const transforms: Array<(json: string) => string> = []
@@ -1981,7 +2035,50 @@ export function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: st
   if (edit.plates.some((plate) => plate.primeTower)) {
     transforms.push((json) => applyPrimeTowerSettings(json, edit))
   }
+  if (edit.repairSettings) {
+    transforms.push(repairProjectSettingsDocument)
+  }
   return transforms
+}
+
+/**
+ * Apply the settings-level shared repairs to a `project_settings.config` document: flush-matrix
+ * sizing, `filament_self_index`, `filament_ids`, and `inherits_group` — each defect's single
+ * repair implementation from `repairs/`, so detection and repair can never disagree. Every step is
+ * inspect-gated, so a healthy document rides through byte-identical. `inherits_group` runs last
+ * because it reads the filament slot count the other steps do not change. The model_settings half
+ * of the staged repair (object-level extruders) is applied by {@link buildEditedThreeMfDocuments}.
+ */
+export function repairProjectSettingsDocument(projectSettingsJson: string): string {
+  let record: Record<string, unknown>
+  try {
+    const parsed: unknown = JSON.parse(projectSettingsJson)
+    if (!parsed || typeof parsed !== 'object') return projectSettingsJson
+    record = parsed as Record<string, unknown>
+  } catch {
+    return projectSettingsJson
+  }
+  const matrixInspection = inspectProjectFlushVolumesMatrix(projectSettingsJson)
+  if (matrixInspection?.inconsistent) {
+    const repaired = repairFlushVolumesMatrix(
+      Array.isArray(record.flush_volumes_matrix) ? record.flush_volumes_matrix : null,
+      matrixInspection.filamentCount,
+      matrixInspection.extruderCount
+    )
+    if (repaired) record.flush_volumes_matrix = repaired
+  }
+  if (inspectProjectFilamentSelfIndex(projectSettingsJson)?.inconsistent) {
+    const repaired = repairFilamentSelfIndex(record)
+    if (repaired) record.filament_self_index = repaired
+  }
+  if (inspectProjectFilamentIds(projectSettingsJson)?.inconsistent) {
+    repairFilamentIds(record)
+  }
+  if (inspectProjectInheritsGroup(JSON.stringify(record))?.inconsistent) {
+    const repaired = repairInheritsGroup(record)
+    if (repaired) record.inherits_group = repaired
+  }
+  return JSON.stringify(record)
 }
 
 /**

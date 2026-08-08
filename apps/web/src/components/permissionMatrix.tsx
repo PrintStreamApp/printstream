@@ -582,6 +582,7 @@ export function PermissionDependencyPopover({
 export function buildPermissionSections(definitions: PermissionDefinition[]): PermissionSection[] {
   const order = [
     'Platform',
+    'Accounts & Licensing',
     'Authentication',
     'Printers & Devices',
     'Library',
@@ -609,7 +610,19 @@ export function buildPermissionSections(definitions: PermissionDefinition[]): Pe
 }
 
 export function permissionSectionTitle(permission: Permission): string {
-  if (permission === 'tenants.manage' || permission === 'tenants.disable') return 'Platform'
+  if (permission === 'workspaces.manage' || permission === 'workspaces.disable') return 'Platform'
+  // Customer accounts, their licences, and the money on them. `billing.*` joins
+  // them rather than staying in "Other", where it had been sitting alone: what
+  // a comp gives away is exactly what these other permissions govern, so an
+  // operator deciding a role's authority over an account should see the whole
+  // group in one place.
+  if (
+    permission.startsWith('accounts.')
+    || permission.startsWith('licenses.')
+    || permission.startsWith('billing.')
+  ) {
+    return 'Accounts & Licensing'
+  }
   if (permission.startsWith('auth.')) return 'Authentication'
   if (
     permission.startsWith('camera.')

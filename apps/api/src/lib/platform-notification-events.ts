@@ -1,11 +1,11 @@
 /**
  * Platform-scope notification events: operator-level triggers with editable
  * templates, delivered through the same channel plugins as printer
- * notifications but at the platform (tenantless) scope.
+ * notifications but at the platform (workspaceless) scope.
  *
  * Event definitions are registered at startup (`registerPlatformNotificationEvents`)
  * so deployments can differ: the private cloud module registers its operator
- * events (beta signups, new workspaces); an OSS install registers none and the
+ * events (new workspaces); an OSS install registers none and the
  * platform templates surface stays empty. Templates are stored under the
  * platform settings scope (`platform:notifications:template:<event>`), and
  * `emitPlatformNotification` renders + fans the message out over the
@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import type { NotificationMessage, PlatformNotificationTemplate } from '@printstream/shared'
 import { printerEvents } from './printer-events.js'
 import { prisma } from './prisma.js'
-import { scopeSettingKeyForTenant } from './tenant-settings.js'
+import { scopeSettingKeyForWorkspace } from './workspace-settings.js'
 
 export interface PlatformNotificationEventDefinition {
   /** Stable event id (kebab-case), unique across the deployment. */
@@ -47,7 +47,7 @@ export function isKnownPlatformNotificationEvent(event: string): boolean {
 }
 
 function templateSettingKey(event: string): string {
-  return scopeSettingKeyForTenant(null, `notifications:platform-template:${event}`)
+  return scopeSettingKeyForWorkspace(null, `notifications:platform-template:${event}`)
 }
 
 interface StoredTemplate {
@@ -187,7 +187,7 @@ export async function emitPlatformNotification(
  * `platform.notification` bus event. For emitters outside the template
  * registry whose copy is transactional rather than operator-editable
  * (support replies to a user, suggestion-comment notifications). The
- * message must carry `targetUserIds`; tenantless messages deliver
+ * message must carry `targetUserIds`; workspaceless messages deliver
  * cross-scope per the shared targeted contract. Fire-and-forget.
  */
 export function emitUserNotification(

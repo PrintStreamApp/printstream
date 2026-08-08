@@ -73,7 +73,7 @@ test('websocket reconnect refreshes jobs and dispatch queries after the initial 
   wsClient.stop = (() => {}) as typeof wsClient.stop
 
   function Harness() {
-    usePrinterWebSocket(true, 'tenant:test')
+    usePrinterWebSocket(true, 'workspace:test')
     return null
   }
 

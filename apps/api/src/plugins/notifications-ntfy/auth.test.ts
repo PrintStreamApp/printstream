@@ -88,7 +88,7 @@ test('a legacy topicUrl setting appears as a shared recipient', async () => {
     assert.equal(read.configured, true)
     assert.deepEqual(read.recipients.map((entry) => entry.audience), ['everyone'])
     assert.equal(read.recipients[0]!.id, 'legacy')
-  }, { initialSettings: { 'tenant:test-tenant:topicUrl': 'https://ntfy.sh/legacy-topic' } })
+  }, { initialSettings: { 'workspace:test-workspace:topicUrl': 'https://ntfy.sh/legacy-topic' } })
 })
 
 test('ntfy rejects an SSRF topic URL (cloud metadata / loopback)', async () => {
@@ -118,7 +118,7 @@ async function withNtfyApp(
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = { id: 'test-tenant', slug: 'test', name: 'Test Tenant' }
+    request.workspace = { id: 'test-workspace', slug: 'test', name: 'Test Workspace' }
     next()
   })
 
@@ -151,13 +151,13 @@ async function withNtfyApp(
       async get(key) { return settings.get(key) ?? null },
       async set(key, value) { settings.set(key, value) },
       async delete(key) { settings.delete(key) },
-      forTenant(tenantId: string) {
-        const prefix = `tenant:${tenantId}:`
+      forWorkspace(workspaceId: string) {
+        const prefix = `workspace:${workspaceId}:`
         return {
           async get(key: string) { return settings.get(prefix + key) ?? null },
           async set(key: string, value: string) { settings.set(prefix + key, value) },
           async delete(key: string) { settings.delete(prefix + key) },
-          forTenant(): never { throw new Error('nested forTenant not supported') }
+          forWorkspace(): never { throw new Error('nested forWorkspace not supported') }
         }
       }
     },

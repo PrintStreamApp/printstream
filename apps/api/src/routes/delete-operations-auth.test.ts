@@ -14,10 +14,10 @@ import { deleteOperationsRouter } from './delete-operations.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { deleteOperationDispatcher } from '../lib/delete-operation-dispatcher.js'
 import { HttpError } from '../lib/http-error.js'
-import type { RequestTenantSummary } from '../lib/tenant-context.js'
+import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
 
 const originalList = deleteOperationDispatcher.list
-const TEST_TENANT: RequestTenantSummary = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' }
+const TEST_WORKSPACE: RequestWorkspaceSummary = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' }
 
 afterEach(() => {
   deleteOperationDispatcher.list = originalList
@@ -98,10 +98,10 @@ test('delete operations include printer storage jobs for printers.manage callers
   })
 })
 
-test('delete operations request the active tenant job slice', async () => {
-  let requestedTenantId: string | null | undefined
-  deleteOperationDispatcher.list = ((tenantId?: string | null) => {
-    requestedTenantId = tenantId
+test('delete operations request the active workspace job slice', async () => {
+  let requestedWorkspaceId: string | null | undefined
+  deleteOperationDispatcher.list = ((workspaceId?: string | null) => {
+    requestedWorkspaceId = workspaceId
     return []
   }) as typeof deleteOperationDispatcher.list
 
@@ -114,9 +114,9 @@ test('delete operations request the active tenant job slice', async () => {
     const response = await fetch(`${baseUrl}/api/delete-operations`)
 
     assert.equal(response.status, 200)
-  }, TEST_TENANT)
+  }, TEST_WORKSPACE)
 
-  assert.equal(requestedTenantId, 'tenant-1')
+  assert.equal(requestedWorkspaceId, 'workspace-1')
 })
 
 function createJob(kind: DeleteOperationJob['kind'], targetName: string): DeleteOperationJob {
@@ -142,12 +142,12 @@ function createJob(kind: DeleteOperationJob['kind'], targetName: string): Delete
 async function withDeleteOperationsApp(
   auth: RequestAuthContext,
   run: (baseUrl: string) => Promise<void>,
-  tenant?: RequestTenantSummary | null
+  workspace?: RequestWorkspaceSummary | null
 ): Promise<void> {
   const app = express()
   app.use((request, _response, next) => {
     request.auth = auth
-    request.tenant = tenant ?? null
+    request.workspace = workspace ?? null
     next()
   })
   app.use('/api/delete-operations', deleteOperationsRouter)

@@ -42,6 +42,51 @@ export const CURRENT_BRIDGE_BUILD_POINTER_FILE = 'current-bridge-build.json'
 
 const CURRENT_BRIDGE_SOURCE_FINGERPRINT = normalizeOptionalBuildMetadata(env.PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT)
 
+/** The bridge build this server's own commit expects, baked in at image build. */
+const EXPECTED_BRIDGE_RELEASE_FINGERPRINT = normalizeOptionalBuildMetadata(env.PRINTSTREAM_BRIDGE_RELEASE_FINGERPRINT)
+
+/** Latches the mismatch warning: bridges poll the manifest, so this must not log per request. */
+let warnedAboutBridgeReleaseMismatch = false
+
+export interface BridgeReleaseConsistency {
+  /** False only when both fingerprints are known AND they disagree. */
+  matches: boolean
+  /** What this server's commit expects, or null when the image did not record it. */
+  expected: string | null
+  /** What the promoted pointer actually names, or null when nothing is promoted. */
+  promoted: string | null
+}
+
+/**
+ * Whether the promoted bridge build is the one this server's commit expects.
+ *
+ * Promotion is a separate step from deploying, so the two can part company: a
+ * deploy run with `--skip-bridge-promotion`, or one whose bridge build never
+ * published, moves the app forward and leaves the pointer behind. Nothing
+ * reported that, so a server could serve a bridge older than itself
+ * indefinitely — observed on staging, where the download page offered an
+ * installer that rejected the very flag the page told people to pass.
+ *
+ * UNKNOWN counts as matching, on purpose. A self-hosted image, a local build, or
+ * anything that did not record a fingerprint would otherwise have its downloads
+ * withheld over a value that was never populated — breaking working installs to
+ * report a problem they do not have.
+ */
+export function describeBridgeReleaseConsistency(options: { releasesDir?: string } = {}): BridgeReleaseConsistency {
+  const pointer = readCurrentBridgeBuildPointer(options.releasesDir ?? env.BRIDGE_RELEASES_DIR)
+  const promoted = pointer?.sourceFingerprint ?? null
+  const expected = EXPECTED_BRIDGE_RELEASE_FINGERPRINT ?? null
+  const matches = !expected || !promoted || expected === promoted
+  if (!matches && !warnedAboutBridgeReleaseMismatch) {
+    warnedAboutBridgeReleaseMismatch = true
+    console.error(
+      '[bridge] promoted bridge build does not match this server build; bridge downloads are withheld until a deploy promotes the matching build',
+      { expected, promoted }
+    )
+  }
+  return { matches, expected, promoted }
+}
+
 /** Asset URLs under this path are rewritten to the origin serving the manifest. */
 const RELEASE_ASSETS_PATH = '/api/bridge-runtime/release-assets/'
 

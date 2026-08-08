@@ -1,7 +1,7 @@
 /**
  * Bridge runtime credentials.
  *
- * Connect codes are short-lived pairing secrets shown to tenant admins.
+ * Connect codes are short-lived pairing secrets shown to workspace admins.
  * Runtime tokens are long-lived machine credentials stored hashed in
  * the database and presented by the bridge process on reconnect.
  */

@@ -436,7 +436,7 @@ async function isBridgeLibraryLocalCopyComplete(bridgeId: string, storedPath: st
 const inflightReplicaBuilds = new Map<string, Promise<string>>()
 
 export async function ensureLibraryFileReplica(input: {
-  tenantId: string
+  workspaceId: string
   libraryFileId: string
   fileName: string
   sourceBridgeId: string | null
@@ -461,7 +461,7 @@ export async function ensureLibraryFileReplica(input: {
 }
 
 async function ensureLibraryFileReplicaUncoalesced(input: {
-  tenantId: string
+  workspaceId: string
   libraryFileId: string
   fileName: string
   sourceBridgeId: string | null
@@ -524,7 +524,7 @@ async function ensureLibraryFileReplicaUncoalesced(input: {
       expiresAt: null
     },
     create: {
-      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
       libraryFileId: input.libraryFileId,
       bridgeId: input.targetBridgeId,
       storedPath,

@@ -8,45 +8,50 @@
 import { Router } from 'express'
 import {
   authSessionListResponseSchema,
-  filterPermissionsForTenantContext,
+  filterPermissionsForWorkspaceContext,
   permissionValues,
-  selectTenantContextRequestSchema,
-  switchTenantRequestSchema
+  selectWorkspaceContextRequestSchema,
+  switchWorkspaceRequestSchema,
 } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { buildAuthBootstrapCapabilities } from '../lib/auth-capabilities.js'
 import { authUsesExplicitPermissions } from '../lib/auth-context.js'
 import { authProviderRegistry } from '../lib/auth-registry.js'
 import { clearAuthSessionCookie, readRequestAuthSessionSecretHash, revokeRequestAuthSession } from '../lib/auth-session.js'
-import { listTenants } from '../lib/default-tenant.js'
+import { listCustomersForUser } from '../lib/billing-scope.js'
+import { listWorkspaces } from '../lib/workspace-resolution.js'
 import { badRequest, forbidden, notFound, unauthorized } from '../lib/http-error.js'
 import { prisma } from '../lib/prisma.js'
 import { rootPrisma } from '../lib/prisma.js'
 import { hasSupportAccessBypass, isSupportAccessAllowed, listSupportAccessibleWorkspaces } from '../lib/support-access.js'
-import { filterEnabledTenants, isTenantDisabled } from '../lib/tenant-availability.js'
-import { clearTenantContextCookie, setTenantContextCookie, withTenantRequestContext } from '../lib/tenant-context.js'
-import { isPublicDemoTenant } from '../lib/public-demo-policy.js'
+import { filterEnabledWorkspaces, isWorkspaceDisabled } from '../lib/workspace-availability.js'
+import { clearWorkspaceContextCookie, setWorkspaceContextCookie, withWorkspaceRequestContext, type RequestWorkspaceSummary } from '../lib/workspace-context.js'
+import { isPublicDemoWorkspace } from '../lib/public-demo-policy.js'
 import { authManagementRouter } from './auth-management.js'
+import { visibleWorkspacesWhere } from '../lib/workspace-visibility.js'
 
 export const authRouter = Router()
 
 authRouter.get('/bootstrap', async (request, response) => {
-  const activeTenant = resolveEffectiveRequestTenant(request)
+  const activeWorkspace = resolveEffectiveRequestWorkspace(request)
   const actor = await resolveBootstrapActor(request)
-  const bootstrap = await authProviderRegistry.buildBootstrap({ demoMode: isPublicDemoTenant(activeTenant) })
-  const memberTenants = await resolveMemberTenants(request)
-  const availableTenants = await resolveAvailableTenants(request)
-  const platformAuthEnabled = activeTenant
-    ? await withTenantRequestContext(null, async () => await authProviderRegistry.hasEnabledProviders())
+  const bootstrap = await authProviderRegistry.buildBootstrap({ demoMode: isPublicDemoWorkspace(activeWorkspace) })
+  const memberWorkspaces = await resolveMemberWorkspaces(request)
+  const customers = await listCustomersForUser(
+    request.auth.actor.type === 'user' ? request.auth.actor.userId : null
+  )
+  const availableWorkspaces = await resolveAvailableWorkspaces(request)
+  const platformAuthEnabled = activeWorkspace
+    ? await withWorkspaceRequestContext(null, async () => await authProviderRegistry.hasEnabledProviders())
     : bootstrap.authEnabled
-  const tenantHasConnectedBridges = activeTenant
+  const workspaceHasConnectedBridges = activeWorkspace
     ? (await prisma.bridge.count()) > 0
     : false
 
   // Anonymous visitors admitted to the public demo browse with an explicit
   // guest permission set, never a sign-in. Report no-auth/no-setup so the web
   // shell renders the demo workspace instead of gating it behind a login wall,
-  // even when the demo tenant happens to resolve an enabled auth provider.
+  // even when the demo workspace happens to resolve an enabled auth provider.
   const isPublicDemoGuest = request.auth.publicDemoGuest === true
   const authEnabled = isPublicDemoGuest ? false : bootstrap.authEnabled
   const setupRequired = isPublicDemoGuest ? false : bootstrap.setupRequired
@@ -57,15 +62,16 @@ authRouter.get('/bootstrap', async (request, response) => {
     setupRequired,
     platformAuthEnabled,
     actor,
-    tenant: activeTenant,
-    memberTenants,
-    availableTenants,
-    tenantHasConnectedBridges,
+    workspace: serializeWorkspaceSummary(activeWorkspace),
+    memberWorkspaces,
+    availableWorkspaces,
+    customers,
+    workspaceHasConnectedBridges,
     // With auth disabled in this workspace's scope, route guards bypass
     // permission enforcement, so report the full workspace permission set as
     // server truth — otherwise the web shell hides navigation it may use.
-    permissions: !authUsesExplicitPermissions(request.auth) && activeTenant
-      ? filterPermissionsForTenantContext(permissionValues)
+    permissions: !authUsesExplicitPermissions(request.auth) && activeWorkspace
+      ? filterPermissionsForWorkspaceContext(permissionValues)
       : request.auth.permissions,
     capabilities: buildAuthBootstrapCapabilities(request.auth, {
       setupRequired
@@ -73,50 +79,50 @@ authRouter.get('/bootstrap', async (request, response) => {
   })
 })
 
-authRouter.post('/switch-tenant', async (request, response) => {
+authRouter.post('/switch-workspace', async (request, response) => {
   if (request.auth.actor.type !== 'user') {
-    throw unauthorized('Sign in to switch tenants.')
+    throw unauthorized('Sign in to switch workspaces.')
   }
 
-  const parsed = switchTenantRequestSchema.safeParse(request.body)
+  const parsed = switchWorkspaceRequestSchema.safeParse(request.body)
   if (!parsed.success) {
-    throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid tenant switch payload.')
-  }
-
-  annotateRequestAuditLog(request, {
-    action: 'switch-tenant',
-    resource: 'workspace',
-    tenantId: null,
-    summary: parsed.data.tenantId
-      ? 'Switched into a different tenant workspace.'
-      : 'Returned to the platform workspace.',
-    metadata: {
-      sourceTenantId: request.tenant?.id ?? null,
-      targetTenantId: parsed.data.tenantId
-    }
-  })
-  await selectTenantContext(request, response, parsed.data.tenantId)
-})
-
-authRouter.post('/tenant-context', async (request, response) => {
-  const parsed = selectTenantContextRequestSchema.safeParse(request.body)
-  if (!parsed.success) {
-    throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid tenant context payload.')
+    throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid workspace switch payload.')
   }
 
   annotateRequestAuditLog(request, {
     action: 'switch-workspace',
     resource: 'workspace',
-    tenantId: null,
-    summary: parsed.data.tenantId
+    workspaceId: null,
+    summary: parsed.data.workspaceId
+      ? 'Switched into a different workspace.'
+      : 'Returned to the platform workspace.',
+    metadata: {
+      sourceWorkspaceId: request.workspace?.id ?? null,
+      targetWorkspaceId: parsed.data.workspaceId
+    }
+  })
+  await selectWorkspaceContext(request, response, parsed.data.workspaceId)
+})
+
+authRouter.post('/workspace-context', async (request, response) => {
+  const parsed = selectWorkspaceContextRequestSchema.safeParse(request.body)
+  if (!parsed.success) {
+    throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid workspace context payload.')
+  }
+
+  annotateRequestAuditLog(request, {
+    action: 'switch-workspace',
+    resource: 'workspace',
+    workspaceId: null,
+    summary: parsed.data.workspaceId
       ? 'Changed the active workspace context.'
       : 'Cleared the active workspace context.',
     metadata: {
-      sourceTenantId: request.tenant?.id ?? null,
-      targetTenantId: parsed.data.tenantId
+      sourceWorkspaceId: request.workspace?.id ?? null,
+      targetWorkspaceId: parsed.data.workspaceId
     }
   })
-  await selectTenantContext(request, response, parsed.data.tenantId)
+  await selectWorkspaceContext(request, response, parsed.data.workspaceId)
 })
 
 authRouter.post('/logout', async (request, response) => {
@@ -127,7 +133,7 @@ authRouter.post('/logout', async (request, response) => {
   })
   await revokeRequestAuthSession(prisma, request)
   clearAuthSessionCookie(response)
-  clearTenantContextCookie(response)
+  clearWorkspaceContextCookie(response)
   response.status(204).end()
 })
 
@@ -241,15 +247,49 @@ async function resolveBootstrapActor(request: import('express').Request) {
   }
 }
 
-async function resolveAvailableTenants(request: import('express').Request) {
+/**
+ * The workspaces a user belongs to and may sign into.
+ *
+ * One implementation because there were two identical copies, and a soft-deleted
+ * workspace leaked through BOTH of them — the visibility audit fixed the lists
+ * that query `workspace` directly and missed the pair that reach it through a
+ * membership. A deleted workspace kept appearing in the chooser, which is worse
+ * than not deleting it: it is listed, enterable, and gone from everywhere else.
+ *
+ * `loginDisabled` and `deletedAt` are different refusals and both belong here —
+ * one is "this person may not sign in", the other is "this workspace is on its
+ * way out".
+ */
+export async function loadMembershipWorkspaces(userId: string) {
+  const memberships = await rootPrisma.authWorkspaceMembership.findMany({
+    where: {
+      userId,
+      loginDisabled: false,
+      workspace: visibleWorkspacesWhere({})
+    },
+    select: {
+      workspace: {
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          description: true
+        }
+      }
+    }
+  })
+  return memberships
+}
+
+async function resolveAvailableWorkspaces(request: import('express').Request) {
   if (request.auth.actor.type === 'user' && request.auth.actor.isPlatformUser) {
-    const [memberTenants, supportAccessibleTenants] = await Promise.all([
-      resolveMemberTenants(request),
-      withTenantWorkspaceUsage(await listSupportAccessibleWorkspaces({
+    const [memberWorkspaces, supportAccessibleWorkspaces] = await Promise.all([
+      resolveMemberWorkspaces(request),
+      withWorkspaceUsage(await listSupportAccessibleWorkspaces({
         bypassSupportAccess: hasSupportAccessBypass(request.auth.platformPermissions ?? request.auth.permissions)
       }))
     ])
-    return mergeTenantWorkspaceLists(memberTenants, supportAccessibleTenants)
+    return mergeWorkspaceLists(memberWorkspaces, supportAccessibleWorkspaces)
   }
 
   if (request.auth.actor.type !== 'user') {
@@ -257,33 +297,18 @@ async function resolveAvailableTenants(request: import('express').Request) {
   }
 
   if (!request.auth.authEnabled) {
-    return await withTenantWorkspaceUsage(await filterEnabledTenants({ tenants: await listTenants(prisma) }))
+    return await withWorkspaceUsage(await filterEnabledWorkspaces({ workspaces: await listWorkspaces(prisma) }))
   }
 
-  const memberships = await rootPrisma.authTenantMembership.findMany({
-    where: {
-      userId: request.auth.actor.userId,
-      loginDisabled: false
-    },
-    select: {
-      tenant: {
-        select: {
-          id: true,
-          slug: true,
-          name: true,
-          description: true
-        }
-      }
-    }
-  })
+  const memberships = await loadMembershipWorkspaces(request.auth.actor.userId)
 
-  return await withTenantWorkspaceUsage(
-    (await filterEnabledTenants({ tenants: memberships.map((membership) => membership.tenant) }))
+  return await withWorkspaceUsage(
+    (await filterEnabledWorkspaces({ workspaces: memberships.map((membership) => membership.workspace) }))
       .sort((left, right) => left.name.localeCompare(right.name))
   )
 }
 
-async function resolveMemberTenants(request: import('express').Request) {
+async function resolveMemberWorkspaces(request: import('express').Request) {
   if (
     request.auth.actor.type !== 'user'
     || (!request.auth.authEnabled && !request.auth.actor.isPlatformUser)
@@ -291,41 +316,26 @@ async function resolveMemberTenants(request: import('express').Request) {
     return []
   }
 
-  const memberships = await rootPrisma.authTenantMembership.findMany({
-    where: {
-      userId: request.auth.actor.userId,
-      loginDisabled: false
-    },
-    select: {
-      tenant: {
-        select: {
-          id: true,
-          slug: true,
-          name: true,
-          description: true
-        }
-      }
-    }
-  })
+  const memberships = await loadMembershipWorkspaces(request.auth.actor.userId)
 
-  return await withTenantWorkspaceUsage(
-    (await filterEnabledTenants({ tenants: memberships.map((membership) => membership.tenant) }))
+  return await withWorkspaceUsage(
+    (await filterEnabledWorkspaces({ workspaces: memberships.map((membership) => membership.workspace) }))
       .sort((left, right) => left.name.localeCompare(right.name))
   )
 }
 
-async function withTenantWorkspaceUsage<TTenant extends {
+async function withWorkspaceUsage<TWorkspace extends {
   id: string
   slug: string
   name: string
   description?: string | null
-}>(tenants: readonly TTenant[]): Promise<Array<TTenant & { userCount: number; printerCount: number }>> {
-  if (tenants.length === 0) return []
+}>(workspaces: readonly TWorkspace[]): Promise<Array<TWorkspace & { userCount: number; printerCount: number }>> {
+  if (workspaces.length === 0) return []
 
-  const usageRows = await rootPrisma.tenant.findMany({
-    where: {
-      id: { in: tenants.map((tenant) => tenant.id) }
-    },
+  const usageRows = await rootPrisma.workspace.findMany({
+    where: visibleWorkspacesWhere({
+      id: { in: workspaces.map((workspace) => workspace.id) }
+    }),
     select: {
       id: true,
       _count: {
@@ -336,130 +346,137 @@ async function withTenantWorkspaceUsage<TTenant extends {
       }
     }
   })
-  const usageByTenantId = new Map(usageRows.map((tenant) => [
-    tenant.id,
+  const usageByWorkspaceId = new Map(usageRows.map((workspace) => [
+    workspace.id,
     {
-      userCount: tenant._count.authMemberships,
-      printerCount: tenant._count.printers
+      userCount: workspace._count.authMemberships,
+      printerCount: workspace._count.printers
     }
   ] as const))
 
-  return tenants.map((tenant) => ({
-    ...tenant,
-    userCount: usageByTenantId.get(tenant.id)?.userCount ?? 0,
-    printerCount: usageByTenantId.get(tenant.id)?.printerCount ?? 0
+  return workspaces.map((workspace) => ({
+    ...workspace,
+    userCount: usageByWorkspaceId.get(workspace.id)?.userCount ?? 0,
+    printerCount: usageByWorkspaceId.get(workspace.id)?.printerCount ?? 0
   }))
 }
 
-function mergeTenantWorkspaceLists<TTenant extends { id: string; slug: string; name: string }>(
-  ...groups: ReadonlyArray<ReadonlyArray<TTenant>>
-): TTenant[] {
-  const tenantsById = new Map<string, TTenant>()
+/** The active workspace as bootstrap reports it. Null passes straight through. */
+function serializeWorkspaceSummary(workspace: RequestWorkspaceSummary | null) {
+  return workspace
+    ? { id: workspace.id, slug: workspace.slug, name: workspace.name }
+    : null
+}
+
+function mergeWorkspaceLists<TWorkspace extends { id: string; slug: string; name: string }>(
+  ...groups: ReadonlyArray<ReadonlyArray<TWorkspace>>
+): TWorkspace[] {
+  const workspacesById = new Map<string, TWorkspace>()
   for (const group of groups) {
-    for (const tenant of group) {
-      tenantsById.set(tenant.id, tenant)
+    for (const workspace of group) {
+      workspacesById.set(workspace.id, workspace)
     }
   }
 
-  return [...tenantsById.values()].sort((left, right) => left.name.localeCompare(right.name))
+  return [...workspacesById.values()].sort((left, right) => left.name.localeCompare(right.name))
 }
 
-function resolveEffectiveRequestTenant(request: import('express').Request) {
+function resolveEffectiveRequestWorkspace(request: import('express').Request) {
   if (request.auth.actor.type === 'user' || request.auth.actor.type === 'service-account') {
-    return request.auth.actor.tenant ?? request.tenant ?? null
+    return request.auth.actor.workspace ?? request.workspace ?? null
   }
 
-  return request.tenant ?? null
+  return request.workspace ?? null
 }
 
-async function selectTenantContext(
+async function selectWorkspaceContext(
   request: import('express').Request,
   response: import('express').Response,
-  tenantId: string | null
+  workspaceId: string | null
 ) {
   if (request.auth.actor.type !== 'user') {
     throw unauthorized('Sign in to change workspace context.')
   }
 
   if (!request.auth.authEnabled) {
-    if (tenantId == null) {
-      setTenantContextCookie(response, null)
+    if (workspaceId == null) {
+      setWorkspaceContextCookie(response, null)
       response.status(204).end()
       return
     }
 
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
+    const workspace = await prisma.workspace.findFirst({
+      where: visibleWorkspacesWhere({ id: workspaceId }),
       select: { id: true }
     })
-    if (!tenant) {
-      throw notFound('Tenant not found.')
+    if (!workspace) {
+      throw notFound('Workspace not found.')
     }
-    if (await isTenantDisabled({ tenantId })) {
+    if (await isWorkspaceDisabled({ workspaceId })) {
       throw forbidden('This workspace is disabled.')
     }
 
-    setTenantContextCookie(response, tenant.id)
+    setWorkspaceContextCookie(response, workspace.id)
     response.status(204).end()
     return
   }
 
-  if (tenantId == null) {
-    setTenantContextCookie(response, null)
+  if (workspaceId == null) {
+    setWorkspaceContextCookie(response, null)
     response.status(204).end()
     return
   }
 
   if (request.auth.actor.isPlatformUser) {
-    if (await isTenantDisabled({ tenantId })) {
+    if (await isWorkspaceDisabled({ workspaceId })) {
       throw forbidden('This workspace is disabled.')
     }
 
-    const tenant = await rootPrisma.tenant.findMany({
-      where: { id: tenantId },
+    const workspace = await rootPrisma.workspace.findMany({
+      where: visibleWorkspacesWhere({ id: workspaceId }),
       select: { id: true }
     })
-    if (tenant.length === 0) {
-      throw notFound('Tenant not found.')
+    if (workspace.length === 0) {
+      throw notFound('Workspace not found.')
     }
 
-    const memberships = await rootPrisma.authTenantMembership.findMany({
+    const memberships = await rootPrisma.authWorkspaceMembership.findMany({
       where: {
         userId: request.auth.actor.userId,
-        tenantId,
+        workspaceId,
         loginDisabled: false
       },
-      select: { tenantId: true },
+      select: { workspaceId: true },
       take: 1
     })
     const supportAccessAllowed = await isSupportAccessAllowed({
-      tenantId,
+      workspaceId,
       bypassSupportAccess: hasSupportAccessBypass(request.auth.platformPermissions ?? request.auth.permissions)
     })
     if (memberships.length === 0 && !supportAccessAllowed) {
       throw forbidden('You do not have access to this workspace.')
     }
 
-    setTenantContextCookie(response, tenantId)
+    setWorkspaceContextCookie(response, workspaceId)
     response.status(204).end()
     return
   }
 
-  const membership = await prisma.authTenantMembership.findFirst({
+  const membership = await prisma.authWorkspaceMembership.findFirst({
     where: {
       userId: request.auth.actor.userId,
-      tenantId,
+      workspaceId,
       loginDisabled: false
     },
     select: {
-      tenantId: true
+      workspaceId: true
     }
   })
 
-  if (!membership || await isTenantDisabled({ tenantId })) {
+  if (!membership || await isWorkspaceDisabled({ workspaceId })) {
     throw forbidden('You do not have access to this workspace.')
   }
 
-  setTenantContextCookie(response, tenantId)
+  setWorkspaceContextCookie(response, workspaceId)
   response.status(204).end()
 }

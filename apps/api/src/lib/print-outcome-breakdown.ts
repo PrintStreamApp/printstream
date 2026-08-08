@@ -92,7 +92,7 @@ async function readPrintOutcomeBreakdown(
   return breakdown
 }
 
-export async function readTenantPrintOutcomeBreakdown(
+export async function readWorkspacePrintOutcomeBreakdown(
   where: Prisma.PrintJobWhereInput = {}
 ): Promise<PrintOutcomeBreakdown> {
   return await readPrintOutcomeBreakdown((args) => prisma.printJob.groupBy(args as never), where)

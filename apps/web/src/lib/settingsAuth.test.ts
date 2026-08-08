@@ -11,7 +11,7 @@ test('resolveSettingsAuthState keeps auth management available during setup whil
         canManageAuthProviders: false,
         canManageSettings: false,
         canManageSupportAccess: false,
-        canManageTenants: false,
+        canManageWorkspaces: false,
         canManagePlugins: false,
         canViewLogs: false
       },
@@ -45,7 +45,7 @@ test('resolveSettingsAuthState requires auth access view once auth is enabled', 
         canManageAuthProviders: false,
         canManageSettings: false,
         canManageSupportAccess: false,
-        canManageTenants: false,
+        canManageWorkspaces: false,
         canManagePlugins: false,
         canViewLogs: false
       },
@@ -79,7 +79,7 @@ test('resolveSettingsAuthState keeps users and roles hidden while auth is disabl
         canManageAuthProviders: false,
         canManageSettings: false,
         canManageSupportAccess: false,
-        canManageTenants: false,
+        canManageWorkspaces: false,
         canManagePlugins: false,
         canViewLogs: false
       },
@@ -113,7 +113,7 @@ test('resolveSettingsAuthState hides users and roles while auth is disabled even
         canManageAuthProviders: true,
         canManageSettings: true,
         canManageSupportAccess: true,
-        canManageTenants: true,
+        canManageWorkspaces: true,
         canManagePlugins: true,
         canViewLogs: true
       },

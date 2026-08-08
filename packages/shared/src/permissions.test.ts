@@ -60,10 +60,10 @@ test('resolveImpliedPermissions resolves auth management views through access vi
   assert.ok(sorted.includes('auth.access.view'))
 })
 
-test('resolveImpliedPermissions requires tenant management before tenant disablement', () => {
-  const implied = resolveImpliedPermissions(['tenants.disable'])
+test('resolveImpliedPermissions requires workspace management before workspace disablement', () => {
+  const implied = resolveImpliedPermissions(['workspaces.disable'])
 
-  assert.deepEqual(implied, ['tenants.manage'])
+  assert.deepEqual(implied, ['workspaces.manage'])
 })
 
 test('getPermissionPrerequisites returns direct parents only', () => {

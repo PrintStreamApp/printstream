@@ -46,7 +46,7 @@ export class WebPushDelivery {
    * Load persisted delivery state.
    *
    * Server-wide instances own the shared VAPID keys and should use the
-   * default behavior. Tenant-scoped instances should restore only the
+   * default behavior. Workspace-scoped instances should restore only the
    * subscription list and continue signing with the server-wide keypair.
    */
   async load(options: { includeVapid?: boolean } = {}): Promise<void> {
@@ -92,7 +92,7 @@ export class WebPushDelivery {
   }
 
   /**
-   * Override the VAPID keys used for signing. Used by per-tenant
+   * Override the VAPID keys used for signing. Used by per-workspace
    * delivery instances so they share the server-wide keypair without
    * regenerating their own.
    */

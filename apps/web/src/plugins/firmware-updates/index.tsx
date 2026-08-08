@@ -55,6 +55,7 @@ import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { wsClient } from '../../lib/wsClient'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { Markdown } from '../../components/Markdown'
+import { ListSkeleton } from '../../components/ListSkeleton'
 import {
   firmwareChipColor,
   firmwareStillPendingInstall,
@@ -181,7 +182,7 @@ function useFirmwarePermissions(): { canViewPrinters: boolean; canManagePrinters
     canViewPrinters: authBootstrapQuery.data ? (!authEnabled || permissions.includes(PRINTERS_VIEW_PERMISSION)) : false,
     canManagePrinters: authBootstrapQuery.data ? (!authEnabled || permissions.includes(PRINTERS_MANAGE_PERMISSION)) : false,
     loading: authBootstrapQuery.isLoading,
-    scopeKey: authBootstrapQuery.data ? authBootstrapQuery.data.tenant?.id ?? 'platform' : null
+    scopeKey: authBootstrapQuery.data ? authBootstrapQuery.data.workspace?.id ?? 'platform' : null
   }
 }
 
@@ -317,7 +318,7 @@ function FirmwareUpdateDetailsDialog({
         <DialogContent>
           <Stack spacing={1.5}>
             {!update && updatesQuery.isLoading && (
-              <Typography level="body-sm" textColor="text.tertiary">Loading…</Typography>
+              <ListSkeleton rows={2} />
             )}
 
             {update && (

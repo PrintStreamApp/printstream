@@ -18,11 +18,15 @@ const ambientOverlayBase = [
 ].join(',')
 
 export function PublicShell({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
+  // No BrandChromeContext provider: PublicShell has no header of its own, and the
+  // context's default (false = "nothing brands the page above") is exactly right.
   return (
     <Box
       sx={{
         minHeight: '100vh',
         position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
         px: { xs: 2, md: 4 },
         pt: {
           xs: 'calc(var(--app-top-inset, 0px) + 16px)',
@@ -57,8 +61,26 @@ export function PublicShell({ children, footer }: { children: ReactNode; footer?
         sx={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 1200, mx: 'auto' }}
       >
         {children}
-        {footer ? <Box sx={{ mt: 1, display: 'flex', justifyContent: 'center' }}>{footer}</Box> : null}
       </Stack>
+      {/* Outside the content Stack so `mt: 'auto'` pins it to the viewport bottom on short pages
+          (inside, the Stack's spacing margins would override the auto margin). */}
+      {footer ? (
+        <Box
+          sx={{
+            position: 'relative',
+            zIndex: 1,
+            width: '100%',
+            maxWidth: 1200,
+            mx: 'auto',
+            mt: 'auto',
+            pt: 4,
+            display: 'flex',
+            justifyContent: 'center'
+          }}
+        >
+          {footer}
+        </Box>
+      ) : null}
     </Box>
   )
 }

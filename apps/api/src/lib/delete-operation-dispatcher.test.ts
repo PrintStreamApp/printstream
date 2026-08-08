@@ -14,7 +14,7 @@ test('library delete jobs run in the background and finish with progress', async
     async listLibraryRows(fileIds) {
       return fileIds.map((id, index) => ({
         id,
-        tenantId: 'tenant-1',
+        workspaceId: 'workspace-1',
         name: `file-${index + 1}.gcode`,
         storedPath: `stored-${index + 1}.gcode`,
         hidden: false

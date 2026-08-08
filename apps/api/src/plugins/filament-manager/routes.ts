@@ -21,7 +21,7 @@ import type { ApiPluginContext } from '../../plugin/types.js'
 import { annotateRequestAuditLog } from '../../lib/audit-logs.js'
 import { requireRequestPermission } from '../../lib/authorization.js'
 import { badRequest, notFound } from '../../lib/http-error.js'
-import { requireRequestTenantId, requireRouteParam } from '../../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam } from '../../lib/request-helpers.js'
 import { broadcastPluginSettingsChanged } from '../../lib/ws-resource-events.js'
 import { toSpoolDto } from './dto.js'
 import { broadcastSpoolsChanged } from './events.js'
@@ -58,35 +58,35 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
 
   // --- settings -----------------------------------------------------
   context.router.get('/settings', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
-    response.json({ autoAddBambuSpools: await loadAutoAddBambuSpools(context.settings, tenantId) })
+    const workspaceId = requireRequestWorkspaceId(request)
+    response.json({ autoAddBambuSpools: await loadAutoAddBambuSpools(context.settings, workspaceId) })
   })
 
   context.router.put('/settings', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const parsed = filamentManagerSettingsSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid settings payload')
-    await setAutoAddBambuSpools(context.settings, tenantId, parsed.data.autoAddBambuSpools)
+    await setAutoAddBambuSpools(context.settings, workspaceId, parsed.data.autoAddBambuSpools)
     annotateRequestAuditLog(request, {
       action: 'update-filament-manager-settings',
       resource: 'filament-manager settings',
       summary: `Auto-add Bambu spools ${parsed.data.autoAddBambuSpools ? 'enabled' : 'disabled'}.`,
       metadata: { autoAddBambuSpools: parsed.data.autoAddBambuSpools }
     })
-    broadcastPluginSettingsChanged(context.pluginName, tenantId)
+    broadcastPluginSettingsChanged(context.pluginName, workspaceId)
     response.json({ autoAddBambuSpools: parsed.data.autoAddBambuSpools })
   })
 
   // --- stats --------------------------------------------------------
   context.router.get('/stats', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
-    response.json(await readFilamentUsageStats(db, tenantId))
+    const workspaceId = requireRequestWorkspaceId(request)
+    response.json(await readFilamentUsageStats(db, workspaceId))
   })
 
   // --- spools -------------------------------------------------------
   context.router.get('/spools', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
-    const rows = await listSpoolRows(db, tenantId, {
+    const workspaceId = requireRequestWorkspaceId(request)
+    const rows = await listSpoolRows(db, workspaceId, {
       includeArchived: request.query.includeArchived === 'true',
       includeDeleted: request.query.includeDeleted === 'true'
     })
@@ -94,34 +94,34 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
   })
 
   context.router.post('/spools', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const parsed = spoolCreateSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid spool payload')
-    const row = await createSpoolRow(db, tenantId, parsed.data)
+    const row = await createSpoolRow(db, workspaceId, parsed.data)
     annotateRequestAuditLog(request, {
       action: 'create-filament-spool',
       resource: 'filament spool',
       summary: `Added ${row.brand ?? ''} ${row.filamentType} spool to the filament library.`.trim(),
       metadata: { spoolId: row.id, filamentType: row.filamentType }
     })
-    broadcastSpoolsChanged(context, tenantId)
+    broadcastSpoolsChanged(context, workspaceId)
     response.status(201).json(toSpoolDto(row))
   })
 
   context.router.get('/spools/:id', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
-    const row = await getSpoolRow(db, tenantId, id)
+    const row = await getSpoolRow(db, workspaceId, id)
     if (!row) throw notFound('Filament spool not found')
     response.json(toSpoolDto(row))
   })
 
   context.router.patch('/spools/:id', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
     const parsed = spoolUpdateSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid spool payload')
-    const row = await updateSpoolRow(db, tenantId, id, parsed.data)
+    const row = await updateSpoolRow(db, workspaceId, id, parsed.data)
     if (!row) throw notFound('Filament spool not found')
     annotateRequestAuditLog(request, {
       action: 'update-filament-spool',
@@ -129,16 +129,16 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
       summary: `Updated ${row.filamentType} spool.`,
       metadata: { spoolId: row.id }
     })
-    broadcastSpoolsChanged(context, tenantId)
+    broadcastSpoolsChanged(context, workspaceId)
     response.json(toSpoolDto(row))
   })
 
   context.router.post('/spools/:id/adjust', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
     const parsed = spoolAdjustSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid adjustment payload')
-    const row = await adjustSpoolRow(db, tenantId, id, parsed.data)
+    const row = await adjustSpoolRow(db, workspaceId, id, parsed.data)
     if (!row) throw notFound('Filament spool not found')
     annotateRequestAuditLog(request, {
       action: 'adjust-filament-spool',
@@ -146,16 +146,16 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
       summary: `Adjusted remaining filament to ${Math.round(row.remainingGrams)}g.`,
       metadata: { spoolId: row.id, remainingGrams: row.remainingGrams }
     })
-    broadcastSpoolsChanged(context, tenantId)
+    broadcastSpoolsChanged(context, workspaceId)
     response.json(toSpoolDto(row))
   })
 
   context.router.post('/spools/:id/assign', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
     const parsed = spoolAssignSchema.safeParse(request.body)
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid assignment payload')
-    const row = await assignSpoolRow(db, tenantId, id, parsed.data)
+    const row = await assignSpoolRow(db, workspaceId, id, parsed.data)
     if (!row) throw notFound('Filament spool not found')
     annotateRequestAuditLog(request, {
       action: 'assign-filament-spool',
@@ -163,10 +163,10 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
       summary: `Loaded ${row.filamentType} spool into a printer slot.`,
       metadata: { spoolId: row.id, printerId: parsed.data.printerId, amsId: parsed.data.amsId, slotId: parsed.data.slotId ?? null }
     })
-    broadcastSpoolsChanged(context, tenantId)
+    broadcastSpoolsChanged(context, workspaceId)
     if (parsed.data.slotId != null) {
       context.printerEvents.emit('ams-slot.filament-loaded', {
-        tenantId,
+        workspaceId,
         printerId: parsed.data.printerId,
         amsId: parsed.data.amsId,
         slotId: parsed.data.slotId,
@@ -181,18 +181,18 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
   })
 
   context.router.post('/spools/:id/unassign', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
-    const row = await unassignSpoolRow(db, tenantId, id)
+    const row = await unassignSpoolRow(db, workspaceId, id)
     if (!row) throw notFound('Filament spool not found')
-    broadcastSpoolsChanged(context, tenantId)
+    broadcastSpoolsChanged(context, workspaceId)
     response.json(toSpoolDto(row))
   })
 
   context.router.post('/spools/:id/recycle', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
-    const recycled = await recycleSpoolRow(db, tenantId, id)
+    const recycled = await recycleSpoolRow(db, workspaceId, id)
     if (!recycled) throw notFound('Filament spool not found')
     annotateRequestAuditLog(request, {
       action: 'recycle-filament-spool',
@@ -200,23 +200,23 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
       summary: 'Moved a filament spool to the recycle bin.',
       metadata: { spoolId: id }
     })
-    broadcastSpoolsChanged(context, tenantId)
+    broadcastSpoolsChanged(context, workspaceId)
     response.json({ id, deleted: true })
   })
 
   context.router.post('/spools/:id/restore', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
-    const row = await restoreSpoolRow(db, tenantId, id)
+    const row = await restoreSpoolRow(db, workspaceId, id)
     if (!row) throw notFound('Filament spool not found')
-    broadcastSpoolsChanged(context, tenantId)
+    broadcastSpoolsChanged(context, workspaceId)
     response.json(toSpoolDto(row))
   })
 
   context.router.delete('/spools/:id', requireRequestPermission(LIBRARY_MANAGE_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
-    const deleted = await deleteSpoolRow(db, tenantId, id)
+    const deleted = await deleteSpoolRow(db, workspaceId, id)
     if (!deleted) throw notFound('Filament spool not found')
     annotateRequestAuditLog(request, {
       action: 'delete-filament-spool',
@@ -224,16 +224,16 @@ export function registerFilamentManagerRoutes(context: ApiPluginContext): void {
       summary: 'Permanently deleted a filament spool.',
       metadata: { spoolId: id }
     })
-    broadcastSpoolsChanged(context, tenantId)
+    broadcastSpoolsChanged(context, workspaceId)
     response.json({ id, deleted: true })
   })
 
   context.router.get('/spools/:id/usage', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
-    const tenantId = requireRequestTenantId(request)
+    const workspaceId = requireRequestWorkspaceId(request)
     const id = requireRouteParam(request.params.id, 'id')
-    const spool = await getSpoolRow(db, tenantId, id)
+    const spool = await getSpoolRow(db, workspaceId, id)
     if (!spool) throw notFound('Filament spool not found')
-    const rows = await listUsageRows(db, tenantId, id)
+    const rows = await listUsageRows(db, workspaceId, id)
     response.json({ usage: rows.map(usageToDto) })
   })
 }

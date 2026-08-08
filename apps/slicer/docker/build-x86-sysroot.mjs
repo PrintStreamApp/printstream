@@ -34,8 +34,15 @@ export const UBUNTU_BASE_URL =
 export const APT_SUITE = 'noble'
 
 // Top-level runtime packages the BambuStudio CLI links; apt pulls the full transitive closure.
-// Mesa's DRI/llvmpipe driver (libgl1-mesa-dri) is required for the offscreen GL that renders
-// plate thumbnails — dropping it slices gcode fine but produces thumbnail-less output.
+//
+// Mesa (libgl1-mesa-dri and its llvmpipe/gallium payload) is listed for the offscreen GL the
+// CLI *tries* to use, NOT because plate thumbnails depend on it. Measured 2026-08-06: glfwInit
+// fails with "Wayland: Failed to connect to display" on every deployment we run — arm64 dev AND
+// the amd64 production slicer container, under Xvfb — and slicing exits 0 regardless. Thumbnails
+// reach the output another way entirely: the API bakes editor-rendered PNGs into the INPUT 3MF
+// (`embedPlateThumbnails`) and `backfillPlateThumbnails` copies any the CLI did not write. So
+// `trimSysrootForHeadlessSlicing` can drop Mesa without losing thumbnails; see it for what else
+// goes and why.
 export const APT_PACKAGES = [
   'libgtk-3-0t64', 'libwebkit2gtk-4.1-0', 'libgstreamer1.0-0', 'libgstreamer-plugins-base1.0-0',
   'libgl1', 'libglx-mesa0', 'libgl1-mesa-dri', 'libegl1', 'libegl-mesa0', 'libgbm1', 'libglu1-mesa',
@@ -92,6 +99,48 @@ export function buildX86Sysroot({ sysroot, cacheDir, log = console.log } = {}) {
   for (const deb of debs) run('dpkg-deb', ['-x', deb, sysroot])
   writeFileSync(sysrootStamp(sysroot), `${new Date().toISOString()}\n`)
   return sysroot
+}
+
+/**
+ * Strip a built sysroot down to what a HEADLESS slice actually loads.
+ *
+ * Measured on the real closure: `bin/bambu-studio` needs 131 sonames, 128 of which come from
+ * here (the AppImage bundles only libavcodec/libavutil/libswscale). Every one of those is
+ * DT_NEEDED and stays. What goes is everything the loader never opens:
+ *
+ * - Mesa's software rasteriser — `libLLVM.so` (137 MB) and `libgallium*.so` (41 MB) — dlopen'd
+ *   only for the GL context that never initialises here. See the note on APT_PACKAGES.
+ * - GTK furniture that no headless process reads: icon themes (46 MB), locales (23 MB), docs
+ *   and man pages (16 MB).
+ * - Executables: `usr/bin`, `usr/sbin`, systemd and apt. We need libraries and the loader; the
+ *   CLI comes from the AppImage.
+ *
+ * 620 MB -> 314 MB, and the trimmed sysroot slices (verified end to end under qemu).
+ *
+ * **Opt-in.** The Docker images keep the full sysroot: this exists for the native self-hosted
+ * app, which downloads it over a customer's connection, and changing what the images emulate
+ * against is a separate decision with its own blast radius.
+ */
+export function trimSysrootForHeadlessSlicing(sysroot, { log = console.log } = {}) {
+  const before = duMegabytes(sysroot)
+  for (const relative of [
+    'usr/share/icons', 'usr/share/locale', 'usr/share/doc', 'usr/share/man',
+    'usr/bin', 'usr/sbin', 'usr/lib/systemd', 'usr/lib/apt', 'var',
+    'usr/lib/x86_64-linux-gnu/dri'
+  ]) {
+    rmSync(path.join(sysroot, relative), { recursive: true, force: true })
+  }
+  for (const glob of ['libLLVM.so*', 'libgallium*.so*', 'libvulkan*', 'libVkLayer*']) {
+    run('sh', ['-c', `rm -f ${path.join(sysroot, 'usr/lib/x86_64-linux-gnu', glob)}`])
+  }
+  const after = duMegabytes(sysroot)
+  log(`  trimmed sysroot ${before} MB -> ${after} MB`)
+  return sysroot
+}
+
+function duMegabytes(dir) {
+  const out = execFileSync('du', ['-sm', '--count-links', dir], { encoding: 'utf8' })
+  return Number.parseInt(out.trim().split(/\s+/)[0] ?? '0', 10)
 }
 
 function setupAptRoot(aptDir) {

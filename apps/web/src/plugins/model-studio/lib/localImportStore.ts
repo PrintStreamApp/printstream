@@ -2,7 +2,7 @@
  * Staged imports, held in the browser.
  *
  * The counterpart of the api's `import-store.ts`. In the signed-in app a foreign model is uploaded
- * to `POST /api/editor/imports`, parsed server-side, kept in a tenant-keyed LRU, and referenced by
+ * to `POST /api/editor/imports`, parsed server-side, kept in a workspace-keyed LRU, and referenced by
  * `importId` until the bake resolves it. None of that can happen in the public editor: there is no
  * session, and the file is not supposed to leave the machine.
  *

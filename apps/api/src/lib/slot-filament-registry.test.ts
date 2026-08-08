@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { slotFilamentResolvers, type SlotFilamentIdentity } from './slot-filament-registry.js'
 
-const query = { tenantId: 't1', printerId: 'p1', amsId: 0, slotId: 1 }
+const query = { workspaceId: 't1', printerId: 'p1', amsId: 0, slotId: 1 }
 const identity = (spoolId: string): SlotFilamentIdentity => ({
   spoolId,
   brand: 'Acme',

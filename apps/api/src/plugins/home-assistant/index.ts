@@ -12,16 +12,16 @@
  *
  * WebSocket events emitted (type `plugin.event`, pluginName `home-assistant`):
  * - `{ type: 'printer.update', printer }` \u2014 fired on every status change,
- *   scoped to the owning tenant so each tenant only sees its printers.
+ *   scoped to the owning workspace so each workspace only sees its printers.
  * - `{ type: 'snapshot', ... }` \u2014 fired when the printer list changes
- *   (add / remove), broadcast per-tenant so HA instances don't receive
- *   cross-tenant data.
+ *   (add / remove), broadcast per-workspace so HA instances don't receive
+ *   cross-workspace data.
  *
  * ## Startup & caching
  *
  * The printer list is cached at activation time using `rootPrisma`
- * (no tenant request context exists during plugin startup). Event
- * handlers resolve tenant ownership via `printerManager.getTenantId()`
+ * (no workspace request context exists during plugin startup). Event
+ * handlers resolve workspace ownership via `printerManager.getWorkspaceId()`
  * to scope each broadcast.
  */
 import {
@@ -39,7 +39,7 @@ import { printerManager } from '../../lib/printer-manager.js'
 import { listPrinters } from '../../lib/printer-list.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
 import { rootPrisma } from '../../lib/prisma.js'
-import { requireRequestTenantId } from '../../lib/request-helpers.js'
+import { requireRequestWorkspaceId } from '../../lib/request-helpers.js'
 import { buildHomeAssistantBridgeInfo, buildHomeAssistantSnapshot } from './snapshot.js'
 import { createHomeAssistantAccessToken, readHomeAssistantAccessStatus } from './access.js'
 
@@ -73,7 +73,7 @@ export function createHomeAssistantPlugin(deps: Partial<HomeAssistantPluginDeps>
     version: '0.1.0',
     description: 'Expose printers and AMS units to Home Assistant with real-time WebSocket updates.',
     async register(context) {
-      const isEnabledForTenant = (tenantId: string | null): boolean => context.isEnabledForTenant?.(tenantId) ?? true
+      const isEnabledForWorkspace = (workspaceId: string | null): boolean => context.isEnabledForWorkspace?.(workspaceId) ?? true
 
       context.router.get('/', requireRequestPermission(PRINTERS_VIEW_PERMISSION), async (_request, response) => {
         response.json(buildHomeAssistantBridgeInfo(await readSnapshot(context.prisma)))
@@ -84,15 +84,15 @@ export function createHomeAssistantPlugin(deps: Partial<HomeAssistantPluginDeps>
       })
 
       context.router.get('/access', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-        const tenantId = requireRequestTenantId(request)
-        const settings = context.settings.forTenant(tenantId)
+        const workspaceId = requireRequestWorkspaceId(request)
+        const settings = context.settings.forWorkspace(workspaceId)
         response.json(homeAssistantAccessStatusSchema.parse(await readHomeAssistantAccessStatus(context.prisma, settings)))
       })
 
       context.router.post('/access/token', requireRequestPermission(SETTINGS_MANAGE_PERMISSION), async (request, response) => {
-        const tenantId = requireRequestTenantId(request)
-        const settings = context.settings.forTenant(tenantId)
-        const result = await createHomeAssistantAccessToken(context.prisma, settings, tenantId)
+        const workspaceId = requireRequestWorkspaceId(request)
+        const settings = context.settings.forWorkspace(workspaceId)
+        const result = await createHomeAssistantAccessToken(context.prisma, settings, workspaceId)
         // Record that a token was issued and which service account it belongs
         // to. Never log the token value itself.
         annotateRequestAuditLog(request, {
@@ -109,7 +109,7 @@ export function createHomeAssistantPlugin(deps: Partial<HomeAssistantPluginDeps>
 
       // Cache the printer list so status events don't hit the DB on every update.
       // Use rootPrisma for the initial load because this runs at plugin
-      // activation time, outside any per-tenant request context.
+      // activation time, outside any per-workspace request context.
       let cachedPrinters: Printer[] = await services.listPrinters(rootPrisma)
 
       const refreshPrinterCache = async () => {
@@ -121,14 +121,14 @@ export function createHomeAssistantPlugin(deps: Partial<HomeAssistantPluginDeps>
         try {
           const printer = cachedPrinters.find((p) => p.id === status.printerId)
           if (!printer) return
-          const tenantId = printerManager.getTenantId(status.printerId)
-          if (!tenantId || !isEnabledForTenant(tenantId)) return
+          const workspaceId = printerManager.getWorkspaceId(status.printerId)
+          if (!workspaceId || !isEnabledForWorkspace(workspaceId)) return
           const snapshot = buildHomeAssistantSnapshot([printer], () => status)
           context.ws.broadcast({
             type: 'plugin.event',
             pluginName: 'home-assistant',
             event: { type: 'printer.update', printer: snapshot.printers[0] }
-          }, tenantId)
+          }, workspaceId)
         } catch (error) {
           // Fire-and-forget listener: a thrown error would otherwise be lost,
           // leaving HA out of sync without any trace.
@@ -140,24 +140,24 @@ export function createHomeAssistantPlugin(deps: Partial<HomeAssistantPluginDeps>
       const onPrinterListChanged = async () => {
         try {
           await refreshPrinterCache()
-          // Group printers by tenant and broadcast per-tenant snapshots
-          // so each tenant only sees its own printers.
-          const byTenant = new Map<string, Printer[]>()
+          // Group printers by workspace and broadcast per-workspace snapshots
+          // so each workspace only sees its own printers.
+          const byWorkspace = new Map<string, Printer[]>()
           for (const printer of cachedPrinters) {
-            const tenantId = printerManager.getTenantId(printer.id)
-            if (!tenantId) continue
-            const list = byTenant.get(tenantId) ?? []
+            const workspaceId = printerManager.getWorkspaceId(printer.id)
+            if (!workspaceId) continue
+            const list = byWorkspace.get(workspaceId) ?? []
             list.push(printer)
-            byTenant.set(tenantId, list)
+            byWorkspace.set(workspaceId, list)
           }
-          for (const [tenantId, printers] of byTenant) {
-            if (!isEnabledForTenant(tenantId)) continue
+          for (const [workspaceId, printers] of byWorkspace) {
+            if (!isEnabledForWorkspace(workspaceId)) continue
             const snapshot = buildHomeAssistantSnapshot(printers, services.getStatus)
             context.ws.broadcast({
               type: 'plugin.event',
               pluginName: 'home-assistant',
               event: { type: 'snapshot', ...snapshot }
-            }, tenantId)
+            }, workspaceId)
           }
         } catch (error) {
           // Fire-and-forget listener: surface refresh/broadcast failures so a

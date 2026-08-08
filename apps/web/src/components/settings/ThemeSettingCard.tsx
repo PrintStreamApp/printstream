@@ -1,6 +1,6 @@
 /**
  * The Theme picker card: a shared default (persisted through /api/settings
- * in the caller's scope — tenant or platform) plus a browser-local
+ * in the caller's scope — workspace or platform) plus a browser-local
  * per-device override. Rendered by both the workspace Settings view and the
  * Platform workspace so the two surfaces stay identical; each passes its own
  * scope's values and override handlers.
@@ -13,6 +13,8 @@ import { DeviceOverrideNotice, GeneralSettingCard, GeneralSettingSelectRow } fro
 type DeviceThemeSettingSelectValue = 'follow-default' | AppThemeSetting
 
 export function ThemeSettingCard({
+  hasSharedSetting = true,
+  sharedScopeLabel = 'everyone here',
   sharedAppTheme,
   deviceAppThemeOverride,
   canManageSettings,
@@ -21,6 +23,23 @@ export function ThemeSettingCard({
   onSetDeviceAppTheme,
   onClearDeviceAppThemeOverride
 }: {
+  /**
+   * Whether a shared default exists in this scope at all.
+   *
+   * False in the billing scope, which has no server-side setting behind it. The
+   * row used to render regardless -- an interactive select wired to a handler
+   * that did nothing, which is worse than no control.
+   */
+  hasSharedSetting?: boolean
+  /**
+   * Who the SHARED default is shared with, named by the host.
+   *
+   * The card is rendered in three scopes and the row said only "shared
+   * default", which answers device-vs-shared and not shared-with-whom. Someone
+   * changing it in one workspace could not tell whether they had just restyled
+   * their team, every workspace, or the whole deployment.
+   */
+  sharedScopeLabel?: string
   sharedAppTheme: AppThemeSetting
   deviceAppThemeOverride: AppThemeSetting | null
   canManageSettings: boolean
@@ -35,13 +54,17 @@ export function ThemeSettingCard({
     <GeneralSettingCard
       title="Theme"
       description="Choose the app's appearance: the default look, the Aurora background treatment, or one of the flat styles (Graphite accents, Slate, Code Dark)."
-      resetDisabled={deviceAppThemeOverride == null && !(canManageSettings && sharedAppTheme !== 'default')}
+      resetDisabled={deviceAppThemeOverride == null && !(hasSharedSetting && canManageSettings && sharedAppTheme !== 'default')}
       onReset={() => {
-        if (canManageSettings) onSetSharedAppTheme('default')
+        if (hasSharedSetting && canManageSettings) onSetSharedAppTheme('default')
         onClearDeviceAppThemeOverride()
       }}
     >
-      <GeneralSettingSelectRow label="Default setting" helper="Shared default applied to devices that do not have their own override.">
+      {hasSharedSetting ? (
+      <GeneralSettingSelectRow
+        label="Default setting"
+        helper={`Shared with ${sharedScopeLabel}, and applied to devices that do not have their own override.`}
+      >
         <Select<AppThemeSetting>
           value={sharedAppTheme}
           disabled={sharedSettingsSaving}
@@ -55,8 +78,14 @@ export function ThemeSettingCard({
           ))}
         </Select>
       </GeneralSettingSelectRow>
+      ) : null}
 
-      <GeneralSettingSelectRow label="This device" helper="Saved in this browser only. Choose follow default to inherit the shared setting.">
+      <GeneralSettingSelectRow
+        label="This device"
+        helper={hasSharedSetting
+          ? 'Saved in this browser only, and applies wherever you go in the app on it. Choose follow default to inherit the shared setting.'
+          : 'Saved in this browser only. Nobody else on the account sees this choice.'}
+      >
         <Select<DeviceThemeSettingSelectValue>
           value={deviceThemeSelectValue}
           onChange={(_event, value) => {

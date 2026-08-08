@@ -16,15 +16,20 @@ loadDotenv()
 
 interface BridgeBuildMetadataFile {
   bridgeSourceFingerprint?: unknown
+  bridgeReleaseFingerprint?: unknown
 }
 
 function readBridgeBuildMetadata() {
   try {
     const parsed = JSON.parse(readFileSync(path.join(workspaceRoot, 'bridge-build-metadata.json'), 'utf8')) as BridgeBuildMetadataFile
+    const clean = (value: unknown): string | undefined =>
+      typeof value === 'string' && value !== 'unknown' && value.length > 0 ? value : undefined
     return {
-      sourceFingerprint: typeof parsed.bridgeSourceFingerprint === 'string' && parsed.bridgeSourceFingerprint !== 'unknown'
-        ? parsed.bridgeSourceFingerprint
-        : undefined
+      sourceFingerprint: clean(parsed.bridgeSourceFingerprint),
+      // The bridge build THIS image's commit expects, computed by the Dockerfile
+      // from `bridge-release-fingerprint.sh`. Lets the server notice it is
+      // serving a bridge that is not its own; see `bridge-update-policy.ts`.
+      releaseFingerprint: clean(parsed.bridgeReleaseFingerprint)
     }
   } catch {
     return {}
@@ -33,36 +38,42 @@ function readBridgeBuildMetadata() {
 
 const bridgeBuildMetadata = readBridgeBuildMetadata()
 
-function optionalStringEnv() {
+/**
+ * "Unset" and "set to nothing" mean the same thing for every variable here.
+ *
+ * Load-bearing rather than tidy: this repo maps env into containers as
+ * `VAR: ${VAR:-}`, which passes an EMPTY STRING when the `.env` line is absent —
+ * so a schema that only admits `undefined` rejects the most common operator
+ * mistake, and a `z.parse` failure at module load kills the process before it
+ * can log anything useful. `PLATFORM_ADMIN_EMAIL` shipped that way: an empty
+ * value crash-looped the API instead of reaching its own "set this to claim the
+ * platform admin" refusal.
+ *
+ * Every optional variable goes through here so the rule is a property of the
+ * file rather than something each one opts into by hand.
+ */
+function trimmedEnv<Schema extends z.ZodTypeAny>(schema: Schema) {
   return z.preprocess((value) => {
     if (typeof value !== 'string') return value
     const trimmed = value.trim()
     return trimmed.length === 0 ? undefined : trimmed
-  }, z.string().optional())
+  }, schema)
+}
+
+function optionalStringEnv() {
+  return trimmedEnv(z.string().optional())
 }
 
 function positiveIntEnv(defaultValue: number) {
-  return z.preprocess((value) => {
-    if (typeof value !== 'string') return value
-    const trimmed = value.trim()
-    return trimmed.length === 0 ? undefined : trimmed
-  }, z.coerce.number().int().positive().default(defaultValue))
+  return trimmedEnv(z.coerce.number().int().positive().default(defaultValue))
 }
 
 function optionalPositiveIntEnv() {
-  return z.preprocess((value) => {
-    if (typeof value !== 'string') return value
-    const trimmed = value.trim()
-    return trimmed.length === 0 ? undefined : trimmed
-  }, z.coerce.number().int().positive().optional())
+  return trimmedEnv(z.coerce.number().int().positive().optional())
 }
 
 function booleanEnv(defaultValue: boolean) {
-  return z.preprocess((value) => {
-    if (typeof value !== 'string') return value
-    const trimmed = value.trim()
-    return trimmed.length === 0 ? undefined : trimmed
-  }, z.enum(['0', '1', 'false', 'true']).default(defaultValue ? 'true' : 'false').transform((value) => value === '1' || value === 'true'))
+  return trimmedEnv(z.enum(['0', '1', 'false', 'true']).default(defaultValue ? 'true' : 'false').transform((value) => value === '1' || value === 'true'))
 }
 
 /**
@@ -70,11 +81,7 @@ function booleanEnv(defaultValue: boolean) {
  * derived default), otherwise the parsed boolean.
  */
 function optionalBooleanEnv() {
-  return z.preprocess((value) => {
-    if (typeof value !== 'string') return value
-    const trimmed = value.trim()
-    return trimmed.length === 0 ? undefined : trimmed
-  }, z.enum(['0', '1', 'false', 'true']).optional().transform((value) => (value === undefined ? undefined : value === '1' || value === 'true')))
+  return trimmedEnv(z.enum(['0', '1', 'false', 'true']).optional().transform((value) => (value === undefined ? undefined : value === '1' || value === 'true')))
 }
 
 const envSchema = z.object({
@@ -92,9 +99,33 @@ const envSchema = z.object({
   // DATABASE_URL as query params (see prisma.ts).
   DATABASE_CONNECTION_LIMIT: optionalPositiveIntEnv(),
   DATABASE_POOL_TIMEOUT: optionalPositiveIntEnv(),
-  CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
+  /**
+   * The deployment's canonical browser origin(s), comma-separated. Read it
+   * through `lib/client-origins.ts` (never split inline); the FIRST entry is
+   * the canonical origin.
+   *
+   * NOT a CORS-only knob, despite the name: CORS (`app.ts`) is one reader
+   * among several. It is also the WebAuthn relying-party id and expected
+   * origin (`auth-local/passkeys.ts`), the OIDC redirect base (`auth-oauth`),
+   * the fallback for deciding the `Secure` cookie flag (`auth-session.ts`),
+   * and — on the cloud — the origin every Paddle checkout is pinned to. An
+   * operator who reads this as "only needed for a split topology" and drops it
+   * on the cloud breaks every passkey sign-in, because the relying-party id
+   * silently becomes `localhost`.
+   *
+   * Empty collapses to the dev default, like unset.
+   */
+  CLIENT_ORIGIN: trimmedEnv(z.string().default('http://localhost:5173')),
   AUTH_LOCAL_EMAIL_CODE_TTL_MINUTES: positiveIntEnv(15),
-  AUTO_CREATE_DEFAULT_WORKSPACE: booleanEnv(true),
+  /**
+   * Create a default workspace on first start when the database has none.
+   * Tri-state on purpose: unset derives from the deployment — self-hosted
+   * installs get one (the app should just work out of the box), the
+   * multi-workspace cloud does not (its workspaces come from signups, and an
+   * empty database is the FIRST-RUN state, not a broken one). See
+   * `default-workspace.ts` for the resolution.
+   */
+  AUTO_CREATE_DEFAULT_WORKSPACE: optionalBooleanEnv(),
   DEFAULT_WORKSPACE_SLUG: z.string().default('default'),
   DEFAULT_WORKSPACE_NAME: z.string().default('My Workspace'),
   // Master key for encrypting stored secrets at rest (e.g. OAuth client secrets)
@@ -115,11 +146,7 @@ const envSchema = z.object({
   CSP_ANALYTICS_ORIGIN: optionalStringEnv(),
   CLOUDFLARE_EMAIL_ACCOUNT_ID: optionalStringEnv(),
   CLOUDFLARE_EMAIL_API_TOKEN: optionalStringEnv(),
-  CLOUDFLARE_EMAIL_FROM_EMAIL: z.preprocess((value) => {
-    if (typeof value !== 'string') return value
-    const trimmed = value.trim()
-    return trimmed.length === 0 ? undefined : trimmed
-  }, z.string().email().optional()),
+  CLOUDFLARE_EMAIL_FROM_EMAIL: trimmedEnv(z.string().email().optional()),
   CLOUDFLARE_EMAIL_FROM_NAME: optionalStringEnv(),
   NTFY_TOPIC_URL: optionalStringEnv(),
   // Paddle billing (cloud-only; unset in self-hosted/OSS builds). The private
@@ -142,7 +169,30 @@ const envSchema = z.object({
    * set in Docker, OSS, or cloud deployments.
    */
   PRINTSTREAM_NATIVE: booleanEnv(false),
+  /**
+   * Which native-build channel this deployment offers for download.
+   *
+   * `stable` is the shipping app. `staging` is the test channel, whose binaries
+   * verify licences against staging's throwaway signing key — so they accept
+   * keys this staging deployment issues and REJECT every real one. Setting this
+   * to `staging` on production would hand paying customers a build that refuses
+   * their licence, which is why it is an explicit named value rather than
+   * anything inferred.
+   */
+  SELF_HOST_RELEASE_CHANNEL: trimmedEnv(z.enum(['stable', 'staging']).default('stable')),
   PADDLE_API_KEY: optionalStringEnv(),
+  /**
+   * The name charges appear as on a customer's bank statement, exactly as it is
+   * set in Paddle's checkout settings (e.g. `PRINTSTRM`).
+   *
+   * Configured rather than read from Paddle because Paddle's API does not expose
+   * it — it is a dashboard setting with no endpoint behind it. Configured rather
+   * than hardcoded because a wrong value here is worse than none: an unfamiliar
+   * name on a statement is what a chargeback starts as, and telling someone the
+   * wrong one sends them looking for a charge that is not there under that name.
+   * Unset simply omits the sentence.
+   */
+  PADDLE_STATEMENT_DESCRIPTOR: optionalStringEnv(),
   PADDLE_WEBHOOK_SECRET: optionalStringEnv(),
   /**
    * Paddle client-side token (safe to expose in the browser). Delivered to the
@@ -156,6 +206,19 @@ const envSchema = z.object({
   /** Paddle price id for each additional printer beyond the base allotment. */
   PADDLE_PRICE_PRO_PER_PRINTER: optionalStringEnv(),
   /**
+   * Paddle price ids for SELF-HOSTED Pro, the same $/printer shape as cloud Pro
+   * but a distinct product: a customer buys one or the other, never both, so
+   * sharing the cloud price ids would make the two indistinguishable in Paddle
+   * and in our own webhooks.
+   *
+   * Metered exactly like cloud, with one difference in where the number comes
+   * from: the install ASKS the cloud to change its printer count and the answer
+   * is signed into the key, because a count reported by software running on the
+   * customer's machine is not a billable fact (the Docker build is open source).
+   */
+  PADDLE_PRICE_SELF_HOSTED_PRO_BASE: optionalStringEnv(),
+  PADDLE_PRICE_SELF_HOSTED_PRO_PER_PRINTER: optionalStringEnv(),
+  /**
    * Paddle price id for the Lifetime self-hosted license: a one-time,
    * perpetual, commercial-use key. Self-hosted only — it confers no cloud plan.
    */
@@ -167,17 +230,53 @@ const envSchema = z.object({
    */
   PADDLE_PRICE_UPDATES_RENEWAL: optionalStringEnv(),
   /**
-   * Where a self-hosted install refreshes a subscription-backed license key
-   * (see `license-refresh-client.ts`). Ships pointed at the vendor cloud; an
-   * override exists only so staging can be exercised against sandbox billing.
-   * Perpetual keys never contact it, so this is unused on community/Lifetime
-   * installs.
+   * Read-only GitHub token used to resolve signed download URLs for the native
+   * self-hosted builds, which are assets on a PRIVATE release. Needs no more
+   * than `contents: read` on that one repository. Unset elsewhere: the download
+   * route reports "not available on this deployment" rather than failing.
    */
-  LICENSE_REFRESH_ORIGIN: z.string().url().default('https://printstream.app'),
+  GITHUB_RELEASE_TOKEN: optionalStringEnv(),
+  /** `owner/repo` holding the native build releases. */
+  GITHUB_RELEASE_REPO: optionalStringEnv(),
+  /**
+   * Paddle discount id for the beta-exit launch promo on Pro. Must be a
+   * *recurring* percentage discount restricted to the Pro price ids: it rides
+   * every later item change, so an eligible subscriber keeps the promo rate
+   * when they add printers, long after the promo window closes. See
+   * `private/cloud/launch-promo.ts` for why this is a discount and not a
+   * second set of half-price price ids.
+   */
+  PADDLE_DISCOUNT_LAUNCH_PROMO_PRO: optionalStringEnv(),
+  /**
+   * Paddle discount id for the launch promo on the Lifetime license: one-time,
+   * restricted to the Lifetime price id. Kept separate from the Pro discount so
+   * it can be withdrawn when the window closes without touching the recurring
+   * discount on live Pro subscriptions.
+   */
+  PADDLE_DISCOUNT_LAUNCH_PROMO_LIFETIME: optionalStringEnv(),
+  /**
+   * OVERRIDE for where a self-hosted install refreshes a subscription-backed
+   * license key. Normally leave this unset: the key itself names the deployment
+   * that issued it (`refreshOrigin`), which cannot drift from the truth because
+   * it is signed. Setting this wins anyway — an operator behind a rewriting
+   * proxy needs an escape hatch — and a disagreement with the key is logged.
+   *
+   * Resolution lives in `license-origin.ts`, never read directly: the fallback
+   * chain is the contract, not this variable. Perpetual keys never refresh, so
+   * community/Lifetime installs ignore all of it.
+   */
+  LICENSE_REFRESH_ORIGIN: z.string().url().optional(),
   LIBRARY_DIR: z.string().default('./data/library'),
   LIBRARY_MAX_UPLOAD_BYTES: positiveIntEnv(1024 * 1024 * 1024),
   LIBRARY_TRANSIENT_RETENTION_DAYS: positiveIntEnv(7),
   LIBRARY_RECYCLE_RETENTION_DAYS: positiveIntEnv(30),
+  /**
+   * How long a deleted workspace stays restorable before the sweep removes it
+   * for good. Matches the library recycle bin by default rather than inventing
+   * a second number for the same idea: both are "you can still change your
+   * mind", and a user who has learned one should not have to learn the other.
+   */
+  WORKSPACE_DELETED_RETENTION_DAYS: positiveIntEnv(30),
   LIBRARY_UNREFERENCED_SLICE_RETENTION_HOURS: positiveIntEnv(24),
   /**
    * Base URL(s) of the standalone slicer runtime. Accepts a comma-separated
@@ -220,6 +319,16 @@ const envSchema = z.object({
    */
   SELF_HOSTED: optionalBooleanEnv(),
   /**
+   * Who may claim a fresh CLOUD deployment's first platform-admin account.
+   *
+   * The first-run claim is first-comer on self-hosted installs, which is fine on
+   * a LAN; a cloud host is public the moment DNS resolves, so its claim must be
+   * pinned to an operator-chosen address instead of raced for. Cloud-only:
+   * ignored entirely on self-hosted builds, and irrelevant once the first
+   * platform user exists.
+   */
+  PLATFORM_ADMIN_EMAIL: trimmedEnv(z.string().email().optional()),
+  /**
    * Path to the managed-bridge provisioning token. In managed mode the API
    * generates this token on first start (if absent) and the bundled bridge
    * reads it from the same path over a shared mount to authenticate its
@@ -261,21 +370,15 @@ const envSchema = z.object({
    * original protocol can get wrong). Leave unset for LAN-only installs;
    * in that case Discord/ntfy notifications will skip the snapshot embed.
    */
-  PUBLIC_BASE_URL: z.preprocess((value) => {
-    if (typeof value !== 'string') return value
-    const trimmed = value.trim()
-    return trimmed.length === 0 ? undefined : trimmed
-  }, z.string().url().optional()),
+  PUBLIC_BASE_URL: trimmedEnv(z.string().url().optional()),
   /**
-   * Optional tenant-routing suffix for cloud-hosted deployments.
+   * Optional workspace-routing suffix for cloud-hosted deployments.
    * Example: when set to `printstream.example.com`, requests for
-   * `acme.printstream.example.com` resolve to the `acme` tenant.
+   * `acme.printstream.example.com` resolve to the `acme` workspace.
    */
-  TENANT_DOMAIN_SUFFIX: z.preprocess((value) => {
-    if (typeof value !== 'string') return value
-    const trimmed = value.trim().toLowerCase()
-    return trimmed.length === 0 ? undefined : trimmed
-  }, z.string().min(1).optional()),
+  // Lower-cased because it is matched against a request Host header, which
+  // carries whatever casing the client sent.
+  WORKSPACE_DOMAIN_SUFFIX: trimmedEnv(z.string().min(1).optional().transform((value) => value?.toLowerCase())),
   /**
    * When true, log raw MQTT publish/receive payload summaries to the
    * API console for printer protocol debugging. Off by default so dev
@@ -317,5 +420,11 @@ export const env = {
   SLICER_SERVICE_URLS: slicerServiceUrls,
   // One concurrent slice per slicer instance unless explicitly overridden.
   SLICING_MAX_CONCURRENT_JOBS: parsedEnv.SLICING_MAX_CONCURRENT_JOBS ?? Math.max(1, slicerServiceUrls.length),
-  PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT: parsedEnv.PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT ?? bridgeBuildMetadata.sourceFingerprint
+  PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT: parsedEnv.PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT ?? bridgeBuildMetadata.sourceFingerprint,
+  /**
+   * The bridge build this server's own commit expects. Not operator-settable:
+   * it describes the image, so an override could only ever make the server
+   * agree with a bridge that is not its own.
+   */
+  PRINTSTREAM_BRIDGE_RELEASE_FINGERPRINT: bridgeBuildMetadata.releaseFingerprint
 }

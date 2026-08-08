@@ -1,7 +1,7 @@
 /**
  * Pure decision helpers for auth/setup route chrome — the single owner of the
  * "should this route show the loading splash, the auth wall, or the real page"
- * logic, plus the platform-vs-tenant auth-theme and account-tab heuristics. Kept
+ * logic, plus the platform-vs-workspace auth-theme and account-tab heuristics. Kept
  * as pure functions (no hooks) so route components and tests share one source of
  * truth instead of re-deriving the state machine. See the web development notes.
  */
@@ -14,8 +14,8 @@ export type PublicRootRouteState = 'marketing'
 export function shouldShowAccountTab(input: {
   authBootstrapReady: boolean
   actorType: AuthActorSummary['type']
-  activeTenantId?: string | null
-  memberTenantIds?: ReadonlySet<string>
+  activeWorkspaceId?: string | null
+  memberWorkspaceIds?: ReadonlySet<string>
 }): boolean {
   if (!input.authBootstrapReady) {
     return false
@@ -25,11 +25,11 @@ export function shouldShowAccountTab(input: {
     return false
   }
 
-  if (input.activeTenantId == null) {
+  if (input.activeWorkspaceId == null) {
     return true
   }
 
-  return input.memberTenantIds?.has(input.activeTenantId) ?? false
+  return input.memberWorkspaceIds?.has(input.activeWorkspaceId) ?? false
 }
 
 export function resolveAuthRouteState(input: {
@@ -82,21 +82,21 @@ export function resolvePublicRootRouteState(input: {
 }
 
 export function shouldUsePlatformAuthTheme(input: {
-  hasTenantContext: boolean
+  hasWorkspaceContext: boolean
   canUsePlatformWorkspace: boolean
   authRouteState: AuthRouteState
 }): boolean {
-  if (input.canUsePlatformWorkspace && !input.hasTenantContext) {
+  if (input.canUsePlatformWorkspace && !input.hasWorkspaceContext) {
     return true
   }
 
-  return input.authRouteState === 'auth' && !input.hasTenantContext
+  return input.authRouteState === 'auth' && !input.hasWorkspaceContext
 }
 
 export function shouldShowWorkspaceSwitcher(input: {
   authRouteState: AuthRouteState
-  requestedTenantSlug?: string | null
-  activeTenantSlug?: string | null
+  requestedWorkspaceSlug?: string | null
+  activeWorkspaceSlug?: string | null
 }): boolean {
   return input.authRouteState === 'redirect'
 }

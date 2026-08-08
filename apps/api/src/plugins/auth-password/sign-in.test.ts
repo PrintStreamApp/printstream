@@ -13,7 +13,7 @@ type SignInUser = {
   id: string
   isPlatformUser: boolean
   passwordCredential: { passwordHash: string } | null
-  tenantMemberships: Array<{ tenantId: string }>
+  workspaceMemberships: Array<{ workspaceId: string }>
 } | null
 
 const SIGN_IN_FAILED = 'Email or password is incorrect.'
@@ -57,7 +57,7 @@ async function buildSignInApp(options: { user: SignInUser; enabled?: boolean }):
       },
       async set() {},
       async delete() {},
-      forTenant() { return this }
+      forWorkspace() { return this }
     },
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
@@ -93,7 +93,7 @@ async function buildSignInApp(options: { user: SignInUser; enabled?: boolean }):
 test('password sign-in succeeds with the correct password and sets a session cookie', async () => {
   const passwordHash = await hashPassword('correct horse battery staple')
   const { baseUrl, server } = await buildSignInApp({
-    user: { id: 'user-1', isPlatformUser: true, passwordCredential: { passwordHash }, tenantMemberships: [] }
+    user: { id: 'user-1', isPlatformUser: true, passwordCredential: { passwordHash }, workspaceMemberships: [] }
   })
   try {
     const response = await fetch(`${baseUrl}/sign-in`, {
@@ -116,7 +116,7 @@ test('password sign-in succeeds with the correct password and sets a session coo
 test('password sign-in returns an identical generic error for a wrong password and an unknown email', async () => {
   const passwordHash = await hashPassword('correct horse battery staple')
   const wrong = await buildSignInApp({
-    user: { id: 'user-1', isPlatformUser: true, passwordCredential: { passwordHash }, tenantMemberships: [] }
+    user: { id: 'user-1', isPlatformUser: true, passwordCredential: { passwordHash }, workspaceMemberships: [] }
   })
   const unknown = await buildSignInApp({ user: null })
   try {
@@ -142,10 +142,10 @@ test('password sign-in returns an identical generic error for a wrong password a
   }
 })
 
-test('password sign-in rejects a user with no enabled tenant membership', async () => {
+test('password sign-in rejects a user with no enabled workspace membership', async () => {
   const passwordHash = await hashPassword('correct horse battery staple')
   const { baseUrl, server } = await buildSignInApp({
-    user: { id: 'user-1', isPlatformUser: false, passwordCredential: { passwordHash }, tenantMemberships: [] }
+    user: { id: 'user-1', isPlatformUser: false, passwordCredential: { passwordHash }, workspaceMemberships: [] }
   })
   try {
     const response = await fetch(`${baseUrl}/sign-in`, {

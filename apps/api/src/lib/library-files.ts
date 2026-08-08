@@ -21,7 +21,7 @@ type PersistedLibraryFileRow = Awaited<ReturnType<typeof prisma.libraryFile.crea
 
 type LibraryOverwriteTarget = {
   id: string
-  tenantId: string
+  workspaceId: string
   name: string
   ownerBridgeId?: string | null
   sizeBytes: number
@@ -37,7 +37,7 @@ type LibraryOverwriteTarget = {
 }
 
 export async function persistLibraryFileFromLocalPath(input: {
-  tenantId: string
+  workspaceId: string
   sourcePath: string
   fileName: string
   sizeBytes: number
@@ -69,7 +69,7 @@ export async function persistLibraryFileFromLocalPath(input: {
 
   const overwriteTarget = !input.hidden
     ? await findLibraryOverwriteTarget({
-      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
       ownerBridgeId,
       folderId: input.folderId,
       name: input.fileName
@@ -132,7 +132,7 @@ export async function persistLibraryFileFromLocalPath(input: {
     } else {
       created = await prisma.libraryFile.create({
         data: {
-          tenantId: input.tenantId,
+          workspaceId: input.workspaceId,
           ownerBridgeId,
           name: input.fileName,
           storedPath,
@@ -223,7 +223,7 @@ async function hashLocalFile(filePath: string): Promise<string> {
  * loses the unique-constraint race and re-reads the winner's row.
  */
 export async function ensureLibraryFolderPath(input: {
-  tenantId: string
+  workspaceId: string
   bridgeId: string | null
   baseFolderId: string | null
   segments: string[]
@@ -243,7 +243,7 @@ export async function ensureLibraryFolderPath(input: {
     if (!name || name === '.' || name === '..' || /[/\\]/.test(name)) {
       throw badRequest('Upload contains an invalid folder name')
     }
-    const where = { tenantId: input.tenantId, ownerBridgeId, parentId, name }
+    const where = { workspaceId: input.workspaceId, ownerBridgeId, parentId, name }
     let folder = await prisma.libraryFolder.findFirst({ where, select: { id: true } })
     if (!folder) {
       try {
@@ -325,14 +325,14 @@ function buildLibraryStoredPath(fileName: string): string {
 }
 
 async function findLibraryOverwriteTarget(input: {
-  tenantId: string
+  workspaceId: string
   ownerBridgeId: string
   folderId: string | null
   name: string
 }): Promise<LibraryOverwriteTarget | null> {
   return await prisma.libraryFile.findFirst({
     where: visibleLibraryFilesWhere({
-      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
       ownerBridgeId: input.ownerBridgeId,
       folderId: input.folderId,
       name: input.name
@@ -343,7 +343,7 @@ async function findLibraryOverwriteTarget(input: {
 
 function toLibraryFileVersionCreateInput(row: LibraryOverwriteTarget) {
   return {
-    tenantId: row.tenantId,
+    workspaceId: row.workspaceId,
     libraryFileId: row.id,
     ownerBridgeId: row.ownerBridgeId,
     folderId: row.folderId,
@@ -395,7 +395,7 @@ export async function unhideSlicedOutput(
 
   const existing = output.ownerBridgeId
     ? await findLibraryOverwriteTarget({
-      tenantId: output.tenantId,
+      workspaceId: output.workspaceId,
       ownerBridgeId: output.ownerBridgeId,
       folderId,
       name

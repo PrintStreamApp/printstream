@@ -15,9 +15,9 @@ import type { RequestAuthContext } from '../lib/auth-context.js'
 import { prisma } from '../lib/prisma.js'
 import { restorePrismaMethodsAfterEach } from '../test-utils/prisma-stubs.js'
 import { HttpError } from '../lib/http-error.js'
-import type { RequestTenantSummary } from '../lib/tenant-context.js'
+import type { RequestWorkspaceSummary } from '../lib/workspace-context.js'
 
-const TEST_TENANT = { id: 'tenant-1', slug: 'tenant-1', name: 'Tenant 1' } as const
+const TEST_WORKSPACE = { id: 'workspace-1', slug: 'workspace-1', name: 'Workspace 1' } as const
 
 const p = prisma as unknown as Record<string, Record<string, unknown>>
 // Auto-restore the prisma/rootPrisma methods these tests override (was a per-method save/restore block).
@@ -56,7 +56,7 @@ test('jobs list allows actors with jobs view permission', async () => {
       permissions: [JOBS_VIEW_PERMISSION],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/jobs`)
 
@@ -96,7 +96,7 @@ test('calibration replay returns 403 without printer control permission', async 
       permissions: [JOBS_VIEW_PERMISSION],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/jobs/job-1/reprint`, {
       method: 'POST',
@@ -140,7 +140,7 @@ test('calibration replay passes authorization with printer control permission', 
       permissions: [JOBS_VIEW_PERMISSION, PRINTERS_CONTROL_PERMISSION],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/jobs/job-1/reprint`, {
       method: 'POST',
@@ -161,7 +161,7 @@ test('job history deletion returns 403 without the delete permission', async () 
       permissions: [JOBS_VIEW_PERMISSION],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/jobs/job-1`, {
       method: 'DELETE'
@@ -188,7 +188,7 @@ test('job history deletion passes authorization with the delete permission', asy
       permissions: [JOBS_VIEW_PERMISSION, JOBS_DELETE_PERMISSION],
       runtimePolicy: { demoMode: false }
     },
-    tenant: TEST_TENANT
+    workspace: TEST_WORKSPACE
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/jobs/job-1`, {
       method: 'DELETE'
@@ -200,14 +200,14 @@ test('job history deletion passes authorization with the delete permission', asy
 })
 
 async function withJobsApp(
-  input: { auth: RequestAuthContext; tenant?: RequestTenantSummary | null },
+  input: { auth: RequestAuthContext; workspace?: RequestWorkspaceSummary | null },
   run: (baseUrl: string) => Promise<void>
 ): Promise<void> {
   const app = express()
   app.use(express.json())
   app.use((request, _response, next) => {
     request.auth = input.auth
-    request.tenant = input.tenant ?? null
+    request.workspace = input.workspace ?? null
     next()
   })
   app.use('/api/jobs', jobsRouter)

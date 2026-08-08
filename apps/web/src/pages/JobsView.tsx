@@ -75,7 +75,7 @@ import { selectDispatchQueueWithPrintJobs } from '../lib/trackedPrintJobs'
 import { formatDateTime, formatEtaFromNow, formatMinutesDuration } from '../lib/time'
 import { toast } from '../lib/toast'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
-import { buildTenantWorkspacePath } from '../lib/workspaceRoute'
+import { buildWorkspacePath } from '../lib/workspaceRoute'
 import { useBufferedCoverImage } from '../hooks/useBufferedCoverImage'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { useSlicingJobs } from '../hooks/useSlicingJobs'
@@ -83,6 +83,7 @@ import { PluginSlot } from '../plugin/PluginSlot'
 import { PrintModal } from '../components/library/PrintModal'
 import { SliceThenPrintFlow } from '../components/library/SliceThenPrintFlow'
 import { SplitButton } from '../components/SplitButton'
+import { ListSkeleton } from '../components/ListSkeleton'
 
 interface LiveJob {
   jobId: string
@@ -195,8 +196,8 @@ export function JobsView() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const isMobileViewport = useMobileViewport()
-  const { tenantSlug } = useParams<{ tenantSlug: string }>()
-  const workspacePath = (path: string) => tenantSlug ? buildTenantWorkspacePath(tenantSlug, path) : path
+  const { workspaceSlug } = useParams<{ workspaceSlug: string }>()
+  const workspacePath = (path: string) => workspaceSlug ? buildWorkspacePath(workspaceSlug, path) : path
   const [reprintJob, setReprintJob] = useState<PrintJob | null>(null)
   // "Slice again": re-slice the project a finished print was produced from, rather than
   // re-dispatching the identical G-code. Held as the whole job so the flow can seed the
@@ -224,8 +225,8 @@ export function JobsView() {
   const permissions = authBootstrapQuery.data?.permissions ?? []
   const canOpenBridgesSettings = authBootstrapQuery.data?.capabilities.canManageSettings ?? false
   const showNoConnectedBridgesPlaceholder = authBootstrapQuery.isSuccess
-    && authBootstrapQuery.data?.tenant != null
-    && !authBootstrapQuery.data.tenantHasConnectedBridges
+    && authBootstrapQuery.data?.workspace != null
+    && !authBootstrapQuery.data.workspaceHasConnectedBridges
   const hasPermission = (permission: Permission) => !authEnabled || permissions.includes(permission)
   const canDeleteJobs = hasPermission(JOBS_DELETE_PERMISSION)
   const canViewJobs = hasPermission(JOBS_VIEW_PERMISSION)
@@ -510,7 +511,7 @@ export function JobsView() {
     <Stack spacing={pageSectionStackSpacing}>
       {!showNoConnectedBridgesPlaceholder && <SectionNav aria-label="Jobs sections" sections={sections} mb={0} />}
       <Typography level="h3" startDecorator={<HistoryRoundedIcon />}>Jobs</Typography>
-      {authBootstrapQuery.isLoading && <Typography>Loading…</Typography>}
+      {authBootstrapQuery.isLoading && <ListSkeleton rows={3} />}
       {authBootstrapQuery.isSuccess && !canViewJobs && (
         <EmptyState
           compact
@@ -679,7 +680,7 @@ export function JobsView() {
               </Card>
             )
           })}
-          {liveJobs.map((job) => <ActiveJobCard key={job.jobId} job={job} canViewCamera={canViewCamera} tenantSlug={tenantSlug} />)}
+          {liveJobs.map((job) => <ActiveJobCard key={job.jobId} job={job} canViewCamera={canViewCamera} workspaceSlug={workspaceSlug} />)}
         </Stack>
       </Box>
 
@@ -1188,7 +1189,7 @@ function SlicingJobHistoryCard({ job, printerName, action }: { job: SlicingJob; 
   )
 }
 
-function ActiveJobCard({ job, canViewCamera, tenantSlug }: { job: LiveJob; canViewCamera: boolean; tenantSlug?: string }) {
+function ActiveJobCard({ job, canViewCamera, workspaceSlug }: { job: LiveJob; canViewCamera: boolean; workspaceSlug?: string }) {
   const navigate = useNavigate()
   const cameraSupported = job.printerModel ? getPrinterDisplayCapabilities(job.printerModel).camera : false
   const [pendingStartWarning, setPendingStartWarning] = useState(false)
@@ -1251,7 +1252,7 @@ function ActiveJobCard({ job, canViewCamera, tenantSlug }: { job: LiveJob; canVi
                   printerId={job.printerId}
                   label={job.printerName}
                   onNavigate={(printerId) => {
-                    if (tenantSlug) navigate(buildTenantWorkspacePath(tenantSlug, `/printers/${printerId}`))
+                    if (workspaceSlug) navigate(buildWorkspacePath(workspaceSlug, `/printers/${printerId}`))
                   }}
                 />
               </Typography>

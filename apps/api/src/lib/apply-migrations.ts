@@ -8,23 +8,23 @@
  * engine and the tracked migration SQL — so it needs an applier that talks to
  * Postgres directly. This module is that applier.
  *
- * The checked-in migration history is **not replayable from empty** — the
- * earliest migration assumes pre-history auth tables (`AuthGroup`, ...) that no
- * migration creates, exactly the baseline gap the Docker CLI bootstrap recovers
- * from with `db push` + baseline. So a fresh database cannot be provisioned by
- * replaying migrations; it must materialize `schema.prisma` wholesale. The
- * CLI-free equivalent is Prisma's standard **baseline** workflow:
+ * The checked-in history **replays from empty**: `00000000000000_init` is the
+ * whole schema, so provisioning is not a special case — a fresh database simply
+ * applies every migration in order, like any other. That leaves two branches:
  *
- * - **Fresh database** (no `_prisma_migrations` history, no app schema): run the
- *   checked-in full-schema snapshot `prisma/baseline.sql` (generated from
- *   `schema.prisma` via `npm run prisma:baseline` — regenerate it whenever the
- *   schema/migrations change; it must equal the cumulative migration history),
- *   then mark every checked-in migration as applied (baseline). Nothing replays.
- * - **Existing database** (has history): forward-apply only migrations not yet
- *   recorded — the upgrade path, where a newly-added migration is a clean delta.
- * - **Schema present but no history** (e.g. a cluster restored from a dump or
- *   otherwise provisioned out-of-band): baseline-mark without re-running the
- *   snapshot, so existing tables are left intact.
+ * - **Fresh or existing database**: forward-apply only migrations not yet
+ *   recorded. On a fresh database that is all of them, starting with init.
+ * - **Schema present but no history** (a cluster restored from a dump or
+ *   otherwise provisioned out-of-band): baseline-mark without running anything,
+ *   so existing tables are left intact.
+ *
+ * Plus one transitional step, `reconcileMigrationHistory`. Databases created
+ * before the squash carry rows for the 66 migrations init replaced; those rows
+ * name migrations that no longer exist on disk, which would otherwise leave the
+ * history permanently disagreeing with the directory (and blocks the Prisma CLI
+ * outright when one of them is a FAILED row). It rewrites such a history to the
+ * single init row, running no SQL — the schema those migrations produced is by
+ * construction what init produces.
  *
  * Each step records a Prisma-compatible row (same table shape, same sha256
  * checksum) so the embedded database stays compatible with the Docker stack's
@@ -56,11 +56,6 @@ export function defaultMigrationsDir(): string {
   return process.env.PRINTSTREAM_MIGRATIONS_DIR ?? path.resolve(moduleDir, '..', '..', 'prisma', 'migrations')
 }
 
-/** Full-schema snapshot used to provision a fresh database (`prisma/baseline.sql`). */
-export function defaultBaselineSqlPath(): string {
-  return process.env.PRINTSTREAM_BASELINE_SQL ?? path.resolve(moduleDir, '..', '..', 'prisma', 'baseline.sql')
-}
-
 /** A single checked-in migration: its directory name, SQL body, and checksum. */
 export interface MigrationFile {
   /** Directory name, e.g. `20260505150000_platform_groups`. */
@@ -76,8 +71,6 @@ export interface ApplyMigrationsOptions {
   databaseUrl: string
   /** Directory of checked-in migrations. Defaults to `defaultMigrationsDir()`. */
   migrationsDir?: string
-  /** Full-schema snapshot for fresh databases. Defaults to `defaultBaselineSqlPath()`. */
-  baselineSqlPath?: string
   /** Optional progress sink; defaults to no-op. */
   log?: (message: string) => void
 }
@@ -87,8 +80,10 @@ export interface ApplyMigrationsResult {
   applied: string[]
   /** Migration names already recorded before this call. */
   alreadyApplied: string[]
-  /** True when the full-schema baseline snapshot was materialized this call. */
+  /** True when migrations were recorded without being run (existing schema). */
   baselined: boolean
+  /** Pre-squash rows discarded by `reconcileMigrationHistory` this call. */
+  collapsedLegacyRows: number
 }
 
 /** Prisma's exact `_prisma_migrations` table shape, so the CLI stays compatible. */
@@ -148,10 +143,19 @@ async function readAppliedMigrationNames(client: Client): Promise<Set<string>> {
   return new Set(result.rows.map((row) => row.migration_name))
 }
 
-/** Whether the app schema already exists, sniffed via a core table. */
+/**
+ * Whether the app schema already exists, sniffed via a core table.
+ *
+ * Accepts EITHER name: `Tenant` was renamed to `Workspace` by
+ * `20260801130000_rename_to_workspace_and_customer`, and this runs before that
+ * migration on exactly the databases that still carry the old one. Probing only
+ * the new name would report every not-yet-renamed database as fresh and send it
+ * back through baselining.
+ */
 async function hasAppSchema(client: Client): Promise<boolean> {
   const result = await client.query<{ present: boolean }>(
-    `SELECT to_regclass('public."Tenant"') IS NOT NULL AS present`
+    `SELECT (to_regclass('public."Workspace"') IS NOT NULL
+             OR to_regclass('public."Tenant"') IS NOT NULL) AS present`
   )
   return result.rows[0]?.present === true
 }
@@ -182,22 +186,14 @@ async function applyOne(client: Client, migration: MigrationFile): Promise<void>
 }
 
 /**
- * Provisions a fresh database from the baseline snapshot (when `materialize`),
- * then baseline-marks every checked-in migration as applied — all in one
- * transaction so a failure leaves the database untouched.
+ * Baseline-marks every checked-in migration as applied without running any of
+ * it, in one transaction. For a database whose schema was provisioned outside
+ * Prisma (restored dump, `db push`), where replaying would fail on objects that
+ * already exist.
  */
-async function baselineFromSnapshot(
-  client: Client,
-  all: MigrationFile[],
-  baselineSqlPath: string,
-  materialize: boolean
-): Promise<void> {
+async function baselineExistingSchema(client: Client, all: MigrationFile[]): Promise<void> {
   await client.query('BEGIN')
   try {
-    if (materialize) {
-      const baselineSql = readFileSync(baselineSqlPath, 'utf8')
-      await client.query(baselineSql)
-    }
     for (const migration of all) {
       await recordMigration(client, migration)
     }
@@ -210,46 +206,95 @@ async function baselineFromSnapshot(
 }
 
 /**
- * Brings the database at `databaseUrl` up to the checked-in schema. Fresh
- * databases are provisioned from `baseline.sql` and baselined; existing
- * databases forward-apply only migrations they have not yet recorded. Idempotent:
- * a second call with no new migrations is a no-op. Throws on the first failing
- * migration (its transaction rolls back; earlier ones stay applied).
+ * Collapses a pre-squash migration history onto the init migration.
+ *
+ * Runs no schema SQL, and only when the history is unambiguously from before
+ * the squash: it names migrations that are not on disk, and the app schema is
+ * present. Those rows recorded exactly the schema `00000000000000_init` now
+ * contains, so the history is rewritten rather than replayed.
+ *
+ * Deliberately reads rows regardless of `finished_at`, so a FAILED row for a
+ * retired migration is cleared too — a failed row blocks `prisma migrate deploy`
+ * permanently (P3009), and leaving one behind would strand the Docker stack on
+ * a database this applier had otherwise brought up to date.
+ *
+ * Returns the number of stale rows discarded (0 when there was nothing to do).
+ */
+export async function reconcileMigrationHistory(
+  client: Client,
+  all: MigrationFile[],
+  log: (message: string) => void = () => undefined
+): Promise<number> {
+  const init = all[0]
+  if (!init) return 0
+
+  const existing = await client.query<{ migration_name: string }>(
+    `SELECT "migration_name" FROM "_prisma_migrations"`
+  )
+  if (existing.rows.length === 0) return 0
+
+  const onDisk = new Set(all.map((migration) => migration.name))
+  const stale = existing.rows.map((row) => row.migration_name).filter((name) => !onDisk.has(name))
+  if (stale.length === 0) return 0
+
+  // Only a database that already carries the schema can be collapsed; anything
+  // else is a history we do not recognise, and guessing would be destructive.
+  if (!(await hasAppSchema(client))) return 0
+
+  const alreadyRecorded = (await readAppliedMigrationNames(client)).has(init.name)
+  await client.query('BEGIN')
+  try {
+    await client.query(`DELETE FROM "_prisma_migrations" WHERE "migration_name" = ANY($1::text[])`, [stale])
+    if (!alreadyRecorded) await recordMigration(client, init)
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`Failed to collapse pre-squash migration history: ${reason}`)
+  }
+
+  log(`Collapsed ${stale.length} pre-squash migration row(s) onto ${init.name}.`)
+  return stale.length
+}
+
+/**
+ * Brings the database at `databaseUrl` up to the checked-in schema by
+ * forward-applying migrations it has not recorded — on a fresh database that is
+ * the whole history, starting with init. A schema present without any history is
+ * baseline-marked instead of replayed. Idempotent: a second call with no new
+ * migrations is a no-op. Throws on the first failing migration (its transaction
+ * rolls back; earlier ones stay applied).
  */
 export async function applyPendingMigrations(options: ApplyMigrationsOptions): Promise<ApplyMigrationsResult> {
-  const {
-    databaseUrl,
-    migrationsDir = defaultMigrationsDir(),
-    baselineSqlPath = defaultBaselineSqlPath()
-  } = options
+  const { databaseUrl, migrationsDir = defaultMigrationsDir() } = options
   const log = options.log ?? (() => undefined)
 
   const client = new Client({ connectionString: databaseUrl })
   await client.connect()
   try {
     await client.query(PRISMA_MIGRATIONS_DDL)
-    const appliedNames = await readAppliedMigrationNames(client)
     const all = listMigrationFiles(migrationsDir)
+    const collapsedLegacyRows = await reconcileMigrationHistory(client, all, log)
+    const appliedNames = await readAppliedMigrationNames(client)
 
-    if (appliedNames.size === 0) {
-      // No Prisma history: either a truly fresh database or one provisioned
-      // out-of-band. The checked-in history can't replay from empty, so a fresh
-      // database is materialized from the snapshot; a pre-provisioned one is just
-      // baselined so its existing tables are left intact.
-      const provisioned = await hasAppSchema(client)
-      log(
-        provisioned
-          ? 'Existing schema without Prisma history; baselining checked-in migrations.'
-          : `Fresh database; materializing schema and baselining ${all.length} migration(s).`
-      )
-      await baselineFromSnapshot(client, all, baselineSqlPath, !provisioned)
-      return { applied: all.map((migration) => migration.name), alreadyApplied: [], baselined: !provisioned }
+    // Schema but no history — restored from a dump, or provisioned with
+    // `db push`. Replaying init would fail on tables that already exist, so
+    // record the history instead of running it.
+    if (appliedNames.size === 0 && await hasAppSchema(client)) {
+      log('Existing schema without Prisma history; baselining checked-in migrations.')
+      await baselineExistingSchema(client, all)
+      return {
+        applied: all.map((migration) => migration.name),
+        alreadyApplied: [],
+        baselined: true,
+        collapsedLegacyRows
+      }
     }
 
     const pending = selectPendingMigrations(all, appliedNames)
     if (pending.length === 0) {
       log('Database is up to date; no migrations to apply.')
-      return { applied: [], alreadyApplied: [...appliedNames], baselined: false }
+      return { applied: [], alreadyApplied: [...appliedNames], baselined: false, collapsedLegacyRows }
     }
 
     log(`Applying ${pending.length} migration(s)...`)
@@ -259,7 +304,7 @@ export async function applyPendingMigrations(options: ApplyMigrationsOptions): P
       applied.push(migration.name)
       log(`Applied ${migration.name}`)
     }
-    return { applied, alreadyApplied: [...appliedNames], baselined: false }
+    return { applied, alreadyApplied: [...appliedNames], baselined: false, collapsedLegacyRows }
   } finally {
     await client.end().catch(() => undefined)
   }

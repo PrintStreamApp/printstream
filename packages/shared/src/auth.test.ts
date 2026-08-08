@@ -39,10 +39,11 @@ test('authBootstrapSchema preserves mixed provider methods', () => {
     authEnabled: true,
     platformAuthEnabled: true,
     setupRequired: false,
-    tenant: null,
-    memberTenants: [],
-    availableTenants: [],
-    tenantHasConnectedBridges: false,
+    workspace: null,
+    memberWorkspaces: [],
+    availableWorkspaces: [],
+    customers: [],
+    workspaceHasConnectedBridges: false,
     providers: [
       {
         id: 'auth-local',
@@ -82,7 +83,7 @@ test('authBootstrapSchema preserves mixed provider methods', () => {
       canManageAuthProviders: true,
       canManageSettings: true,
       canManageSupportAccess: true,
-      canManageTenants: true,
+      canManageWorkspaces: true,
       canManagePlugins: true,
       canViewLogs: true
     },
@@ -91,10 +92,11 @@ test('authBootstrapSchema preserves mixed provider methods', () => {
     authEnabled: true,
     platformAuthEnabled: true,
     setupRequired: false,
-    tenant: null,
-    memberTenants: [],
-    availableTenants: [],
-    tenantHasConnectedBridges: false,
+    workspace: null,
+    memberWorkspaces: [],
+    availableWorkspaces: [],
+    customers: [],
+    workspaceHasConnectedBridges: false,
     providers: [
       {
         id: 'auth-local',
@@ -134,7 +136,7 @@ test('authBootstrapSchema preserves mixed provider methods', () => {
       canManageAuthProviders: true,
       canManageSettings: true,
       canManageSupportAccess: true,
-      canManageTenants: true,
+      canManageWorkspaces: true,
       canManagePlugins: true,
       canViewLogs: true
     },

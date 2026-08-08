@@ -19,7 +19,7 @@
  * until a finish event resolves it to success/failed/cancelled.
  *
  * All persistence uses `rootPrisma`: recording runs from event-bus handlers
- * outside any tenant request context, and the tenant is resolved from the
+ * outside any workspace request context, and the workspace is resolved from the
  * printer row. Metadata-column writes tolerate a DB still missing the newest
  * columns (logged, then retried without them) so recording never blocks a print.
  */
@@ -115,13 +115,13 @@ function emitRecordedJobFinished(event: {
   })
 }
 
-async function readPrinterTenantId(printerId: string): Promise<string | null> {
+async function readPrinterWorkspaceId(printerId: string): Promise<string | null> {
   if (!printerId) return null
   const row = await rootPrisma.printer.findUnique({
     where: { id: printerId },
-    select: { tenantId: true }
+    select: { workspaceId: true }
   })
-  return row?.tenantId ?? null
+  return row?.workspaceId ?? null
 }
 
 export function setPrintJobSnapshotEnsurerForTests(
@@ -296,7 +296,7 @@ export async function createPrintJobStartRecord(input: {
 }): Promise<PrintJobStartRecord> {
   const printer = await rootPrisma.printer.findUnique({
     where: { id: input.printerId },
-    select: { tenantId: true }
+    select: { workspaceId: true }
   })
   if (!printer) {
     throw new Error(`Printer not found for print job record: ${input.printerId}`)
@@ -304,7 +304,7 @@ export async function createPrintJobStartRecord(input: {
 
   const data = {
     ...(input.jobId ? { id: input.jobId } : {}),
-    tenantId: printer.tenantId,
+    workspaceId: printer.workspaceId,
     printerId: input.printerId,
     taskId: normalizeActivePrintTaskId(input.metadata?.taskId),
     printerFilePath: normalizeExactPrinterFilePath(input.metadata?.printerFilePath),
@@ -333,7 +333,7 @@ export async function createPrintJobStartRecord(input: {
     created = await rootPrisma.printJob.create({
       data: {
         ...(input.jobId ? { id: input.jobId } : {}),
-        tenantId: data.tenantId,
+        workspaceId: data.workspaceId,
         printerId: data.printerId,
         jobName: data.jobName,
         fileId: data.fileId,
@@ -381,7 +381,7 @@ async function bumpLibraryFilePrintStats(fileId: string | null | undefined, prin
  * this REWINDS it to a running state: `startedAt` is set to now and
  * `finishedAt`/`progressPercent`/`durationSeconds`/`result` are cleared back to
  * `unknown`, so a re-run does not inherit the prior run's completion. Broadcasts
- * a jobs-changed hint to the printer's tenant.
+ * a jobs-changed hint to the printer's workspace.
  */
 export async function upsertTrackedPrintJobRecord(input: {
   jobId: string
@@ -430,11 +430,11 @@ export async function upsertTrackedPrintJobRecord(input: {
     })
   }
 
-  broadcastJobsChanged(await readPrinterTenantId(input.printerId))
+  broadcastJobsChanged(await readPrinterWorkspaceId(input.printerId))
 }
 
 async function resolvePrintJobFilamentUsage(input: {
-  tenantId: string
+  workspaceId: string
   sourceType: string
   fileId: string | null
   plate: number | null
@@ -449,13 +449,13 @@ async function resolvePrintJobFilamentUsage(input: {
   const file = await rootPrisma.libraryFile.findUnique({
     where: { id: input.fileId },
     select: {
-      tenantId: true,
+      workspaceId: true,
       kind: true,
       ownerBridgeId: true,
       storedPath: true
     }
   })
-  if (!file || file.tenantId !== input.tenantId || (file.kind !== '3mf' && file.kind !== 'gcode')) return null
+  if (!file || file.workspaceId !== input.workspaceId || (file.kind !== '3mf' && file.kind !== 'gcode')) return null
 
   try {
     return await readLibraryThreeMfPlateUsage(file, input.plate)
@@ -574,7 +574,7 @@ async function closeDuplicateUnfinishedPrintJobs(input: {
   console.warn(
     `[print-job-recorder] closed ${duplicateIds.length} duplicate unfinished print job${duplicateIds.length === 1 ? '' : 's'} for ${input.printerId}:${input.taskId}`
   )
-  broadcastJobsChanged(await readPrinterTenantId(input.printerId))
+  broadcastJobsChanged(await readPrinterWorkspaceId(input.printerId))
 }
 
 async function closeStaleUnfinishedPrintJobsForPrinter(input: {
@@ -602,7 +602,7 @@ async function closeStaleUnfinishedPrintJobsForPrinter(input: {
   console.warn(
     `[print-job-recorder] closed ${staleJobIds.length} stale unfinished print job${staleJobIds.length === 1 ? '' : 's'} for ${input.printerId} after terminal status reconciliation`
   )
-  broadcastJobsChanged(await readPrinterTenantId(input.printerId))
+  broadcastJobsChanged(await readPrinterWorkspaceId(input.printerId))
 }
 
 function mapTerminalStatusResult(stage: PrinterStatus['stage']): 'success' | 'failed' | 'unknown' {
@@ -644,7 +644,7 @@ export async function finishTrackedPrintJobRecord(input: {
       printerId: true,
       jobName: true,
       taskId: true,
-      tenantId: true,
+      workspaceId: true,
       sourceType: true,
       fileId: true,
       plate: true
@@ -656,7 +656,7 @@ export async function finishTrackedPrintJobRecord(input: {
   const filamentUsage = input.result === 'unknown'
     ? null
     : await resolvePrintJobFilamentUsage({
-      tenantId: existing.tenantId,
+      workspaceId: existing.workspaceId,
         sourceType: existing.sourceType,
         fileId: existing.fileId,
         plate: existing.plate
@@ -717,7 +717,7 @@ export async function finishTrackedPrintJobRecord(input: {
     })
   }
 
-  broadcastJobsChanged(await readPrinterTenantId(existing.printerId))
+  broadcastJobsChanged(await readPrinterWorkspaceId(existing.printerId))
 }
 
 export async function cancelTrackedPrintJobRecord(input: {
@@ -776,14 +776,14 @@ async function onJobFinished(event: { printer: { id: string }; jobName: string; 
       where: { id: jobId },
       select: {
         startedAt: true,
-        tenantId: true,
+        workspaceId: true,
         sourceType: true,
         fileId: true,
         plate: true
       }
     })
     const filamentUsage = await resolvePrintJobFilamentUsage({
-      tenantId: existing?.tenantId ?? '',
+      workspaceId: existing?.workspaceId ?? '',
       sourceType: existing?.sourceType ?? 'external',
       fileId: existing?.fileId ?? null,
       plate: existing?.plate ?? null
@@ -832,7 +832,7 @@ async function onJobFinished(event: { printer: { id: string }; jobName: string; 
       result: event.result,
       snapshotPath
     })
-    broadcastJobsChanged(await readPrinterTenantId(event.printer.id))
+    broadcastJobsChanged(await readPrinterWorkspaceId(event.printer.id))
   } catch (error) {
     console.error('Failed to record print job finish', error)
   } finally {
@@ -1214,14 +1214,14 @@ async function resolveObservedLibraryFile(input: {
   observedJobName: string | null
   observedPrinterFilePath: string | null
 }): Promise<ObservedLibraryFileMatch | null> {
-  const tenantId = await readPrinterTenantId(input.printerId).catch((error) => {
-    console.warn(`[print-job-recorder] tenant lookup failed for printer ${input.printerId} during library match`, (error as Error).message)
+  const workspaceId = await readPrinterWorkspaceId(input.printerId).catch((error) => {
+    console.warn(`[print-job-recorder] workspace lookup failed for printer ${input.printerId} during library match`, (error as Error).message)
     return null
   })
-  if (!tenantId) return null
+  if (!workspaceId) return null
 
   const files = await rootPrisma.libraryFile.findMany({
-    where: visibleLibraryFilesWhere({ tenantId }),
+    where: visibleLibraryFilesWhere({ workspaceId }),
     select: { id: true, name: true, storedPath: true, sizeBytes: true, kind: true }
   }).catch((error) => {
     console.warn(`[print-job-recorder] library file lookup failed for printer ${input.printerId}`, (error as Error).message)

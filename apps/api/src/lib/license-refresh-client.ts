@@ -20,8 +20,9 @@
  * Counterpart: `apps/api/src/private/cloud/license-refresh.ts` (the endpoint).
  */
 import { licenseRefreshResponseSchema } from '@printstream/shared'
-import { env } from './env.js'
+import { getInstallationId } from './installation-id.js'
 import { isLicenseEnforced, invalidateLicenseCache } from './license-enforcement.js'
+import { resolveLicenseRefreshOrigin } from './license-origin.js'
 import { getInstalledLicenseKey, getInstalledLicenseStatus, setInstalledLicenseKey } from './license-state.js'
 
 /**
@@ -50,10 +51,10 @@ export async function refreshInstalledLicense(): Promise<'skipped' | 'unchanged'
   if (status.expiresAt == null) return 'skipped'
 
   try {
-    const response = await fetch(new URL('/api/license/refresh', env.LICENSE_REFRESH_ORIGIN), {
+    const response = await fetch(new URL('/api/license/refresh', resolveLicenseRefreshOrigin(key)), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key }),
+      body: JSON.stringify({ key, installationId: await getInstallationId() }),
       signal: AbortSignal.timeout(30_000)
     })
     if (!response.ok) {

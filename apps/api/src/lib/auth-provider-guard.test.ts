@@ -107,7 +107,7 @@ test('workspace admins cannot disable the last enabled auth provider', async () 
       providerId: 'auth-local',
       currentEnabled: true,
       nextEnabled: false,
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
       isPlatformUser: false
     }),
     (error: unknown) => {
@@ -133,7 +133,7 @@ test('self-hosted workspace admins can disable the last enabled auth provider', 
     providerId: 'auth-password',
     currentEnabled: true,
     nextEnabled: false,
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     isPlatformUser: false,
     selfHosted: true
   }))
@@ -153,12 +153,12 @@ test('platform users can disable the last enabled auth provider in a workspace',
     providerId: 'auth-local',
     currentEnabled: true,
     nextEnabled: false,
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     isPlatformUser: true
   }))
 })
 
-test('tenant auth providers cannot be enabled until platform auth is enabled', async () => {
+test('workspace auth providers cannot be enabled until platform auth is enabled', async () => {
   authProviderRegistry.register({
     id: 'auth-local',
     label: 'Local Auth',
@@ -173,18 +173,18 @@ test('tenant auth providers cannot be enabled until platform auth is enabled', a
       providerId: 'auth-local',
       currentEnabled: false,
       nextEnabled: true,
-      tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+      workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
     }),
     (error: unknown) => {
       assert.equal(error instanceof HttpError, true)
       assert.equal((error as HttpError).statusCode, 409)
-      assert.equal((error as HttpError).message, 'Enable platform authentication before configuring tenant sign-in.')
+      assert.equal((error as HttpError).message, 'Enable platform authentication before configuring workspace sign-in.')
       return true
     }
   )
 })
 
-test('self-hosted workspaces can enable tenant auth without platform auth', async () => {
+test('self-hosted workspaces can enable workspace auth without platform auth', async () => {
   authProviderRegistry.register({
     id: 'auth-password',
     label: 'Password',
@@ -198,12 +198,12 @@ test('self-hosted workspaces can enable tenant auth without platform auth', asyn
     providerId: 'auth-password',
     currentEnabled: false,
     nextEnabled: true,
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     selfHosted: true
   }))
 })
 
-test('tenant auth providers can be enabled once platform auth is enabled', async () => {
+test('workspace auth providers can be enabled once platform auth is enabled', async () => {
   authProviderRegistry.register(() => ({
     id: 'auth-local',
     label: 'Local Auth',
@@ -217,7 +217,7 @@ test('tenant auth providers can be enabled once platform auth is enabled', async
     providerId: 'auth-oauth',
     currentEnabled: false,
     nextEnabled: true,
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' }
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' }
   }))
 })
 
@@ -225,7 +225,7 @@ test('disabling the last workspace auth provider as a platform user re-enables s
   let receivedArgs: unknown = null
 
   await restoreSupportAccessWhenWorkspaceAuthDisabled({
-    tenant: { id: 'tenant-1', slug: 'alpha', name: 'Alpha' },
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
     nextEnabled: false,
     isPlatformUser: true,
     prismaClient: {
@@ -239,8 +239,8 @@ test('disabling the last workspace auth provider as a platform user re-enables s
   })
 
   assert.deepEqual(receivedArgs, {
-    where: { key: 'tenant:tenant-1:auth:supportAccessEnabled' },
-    create: { key: 'tenant:tenant-1:auth:supportAccessEnabled', value: 'true' },
+    where: { key: 'workspace:workspace-1:auth:supportAccessEnabled' },
+    create: { key: 'workspace:workspace-1:auth:supportAccessEnabled', value: 'true' },
     update: { value: 'true' }
   })
 })
