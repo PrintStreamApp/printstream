@@ -20,29 +20,33 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const outDir = process.argv[2]
+
+/**
+ * ESM import specifiers must be URLs, not paths.
+ *
+ * A bare absolute path works on Linux only because it looks like a URL path; on
+ * Windows `D:\a\...` is read as the scheme `d:` and rejected outright
+ * (ERR_UNSUPPORTED_ESM_URL_SCHEME). This script runs on windows-latest, which
+ * is the only place that matters and the only place it would ever be noticed.
+ */
+const importFromRepo = (relative) => import(pathToFileURL(path.join(REPO_ROOT, relative)).href)
 if (!outDir) {
   process.stderr.write('usage: render-powershell.mjs <outDir>\n')
   process.exit(1)
 }
 
-const { generateSetupGuiScript } = await import(
-  path.join(REPO_ROOT, 'packages/sea-runtime/dist/setup-gui.js')
-)
-const { generateWindowsTrayScript } = await import(
-  path.join(REPO_ROOT, 'packages/sea-runtime/dist/tray/windows-tray.js')
-)
-const { buildShortcutScript } = await import(
-  path.join(REPO_ROOT, 'packages/sea-runtime/dist/tray/launcher.js')
-)
+const { generateSetupGuiScript } = await importFromRepo('packages/sea-runtime/dist/setup-gui.js')
+const { generateWindowsTrayScript } = await importFromRepo('packages/sea-runtime/dist/tray/windows-tray.js')
+const { buildShortcutScript } = await importFromRepo('packages/sea-runtime/dist/tray/launcher.js')
 const {
   buildInstallDirCleanupScript,
   buildUserSessionTrayScript,
   buildHideOwnConsoleScript
-} = await import(path.join(REPO_ROOT, 'packages/sea-runtime/dist/windows-elevation.js'))
+} = await importFromRepo('packages/sea-runtime/dist/windows-elevation.js')
 
 /**
  * Inputs are only placeholders for the SHAPE of the script — the generators

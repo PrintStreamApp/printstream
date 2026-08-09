@@ -8,13 +8,17 @@ import { test } from 'node:test'
 
 // Deployment mode is fixed when env.ts parses and static imports hoist above
 // assignments, so the flag is cleared first and the subject imported
-// dynamically. Unset means "cloud" here (the dev tree carries the private
-// modules), which is the mode whose derived default these tests pin.
+// dynamically. With the flag unset the mode is derived, and one input is
+// whether private modules are PRESENT — true in this repo, false in the public
+// snapshot, where the cloud case therefore cannot exist at all. The one test
+// that pins cloud behaviour is skipped there rather than asserting something
+// that build can never be; the rest are deployment-agnostic.
 delete process.env.SELF_HOSTED
 delete process.env.AUTO_CREATE_DEFAULT_WORKSPACE
 
 const { ensureDefaultWorkspace } = await import('./default-workspace.js')
 const { isSelfHostedDeployment } = await import('./deployment-mode.js')
+const { hasPrivateModules } = await import('./private-modules.js')
 
 function fakeClient(initialCount: number) {
   const created: Array<{ slug: string; name: string }> = []
@@ -69,7 +73,9 @@ test('does nothing when disabled', async () => {
   assert.equal(created.length, 0)
 })
 
-test('unset derives from the deployment: the cloud never auto-creates', async () => {
+test('unset derives from the deployment: the cloud never auto-creates', {
+  skip: hasPrivateModules() ? false : 'public build: no private modules, so this can never be the cloud'
+}, async () => {
   // The control first: under SELF_HOSTED=true this case would prove nothing.
   assert.equal(isSelfHostedDeployment(), false)
   // The bug this pins: with a static `true` default, a hosted deployment's

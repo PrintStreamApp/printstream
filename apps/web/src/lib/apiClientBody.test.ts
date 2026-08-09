@@ -18,7 +18,7 @@ process.env.NODE_ENV = 'test'
  * to be a source check, in the same spirit as `LazyDialogFallback.test.ts`.
  */
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -70,8 +70,18 @@ test('the scan actually reaches the files it is meant to check', () => {
   // The control. A broken walk would report zero offenders forever.
   const files = sourceFiles(SRC)
   assert.ok(files.length > 100, `expected to walk the web source, found ${files.length} files`)
+  // Anchored on a CORE file: the public snapshot ships no `private/` at all, so
+  // a control that names one fails there for a reason that has nothing to do
+  // with the walk — which is not a control, it is a false alarm.
   assert.ok(
-    files.some((file) => file.endsWith(path.join('private', 'cloud', 'usePurchaseActions.ts'))),
-    'the walk should reach the private cloud modules, where every offender lived'
+    files.some((file) => file.endsWith(path.join('lib', 'apiClient.ts'))),
+    'the walk should reach the core lib modules'
   )
+  // Where every offender actually lived — asserted only where that tree exists.
+  if (existsSync(path.join(SRC, 'private'))) {
+    assert.ok(
+      files.some((file) => file.includes(path.join('private', 'cloud'))),
+      'the walk should reach the private cloud modules, where every offender lived'
+    )
+  }
 })
