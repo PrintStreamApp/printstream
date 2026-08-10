@@ -44,7 +44,15 @@ export type EditorSidebarSideSetting = z.infer<typeof editorSidebarSideSchema>
  * `slicerDeveloperMode` reveals BambuStudio's developer-mode (`develop`-tier)
  * options in the process-settings editor; it is the workspace-wide default that
  * a per-device override (browser localStorage) can shadow.
- * `landingPage` controls which workspace page opens first when the app enters a workspace.
+ * `landingPage` controls which workspace page opens first when the app enters a
+ * workspace — a core page, an enabled plugin page, or a saved printer view's
+ * `/printers/views/<id>` address (see the web's `lib/printerViewRoutes.ts`).
+ * `printersDefaultViewId` is the saved printer view the bare `/printers` address
+ * opens with (`null` = the built-in Overview). Like the editor viewport
+ * preferences it is a workspace-wide default that a per-device override (browser
+ * localStorage) can shadow — see the web's `lib/printerViewDefaults.ts`. A
+ * stored id whose view was since deleted is treated as Overview by readers; the
+ * API clears it when the referenced view is deleted.
  * `quickStartDismissed` hides the Get started page once a workspace is set up;
  * until then that page is the workspace's default landing page.
  * `supportAccessEnabled` allows support users to enter the current workspace.
@@ -60,6 +68,7 @@ export const generalSettingsSchema = z.object({
   unconstrainedWidth: z.boolean().default(false),
   slicerDeveloperMode: z.boolean().default(false),
   landingPage: appLandingPageSettingSchema.default(DEFAULT_APP_LANDING_PAGE),
+  printersDefaultViewId: z.string().min(1).nullable().default(null),
   navTabOrder: navTabOrderSchema,
   quickStartDismissed: z.boolean().default(false),
   supportAccessEnabled: z.boolean().default(true),
@@ -75,6 +84,7 @@ export const updateGeneralSettingsSchema = z.object({
   unconstrainedWidth: z.boolean().optional(),
   slicerDeveloperMode: z.boolean().optional(),
   landingPage: appLandingPageSettingSchema.optional(),
+  printersDefaultViewId: z.string().min(1).nullable().optional(),
   navTabOrder: z.array(z.string()).optional(),
   quickStartDismissed: z.boolean().optional(),
   supportAccessEnabled: z.boolean().optional(),
@@ -82,7 +92,7 @@ export const updateGeneralSettingsSchema = z.object({
   editorShowBedModel: z.boolean().optional(),
   editorSidebarSide: editorSidebarSideSchema.optional()
 }).refine(
-  (value) => value.appTheme !== undefined || value.unconstrainedWidth !== undefined || value.slicerDeveloperMode !== undefined || value.landingPage !== undefined || value.navTabOrder !== undefined || value.quickStartDismissed !== undefined || value.supportAccessEnabled !== undefined || value.supportAccessPermissions !== undefined || value.editorShowBedModel !== undefined || value.editorSidebarSide !== undefined,
+  (value) => value.appTheme !== undefined || value.unconstrainedWidth !== undefined || value.slicerDeveloperMode !== undefined || value.landingPage !== undefined || value.printersDefaultViewId !== undefined || value.navTabOrder !== undefined || value.quickStartDismissed !== undefined || value.supportAccessEnabled !== undefined || value.supportAccessPermissions !== undefined || value.editorShowBedModel !== undefined || value.editorSidebarSide !== undefined,
   'At least one general setting must be provided.'
 )
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile } from '@printstream/shared'
-import { isPreviewFirstLibraryFile, isPreviewOnlyLibraryFile, isUnslicedThreeMfFile } from './libraryFileTags.js'
+import { buildCompactFileTags, buildFullFileTags, buildLibraryFileMetaTags, isPreviewFirstLibraryFile, isPreviewOnlyLibraryFile, isUnslicedThreeMfFile } from './libraryFileTags.js'
 
 function fileOfKind(kind: LibraryFile['kind'], name: string): LibraryFile {
   return { kind, name } as LibraryFile
@@ -41,4 +41,29 @@ test('geometry-only 3MFs classify like STL: preview-only, never sliceable/editab
   // The flag is only meaningful when true — absent/false keeps project behavior.
   assert.equal(isPreviewOnlyLibraryFile({ ...fileOfKind('3mf', 'project.3mf'), geometryOnly: false }), false)
   assert.equal(isUnslicedThreeMfFile({ ...fileOfKind('3mf', 'project.3mf'), geometryOnly: false }), true)
+})
+
+test('a metadata-pending file shows a single processing tag on every tag surface', () => {
+  const pending: LibraryFile = {
+    ...fileOfKind('3mf', 'fresh-upload.3mf'),
+    metadataPending: true,
+    compatiblePrinterModels: [],
+    plateTypeChips: [],
+    nozzleSizeChips: [],
+    projectFilamentChips: []
+  } as LibraryFile
+  // All three builders share the meta group, so the browser row, icon card, and the
+  // version-history dialog all surface the indicator without per-surface handling.
+  const full = buildFullFileTags(pending)
+  const compact = buildCompactFileTags(pending)
+  const versionDialog = buildLibraryFileMetaTags(pending)
+  for (const meta of [full.meta, compact.meta, versionDialog]) {
+    assert.equal(meta.length, 1)
+    assert.equal(meta[0]?.pending, true)
+    assert.match(meta[0]?.label ?? '', /processing/i)
+  }
+  // The indicator never appears once metadata is settled — even when it settled to nothing.
+  const settled = { ...pending, metadataPending: undefined }
+  assert.equal(buildFullFileTags(settled).meta.length, 0)
+  assert.equal(buildCompactFileTags(settled).meta.some((tag) => tag.pending), false)
 })

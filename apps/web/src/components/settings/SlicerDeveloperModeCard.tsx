@@ -17,36 +17,18 @@
  * using the editor may set. The public editor omits it (no workspace to read a
  * shared default from).
  */
-import { extractErrorMessage, type GeneralSettings, type UpdateGeneralSettingsInput } from '@printstream/shared'
 import { Alert, Option, Select } from '@mui/joy'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useAuthBootstrapQuery } from '../../lib/authQuery'
-import { apiFetch } from '../../lib/apiClient'
 import { useSlicerDeveloperModeOverride } from '../../lib/slicerDeveloperMode'
 import { DeviceOverrideNotice, GeneralSettingCard, GeneralSettingSelectRow } from './GeneralSettingControls'
+import { useGeneralSettingsEditor } from './useGeneralSettingsEditor'
 
 type SharedValue = 'on' | 'off'
 type DeviceValue = 'follow-default' | 'on' | 'off'
 
 export function SlicerDeveloperModeCard() {
-  const queryClient = useQueryClient()
-  const canManageSettings = useAuthBootstrapQuery().data?.capabilities?.canManageSettings ?? false
-  const generalSettingsQuery = useQuery({
-    queryKey: ['general-settings'],
-    queryFn: ({ signal }) => apiFetch<GeneralSettings>('/api/settings', { signal })
-  })
-  const sharedEnabled = generalSettingsQuery.data?.slicerDeveloperMode ?? false
+  const { canManageSettings, settings, save: updateGeneralSettings, saveError } = useGeneralSettingsEditor()
+  const sharedEnabled = settings?.slicerDeveloperMode ?? false
   const [deviceOverride, setDeviceOverride] = useSlicerDeveloperModeOverride()
-
-  const updateGeneralSettings = useMutation({
-    mutationFn: (input: UpdateGeneralSettingsInput) =>
-      apiFetch<GeneralSettings>('/api/settings', { method: 'PUT', body: input }),
-    onSuccess: (data) => {
-      // Keep the app-wide general-settings cache authoritative, matching App.tsx.
-      queryClient.setQueryData(['general-settings'], data)
-    }
-  })
-  const saveError = updateGeneralSettings.error ? extractErrorMessage(updateGeneralSettings.error) : null
 
   const sharedSelectValue: SharedValue = sharedEnabled ? 'on' : 'off'
   const deviceSelectValue: DeviceValue = deviceOverride == null ? 'follow-default' : deviceOverride ? 'on' : 'off'

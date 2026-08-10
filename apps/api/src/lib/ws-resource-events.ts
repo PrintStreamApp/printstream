@@ -67,6 +67,30 @@ export function broadcastLibraryChanged(workspaceId?: string | null): void {
   broadcastResourceChange({ resource: 'library', workspaceId })
 }
 
+/** Workspaces with a library broadcast scheduled, so a warm burst coalesces to one signal. */
+const pendingLibraryChangedBroadcasts = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * Trailing-debounced {@link broadcastLibraryChanged} for high-fan-out BACKGROUND writes — the
+ * derived-metadata warms a listing triggers land one per stale row (every row, after a parser
+ * version bump), and a broadcast apiece would refetch every client's library list N times. One
+ * broadcast per workspace per quiet window is enough: the refetch it triggers reads ALL rows'
+ * persisted state, whichever subset had landed by then, and any warm that finishes later
+ * reschedules. Request-path mutations keep calling {@link broadcastLibraryChanged} directly —
+ * a user-visible action should signal immediately.
+ */
+export function broadcastLibraryChangedDebounced(workspaceId: string, delayMs = 500): void {
+  const existing = pendingLibraryChangedBroadcasts.get(workspaceId)
+  if (existing) clearTimeout(existing)
+  const timer = setTimeout(() => {
+    pendingLibraryChangedBroadcasts.delete(workspaceId)
+    broadcastLibraryChanged(workspaceId)
+  }, delayMs)
+  // A pending signal must never hold the process open on shutdown.
+  timer.unref?.()
+  pendingLibraryChangedBroadcasts.set(workspaceId, timer)
+}
+
 export function broadcastLogsChanged(workspaceId?: string | null): void {
   broadcastResourceChange({ resource: 'logs', workspaceId })
 }

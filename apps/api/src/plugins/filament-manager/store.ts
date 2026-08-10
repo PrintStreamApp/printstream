@@ -20,7 +20,7 @@ import {
 } from '@printstream/shared'
 import { serializeColors, type SpoolRowWithPrinter } from './dto.js'
 
-const loadedPrinterInclude = { loadedPrinter: { select: { name: true } } }
+const loadedPrinterInclude = { loadedPrinter: { select: { name: true, model: true } } }
 
 export type ListSpoolsOptions = {
   includeArchived?: boolean

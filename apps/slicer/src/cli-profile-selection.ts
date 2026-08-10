@@ -37,6 +37,14 @@ export function selectCliProfileFiles<T extends PresetKinded>(
  * process-only exits -17, machine + process exports fine). The API then retries without the
  * builtin profiles, so the slice silently completes on the project's own presets instead of the
  * process the user picked.
+ *
+ * The export equally cannot run with HALF a pair — a machine and no process (the normal state of
+ * a slice whose process is the project's own `project:` preset, which resolves to no file by
+ * design) exits 239 just as deterministically, and when the machine is a CUSTOM preset the API's
+ * builtin-drop retry cannot recover it. `ensureMachineProcessPairForExport` in
+ * `project-settings-fallback.ts` repairs that downstream by deriving the missing half from the
+ * embedded settings' lineage (or dropping the loaded half); keeping ALL the files here is what
+ * hands it the true picture of what the slice loads.
  */
 export function selectSettingsExportProfileFiles<T extends PresetKinded>(profileFiles: readonly T[]): T[] {
   return [...profileFiles]

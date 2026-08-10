@@ -31,6 +31,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   DialogActions,
   DialogContent,
   DialogTitle,
@@ -62,6 +63,7 @@ import {
   formatFirmwareChipLabel,
   formatModuleLabel,
   getDefaultSelectedVersion,
+  getFirmwareVersionsLoadState,
   getInstallableVersions,
   getModuleFirmware,
   getSelectedPrerequisite,
@@ -219,6 +221,22 @@ function FirmwareReleaseNotes({ markdown }: { markdown: string }) {
   )
 }
 
+/**
+ * Inline "working on it" row for the version-picker slot. Fetching the
+ * downloadable version list hits Bambu Lab's wiki and download pages and can
+ * take many seconds, so the dialog needs a visible signal that the picker is
+ * coming rather than appearing broken (no dropdown, no changelog, a disabled
+ * upload button) while the report fills in.
+ */
+function FirmwareLoadingRow({ label }: { label: string }) {
+  return (
+    <Stack direction="row" spacing={1} alignItems="center">
+      <CircularProgress size="sm" />
+      <Typography level="body-sm" textColor="text.secondary">{label}</Typography>
+    </Stack>
+  )
+}
+
 function FirmwareUpdateDetailsDialog({
   printerId,
   printerName,
@@ -239,6 +257,7 @@ function FirmwareUpdateDetailsDialog({
   // the update report has loaded; the user can pick any older version
   // that is also available on Bambu's download page.
   const installableVersions = useMemo(() => getInstallableVersions(update), [update])
+  const versionsLoadState = getFirmwareVersionsLoadState(installableVersions, updatesQuery.isFetching)
   const moduleFirmware = useMemo(() => getModuleFirmware(update), [update])
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
   useEffect(() => {
@@ -317,8 +336,17 @@ function FirmwareUpdateDetailsDialog({
         <DialogTitle>Firmware update — {printerName}</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5}>
-            {!update && updatesQuery.isLoading && (
-              <ListSkeleton rows={2} />
+            {/* isFetching, not isLoading: a stale-cache initialData render can leave
+                the report absent while a refetch is in flight, and isLoading is false
+                then — the dialog would sit blank instead of showing the skeleton. */}
+            {!update && (
+              updatesQuery.isFetching ? (
+                <ListSkeleton rows={2} />
+              ) : (
+                <Typography level="body-sm" textColor="text.tertiary">
+                  No firmware information is available for this printer yet.
+                </Typography>
+              )
             )}
 
             {update && (
@@ -370,7 +398,7 @@ function FirmwareUpdateDetailsDialog({
                   </Box>
                 )}
 
-                {installableVersions.length > 0 && (
+                {versionsLoadState === 'ready' && (
                   <FormControl size="sm">
                     <FormLabel>Version to install</FormLabel>
                     <Select
@@ -399,6 +427,21 @@ function FirmwareUpdateDetailsDialog({
                       </Typography>
                     )}
                   </FormControl>
+                )}
+
+                {versionsLoadState === 'loading' && (
+                  <FirmwareLoadingRow label="Loading available firmware versions…" />
+                )}
+
+                {/* Suppressed while offline-blocked: that alert already explains why
+                    nothing can be staged, and two alerts for one dead end read as two
+                    separate problems. */}
+                {versionsLoadState === 'unavailable' && !offlineBlocked && (
+                  <Alert color="neutral" variant="soft" startDecorator={<InfoOutlinedIcon />}>
+                    {update.latestVersion
+                      ? `Firmware ${update.latestVersion} is announced, but Bambu Lab hasn't published a downloadable file for this printer yet.`
+                      : 'No downloadable firmware versions are available for this printer right now.'}
+                  </Alert>
                 )}
 
                 {!offlineBlocked && selectedPrerequisite && (

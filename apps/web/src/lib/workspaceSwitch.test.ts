@@ -171,6 +171,26 @@ test('resolveWorkspaceLandingPath returns the selected workspace page when it is
   }), '/settings')
 })
 
+test('resolveWorkspaceLandingPath treats a saved printer view address like the printers page', () => {
+  assert.equal(resolveWorkspaceLandingPath({
+    preferredPage: '/printers/views/clxyzabc1234567890printer',
+    canViewPrinters: true,
+    canViewLibrary: true,
+    canViewJobs: true,
+    canOpenSettings: true,
+    enabledPluginBasePaths: []
+  }), '/printers/views/clxyzabc1234567890printer')
+
+  assert.equal(resolveWorkspaceLandingPath({
+    preferredPage: '/printers/views/clxyzabc1234567890printer',
+    canViewPrinters: false,
+    canViewLibrary: true,
+    canViewJobs: true,
+    canOpenSettings: true,
+    enabledPluginBasePaths: []
+  }), '/library')
+})
+
 test('resolveWorkspaceLandingPath allows enabled plugin pages', () => {
   assert.equal(resolveWorkspaceLandingPath({
     preferredPage: '/orders',

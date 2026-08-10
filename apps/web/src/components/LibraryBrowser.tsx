@@ -12,7 +12,7 @@
 import React, { useEffect, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
 import LinkOffRoundedIcon from '@mui/icons-material/LinkOffRounded'
 import StarRoundedIcon from '@mui/icons-material/StarRounded'
-import { AspectRatio, Box, Checkbox, Chip, Stack, Tooltip, Typography } from '@mui/joy'
+import { AspectRatio, Box, Checkbox, Chip, CircularProgress, Stack, Tooltip, Typography } from '@mui/joy'
 import { formatBytes, type LibraryFile, type LibraryFolder } from '@printstream/shared'
 import { buildApiUrl } from '../lib/apiUrl'
 import { getMeshThumbnailProvider, getSceneThumbnailProvider } from '../lib/modelThumbnailRegistry'
@@ -1039,6 +1039,7 @@ function renderTagChip({
   kind,
   dotColor,
   chipSx,
+  pending = false,
   compact = false
 }: {
   key: string
@@ -1047,6 +1048,7 @@ function renderTagChip({
   kind: FileTagKind
   dotColor?: string | null
   chipSx?: Record<string, unknown>
+  pending?: boolean
   compact?: boolean
 }) {
   const display = summarizeChipLabel(label)
@@ -1056,6 +1058,13 @@ function renderTagChip({
       size="sm"
       variant="soft"
       color={color}
+      startDecorator={pending ? (
+        // Sized to the chip's tiny type scale — Joy's smallest stock spinner would dwarf it.
+        <CircularProgress
+          color="neutral"
+          sx={{ '--CircularProgress-size': compact ? '9px' : '11px', '--CircularProgress-trackThickness': '2px', '--CircularProgress-progressThickness': '2px' }}
+        />
+      ) : undefined}
       sx={{
         '--Chip-minHeight': compact ? '15px' : '17px',
         fontSize: compact ? '9px' : '10px',

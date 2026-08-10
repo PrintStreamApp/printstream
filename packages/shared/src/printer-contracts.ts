@@ -988,6 +988,17 @@ export const libraryFileSchema = z.object({
   /** Plates in the 3MF project index; absent or 0 when unknown or not a 3MF. */
   plateCount: z.number().int().nonnegative().optional(),
   /**
+   * The derived 3MF metadata (chips, plate count, geometry-only/object-export flags) has not
+   * been computed for this file version yet — the API is deriving it in the background and
+   * broadcasts a library change when it lands, so a listing showing "processing" self-heals.
+   * While true, the metadata fields above are EMPTY, not "known to be absent": the web renders
+   * a processing indicator instead of a bare card, and must not latch decisions that depend on
+   * them (e.g. `geometryOnly` routing). Only ever set for kinds that carry derived metadata
+   * (3mf/gcode); absent means the metadata is settled. Counterpart: `toDto` in the API's
+   * library routes + `warmLibraryFileDerivedChips`.
+   */
+  metadataPending: z.boolean().optional(),
+  /**
    * A 3MF with no Bambu project metadata (a vanilla/CAD mesh container). Such a file is
    * not an openable project — the web treats it like STL/STEP (preview-only card, mesh
    * thumbnail, importable into projects). Absent for other kinds and for real projects.

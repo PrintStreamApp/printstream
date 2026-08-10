@@ -169,6 +169,20 @@ test('selecting a printer sets the mode and the target in one gesture', () => {
   assert.equal(result.current.printerProfileId, H2D_04.id)
 })
 
+test("selecting a printer switches the plate to that printer's configured plate (issue #10)", () => {
+  const farm = { id: 'p1', name: 'Farm 06', model: 'H2D', currentNozzleDiameters: [], currentPlateType: 'High Temp Plate' } as unknown as Printer
+  const { result } = renderTarget(baseParams({
+    machineProfiles: [H2D_04],
+    printers: [farm],
+    bakedIndex: index({ compatiblePrinterModels: ['H2D'], plates: [plate({ plateType: 'cool_plate' })] }) as ThreeMfIndex,
+    ...SETTLED
+  }))
+  assert.equal(result.current.plateType, 'cool_plate', "no printer picked yet: the project's plate")
+  act(() => { result.current.selectPrinter(farm) })
+  assert.equal(result.current.plateType, 'high_temp_plate', "the printer's plate takes over")
+  assert.equal(result.current.origins.plateType, 'printer')
+})
+
 test('a locked preferred printer pins the target without an effect racing the picker', () => {
   const locked = { id: 'locked', name: 'Farm 06', model: 'H2D', currentNozzleDiameters: [], currentPlateType: null } as unknown as Printer
   const { result } = renderTarget(baseParams({

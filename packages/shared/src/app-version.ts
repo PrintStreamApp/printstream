@@ -54,14 +54,35 @@ export const appVersionResponseSchema = z.object({
   /** True when running from the published open-core image (has an update channel). */
   published: z.boolean(),
   /** Registry update status; null unless this is the published open-core image. */
-  update: appUpdateInfoSchema.nullable()
+  update: appUpdateInfoSchema.nullable(),
+  /**
+   * True when THIS VIEWER may apply the available update in place — only ever
+   * true on the native single-file app, for a viewer with settings-manage
+   * permission, while `update.status` is `updateAvailable` and a binary exists
+   * for this platform. Drives the footer's one-click update; the server
+   * re-checks permission on `POST /api/app/update/start`.
+   */
+  canApplyUpdate: z.boolean().default(false)
 })
 export type AppVersionResponse = z.infer<typeof appVersionResponseSchema>
+
+/**
+ * Response of `POST /api/app/update/start` when the update was accepted. Every
+ * non-accepted outcome (already current, busy, unsigned build, licence refusal)
+ * is an HTTP error whose message says why, so this shape only ever means "the
+ * app is restarting into the new build".
+ */
+export const appUpdateStartResponseSchema = z.object({
+  accepted: z.literal(true),
+  message: z.string()
+})
+export type AppUpdateStartResponse = z.infer<typeof appUpdateStartResponseSchema>
 
 /** Nothing-to-show payload (dev/source run, or viewer not permitted). */
 export const EMPTY_APP_VERSION_RESPONSE: AppVersionResponse = {
   revision: null,
   shortRevision: null,
   published: false,
-  update: null
+  update: null,
+  canApplyUpdate: false
 }

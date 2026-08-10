@@ -39,6 +39,7 @@ function makeSpool(overrides: Partial<FilamentSpool> = {}): FilamentSpool {
     notes: null,
     loadedPrinterId: null,
     loadedPrinterName: null,
+    loadedPrinterModel: null,
     loadedAmsId: null,
     loadedSlotId: null,
     loadedAt: null,
@@ -120,9 +121,25 @@ test('formatLoadedLocation describes AMS, external, and unloaded spools', () => 
     formatLoadedLocation(makeSpool({ loadedPrinterId: 'p', loadedPrinterName: 'X1C', loadedAmsId: 0, loadedSlotId: 1 })),
     'X1C · AMS A slot 2'
   )
+  // Single-nozzle machines have one external spool, so a left/right side would
+  // be noise (public issue #9's P1S showed "(right)"); only dual-nozzle
+  // machines, which really have two, get the side suffix.
   assert.equal(
-    formatLoadedLocation(makeSpool({ loadedPrinterId: 'p', loadedPrinterName: 'P1S', loadedAmsId: 255, loadedSlotId: null })),
-    'P1S · External spool (right)'
+    formatLoadedLocation(makeSpool({ loadedPrinterId: 'p', loadedPrinterName: 'P1S', loadedPrinterModel: 'P1S', loadedAmsId: 255, loadedSlotId: null })),
+    'P1S · External spool'
+  )
+  assert.equal(
+    formatLoadedLocation(makeSpool({ loadedPrinterId: 'p', loadedPrinterName: 'H2D', loadedPrinterModel: 'H2D', loadedAmsId: 255, loadedSlotId: null })),
+    'H2D · External spool (right)'
+  )
+  assert.equal(
+    formatLoadedLocation(makeSpool({ loadedPrinterId: 'p', loadedPrinterName: 'H2D', loadedPrinterModel: 'H2D', loadedAmsId: 254, loadedSlotId: null })),
+    'H2D · External spool (left)'
+  )
+  // Unknown model -> conservative plain label rather than a guessed side.
+  assert.equal(
+    formatLoadedLocation(makeSpool({ loadedPrinterId: 'p', loadedPrinterName: 'Printer', loadedPrinterModel: null, loadedAmsId: 255, loadedSlotId: null })),
+    'Printer · External spool'
   )
 })
 

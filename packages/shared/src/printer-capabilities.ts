@@ -7,11 +7,12 @@
  * Depends only on the wire contracts in `./printer-contracts.js`; it never
  * imports the action-availability logic.
  */
-import type {
-  PrinterModel,
-  PrinterPrintStartOptions,
-  PrinterStage,
-  PrinterStatus
+import {
+  printerModelSchema,
+  type PrinterModel,
+  type PrinterPrintStartOptions,
+  type PrinterStage,
+  type PrinterStatus
 } from './printer-contracts.js'
 
 export interface PrinterCalibrationCapabilities {
@@ -366,6 +367,17 @@ export function getPrinterControlCapabilities(model: PrinterModel): PrinterContr
     motion: true,
     extruderControl: true
   }
+}
+
+/**
+ * Whether a stored printer model string names a dual-nozzle machine. Takes the
+ * RAW model string (as persisted on printer rows and spool DTOs) so callers
+ * need no schema parse; unknown/unparseable models resolve to single-nozzle,
+ * the conservative answer for both external-tray wire encoding and labels.
+ */
+export function printerModelHasDualNozzles(model: string): boolean {
+  const parsed = printerModelSchema.safeParse(model)
+  return getPrinterControlCapabilities(parsed.success ? parsed.data : 'unknown').dualNozzles
 }
 
 export function getPrinterChamberTemperatureMax(model: PrinterModel): number {

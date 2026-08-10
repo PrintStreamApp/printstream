@@ -6,6 +6,7 @@ import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/Sc
 import { type Printer, type PrinterView, type PrinterViewInput } from '@printstream/shared'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { DialogSection } from '../../components/DialogSection'
+import { DefaultPrinterViewCard } from '../settings/DefaultPrinterViewCard'
 import { PrinterCardContentSettingsFields } from './PrinterCardContentSettingsFields'
 import { CARDS_PER_ROW_OPTIONS, moveListItem, updateViewCardContentSetting, clonePrinterViewInput, resetPrinterViewInput, normalizePrinterViewInput } from '../../lib/printersViewHelpers'
 
@@ -150,7 +151,6 @@ export function PrinterViewsModal({
   mode,
   activeView,
   currentViewLabel,
-  isCurrentDefaultView,
   currentState,
   submitting,
   error,
@@ -158,13 +158,11 @@ export function PrinterViewsModal({
   onApplyDefault,
   onCreate,
   onUpdate,
-  onDelete,
-  onSetAsDefault
+  onDelete
 }: {
   mode: 'settings' | 'create'
   activeView: PrinterView | null
   currentViewLabel: string
-  isCurrentDefaultView: boolean
   currentState: PrinterViewInput
   submitting: boolean
   error: string | null
@@ -173,7 +171,6 @@ export function PrinterViewsModal({
   onCreate: (input: PrinterViewInput) => void
   onUpdate: (id: string, input: PrinterViewInput) => void
   onDelete: (id: string) => void
-  onSetAsDefault: () => void
 }) {
   const [formValues, setFormValues] = useState<PrinterViewInput>(() => clonePrinterViewInput(currentState))
   const editingView = mode === 'settings' ? activeView : null
@@ -259,7 +256,7 @@ export function PrinterViewsModal({
 
             <DialogSection
               title="Defaults"
-              description="Reset the layout and card content to the standard, or save this view as the workspace default."
+              description="Reset the layout and card content to the standard."
             >
               <Stack
                 direction="row"
@@ -280,18 +277,10 @@ export function PrinterViewsModal({
                 >
                   Reset to defaults
                 </Button>
-                {!isCreatingView && !isCurrentDefaultView && (
-                  <Button
-                    type="button"
-                    variant="soft"
-                    color="neutral"
-                    onClick={onSetAsDefault}
-                  >
-                    Set as default
-                  </Button>
-                )}
               </Stack>
             </DialogSection>
+
+            {!isCreatingView && <DefaultPrinterViewCard />}
           </Stack>
         </ScrollableDialogBody>
 

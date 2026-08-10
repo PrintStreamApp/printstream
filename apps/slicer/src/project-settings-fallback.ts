@@ -183,6 +183,147 @@ async function buildFilamentCoverageFromEmbedded(
   return paths.join(';')
 }
 
+/** `inherits_group` is positional: `[process, filament1..N, machine]` (what the API's sanitize and
+ * BambuStudio's own writer both assume). The PROCESS lineage is entry 0; the MACHINE lineage is the
+ * last entry — and only when the array is long enough that they are distinct entries. */
+function processInheritsFromGroup(embedded: Record<string, unknown> | null): string | null {
+  const group = embedded && Array.isArray(embedded.inherits_group) ? embedded.inherits_group : []
+  return group.length >= 2 ? firstStringValue(group[0]) : null
+}
+function machineInheritsFromGroup(embedded: Record<string, unknown> | null): string | null {
+  const group = embedded && Array.isArray(embedded.inherits_group) ? embedded.inherits_group : []
+  return group.length >= 2 ? firstStringValue(group[group.length - 1]) : null
+}
+
+/** Trimmed string entries of a `compatible_printers`-style value; [] for anything else. */
+function stringListValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim())
+}
+
+/**
+ * The name the CLI tests process compatibility against for a loaded machine preset: its own name
+ * for a system preset, its `inherits` (the system base) for a User preset — mirroring
+ * `load_config_file` in BambuStudio's CLI (`config_from == "system" ? name : inherits`).
+ */
+function machineSystemName(machine: Record<string, unknown>): string | null {
+  const from = typeof machine.from === 'string' ? machine.from.trim().toLowerCase() : ''
+  return from === 'system' ? firstStringValue(machine.name) : firstStringValue(machine.inherits)
+}
+
+/** The `--load-settings` files of an export arg set, classified by their own `type` field. */
+interface LoadSettingsClassification {
+  /** Index of the `--load-settings` flag in the args. */
+  index: number
+  /** The `;`-joined value split back into file paths. */
+  paths: string[]
+  machine: Record<string, unknown> | null
+  process: Record<string, unknown> | null
+  /** True when any file could not be read/parsed/classified — leave such args alone. */
+  unknown: boolean
+}
+
+async function classifyLoadSettings(args: readonly string[]): Promise<LoadSettingsClassification | null> {
+  const index = args.indexOf('--load-settings')
+  const value = index >= 0 ? args[index + 1] : undefined
+  if (typeof value !== 'string' || value.trim().length === 0) return null
+  const paths = value.split(';').filter((entry) => entry.trim().length > 0)
+  const classification: LoadSettingsClassification = { index, paths, machine: null, process: null, unknown: false }
+  for (const filePath of paths) {
+    try {
+      const parsed = JSON.parse(await readFile(filePath, 'utf8')) as Record<string, unknown>
+      if (parsed.type === 'machine') classification.machine = parsed
+      else if (parsed.type === 'process') classification.process = parsed
+      else classification.unknown = true
+    } catch {
+      classification.unknown = true
+    }
+  }
+  return classification
+}
+
+/** `args` with `extraPath` appended to the `--load-settings` value. */
+function withExtraLoadSettingsPath(args: readonly string[], loaded: LoadSettingsClassification, extraPath: string): readonly string[] {
+  const next = [...args]
+  next[loaded.index + 1] = [...loaded.paths, extraPath].join(';')
+  return next
+}
+
+/** `args` without its `--load-settings` flag + value. */
+function withoutLoadSettings(args: readonly string[], loaded: LoadSettingsClassification): readonly string[] {
+  return args.filter((_entry, index) => index !== loaded.index && index !== loaded.index + 1)
+}
+
+/**
+ * The export cannot run with HALF a machine/process pair. `--export-settings` loads no 3MF, so
+ * with a machine loaded and no process the CLI tests the (absent) project's
+ * `print_compatible_printers` — an empty list, whose "compatible with everything" carve-out only
+ * applies when no new printer was loaded — and exits 239 "process not compatible with printer";
+ * a process with no machine fails the same test from the other side (both verified against the
+ * 2.7.1 CLI, and mirrored in `BambuStudio.cpp`'s exit-239 block). The slice itself is fine with
+ * either half: the rewritten 3MF carries the other. Only this export needs the pairing.
+ *
+ * So when the args carry exactly one half, derive the other from names the inputs already declare —
+ * preferring the embedded settings' own lineage so the baseline stays close to what the slice will
+ * actually use — keeping only a candidate whose `compatible_printers` pairing the CLI will accept
+ * (same containment test, against the machine's SYSTEM name). When nothing resolvable is
+ * compatible, drop the loaded half instead: a filaments-only export succeeds (the no-presets
+ * branch of the CLI's check treats an empty list as compatible), and the export is only a
+ * structural baseline the embedded settings overlay anyway. Args whose `--load-settings` files
+ * cannot be classified are returned untouched — never meddle where the pairing cannot be seen.
+ */
+async function ensureMachineProcessPairForExport(
+  args: readonly string[],
+  profileDir: string | null | undefined,
+  embedded: Record<string, unknown> | null,
+  log: (message: string) => void
+): Promise<readonly string[]> {
+  const loaded = await classifyLoadSettings(args)
+  if (!loaded || loaded.unknown) return args
+  if ((loaded.machine !== null) === (loaded.process !== null)) return args
+
+  if (loaded.machine) {
+    const systemName = machineSystemName(loaded.machine)
+    const candidates = [
+      firstStringValue(embedded?.print_settings_id),
+      processInheritsFromGroup(embedded),
+      firstStringValue(loaded.machine.default_print_profile),
+      firstStringValue(embedded?.default_print_profile)
+    ]
+    for (const name of candidates) {
+      if (!profileDir || !name) continue
+      const processPath = await builtinProfilePathForName(profileDir, 'process', name)
+      if (!processPath) continue
+      const config = await readFile(processPath, 'utf8').then((raw) => JSON.parse(raw) as Record<string, unknown>).catch(() => null)
+      if (!config || !systemName || !stringListValue(config.compatible_printers).includes(systemName)) continue
+      log(`Settings export: pairing the machine with process "${name}" (a machine preset cannot export without one)`)
+      return withExtraLoadSettingsPath(args, loaded, processPath)
+    }
+    log('Settings export: no compatible process preset resolves — exporting without the machine preset')
+    return withoutLoadSettings(args, loaded)
+  }
+
+  const process = loaded.process as Record<string, unknown>
+  const compatiblePrinters = stringListValue(process.compatible_printers)
+  const candidates = [
+    firstStringValue(embedded?.printer_settings_id),
+    machineInheritsFromGroup(embedded),
+    ...compatiblePrinters
+  ]
+  for (const name of candidates) {
+    if (!profileDir || !name) continue
+    const machinePath = await builtinProfilePathForName(profileDir, 'machine', name)
+    if (!machinePath) continue
+    const config = await readFile(machinePath, 'utf8').then((raw) => JSON.parse(raw) as Record<string, unknown>).catch(() => null)
+    const systemName = config ? machineSystemName(config) : null
+    if (!systemName || !compatiblePrinters.includes(systemName)) continue
+    log(`Settings export: pairing the process with machine "${name}" (a process preset cannot export without one)`)
+    return withExtraLoadSettingsPath(args, loaded, machinePath)
+  }
+  log('Settings export: no compatible machine preset resolves — exporting without the process preset')
+  return withoutLoadSettings(args, loaded)
+}
+
 /**
  * The export must cover the FILAMENT domain too: with no filament preset loaded, the exported
  * config omits the nullable per-filament override arrays (`filament_retraction_length`,
@@ -378,6 +519,9 @@ export async function ensureEmbeddedProjectSettings(input: {
     }
     exportArgs = derived
   }
+  // Order matters: the pairing may DROP `--load-settings` entirely, and the filament coverage
+  // below is what keeps such an export meaningful (a filaments-only export succeeds).
+  exportArgs = await ensureMachineProcessPairForExport(exportArgs, input.profileDir, embedded, input.log)
   exportArgs = await ensureFilamentCoverage(exportArgs, input.profileDir, embedded)
 
   // Name the keys and the arg count. This step REPLACES the project's settings with the CLI's

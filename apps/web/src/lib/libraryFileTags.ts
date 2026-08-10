@@ -17,6 +17,8 @@ export interface FileTagDescriptor {
   kind: FileTagKind
   dotColor?: string | null
   chipSx?: Record<string, unknown>
+  /** Metadata is still being derived — renderers may add an in-progress decorator. */
+  pending?: boolean
 }
 
 export interface FileTagGroups {
@@ -135,6 +137,18 @@ function buildMetaTagDescriptors(
   file: LibraryFile,
   options: { includePlateTypes?: boolean; includeNozzleSizes?: boolean; shortPlateLabels?: boolean } = {}
 ): FileTagDescriptor[] {
+  // Metadata still deriving server-side: every chip field is empty because it is UNKNOWN, not
+  // absent — say so instead of rendering a silently bare card. The API broadcasts a library
+  // change when the derive lands, so this tag replaces itself with the real chips.
+  if (file.metadataPending) {
+    return [{
+      key: 'metadata-pending',
+      label: 'Processing…',
+      color: 'neutral' as const,
+      kind: 'meta' as const,
+      pending: true
+    }]
+  }
   const tags: FileTagDescriptor[] = []
   tags.push(...file.compatiblePrinterModels.map((label) => ({
     key: `model-${label}`,

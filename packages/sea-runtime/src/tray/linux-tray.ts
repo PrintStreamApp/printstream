@@ -108,7 +108,7 @@ class Tray:
         self.restart_service_item = Gtk.MenuItem(label="Restart service")
         self.restart_service_item.connect("activate", self.restart_service)
         self.menu.append(self.restart_service_item)
-        self.update_item = Gtk.MenuItem(label="Update bridge")
+        self.update_item = Gtk.MenuItem(label="Update " + APP_NAME)
         self.update_item.connect("activate", self.update_bridge)
         self.menu.append(self.update_item)
         logs_item = Gtk.MenuItem(label="View logs")

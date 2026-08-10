@@ -2,8 +2,9 @@
  * "Is there a newer native build?" — asked by the native single-file app.
  *
  * The Docker bundle has had an update notice since it shipped (`app-update-check.ts`,
- * which reads GHCR). The native bundle had nothing at all: no check, no notice,
- * no self-update. This closes that, notify-only; applying a build is Phase 2.
+ * which reads GHCR). This module is the NOTIFY half for the native bundle; the
+ * user-initiated APPLY half is `native-update-apply.ts`, which reuses this
+ * module's manifest fetch so both read the channel one way.
  *
  * **Anonymous by design.** The request carries no licence key, no installation
  * id, and no telemetry — it is a plain GET for a manifest. That matters twice
@@ -25,7 +26,7 @@
  * live server's `/api/server-runtime/releases` (what is current), served by
  * `apps/api/src/private/cloud/server-release-channel.ts`.
  */
-import type { AppUpdateInfo } from '@printstream/shared'
+import { serverReleaseManifestSchema, type AppUpdateInfo, type ServerReleaseManifest } from '@printstream/shared'
 import { env } from './env.js'
 import { isNativeDeployment } from './deployment-mode.js'
 import { shortenRevision } from './app-build-info.js'
@@ -60,7 +61,7 @@ let inFlight: Promise<void> | null = null
  * the native build, and the API only reads it. Empty or absent (any non-native
  * run, or a locally-built binary) means the check never fires.
  */
-function installedFingerprint(): string | null {
+export function installedFingerprint(): string | null {
   const value = env.PRINTSTREAM_SERVER_FINGERPRINT?.trim()
   return value ? value : null
 }
@@ -68,6 +69,33 @@ function installedFingerprint(): string | null {
 /** Whether this process can meaningfully ask. */
 function isActive(): boolean {
   return isNativeDeployment() && installedFingerprint() != null
+}
+
+/** The manifest key for this machine's binary. */
+export function nativeUpdatePlatformKey(): string {
+  return `${process.platform}-${process.arch}`
+}
+
+/** The release-channel origin (baked; env override is test-only). The apply
+ * driver pins download URLs to exactly this origin. */
+export function nativeUpdateOrigin(): string {
+  return env.NATIVE_UPDATE_ORIGIN ?? DEFAULT_ORIGIN
+}
+
+/**
+ * The live server's current native build, freshly fetched and schema-parsed.
+ * Shared by the notify check below and the apply driver
+ * (`native-update-apply.ts`), so both read the manifest one way. Throws on
+ * network/shape failures — the notify path degrades that to `unknown`, the
+ * apply path surfaces it.
+ */
+export async function fetchCurrentServerBuild(): Promise<ServerReleaseManifest['current']> {
+  const response = await fetch(new URL('/api/server-runtime/releases', nativeUpdateOrigin()), {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  })
+  if (!response.ok) throw new Error(`manifest request failed: ${response.status}`)
+  return serverReleaseManifestSchema.parse(await response.json()).current
 }
 
 /**
@@ -81,6 +109,18 @@ export function getNativeUpdateInfo(): AppUpdateInfo | null {
   return cache?.info ?? null
 }
 
+/**
+ * Force a check now and return the fresh verdict (null when this process is
+ * not an identifiable native run). Used by the native app's periodic
+ * status-file writer and the control channel's `update.check`, which both want
+ * the answer rather than the footer's stale-while-revalidate view.
+ */
+export async function refreshNativeUpdateInfo(): Promise<AppUpdateInfo | null> {
+  if (!isActive()) return null
+  await refresh()
+  return cache?.info ?? null
+}
+
 function refresh(): Promise<void> {
   inFlight ??= runCheck().finally(() => {
     inFlight = null
@@ -89,17 +129,9 @@ function refresh(): Promise<void> {
 }
 
 async function runCheck(): Promise<void> {
-  const origin = env.NATIVE_UPDATE_ORIGIN ?? DEFAULT_ORIGIN
   try {
-    const response = await fetch(new URL('/api/server-runtime/releases', origin), {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-    })
-    if (!response.ok) throw new Error(`manifest request failed: ${response.status}`)
-    const body = await response.json() as {
-      current?: { fingerprint?: string; binaries?: Record<string, { url?: string }> } | null
-    }
-    const current = body.current?.fingerprint ?? null
+    const build = await fetchCurrentServerBuild()
+    const current = build?.fingerprint ?? null
     cache = {
       info: {
         status: current == null
@@ -109,7 +141,7 @@ async function runCheck(): Promise<void> {
         latestShortRevision: shortenRevision(current),
         checkedAt: new Date().toISOString(),
         imageRef: null,
-        downloadUrl: pickDownloadUrl(body.current?.binaries ?? null)
+        downloadUrl: pickDownloadUrl(build?.binaries ?? null)
       },
       checkedAtMs: Date.now(),
       error: false
@@ -139,8 +171,7 @@ async function runCheck(): Promise<void> {
  */
 function pickDownloadUrl(binaries: Record<string, { url?: string }> | null): string | null {
   if (!binaries) return null
-  const key = `${process.platform}-${process.arch}`
-  const url = binaries[key]?.url
+  const url = binaries[nativeUpdatePlatformKey()]?.url
   return typeof url === 'string' ? url : null
 }
 

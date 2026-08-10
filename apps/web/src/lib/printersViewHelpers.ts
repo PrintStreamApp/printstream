@@ -1062,15 +1062,6 @@ export function parseStoredBoolean(raw: string): boolean | null {
   return null
 }
 
-export function parseStoredOptionalString(raw: string): string | null {
-  const value = raw.trim()
-  return value && value !== 'null' ? value : null
-}
-
-export function serializeStoredOptionalString(value: string | null): string {
-  return value ?? ''
-}
-
 export function parseStoredStringArray(raw: string): string[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown

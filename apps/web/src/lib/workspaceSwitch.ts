@@ -133,9 +133,14 @@ function readPathname(path: string): string {
 }
 
 function pathIsAvailable(path: string, input: WorkspaceLandingPathInput): boolean {
+  // Any printers-page address is available exactly when the printers page is —
+  // including a saved view's `/printers/views/<id>` landing target. Whether the
+  // view still exists is not knowable here (the list loads per workspace); the
+  // printers page itself degrades a stale view address to its bare route.
+  if (path === '/printers' || path.startsWith('/printers/')) {
+    return input.canViewPrinters
+  }
   switch (path) {
-    case '/printers':
-      return input.canViewPrinters
     case '/library':
       return input.canViewLibrary
     case '/jobs':

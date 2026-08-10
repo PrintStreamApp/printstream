@@ -181,25 +181,30 @@ test('no compatible machine profile resolves to no selection rather than an inco
 
 // ---- plate ----------------------------------------------------------------------------------
 
-test("the project's own plate seeds, and the printer's loaded plate only fills a project that has none", () => {
+test("a picked printer's plate outranks the project's; a model-only target keeps the project's (issue #10)", () => {
   const loaded = printer({ currentPlateType: 'High Temp Plate' })
-  const withProjectPlate = resolveWith(
-    {
-      machineProfiles: [H2D_04],
-      printers: [loaded],
-      bakedIndex: index({ compatiblePrinterModels: ['H2D'], plates: [plate({ plateType: 'cool_plate' })] }) as ThreeMfIndex,
-      ...settled()
-    },
-    { printerId: loaded.id }
-  )
-  assert.equal(withProjectPlate.plateType, 'cool_plate', "an existing project's own plate wins")
+  const args = {
+    machineProfiles: [H2D_04],
+    printers: [loaded],
+    bakedIndex: index({ compatiblePrinterModels: ['H2D'], plates: [plate({ plateType: 'cool_plate' })] }) as ThreeMfIndex,
+    ...settled()
+  }
 
-  const withoutProjectPlate = resolveWith(
-    { machineProfiles: [H2D_04], printers: [loaded], bakedIndex: index({ compatiblePrinterModels: ['H2D'] }), ...settled() },
-    { printerId: loaded.id }
-  )
-  assert.equal(withoutProjectPlate.plateType, 'high_temp_plate', "a new project inherits the printer's loaded plate")
-  assert.equal(withoutProjectPlate.origins.plateType, 'printer')
+  const withPrinter = resolveWith(args, { printerId: loaded.id })
+  assert.equal(withPrinter.plateType, 'high_temp_plate', 'targeting a real printer follows the plate configured on it')
+  assert.equal(withPrinter.origins.plateType, 'printer')
+
+  const modelOnly = resolveWith(args)
+  assert.equal(modelOnly.plateType, 'cool_plate', "no printer picked: the project's own plate seeds")
+  assert.equal(modelOnly.origins.plateType, 'project')
+
+  const bare = printer({ currentPlateType: null })
+  const printerWithoutPlate = resolveWith({ ...args, printers: [bare] }, { printerId: bare.id })
+  assert.equal(printerWithoutPlate.plateType, 'cool_plate', "a printer with no configured plate falls back to the project's")
+
+  const userPick = resolveWith(args, { printerId: loaded.id, plateType: 'cool_plate' })
+  assert.equal(userPick.plateType, 'cool_plate', "an explicit plate pick still beats the printer's")
+  assert.equal(userPick.origins.plateType, 'user')
 })
 
 test('a user plate pick survives a value-form change, because every rung matches by LABEL', () => {

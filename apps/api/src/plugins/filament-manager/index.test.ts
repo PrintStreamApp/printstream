@@ -86,11 +86,12 @@ test('toSpoolDto derives remainPercent, status and printer name', () => {
     loadedPrinterId: 'printer-1',
     loadedAmsId: 0,
     loadedSlotId: 2,
-    loadedPrinter: { name: 'X1C' }
+    loadedPrinter: { name: 'X1C', model: 'X1C' }
   }))
   assert.equal(dto.remainPercent, 50)
   assert.equal(dto.status, 'loaded')
   assert.equal(dto.loadedPrinterName, 'X1C')
+  assert.equal(dto.loadedPrinterModel, 'X1C')
   assert.equal(dto.createdAt, '2026-06-01T00:00:00.000Z')
 })
 

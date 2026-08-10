@@ -17,6 +17,32 @@ import { getNativeUpdateInfo, resetNativeUpdateCheckForTests } from './native-up
 
 interface Captured { url: string; headers: Record<string, string | string[] | undefined> }
 
+/**
+ * A schema-valid manifest around the fields a test cares about. The client
+ * parses with `serverReleaseManifestSchema`, so a fixture missing envelope
+ * fields would silently read as `unknown` and pass the wrong way.
+ */
+function manifest(
+  current: { fingerprint: string; binaries?: Record<string, { url: string; sizeBytes?: number }> } | null
+): unknown {
+  return {
+    schemaVersion: 1,
+    generatedAt: '2026-08-09T00:00:00.000Z',
+    current: current
+      ? {
+          fingerprint: current.fingerprint,
+          releasedAt: '2026-08-09T00:00:00.000Z',
+          binaries: Object.fromEntries(
+            Object.entries(current.binaries ?? {}).map(([platform, binary]) => [
+              platform,
+              { url: binary.url, sizeBytes: binary.sizeBytes ?? 100 }
+            ])
+          )
+        }
+      : null
+  }
+}
+
 async function withManifest(
   body: unknown,
   run: (captured: Captured[]) => Promise<void>
@@ -55,7 +81,7 @@ function asNative(fingerprint: string | null): void {
 }
 
 test('a non-native build never asks at all', async () => {
-  await withManifest({ current: { fingerprint: 'newbuild' } }, async (captured) => {
+  await withManifest(manifest({ fingerprint: 'newbuild' }), async (captured) => {
     resetNativeUpdateCheckForTests()
     env.PRINTSTREAM_NATIVE = false
     env.PRINTSTREAM_SERVER_FINGERPRINT = 'abc123'
@@ -69,7 +95,7 @@ test('a non-native build never asks at all', async () => {
 test('a native build with no baked fingerprint never asks', async () => {
   // A locally-built binary. Telling a developer their own build is stale is
   // worse than saying nothing, and asking would be a request with no purpose.
-  await withManifest({ current: { fingerprint: 'newbuild' } }, async (captured) => {
+  await withManifest(manifest({ fingerprint: 'newbuild' }), async (captured) => {
     asNative(null)
     assert.equal(getNativeUpdateInfo(), null)
     await new Promise((resolve) => setTimeout(resolve, 50))
@@ -78,7 +104,7 @@ test('a native build with no baked fingerprint never asks', async () => {
 })
 
 test('the request is anonymous — no licence key, no installation id', async () => {
-  await withManifest({ current: { fingerprint: 'newbuild', binaries: {} } }, async (captured) => {
+  await withManifest(manifest({ fingerprint: 'newbuild' }), async (captured) => {
     asNative('oldbuild')
     getNativeUpdateInfo()
     await settle()
@@ -92,14 +118,14 @@ test('the request is anonymous — no licence key, no installation id', async ()
 })
 
 test('a differing fingerprint reports an update, matching reports current', async () => {
-  await withManifest({ current: { fingerprint: 'newbuild', binaries: {} } }, async () => {
+  await withManifest(manifest({ fingerprint: 'newbuild' }), async () => {
     asNative('oldbuild')
     getNativeUpdateInfo()
     await settle()
     assert.equal(getNativeUpdateInfo()?.status, 'updateAvailable')
   })
 
-  await withManifest({ current: { fingerprint: 'samebuild', binaries: {} } }, async () => {
+  await withManifest(manifest({ fingerprint: 'samebuild' }), async () => {
     asNative('samebuild')
     getNativeUpdateInfo()
     await settle()
@@ -110,7 +136,7 @@ test('a differing fingerprint reports an update, matching reports current', asyn
 test('a manifest offering nothing is not reported as an update', async () => {
   // A live server with no promoted native build answers `current: null`. Reading
   // that as "you are out of date" would nag every install forever.
-  await withManifest({ current: null }, async () => {
+  await withManifest(manifest(null), async () => {
     asNative('oldbuild')
     getNativeUpdateInfo()
     await settle()
@@ -132,12 +158,10 @@ test('an unreachable server degrades to unknown rather than throwing', async () 
 
 test('only the binary for THIS platform is offered', async () => {
   const key = `${process.platform}-${process.arch}`
-  await withManifest({
-    current: {
-      fingerprint: 'newbuild',
-      binaries: { [key]: { url: 'https://x/mine' }, 'some-other-platform': { url: 'https://x/theirs' } }
-    }
-  }, async () => {
+  await withManifest(manifest({
+    fingerprint: 'newbuild',
+    binaries: { [key]: { url: 'https://x/mine' }, 'some-other-platform': { url: 'https://x/theirs' } }
+  }), async () => {
     asNative('oldbuild')
     getNativeUpdateInfo()
     await settle()
@@ -145,9 +169,10 @@ test('only the binary for THIS platform is offered', async () => {
   })
 
   // Handing someone the wrong platform's binary is worse than no link at all.
-  await withManifest({
-    current: { fingerprint: 'newbuild', binaries: { 'some-other-platform': { url: 'https://x/theirs' } } }
-  }, async () => {
+  await withManifest(manifest({
+    fingerprint: 'newbuild',
+    binaries: { 'some-other-platform': { url: 'https://x/theirs' } }
+  }), async () => {
     asNative('oldbuild')
     getNativeUpdateInfo()
     await settle()

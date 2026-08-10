@@ -575,3 +575,237 @@ test('names the missing sentinel keys when it completes a partial config', async
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+// The CLI cannot export with HALF a machine/process pair: a machine preset with no process makes
+// it test the (unloaded) project's `print_compatible_printers` — always empty here since
+// `--export-settings` loads no 3MF — and exit 239 "process not compatible with printer"; a process
+// with no machine fails the same check from the other side. The pairing tests below pin the repair:
+// derive the missing half from the embedded settings' own lineage, or drop the half that was
+// loaded. (The production shape: an editor slice whose material change stripped the filament
+// physics, targeting a CUSTOM machine with the project's own process — the custom machine survives
+// the API's builtin-drop retry, so without the pairing the job can never succeed.)
+
+test('settings export derives a process from the embedded lineage when the args carry only a machine', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    await writeFile(
+      fakeCli,
+      '#!/bin/sh\necho "$@" > "$(dirname "$0")/cli-args.txt"\nfor last; do :; done\nprintf %s \'{"printable_area":["0x0"],"layer_height":"0.2","nozzle_temperature":["220"]}\' > "$last"\n',
+      { mode: 0o755 }
+    )
+    const profileDir = path.join(dir, 'profiles')
+    await mkdir(path.join(profileDir, 'process_full'), { recursive: true })
+    await mkdir(path.join(profileDir, 'filament_full'), { recursive: true })
+    // The process the project's own preset inherits from — compatible with the machine's base.
+    await writeFile(
+      path.join(profileDir, 'process_full', '0.28mm Extra Draft @BBL P1P.json'),
+      JSON.stringify({ type: 'process', name: '0.28mm Extra Draft @BBL P1P', from: 'system', compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] })
+    )
+    // The machine's default process also exists — the LINEAGE candidate must win over it.
+    await writeFile(
+      path.join(profileDir, 'process_full', '0.20mm Standard @BBL P1P.json'),
+      JSON.stringify({ type: 'process', name: '0.20mm Standard @BBL P1P', from: 'system', compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] })
+    )
+    await writeFile(path.join(profileDir, 'filament_full', 'Generic PLA.json'), '{"type":"filament"}')
+    // A CUSTOM machine as the slicer materializes one: User + inherits naming the system base.
+    const machinePath = path.join(dir, 'custom-machine.json')
+    await writeFile(machinePath, JSON.stringify({
+      type: 'machine',
+      name: 'Bambu Lab P1P 0.4 nozzle - No Aux Fan',
+      from: 'User',
+      inherits: 'Bambu Lab P1P 0.4 nozzle',
+      default_print_profile: '0.20mm Standard @BBL P1P'
+    }))
+    // Partial embedded settings, as the material-change drop leaves them: process block intact,
+    // filament physics (the nozzle_temperature sentinel) gone, preset names naming a custom
+    // process that resolves nowhere — only its inherits_group lineage does.
+    const input = await writeThreeMf(dir, 'mike.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': JSON.stringify({
+        printable_area: ['0x0'],
+        layer_height: '0.28',
+        print_settings_id: '0.28mm Draft Mod - Game case',
+        printer_settings_id: 'Bambu Lab P1P 0.4 nozzle - No Aux Fan',
+        inherits_group: ['0.28mm Extra Draft @BBL P1P', 'Generic PLA @BBL P1P', 'Bambu Lab P1P 0.4 nozzle'],
+        filament_settings_id: ['Elegoo Pla - Black no aux'],
+        filament_type: ['PLA'],
+        filament_colour: ['#161616']
+      })
+    })
+    const logged: string[] = []
+    const result = await ensureEmbeddedProjectSettings({
+      inputPath: input,
+      cliPath: fakeCli,
+      appDir: null,
+      profileArgs: ['--load-settings', machinePath],
+      profileDir,
+      workDir: dir,
+      env: {},
+      log: (message) => logged.push(message)
+    })
+    assert.notEqual(result, input)
+    const cliArgs = await readFile(path.join(dir, 'cli-args.txt'), 'utf8')
+    // The machine the user picked is still loaded…
+    assert.match(cliArgs, /custom-machine\.json/)
+    // …now paired with the process the project's lineage names, not the machine's generic default.
+    assert.match(cliArgs, /0\.28mm Extra Draft @BBL P1P\.json/)
+    assert.doesNotMatch(cliArgs, /0\.20mm Standard @BBL P1P\.json/)
+    assert.equal(logged.some((line) => /pairing the machine with process/i.test(line)), true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('settings export drops the machine when no compatible process can be derived', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    await writeFile(
+      fakeCli,
+      '#!/bin/sh\necho "$@" > "$(dirname "$0")/cli-args.txt"\nfor last; do :; done\nprintf %s \'{"printable_area":["0x0"],"layer_height":"0.2","nozzle_temperature":["220"]}\' > "$last"\n',
+      { mode: 0o755 }
+    )
+    const profileDir = path.join(dir, 'profiles')
+    await mkdir(path.join(profileDir, 'process_full'), { recursive: true })
+    await mkdir(path.join(profileDir, 'filament_full'), { recursive: true })
+    // The only resolvable process targets a DIFFERENT machine — loading it beside this machine
+    // would 239 just like loading no process at all, so the machine has to go instead.
+    await writeFile(
+      path.join(profileDir, 'process_full', '0.20mm Standard @BBL P1P.json'),
+      JSON.stringify({ type: 'process', name: '0.20mm Standard @BBL P1P', from: 'system', compatible_printers: ['Bambu Lab X1 Carbon 0.4 nozzle'] })
+    )
+    await writeFile(path.join(profileDir, 'filament_full', 'Generic PLA.json'), '{"type":"filament"}')
+    const machinePath = path.join(dir, 'custom-machine.json')
+    await writeFile(machinePath, JSON.stringify({
+      type: 'machine',
+      name: 'Bambu Lab P1P 0.4 nozzle - No Aux Fan',
+      from: 'User',
+      inherits: 'Bambu Lab P1P 0.4 nozzle',
+      default_print_profile: '0.20mm Standard @BBL P1P'
+    }))
+    const input = await writeThreeMf(dir, 'partial.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': JSON.stringify({
+        printable_area: ['0x0'],
+        layer_height: '0.28',
+        filament_settings_id: ['Elegoo Pla - Black no aux'],
+        filament_type: ['PLA'],
+        filament_colour: ['#161616']
+      })
+    })
+    const logged: string[] = []
+    const result = await ensureEmbeddedProjectSettings({
+      inputPath: input,
+      cliPath: fakeCli,
+      appDir: null,
+      profileArgs: ['--load-settings', machinePath],
+      profileDir,
+      workDir: dir,
+      env: {},
+      log: (message) => logged.push(message)
+    })
+    assert.notEqual(result, input)
+    const cliArgs = await readFile(path.join(dir, 'cli-args.txt'), 'utf8')
+    // The unpaired machine is gone; the filament domain still gets covered so the merge is complete.
+    assert.doesNotMatch(cliArgs, /--load-settings/)
+    assert.doesNotMatch(cliArgs, /custom-machine\.json/)
+    assert.match(cliArgs, /--load-filaments/)
+    assert.equal(logged.some((line) => /without the machine preset/i.test(line)), true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('settings export derives a machine from the process compatibility list when the args carry only a process', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    await writeFile(
+      fakeCli,
+      '#!/bin/sh\necho "$@" > "$(dirname "$0")/cli-args.txt"\nfor last; do :; done\nprintf %s \'{"printable_area":["0x0"],"layer_height":"0.2","nozzle_temperature":["220"]}\' > "$last"\n',
+      { mode: 0o755 }
+    )
+    const profileDir = path.join(dir, 'profiles')
+    await mkdir(path.join(profileDir, 'machine_full'), { recursive: true })
+    await mkdir(path.join(profileDir, 'filament_full'), { recursive: true })
+    await writeFile(
+      path.join(profileDir, 'machine_full', 'Bambu Lab P1P 0.4 nozzle.json'),
+      JSON.stringify({ type: 'machine', name: 'Bambu Lab P1P 0.4 nozzle', from: 'system' })
+    )
+    await writeFile(path.join(profileDir, 'filament_full', 'Generic PLA.json'), '{"type":"filament"}')
+    // A custom process (the API retry dropped its builtin machine companion, keeping this).
+    const processPath = path.join(dir, 'custom-process.json')
+    await writeFile(processPath, JSON.stringify({
+      type: 'process',
+      name: '0.28mm Draft Mod - Game case',
+      from: 'User',
+      inherits: '0.28mm Extra Draft @BBL P1P',
+      compatible_printers: ['Bambu Lab P1P 0.4 nozzle']
+    }))
+    const input = await writeThreeMf(dir, 'partial.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': JSON.stringify({
+        printable_area: ['0x0'],
+        layer_height: '0.28',
+        printer_settings_id: 'Bambu Lab P1P 0.4 nozzle - No Aux Fan',
+        filament_settings_id: ['Elegoo Pla - Black no aux'],
+        filament_type: ['PLA'],
+        filament_colour: ['#161616']
+      })
+    })
+    const result = await ensureEmbeddedProjectSettings({
+      inputPath: input,
+      cliPath: fakeCli,
+      appDir: null,
+      profileArgs: ['--load-settings', processPath],
+      profileDir,
+      workDir: dir,
+      env: {},
+      log: () => {}
+    })
+    assert.notEqual(result, input)
+    const cliArgs = await readFile(path.join(dir, 'cli-args.txt'), 'utf8')
+    assert.match(cliArgs, /custom-process\.json/)
+    assert.match(cliArgs, /Bambu Lab P1P 0\.4 nozzle\.json/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('settings export leaves a complete machine + process pair untouched', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'ps-fallback-'))
+  try {
+    const fakeCli = path.join(dir, 'fake-cli.sh')
+    await writeFile(
+      fakeCli,
+      '#!/bin/sh\necho "$@" > "$(dirname "$0")/cli-args.txt"\nfor last; do :; done\nprintf %s \'{"printable_area":["0x0"],"layer_height":"0.2","nozzle_temperature":["220"]}\' > "$last"\n',
+      { mode: 0o755 }
+    )
+    const profileDir = path.join(dir, 'profiles')
+    await mkdir(path.join(profileDir, 'filament_full'), { recursive: true })
+    await writeFile(path.join(profileDir, 'filament_full', 'Generic PLA.json'), '{"type":"filament"}')
+    const machinePath = path.join(dir, 'machine.json')
+    const processPath = path.join(dir, 'process.json')
+    await writeFile(machinePath, JSON.stringify({ type: 'machine', name: 'Bambu Lab P1P 0.4 nozzle', from: 'system' }))
+    await writeFile(processPath, JSON.stringify({ type: 'process', name: '0.20mm Standard @BBL P1P', from: 'system', compatible_printers: ['Bambu Lab P1P 0.4 nozzle'] }))
+    const input = await writeThreeMf(dir, 'partial.3mf', {
+      '3D/3dmodel.model': '<model/>',
+      'Metadata/project_settings.config': '{"printable_area":["0x0"],"filament_colour":["#001489"]}'
+    })
+    await ensureEmbeddedProjectSettings({
+      inputPath: input,
+      cliPath: fakeCli,
+      appDir: null,
+      profileArgs: ['--load-settings', `${machinePath};${processPath}`],
+      profileDir,
+      workDir: dir,
+      env: {},
+      log: () => {}
+    })
+    const cliArgs = await readFile(path.join(dir, 'cli-args.txt'), 'utf8')
+    assert.match(cliArgs, new RegExp(`--load-settings ${machinePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};${processPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

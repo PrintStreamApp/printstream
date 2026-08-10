@@ -45,6 +45,23 @@ export { installTrayAutostart, uninstallTrayAutostart } from './tray/autostart.j
 export { ensureFfmpeg } from './ffmpeg.js'
 export type { EnsureFfmpegOptions, FfmpegStatus } from './ffmpeg.js'
 
+// In-place self-update mechanics (download/verify, executable swap, crash-loop
+// rollback), shared by the bridge's standalone driver and the server app.
+export {
+  clearStaleHoldBack,
+  confirmSelfUpdateHealthy,
+  downloadVerifiedExecutable,
+  noteBootAttemptAndMaybeRollback,
+  readHeldBackFingerprint,
+  readSelfUpdateState,
+  rollbackSelfUpdate,
+  sha256Hex,
+  swapExecutableInPlace,
+  verifyDetachedSha256Signature,
+  writeSelfUpdateState
+} from './self-update.js'
+export type { BootAttemptOutcome, SelfUpdateStateFile } from './self-update.js'
+
 // Windows UAC self-elevation, for the guided installer / uninstaller.
 export {
   clearOwnMarkOfTheWeb,

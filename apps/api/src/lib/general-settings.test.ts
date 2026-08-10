@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DEFAULT_APP_LANDING_PAGE } from '@printstream/shared'
-import { getGeneralSettings, updateGeneralSettings } from './general-settings.js'
+import { clearPrintersDefaultViewIdIfMatches, getGeneralSettings, updateGeneralSettings } from './general-settings.js'
 import { listAllWorkspaceSupportPermissions } from './support-access.js'
 import { withWorkspaceRequestContext } from './workspace-context.js'
 
@@ -20,6 +20,7 @@ test('getGeneralSettings defaults unconstrained width off when unset', async () 
     unconstrainedWidth: false,
     slicerDeveloperMode: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
+    printersDefaultViewId: null,
     navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
@@ -47,6 +48,7 @@ test('getGeneralSettings reads a persisted unconstrained width flag', async () =
     unconstrainedWidth: true,
     slicerDeveloperMode: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
+    printersDefaultViewId: null,
     navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
@@ -73,6 +75,7 @@ test('updateGeneralSettings upserts the shared unconstrained width flag', async 
     unconstrainedWidth: true,
     slicerDeveloperMode: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
+    printersDefaultViewId: null,
     navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: true,
@@ -115,6 +118,7 @@ test('updateGeneralSettings writes support access policy in workspace scope with
     unconstrainedWidth: true,
     slicerDeveloperMode: false,
     landingPage: DEFAULT_APP_LANDING_PAGE,
+    printersDefaultViewId: null,
     navTabOrder: [],
     quickStartDismissed: false,
     supportAccessEnabled: false,
@@ -187,6 +191,68 @@ test('getGeneralSettings reads a persisted slicer developer mode flag', async ()
   })
 
   assert.equal(settings.slicerDeveloperMode, true)
+})
+
+test('getGeneralSettings reads a persisted default printer view, treating the empty clear-marker as none', async () => {
+  const readValue = async (stored: string | null) => (await getGeneralSettings({
+    async findUnique(args) {
+      if (args.where.key.endsWith('app:general:printersDefaultViewId') && stored !== null) {
+        return { value: stored }
+      }
+      return null
+    },
+    async upsert() {
+      throw new Error('upsert should not be called')
+    }
+  })).printersDefaultViewId
+
+  assert.equal(await readValue('clviewid1234'), 'clviewid1234')
+  // '' is how a cleared default is stored (the store interface cannot delete).
+  assert.equal(await readValue(''), null)
+  assert.equal(await readValue(null), null)
+})
+
+test('updateGeneralSettings upserts the default printer view and clears it as the empty marker', async () => {
+  const upserts: Array<{ key: string; value: string }> = []
+  const store = {
+    async findUnique() {
+      return null
+    },
+    async upsert(args: { where: { key: string }; update: { value: string } }) {
+      upserts.push({ key: args.where.key, value: args.update.value })
+      return {}
+    }
+  }
+
+  const set = await updateGeneralSettings({ printersDefaultViewId: 'clviewid1234' }, store)
+  assert.equal(set.printersDefaultViewId, 'clviewid1234')
+  const cleared = await updateGeneralSettings({ printersDefaultViewId: null }, store)
+  assert.equal(cleared.printersDefaultViewId, null)
+
+  assert.equal(upserts.length, 2)
+  assert.ok(upserts[0]?.key.endsWith('app:general:printersDefaultViewId'))
+  assert.equal(upserts[0]?.value, 'clviewid1234')
+  assert.equal(upserts[1]?.value, '')
+})
+
+test('clearPrintersDefaultViewIdIfMatches clears only a matching stored default', async () => {
+  const run = async (stored: string | null, deletedViewId: string) => {
+    const upserts: Array<{ value: string }> = []
+    await clearPrintersDefaultViewIdIfMatches(deletedViewId, {
+      async findUnique() {
+        return stored === null ? null : { value: stored }
+      },
+      async upsert(args) {
+        upserts.push({ value: args.update.value })
+        return {}
+      }
+    })
+    return upserts
+  }
+
+  assert.deepEqual(await run('clviewid1234', 'clviewid1234'), [{ value: '' }])
+  assert.deepEqual(await run('clotherview', 'clviewid1234'), [])
+  assert.deepEqual(await run(null, 'clviewid1234'), [])
 })
 
 test('getGeneralSettings reads a persisted quick start dismissal', async () => {

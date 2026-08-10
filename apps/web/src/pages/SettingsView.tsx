@@ -21,7 +21,9 @@ import { NavTabOrderEditor } from '../components/settings/NavTabOrderEditor'
 import { PluginManagerSection } from '../components/PluginManagerSection'
 import { apiFetch } from '../lib/apiClient'
 import { authQueryKeys, resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
-import { CORE_LANDING_PAGE_OPTIONS, type LandingPageOption } from '../lib/landingPageOptions'
+import { CORE_LANDING_PAGE_OPTIONS, withPrinterViewLandingPageOptions, type LandingPageOption } from '../lib/landingPageOptions'
+import { isPrinterViewPath } from '../lib/printerViewRoutes'
+import { usePrinterViewsQuery } from '../lib/printerViewsQuery'
 import { DeviceOverrideNotice, GeneralSettingCard, GeneralSettingSelectRow } from '../components/settings/GeneralSettingControls'
 import { ThemeSettingCard } from '../components/settings/ThemeSettingCard'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
@@ -164,9 +166,17 @@ export function SettingsView({
     : deviceUnconstrainedWidthOverride
       ? 'full-width'
       : 'centered'
+  // Saved printer views are offered as landing targets alongside the core
+  // pages. Fetched only while the General section is open — the rest of the
+  // settings shell has no use for the list.
+  const printerViewsQuery = usePrinterViewsQuery(visibleSubview === 'general' && hasWorkspaceContext)
+  const landingPageOptionsWithViews = React.useMemo(
+    () => withPrinterViewLandingPageOptions(landingPageOptions, printerViewsQuery.data?.views ?? []),
+    [landingPageOptions, printerViewsQuery.data]
+  )
   const resolvedLandingPageOptions = React.useMemo(
-    () => ensureLandingPageOptions(landingPageOptions, [sharedLandingPage, deviceLandingPageOverride]),
-    [deviceLandingPageOverride, landingPageOptions, sharedLandingPage]
+    () => ensureLandingPageOptions(landingPageOptionsWithViews, [sharedLandingPage, deviceLandingPageOverride]),
+    [deviceLandingPageOverride, landingPageOptionsWithViews, sharedLandingPage]
   )
   return (
     <Stack spacing={2}>
@@ -300,7 +310,7 @@ export function SettingsView({
           {landingPageOptions.length > 0 && (
           <GeneralSettingCard
             title="Default page"
-            description="Choose which page opens first, including enabled plugin pages."
+            description="Choose which page opens first, including enabled plugin pages and saved printer views."
             resetDisabled={deviceLandingPageOverride == null && !(canManageSettings && sharedLandingPage !== DEFAULT_APP_LANDING_PAGE)}
             onReset={() => {
               if (canManageSettings) onSetSharedLandingPage(DEFAULT_APP_LANDING_PAGE)
@@ -706,6 +716,9 @@ function ensureLandingPageOptions(
 }
 
 function formatLandingPageLabel(value: string): string {
+  // A stored view address whose view has not loaded (or was deleted): the raw
+  // path would render as a meaningless id, so name the kind instead.
+  if (isPrinterViewPath(value)) return 'Printers view'
   return value
     .replace(/^\//, '')
     .split('/')

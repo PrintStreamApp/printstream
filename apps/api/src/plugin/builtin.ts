@@ -104,6 +104,11 @@ export async function registerBuiltinPlugins(): Promise<void> {
     workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(firmwareUpdatesPlugin, {
+    // On by default on every deployment: firmware awareness is expected core
+    // printer functionality, and its UI is inert until an update actually
+    // exists. Installs whose operator explicitly disabled it keep that choice
+    // (the persisted _enabled row wins over this default).
+    defaultEnabled: true,
     runtimeSurfaces: ['workspace'],
     managerSurfaces: ['platform', 'workspace'],
     workspaceAccess: 'controlled'

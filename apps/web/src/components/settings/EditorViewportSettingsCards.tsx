@@ -14,40 +14,14 @@
  * than the Settings page, because that is where these are used — but the workspace tier is NOT
  * editor-only state, which is why they live in core settings components.
  */
-import { extractErrorMessage, type EditorSidebarSideSetting, type GeneralSettings, type UpdateGeneralSettingsInput } from '@printstream/shared'
+import type { EditorSidebarSideSetting } from '@printstream/shared'
 import { Alert, Option, Select } from '@mui/joy'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useAuthBootstrapQuery } from '../../lib/authQuery'
-import { apiFetch } from '../../lib/apiClient'
 import { useShowBedModelOverride, useSidebarSideOverride, useViewportSettingsDeviceOnly } from '../../lib/editorViewportSettings'
 import { DeviceOverrideNotice, GeneralSettingCard, GeneralSettingSelectRow } from './GeneralSettingControls'
+import { useGeneralSettingsEditor } from './useGeneralSettingsEditor'
 
 /** `follow-default` is the absence of a device override, not a third stored value. */
 type DeviceChoice<T extends string> = 'follow-default' | T
-
-/** Shared plumbing both cards need: the settings cache, the save mutation, and edit permission. */
-function useGeneralSettingsEditor() {
-  const queryClient = useQueryClient()
-  const canManageSettings = useAuthBootstrapQuery().data?.capabilities?.canManageSettings ?? false
-  const query = useQuery({
-    queryKey: ['general-settings'],
-    queryFn: ({ signal }) => apiFetch<GeneralSettings>('/api/settings', { signal })
-  })
-  const mutation = useMutation({
-    mutationFn: (input: UpdateGeneralSettingsInput) =>
-      apiFetch<GeneralSettings>('/api/settings', { method: 'PUT', body: input }),
-    onSuccess: (data) => {
-      // Keep the app-wide general-settings cache authoritative, matching App.tsx.
-      queryClient.setQueryData(['general-settings'], data)
-    }
-  })
-  return {
-    canManageSettings,
-    settings: query.data,
-    save: mutation,
-    saveError: mutation.error ? extractErrorMessage(mutation.error) : null
-  }
-}
 
 export function BuildPlateSettingCard() {
   const { canManageSettings, settings, save, saveError } = useGeneralSettingsEditor()

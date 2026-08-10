@@ -10,9 +10,9 @@ import type { FilamentSpool, FilamentSpoolStatus, FilamentRemainSource } from '@
 /** At or below this remaining percentage a spool is flagged "low". */
 export const LOW_REMAIN_PERCENT = 25
 
-/** Row shape this module needs, plus the optional denormalized printer name. */
+/** Row shape this module needs, plus the optional denormalized printer identity. */
 export type SpoolRowWithPrinter = FilamentSpoolRow & {
-  loadedPrinter?: { name: string } | null
+  loadedPrinter?: { name: string; model: string } | null
 }
 
 export function parseColors(colorsJson: string | null): string[] {
@@ -91,6 +91,7 @@ export function toSpoolDto(row: SpoolRowWithPrinter): FilamentSpool {
     notes: row.notes,
     loadedPrinterId: row.loadedPrinterId,
     loadedPrinterName: row.loadedPrinter?.name ?? null,
+    loadedPrinterModel: row.loadedPrinter?.model ?? null,
     loadedAmsId: row.loadedAmsId,
     loadedSlotId: row.loadedSlotId,
     loadedAt: row.loadedAt ? row.loadedAt.toISOString() : null,

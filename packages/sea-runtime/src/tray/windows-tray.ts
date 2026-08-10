@@ -88,10 +88,10 @@ $stopServiceItem.add_Click({ Start-Process -FilePath $exePath -ArgumentList 'ser
 $restartServiceItem = $menu.Items.Add('Restart service')
 $restartServiceItem.Visible = $false
 $restartServiceItem.add_Click({ Start-Process -FilePath $exePath -ArgumentList 'service','restart' -Verb RunAs })
-$updateItem = $menu.Items.Add('Update bridge')
+$updateItem = $menu.Items.Add('Update ' + $appName)
 $updateItem.Visible = $false
 $updateItem.add_Click({
-  $notify.ShowBalloonTip(4000, $appName, 'Updating the bridge — approve the administrator prompt.', [System.Windows.Forms.ToolTipIcon]::Info)
+  $notify.ShowBalloonTip(4000, $appName, 'Updating ' + $appName + ' — approve the administrator prompt.', [System.Windows.Forms.ToolTipIcon]::Info)
   Start-Process -FilePath $exePath -ArgumentList 'update','apply' -Verb RunAs
 })
 $logsItem = $menu.Items.Add('View logs')

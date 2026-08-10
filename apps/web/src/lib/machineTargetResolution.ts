@@ -275,6 +275,10 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   // 6. Plate. Matched BY LABEL at every rung: the same plate arrives as a code (`high_temp_plate`)
   //    from the project and as a label ("High Temp Plate") from a profile, so comparing values
   //    drops a choice that never actually changed.
+  //    The printer rung outranks the project's on purpose (issue #10): the project's plate is
+  //    whatever the file happened to be saved with, but a real printer's configured plate states
+  //    what is physically on that machine. `plateFromPrinter` is non-null only when a real printer
+  //    is the target, so a model-only target still seeds from the project.
   const plateTypeOptions = resolveCompatiblePlateTypes(file, bakedIndex, selectedMachineProfile, printerCompatibleProcessProfiles)
   const plateFromIntent = matchPlateTypeByLabel(plateTypeOptions, intent.plateType)
   const plateFromProject = matchPlateTypeByLabel(plateTypeOptions, resolveProjectPlateType(file, bakedIndex))
@@ -282,8 +286,8 @@ export function resolveMachineTarget(inputs: MachineTargetInputs, intent: Machin
   let plateType = ''
   let plateOrigin: MachineTargetOrigin = 'unseeded'
   if (plateFromIntent) { plateType = plateFromIntent; plateOrigin = 'user' }
-  else if (plateFromProject) { plateType = plateFromProject; plateOrigin = 'project' }
   else if (plateFromPrinter) { plateType = plateFromPrinter; plateOrigin = 'printer' }
+  else if (plateFromProject) { plateType = plateFromProject; plateOrigin = 'project' }
   else {
     // Never BambuStudio's rank-0 Cool Plate as the blind default — an unrelated profiles recompute
     // must not silently move a project onto a plate nobody chose.

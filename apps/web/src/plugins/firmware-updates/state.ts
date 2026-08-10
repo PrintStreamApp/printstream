@@ -160,6 +160,29 @@ export function getInstallableVersions(update: UpdateReport | undefined): Availa
   return update?.availableVersions.filter((version) => version.fileAvailable) ?? []
 }
 
+export type FirmwareVersionsLoadState = 'ready' | 'loading' | 'unavailable'
+
+/**
+ * What the dialog should render in place of the version picker.
+ *
+ * The installed/latest versions and the downloadable version list arrive in the
+ * same report, but a stale-cache `initialData` render can show installed/latest
+ * while a slow remote refetch (Bambu's wiki + download pages) is still repopulating
+ * the list — leaving the dropdown, changelog, and upload button blank with no hint
+ * that anything is happening. This collapses that into one state:
+ *
+ * - `ready`        — at least one installable version is known; show the picker.
+ * - `loading`      — none known yet and a fetch is in flight; show a spinner.
+ * - `unavailable`  — the fetch has settled and still found nothing installable.
+ */
+export function getFirmwareVersionsLoadState(
+  installableVersions: AvailableVersion[],
+  isFetching: boolean
+): FirmwareVersionsLoadState {
+  if (installableVersions.length > 0) return 'ready'
+  return isFetching ? 'loading' : 'unavailable'
+}
+
 /**
  * Module firmware to show in the dialog, AMS units first (the common reason a
  * user opens this), each group keeping the printer's reported order.

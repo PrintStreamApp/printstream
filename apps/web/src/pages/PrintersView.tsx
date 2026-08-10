@@ -18,6 +18,10 @@ import { apiFetch } from '../lib/apiClient'
 import { prefetchSlicingPresets } from '../lib/slicingPresetsQuery'
 import { refreshSlicingJobs, seedSlicingJob } from '../lib/slicingJobsCache'
 import { useAuthBootstrapQuery } from '../lib/authQuery'
+import { resolveEffectiveDefaultPrinterViewId, useDefaultPrinterViewOverride, useSharedDefaultPrinterViewId } from '../lib/printerViewDefaults'
+import { OVERVIEW_VIEW_ROUTE_ID, printerViewPath, resolveActivePrinterViewId } from '../lib/printerViewRoutes'
+import { printerViewsQueryKey as buildPrinterViewsQueryKey, usePrinterViewsQuery } from '../lib/printerViewsQuery'
+import { workspacePreferenceScopeKeyFromBootstrap } from '../lib/workspacePreferenceScope'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
 import { isUnslicedThreeMfFile } from '../lib/libraryFileTags'
@@ -47,7 +51,7 @@ import { shouldShowNoConnectedPrintersEmptyState } from '../lib/printersEmptySta
 import { usePlateClearingSync } from '../lib/plateClearing'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
 import { buildWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspaceRoute'
-import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, matchesPrinterSearch, filterPrintersForView, sortPrintersForView, groupPrintersForOverview, parseStoredOptionalString, serializeStoredOptionalString, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings, parsePrinterGroupBy, parsePrinterOverviewPageSize, sameStringSet, PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS, type PrinterGroupBy } from '../lib/printersViewHelpers'
+import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, matchesPrinterSearch, filterPrintersForView, sortPrintersForView, groupPrintersForOverview, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings, parsePrinterGroupBy, parsePrinterOverviewPageSize, sameStringSet, PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS, type PrinterGroupBy } from '../lib/printersViewHelpers'
 import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, PRINTER_HISTORY_SORT_DIR_KEY, PRINTER_HISTORY_RESULT_FILTER_KEY, PRINTER_HISTORY_PAGE_SIZE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
 import { PrinterCard } from '../components/printers/PrinterCard'
@@ -98,16 +102,14 @@ export function PrintersView() {
   const { confirm } = usePromptDialog()
   const { demoMode } = useRuntimePolicy()
   const navigate = useNavigate()
-  const { workspaceSlug, printerId: routePrinterId } = useParams<{ workspaceSlug: string; printerId: string }>()
+  const { workspaceSlug, printerId: routePrinterId, viewId: routeViewId } = useParams<{ workspaceSlug: string; printerId?: string; viewId?: string }>()
   const workspacePath = useCallback((path: string) => (
     workspaceSlug ? buildWorkspacePath(workspaceSlug, path) : buildWorkspaceSelectionPath()
   ), [workspaceSlug])
   const authBootstrapQuery = useAuthBootstrapQuery()
-  const workspacePreferenceScopeKey = authBootstrapQuery.data
-    ? authBootstrapQuery.data.workspace?.id ?? 'platform'
-    : 'pending'
+  const workspacePreferenceScopeKey = workspacePreferenceScopeKeyFromBootstrap(authBootstrapQuery.data)
   const printerViewsQueryKey = useMemo(
-    () => ['printer-views', workspacePreferenceScopeKey] as const,
+    () => buildPrinterViewsQueryKey(workspacePreferenceScopeKey),
     [workspacePreferenceScopeKey]
   )
   const singlePrinterView = Boolean(routePrinterId)
@@ -251,13 +253,11 @@ export function PrintersView() {
     parsePrinterViewSort,
     encodePrinterViewSort
   )
-  const [defaultPrinterViewId, setDefaultPrinterViewId] = useLocalStorageState<string | null>(
-    `bambu.printers.defaultViewId.${workspacePreferenceScopeKey}`,
-    null,
-    parseStoredOptionalString,
-    serializeStoredOptionalString
-  )
-  const [activePrinterViewId, setActivePrinterViewId] = useState<string | null>(() => defaultPrinterViewId)
+  // Two-tier default view: this device's override shadows the workspace-shared
+  // default (see lib/printerViewDefaults.ts); both are edited from the View
+  // settings dialog's Default view card.
+  const [defaultViewOverride, setDefaultViewOverride] = useDefaultPrinterViewOverride()
+  const sharedDefaultViewId = useSharedDefaultPrinterViewId()
 
   // Overview directory-toolbar state. Search + page are ephemeral; page size is a
   // local display preference. Sort, grouping, the attribute filters, and the printer
@@ -315,11 +315,7 @@ export function PrintersView() {
     queryFn: ({ signal }) => apiFetch<{ printers: Printer[] }>('/api/printers', { signal }),
     enabled: authBootstrapQuery.isSuccess ? (canViewPrinters && !showNoConnectedBridgesPlaceholder) : false
   })
-  const printerViewsQuery = useQuery({
-    queryKey: printerViewsQueryKey,
-    queryFn: ({ signal }) => apiFetch<{ views: PrinterView[] }>('/api/printer-views', { signal }),
-    enabled: authBootstrapQuery.isSuccess ? (canViewPrinters && !showNoConnectedBridgesPlaceholder) : false
-  })
+  const printerViewsQuery = usePrinterViewsQuery(!showNoConnectedBridgesPlaceholder)
   const bridgesQuery = useQuery({
     queryKey: ['bridges'],
     queryFn: ({ signal }) => apiFetch<BridgeListResponse>('/api/bridges', { signal }),
@@ -372,12 +368,22 @@ export function PrintersView() {
   const printers = printersQuery.data?.printers ?? EMPTY_PRINTERS
   const persistedJobs = jobsQuery.data?.jobs ?? EMPTY_PRINT_JOBS
   const printerViews = printerViewsQuery.data?.views ?? EMPTY_PRINTER_VIEWS
+  const effectiveDefaultViewId = resolveEffectiveDefaultPrinterViewId({
+    override: defaultViewOverride,
+    sharedDefaultViewId,
+    views: printerViews
+  })
+  // The URL owns the active view: a pinned `/printers/views/<id>` address wins,
+  // and the bare `/printers` address applies the effective default view.
+  const activePrinterViewId = resolveActivePrinterViewId({
+    routeViewId,
+    storedDefaultViewId: effectiveDefaultViewId,
+    views: printerViews
+  })
   const activePrinterView = useMemo(
     () => printerViews.find((view) => view.id === activePrinterViewId) ?? null,
     [activePrinterViewId, printerViews]
   )
-  const hasStoredDefaultPrinterView = defaultPrinterViewId != null
-    && printerViews.some((view) => view.id === defaultPrinterViewId)
   // Layout + card content are owned by the View settings dialog (not the toolbar),
   // so they read straight from the active view / local default.
   const effectiveCardsPerRow = activePrinterView?.cardsPerRow ?? cardsPerRow
@@ -416,19 +422,24 @@ export function PrintersView() {
   )
   useEffect(() => {
     if (!printerViewsQuery.data) return
-    if (defaultPrinterViewId && !hasStoredDefaultPrinterView) {
-      setDefaultPrinterViewId(null)
+    // A device override naming a deleted view is cleared back to "follow the
+    // workspace default". The `overview` sentinel is not a view id and stays.
+    if (defaultViewOverride && defaultViewOverride !== OVERVIEW_VIEW_ROUTE_ID && !printerViews.some((view) => view.id === defaultViewOverride)) {
+      setDefaultViewOverride(null)
     }
-    if (activePrinterViewId && !activePrinterView) {
-      setActivePrinterViewId(hasStoredDefaultPrinterView ? defaultPrinterViewId : null)
+    // A pinned address whose view no longer exists (deleted here or elsewhere)
+    // falls back to the bare address, which applies the effective default.
+    if (routeViewId && routeViewId !== OVERVIEW_VIEW_ROUTE_ID && !printerViews.some((view) => view.id === routeViewId)) {
+      navigate(workspacePath('/printers'), { replace: true })
     }
   }, [
-    activePrinterView,
-    activePrinterViewId,
-    defaultPrinterViewId,
-    hasStoredDefaultPrinterView,
+    defaultViewOverride,
+    navigate,
+    printerViews,
     printerViewsQuery.data,
-    setDefaultPrinterViewId
+    routeViewId,
+    setDefaultViewOverride,
+    workspacePath
   ])
 
   const filteredPrinters = useMemo(
@@ -646,8 +657,9 @@ export function PrintersView() {
       }))
       void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
       setViewDraft(null)
-      setActivePrinterViewId(view.id)
       setPrinterViewsDialogOpen(false)
+      // After the cache is seeded, so the new view's address renders it directly.
+      navigate(workspacePath(printerViewPath(view.id)))
     }
   })
   const updatePrinterView = useMutation({
@@ -659,7 +671,6 @@ export function PrintersView() {
         views: (current?.views ?? []).map((entry) => (entry.id === view.id ? view : entry))
       }))
       void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
-      setActivePrinterViewId(view.id)
       setPrinterViewsDialogOpen(false)
     }
   })
@@ -671,8 +682,12 @@ export function PrintersView() {
         views: (current?.views ?? []).filter((entry) => entry.id !== id)
       }))
       void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
-      if (activePrinterViewId === id) setActivePrinterViewId(null)
-      if (defaultPrinterViewId === id) setDefaultPrinterViewId(null)
+      // If the deleted view was pinned in the URL, the stale-address effect
+      // above replaces to the bare route once the cache update lands. The API
+      // clears a workspace default naming the deleted view, so refresh the
+      // general-settings cache too.
+      if (defaultViewOverride === id) setDefaultViewOverride(null)
+      void queryClient.invalidateQueries({ queryKey: ['general-settings'] })
       setPrinterViewsDialogOpen(false)
     }
   })
@@ -691,6 +706,27 @@ export function PrintersView() {
       void queryClient.invalidateQueries({ queryKey: printerViewsQueryKey })
     }
   })
+
+  // Shared by the desktop and mobile view Selects. Switching views is a
+  // navigation — every view has its own address (see lib/printerViewRoutes.ts) —
+  // so bookmarks and back/forward work; the draft clears in the same batch to
+  // avoid one frame of the next view under the previous view's unsaved edits.
+  //
+  // `null` is never a user pick (every option carries a value, Overview
+  // included): it is the base Select clearing a selection whose Option is not
+  // mounted, which happens transiently while the views are still loading and
+  // the active view's Option does not exist yet. Acting on it would "correct"
+  // a freshly opened view address back to the Overview mid-load.
+  const handleViewSelectChange = useCallback((_event: unknown, value: string | null) => {
+    if (value == null) return
+    if (value === NEW_VIEW_OPTION_VALUE) {
+      setPrinterViewsDialogMode('create')
+      setPrinterViewsDialogOpen(true)
+      return
+    }
+    setViewDraft(null)
+    navigate(workspacePath(printerViewPath(value === OVERVIEW_VIEW_OPTION_VALUE ? OVERVIEW_VIEW_ROUTE_ID : value)))
+  }, [navigate, workspacePath])
 
   // Stage a toolbar "view content" change: on a saved view it overlays the draft
   // (committed later via Save changes); on the Overview it writes the local defaults.
@@ -764,9 +800,8 @@ export function PrintersView() {
         ? (deletePrinterView.error as Error).message
         : null
   const printerViewsSubmitting = createPrinterView.isPending || updatePrinterView.isPending || deletePrinterView.isPending
-          const currentViewLabel = activePrinterView?.name ?? OVERVIEW_VIEW_LABEL
-        const isOverviewDefaultView = defaultPrinterViewId == null
-        const isActiveViewDefault = defaultPrinterViewId === (activePrinterView?.id ?? null)
+  const currentViewLabel = activePrinterView?.name ?? OVERVIEW_VIEW_LABEL
+  const isOverviewDefaultView = effectiveDefaultViewId == null
 
   return (
     <Stack spacing={2}>
@@ -831,17 +866,9 @@ export function PrintersView() {
               <Select
                 size="sm"
                 value={activePrinterViewId ?? OVERVIEW_VIEW_OPTION_VALUE}
-                onChange={(_event, value) => {
-                  if (value === NEW_VIEW_OPTION_VALUE) {
-                    setPrinterViewsDialogMode('create')
-                    setPrinterViewsDialogOpen(true)
-                    return
-                  }
-                  setViewDraft(null)
-                  setActivePrinterViewId(value === OVERVIEW_VIEW_OPTION_VALUE ? null : value ?? null)
-                }}
+                onChange={handleViewSelectChange}
                 sx={{ minWidth: 168, flex: '0 0 auto' }}
-                renderValue={() => `View: ${formatPrinterViewSelectValue(activePrinterViewId, printerViews, defaultPrinterViewId, isOverviewDefaultView)}`}
+                renderValue={() => `View: ${formatPrinterViewSelectValue(activePrinterViewId, printerViews, effectiveDefaultViewId, isOverviewDefaultView)}`}
                 slotProps={{ button: { 'aria-label': 'Saved printer views' } }}
               >
                 <Option value={NEW_VIEW_OPTION_VALUE}>
@@ -855,7 +882,7 @@ export function PrintersView() {
                 </Option>
                 {printerViews.map((view) => (
                   <Option key={view.id} value={view.id}>
-                    {defaultPrinterViewId === view.id ? `${view.name} (Default)` : view.name}
+                    {effectiveDefaultViewId === view.id ? `${view.name} (Default)` : view.name}
                   </Option>
                 ))}
               </Select>
@@ -966,17 +993,9 @@ export function PrintersView() {
               <Select
                 size="sm"
                 value={activePrinterViewId ?? OVERVIEW_VIEW_OPTION_VALUE}
-                onChange={(_event, value) => {
-                  if (value === NEW_VIEW_OPTION_VALUE) {
-                    setPrinterViewsDialogMode('create')
-                    setPrinterViewsDialogOpen(true)
-                    return
-                  }
-                  setViewDraft(null)
-                  setActivePrinterViewId(value === OVERVIEW_VIEW_OPTION_VALUE ? null : value ?? null)
-                }}
+                onChange={handleViewSelectChange}
                 sx={{ flex: '1 1 0', minWidth: 0 }}
-                renderValue={() => `View: ${formatPrinterViewSelectValue(activePrinterViewId, printerViews, defaultPrinterViewId, isOverviewDefaultView)}`}
+                renderValue={() => `View: ${formatPrinterViewSelectValue(activePrinterViewId, printerViews, effectiveDefaultViewId, isOverviewDefaultView)}`}
                 slotProps={{ button: { 'aria-label': 'Saved printer views' } }}
               >
                 <Option value={NEW_VIEW_OPTION_VALUE}>
@@ -990,7 +1009,7 @@ export function PrintersView() {
                 </Option>
                 {printerViews.map((view) => (
                   <Option key={view.id} value={view.id}>
-                    {defaultPrinterViewId === view.id ? `${view.name} (Default)` : view.name}
+                    {effectiveDefaultViewId === view.id ? `${view.name} (Default)` : view.name}
                   </Option>
                 ))}
               </Select>
@@ -1514,7 +1533,6 @@ export function PrintersView() {
           mode={printerViewsDialogMode}
           activeView={activePrinterView}
           currentViewLabel={printerViewsDialogMode === 'create' ? 'New view' : currentViewLabel}
-          isCurrentDefaultView={printerViewsDialogMode === 'create' ? false : isActiveViewDefault}
           currentState={
             // View settings edits the saved view's committed content (independent of any
             // pending toolbar draft); New view / Overview capture the current display.
@@ -1564,10 +1582,6 @@ export function PrintersView() {
           onDelete={(id) => {
             const view = printerViews.find((entry) => entry.id === id) ?? null
             if (view) setDeletePrinterViewTarget(view)
-          }}
-          onSetAsDefault={() => {
-            setDefaultPrinterViewId(activePrinterView?.id ?? null)
-            toast.success(`${activePrinterView?.name ?? OVERVIEW_VIEW_LABEL} set as default`)
           }}
         />
       )}

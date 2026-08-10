@@ -310,6 +310,24 @@ const envSchema = z.object({
   // fingerprint baked into its binary. Absent everywhere else, which is what
   // keeps the native update check inert on Docker/dev runs.
   PRINTSTREAM_SERVER_FINGERPRINT: optionalStringEnv(),
+  // The native app's one-click in-place update (native-update-apply.ts). All
+  // published by apps/server/src at boot, absent everywhere else — their
+  // absence is what keeps the apply path refusing on Docker/dev runs:
+  // - PRINTSTREAM_SERVER_EXE: the installed executable to swap. Only ever set
+  //   by a PACKAGED native run, so a dev process can never swap its own node.
+  // - PRINTSTREAM_SERVER_BUILD_REVISION: the git revision baked into the native
+  //   binary; the footer's build identity (app-build-info.ts falls back to it,
+  //   since only Docker images carry app-build-metadata.json).
+  // - PRINTSTREAM_UPDATE_STATE_FILE / PRINTSTREAM_UPDATE_HELD_BACK_FILE: the
+  //   pending-update + hold-back bookkeeping shared with the boot-side backup
+  //   and crash-loop rollback in apps/server/src/run.ts.
+  // - NATIVE_UPDATE_PUBLIC_KEY: test-only trust-root override, undocumented
+  //   like NATIVE_UPDATE_ORIGIN; shipped builds use the baked official key.
+  PRINTSTREAM_SERVER_EXE: optionalStringEnv(),
+  PRINTSTREAM_SERVER_BUILD_REVISION: optionalStringEnv(),
+  PRINTSTREAM_UPDATE_STATE_FILE: optionalStringEnv(),
+  PRINTSTREAM_UPDATE_HELD_BACK_FILE: optionalStringEnv(),
+  NATIVE_UPDATE_PUBLIC_KEY: optionalStringEnv(),
   PRINTSTREAM_BRIDGE_SOURCE_FINGERPRINT: optionalStringEnv(),
   /**
    * Managed-bridge mode. When true, this server provisions and owns a single

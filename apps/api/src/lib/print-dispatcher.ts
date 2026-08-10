@@ -27,9 +27,10 @@ import {
   AMS_LITE_MIXED_TRAY_INDEX_OFFSET,
   bridgeUpdateBlocksPrinting,
   bridgeUpdateStatusSchema,
-  getPrinterControlCapabilities,
   getPrinterPrintStartOptions,
   formatBytes,
+  isPhysicalAmsTrayIndex,
+  printerModelHasDualNozzles,
   trayIndexToAmsSlot,
   VIRTUAL_TRAY_DEPUTY_ID,
   VIRTUAL_TRAY_MAIN_ID,
@@ -798,6 +799,12 @@ export interface ProjectFilePrintCommandInput {
   filamentDynamicsCalibration: boolean
   nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
   timelapse: boolean
+  /**
+   * Caller's AMS preference. Only a baseline: when `amsMapping` names any tray,
+   * the wire `use_ams` is derived from the mapping instead (see
+   * {@link resolveEffectiveUseAms}), so callers that hardcode `true` still
+   * produce correct external-spool prints.
+   */
   useAms: boolean
   amsMapping?: number[] | null
   /**
@@ -835,13 +842,26 @@ function flatAmsMappingEntry(trayIndex: number): number {
 }
 
 /**
- * Whether a stored printer model string names a dual-nozzle machine, for the
- * command builder's `dualNozzles` input. Unknown/unparseable models resolve to
- * single-nozzle, which yields the conservative external-tray encoding.
+ * The wire `use_ams` for a print, mirroring BambuStudio's decision
+ * (`SelectMachineDialog`, SelectMachine.cpp: `_HasAms`/`_HasExt`): any physical
+ * AMS tray in the mapping → true (mixed included); a mapping that targets only
+ * external virtual trays → false; a mapping naming no tray at all (absent, or
+ * every entry pruned to -1) carries no signal, so the caller's flag stands.
+ *
+ * Deriving here — not in each caller — is what keeps every dispatch path
+ * correct at once: the web dialogs hardcode `useAms: true`, and sending that
+ * for an all-external print makes firmware build an AMS mapping table it
+ * cannot satisfy, failing 07FF-8012 at print start when no AMS is attached
+ * (public issue #9, P1S with its AMS disconnected — Bambu Studio itself prints
+ * fine there because it sends `use_ams: false`).
  */
-export function printerModelHasDualNozzles(model: string): boolean {
-  const parsed = printerModelSchema.safeParse(model)
-  return getPrinterControlCapabilities(parsed.success ? parsed.data : 'unknown').dualNozzles
+function resolveEffectiveUseAms(useAms: boolean, amsMapping: number[] | null | undefined): boolean {
+  if (!amsMapping || amsMapping.length === 0) return useAms
+  if (amsMapping.some(isPhysicalAmsTrayIndex)) return true
+  const hasExternalTray = amsMapping.some(
+    (trayIndex) => trayIndex === VIRTUAL_TRAY_MAIN_ID || trayIndex === VIRTUAL_TRAY_DEPUTY_ID
+  )
+  return hasExternalTray ? false : useAms
 }
 
 /**
@@ -883,7 +903,8 @@ function amsMapping2Entry(trayIndex: number, dualNozzles: boolean): { ams_id: nu
  *
  * The AMS mapping is sent in both wire forms: the flat `ams_mapping` array
  * (physical tray indices, virtual trays -1 — see {@link flatAmsMappingEntry})
- * plus the `ams_mapping2` unit/slot pairs ({@link amsMapping2Entry}). This is
+ * plus the `ams_mapping2` unit/slot pairs ({@link amsMapping2Entry}), and it
+ * decides the wire `use_ams` ({@link resolveEffectiveUseAms}). This is
  * the exact shape verified working on H2D/H2C hardware including AMS HT
  * fetches; do not add speculative fields without a wire capture — the
  * `ams_mapping_info`/`nozzles_info` names we once inferred from BambuStudio
@@ -904,7 +925,7 @@ export function buildProjectFilePrintCommand(input: ProjectFilePrintCommandInput
     auto_flow_cali: resolvePrintOnOffAutoModeFlag(input.flowCalibration),
     vibration_cali: input.vibrationCompensation,
     layer_inspect: input.firstLayerInspection,
-    use_ams: input.useAms,
+    use_ams: resolveEffectiveUseAms(input.useAms, input.amsMapping),
     cfg: '0',
     extrude_cali_flag: input.filamentDynamicsCalibration ? 1 : 0,
     extrude_cali_manual_mode: 0,

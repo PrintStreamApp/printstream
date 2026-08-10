@@ -4,6 +4,8 @@
  */
 export * from './auth.js'
 export * from './app-version.js'
+export * from './server-release.js'
+export * from './update-trust.js'
 export * from './license.js'
 export * from './permissions.js'
 export * from './ams-drying.js'

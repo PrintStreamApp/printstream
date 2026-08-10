@@ -920,7 +920,11 @@ export function buildLoadedPrinterMaterialOptions(
       ? identityMaterial ?? fallbackLabel
       : preset.profile ? formatSlicingPresetDisplayName(preset.profile) : identityMaterial ?? fallbackLabel
     const color = normalizeSliceFilamentColor(identity.colorHex ?? spool.color ?? spool.colors[0] ?? null)
-    const sourceLabel = spool.amsId === 254 ? 'Left external spool' : spool.amsId === 255 ? 'Right external spool' : 'External spool'
+    // Same rule as slotLabel below: only a machine with two external spools
+    // (dual-nozzle) distinguishes sides; a lone external spool gets no side.
+    const sourceLabel = source.externalSpools.length > 1
+      ? (spool.amsId === 254 ? 'Left external spool' : spool.amsId === 255 ? 'Right external spool' : 'External spool')
+      : 'External spool'
     options.push({
       id: `loaded:external:${spool.amsId}:${preset.profile?.id ?? fallbackLabel}:${color}`,
       label,

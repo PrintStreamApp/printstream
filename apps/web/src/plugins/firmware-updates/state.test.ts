@@ -9,6 +9,7 @@ import {
   firmwareChipColor,
   formatModuleLabel,
   getDefaultSelectedVersion,
+  getFirmwareVersionsLoadState,
   getInstallableVersions,
   getModuleFirmware,
   getUpdatesStorageKey,
@@ -250,6 +251,21 @@ test('version selection helpers prefer the latest installable version and expose
   assert.equal(isDowngradeSelection(sampleUpdate, '01.09.01.00'), true)
   assert.equal(isDowngradeSelection(sampleUpdate, '01.10.00.00'), false)
   assert.equal(getSelectedReleaseNotes(sampleUpdate, '01.09.01.00'), '# Version 01.09.01.00')
+})
+
+test('firmware versions load state distinguishes ready, loading, and unavailable', () => {
+  const installable = getInstallableVersions(sampleUpdate)
+
+  // A version is downloadable: show the picker regardless of a background refetch.
+  assert.equal(getFirmwareVersionsLoadState(installable, false), 'ready')
+  assert.equal(getFirmwareVersionsLoadState(installable, true), 'ready')
+
+  // None known yet but a fetch is in flight (e.g. stale cache refetching the
+  // slow Bambu version list): show the loading indicator, not a broken-looking dialog.
+  assert.equal(getFirmwareVersionsLoadState([], true), 'loading')
+
+  // Fetch settled with nothing installable: surface a clear "none available" message.
+  assert.equal(getFirmwareVersionsLoadState([], false), 'unavailable')
 })
 
 test('version selection falls back to the first installable version when the latest lacks a file', () => {

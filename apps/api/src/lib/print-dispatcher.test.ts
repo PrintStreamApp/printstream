@@ -499,6 +499,39 @@ test('buildProjectFilePrintCommand encodes the mapping wire forms across the tra
   ])
 })
 
+test('buildProjectFilePrintCommand derives use_ams from the mapping (BambuStudio parity)', () => {
+  // Mirrors SelectMachineDialog: an all-external mapping prints with
+  // use_ams: false — sending true makes firmware build an AMS mapping table it
+  // cannot satisfy and fail 07FF-8012 at print start on AMS-less machines
+  // (public issue #9, P1S with its AMS disconnected). Any physical tray forces
+  // true; a mapping with no trays at all carries no signal, so the caller's
+  // flag passes through.
+  const base = {
+    remoteName: 'a.gcode.3mf', param: 'Metadata/plate_1.gcode', subtaskName: 'a', submissionId: '1',
+    bedLevel: 'off', flowCalibration: 'off', vibrationCompensation: false,
+    firstLayerInspection: false, filamentDynamicsCalibration: false,
+    nozzleOffsetCalibration: 'off', timelapse: false
+  } as const
+
+  // All-external → false, while the mapping arrays still ride along unchanged.
+  const external = buildProjectFilePrintCommand({ ...base, useAms: true, amsMapping: [255], dualNozzles: false })
+  assert.equal(external.use_ams, false)
+  assert.deepEqual(external.ams_mapping, [-1])
+  assert.deepEqual(external.ams_mapping2, [{ ams_id: 255, slot_id: 0 }])
+
+  // Pruned -1 holes beside an external tray still count as all-external.
+  assert.equal(buildProjectFilePrintCommand({ ...base, useAms: true, amsMapping: [-1, 254], dualNozzles: true }).use_ams, false)
+
+  // Any physical tray (mixed, or any band including AMS HT) → true, even if the caller said false.
+  assert.equal(buildProjectFilePrintCommand({ ...base, useAms: true, amsMapping: [0, 255], dualNozzles: false }).use_ams, true)
+  assert.equal(buildProjectFilePrintCommand({ ...base, useAms: false, amsMapping: [128], dualNozzles: true }).use_ams, true)
+
+  // No mapping, or a mapping that names no tray at all → caller's flag.
+  assert.equal(buildProjectFilePrintCommand({ ...base, useAms: true, dualNozzles: false }).use_ams, true)
+  assert.equal(buildProjectFilePrintCommand({ ...base, useAms: false, dualNozzles: false }).use_ams, false)
+  assert.equal(buildProjectFilePrintCommand({ ...base, useAms: true, amsMapping: [-1, -1], dualNozzles: false }).use_ams, true)
+})
+
 test('buildProjectFilePrintCommand omits ams_mapping when empty', () => {
   const withEmpty = buildProjectFilePrintCommand({
     remoteName: 'a.gcode', param: 'a.gcode', subtaskName: 'a', submissionId: '1',

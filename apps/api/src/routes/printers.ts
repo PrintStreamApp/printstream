@@ -47,6 +47,7 @@ import {
   getPrinterChamberTemperatureMax,
   getPauseAvailability,
   getPrinterControlCapabilities,
+  printerModelHasDualNozzles,
   getRetryAmsFilamentChangeAvailability,
   isDirectPrintableFileName,
   getResumeAvailability,
@@ -131,7 +132,6 @@ import { deleteOperationDispatcher } from '../lib/delete-operation-dispatcher.js
 import { printGuards } from '../lib/print-guards.js'
 import {
   buildProjectFilePrintCommand,
-  printerModelHasDualNozzles,
   getRemotePrintTarget,
   getPrintSourceKind,
   normalizePrintStartOptionsForPrinter,

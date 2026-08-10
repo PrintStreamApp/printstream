@@ -560,6 +560,17 @@ model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outpu
   against the slicer's builtin catalog — and the export must always cover the FILAMENT domain
   (falling back to Generic PLA), because a filament-less export omits the per-filament override
   arrays (`filament_retraction_length`, …) and the bare loader segfaults on those alone.
+  A third specific: the export cannot run with HALF a machine/process pair — with no 3MF loaded,
+  a machine preset and no process (the normal state of a project-preset slice that resolved a
+  machine file) exits 239 deterministically, as does the mirror case — so
+  `ensureMachineProcessPairForExport` derives the missing half from the embedded settings'
+  lineage (`print_settings_id` → `inherits_group` → the machine's `default_print_profile`,
+  kept only when its `compatible_printers` accepts the loaded machine's SYSTEM name, mirroring
+  the CLI's own test) or drops the loaded half so a filaments-only export proceeds. The editor
+  makes this path rare in the first place: its SLICE emits the sceneEdit through the same
+  `authorFilamentConfigs` pass as its save (`filamentConfigAuthoring.ts`), so a material change
+  reaches the slicer with the new preset's physics authored in rather than with the dropped
+  arrays that made the config partial.
   When the export itself FAILS (e.g. the CLI's exit 239 "process not compatible with printer"
   from a cross-model machine/process pairing), the guard throws with that reason instead of
   slicing the incomplete config — proceeding is always the deterministic segfault — keeping the

@@ -29,6 +29,7 @@ import {
   type LibrarySortKey,
   type LibrarySortDirection,
   PRINTS_DISPATCH_PERMISSION,
+  printerModelHasDualNozzles,
   printerModelSchema,
   printFromLibrarySchema,
   startLibraryDeleteJobSchema,
@@ -52,7 +53,9 @@ import {
   storeBridgeLibraryFile
 } from '../lib/bridge-library-files.js'
 import {
+  LIBRARY_DERIVED_CHIPS_VERSION,
   parseDerivedChips,
+  serializeDerivedChips,
   warmLibraryFileDerivedChips,
   type DerivedChips
 } from '../lib/library-derived-chips.js'
@@ -73,7 +76,6 @@ import { printerManager } from '../lib/printer-manager.js'
 import { requireWorkspaceOwnedConnectedPrinter } from '../lib/printer-access.js'
 import {
   buildProjectFilePrintCommand,
-  printerModelHasDualNozzles,
   getPrintSourceKind,
   getRemotePrintTarget,
   normalizePrintStartOptionsForPrinter,
@@ -106,7 +108,7 @@ function resolvePrinterFirstLayerInspectionDefault(
 }
 import { printGuards } from '../lib/print-guards.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
-import { broadcastLibraryChanged, broadcastPrintDispatchChanged } from '../lib/ws-resource-events.js'
+import { broadcastLibraryChanged, broadcastLibraryChangedDebounced, broadcastPrintDispatchChanged } from '../lib/ws-resource-events.js'
 import { enqueueLibraryPrint, enqueueLibraryPrintSource } from '../lib/library-printing.js'
 import { deleteOperationDispatcher } from '../lib/delete-operation-dispatcher.js'
 import { startTrackedPrintJob } from '../lib/print-job-recorder.js'
@@ -815,7 +817,7 @@ libraryRouter.post(
       bridgeId,
       hidden
     })
-    response.status(201).json({ file: await toDto(created), unchanged })
+    response.status(201).json({ file: await toDto(created, { persistDerived: true }), unchanged })
   } finally {
     await unlink(request.file.path).catch(() => undefined)
   }
@@ -946,7 +948,7 @@ libraryRouter.post('/uploads/:uploadId/complete', requireRequestPermission(LIBRA
         await writeUploadSession(session)
       }
     })
-    response.status(201).json({ file: await toDto(created.file), unchanged: created.unchanged })
+    response.status(201).json({ file: await toDto(created.file, { persistDerived: true }), unchanged: created.unchanged })
   } finally {
     await deleteUploadSession(uploadId)
   }
@@ -1953,8 +1955,11 @@ async function toDto(row: {
   derivedChipsVersion?: number | null
   printCount?: number | null
   lastPrintedAt?: Date | null
-}, options: { cacheOnly?: boolean; favorite?: boolean } = {}): Promise<LibraryFile> {
+}, options: { cacheOnly?: boolean; favorite?: boolean; persistDerived?: boolean } = {}): Promise<LibraryFile> {
   let chips: DerivedChips = { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [] }
+  // Empty chips are ambiguous on the wire ("not derived yet" vs "derived: nothing there"), and the
+  // web needs the difference to show a processing indicator instead of a silently bare card.
+  let metadataPending = false
   if (row.kind === '3mf' || row.kind === 'gcode') {
     try {
       // List path (`cacheOnly`): read the chips persisted on the row — O(1), no
@@ -1966,18 +1971,45 @@ async function toDto(row: {
         if (cached) {
           chips = cached
         } else {
+          metadataPending = true
           warmLibraryFileDerivedChips(row, {
             deriveChips: async (file) => deriveChips(await readLibraryThreeMfIndex(file)),
             persist: async (fileId, json, version) => {
-              await prisma.libraryFile.update({ where: { id: fileId }, data: { derivedChipsJson: json, derivedChipsVersion: version } })
-            }
+              const updated = await prisma.libraryFile.update({
+                where: { id: fileId },
+                data: { derivedChipsJson: json, derivedChipsVersion: version },
+                select: { workspaceId: true }
+              })
+              // The listing that triggered this warm already went out with `metadataPending`
+              // cards; without a signal the chips appear only on an accidental refetch.
+              // Debounced: a stale listing warms one row apiece (every row after a parser
+              // version bump), and one refetch serves them all.
+              broadcastLibraryChangedDebounced(updated.workspaceId)
+            },
+            log: (message, error) => console.warn(message, error)
           })
         }
       } else {
         chips = deriveChips(await readLibraryThreeMfIndex(row))
+        // Upload paths persist what they just derived (the upload response already paid for the
+        // parse), so the listing that follows serves chips from the row instead of flashing a
+        // processing card and re-deriving. Opt-in: `toVersionDto` also takes this branch with
+        // VERSION rows whose ids must never be written onto `LibraryFile`.
+        if (options.persistDerived && !cached) {
+          await prisma.libraryFile.update({
+            where: { id: row.id },
+            data: { derivedChipsJson: serializeDerivedChips(chips, row.storedPath), derivedChipsVersion: LIBRARY_DERIVED_CHIPS_VERSION }
+          }).catch((error: unknown) => {
+            // The DTO is already correct; losing the cache write only costs a background re-derive.
+            console.warn(`[library] could not persist derived chips for ${row.id}`, error)
+          })
+        }
       }
     } catch {
       chips = { plateCount: 0, compatiblePrinterModels: [], plateTypeChips: [], nozzleSizeChips: [], projectFilamentChips: [] }
+      // An inline derive failure (e.g. the owning bridge is unreachable) leaves the metadata
+      // unresolved, not absent — list-path warms keep retrying, so "pending" stays honest.
+      metadataPending = true
     }
   }
   const { compatiblePrinterModels, plateTypeChips, nozzleSizeChips, projectFilamentChips, plateCount } = chips
@@ -1994,6 +2026,7 @@ async function toDto(row: {
     nozzleSizeChips,
     projectFilamentChips,
     plateCount,
+    ...(metadataPending ? { metadataPending: true } : {}),
     ...(chips.geometryOnly ? { geometryOnly: true } : {}),
     ...(chips.objectExport ? { objectExport: true } : {}),
     ...(chips.needsSettingsRepair ? { needsSettingsRepair: true } : {}),

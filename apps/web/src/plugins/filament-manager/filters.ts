@@ -3,7 +3,7 @@
  * library. Kept out of the view so it stays testable and the components stay
  * focused on rendering.
  */
-import type { FilamentSpool, FilamentSpoolStatus } from '@printstream/shared'
+import { printerModelHasDualNozzles, type FilamentSpool, type FilamentSpoolStatus } from '@printstream/shared'
 import { resolveProjectFilamentColorName } from '../../lib/filamentColor'
 
 export type SpoolSort = 'used' | 'remaining' | 'brand' | 'type' | 'name'
@@ -100,9 +100,14 @@ export function formatGrams(grams: number): string {
 export function formatLoadedLocation(spool: FilamentSpool): string | null {
   if (spool.loadedAmsId == null && !spool.loadedPrinterId) return null
   let slotDesc: string
-  if (spool.loadedAmsId === 255) slotDesc = 'External spool (right)'
-  else if (spool.loadedAmsId === 254) slotDesc = 'External spool (left)'
-  else if (spool.loadedAmsId != null) {
+  if (spool.loadedAmsId === 255 || spool.loadedAmsId === 254) {
+    // Only dual-nozzle machines have two external spools; a side label on a
+    // single-nozzle (or unknown-model) printer would be noise.
+    const side = printerModelHasDualNozzles(spool.loadedPrinterModel ?? '')
+      ? (spool.loadedAmsId === 255 ? ' (right)' : ' (left)')
+      : ''
+    slotDesc = `External spool${side}`
+  } else if (spool.loadedAmsId != null) {
     const unit = String.fromCharCode(65 + spool.loadedAmsId)
     slotDesc = `AMS ${unit}${spool.loadedSlotId != null ? ` slot ${spool.loadedSlotId + 1}` : ''}`
   } else slotDesc = ''

@@ -20,6 +20,7 @@ import {
   serializePrinterViewPlateTypeFilter,
   toPrinterViewDto
 } from '../lib/printer-view-record.js'
+import { clearPrintersDefaultViewIdIfMatches } from '../lib/general-settings.js'
 import { requireRequestWorkspaceId } from '../lib/request-helpers.js'
 import { broadcastPrinterViewsChanged } from '../lib/ws-resource-events.js'
 
@@ -138,6 +139,8 @@ printerViewsRouter.delete('/:id', async (request, response) => {
     }
   })
   await prisma.printerView.delete({ where: { id: existing.id } })
+  // The workspace default-view setting must not keep naming the deleted view.
+  await clearPrintersDefaultViewIdIfMatches(existing.id)
   broadcastPrinterViewsChanged(workspaceId)
   response.status(204).end()
 })

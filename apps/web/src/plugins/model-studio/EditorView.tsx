@@ -4951,6 +4951,26 @@ function EditorView({
     setMaterialSyncToken((token) => token + 1)
   }, [materials])
 
+  // Resolve each slot's preset in the BROWSER and attach it to the edit — the editor authors what
+  // it emits. A slot the "missing material settings" repair already resolved this session wins:
+  // that repair is an undoable edit whose whole content is those configs, so re-resolving here
+  // could quietly emit something other than what the user accepted (and repeats work already done).
+  // Shared by the SAVE and SLICE paths on purpose: a slice's bake takes the same material-change
+  // drop path as a save's (`applyFilamentList`), so a slice that omitted the configs handed the
+  // slicer a project stripped of its filament physics and leaned on the settings-repair export —
+  // which cannot run when the slice loads a machine preset without a process preset (exit 239).
+  const authorFilamentConfigs = useCallback(async (edit: SceneEdit) => attachResolvedFilamentConfigs(
+    applyRepairedFilamentConfigs(edit, stateRef.current?.repairedFilamentConfigs),
+    resolveFilamentConfig,
+    {
+      targetId: sliceConfigRef.current?.selectedSlicerTargetId ?? null,
+      sourceFileId: baseFileId ?? null,
+      profileIdByFilamentId: Object.fromEntries(Object.entries(sliceConfigRef.current?.filamentMaterialOptionIds ?? {}).map(
+        ([filamentId, optionId]) => [filamentId, sliceConfigRef.current?.materialOptions.find((option) => option.id === optionId)?.profileId ?? undefined]
+      ))
+    }
+  ), [resolveFilamentConfig, stateRef, sliceConfigRef, baseFileId])
+
   const {
     savedFile,
     saving,
@@ -4968,21 +4988,7 @@ function EditorView({
     dirtyRef,
     markSaved,
     buildSceneEditOut,
-    // Resolve each slot's preset in the BROWSER at save time — the editor authors what it saves.
-    // A slot the "missing material settings" repair already resolved this session wins: that repair
-    // is an undoable edit whose whole content is those configs, so re-resolving here could quietly
-    // save something other than what the user accepted (and repeats work already done).
-    authorFilamentConfigs: useCallback(async (edit: SceneEdit) => attachResolvedFilamentConfigs(
-      applyRepairedFilamentConfigs(edit, stateRef.current?.repairedFilamentConfigs),
-      resolveFilamentConfig,
-      {
-        targetId: sliceConfigRef.current?.selectedSlicerTargetId ?? null,
-        sourceFileId: baseFileId ?? null,
-        profileIdByFilamentId: Object.fromEntries(Object.entries(sliceConfigRef.current?.filamentMaterialOptionIds ?? {}).map(
-          ([filamentId, optionId]) => [filamentId, sliceConfigRef.current?.materialOptions.find((option) => option.id === optionId)?.profileId ?? undefined]
-        ))
-      }
-    ), [resolveFilamentConfig, sliceConfigRef, baseFileId]),
+    authorFilamentConfigs,
     captureAllPlateThumbnails,
     worldFootprintCenterFor,
     // Only meaningful for a session on the file's HEAD: editing an archived version means the head
@@ -5026,7 +5032,7 @@ function EditorView({
       try {
         await afterNextPaint()
         const thumbnails = await captureAllPlateThumbnails(current)
-        onSlice({ plate, sceneEdit: buildSceneEditOut(current, { thumbnails }) })
+        onSlice({ plate, sceneEdit: await authorFilamentConfigs(buildSceneEditOut(current, { thumbnails })) })
       } catch (error) {
         // Rethrowing here would only become an unhandled rejection: the console sees it but the
         // /api/logs buffer (which captures console.*) does not, and the user is left staring at a
@@ -5036,7 +5042,7 @@ function EditorView({
         toast.error(extractErrorMessage(error, 'Could not prepare the slice.'))
       }
     })()
-  }, [onSlice, captureAllPlateThumbnails, buildSceneEditOut, stateRef])
+  }, [onSlice, captureAllPlateThumbnails, buildSceneEditOut, authorFilamentConfigs, stateRef])
 
   // Once an editor-born project has been saved it is a real library file, so it stops presenting
   // as "New Project" and gains the ordinary Save-version path — without the editor re-mounting.

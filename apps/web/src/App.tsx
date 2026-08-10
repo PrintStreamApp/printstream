@@ -1365,6 +1365,7 @@ export function App() {
                   />
                 ) : null}
                 <Route path="/workspaces/:workspaceSlug/printers" element={renderWorkspaceContextElement(<PrintersView />)} />
+                <Route path="/workspaces/:workspaceSlug/printers/views/:viewId" element={renderWorkspaceContextElement(<PrintersView />)} />
                 <Route path="/workspaces/:workspaceSlug/printers/:printerId" element={renderWorkspaceContextElement(<PrintersView />)} />
                 <Route path="/workspaces/:workspaceSlug/library" element={renderWorkspaceContextElement(<LibraryView />)} />
                 {/* Static `favorites` outranks the `:folderId` route below, giving the favorites view its own bookmarkable URL. */}

@@ -133,6 +133,12 @@ export const filamentSpoolSchema = z.object({
   loadedPrinterId: z.string().nullable(),
   /** Denormalised for display so listings need no extra printer lookup. */
   loadedPrinterName: z.string().nullable(),
+  /**
+   * Loaded printer's model string, denormalised like the name so display code
+   * can derive model capabilities (e.g. whether an external tray needs a
+   * left/right side label; only dual-nozzle machines have two).
+   */
+  loadedPrinterModel: z.string().nullable(),
   loadedAmsId: z.number().nullable(),
   loadedSlotId: z.number().nullable(),
   loadedAt: z.string().nullable(),

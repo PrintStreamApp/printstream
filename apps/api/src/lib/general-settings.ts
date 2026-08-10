@@ -14,6 +14,9 @@ const APP_THEME_KEY = 'app:general:theme'
 const UNCONSTRAINED_WIDTH_KEY = 'app:general:unconstrainedWidth'
 const SLICER_DEVELOPER_MODE_KEY = 'app:general:slicerDeveloperMode'
 const LANDING_PAGE_KEY = 'app:general:landingPage'
+// Value is a PrinterView id; an empty string encodes "no default" (Overview) —
+// the store interface has no delete, so clearing writes ''.
+const PRINTERS_DEFAULT_VIEW_KEY = 'app:general:printersDefaultViewId'
 const NAV_TAB_ORDER_KEY = 'app:general:navTabOrder'
 const QUICK_START_DISMISSED_KEY = 'app:general:quickStartDismissed'
 
@@ -27,11 +30,12 @@ interface GeneralSettingsStore {
 }
 
 export async function getGeneralSettings(store: GeneralSettingsStore = prisma.setting): Promise<GeneralSettings> {
-  const [appThemeRow, unconstrainedWidthRow, slicerDeveloperModeRow, landingPageRow, navTabOrderRow, quickStartDismissedRow, supportAccessEnabledRow, supportAccessPermissionsRow] = await Promise.all([
+  const [appThemeRow, unconstrainedWidthRow, slicerDeveloperModeRow, landingPageRow, printersDefaultViewRow, navTabOrderRow, quickStartDismissedRow, supportAccessEnabledRow, supportAccessPermissionsRow] = await Promise.all([
     store.findUnique({ where: { key: scopeSettingKey(APP_THEME_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(UNCONSTRAINED_WIDTH_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(SLICER_DEVELOPER_MODE_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(LANDING_PAGE_KEY) } }),
+    store.findUnique({ where: { key: scopeSettingKey(PRINTERS_DEFAULT_VIEW_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(NAV_TAB_ORDER_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(QUICK_START_DISMISSED_KEY) } }),
     store.findUnique({ where: { key: scopeSettingKey(SUPPORT_ACCESS_ENABLED_SETTING_KEY) } }),
@@ -43,6 +47,7 @@ export async function getGeneralSettings(store: GeneralSettingsStore = prisma.se
     unconstrainedWidth: unconstrainedWidthRow?.value === 'true',
     slicerDeveloperMode: slicerDeveloperModeRow?.value === 'true',
     landingPage: parseLandingPageSetting(landingPageRow?.value),
+    printersDefaultViewId: printersDefaultViewRow?.value ? printersDefaultViewRow.value : null,
     navTabOrder: parseNavTabOrder(navTabOrderRow?.value),
     quickStartDismissed: quickStartDismissedRow?.value === 'true',
     supportAccessEnabled: supportAccessEnabledRow?.value !== 'false',
@@ -92,6 +97,16 @@ export async function updateGeneralSettings(
     })
   }
 
+  if (input.printersDefaultViewId !== undefined) {
+    const key = scopeSettingKey(PRINTERS_DEFAULT_VIEW_KEY)
+    const value = input.printersDefaultViewId ?? ''
+    await store.upsert({
+      where: { key },
+      create: { key, value },
+      update: { value }
+    })
+  }
+
   if (input.navTabOrder !== undefined) {
     const key = scopeSettingKey(NAV_TAB_ORDER_KEY)
     const value = JSON.stringify(input.navTabOrder)
@@ -132,6 +147,26 @@ export async function updateGeneralSettings(
   return generalSettingsSchema.parse({
     ...current,
     ...input
+  })
+}
+
+/**
+ * Clear the workspace's default printer view when the view it names is deleted,
+ * so the setting never advertises a dangling id. Readers tolerate a stale id
+ * anyway (they fall back to the Overview), so a raced delete is harmless —
+ * this just keeps the stored state honest. Runs in the caller's workspace scope.
+ */
+export async function clearPrintersDefaultViewIdIfMatches(
+  viewId: string,
+  store: GeneralSettingsStore = prisma.setting
+): Promise<void> {
+  const key = scopeSettingKey(PRINTERS_DEFAULT_VIEW_KEY)
+  const row = await store.findUnique({ where: { key } })
+  if (row?.value !== viewId) return
+  await store.upsert({
+    where: { key },
+    create: { key, value: '' },
+    update: { value: '' }
   })
 }
 

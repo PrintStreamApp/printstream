@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { env } from './env.js'
 import {
   EMPTY_APP_VERSION_RESPONSE,
   type AppUpdateInfo,
@@ -66,7 +67,12 @@ export function getAppBuildInfo(): AppBuildInfo {
     revision = readBakedRevision(parsed.revision)
     published = parsed.published === 'true' || parsed.published === true
   } catch {
-    // No metadata file: source/dev run.
+    // No metadata file. The native single-file app has no Docker build ARGs to
+    // write one, so its host publishes the revision baked into the binary as
+    // env instead (apps/server/src/run.ts) — without this fallback the native
+    // footer renders nothing at all, update notice included. `published` stays
+    // false: that flag means the GHCR image channel specifically.
+    revision = readBakedRevision(env.PRINTSTREAM_SERVER_BUILD_REVISION)
   }
   // "published" is only meaningful alongside a real revision.
   cachedBuildInfo = {
@@ -105,17 +111,25 @@ export function resolveAppVersionPayload(input: {
    * information.
    */
   native?: boolean
+  /**
+   * Whether THIS VIEWER may trigger the native in-place update. The route
+   * computes it (permission + platform binary present); this only clamps it to
+   * the cases where an update is actually on offer.
+   */
+  canApplyUpdate?: boolean
 }): AppVersionResponse {
-  const { build, isPlatformUser, update, native = false } = input
+  const { build, isPlatformUser, update, native = false, canApplyUpdate = false } = input
   const visible = build.revision != null && (build.published || native || isPlatformUser)
   if (!visible) return EMPTY_APP_VERSION_RESPONSE
   // Only a build with somewhere to get a newer one reports `update`; the cloud
   // image has no channel and its operators deploy it themselves.
   const hasUpdateChannel = build.published || native
+  const shownUpdate = hasUpdateChannel ? update : null
   return {
     revision: build.revision,
     shortRevision: build.shortRevision,
     published: build.published,
-    update: hasUpdateChannel ? update : null
+    update: shownUpdate,
+    canApplyUpdate: canApplyUpdate && native && shownUpdate?.status === 'updateAvailable' && shownUpdate.downloadUrl != null
   }
 }
