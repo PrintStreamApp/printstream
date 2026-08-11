@@ -39,8 +39,11 @@ import {
   getPrinterPrintOptionCapabilities,
   isPlateTypeCompatible,
   isPrinterModelCompatible,
+  mergeAmsMapping,
   resolvePrinterNozzleDiameters
 } from '@printstream/shared'
+import { autoSelectedFilamentIds, computeAutoTrayMapping } from '../../lib/autoTrayMatch'
+import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../../lib/workspaceScope'
@@ -126,7 +129,11 @@ interface AmsMappingsBySerial {
    * key = printer.id, value = array indexed by 0-based filament-id (project
    * filament `id - 1`) → dispatch tray mapping value. Standard AMS trays use
    * the global tray index; external spools use the virtual ids `255` / `254`.
-   * `-1` (or absent) means “unset”, which we omit from the wire payload.
+   *
+   * This is the EXPLICIT layer only — rows the user picked or a caller's
+   * `defaultAmsMapping` replay. `-1` (or absent) means "no explicit pick";
+   * the effective mapping merges the matcher's auto suggestion underneath
+   * (see `effectiveMappings`), and unset rows are omitted from the wire payload.
    */
   [printerId: string]: number[]
 }
@@ -362,6 +369,38 @@ export function PrintModal({
     () => visibleMappingFilaments(filamentEntries, usedIds, activePlateIsSliced),
     [filamentEntries, usedIds, activePlateIsSliced]
   )
+  /**
+   * Automatic slot suggestions per selected printer (exact type+colour matches,
+   * nozzle- and remaining-aware — see `lib/autoTrayMatch.ts`). Layered UNDER the
+   * user's explicit picks in `mappings` via the shared `mergeAmsMapping`
+   * precedence (explicit slots win, `-1` falls back to the match), so neither a
+   * caller-supplied `defaultAmsMapping` replay nor a row the user touched can
+   * ever be clobbered by a recomputed suggestion. Recomputes as printer status
+   * streams in, which keeps untouched rows tracking what is actually loaded.
+   */
+  const resolveSlotFilament = useSlotFilamentIdentityLookup()
+  const autoMappings = useMemo(() => {
+    const next: Record<string, number[]> = {}
+    for (const printerId of selectedIds) {
+      next[printerId] = computeAutoTrayMapping(printerId, statuses[printerId], visibleFilaments, usedGramsById, resolveSlotFilament)
+    }
+    return next
+  }, [resolveSlotFilament, selectedIds, statuses, usedGramsById, visibleFilaments])
+  const effectiveMappings = useMemo(() => {
+    const next: Record<string, number[]> = {}
+    for (const printerId of selectedIds) {
+      next[printerId] = mergeAmsMapping(mappings[printerId] ?? null, autoMappings[printerId]) ?? []
+    }
+    return next
+  }, [autoMappings, mappings, selectedIds])
+  /** Rows whose effective selection is the matcher's (not an explicit pick) — flagged in the mapping UI. */
+  const autoSelectedIdsByPrinter = useMemo(() => {
+    const next: Record<string, Set<number>> = {}
+    for (const printerId of selectedIds) {
+      next[printerId] = autoSelectedFilamentIds(visibleFilaments, autoMappings[printerId] ?? [], mappings[printerId] ?? [])
+    }
+    return next
+  }, [autoMappings, mappings, selectedIds, visibleFilaments])
   const requiredNozzleDiameters = useMemo(
     () => buildRequiredNozzleDiametersByExtruder(activePlate?.filaments ?? [], activePlate?.nozzleSizes ?? []),
     [activePlate]
@@ -408,7 +447,7 @@ export function PrintModal({
   )
   const isMappingComplete = (printerId: string): boolean => {
     if (!printerHasSelectableTrays(statuses[printerId])) return true
-    const mapping = mappings[printerId] ?? []
+    const mapping = effectiveMappings[printerId] ?? []
     const trayGroups = buildPrinterTrayGroups(statuses[printerId])
     return requiredFilamentIds.every((id) => {
       const selectedValue = mapping[id - 1] ?? -1
@@ -427,7 +466,7 @@ export function PrintModal({
   const compatibilityIssuesByPrinter = useMemo(() => {
     const next: Record<string, FilamentCompatibilityIssue[]> = {}
     for (const printerId of selectedIds) {
-      const mapping = mappings[printerId] ?? []
+      const mapping = effectiveMappings[printerId] ?? []
       const trayByValue = buildPrinterTrayMap(statuses[printerId])
       const selectedTrays = new Map<number, { filamentType: string | null; label: string; nozzleId: number | null }>()
       for (const filament of visibleFilaments) {
@@ -457,7 +496,7 @@ export function PrintModal({
       if (issues.length > 0) next[printerId] = issues
     }
     return next
-  }, [mappings, selectedIds, statuses, visibleFilaments])
+  }, [effectiveMappings, selectedIds, statuses, visibleFilaments])
   const compatibilityIssueEntries = useMemo(
     () => selectedIds
       .map((printerId) => [printerId, compatibilityIssuesByPrinter[printerId] ?? []] as const)
@@ -633,7 +672,7 @@ export function PrintModal({
       .map((printerId) => {
         const printer = printersById.get(printerId)
         const warnings = getSelectedTrayWarningMessages({
-          mapping: mappings[printerId] ?? [],
+          mapping: effectiveMappings[printerId] ?? [],
           trayByMappingValue: buildPrinterTrayMap(statuses[printerId]),
           filaments: visibleFilaments,
           status: statuses[printerId]
@@ -646,7 +685,7 @@ export function PrintModal({
         }
       })
       .filter((entry): entry is { printerId: string; printerName: string; warnings: string[] } => entry != null)
-  }, [mappings, printersById, selectedIds, statuses, visibleFilaments])
+  }, [effectiveMappings, printersById, selectedIds, statuses, visibleFilaments])
 
   const hardwareIssuesByPrinter = useMemo(() => {
     const next: Record<string, { plateType: PlateTypeMismatchIssue | null; nozzleDiameters: NozzleDiameterCompatibilityIssue[] }> = {}
@@ -857,7 +896,7 @@ export function PrintModal({
                 printer?.currentNozzleDiameters ?? []
               ),
               plate: activePlate?.index ?? 1,
-              amsMapping: sanitizeTrayMapping(mappings[printerId]),
+              amsMapping: sanitizeTrayMapping(effectiveMappings[printerId]),
               // The same deselection applies to every selected printer. Filter to the
               // active plate's objects so a stale id can never reach the dispatch.
               ...(skipObjects.length > 0 ? { skipObjects } : {})
@@ -1090,8 +1129,9 @@ export function PrintModal({
                             status={status}
                             filaments={visibleFilaments}
                             usedGramsById={usedGramsById}
-                            mapping={mappings[printer.id] ?? []}
+                            mapping={effectiveMappings[printer.id] ?? []}
                             issues={compatibilityIssuesByPrinter[printer.id] ?? []}
+                            autoSelectedFilamentIds={autoSelectedIdsByPrinter[printer.id]}
                             onChange={(filamentId, tray) => setSlot(printer.id, filamentId, tray)}
                           />
                         </Box>

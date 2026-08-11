@@ -20,8 +20,7 @@
  * precedence: encoded multi-colour match > common name (non-genuine) > Bambu
  * swatch (genuine, material-scoped) > meaningful tray name.
  */
-import { normalizeHexColor } from './print-queue.js'
-import { commonFilamentColorName } from './filament-color.js'
+import { commonFilamentColorName, normalizeHexColor } from './filament-color.js'
 import {
   bambuMaterialFromPresetName,
   bambuMaterialFromType,

@@ -50,6 +50,13 @@ import {
 } from './editorGeometry'
 import { FOOTPRINT_CELL_MM, shiftFootprintCells } from './lib/arrange'
 import { type EditorInstance, type EditorPlate } from './lib/editorModel'
+import {
+  applySelectionDelta,
+  selectionDeltaFromProxy,
+  selectionPivot,
+  type MultiTransformMode,
+  type SelectionMemberPose
+} from './lib/multiSelectionTransform'
 import { type PartSelection } from './lib/selectionModel'
 import { type SupportPaintBrushMode } from './lib/supportPaint'
 
@@ -133,6 +140,13 @@ export interface EditorSceneParams {
   // Gizmo + transform write-back.
   gizmoModeRef: MutableRefObject<GizmoMode>
   setGizmoModeRef: MutableRefObject<Dispatch<SetStateAction<GizmoMode>>>
+  /**
+   * The multi-selection pivot proxy: an empty Object3D the gizmo attaches to when several
+   * objects are selected, seated at the selection's pivot by `reattachGizmo` (its counterpart
+   * in EditorView). The gizmo drives THIS object; each frame its delta is applied rigid-body
+   * to every member. Created by the scene setup effect; null before the viewport mounts.
+   */
+  multiPivotRef: MutableRefObject<THREE.Object3D | null>
   bakeExactMatrixRef: MutableRefObject<(group: THREE.Object3D) => void>
   syncSelectedTransformRef: MutableRefObject<((object: THREE.Object3D) => void) | null>
   setRotationReadoutRef: MutableRefObject<((angleDeg: number | null) => void) | null>
@@ -237,6 +251,7 @@ export function useEditorScene(params: EditorSceneParams): void {
     setSelectionHighlightRef,
     gizmoModeRef,
     setGizmoModeRef,
+    multiPivotRef,
     bakeExactMatrixRef,
     syncSelectedTransformRef,
     setRotationReadoutRef,
@@ -581,6 +596,12 @@ export function useEditorScene(params: EditorSceneParams): void {
       }
     }
     const transformEvents = transform as unknown as TransformControlsEvents
+    // The multi-selection pivot proxy (see EditorSceneParams.multiPivotRef): parented at the
+    // scene root so its transform IS the world delta, with no member's own transform involved.
+    const multiPivot = new THREE.Group()
+    multiPivot.name = 'multiSelectionPivot'
+    scene.add(multiPivot)
+    multiPivotRef.current = multiPivot
     // Disable orbit while dragging a gizmo so the camera does not fight the drag.
     // While the rotate gizmo drags, show the snap guides + angle readout.
     // The gizmo attaches to the outer group (move/scale) or its inner rotor (rotate),
@@ -616,23 +637,69 @@ export function useEditorScene(params: EditorSceneParams): void {
       return target && (typeof target.userData.addedPartKey === 'string' || partGroupRef(target)) ? target : null
     }
 
-    // Extras co-moved by the TRANSLATE gizmo (multi-select): per-group offsets from the
-    // primary, captured at drag start.
-    let gizmoCoDrag: Array<{ group: THREE.Group; dx: number; dy: number }> = []
-    const beginGizmoCoDrag = () => {
-      gizmoCoDrag = []
-      const primaryKey = selectedKeyRef.current
-      const primary = primaryKey ? groupByKeyRef.current.get(primaryKey) : null
-      if (!primary || gizmoModeRef.current !== 'translate') return
-      for (const key of extraSelectedKeysRef.current) {
+    // Multi-selection gizmo drag (the gizmo is attached to the pivot proxy): a drag-start
+    // snapshot of every member and the proxy, so each frame recomputes the members' rigid-body
+    // pose from scratch — Studio does the same from its `set_caches` snapshot; incremental
+    // composition would accumulate error. See lib/multiSelectionTransform.ts for the semantics
+    // and the two deliberate divergences (no Alt "independent" mode; unselected sibling
+    // instances of a member's object are never re-oriented the way Studio's
+    // synchronize_unselected_instances does — our linked copies keep independent placements).
+    let multiDrag: {
+      pivot: THREE.Vector3
+      proxyStart: SelectionMemberPose
+      members: Array<{ group: THREE.Group; start: SelectionMemberPose }>
+    } | null = null
+
+    const attachedToMultiPivot = (): boolean =>
+      (transform as unknown as { object?: THREE.Object3D }).object === multiPivot
+
+    const activeMultiMode = (): MultiTransformMode => {
+      const mode = gizmoModeRef.current
+      return mode === 'rotate' || mode === 'scale' ? mode : 'translate'
+    }
+
+    const poseOf = (object: THREE.Object3D): SelectionMemberPose => ({
+      position: object.position.clone(),
+      quaternion: rotorOf(object).quaternion.clone(),
+      scale: object.scale.clone()
+    })
+
+    const beginMultiDrag = () => {
+      multiDrag = null
+      if (!attachedToMultiPivot()) return
+      const members: Array<{ group: THREE.Group; start: SelectionMemberPose }> = []
+      for (const key of allSelectedKeysRef.current()) {
         const group = groupByKeyRef.current.get(key)
-        if (group) {
-          // Bake a shearing co-dragged object first so its exactMatrix is cleared (the gizmo co-move
-          // would otherwise be discarded on save) and group.position is valid to offset from.
-          bakeExactMatrixRef.current(group)
-          gizmoCoDrag.push({ group, dx: group.position.x - primary.position.x, dy: group.position.y - primary.position.y })
-        }
+        if (!group) continue
+        // Bake a shearing member first so its exactMatrix is cleared (the rigid-body write-back
+        // would otherwise be discarded on save) and its decomposed TRS is valid to snapshot.
+        bakeExactMatrixRef.current(group)
+        members.push({ group, start: poseOf(group) })
       }
+      if (members.length === 0) return
+      multiDrag = {
+        pivot: multiPivot.position.clone(),
+        proxyStart: { position: multiPivot.position.clone(), quaternion: multiPivot.quaternion.clone(), scale: multiPivot.scale.clone() },
+        members
+      }
+    }
+
+    /**
+     * Re-seat the proxy on the (possibly just-moved) selection for the NEXT drag: pivot at the
+     * mode's selection centre, identity rotation/unit scale so the next delta reads clean.
+     * Cheap boxes on purpose — a precise per-vertex walk here is what the drop-frame
+     * optimisation removed, and a few mm of pivot slop on a rotated hi-poly mesh is invisible.
+     */
+    const reseatMultiPivot = () => {
+      const boxes: THREE.Box3[] = []
+      for (const key of allSelectedKeysRef.current()) {
+        const group = groupByKeyRef.current.get(key)
+        if (group) boxes.push(printableMeshBox(group, false))
+      }
+      const pivot = selectionPivot(boxes, activeMultiMode())
+      if (pivot) multiPivot.position.copy(pivot)
+      multiPivot.quaternion.identity()
+      multiPivot.scale.set(1, 1, 1)
     }
 
     const onDraggingChanged = (event: TransformControlsEvent) => {
@@ -646,13 +713,44 @@ export function useEditorScene(params: EditorSceneParams): void {
       if (dragging) {
         panelSyncTick = 0
         recordHistoryRef.current?.()
-        // Snap a shearing object to editable T·S·R before the drag (it rendered an exact matrix
-        // with matrixAutoUpdate off, which the gizmo can't move).
-        const outerForBake = selectedOuterGroup()
-        if (outerForBake) bakeExactMatrixRef.current(outerForBake)
-        beginGizmoCoDrag()
-      } else {
-        gizmoCoDrag = []
+        if (attachedToMultiPivot()) {
+          beginMultiDrag()
+        } else {
+          // Snap a shearing object to editable T·S·R before the drag (it rendered an exact matrix
+          // with matrixAutoUpdate off, which the gizmo can't move).
+          const outerForBake = selectedOuterGroup()
+          if (outerForBake) bakeExactMatrixRef.current(outerForBake)
+        }
+      }
+      // Multi-selection drag via the pivot proxy: guides/readout track the PIVOT (where the
+      // rotation actually happens), and the end-of-drag choreography runs per member.
+      if (multiDrag) {
+        if (dragging && gizmoModeRef.current === 'rotate') {
+          snapGuides.position.copy(multiDrag.pivot)
+          snapGuides.visible = true
+          // Relative readout (Studio labels its multi-selection rotate field "Rotate (relative)"
+          // and zeroes it at drag start) — there is no single absolute angle for N members.
+          setRotationReadoutRef.current?.(0)
+        } else {
+          snapGuides.visible = false
+          setRotationReadoutRef.current?.(null)
+        }
+        if (!dragging) {
+          for (const member of multiDrag.members) {
+            // Always re-rest on drag end: rotating/scaling can move a member's lowest point
+            // (Studio's ensure_on_bed / do_rotate re-drop). A pure translate keeps z, so this
+            // is a no-op there.
+            restObjectOnBed(member.group)
+            writeBackGroupTransform(member.group)
+          }
+          const primary = selectedOuterGroup()
+          if (primary) syncSelectedTransformRef.current?.(primary)
+          // The selection moved: re-seat the pivot on its new centre for the next drag.
+          reseatMultiPivot()
+          multiDrag = null
+          regenerateActiveThumbnailRef.current?.()
+        }
+        return
       }
       // Added part volumes transform freely inside their object: no bed rest, no
       // group write-back — just persist the part's object-local placement.
@@ -697,6 +795,29 @@ export function useEditorScene(params: EditorSceneParams): void {
     // single coloured axis) is used — TransformControls computes scale from the pointer
     // delta, not the object's position, so adjusting z here doesn't perturb the drag.
     const onObjectChange = () => {
+      // Multi-selection: the gizmo drives the pivot proxy; apply its delta rigid-body to every
+      // member — offsets orbit/scale about the pivot while each member's own orientation/scale
+      // composes (Studio's transform_instance_relative). Recomputed from the drag-start
+      // snapshot each frame, never accumulated.
+      if (multiDrag) {
+        const mode = activeMultiMode()
+        const delta = selectionDeltaFromProxy(poseOf(multiPivot), multiDrag.proxyStart)
+        for (const member of multiDrag.members) {
+          const pose = applySelectionDelta(mode, member.start, delta, multiDrag.pivot)
+          member.group.position.copy(pose.position)
+          rotorOf(member.group).quaternion.copy(pose.quaternion)
+          member.group.scale.copy(pose.scale)
+          // Scale grows every member upward from the bed each frame, like the single path below.
+          if (mode === 'scale') restObjectOnBed(member.group)
+          writeBackGroupTransform(member.group)
+        }
+        const primary = selectedOuterGroup()
+        if (primary) throttledPanelSync(primary)
+        if (mode === 'rotate' && snapGuides.visible) {
+          setRotationReadoutRef.current?.(THREE.MathUtils.radToDeg(new THREE.Euler().setFromQuaternion(delta.rotation).z))
+        }
+        return
+      }
       const partMesh = attachedPartMesh()
       if (partMesh) {
         writeBackPartMeshRef.current?.(partMesh)
@@ -707,12 +828,6 @@ export function useEditorScene(params: EditorSceneParams): void {
       if (!outer) return
       if (gizmoModeRef.current === 'scale') restObjectOnBed(outer)
       writeBackGroupTransform(outer)
-      // Translate moves the whole multi-selection, preserving relative spacing.
-      for (const extra of gizmoCoDrag) {
-        extra.group.position.x = outer.position.x + extra.dx
-        extra.group.position.y = outer.position.y + extra.dy
-        writeBackGroupTransform(extra.group)
-      }
       throttledPanelSync(outer)
       if (gizmoModeRef.current === 'rotate' && snapGuides.visible) {
         setRotationReadoutRef.current?.(THREE.MathUtils.radToDeg(rotorOf(outer).rotation.z))
@@ -1575,6 +1690,8 @@ export function useEditorScene(params: EditorSceneParams): void {
       disposeObject3D(plateRoot)
       scene.remove(plateRoot)
       scene.remove(transform as unknown as THREE.Object3D)
+      scene.remove(multiPivot)
+      if (multiPivotRef.current === multiPivot) multiPivotRef.current = null
       // Before forceContextLoss below, which fires webglcontextlost on our own canvas —
       // a deliberate teardown must not be misread as a GPU failure and trigger a rebuild.
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost)

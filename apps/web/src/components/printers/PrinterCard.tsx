@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Printer3dRoundedIcon } from '../../components/Printer3dRoundedIcon'
-import { getAmsLoadFilamentAvailability, getAmsRescanAvailability, getAmsUnloadFilamentAvailability, getPrinterCalibrationCapabilities, getPrinterDisplayCapabilities, getPrinterControlCapabilities, isPrinterActiveJobStage, isPrinterIdleCompatibleStage, type AmsSlot, type AmsUnit, type ExternalSpool, type PrintJob, type PrinterActivePrintObjects, type PrinterCardContentSettings, type Printer, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
+import { formatPrinterNozzleSizesLabel, getAmsLoadFilamentAvailability, getAmsRescanAvailability, getAmsUnloadFilamentAvailability, getPrinterCalibrationCapabilities, getPrinterDisplayCapabilities, getPrinterControlCapabilities, isPrinterActiveJobStage, isPrinterIdleCompatibleStage, type AmsSlot, type AmsUnit, type ExternalSpool, type PrintJob, type PrinterActivePrintObjects, type PrinterCardContentSettings, type Printer, type PrinterCommand, type PrinterStatus } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { usePluginCatalogQuery } from '../../lib/pluginCatalogQuery'
@@ -33,14 +33,13 @@ import {
   getPrinterAttentionSummary
 } from '../../lib/printerProgressSummary'
 import { useBufferedCoverImage } from '../../hooks/useBufferedCoverImage'
-import { useControlledMenuClickAway } from '../../hooks/useControlledMenuClickAway'
 import { PrinterStorageDialogs } from './PrinterStorageDialogs'
 import { PluginSlot } from '../../plugin/PluginSlot'
 import { webPluginRegistry } from '../../plugin/registry'
 import { isPluginActiveByName } from '../../lib/pluginSettings'
 import { usePlateClearingState } from '../../lib/plateClearing'
 import { computeFilamentRecoverySources } from '../../lib/printerFilamentRecovery'
-import { printerHistoryResultColor, dispatchStatusColor, dispatchStatusLabel, formatDispatchProgress, formatPrinterCardNozzleSizes, resolveFilamentChangeTargetTemp, formatPrinterAttentionSummaryText, formatRemaining, formatFinishedAgo, formatLayerSummary, formatEstimatedCompletionTime, formatWifiSignal, isActiveLightMode, lightModeForControl, isPrinterControlCommand, printerControlSuccessMessage, shouldPreferTrackedActiveJobName, printerCardAmsGridColumns, parseStoredBoolean, printerNozzles } from '../../lib/printersViewHelpers'
+import { printerHistoryResultColor, dispatchStatusColor, dispatchStatusLabel, formatDispatchProgress, resolveFilamentChangeTargetTemp, formatPrinterAttentionSummaryText, formatRemaining, formatFinishedAgo, formatLayerSummary, formatEstimatedCompletionTime, formatWifiSignal, isActiveLightMode, lightModeForControl, isPrinterControlCommand, printerControlSuccessMessage, shouldPreferTrackedActiveJobName, printerCardAmsGridColumns, parseStoredBoolean, printerNozzles } from '../../lib/printersViewHelpers'
 import { DISPATCHED_START_WARNING_TIMEOUT_MS, PRINTER_SETTINGS_LABELS } from '../../lib/printerViewConstants'
 import {
   type PrinterControlsDialogTab
@@ -54,7 +53,8 @@ import { PrinterCardAttentionSummary } from './PrinterCardAttentionSummary'
 import { usePrinterCardFooterActions } from './usePrinterCardFooterActions'
 import { usePrinterRecoveryActions } from './usePrinterRecoveryActions'
 import { useLayerSummaryFit } from './useLayerSummaryFit'
-import { PrinterCardIdentity } from './PrinterCardIdentity'
+import { PrinterCardName } from './PrinterCardName'
+import { PrinterCardHardwareChips } from './PrinterCardHardwareChips'
 import { PrinterAmsDialogs } from './PrinterAmsDialogs'
 
 /**
@@ -182,14 +182,11 @@ function PrinterCardComponent({
     parseStoredBoolean,
     String
   )
-  const [printMenuOpen, setPrintMenuOpen] = useState(false)
   const [calibrationDialogOpen, setCalibrationDialogOpen] = useState(false)
   const [controlsDialogOpen, setControlsDialogOpen] = useState(false)
   const [controlsDialogInitialTab, setControlsDialogInitialTab] = useState<PrinterControlsDialogTab>('printer')
   const [skipObjectDialogOpen, setSkipObjectDialogOpen] = useState(false)
   const queryClient = useQueryClient()
-  const printAnchorRef = useRef<HTMLDivElement>(null)
-  useControlledMenuClickAway(printMenuOpen, `print-menu-${printer.id}`, () => setPrintMenuOpen(false), [printAnchorRef])
   const dispatchJob = dispatchLink?.dispatchJob
   const dispatchPrintJob = dispatchLink?.printJob
   const [pendingStartWarning, setPendingStartWarning] = useState(false)
@@ -299,7 +296,7 @@ function PrinterCardComponent({
   const chamberTarget = status?.chamberTarget ?? null
   const showChamberTemperature = chamberTemperature != null
     && displayCapabilities.chamberTemperature
-  const nozzleSizeLabel = formatPrinterCardNozzleSizes(status, printer.currentNozzleDiameters)
+  const nozzleSizeLabel = formatPrinterNozzleSizesLabel(status, printer.currentNozzleDiameters)
   const secondaryStageLabel = formatSecondaryStageLabel(status)
   const printerAttentionSummaryText = printerAttentionSummary
     ? formatPrinterAttentionSummaryText(printerAttentionSummary)
@@ -650,26 +647,50 @@ function PrinterCardComponent({
     >
       <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 0.75, sm: 1 } }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-          <PrinterCardIdentity
-            printer={printer}
-            cardRef={cardRef}
-            printerIpAddress={printerIpAddress}
-            wifiSignalLabel={wifiSignalLabel}
-            nozzleSizeLabel={nozzleSizeLabel}
-            onOpenDetails={onOpenDetails}
-          />
-          <PrinterCardStatusChips
-            status={status}
-            isIdleLikeStage={isIdleLikeStage}
-            showPendingDispatchSummary={showPendingDispatchSummary}
-            hasActiveJob={Boolean(activeJob)}
-            pendingStartWarning={pendingStartWarning}
-            isOnline={isOnline}
-            showHmsErrors={contentSettings.hmsErrors}
-            printerModel={printer.model}
-            printerSerial={printer.serial}
-          />
-          <PluginSlot name="printer.card.headerChips" context={{ printerId: printer.id, printerName: printer.name }} />
+          <PrinterCardName printer={printer} cardRef={cardRef} onOpenDetails={onOpenDetails} />
+          {/*
+            One-line clamp: when the row runs short, chips wrap onto a second line that the
+            maxHeight hides, so whole chips drop out (last in DOM first) rather than squeezing
+            the printer name below its reserved floor (see PrinterCardName). Keep the chips
+            ordered most- to least-important — the static hardware chips go last so nozzle
+            size, then model, are the first to give way.
+          */}
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              alignContent: 'flex-start',
+              justifyContent: 'flex-end',
+              flexWrap: 'wrap',
+              gap: 1,
+              minWidth: 0,
+              // Exactly one sm-chip line — every chip in this row is size="sm" (revisit if a
+              // taller header chip appears). The 8px row gap puts a wrapped second line fully
+              // below the clamp, so hidden chips never peek through, and matching the chip
+              // height keeps the visible line vertically centered while chips are dropped.
+              maxHeight: '1.25rem',
+              overflow: 'hidden'
+            }}
+          >
+            <PrinterCardStatusChips
+              status={status}
+              isIdleLikeStage={isIdleLikeStage}
+              showPendingDispatchSummary={showPendingDispatchSummary}
+              hasActiveJob={Boolean(activeJob)}
+              pendingStartWarning={pendingStartWarning}
+              isOnline={isOnline}
+              showHmsErrors={contentSettings.hmsErrors}
+              printerModel={printer.model}
+              printerSerial={printer.serial}
+            />
+            <PluginSlot name="printer.card.headerChips" context={{ printerId: printer.id, printerName: printer.name }} />
+            <PrinterCardHardwareChips
+              printerModel={printer.model}
+              printerIpAddress={printerIpAddress}
+              wifiSignalLabel={wifiSignalLabel}
+              nozzleSizeLabel={nozzleSizeLabel}
+            />
+          </Box>
           <PrinterCardActionsMenu
             printer={printer}
             isOnline={isOnline}
@@ -1037,9 +1058,6 @@ function PrinterCardComponent({
           canShowPrintAction={canShowPrintAction}
           canPrintFromPrinter={canPrintFromPrinter}
           printDisabledReason={printDisabledReason}
-          printAnchorRef={printAnchorRef}
-          printMenuOpen={printMenuOpen}
-          setPrintMenuOpen={setPrintMenuOpen}
           onPrint={onPrint}
           onPrintLocal={onPrintLocal}
         />

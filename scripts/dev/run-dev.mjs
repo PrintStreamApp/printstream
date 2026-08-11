@@ -41,7 +41,11 @@ if (runLocalSlicer) {
     SLICER_SERVICE_URL: 'http://localhost:4010',
     SLICER_TARGETS_FILE: path.join(DATA_ROOT, 'slicers', 'targets.json'),
     SLICER_WORK_DIR: process.env.SLICER_WORK_DIR || '/tmp/printstream-slicer',
-    SLICER_PORT: process.env.SLICER_PORT || '4010'
+    SLICER_PORT: process.env.SLICER_PORT || '4010',
+    // Offscreen-GL preload for CLI-rendered plate thumbnails, compiled by the setup scripts.
+    // Explicit on both arches: the x86 dev cliPath is the repo wrapper, whose next-to-me
+    // default would look in the repo tree rather than the data dir.
+    SLICER_GL_SHIM: process.env.SLICER_GL_SHIM || path.join(DATA_ROOT, 'gl-osmesa-shim.so')
   }
   if (useQemuSlicer) {
     // The qemu wrapper defaults to this, but set it explicitly so a custom SLICER_DATA_ROOT works.

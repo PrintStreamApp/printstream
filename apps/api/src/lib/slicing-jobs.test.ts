@@ -278,6 +278,61 @@ test('slicing jobs reload persisted history after restart', async () => {
   }
 })
 
+test('listActive drops finished jobs older than the recency window while list keeps them', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'slicing-jobs-active-'))
+  const stateFilePath = path.join(tempDir, 'state.json')
+  const options = {
+    progressPollIntervalMs: 10,
+    progressHeartbeatIntervalMs: 10,
+    persistState: true,
+    stateFilePath,
+    resolveSource: passthroughResolveSource, authorSliceSettings: noAuthoring
+  }
+
+  slicerClient.isConfigured = (() => true) as typeof slicerClient.isConfigured
+  slicerClient.progress = (async () => ({ kind: 'unclaimed' })) as typeof slicerClient.progress
+  slicerClient.run = (async () => {
+    throw new SlicerServiceError('Slicing failed', [])
+  }) as typeof slicerClient.run
+
+  const first = new SlicingJobs(options)
+  const queued = first.enqueue({
+    workspaceId: 'workspace-1',
+    workspace: { id: 'workspace-1', slug: 'alpha', name: 'Alpha' },
+    sourceFileId: 'file-1',
+    sourceFileName: 'part.3mf',
+    sourcePath: '/tmp/part.3mf',
+    targetBridgeId: null,
+    request: makeRequest()
+  })
+
+  try {
+    await waitFor(async () => {
+      assert.equal(first.get('workspace-1', queued.id).status, 'failed')
+    })
+    await waitFor(async () => {
+      const raw = await readFile(stateFilePath, 'utf8')
+      assert.equal(raw.includes(queued.id), true)
+    })
+
+    // Age a CLONE of the real persisted record far past the recency window, then rehydrate —
+    // the store never exposes a way to backdate a live job, and hand-writing a record from
+    // scratch would drift from the persisted shape the hydrator actually accepts.
+    const persisted = JSON.parse(await readFile(stateFilePath, 'utf8')) as { jobs: Array<Record<string, unknown>> }
+    const template = persisted.jobs[0]
+    assert.ok(template)
+    const aged = '2026-01-01T00:00:00.000Z'
+    persisted.jobs.push({ ...template, id: 'old-finished-job', createdAt: aged, updatedAt: aged, startedAt: aged, finishedAt: aged })
+    await writeFile(stateFilePath, JSON.stringify(persisted), 'utf8')
+
+    const reloaded = new SlicingJobs(options)
+    assert.deepEqual(reloaded.list('workspace-1').map((job) => job.id).sort(), ['old-finished-job', queued.id].sort())
+    assert.deepEqual(reloaded.listActive('workspace-1').map((job) => job.id), [queued.id])
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+})
+
 test('slicing jobs persist slice-to-print artifacts as hidden files', async () => {
   const persistedInputs: Array<{ hidden: boolean; folderId: string | null; fileName: string }> = []
   const jobs = new SlicingJobs({

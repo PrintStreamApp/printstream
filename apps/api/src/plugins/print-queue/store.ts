@@ -8,6 +8,7 @@
 import {
   isDirectPrintableFileName,
   queuePrintOptionsSchema,
+  queueRequiredFilamentFromPlate,
   queueRequiredFilamentSchema,
   type QueueItem as QueueItemDto,
   type QueueItemPlacement,
@@ -74,7 +75,7 @@ interface InspectedThreeMfIndex {
     name: string | null
     plateType: string | null
     nozzleSizes: string[]
-    filaments: Array<{ id: number; filamentType: string | null; filamentName: string | null; color: string | null; usedGrams: number | null }>
+    filaments: Array<{ id: number; filamentType: string | null; filamentName: string | null; color: string | null; usedGrams: number | null; nozzleId: number | null }>
   }>
   compatiblePrinterModels: string[]
 }
@@ -93,19 +94,20 @@ export interface InspectedQueuePlate {
 }
 
 /**
- * Backfill each filament's `usedGrams` from `source` (matched by filament id) when it doesn't already
- * carry it. Grams are authoritative slice data tied to the filament slot — they don't change when the
- * user overrides a material's type/color/brand — so an explicit material override (which omits grams)
- * gets them filled in from the inspected plate (or the prior stored row).
+ * Backfill each filament's `usedGrams` and `nozzleId` from `source` (matched by filament id) when it
+ * doesn't already carry them. Both are authoritative slice data tied to the filament SLOT — they
+ * don't change when the user overrides a material's type/color/brand — so an explicit material
+ * override (which omits them) gets them filled in from the inspected plate (or the prior stored row).
  */
-export function withUsedGramsFrom(
+export function withPlateSliceDataFrom(
   filaments: QueueRequiredFilament[],
   source: QueueRequiredFilament[]
 ): QueueRequiredFilament[] {
-  const gramsById = new Map(source.map((filament) => [filament.id, filament.usedGrams ?? null]))
+  const sourceById = new Map(source.map((filament) => [filament.id, filament]))
   return filaments.map((filament) => ({
     ...filament,
-    usedGrams: filament.usedGrams ?? gramsById.get(filament.id) ?? null
+    usedGrams: filament.usedGrams ?? sourceById.get(filament.id)?.usedGrams ?? null,
+    nozzleId: filament.nozzleId ?? sourceById.get(filament.id)?.nozzleId ?? null
   }))
 }
 
@@ -162,24 +164,10 @@ export function parseAmsMapping(json: string | null): number[] | null {
   }
 }
 
-/**
- * Combine an explicit per-filament tray mapping with the matcher's computed mapping for the
- * dispatched printer. An explicit slot (>= 0) wins; an entry left at the `-1` "auto" sentinel — a
- * material-mode filament the user pinned to a library / custom material rather than a fixed slot —
- * takes the computed (material-matched) slot. Lets a specific-printer queue item mix slot-mapped and
- * material-matched filaments. `null`/empty override → use the computed mapping as-is.
- */
-export function mergeAmsMapping(override: number[] | null, computed: number[] | undefined): number[] | undefined {
-  if (!override || override.length === 0) return computed && computed.length > 0 ? computed : undefined
-  if (!computed || computed.length === 0) return override
-  const length = Math.max(override.length, computed.length)
-  const merged: number[] = []
-  for (let index = 0; index < length; index += 1) {
-    const explicit = override[index]
-    merged[index] = explicit != null && explicit >= 0 ? explicit : computed[index] ?? -1
-  }
-  return merged
-}
+// `mergeAmsMapping` (explicit slots win, `-1` falls back to the computed match) moved to
+// `@printstream/shared` so the web dialogs layer user picks over auto-matches with the
+// same precedence the dispatch uses. Re-exported for this plugin's existing importers.
+export { mergeAmsMapping } from '@printstream/shared'
 
 function normalizeStatus(value: string): QueueItemDto['status'] {
   switch (value) {
@@ -275,13 +263,7 @@ export async function inspectQueuePlate(
     return {
       plateExists: true,
       plateName: plateEntry.name?.trim() || null,
-      requiredFilaments: plateEntry.filaments.map((filament) => ({
-        id: filament.id,
-        filamentType: filament.filamentType,
-        filamentName: filament.filamentName,
-        color: filament.color,
-        usedGrams: filament.usedGrams
-      })),
+      requiredFilaments: plateEntry.filaments.map(queueRequiredFilamentFromPlate),
       compatibleModels,
       plateType: plateEntry.plateType?.trim() || null,
       nozzleDiameters: plateEntry.nozzleSizes ?? []

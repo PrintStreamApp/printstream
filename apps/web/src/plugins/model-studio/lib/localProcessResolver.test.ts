@@ -90,3 +90,49 @@ test('a workspace/custom id is not resolvable on an anonymous host', async () =>
   const resolver = buildLocalProcessConfigResolver({ project: projectWith({}), processProfiles: [], resolveBuiltin })
   await assert.rejects(resolver({ processProfileId: 'custom:whatever', targetId: null, sourceFileId: null }))
 })
+
+/** Run a body with browser storage present, holding the given stored presets. */
+async function withLocalPresetStore(stored: unknown[], body: () => Promise<void>) {
+  const host = globalThis as { window?: unknown }
+  const original = host.window
+  host.window = { localStorage: { getItem: () => JSON.stringify(stored) } }
+  try {
+    await body()
+  } finally {
+    if (original === undefined) delete host.window
+    else host.window = original
+  }
+}
+
+test('a browser-stored process preset resolves by flattening onto its builtin parent', async () => {
+  // The filament resolver grew this branch first; without the process twin, a project that
+  // SELECTED a stored process preset dead-ended the tune dialog on "could not be resolved".
+  const { calls, resolveBuiltin } = stubBuiltin({ wall_loops: '2', top_shell_layers: '5' })
+  const stored = [{
+    id: 'local:process:0.20mm Ryan @BBL A1',
+    kind: 'process',
+    name: '0.20mm Ryan @BBL A1',
+    raw: { inherits: '0.20mm Standard @BBL A1', wall_loops: '4' },
+    addedAt: ''
+  }]
+  await withLocalPresetStore(stored, async () => {
+    const resolver = buildLocalProcessConfigResolver({ project: projectWith({}), processProfiles: [a1Profile], resolveBuiltin })
+    const result = await resolver({ processProfileId: 'local:process:0.20mm Ryan @BBL A1', targetId: 't1', sourceFileId: null })
+    assert.equal(calls[0]?.id, A1_BUILTIN, 'the declared parent was resolved as a builtin')
+    assert.equal(result.config.wall_loops, '4', "the preset's own delta wins")
+    assert.equal(result.config.top_shell_layers, '5', 'the parent fills the keys the delta omits')
+    assert.equal(result.baseConfig.wall_loops, '4', 'an installed preset is its own baseline')
+    assert.equal(result.parentConfig?.wall_loops, '2', "the parent's values ride along as emphasis only")
+    assert.deepEqual(result.overriddenKeys, [], 'nothing is "changed" until the user edits')
+  })
+})
+
+test('a stored process preset of the WRONG kind does not shadow the id space', async () => {
+  // The store holds one entry per (kind, name); a filament preset must never answer a process id.
+  const { resolveBuiltin } = stubBuiltin({})
+  const stored = [{ id: 'local:process:X', kind: 'filament', name: 'X', raw: {}, addedAt: '' }]
+  await withLocalPresetStore(stored, async () => {
+    const resolver = buildLocalProcessConfigResolver({ project: projectWith({}), processProfiles: [], resolveBuiltin })
+    await assert.rejects(resolver({ processProfileId: 'local:process:X', targetId: null, sourceFileId: null }))
+  })
+})

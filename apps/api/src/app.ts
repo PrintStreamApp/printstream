@@ -18,6 +18,7 @@ import { authRouter } from './routes/auth.js'
 import { cspReportRouter } from './routes/csp-report.js'
 import { healthRouter } from './routes/health.js'
 import { appRouter } from './routes/app.js'
+import { serverBackupsRouter } from './routes/server-backups.js'
 import { printersRouter } from './routes/printers.js'
 import { libraryRouter } from './routes/library.js'
 import { jobsRouter } from './routes/jobs.js'
@@ -188,6 +189,7 @@ app.use('/api', createRateLimitMiddleware({
 app.use('/api/auth', authRouter)
 app.use('/api/health', healthRouter)
 app.use('/api/app', appRouter)
+app.use('/api/server-backups', serverBackupsRouter)
 app.use('/api/printers', printersRouter)
 app.use('/api/printer-views', printerViewsRouter)
 app.use('/api/library', libraryRouter)

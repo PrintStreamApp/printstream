@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  permuteFilamentIndexOverrides,
+  permutePerObjectFilamentIndexOverrides,
   remapFilamentIndexOverrides,
   remapFilamentIndexValue,
   remapPerObjectFilamentIndexOverrides
@@ -64,4 +66,34 @@ test('per-object overrides remap and keep identity when untouched', () => {
 
   const untouched = { 'object-1': { sparse_infill_density: '15%' } }
   assert.equal(remapPerObjectFilamentIndexOverrides(untouched, 2), untouched)
+})
+
+test('a reorder permutes filament-index references and defaults dangling ones', () => {
+  // Old order [1,2,3] reversed: 1->3, 2->2, 3->1.
+  const remap = new Map([[1, 3], [2, 2], [3, 1]])
+  const overrides = { support_filament: '1', support_interface_filament: '3', wall_filament: '0', sparse_infill_density: '15%' }
+  assert.deepEqual(permuteFilamentIndexOverrides(overrides, remap), {
+    support_filament: '3',
+    support_interface_filament: '1',
+    wall_filament: '0',
+    sparse_infill_density: '15%'
+  })
+  // A reference the permutation does not cover falls back to Default rather than pointing at
+  // whatever material took over the number.
+  assert.deepEqual(permuteFilamentIndexOverrides({ support_filament: '7' }, remap), { support_filament: '0' })
+  // Identity permutation returns the SAME object so callers skip the state update.
+  const identity = new Map([[1, 1], [2, 2]])
+  const untouched = { support_filament: '2' }
+  assert.equal(permuteFilamentIndexOverrides(untouched, identity), untouched)
+})
+
+test('per-object overrides permute and keep identity when untouched', () => {
+  const remap = new Map([[1, 2], [2, 1]])
+  const perObject = {
+    'object-1': { support_interface_filament: '1' },
+    'object-2': { sparse_infill_density: '15%' }
+  }
+  const next = permutePerObjectFilamentIndexOverrides(perObject, remap)
+  assert.deepEqual(next['object-1'], { support_interface_filament: '2' })
+  assert.equal(next['object-2'], perObject['object-2'])
 })

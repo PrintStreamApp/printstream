@@ -31,6 +31,18 @@ export interface SettingFilamentChoice {
   filamentType?: string | null
   isSupport?: boolean | null
   isSoluble?: boolean | null
+  /**
+   * The material's FULL preset name ("Bambu Support For PLA/PETG @BBL X1C"), for the
+   * recommendation table's name-matched entries — `label` may be vendor-stripped for picker
+   * grouping. Classification-only, like `filamentType`; falls back to `label` when absent.
+   */
+  materialName?: string | null
+  /**
+   * Whether the target plate's MODEL OBJECTS print with this material (the combination table's
+   * model-material side). Dedicated support materials are false. Leave undefined when the host
+   * has no plate context — the table lookup is then skipped entirely.
+   */
+  usedByPlateModels?: boolean | null
 }
 
 export interface SettingValueFieldProps {
@@ -53,6 +65,13 @@ export interface SettingValueFieldProps {
    * colour (Tab.cpp `update_changed_ui`).
    */
   unsaved?: boolean
+  /**
+   * Bulk (multi-target) editing: the selection's members hold DIFFERENT values for this key, so
+   * no single value is true. Renders an explicit "Mixed" state — an empty control with a "Mixed"
+   * placeholder (bools show a hint beside the switch) — instead of any one member's value. Any
+   * interaction sets one value for the whole selection, which clears this flag upstream.
+   */
+  mixed?: boolean
   /**
    * The project's materials, for filament-index settings (BambuStudio's `i_enum_open` int
    * options: support/raft base+interface, walls/infill filament). When provided those render
@@ -86,9 +105,10 @@ function FilamentSwatch({ color }: { color: string | null }) {
 }
 
 function SettingControl(props: SettingValueFieldProps): JSX.Element {
-  const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, isCode, modified, unsaved, filamentChoices, onScalarChange } = props
+  const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, isCode, modified, unsaved, mixed, filamentChoices, onScalarChange } = props
   // A nil is BambuStudio's "not overridden", not a value: show an empty field, never the word.
-  const value = isNilSettingValue(scalar) ? '' : scalar
+  // A mixed key likewise has no single value to show — empty control, "Mixed" placeholder.
+  const value = mixed ? '' : isNilSettingValue(scalar) ? '' : scalar
   // Two channels per state, because weight alone at this size was unreadable. Colour is reserved
   // for the PROJECT change — the one the user acted on and can reset. A preset's own override gets
   // italic+bold instead: noticeable, but it does not read as an alert about something wrong, which
@@ -107,10 +127,11 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
     const normalized = Number.isFinite(current) && current > 0 ? String(current) : '0'
     // A value pointing past the current material list (stale baked config) still needs a
     // visible row, or the select would render blank.
-    const outOfRange = normalized !== '0' && !filamentChoices.some((choice) => String(choice.id) === normalized)
+    const outOfRange = !mixed && normalized !== '0' && !filamentChoices.some((choice) => String(choice.id) === normalized)
     return (
       <Select
-        value={normalized}
+        value={mixed ? null : normalized}
+        placeholder={mixed ? 'Mixed' : undefined}
         disabled={!enabled}
         onChange={(_event, value) => { if (typeof value === 'string') onScalarChange(settingKey, value) }}
         sx={{ width: SCALAR_CONTROL_WIDTH }}
@@ -153,7 +174,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
         <Input
           value={value}
           disabled={!enabled}
-          placeholder="Not set"
+          placeholder={mixed ? 'Mixed' : 'Not set'}
           onChange={(event) => onScalarChange(settingKey, event.target.value)}
           sx={{ flex: 1, minWidth: 0 }}
         />
@@ -174,6 +195,13 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
             {option.label}
           </Typography>
         )}
+        {/* A switch has no empty state, so the mixed hint must be text: the off position would
+            otherwise silently claim every member is off. Toggling sets one value for all. */}
+        {mixed && (
+          <Typography level="body-xs" textColor="text.tertiary">
+            Mixed
+          </Typography>
+        )}
       </Stack>
     )
   }
@@ -183,7 +211,8 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
     const labels = option.enumValues ?? []
     return (
       <Select
-        value={value}
+        value={mixed ? null : value}
+        placeholder={mixed ? 'Mixed' : undefined}
         disabled={!enabled}
         onChange={(_event, value) => { if (typeof value === 'string') onScalarChange(settingKey, value) }}
         sx={{ width: SCALAR_CONTROL_WIDTH }}
@@ -211,6 +240,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
         minRows={Math.min(Math.max(option.height ?? 3, 3), 12)}
         value={value}
         disabled={!enabled}
+        placeholder={mixed ? 'Mixed' : undefined}
         onChange={(event) => onScalarChange(settingKey, event.target.value)}
         sx={{ flex: 1, fontFamily: monospace ? 'code' : undefined, minWidth: 280 }}
       />
@@ -235,6 +265,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
       type={useNumberInput ? 'number' : 'text'}
       value={isPurePercent ? value.replace(/%/g, '').trim() : value}
       disabled={!enabled}
+      placeholder={mixed ? 'Mixed' : undefined}
       onChange={(event) => {
         const raw = event.target.value
         if (isPurePercent) {

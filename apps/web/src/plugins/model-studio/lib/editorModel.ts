@@ -171,6 +171,21 @@ export interface EditorInstancePart {
 export interface EditorPlate {
   /** 1-based, contiguous plate index. */
   index: number
+  /**
+   * Session-stable identity, minted by {@link mintPlateId}. `index` is the plate's POSITION and
+   * every {@link reindexPlates} rewrites it, so anything keyed on it drifts when plates move —
+   * that is exactly how a reorder left the dragged plate's thumbnail on two strip tiles. Caches
+   * that outlive renumbering (live plate-strip thumbnails, the stale-thumbnail set, the
+   * pending-scene set) key on this instead. Never persisted.
+   */
+  plateId: number
+  /**
+   * The plate index this plate holds in the OPENED archive, or null for a plate created this
+   * session. Addresses per-plate reads from the project source — the embedded thumbnail PNG and
+   * the plate's scene — which stay keyed by the source's numbering however the session reorders.
+   * Stays valid across saves because the project source answers from its open-time snapshot.
+   */
+  sourcePlateIndex: number | null
   name: string | null
   plateType: string | null
   /** Bed bounds in mm; used to size the bed surface and clamp adds. */
@@ -415,6 +430,13 @@ export function nextInstanceKey(): string {
   return randomUUID()
 }
 
+let plateIdCounter = 0
+/** Allocate a session-unique plate identity (see {@link EditorPlate.plateId}). Never reused. */
+export function mintPlateId(): number {
+  plateIdCounter += 1
+  return plateIdCounter
+}
+
 let syntheticObjectIdCounter = 0
 /**
  * Allocate a stable, NEGATIVE object id for a freshly-imported object. A not-yet-saved import
@@ -547,7 +569,7 @@ function instanceFromScene(instance: LibraryThreeMfSceneInstance, partInfo: Part
 /** Seed an empty new-project state: a single empty plate, no instances. */
 export function seedEmptyEditorState(): EditorState {
   return {
-    plates: [{ index: 1, name: null, plateType: null, bed: { ...DEFAULT_BED }, instances: [], primeTower: null }]
+    plates: [{ index: 1, plateId: mintPlateId(), sourcePlateIndex: null, name: null, plateType: null, bed: { ...DEFAULT_BED }, instances: [], primeTower: null }]
   }
 }
 
@@ -613,6 +635,8 @@ export function seedEditorState(
     const scene = scenesByPlate.get(plate.index)
     const base: EditorPlate = {
       index: plate.index,
+      plateId: mintPlateId(),
+      sourcePlateIndex: plate.index,
       name: plate.name ?? null,
       plateType: plate.plateType ?? null,
       bed: { ...fallbackBed },
@@ -623,7 +647,7 @@ export function seedEditorState(
   })
 
   if (plates.length === 0) {
-    plates.push({ index: 1, name: null, plateType: null, bed: { ...DEFAULT_BED }, instances: [], primeTower: null })
+    plates.push({ index: 1, plateId: mintPlateId(), sourcePlateIndex: null, name: null, plateType: null, bed: { ...DEFAULT_BED }, instances: [], primeTower: null })
   }
 
   const partProcessOverrides = collectPartProcessOverridesFromScenes(scenesByPlate)
@@ -631,6 +655,24 @@ export function seedEditorState(
     plates: reindexPlates(plates),
     ...(Object.keys(partProcessOverrides).length > 0 ? { partProcessOverrides } : {})
   }
+}
+
+/**
+ * The LIVE plate index the editor should open on, given the preferred SOURCE plate index.
+ *
+ * The two spaces differ: `preferredSourceIndex` is the archive's own numbering (what the baked
+ * index and the host's plate pre-selection speak), while seeded plates are POSITIONAL after
+ * {@link reindexPlates}. They coincide for the usual 1..n-contiguous archive, which is what let
+ * the seed effect assign the source index directly for so long — until a file whose plate list
+ * does not start at 1 (Bambu's per-plate "export sliced file" writes only the exported plate,
+ * keeping its number) selected a live index that no seeded plate has, and the editor sat on
+ * "Loading plates…" forever with the state fully seeded behind it.
+ */
+export function seededActivePlateIndex(plates: EditorPlate[], preferredSourceIndex: number | null): number {
+  const preferred = preferredSourceIndex !== null
+    ? plates.find((plate) => plate.sourcePlateIndex === preferredSourceIndex)
+    : undefined
+  return preferred?.index ?? plates[0]?.index ?? 1
 }
 
 /**
@@ -912,6 +954,27 @@ export function reindexPlates(plates: EditorPlate[]): EditorPlate[] {
   return plates.map((plate, position) => (plate.index === position + 1 ? plate : { ...plate, index: position + 1 }))
 }
 
+/**
+ * Move the plate at live index `fromIndex` into insertion gap `insertAt` — a 0-based gap in the
+ * CURRENT list (0 = before the first plate, `plates.length` = after the last). Gap semantics are
+ * what the strip's between-tile drop zones produce; unlike a "target tile" splice they mean the
+ * same thing whichever direction the drag came from. Returns the input array unchanged for a
+ * no-op (unknown plate, or a gap adjacent to the plate's own position), so callers can cheaply
+ * skip the history checkpoint and rebuild.
+ */
+export function movePlate(plates: EditorPlate[], fromIndex: number, insertAt: number): EditorPlate[] {
+  const from = plates.findIndex((plate) => plate.index === fromIndex)
+  if (from < 0) return plates
+  const gap = Math.max(0, Math.min(plates.length, insertAt))
+  const target = gap > from ? gap - 1 : gap
+  if (target === from) return plates
+  const reordered = [...plates]
+  const [moved] = reordered.splice(from, 1)
+  if (!moved) return plates
+  reordered.splice(target, 0, moved)
+  return reindexPlates(reordered)
+}
+
 /** Flatten the editable state into the locked `SceneEdit` contract. */
 /**
  * Whether an instance needs its full matrix emitted. World-space scale only diverges
@@ -1032,7 +1095,7 @@ export function buildSessionFilamentIdRemap(sessionIds: number[]): Map<number, n
 /**
  * Translate every filament id the SceneEdit carries from session space to the saved (1..N) space.
  * An id the map cannot translate references a REMOVED material: the assignment is dropped rather
- * than guessed (the bake then inherits the object/base value, which `remapPartExtruders` keeps
+ * than guessed (the bake then inherits the object/base value, which `remapModelSettingsFilamentRefs` keeps
  * correct). Colour paint is included — its codes are filament ids encoded inside the triangle
  * strings, so they go through `remapPaintTriangles`; the support/seam channels encode
  * enforcer/blocker CONSTANTS instead and must never be remapped.
@@ -1600,6 +1663,10 @@ export function buildSingleObjectExportState(
     plates: [{
       ...plate,
       index: 1,
+      // A synthetic plate, not the source plate at a new position: its own identity keeps the
+      // export render from ever being attributed to the source plate's caches.
+      plateId: mintPlateId(),
+      sourcePlateIndex: null,
       name: null,
       instances: [instance],
       primeTower: null,
@@ -1709,6 +1776,10 @@ export function cloneEditorState(state: EditorState): EditorState {
   return {
     plates: state.plates.map((plate) => ({
       index: plate.index,
+      // Identity fields must survive the snapshot: undo restores the cloned plate list, and the
+      // strip's thumbnail caches key on plateId — dropping it would resurrect the index-keyed drift.
+      plateId: plate.plateId,
+      sourcePlateIndex: plate.sourcePlateIndex,
       name: plate.name,
       plateType: plate.plateType,
       bed: { ...plate.bed },

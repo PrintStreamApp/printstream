@@ -1226,6 +1226,29 @@ export const slicingJobResponseSchema = z.object({
 })
 export type SlicingJobResponse = z.infer<typeof slicingJobResponseSchema>
 
+/** A job still moving through the pipeline (anything not ready/failed/cancelled). */
+export function isActiveSlicingJob(job: SlicingJob): boolean {
+  return job.status === 'queued' || job.status === 'preparing' || job.status === 'slicing' || job.status === 'saving'
+}
+
+/**
+ * The status chip/search label for a slicing job. Shared because the server-side job-history
+ * search matches against the SAME text users see on the card — a client-only copy would let
+ * the two drift and make search misses look like missing jobs.
+ */
+export function getSlicingJobStatusLabel(job: SlicingJob): string {
+  if (job.status === 'queued' && job.queuePosition) return `Queued #${job.queuePosition}`
+  switch (job.status) {
+    case 'queued': return 'Queued'
+    case 'preparing': return 'Preparing'
+    case 'slicing': return 'Slicing'
+    case 'saving': return 'Saving'
+    case 'ready': return 'Ready'
+    case 'failed': return 'Failed'
+    case 'cancelled': return 'Cancelled'
+  }
+}
+
 /**
  * In-flight work on one engine. Absent means nothing is happening.
  *

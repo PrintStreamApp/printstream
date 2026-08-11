@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata } from './output-metadata.js'
+import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, isPlatePreviewEntry, metadataChangesFilamentColours, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata } from './output-metadata.js'
 
 test('rewriteSliceInfoMetadata replaces stale printer model and filament metadata', () => {
   const metadata = buildSlicedArtifactMetadata({
@@ -527,5 +527,65 @@ test('buildManualNozzleAssignment covers every filament, including ones with no 
   for (const value of assignment.filament_map) {
     assert.ok(Number.isFinite(Number.parseInt(value, 10)), `"${value}" is not a usable extruder`)
     assert.ok(Number.parseInt(value, 10) >= 1, 'extruders are 1-based in filament_map')
+  }
+})
+
+test('metadataChangesFilamentColours flags a colour override and ignores formatting-only differences', () => {
+  const buildWithColors = (colors: Array<string | null>) =>
+    buildSlicedArtifactMetadata({
+      sourceFileId: 'source-file',
+      target: {
+        mode: 'manualProfile',
+        printerModel: 'H2D',
+        printerProfileId: 'machine-profile',
+        processProfileId: 'process-profile',
+        filamentMappings: colors.map((color, index) => ({
+          projectFilamentId: index + 1,
+          material: 'Bambu PLA Basic',
+          color,
+          profileId: 'filament-profile-1',
+          source: 'manual' as const
+        }))
+      },
+      outputFileName: 'example.gcode.3mf',
+      plate: 0
+    }, [
+      { id: 'machine-profile', kind: 'machine', name: 'Bambu Lab H2D 0.4 nozzle' },
+      { id: 'process-profile', kind: 'process', name: '0.20mm Standard @BBL H2D' },
+      { id: 'filament-profile-1', kind: 'filament', name: 'Bambu PLA Basic' }
+    ])
+
+  const changed = buildWithColors(['#FFC72C'])
+  assert.ok(changed)
+  // The stale white/yellow case: project previews were rendered white, the slice maps yellow.
+  assert.equal(metadataChangesFilamentColours({ filament_colour: ['#FFFFFF'] }, changed), true)
+
+  const same = buildWithColors(['#ffffff'])
+  assert.ok(same)
+  // Case and alpha-suffix differences are formatting, not a colour change.
+  assert.equal(metadataChangesFilamentColours({ filament_colour: ['#FFFFFF'] }, same), false)
+  assert.equal(metadataChangesFilamentColours({ filament_colour: ['#FFFFFFFF'] }, same), false)
+
+  const partial = buildWithColors([null, '#000000'])
+  assert.ok(partial)
+  // A mapping with no colour keeps the project's own; only real overrides count.
+  assert.equal(metadataChangesFilamentColours({ filament_colour: ['#FFFFFF', '#000000'] }, partial), false)
+  // A slot the project has no colour for counts as a change when the request sets one.
+  assert.equal(metadataChangesFilamentColours({ filament_colour: ['#FFFFFF'] }, partial), true)
+})
+
+test('isPlatePreviewEntry matches exactly the per-plate preview assets and nothing else', () => {
+  for (const name of [
+    'Metadata/plate_1.png', 'Metadata/plate_12_small.png', 'Metadata/plate_no_light_2.png',
+    'Metadata/top_1.png', 'Metadata/pick_3.png'
+  ]) {
+    assert.equal(isPlatePreviewEntry(name), true, `${name} should be a plate preview`)
+  }
+  for (const name of [
+    'Metadata/plate_1.json', 'Metadata/plate_1.gcode', 'Metadata/project_settings.config',
+    'Metadata/model_settings.config', '3D/3dmodel.model', 'Metadata/plate_1.png.bak',
+    'other/plate_1.png'
+  ]) {
+    assert.equal(isPlatePreviewEntry(name), false, `${name} must not be dropped`)
   }
 })

@@ -23,6 +23,7 @@ import {
 } from '../lib/bridge-runtime-auth.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
 import { getBridgeDebugCaptureStatus } from '../lib/bridge-debug-capture.js'
+import { getBridgeBackupStatus } from '../lib/bridge-backup-status.js'
 import { readRequestOrigin } from '../lib/request-helpers.js'
 import { buildBridgeUpdateSummary, getBridgeReleaseManifest, resolveBridgeAssetOrigin } from '../lib/bridge-update-policy.js'
 import { resolveBridgeReleaseAsset } from '../lib/bridge-release-assets.js'
@@ -124,6 +125,7 @@ function buildRegistrationResponse(bridge: RegisteredBridgeRow, runtimeToken: st
       connectionStats: bridgeSessionManager.getConnectionStats(bridge.id),
       update: buildBridgeUpdateSummary(bridge),
       debugCapture: getBridgeDebugCaptureStatus(bridge.id),
+      backup: getBridgeBackupStatus(bridge.id),
       crash: {
         lastCrashAt: bridge.lastCrashAt?.toISOString() ?? null,
         recentCrashCount: bridge.recentCrashCount ?? 0,

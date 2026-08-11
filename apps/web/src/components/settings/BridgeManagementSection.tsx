@@ -30,6 +30,7 @@ import { formatDateTime } from '../../lib/time'
 import { formatBridgeUpdateStatus } from '../../lib/bridgeUpdateStatus'
 import { bridgeCrashChip } from '../../lib/bridgeCrashHealth'
 import { BackAwareModal } from '../BackAwareModal'
+import { BridgeBackupsSection } from './BridgeBackupsSection'
 import { BridgeInstallCard } from '../BridgeInstallCard'
 import { ConnectivityGuideButton } from '../ConnectivityGuideButton'
 import { ConfirmActionDialog } from '../ConfirmActionDialog'
@@ -507,6 +508,10 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
                   </Button>
                 )}
               </Stack>
+
+              <Divider />
+
+              <BridgeBackupsSection bridge={bridge} actionsDisabled={bridgeActionPending} />
 
               <Divider />
 

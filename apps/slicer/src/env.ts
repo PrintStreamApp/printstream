@@ -52,7 +52,7 @@ const envSchema = z.object({
    * How this host launches an engine — see `engines/launcher.ts`.
    *
    * Set to `container` by our own image, which carries the runtime libraries
-   * and the Xvfb/qemu launcher already. Everything else stays `native`, the
+   * and the weston/qemu launcher already. Everything else stays `native`, the
    * answer that assumes nothing about the machine.
    */
   SLICER_ENGINE_LAUNCH: z.enum(['native', 'container']).default('native'),
@@ -90,7 +90,7 @@ const envSchema = z.object({
   // slow hardware legitimately go silent for minutes.
   SLICER_STALL_TIMEOUT_MS: positiveIntEnv(5 * 60 * 1000),
   // Grace after BambuStudio reports "All done, Success" for its process to exit cleanly.
-  // If it lingers past this (qemu teardown hang, leaving zombie Xvfb procs), the slicer
+  // If it lingers past this (qemu teardown hang, leaving orphaned launcher helpers), the slicer
   // terminates it and treats the slice as done — the output is already fully written.
   SLICER_SUCCESS_EXIT_GRACE_MS: positiveIntEnv(20 * 1000)
 })

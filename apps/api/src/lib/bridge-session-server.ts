@@ -21,6 +21,10 @@ import {
   clearBridgeDebugCaptureStatus,
   setBridgeDebugCaptureStatus
 } from './bridge-debug-capture.js'
+import {
+  clearBridgeBackupStatus,
+  setBridgeBackupStatus
+} from './bridge-backup-status.js'
 import { inactiveBridgeDebugCaptureStatus } from '@printstream/shared'
 import { printerDiscovery } from './printer-discovery.js'
 import { printerManager } from './printer-manager.js'
@@ -212,6 +216,7 @@ export function attachBridgeSessionServer(server: HttpServer): AttachedBridgeSes
         const workspaceId = authenticatedConnection?.workspaceId ?? null
         const clearedPrinterIds = bridgeSessionManager.clearBridgePrinterFtpActivity(authenticatedBridgeId)
         clearBridgeDebugCaptureStatus(authenticatedBridgeId)
+        clearBridgeBackupStatus(authenticatedBridgeId)
         clearBridgeMetrics(authenticatedBridgeId)
         if (workspaceId) {
           for (const printerId of clearedPrinterIds) {
@@ -397,6 +402,13 @@ function handleAuthenticatedMessage(
       setBridgeDebugCaptureStatus(bridgeId, message.status)
       if (workspaceId) {
         wsBroadcaster.broadcast({ type: 'bridge.debug.capture', bridgeId, status: message.status }, workspaceId)
+      }
+      return
+    }
+    case 'bridge.backup.status': {
+      setBridgeBackupStatus(bridgeId, message.status)
+      if (workspaceId) {
+        wsBroadcaster.broadcast({ type: 'bridge.backup', bridgeId, status: message.status }, workspaceId)
       }
       return
     }

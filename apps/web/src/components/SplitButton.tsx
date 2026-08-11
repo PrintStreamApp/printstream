@@ -15,11 +15,10 @@ import type { ReactNode } from 'react'
  * open). `primaryDisabled` means only the primary action is: the caret stays live and the group
  * de-emphasises, see `splitButtonGroupAppearance`. `disabledReason` explains either state.
  *
- * Callers: the editor's Add/Save/Slice buttons (`plugins/model-studio/editorPanels.tsx`) and the
- * Library upload button (`pages/LibraryView.tsx`). Add new split buttons through here so the
- * disabled-half rule cannot drift between them. The printer card's Print button stays hand-rolled:
- * its group ref feeds the footer's overflow measurement and its menu is externally controlled, and
- * both halves gate on one condition there, so it has no disabled-half state to get wrong.
+ * Callers: the editor's Add/Save/Slice buttons (`plugins/model-studio/editorPanels.tsx`), the
+ * Library upload button (`pages/LibraryView.tsx`), and the printer card's Print button
+ * (`components/printers/PrinterCardFooterActions.tsx`). Add new split buttons through here so the
+ * disabled-half rule cannot drift between them.
  */
 export function SplitButton({
   label,

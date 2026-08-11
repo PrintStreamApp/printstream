@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs } from './filamentConfigAuthoring'
+import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, rekeyByBakedSlot } from './filamentConfigAuthoring'
 import type { SceneEdit } from '@printstream/shared'
 
 const edit = (filaments: unknown[]): SceneEdit => ({ plates: [], filaments } as unknown as SceneEdit)
@@ -94,4 +94,33 @@ test('a repaired slot keeps its pinned config instead of being re-resolved', asy
 test('applyRepairedFilamentConfigs is a no-op without a pin', () => {
   const input = { filaments: [{ projectFilamentId: 1, settingsId: 'PETG' }] } as unknown as SceneEdit
   assert.equal(applyRepairedFilamentConfigs(input, undefined), input)
+})
+
+/**
+ * Session ids equal baked slots only until a mid-session remove or reorder — after that, reading a
+ * session-keyed record by position hands one slot another slot's data (a slot once inherited the
+ * preset of whichever slot happened to share its position). The boundary conversion is what keeps
+ * the authoring functions' position reads honest.
+ */
+test('rekeyByBakedSlot follows a reordered session list', () => {
+  // Session slots [3, 1, 2] — the user dragged material 3 first; the save bakes them as slots 1..3.
+  assert.deepEqual(
+    rekeyByBakedSlot({ 1: 'p-pla', 2: 'p-petg', 3: 'p-abs' }, [3, 1, 2]),
+    { 1: 'p-abs', 2: 'p-pla', 3: 'p-petg' }
+  )
+})
+
+test('rekeyByBakedSlot drops removed slots and keys the survivors by position', () => {
+  // Material 1 was removed mid-session: slots [2, 3] bake as 1..2; the dead entry must not leak.
+  assert.deepEqual(
+    rekeyByBakedSlot({ 1: 'p-pla', 2: 'p-petg', 3: 'p-abs' }, [2, 3]),
+    { 1: 'p-petg', 2: 'p-abs' }
+  )
+})
+
+test('rekeyByBakedSlot is the identity for an undiverged session and {} for no record', () => {
+  assert.deepEqual(rekeyByBakedSlot({ 1: 'a', 2: 'b' }, [1, 2]), { 1: 'a', 2: 'b' })
+  // A slot with no entry stays absent rather than becoming an undefined-valued key.
+  assert.deepEqual(Object.keys(rekeyByBakedSlot({ 2: 'b' }, [1, 2])), ['2'])
+  assert.deepEqual(rekeyByBakedSlot(undefined, [1, 2]), {})
 })

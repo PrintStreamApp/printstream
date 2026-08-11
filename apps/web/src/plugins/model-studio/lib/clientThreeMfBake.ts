@@ -15,7 +15,7 @@
  * inflated in memory, so the peak here is roughly the source archive plus the output. That is
  * bounded by `MAX_CLIENT_THREE_MF_BYTES` at open time.
  */
-import { zip } from 'fflate'
+import { zipArchiveEntries } from './zipArchiveClient'
 import {
   emptyThreeMfBakeSource,
   planEditedThreeMf,
@@ -136,12 +136,10 @@ async function applyMachineRetargetToEntries(
   }
 }
 
-/** fflate's callback zip as a promise. Level 6 matches what BambuStudio writes. */
+/**
+ * Deflate through the dedicated zip worker (bounded, always settles — a wedged save must surface
+ * an error, never hang "Saving…"). Level 6 matches what BambuStudio writes.
+ */
 function deflateArchive(entries: Record<string, Uint8Array>): Promise<Uint8Array> {
-  return new Promise((resolve, reject) => {
-    zip(entries, { level: 6 }, (error, data) => {
-      if (error) reject(error)
-      else resolve(data)
-    })
-  })
+  return zipArchiveEntries(entries, 6)
 }

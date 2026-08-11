@@ -301,12 +301,16 @@ async function readPlateBundle(plateOutput: PlateOutput): Promise<PlateBundle> {
 /**
  * Ensure a sliced `.gcode.3mf` carries a per-plate MODEL thumbnail.
  *
- * BambuStudio's all-plate export (`--slice 0`) of a rewritten/editor-arranged project slices the
- * gcode fine but can fail to (re)generate the `plate_N.png` model renders, leaving the file with
- * no thumbnail — the library then shows a misleading toolpath fallback or just the kind label.
- * Copy any missing `plate_N.png` / `plate_N_small.png` from the slicer INPUT, which carries the
- * source project's model renders (the editor's arranged 3MF preserves them). Best-effort: skips
- * plates the input can't supply and never throws — a missing thumbnail must not fail a slice.
+ * The degradation half of the cover-rendering contract (docs/slicer-cover-rendering.md): when
+ * the CLI's own renderer could not run — no weston/OSMesa/gl-osmesa-shim in the runtime (the
+ * native self-hosted app, deliberately), a GL failure, or an all-plate export that skipped the
+ * thumbnail stage — the output lands without `plate_N.png` and the library would show a
+ * misleading toolpath fallback or just the kind label. Copy any missing `plate_N.png` /
+ * `plate_N_small.png` from the slicer INPUT. That must be the ORIGINAL input, not the prepared
+ * copy: `prepareInputThreeMf` strips stale previews from the copy when filament colours change,
+ * counting on this reader to restore the originals wherever fresh renders were impossible.
+ * Best-effort: skips plates the input can't supply and never throws — a missing thumbnail must
+ * not fail a slice.
  */
 export async function backfillPlateThumbnails(outputPath: string, inputPath: string): Promise<void> {
   try {

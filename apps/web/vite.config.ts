@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { devApiProxy } from './devApiProxy'
 
 const pwaIconVersion = '20260519a'
 const workspaceRoot = fileURLToPath(new URL('../..', import.meta.url))
@@ -42,6 +43,7 @@ export default defineConfig(({ command, mode }) => {
         }
       : undefined,
     plugins: [
+      devApiProxy(apiPort),
       react(),
       VitePWA({
         registerType: 'autoUpdate',
@@ -137,15 +139,15 @@ export default defineConfig(({ command, mode }) => {
       fs: {
         allow: [workspaceRoot]
       },
+      // WebSocket upgrades only. Plain HTTP `/api` traffic goes through the devApiProxy
+      // plugin above instead of this http-proxy-based config: http-proxy wedges a share of
+      // requests that follow an aborted large response (see the measurements in devApiProxy.ts).
+      // Upgrades never reach a connect middleware, so these two entries stay here.
+      // Target is overridable so a second dev web server can be pointed at a
+      // second API — running one of each on spare ports is how you exercise
+      // in-progress API changes without restarting the one you are using.
       proxy: {
-        // The bridge-runtime connection is a long-lived WebSocket under /api, so it
-        // needs an explicit ws proxy entry (listed first, most-specific) — without it
-        // a home/LAN bridge pointed at a from-source dev origin can't connect.
-        // Target is overridable so a second dev web server can be pointed at a
-        // second API — running one of each on spare ports is how you exercise
-        // in-progress API changes without restarting the one you are using.
         '/api/bridge-runtime/connect': { target: `ws://localhost:${apiPort}`, ws: true },
-        '/api': { target: `http://localhost:${apiPort}` },
         '/ws': { target: `ws://localhost:${apiPort}`, ws: true }
       }
     }

@@ -7,16 +7,12 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Stack, ToggleButtonGroup, Typography } from '@mui/joy'
-import type { Printer, PrinterStatus, QueueRequiredFilament, ThreeMfProjectFilament } from '@printstream/shared'
+import { queueRequiredFilamentFromPlate, type Printer, type PrinterStatus, type QueueRequiredFilament, type ThreeMfProjectFilament } from '@printstream/shared'
 import { PrinterMapping } from '../../components/library/PrinterMapping'
 import { QueueMaterialRow } from './QueueMaterialRow'
 import { materialKey, useFilamentLibrary } from './useFilamentLibrary'
 
 type Mode = 'slot' | 'material'
-
-function toRequiredFilament(filament: ThreeMfProjectFilament): QueueRequiredFilament {
-  return { id: filament.id, filamentType: filament.filamentType, color: filament.color, filamentName: filament.filamentName }
-}
 
 export function QueueSpecificMaterials({
   printer,
@@ -26,6 +22,7 @@ export function QueueSpecificMaterials({
   usedGramsById,
   mapping,
   materials,
+  autoSelectedFilamentIds,
   onMappingChange,
   onMaterialsChange
 }: {
@@ -40,6 +37,8 @@ export function QueueSpecificMaterials({
   mapping: number[]
   /** Effective per-filament required materials. */
   materials: QueueRequiredFilament[]
+  /** Rows whose current slot came from the auto match (marked in the slot mapper). */
+  autoSelectedFilamentIds?: ReadonlySet<number>
   onMappingChange: (next: number[]) => void
   onMaterialsChange: (next: QueueRequiredFilament[]) => void
 }) {
@@ -106,7 +105,7 @@ export function QueueSpecificMaterials({
     <Stack spacing={1.5}>
       {filaments.map((filament) => {
         const mode = modes[filament.id] ?? 'slot'
-        const file = fileById.get(filament.id) ?? toRequiredFilament(filament)
+        const file = fileById.get(filament.id) ?? queueRequiredFilamentFromPlate(filament)
         const value = materialById.get(filament.id) ?? file
         return (
           <Stack key={filament.id} spacing={0.5}>
@@ -127,6 +126,7 @@ export function QueueSpecificMaterials({
                 usedGramsById={usedGramsById}
                 mapping={mapping}
                 issues={[]}
+                autoSelectedFilamentIds={autoSelectedFilamentIds}
                 onChange={(filamentId, tray) => setSlot(filamentId, tray)}
               />
             ) : (

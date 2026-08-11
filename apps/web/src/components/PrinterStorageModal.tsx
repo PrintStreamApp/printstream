@@ -27,7 +27,7 @@ import {
   formatBytes,
   type PrintNozzleOffsetCalibrationMode,
   type PrintOnOffAutoMode,
-  type PrinterModel,
+  type Printer,
   type PrinterStorageList,
   type PrinterTrayMapping
 } from '@printstream/shared'
@@ -72,9 +72,7 @@ function parentPath(p: string): string {
 }
 
 interface Props {
-  printerId: string
-  printerName: string
-  printerModel: PrinterModel
+  printer: Printer
   onClose: () => void
   /** Optional starting directory. Defaults to `/`. */
   initialPath?: string
@@ -115,9 +113,7 @@ interface Props {
 }
 
 export function PrinterStorageModal({
-  printerId,
-  printerName,
-  printerModel,
+  printer,
   onClose,
   initialPath = '/',
   acceptExtensions,
@@ -130,6 +126,8 @@ export function PrinterStorageModal({
   allowManage = true,
   flat = false
 }: Props) {
+  const printerId = printer.id
+  const printerName = printer.name
   const { confirm, promptText } = usePromptDialog()
   const [path, setPath] = useState(initialPath)
   const [printTarget, setPrintTarget] = useState<string | null>(null)
@@ -560,8 +558,7 @@ export function PrinterStorageModal({
       </Modal>
       {printTarget && (
         <StoragePrintModal
-          printerId={printerId}
-          printerModel={printerModel}
+          printer={printer}
           filePath={printTarget}
           submitting={printMutation.isPending}
           error={printMutation.error ? (printMutation.error as Error).message : null}

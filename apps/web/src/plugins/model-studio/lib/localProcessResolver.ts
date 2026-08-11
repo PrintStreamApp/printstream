@@ -10,7 +10,11 @@
  *   resolved by matching the project's parent preset NAME to a built-in in the loaded catalogue and
  *   resolving THAT through the public endpoint. This is exactly what the workspace route does with the
  *   file it reads server-side — here the file only exists in the tab.
- * - CUSTOM/workspace preset -> impossible on an anonymous host; treated as unresolvable.
+ * - BROWSER-STORED preset (`local:process:`) -> the document the user uploaded through the "Manage"
+ *   dialog, flattened onto its built-in parent. Same branch the filament resolver grew first
+ *   (`localFilamentResolver.ts`) — before it, a project that SELECTED a stored process preset
+ *   dead-ended the tune dialog on "could not be resolved" while the preset sat visibly in Manage.
+ * - WORKSPACE preset -> genuinely impossible here; treated as unresolvable.
  */
 import {
   extractProjectProcessConfig,
@@ -22,6 +26,8 @@ import {
 import { apiFetch } from '../../../lib/apiClient'
 import type { ProcessConfigResolver } from '../../../components/ProcessSettingsDialog'
 import { findParentBuiltinPreset } from './localPresetBaseline'
+import { flattenLocalPreset } from './localPresetInheritance'
+import { listLocalSlicingPresets } from './localSlicingPresets'
 import type { ClientThreeMfProject } from './clientThreeMfProject'
 
 /** Resolve a built-in preset's config via the anonymous endpoint. Injectable for tests. */
@@ -82,6 +88,23 @@ export function buildLocalProcessConfigResolver(input: {
     }
     if (slicingPresetProvenance(processProfileId) === 'builtin') {
       return resolveBuiltinProcess(processProfileId, targetId)
+    }
+    // A preset the user uploaded into THIS BROWSER (the "Manage" dialog's store). FLATTENED onto
+    // its parent first — a BambuStudio export is a delta, and handing `raw` out directly makes the
+    // dialog show a handful of values as the whole preset (see `localPresetInheritance.ts`).
+    // Shaped like the workspace route's custom-preset response: an installed preset is what the
+    // caller's values are measured AGAINST, so it is its own baseConfig and nothing is "changed"
+    // until an edit changes it; the parent's values ride in `parentConfig` as emphasis only.
+    const stored = listLocalSlicingPresets().find((preset) => preset.id === processProfileId && preset.kind === 'process')
+    if (stored) {
+      const { config, parentConfig } = await flattenLocalPreset(stored, input.processProfiles,
+        async (builtinId) => (await resolveBuiltinProcess(builtinId, targetId)).config ?? null)
+      return {
+        config,
+        baseConfig: config,
+        ...(parentConfig ? { parentConfig } : {}),
+        overriddenKeys: []
+      }
     }
     throw new Error('Process profile could not be resolved')
   }

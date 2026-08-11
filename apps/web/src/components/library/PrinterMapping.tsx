@@ -40,9 +40,12 @@ import { AmsSpoolSetupDialog, type AmsSpoolSetupTarget } from '../AmsSpoolSetupD
  * actually used by the selected plate are dimmed but still configurable
  * (so the user can pre-set values when later switching plates).
  *
- * Every used filament must have an explicit tray before the print can
- * be dispatched — there is no “auto” fallback because the printer
- * doesn’t actually pick slots itself.
+ * Every used filament must have an explicit tray before the print can be
+ * dispatched — the printer doesn't pick slots itself. The dialogs pre-fill
+ * rows from the shared matcher's exact-match suggestion (see
+ * `lib/autoTrayMatch.ts`); pass those ids as `autoSelectedFilamentIds` so the
+ * rows are visibly flagged as auto-selected rather than silently filled, and
+ * every row stays freely editable.
  */
 export function PrinterMapping({
   printer,
@@ -51,6 +54,7 @@ export function PrinterMapping({
   usedGramsById,
   mapping,
   issues,
+  autoSelectedFilamentIds,
   onChange
 }: {
   printer: Printer
@@ -60,6 +64,8 @@ export function PrinterMapping({
   usedGramsById: Map<number, number>
   mapping: number[]
   issues: FilamentCompatibilityIssue[]
+  /** Filament ids whose current selection came from the auto match (marked in the row). */
+  autoSelectedFilamentIds?: ReadonlySet<number>
   onChange: (filamentId: number, tray: number) => void
 }) {
   const trayGroups = useMemo(() => buildPrinterTrayGroups(status), [status])
@@ -160,6 +166,7 @@ export function PrinterMapping({
                       requiredNozzleId={filament.nozzleId ?? null}
                       requiredGrams={grams ?? null}
                       autoRefillEnabled={status?.amsSettings.autoRefill === true}
+                      autoSelected={autoSelectedFilamentIds?.has(filament.id) === true}
                     />
                   )
                 }}
@@ -273,7 +280,8 @@ function SlotOptionLabel({
   requiredFilamentType,
   requiredNozzleId,
   requiredGrams,
-  autoRefillEnabled
+  autoRefillEnabled,
+  autoSelected
 }: {
   tray: PrinterTrayOption
   trays: readonly PrinterTrayOption[]
@@ -283,6 +291,8 @@ function SlotOptionLabel({
   requiredNozzleId?: number | null
   requiredGrams?: number | null
   autoRefillEnabled?: boolean
+  /** Render the auto-selected marker (the rendered value of a matcher-filled row; never dropdown options). */
+  autoSelected?: boolean
 }) {
   const hasFilament = trayHasLoadedFilament(tray)
   const unknownSpool = trayHasUnknownSpool(tray)
@@ -374,6 +384,9 @@ function SlotOptionLabel({
         {incompatibilityLabel && (
           <IncompatibilityWarningGlyph label={incompatibilityLabel} />
         )}
+        {!incompatibilityLabel && autoSelected && (
+          <AutoSelectedGlyph />
+        )}
         {remainingDetail && (
           <Stack
             direction="row"
@@ -408,6 +421,48 @@ function SlotOptionLabel({
         )}
       </Box>
     </Stack>
+  )
+}
+
+/** Marks a row the matcher filled in: visible (never a silent pre-fill), with the "still yours to change" affordance in the tooltip. */
+function AutoSelectedGlyph() {
+  return (
+    <Tooltip
+      title="Auto-selected — this slot holds an exact match for the material. Pick another slot to change it."
+      variant="soft"
+      size="sm"
+    >
+      <Box
+        component="span"
+        aria-label="Auto-selected slot"
+        sx={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          color: 'primary.plainColor',
+          flexShrink: 0,
+          gridColumn: '2 / 3',
+          gridRow: '1 / span 2',
+          alignSelf: 'center',
+          justifySelf: 'end',
+          cursor: 'help'
+        }}
+      >
+        <SparkleGlyph />
+      </Box>
+    </Tooltip>
+  )
+}
+
+function SparkleGlyph() {
+  return (
+    <Box
+      component="svg"
+      viewBox="0 0 24 24"
+      aria-hidden
+      sx={{ width: 16, height: 16, display: 'block', fill: 'currentColor' }}
+    >
+      <path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L14 12l-2.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z" />
+    </Box>
   )
 }
 

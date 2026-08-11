@@ -11,7 +11,7 @@
  * ./editorGeometry; the filament-option shape is a type-only import from
  * ./EditorView (erased, no runtime cycle).
  */
-import { Fragment, useEffect, useState, type MutableRefObject } from 'react'
+import { Fragment, useEffect, useMemo, useState, type MutableRefObject } from 'react'
 import {
   Box,
   Button,
@@ -77,6 +77,7 @@ import { printedParts, summarizeInstanceMaterial } from './lib/editorModel'
 import type { EditorAddedPart, EditorInstance, EditorPlate } from './lib/editorModel'
 import { PRIMITIVE_LABELS, type PrimitiveKind } from './lib/primitives'
 import { plateDisplayName } from './lib/plateName'
+import { useListReorderDrag } from '../../hooks/useListReorderDrag'
 import type { FilamentOption } from './EditorView'
 
 /**
@@ -119,7 +120,8 @@ export const TOOL_PANEL_ANCHOR = {
 /**
  * Plate selector strip: a live thumbnail per plate (rendered offscreen from the
  * edited layout), with add-plate and per-plate delete. The selected plate is
- * highlighted.
+ * highlighted. Reordering is pointer-based (mouse drag / touch hold-and-drag) and drops into
+ * the gap BETWEEN tiles — see `useListReorderDrag`.
  */
 export function PlateThumbnailStrip({
   plates,
@@ -135,14 +137,16 @@ export function PlateThumbnailStrip({
 }: {
   plates: EditorPlate[]
   activeIndex: number
+  /** Live client-rendered previews, keyed by the plate's session identity (`plateId`). */
   thumbnails: Record<number, string>
   /** Embedded PNG URL for a plate's source thumbnail, or null when the 3MF has none. */
-  embeddedThumbnailUrl: (plateIndex: number) => string | null
+  embeddedThumbnailUrl: (plate: EditorPlate) => string | null
   onSelect: (index: number) => void
   onAddPlate: () => void
   onRemovePlate: (index: number) => void
   onRenamePlate: (index: number) => void
-  onReorderPlate: (fromIndex: number, toIndex: number) => void
+  /** Drop a plate into insertion gap `insertAt` (0-based, 0 = before the first plate). */
+  onReorderPlate: (fromIndex: number, insertAt: number) => void
   /**
    * Which way the strip runs. Vertical is a rail beside the viewport, chosen by
    * `choosePlateStripOrientation` when a horizontal band would letterbox the 3D area. Only the
@@ -151,9 +155,9 @@ export function PlateThumbnailStrip({
   orientation?: 'horizontal' | 'vertical'
 }) {
   const vertical = orientation === 'vertical'
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
-  // Tile currently hovered during a reorder drag, for the drop-target highlight.
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+  const plateIndices = useMemo(() => plates.map((plate) => plate.index), [plates])
+  const { drag, setContainerElement, setTileElement, handleTilePointerDown, shouldSuppressClick } =
+    useListReorderDrag({ vertical, itemIndices: plateIndices, onDrop: onReorderPlate })
   // Which tile's options menu is open. Held here (rather than letting each Dropdown own its
   // state) so a right-click anywhere on a tile can open that tile's menu — the same menu the
   // kebab opens, so the two entry points can never drift apart.
@@ -181,19 +185,24 @@ export function PlateThumbnailStrip({
       }}
     >
     <Stack
+      ref={setContainerElement}
       direction={vertical ? 'column' : 'row'}
       spacing={0.75}
+      // `relative` anchors the drop caret, which positions in content coordinates so it scrolls
+      // with the tiles it points between.
       sx={vertical
-        ? { overflowY: 'auto', overflowX: 'hidden', alignItems: 'stretch', flex: 1, minHeight: 0, width: '100%' }
-        : { overflowX: 'auto', alignItems: 'stretch' }}
+        ? { position: 'relative', overflowY: 'auto', overflowX: 'hidden', alignItems: 'stretch', flex: 1, minHeight: 0, width: '100%' }
+        : { position: 'relative', overflowX: 'auto', alignItems: 'stretch' }}
     >
       {plates.map((plate) => {
         const active = plate.index === activeIndex
         // Prefer a live client-rendered thumbnail (the active plate + any plate the user has
         // opened/edited reflect the real layout); otherwise fall back to the 3MF's embedded
         // PNG so unopened plates don't have to be loaded + rendered just to fill the strip.
-        const liveThumbnail = thumbnails[plate.index]
-        const embedded = liveThumbnail ? null : embeddedThumbnailUrl(plate.index)
+        // Both caches key on the plate's IDENTITY (plateId / source index), never its live
+        // index, so reordering or removing plates can never leave an image on the wrong tile.
+        const liveThumbnail = thumbnails[plate.plateId]
+        const embedded = liveThumbnail ? null : embeddedThumbnailUrl(plate)
         const thumbnail = liveThumbnail ?? embedded
         // No live render and no embedded PNG means the plate is genuinely still loading
         // (e.g. a freshly added empty plate before it's opened) — show a spinner.
@@ -201,7 +210,8 @@ export function PlateThumbnailStrip({
         const label = plateDisplayName(plate.name, plate.index)
         return (
           <Sheet
-            key={plate.index}
+            key={plate.plateId}
+            ref={(element: HTMLElement | null) => setTileElement(plate.index, element)}
             // A div (not a <button>) because the tile contains the options MenuButton, and a
             // button nested in a button is invalid DOM. role/tabIndex/keydown keep it operable.
             component="div"
@@ -209,7 +219,9 @@ export function PlateThumbnailStrip({
             tabIndex={0}
             variant={active ? 'solid' : 'outlined'}
             color={active ? 'primary' : 'neutral'}
-            onClick={() => onSelect(plate.index)}
+            // A completed reorder drop synthesizes a click on this tile; selecting on it would
+            // switch plates (a full scene rebuild) on top of the reorder's own switch.
+            onClick={() => { if (!shouldSuppressClick()) onSelect(plate.index) }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(plate.index) }
             }}
@@ -217,21 +229,7 @@ export function PlateThumbnailStrip({
             // kebab (which stops propagation for the same reason): switching the active plate
             // rebuilds the scene, and renaming or deleting a plate does not require opening it.
             onContextMenu={(event) => { event.preventDefault(); setMenuPlateIndex(plate.index) }}
-            draggable
-            onDragStart={(event) => { setDragIndex(plate.index); event.dataTransfer.effectAllowed = 'move' }}
-            onDragEnd={() => { setDragIndex(null); setDragOverIndex(null) }}
-            onDragOver={(event) => {
-              if (dragIndex === null || dragIndex === plate.index) return
-              event.preventDefault()
-              setDragOverIndex(plate.index)
-            }}
-            onDragLeave={() => setDragOverIndex((current) => (current === plate.index ? null : current))}
-            onDrop={(event) => {
-              event.preventDefault()
-              if (dragIndex !== null && dragIndex !== plate.index) onReorderPlate(dragIndex, plate.index)
-              setDragIndex(null)
-              setDragOverIndex(null)
-            }}
+            onPointerDown={(event) => handleTilePointerDown(plate.index, event)}
             aria-label={`Select ${label}`}
             aria-current={active}
             sx={{
@@ -256,12 +254,15 @@ export function PlateThumbnailStrip({
               flexDirection: collapsed ? 'row' : 'column',
               alignItems: collapsed ? 'center' : undefined,
               gap: collapsed ? 0.5 : 0.25,
-              // Reorder-drag feedback: dim the tile being dragged and ring the tile
-              // the plate will land on.
-              ...(dragIndex === plate.index ? { opacity: 0.45 } : {}),
-              ...(dragIndex !== null && dragIndex !== plate.index && dragOverIndex === plate.index
-                ? { boxShadow: 'inset 0 0 0 2px var(--joy-palette-primary-400)' }
-                : {})
+              // The tile is a drag handle: text selection would fight a mouse drag, and the
+              // iOS long-press callout would fight the touch hold-to-drag.
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              WebkitTouchCallout: 'none',
+              // Reorder feedback: dim the tile being dragged; the landing position is the caret
+              // drawn in the target gap (a ring on a TILE read as "swap/put inside" and could
+              // not say on which side the plate would land).
+              ...(drag?.itemIndex === plate.index ? { opacity: 0.45 } : {})
             }}
           >
             {!collapsed && (
@@ -308,7 +309,15 @@ export function PlateThumbnailStrip({
             >
               <MenuButton
                 slots={{ root: IconButton }}
-                slotProps={{ root: { size: 'sm', variant: 'plain', color: 'neutral', onClick: (event: React.MouseEvent) => event.stopPropagation(), 'aria-label': `Plate ${plate.index} options` } }}
+                slotProps={{ root: {
+                  size: 'sm',
+                  variant: 'plain',
+                  color: 'neutral',
+                  onClick: (event: React.MouseEvent) => event.stopPropagation(),
+                  // Pressing the kebab must not arm a reorder drag on the tile under it.
+                  onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
+                  'aria-label': `Plate ${plate.index} options`
+                } }}
                 sx={collapsed
                   ? { flexShrink: 0, minHeight: 22, minWidth: 22, '--IconButton-size': '22px' }
                   : { position: 'absolute', top: 2, right: 2, minHeight: 22, minWidth: 22, '--IconButton-size': '22px' }}
@@ -363,6 +372,24 @@ export function PlateThumbnailStrip({
           {collapsed ? <UnfoldMoreRoundedIcon fontSize="small" /> : <UnfoldLessRoundedIcon fontSize="small" />}
         </IconButton>
       </Tooltip>
+      {/* Insertion caret: drawn in the gap the drop would land in, so the target is unambiguous
+          in both drag directions. Positioned in content coordinates (it scrolls with the tiles);
+          rendered last with zeroed margins so the Stack's sibling spacing never shifts a tile. */}
+      {drag && drag.caretOffset !== null && (
+        <Box
+          sx={{
+            position: 'absolute',
+            m: '0 !important',
+            pointerEvents: 'none',
+            zIndex: 1,
+            borderRadius: '2px',
+            bgcolor: 'primary.400',
+            ...(vertical
+              ? { left: 4, right: 4, height: 3, top: drag.caretOffset - 1.5 }
+              : { top: 4, bottom: 4, width: 3, left: drag.caretOffset - 1.5 })
+          }}
+        />
+      )}
     </Stack>
     </Sheet>
   )
@@ -1071,6 +1098,12 @@ function FilamentBadge({
   const interactive = Boolean(onReassign && options && options.length > 0)
   const mixed = Boolean(mixedColors && mixedColors.length > 1)
   if (filamentId == null && !mixed && !interactive) return null
+  // The digit users see is the material's POSITION in the sidebar order, not the session id —
+  // the two diverge after a mid-session remove/reorder (ids stay stable until the save
+  // renumbers). Falls back to the id only when the caller has no options list to derive from.
+  const displayNumber = filamentId == null
+    ? null
+    : options?.find((option) => option.id === filamentId)?.number ?? filamentId
   const swatch = (
     <Box
       sx={{
@@ -1091,13 +1124,13 @@ function FilamentBadge({
     >
       {!mixed && (
         <Typography level="body-xs" sx={{ fontWeight: 700, lineHeight: 1, color: filamentTextColor(color) }}>
-          {filamentId ?? '+'}
+          {displayNumber ?? '+'}
         </Typography>
       )}
     </Box>
   )
   if (!interactive) {
-    return <Tooltip title={title ?? (mixed ? 'Mixed materials' : `Material ${filamentId}`)}>{swatch}</Tooltip>
+    return <Tooltip title={title ?? (mixed ? 'Mixed materials' : `Material ${displayNumber}`)}>{swatch}</Tooltip>
   }
   return (
     <Dropdown>
@@ -1122,7 +1155,7 @@ function FilamentBadge({
             sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
           >
             <Box sx={{ flexShrink: 0, width: 16, height: 16, borderRadius: '3px', bgcolor: option.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
-            <span>Material {option.id}{option.label ? ` — ${option.label}` : ''}{option.colorName ? ` (${option.colorName})` : ''}</span>
+            <span>Material {option.number}{option.label ? ` — ${option.label}` : ''}{option.colorName ? ` (${option.colorName})` : ''}</span>
           </MenuItem>
         ))}
       </Menu>
@@ -1382,7 +1415,7 @@ export function ObjectList({
                       : 'Change material'}
                     onReassign={(fid) => onReassignFilament(materialParts.map((p) => ({ objectId: perObjectId, partIndex: p.partIndex })), fid)}
                   />
-                ) : (!showParts && <FilamentBadge filamentId={resolveId(instance.filamentId)} color={liveColor(resolveId(instance.filamentId), instance.color)} />)}
+                ) : (!showParts && <FilamentBadge filamentId={resolveId(instance.filamentId)} color={liveColor(resolveId(instance.filamentId), instance.color)} options={filamentOptions} />)}
                 {perObject && sliceObject != null && (
                   <SettingsTuneButton
                     changedCount={overrideCount}

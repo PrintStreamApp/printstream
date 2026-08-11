@@ -56,6 +56,10 @@ import {
   bridgeDebugCaptureReadParamsSchema,
   bridgeDebugCaptureReadResultSchema,
   bridgeDebugCaptureStatusResultSchema,
+  bridgeBackupRunParamsSchema,
+  bridgeBackupListParamsSchema,
+  bridgeBackupListResultSchema,
+  bridgeBackupStatusResultSchema,
   createAbortError,
   type BridgeRuntimeInboundMessage,
   type Printer,
@@ -91,6 +95,13 @@ import {
   startCapture,
   stopCapture
 } from './debug-capture.js'
+import {
+  getBridgeBackupStatus,
+  initBridgeBackups,
+  listBridgeBackupSnapshots,
+  onBridgeBackupStatusChange,
+  startBridgeBackup
+} from './backup-manager.js'
 import {
   appendBridgeLibraryFileChunk,
   copyBridgeLibraryFile,
@@ -241,6 +252,10 @@ export class BridgeRuntimeClient {
       lifecycle: 'starting',
       message: 'Starting bridge runtime.'
     })
+
+    // Backups run on their own schedule, independent of the connection loop:
+    // protecting the library must not depend on the server being reachable.
+    await initBridgeBackups()
 
     // Jittered exponential backoff so a fleet of bridges doesn't reconnect in
     // lockstep when the API restarts (each reconnect drives registration + DB
@@ -394,6 +409,13 @@ export class BridgeRuntimeClient {
         socket.send(JSON.stringify({ type: 'bridge.debug.capture.status', status }))
       }
     })
+    // Same per-connection notifier for backup start/finish/failure, so the
+    // settings UI tracks a minutes-long backup live instead of polling.
+    onBridgeBackupStatusChange((status) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'bridge.backup.status', status }))
+      }
+    })
     this.simulator?.start((message) => {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(message))
@@ -522,6 +544,9 @@ export class BridgeRuntimeClient {
           // (re)connected) re-learns it and keeps the banner accurate.
           if (parsed.data.connected && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'bridge.debug.capture.status', status: getCaptureStatus() }))
+            // Backup status too: the API's mirror is dropped on disconnect and
+            // re-learned here, like the capture status above.
+            socket.send(JSON.stringify({ type: 'bridge.backup.status', status: getBridgeBackupStatus() }))
           }
           // Flush a pending crash report once per surviving run: the previous run
           // died without a clean shutdown, and this is the first authenticated
@@ -537,6 +562,7 @@ export class BridgeRuntimeClient {
       socket.once('close', () => {
         if (heartbeatTimer) clearInterval(heartbeatTimer)
         onCaptureStatusChange(null)
+        onBridgeBackupStatusChange(null)
         this.stopAllCameraStreams()
         stopDiscovery()
         printerMonitor.stopAll()
@@ -553,6 +579,7 @@ export class BridgeRuntimeClient {
       socket.once('error', (error) => {
         if (heartbeatTimer) clearInterval(heartbeatTimer)
         onCaptureStatusChange(null)
+        onBridgeBackupStatusChange(null)
         this.stopAllCameraStreams()
         stopDiscovery()
         printerMonitor.stopAll()
@@ -657,6 +684,28 @@ export class BridgeRuntimeClient {
           type: 'bridge.rpc.success',
           id: request.id,
           result: bridgeDebugCaptureReadResultSchema.parse(readCapture())
+        }))
+        return
+      }
+
+      if (request.method === 'bridge.backup.run') {
+        bridgeBackupRunParamsSchema.parse(request.params)
+        // Starts the run and answers immediately; completion is pushed as a
+        // `bridge.backup.status` message (a full backup outlives RPC timeouts).
+        socket.send(JSON.stringify({
+          type: 'bridge.rpc.success',
+          id: request.id,
+          result: bridgeBackupStatusResultSchema.parse(startBridgeBackup('manual'))
+        }))
+        return
+      }
+
+      if (request.method === 'bridge.backup.list') {
+        bridgeBackupListParamsSchema.parse(request.params)
+        socket.send(JSON.stringify({
+          type: 'bridge.rpc.success',
+          id: request.id,
+          result: bridgeBackupListResultSchema.parse({ snapshots: await listBridgeBackupSnapshots() })
         }))
         return
       }

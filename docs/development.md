@@ -92,7 +92,7 @@ BambuStudio CLI logs all diagnostics through stdout/stderr, and some successful 
 npm run test
 ```
 
-This runs the repo's TypeScript test suite via Node's built-in test runner. `npm run validate` includes linting, tests, typechecking, and Prisma schema validation, so new features should add or update focused regression tests before they are considered complete.
+This runs the repo's TypeScript test suite via Node's built-in test runner. `npm run validate` includes linting, tests, typechecking, and Prisma schema validation, so new features should add or update focused regression tests before they are considered complete. Validate runs its stages at the lowest CPU scheduling priority (`scripts/dev/run-low-priority.mjs`), so it can share a machine with the running dev servers without starving them — it only takes longer when something else actually wants the CPU.
 
 The aggregate test runner runs the whole suite in one `node --test` pass (each file is isolated in its own subprocess) and never stops at the first failure. It caps how many files run at once so a busy/shared CPU does not make timing-sensitive suites flake; the default is about half the cores. Tune it with `npm run test -- --concurrency=<n>` or `NODE_TEST_CONCURRENCY=<n> npm run test` (lower it if you see flakes; that knob also bounds peak memory). Pass a path substring to scope the run, e.g. `npm run test -- print-job-recorder`.
 

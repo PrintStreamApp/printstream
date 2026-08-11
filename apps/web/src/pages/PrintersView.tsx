@@ -1,5 +1,5 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
-import { Alert, Box, Button, ButtonGroup, CircularProgress, Divider, FormControl, IconButton, Menu, MenuItem, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, type ComponentProps } from 'react'
+import { Alert, Box, Button, CircularProgress, Divider, FormControl, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
 import AddIcon from '@mui/icons-material/Add'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
@@ -7,7 +7,6 @@ import SaveRoundedIcon from '@mui/icons-material/SaveRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import SortRoundedIcon from '@mui/icons-material/SortRounded'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PaginatedSection } from '../components/PaginationFooter'
@@ -46,7 +45,6 @@ import { useMobileViewport } from '../components/useMobileViewport'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { useLocalStorageState } from '../hooks/useLocalStorageState'
 import { usePersistentState } from '../hooks/usePersistentState'
-import { useControlledMenuClickAway } from '../hooks/useControlledMenuClickAway'
 import { shouldShowNoConnectedPrintersEmptyState } from '../lib/printersEmptyState'
 import { usePlateClearingSync } from '../lib/plateClearing'
 import { useRuntimePolicy } from '../lib/runtimePolicy'
@@ -155,11 +153,13 @@ export function PrintersView() {
     (printer: Printer) => navigate(workspacePath(`/printers/${printer.id}`)),
     [navigate, workspacePath]
   )
-  // Page-level Print flow (split button next to "Add printer"). Mirrors
-  // the per-card flow but with no preselected printer - the user picks
-  // one in the subsequent PrintModal.
+  // Page-level Print flow (button next to "Add printer"). Mirrors the
+  // per-card library flow but with no preselected printer - the user picks
+  // one in the subsequent PrintModal. Unlike the per-card Print it is a
+  // plain button, not a split button: "Print from local file" needs a
+  // printer up front (the upload targets that printer's bridge), so it
+  // has no second action to offer here.
   const [pageLibraryPickerOpen, setPageLibraryPickerOpen] = useState(false)
-  const [pagePrintMenuOpen, setPagePrintMenuOpen] = useState(false)
   const [sortDialogOpen, setSortDialogOpen] = useState(false)
   const [printerViewsDialogOpen, setPrinterViewsDialogOpen] = useState(false)
   const [printerViewsDialogMode, setPrinterViewsDialogMode] = useState<'settings' | 'create'>('settings')
@@ -176,8 +176,6 @@ export function PrintersView() {
     parseHistoryViewMode,
     String
   )
-  const pagePrintDesktopAnchorRef = useRef<HTMLDivElement>(null)
-  const pagePrintMobileAnchorRef = useRef<HTMLDivElement>(null)
   const isMobileViewport = useMobileViewport()
 
   const closePrintFlow = () => {
@@ -222,10 +220,6 @@ export function PrintersView() {
     parseStoredStringArray,
     JSON.stringify
   )
-  useControlledMenuClickAway(pagePrintMenuOpen, 'page-print-menu', () => setPagePrintMenuOpen(false), [
-    pagePrintDesktopAnchorRef,
-    pagePrintMobileAnchorRef
-  ])
   const [printerCardContentSettings, setPrinterCardContentSettings] = useLocalStorageState<PrinterCardContentSettings>(
     `bambu.printers.cardContentSettings.${workspacePreferenceScopeKey}`,
     DEFAULT_PRINTER_CARD_CONTENT_SETTINGS,
@@ -913,31 +907,14 @@ export function PrintersView() {
               )}
               {canDispatchPrints && <Divider orientation="vertical" sx={{ alignSelf: 'stretch', mx: 0.25 }} />}
               {canDispatchPrints && (
-                <ButtonGroup
-                  ref={pagePrintDesktopAnchorRef}
+                <Button
                   size="sm"
-                  color="primary"
-                  variant="solid"
-                  aria-label="print"
+                  onClick={() => setPageLibraryPickerOpen(true)}
+                  startDecorator={<PrintRoundedIcon />}
                   sx={{ flex: '0 0 auto', minWidth: 0 }}
                 >
-                  <Button
-                    onClick={() => setPageLibraryPickerOpen(true)}
-                    startDecorator={<PrintRoundedIcon />}
-                    sx={{ flex: 1, minWidth: 0 }}
-                  >
-                    Print
-                  </Button>
-                  <IconButton
-                    aria-controls={pagePrintMenuOpen ? 'page-print-menu' : undefined}
-                    aria-expanded={pagePrintMenuOpen ? 'true' : undefined}
-                    aria-haspopup="menu"
-                    aria-label="More print options"
-                    onClick={() => setPagePrintMenuOpen((value) => !value)}
-                  >
-                    <ArrowDropDownIcon />
-                  </IconButton>
-                </ButtonGroup>
+                  Print
+                </Button>
               )}
             </Stack>
             <Stack
@@ -957,31 +934,14 @@ export function PrintersView() {
                 </Button>
               )}
               {canDispatchPrints && (
-                <ButtonGroup
-                  ref={pagePrintMobileAnchorRef}
+                <Button
                   size="sm"
-                  color="primary"
-                  variant="solid"
-                  aria-label="print"
+                  onClick={() => setPageLibraryPickerOpen(true)}
+                  startDecorator={<PrintRoundedIcon />}
                   sx={{ width: 119, flex: '0 0 auto', minWidth: 0 }}
                 >
-                  <Button
-                    onClick={() => setPageLibraryPickerOpen(true)}
-                    startDecorator={<PrintRoundedIcon />}
-                    sx={{ flex: 1, minWidth: 0 }}
-                  >
-                    Print
-                  </Button>
-                  <IconButton
-                    aria-controls={pagePrintMenuOpen ? 'page-print-menu' : undefined}
-                    aria-expanded={pagePrintMenuOpen ? 'true' : undefined}
-                    aria-haspopup="menu"
-                    aria-label="More print options"
-                    onClick={() => setPagePrintMenuOpen((value) => !value)}
-                  >
-                    <ArrowDropDownIcon />
-                  </IconButton>
-                </ButtonGroup>
+                  Print
+                </Button>
               )}
             </Stack>
           </Stack>
@@ -1028,26 +988,6 @@ export function PrintersView() {
               </Button>
             </Stack>
           </Stack>
-          {canDispatchPrints && (
-            <Menu
-              id="page-print-menu"
-              open={pagePrintMenuOpen}
-              onClose={() => setPagePrintMenuOpen(false)}
-              anchorEl={pagePrintDesktopAnchorRef.current?.offsetParent != null
-                ? pagePrintDesktopAnchorRef.current
-                : pagePrintMobileAnchorRef.current}
-              placement="bottom-end"
-            >
-              <MenuItem
-                onClick={() => {
-                  setPagePrintMenuOpen(false)
-                  setPageLibraryPickerOpen(true)
-                }}
-              >
-                Print from library…
-              </MenuItem>
-            </Menu>
-          )}
         </Stack>
       )}
 

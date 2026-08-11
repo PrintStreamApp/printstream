@@ -7,9 +7,20 @@
  * `filamentColor.ts`). `filamentColorLabel` is the storable fallback label:
  * the common name when the hex is a known swatch, otherwise the normalized
  * hex itself, so a persisted colour identity is always human-presentable and
- * never a raw printer tray code.
+ * never a raw printer tray code. `normalizeHexColor` is the hex normalizer
+ * every colour comparison in the repo funnels through; it lives here (not in
+ * `print-queue.ts`, its original home) so the identity modules and the print
+ * matcher can both import it without a cycle.
  */
-import { normalizeHexColor } from './print-queue.js'
+
+/** Normalize a color to `#RRGGBB` (uppercase), or null when unparseable. */
+export function normalizeHexColor(value: string | null | undefined): string | null {
+  if (!value) return null
+  const trimmed = value.trim()
+  const match = /^#?([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(trimmed)
+  if (!match) return null
+  return `#${match[1]!.toUpperCase()}`
+}
 
 export interface FilamentColorSwatchOption {
   name: string

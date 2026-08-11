@@ -17,12 +17,17 @@ import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import {
   type AuditLogEntry,
+  type PrintJob,
+  isActiveSlicingJob,
+  jobHistoryQuerySchema,
+  jobHistoryResponseSchema,
   JOBS_DELETE_PERMISSION,
   JOBS_VIEW_PERMISSION,
   parsePreservedSliceSettings,
   PRINTS_DISPATCH_PERMISSION,
   printFromLibrarySchema,
-  PRINTERS_CONTROL_CALIBRATE_SCOPE
+  PRINTERS_CONTROL_CALIBRATE_SCOPE,
+  selectJobHistoryPage
 } from '@printstream/shared'
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { getRelatedAuditLogsForPrintJobs } from '../lib/audit-logs.js'
@@ -35,7 +40,8 @@ import { readPrintJobThumbnail } from '../lib/print-job-thumbnails.js'
 import { deletePrintJobSnapshot } from '../lib/print-job-snapshots.js'
 import { readPrintJobSnapshot } from '../lib/print-job-snapshots.js'
 import { assertRequestPermission, requireRequestPermission } from '../lib/authorization.js'
-import { requireRequestWorkspaceId, requireRouteParam } from '../lib/request-helpers.js'
+import { requireRequestWorkspaceId, requireRouteParam, sendModelBuffer } from '../lib/request-helpers.js'
+import { slicingJobs } from '../lib/slicing-jobs.js'
 import { broadcastJobsChanged, broadcastPrintDispatchChanged } from '../lib/ws-resource-events.js'
 import { parseAmsMapping, reprintJobFromRow, toPrintJobKind } from '../lib/print-reprint.js'
 
@@ -159,6 +165,40 @@ jobsRouter.get('/', requireRequestPermission(JOBS_VIEW_PERMISSION), async (reque
   response.json({
     jobs: await Promise.all(rows.map(async (row) => await toPrintJobDto(row, activityByJobId.get(row.id) ?? [])))
   })
+})
+
+/**
+ * The merged job history — finished prints + terminal slicing jobs — filtered, sorted, and
+ * PAGED server-side (the shared `selectJobHistoryPage` owns the semantics; the Jobs view's
+ * history section is the counterpart). Pagination lives here because the history is a MERGE of
+ * two sources: the browser cannot page a merged list correctly from two independently-paged
+ * endpoints, and shipping both full histories (the old shape) grew without bound. Both source
+ * sets are still materialized server-side per request — same cost `GET /` always paid — so this
+ * bounds the wire, not the server; see the note on `selectJobHistoryPage`.
+ */
+jobsRouter.get('/history', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
+  const workspaceId = requireRequestWorkspaceId(request)
+  const parsedQuery = jobHistoryQuerySchema.safeParse(request.query)
+  if (!parsedQuery.success) throw badRequest('Invalid job history query')
+  const rows = (await listJobs(workspaceId, undefined)).filter((row) => row.finishedAt != null)
+  const activityByJobId = await getRelatedAuditLogsForPrintJobs(rows.map((row) => ({
+    id: row.id,
+    printerId: row.printerId,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt
+  })), workspaceId)
+  const printJobs = await Promise.all(rows.map(async (row) => await toPrintJobDto(row, activityByJobId.get(row.id) ?? [])))
+  const terminalSlicingJobs = slicingJobs.list(workspaceId).filter((job) => !isActiveSlicingJob(job))
+  const printers = await prisma.printer.findMany({ where: { workspaceId }, select: { id: true, name: true } })
+  const printerNames = new Map(printers.map((printer) => [printer.id, printer.name]))
+  const result = selectJobHistoryPage({
+    printJobs,
+    slicingJobs: terminalSlicingJobs,
+    query: parsedQuery.data,
+    printerNameFor: (id) => printerNames.get(id) ?? null
+  })
+  // Gzip-piped like the slicing list: a 100-row page of jobs is still repetitive JSON.
+  await sendModelBuffer(request, response, Buffer.from(JSON.stringify(jobHistoryResponseSchema.parse(result)), 'utf8'), 'application/json')
 })
 
 jobsRouter.delete('/:id', requireRequestPermission(JOBS_DELETE_PERMISSION), async (request, response) => {
@@ -332,6 +372,15 @@ async function listJobs(workspaceId: string, printerId: string | undefined): Pro
 
 type PrintJobRow = Awaited<ReturnType<typeof listJobs>>[number]
 
+/**
+ * The DB column is an open string; the recorder only ever writes the DTO vocabulary, so
+ * anything else is a legacy/foreign row and reads as `unknown` rather than leaking a raw
+ * value the result filter and the shared history contract cannot represent.
+ */
+function normalizePrintJobResult(result: string): PrintJob['result'] {
+  return result === 'success' || result === 'failed' || result === 'cancelled' ? result : 'unknown'
+}
+
 async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
   const jobKind = toPrintJobKind('sourceType' in row ? row.sourceType : 'library', row.fileId)
   const projectFilamentChips = await resolveJobProjectFilamentChips(row)
@@ -344,7 +393,7 @@ async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
     finishedAt: row.finishedAt?.toISOString() ?? null,
     progressPercent: row.progressPercent,
     durationSeconds: row.durationSeconds,
-    result: row.result,
+    result: normalizePrintJobResult(row.result),
     fileId: row.fileId,
     fileName: row.fileName,
     fileSizeBytes: 'file' in row ? row.fileSizeBytes ?? row.file?.sizeBytes ?? null : row.fileSizeBytes,

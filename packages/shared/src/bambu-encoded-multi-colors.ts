@@ -6,7 +6,7 @@
  * covers palettes with multiple colors so the UI can resolve names like
  * "Arctic Whisper" and paint gradient slot badges.
  */
-import { normalizeHexColor } from './print-queue.js'
+import { normalizeHexColor } from './filament-color.js'
 
 export interface BambuEncodedMultiColor {
   trayInfoIdx: string

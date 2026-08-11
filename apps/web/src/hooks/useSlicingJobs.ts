@@ -12,6 +12,13 @@ import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspa
  */
 const SLICING_JOBS_TIMEOUT_MS = 20_000
 
+/**
+ * The workspace's ACTIVE slicing jobs plus a short just-finished window — `GET /api/slicing/jobs`
+ * (its counterpart route) stopped returning full history when the Jobs view's history section
+ * moved to the server-paged `/api/jobs/history`. Consumers are the live surfaces only (the toast
+ * stack, the in-progress section); anything needing one specific job — however old — uses
+ * `useSlicingJob` instead.
+ */
 export function useSlicingJobs(options?: { enabled?: boolean; suppressGlobalErrorToast?: boolean }) {
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
   return useQuery({

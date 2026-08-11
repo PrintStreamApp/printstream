@@ -267,6 +267,25 @@ const envSchema = z.object({
    */
   LICENSE_REFRESH_ORIGIN: z.string().url().optional(),
   LIBRARY_DIR: z.string().default('./data/library'),
+  /**
+   * Where the built-in server backups live (issue #78). Deliberately its own
+   * mount in the Compose stack (`/backups`) and a sibling of the data tree on
+   * the native build, so wiping or recreating the app cannot take the backups
+   * with it. UNSET disables backups entirely — a default inside the container
+   * filesystem would let an install with an un-updated compose file write
+   * "backups" that die with the container. Cloud manages the surface from the
+   * platform workspace (workspace admins never see it).
+   */
+  BACKUPS_DIR: optionalStringEnv(),
+  /** Scheduled server-backup cadence. 0 keeps backups manual-only. */
+  BACKUP_INTERVAL_HOURS: z.coerce.number().nonnegative().default(24),
+  /**
+   * Overrides for the Postgres client tools the backup system shells out to.
+   * Resolution order without them: `EMBEDDED_POSTGRES_BIN_DIR` (native), then
+   * PATH. The Docker image ships matching `postgresql-client` tools.
+   */
+  PG_DUMP_PATH: optionalStringEnv(),
+  PG_RESTORE_PATH: optionalStringEnv(),
   LIBRARY_MAX_UPLOAD_BYTES: positiveIntEnv(1024 * 1024 * 1024),
   LIBRARY_TRANSIENT_RETENTION_DAYS: positiveIntEnv(7),
   LIBRARY_RECYCLE_RETENTION_DAYS: positiveIntEnv(30),

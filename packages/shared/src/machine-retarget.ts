@@ -18,7 +18,7 @@
  */
 import { processSettingsCatalog } from './process-settings.js'
 import { PRINTER_PRESET_OPTIONS, PRINT_PRESET_OPTIONS } from './generated/preset-options.generated.js'
-import { repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
+import { repairFlushMultiplier, repairFlushVolumesMatrix } from './flush-volumes-matrix.js'
 import { buildFilamentVariantRows } from './filament-variant-index.js'
 import { rebindProjectFilamentPhysics, type FilamentSlotRebind } from './filament-rebind.js'
 import { machineSettingsCatalog } from './machine-settings.js'
@@ -145,6 +145,18 @@ export function retargetProjectSettingsToMachine(
     extruderCount
   )
   if (repairedMatrix) next.flush_volumes_matrix = repairedMatrix
+  // `flush_multiplier` is the matrix's per-extruder companion and the length the ENGINE actually
+  // validates the matrix against (`GCode.cpp` uses `flush_multiplier.size()` as the heads count,
+  // not `nozzle_diameter`). Leaving it at the source machine's length made every multi-filament
+  // slice of a 1 -> 2 extruder retarget fail at "Generating G-code" with "Flush volumes matrix do
+  // not match to the correct size!" (exit 156). `flush_multiplier_fast` is only resized when the
+  // file carries it — genuine Bambu saves routinely omit it, and absence is safe.
+  const repairedMultiplier = repairFlushMultiplier(next.flush_multiplier, extruderCount)
+  if (repairedMultiplier) next.flush_multiplier = repairedMultiplier
+  if (next.flush_multiplier_fast !== undefined) {
+    const repairedFast = repairFlushMultiplier(next.flush_multiplier_fast, extruderCount, '1.2')
+    if (repairedFast) next.flush_multiplier_fast = repairedFast
+  }
   return repairEstimateModeProjectSettings(next, machineProfile)
 }
 

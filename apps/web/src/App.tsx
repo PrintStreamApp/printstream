@@ -894,6 +894,10 @@ export function App() {
             label: entry.label,
             ...(entry.description ? { description: entry.description } : {}),
             icon: BILLING_SCOPE_SECTION_ICONS[entry.id],
+            // Like every workspace tab: the mobile dock renders icon-only
+            // (label in the tooltip) — with labels, seven tabs overflow a
+            // 375px dock.
+            mobileIcon: BILLING_SCOPE_SECTION_ICONS[entry.id],
             // Settings is a gear everywhere else in the app, so it is a gear
             // here. It also stops the one utility tab competing for width with
             // the six that are the actual content of this scope.

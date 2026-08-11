@@ -14,21 +14,28 @@
  * always means at least one value would really move — callers can prompt unconditionally.
  *
  * Ported from `Tab.cpp`'s `opt_key == "support_interface_filament"` branch in BambuStudio
- * (the vendored source under `tmp/bambustudio-src`). Two deliberate omissions:
+ * (the vendored source under `tmp/bambustudio-src`). Like Studio, the per-combination table
+ * (`support-recommended-combinations.ts`, vendored from `support_recommended_params.json`) is
+ * consulted FIRST — a table hit decides the outcome outright, even when every table value is
+ * already configured and a fallback case would still move keys — and the three hard-coded
+ * cases run only when it misses. The table needs to know which materials the plate's model
+ * objects print with (`modelFilamentIds`), and only fires when they are homogeneous (all one
+ * type or all one preset name), mirroring Studio's current-plate volume scan; a host that
+ * cannot supply that context simply gets the fallback-only behaviour.
  *
- * - Studio first consults a JSON table of per-material-combination recommendations
- *   (`query_support_recommended_params_for_combination`), which only applies to one printer
- *   model (X2D) and needs vendor profile data we do not ship. We implement only Studio's own
- *   hard-coded fallback sets. Revisit if we ever vendor that table.
- * - Studio has a parallel prompt on the support BASE filament (`support_filament`), including
- *   a "non-soluble material as support base" warning. Not ported; this module is scoped to
- *   the interface change the UI asks about.
+ * One deliberate omission remains: Studio has a parallel prompt on the support BASE filament
+ * (`support_filament`), including a "non-soluble material as support base" warning. Not
+ * ported; this module is scoped to the interface change the UI asks about. And one deliberate
+ * divergence: Studio gates the table on the X2D printer model — we offer it everywhere (see
+ * the combinations module header).
  *
  * Counterpart: `ProcessSettingsDialog` (apps/web) calls this from its scalar-change handler
- * and applies the result through the same config commit path as a manual edit, so the
- * proposal rides the existing modified/reset/undo wiring.
+ * and applies the result through the same config commit path as a manual edit
+ * (via {@link applySupportRecommendationChanges}), so the proposal rides the existing
+ * modified/reset/undo wiring.
  */
 import { serializeProcessBool, type ProcessConfig, type ProcessConfigValue } from './process-settings.js'
+import { normalizeMaterialNameKey, querySupportRecommendedCombination, stripPresetPrinterSuffix } from './support-recommended-combinations.js'
 
 /** One project material, as much of it as the classification needs. */
 export interface SupportRecommendationFilament {
@@ -51,12 +58,20 @@ export interface SupportRecommendationInput {
   supportFilamentId: number
   /** Every material the plate/project carries — the TPU check scans these. */
   filaments: readonly SupportRecommendationFilament[]
+  /**
+   * Ids (into `filaments`) of the materials the target plate's MODEL OBJECTS print with — the
+   * model-material side of the combination-table lookup, mirroring Studio's scan of the current
+   * plate's volumes. Dedicated support materials do not belong here (they are not model
+   * geometry). Omit when the host has no plate context: the table path is skipped and only the
+   * hard-coded fallback cases run.
+   */
+  modelFilamentIds?: readonly number[]
   /** The effective process config the change would land on. */
   config: ProcessConfig
 }
 
-/** Which of BambuStudio's three hard-coded cases matched. */
-export type SupportRecommendationCase = 'supportTpu' | 'solubleInterface' | 'supportMaterial'
+/** The vendored combination table, or one of BambuStudio's three hard-coded fallback cases. */
+export type SupportRecommendationCase = 'combination' | 'supportTpu' | 'solubleInterface' | 'supportMaterial'
 
 export interface SupportRecommendation {
   case: SupportRecommendationCase
@@ -80,8 +95,9 @@ const TPU_FILAMENT_TYPES: ReadonlySet<string> = new Set(['TPU', 'TPU-AMS'])
 const RECTILINEAR_INTERLACED = 'rectilinear_interlaced'
 
 /**
- * The four settings every case recommends. Case 3 stops here; cases 1 and 2 additionally
- * zero `support_object_xy_distance` (see {@link recommendSupportSettingsForInterfaceFilament}).
+ * The four settings every hard-coded FALLBACK case recommends (the combination table carries
+ * its own sets). Case 3 stops here; cases 1 and 2 additionally zero
+ * `support_object_xy_distance` (see {@link recommendSupportSettingsForInterfaceFilament}).
  */
 const SHARED_RECOMMENDED_CHANGES: Readonly<Record<string, string>> = {
   support_top_z_distance: '0',
@@ -122,7 +138,9 @@ export function isSolubleFilament(filament: SupportRecommendationFilament): bool
  * interface material, or null when it would recommend nothing — no case matched, no
  * interface material is selected, or the config already holds every recommended value.
  *
- * Cases are evaluated in BambuStudio's order, and only the first match applies:
+ * The combination table is consulted first and a hit is DECISIVE (see the module header).
+ * On a miss, the fallback cases are evaluated in BambuStudio's order, and only the first
+ * match applies:
  *
  * 1. `supportTpu` — a PLA interface on a plate that prints TPU.
  * 2. `solubleInterface` — a soluble interface over a non-soluble support base. (A soluble
@@ -140,6 +158,16 @@ export function recommendSupportSettingsForInterfaceFilament(
   const interfaceFilament = filaments.find((filament) => filament.id === interfaceFilamentId)
   if (!interfaceFilament) return null
   const baseFilament = filaments.find((filament) => filament.id === supportFilamentId) ?? null
+
+  const combination = matchCombinationRecommendation(interfaceFilament, input.modelFilamentIds, filaments)
+  if (combination) {
+    // A table hit decides the outcome outright, matching Tab.cpp: `found_recommendation` is
+    // set before the config filter runs, so the fallback cases are never consulted — even
+    // when every table value is already in place and a fallback set would still move keys.
+    const changes = filterAgainstConfig(combination.changes, config)
+    if (Object.keys(changes).length === 0) return null
+    return { case: 'combination', reason: combination.reason, changes }
+  }
 
   const plateHasTpu = filaments.some((filament) => TPU_FILAMENT_TYPES.has(normalizeType(filament.filamentType)))
 
@@ -166,12 +194,95 @@ export function recommendSupportSettingsForInterfaceFilament(
   }
   if (!matched) return null
 
-  const changes: Record<string, string> = {}
-  for (const [key, value] of Object.entries(matched.changes)) {
-    if (!processValueMatches(config[key], value)) changes[key] = value
-  }
+  const changes = filterAgainstConfig(matched.changes, config)
   if (Object.keys(changes).length === 0) return null
   return { ...matched, changes }
+}
+
+/** Narrow a recommended set to the keys whose value would actually move. */
+function filterAgainstConfig(recommended: Readonly<Record<string, string>>, config: ProcessConfig): Record<string, string> {
+  const changes: Record<string, string> = {}
+  for (const [key, value] of Object.entries(recommended)) {
+    if (!processValueMatches(config[key], value)) changes[key] = value
+  }
+  return changes
+}
+
+/**
+ * The combination-table half of the decision: resolve the plate's model materials, require
+ * them to be homogeneous (all one type, or all one preset name — Studio's precondition for
+ * "the" model material being well-defined), and query the vendored table. Returns the
+ * unfiltered recommended set plus the prompt sentence naming both materials.
+ */
+function matchCombinationRecommendation(
+  interfaceFilament: SupportRecommendationFilament,
+  modelFilamentIds: readonly number[] | undefined,
+  filaments: readonly SupportRecommendationFilament[]
+): { changes: Readonly<Record<string, string>>; reason: string } | null {
+  if (!modelFilamentIds || modelFilamentIds.length === 0) return null
+  const modelFilaments = modelFilamentIds
+    .map((id) => filaments.find((filament) => filament.id === id))
+    .filter((filament): filament is SupportRecommendationFilament => filament != null)
+  if (modelFilaments.length === 0) return null
+
+  const modelType = homogeneousValue(modelFilaments.map((filament) => filament.filamentType), normalizeType)
+  const modelName = homogeneousValue(modelFilaments.map((filament) => filament.filamentName), normalizeMaterialNameKey)
+  if (!modelType && !modelName) return null
+
+  const match = querySupportRecommendedCombination({
+    interfaceName: interfaceFilament.filamentName,
+    interfaceType: interfaceFilament.filamentType,
+    modelName,
+    modelType
+  })
+  if (!match) return null
+
+  const interfaceLabel = interfaceFilament.filamentName
+    ? stripPresetPrinterSuffix(interfaceFilament.filamentName)
+    : interfaceFilament.filamentType ?? 'This material'
+  const modelLabel = match.matchedModel === 'name' && modelName
+    ? stripPresetPrinterSuffix(modelName)
+    : modelType ?? modelName ?? 'the model material'
+  return { changes: match.changes, reason: `${interfaceLabel} is being used to support ${modelLabel}.` }
+}
+
+/**
+ * The one value every entry shares under `keyOf`, or null when any entry is missing/empty or
+ * they disagree. Returns the FIRST raw value (not the comparison key), for display.
+ */
+function homogeneousValue(values: ReadonlyArray<string | null>, keyOf: (value: string) => string): string | null {
+  if (values.length === 0) return null
+  let firstRaw: string | null = null
+  let firstKey: string | null = null
+  for (const value of values) {
+    if (value == null || value.trim() === '') return null
+    const key = keyOf(value)
+    if (firstKey === null) {
+      firstRaw = value
+      firstKey = key
+    } else if (key !== firstKey) {
+      return null
+    }
+  }
+  return firstRaw
+}
+
+/**
+ * Merge an accepted recommendation into a config the way the settings dialog would. A vector
+ * value (e.g. `support_interface_speed`, per-extruder `coFloats`) gets the scalar written to
+ * EVERY element — Studio's table expresses these uniformly, and keeping a stale second element
+ * would leave one extruder on the old speed. Scalars replace as-is.
+ */
+export function applySupportRecommendationChanges(
+  config: ProcessConfig,
+  changes: Readonly<Record<string, string>>
+): ProcessConfig {
+  const next: ProcessConfig = { ...config }
+  for (const [key, value] of Object.entries(changes)) {
+    const current = config[key]
+    next[key] = Array.isArray(current) ? current.map(() => value) : value
+  }
+  return next
 }
 
 /**

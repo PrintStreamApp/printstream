@@ -449,10 +449,12 @@ export function setBuildItemsUnprintableXml(modelXml: string, unprintableObjectI
 }
 
 /**
- * Embed (or replace) per-plate thumbnail PNGs in a sliced 3MF. BambuStudio's CLI won't regenerate
- * plate thumbnails for an editor-arranged project, so the editor renders its own plate previews and
- * these are baked in here as `Metadata/plate_N.png` (+ the `_small` variant) so the library
- * thumbnail reflects the edited layout. Any existing entry of the same name is replaced.
+ * Embed (or replace) per-plate thumbnail PNGs in a sliced 3MF. An editor SAVE runs no slicer
+ * CLI at all, so the editor renders its own plate previews and they are baked in here as
+ * `Metadata/plate_N.png` (+ the `_small` variant) so the library thumbnail reflects the edited
+ * layout immediately. At SLICE time the CLI can now render its own covers (see
+ * docs/slicer-cover-rendering.md); these editor renders remain the save-time source and the
+ * backfill fallback. Any existing entry of the same name is replaced.
  */
 export async function embedPlateThumbnails(
   threeMfPath: string,

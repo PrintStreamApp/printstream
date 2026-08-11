@@ -13,7 +13,7 @@ export interface TerminableChild {
 
 /**
  * Terminate a slicer CLI child robustly: signal its process group (set up via
- * `detached` at spawn) so BambuStudio's Xvfb helpers go too, then escalate
+ * `detached` at spawn) so the launcher's helpers (weston, qemu) go too, then escalate
  * SIGTERM -> SIGKILL after a grace period in case the CLI ignores SIGTERM.
  * Returns a canceller the caller invokes on the child's `close` so a clean exit
  * doesn't later SIGKILL a recycled PID. The `killGroup`/`graceMs`/`log` seams

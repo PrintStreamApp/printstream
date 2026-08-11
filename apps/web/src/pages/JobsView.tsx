@@ -5,7 +5,7 @@ import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CAMERA_VIEW_PERMISSION,
   LIBRARY_UPLOAD_PERMISSION,
@@ -15,10 +15,12 @@ import {
   PRINTERS_VIEW_PERMISSION,
   PRINTS_DISPATCH_PERMISSION,
   classifyLibraryFileKind,
+  deriveJobHistoryFields,
   extractErrorMessage,
   formatBytes,
   getPrinterDisplayCapabilities,
   isDirectPrintableFileName,
+  type JobHistoryResponse,
   type LibraryFile,
   type Permission,
   type PrintDispatchJob,
@@ -68,7 +70,6 @@ import {
   getLatestSlicingProgressFrame,
   getSlicingJobStatusLabel,
   isActiveSlicingJob,
-  slicingHistoryResult,
   slicingStatusColor
 } from '../lib/slicingJobPresentation'
 import { selectDispatchQueueWithPrintJobs } from '../lib/trackedPrintJobs'
@@ -146,27 +147,28 @@ function sanitizeHistoryPageSize(value: unknown): number {
     : HISTORY_PAGE_SIZE_OPTIONS[0]
 }
 
-type HistoryEntry =
-  | {
-      kind: 'print'
-      id: string
-      printerId: string | null
-      result: PrintJob['result']
-      startedAt: string
-      endedAt: string
-      searchHaystack: string
-      printJob: PrintJob
-    }
-  | {
-      kind: 'slicing'
-      id: string
-      printerId: string | null
-      result: PrintJob['result']
-      startedAt: string
-      endedAt: string
-      searchHaystack: string
-      slicingJob: SlicingJob
-    }
+const EMPTY_PRINTER_OPTIONS: JobHistoryResponse['printerOptions'] = []
+
+/** The server-paged history request — every value here is also part of the query key. */
+function buildJobHistoryUrl(input: {
+  page: number
+  pageSize: number
+  search: string
+  printerIds: ReadonlyArray<string>
+  results: ReadonlyArray<PrintJob['result']>
+  sortBy: HistorySortValue
+  sortDirection: DirectorySortDirection
+}): string {
+  const params = new URLSearchParams()
+  params.set('page', String(input.page))
+  params.set('pageSize', String(input.pageSize))
+  if (input.search) params.set('search', input.search)
+  if (input.printerIds.length > 0) params.set('printerIds', input.printerIds.join(','))
+  if (input.results.length > 0) params.set('results', input.results.join(','))
+  params.set('sortBy', input.sortBy)
+  params.set('sortDirection', input.sortDirection)
+  return `/api/jobs/history?${params.toString()}`
+}
 
 function parseHistoryViewMode(raw: string): DirectoryViewMode | null {
   return raw === 'list' || raw === 'icon' ? raw : null
@@ -243,6 +245,33 @@ export function JobsView() {
     enabled: canViewJobs && !showNoConnectedBridgesPlaceholder
   })
   const slicingJobsQuery = useSlicingJobs({ enabled: canViewJobs && !showNoConnectedBridgesPlaceholder })
+  // The merged print+slicing history, paged/filtered/sorted SERVER-side (GET /api/jobs/history —
+  // the shared selectJobHistoryPage owns the semantics). Every control that changes what a page
+  // contains is part of the key; the page index itself is requested 1-based.
+  const historyQuery = useQuery({
+    queryKey: ['job-history', workspaceScopeKey, {
+      page: historyPage + 1,
+      pageSize: historyPageSize,
+      search: deferredHistorySearch.trim(),
+      printerIds: historyPrinterIds,
+      results: historyResults,
+      sortBy: historySortValue,
+      sortDirection: historySortDirection
+    }],
+    queryFn: ({ signal }) => apiFetch<JobHistoryResponse>(buildJobHistoryUrl({
+      page: historyPage + 1,
+      pageSize: historyPageSize,
+      search: deferredHistorySearch.trim(),
+      printerIds: historyPrinterIds,
+      results: historyResults,
+      sortBy: historySortValue,
+      sortDirection: historySortDirection
+    }), { signal }),
+    // Keep the previous page on screen while the next one loads, so paging/filtering never
+    // flashes the list away (the workspaces directory sets the precedent).
+    placeholderData: keepPreviousData,
+    enabled: canViewJobs && !showNoConnectedBridgesPlaceholder
+  })
   const dispatchQuery = usePrintDispatchJobs({ enabled: canViewJobs && !showNoConnectedBridgesPlaceholder })
   const printersQuery = useQuery({
     queryKey: ['printers'],
@@ -299,6 +328,7 @@ export function JobsView() {
     onSuccess: () => {
       toast.success('History entry deleted')
       void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      void queryClient.invalidateQueries({ queryKey: ['job-history'] })
     },
     onError: (error) => {
       toast.error(extractErrorMessage(error))
@@ -309,6 +339,7 @@ export function JobsView() {
     onSuccess: () => {
       toast.success('Slicing history entry deleted')
       void queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
+      void queryClient.invalidateQueries({ queryKey: ['job-history'] })
     },
     onError: (error) => {
       toast.error(extractErrorMessage(error))
@@ -328,11 +359,6 @@ export function JobsView() {
       .sort((left, right) => right.startedAt.localeCompare(left.startedAt)),
     [persistedJobs]
   )
-  const historyJobs = useMemo(
-    () => persistedJobs
-      .filter((job) => job.finishedAt),
-    [persistedJobs]
-  )
   const activeSlicingJobs = useMemo(
     () => slicingJobs
       .filter(isActiveSlicingJob)
@@ -340,31 +366,11 @@ export function JobsView() {
       .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)),
     [slicingJobs]
   )
-  const historicalSlicingJobs = useMemo(
-    () => slicingJobs
-      .filter((job) => !isActiveSlicingJob(job))
-      .slice()
-      .sort((left, right) => Date.parse(right.finishedAt ?? right.updatedAt) - Date.parse(left.finishedAt ?? left.updatedAt)),
-    [slicingJobs]
-  )
   const printers = printersQuery.data?.printers ?? EMPTY_PRINTERS
   const printersById = useMemo(() => new Map(printers.map((printer) => [printer.id, printer])), [printers])
   const printerNames = useMemo(() => new Map(printers.map((printer) => [printer.id, printer.name])), [printers])
-  const historyPrinterOptions = useMemo(
-    () => [
-      ...historyJobs.map((job) => ({ id: job.printerId, name: job.printerName })),
-      ...historicalSlicingJobs.flatMap((job) => {
-        if (job.target.mode !== 'realPrinter') return []
-        return [{
-          id: job.target.printerId,
-          name: printerNames.get(job.target.printerId) ?? job.target.printerId
-        }]
-      })
-    ]
-      .filter((job, index, jobs) => jobs.findIndex((entry) => entry.id === job.id) === index)
-      .sort((left, right) => left.name.localeCompare(right.name)),
-    [historyJobs, historicalSlicingJobs, printerNames]
-  )
+  // Facet from the server, derived over the WHOLE history — a filtered page must not shrink it.
+  const historyPrinterOptions = historyQuery.data?.printerOptions ?? EMPTY_PRINTER_OPTIONS
   // Drop any selected printer that no longer appears in the history options.
   useEffect(() => {
     const ids = new Set(historyPrinterOptions.map((printer) => printer.id))
@@ -409,73 +415,27 @@ export function JobsView() {
       .filter((job): job is LiveJob => job != null)
       .sort((a, b) => a.printerName.localeCompare(b.printerName))
   }, [printerNames, printersById, statusQuery.data, unfinishedJobs])
-  const historyEntries = useMemo<HistoryEntry[]>(() => {
-    const printEntries: HistoryEntry[] = historyJobs.map((job) => ({
-      kind: 'print',
-      id: job.id,
-      printerId: job.printerId,
-      result: job.result,
-      startedAt: job.startedAt,
-      endedAt: job.finishedAt ?? job.startedAt,
-      searchHaystack: [
-        formatLibraryFileName(job.fileName || job.jobName || 'Untitled'),
-        job.printerName,
-        job.result,
-        formatDateTime(job.startedAt)
-      ].join(' ').toLowerCase(),
-      printJob: job
-    }))
-    const slicingEntries: HistoryEntry[] = historicalSlicingJobs.map((job) => {
-      const printerId = job.target.mode === 'realPrinter' ? job.target.printerId : null
-      const printerName = printerId ? (printerNames.get(printerId) ?? printerId) : 'Manual profile'
-      return {
-        kind: 'slicing',
-        id: job.id,
-        printerId,
-        result: slicingHistoryResult(job),
-        startedAt: job.startedAt ?? job.createdAt,
-        endedAt: job.finishedAt ?? job.updatedAt,
-        searchHaystack: [
-          formatLibraryFileName(job.outputFileName ?? job.sourceFileName),
-          printerName,
-          job.slicerName ?? 'Slicer',
-          getSlicingJobStatusLabel(job),
-          formatDateTime(job.startedAt ?? job.createdAt)
-        ].join(' ').toLowerCase(),
-        slicingJob: job
-      }
-    })
-    return [...slicingEntries, ...printEntries]
-  }, [historicalSlicingJobs, historyJobs, printerNames])
-  const filteredHistoryEntries = useMemo(() => {
-    const activeResults = new Set(historyResults)
-    const normalizedSearch = deferredHistorySearch.trim().toLowerCase()
-    const activePrinterIds = new Set(historyPrinterIds)
-    return historyEntries.filter((entry) => {
-      if (activePrinterIds.size > 0 && (entry.printerId == null || !activePrinterIds.has(entry.printerId))) return false
-      if (activeResults.size > 0 && !activeResults.has(entry.result)) return false
-      if (!normalizedSearch) return true
-      return entry.searchHaystack.includes(normalizedSearch)
-    }).slice().sort((left, right) => {
-      const leftDate = historySortValue === 'started' ? left.startedAt : left.endedAt
-      const rightDate = historySortValue === 'started' ? right.startedAt : right.endedAt
-      return historySortDirection === 'desc'
-        ? rightDate.localeCompare(leftDate)
-        : leftDate.localeCompare(rightDate)
-    })
-  }, [deferredHistorySearch, historyEntries, historyPrinterIds, historyResults, historySortDirection, historySortValue])
-  const historyPageCount = Math.max(1, Math.ceil(filteredHistoryEntries.length / historyPageSize))
+  // The page the server returned (filter/sort/search already applied). The derived fields
+  // (identity, result, sort keys) come from the same shared function the server filtered with.
+  const historyTotal = historyQuery.data?.total ?? 0
+  const historyTotalUnfiltered = historyQuery.data?.totalUnfiltered ?? 0
+  const visibleHistoryEntries = useMemo(
+    () => (historyQuery.data?.entries ?? []).map((entry) => ({
+      entry,
+      derived: deriveJobHistoryFields(entry, (id) => printerNames.get(id) ?? null)
+    })),
+    [historyQuery.data?.entries, printerNames]
+  )
+  const historyPageCount = Math.max(1, Math.ceil(historyTotal / historyPageSize))
   const safeHistoryPage = Math.min(historyPage, historyPageCount - 1)
   const activeHistoryFilterCount = Number(historyPrinterIds.length > 0) + Number(historyResults.length > 0)
   const effectiveHistoryViewMode: DirectoryViewMode = isMobileViewport ? 'list' : historyViewMode
-  const visibleHistoryEntries = useMemo(() => {
-    const start = safeHistoryPage * historyPageSize
-    return filteredHistoryEntries.slice(start, start + historyPageSize)
-  }, [filteredHistoryEntries, historyPageSize, safeHistoryPage])
 
+  // Deleting the last row of the last page (or narrowing filters) can strand the page index past
+  // the end; clamp it back so the next request lands on a real page.
   useEffect(() => {
-    setHistoryPage((current) => Math.min(current, Math.max(0, Math.ceil(filteredHistoryEntries.length / historyPageSize) - 1)))
-  }, [filteredHistoryEntries.length, historyPageSize])
+    setHistoryPage((current) => Math.min(current, Math.max(0, historyPageCount - 1)))
+  }, [historyPageCount])
 
   function clearHistoryFilters() {
     setHistoryPrinterIds([])
@@ -504,7 +464,7 @@ export function JobsView() {
   const sections: SectionNavEntry[] = [
     ...pluginSections,
     { id: 'active', label: 'Active', desktopLabel: 'In progress', count: inProgressCount },
-    { id: 'history', label: 'History', desktopLabel: 'Job history', count: historyEntries.length }
+    { id: 'history', label: 'History', desktopLabel: 'Job history', count: historyTotalUnfiltered }
   ]
 
   return (
@@ -690,9 +650,10 @@ export function JobsView() {
             icon={<HistoryRoundedIcon />}
             title="Job history"
             description="Finished, failed, and cancelled jobs."
-            count={historyEntries.length}
+            count={historyTotalUnfiltered}
           />
-          {historyEntries.length === 0 && (
+          {historyQuery.isLoading && <ListSkeleton rows={3} />}
+          {historyQuery.isSuccess && historyTotalUnfiltered === 0 && (
             <EmptyState
               compact
               icon={<HistoryRoundedIcon />}
@@ -700,7 +661,7 @@ export function JobsView() {
               description="Completed and failed slicing jobs and prints will show up here once work has been started from PrintStream."
             />
           )}
-          {historyEntries.length > 0 && (
+          {historyTotalUnfiltered > 0 && (
             <DirectoryPrimaryToolbar
                 pinStorageKey="jobs.history"
                 searchValue={historySearch}
@@ -788,14 +749,14 @@ export function JobsView() {
                 disableIconModeOnMobile
               />
           )}
-          {historyEntries.length > 0 && filteredHistoryEntries.length === 0 && (
+          {historyTotalUnfiltered > 0 && historyTotal === 0 && (
             <Typography level="body-sm" textColor="text.tertiary">
               No job history matches the current search or filters.
             </Typography>
           )}
-          {filteredHistoryEntries.length > 0 && (
+          {historyTotal > 0 && (
             <PaginatedSection
-              showingLabel={`Showing ${safeHistoryPage * historyPageSize + 1}-${Math.min(filteredHistoryEntries.length, (safeHistoryPage + 1) * historyPageSize)} of ${filteredHistoryEntries.length}`}
+              showingLabel={`Showing ${safeHistoryPage * historyPageSize + 1}-${Math.min(historyTotal, (safeHistoryPage + 1) * historyPageSize)} of ${historyTotal}`}
               previousDisabled={safeHistoryPage === 0}
               nextDisabled={safeHistoryPage >= historyPageCount - 1}
               onPrevious={() => setHistoryPage((current) => Math.max(0, current - 1))}
@@ -812,7 +773,7 @@ export function JobsView() {
                   alignItems: 'stretch'
                 }}
               >
-                {visibleHistoryEntries.map((entry) => {
+                {visibleHistoryEntries.map(({ entry, derived }) => {
                   if (entry.kind === 'slicing') {
                     const job = entry.slicingJob
                     const deleteAction = canDeleteJobs ? (
@@ -829,9 +790,9 @@ export function JobsView() {
                     ) : undefined
                     return (
                       <SlicingJobHistoryCard
-                        key={entry.id}
+                        key={derived.id}
                         job={job}
-                        printerName={entry.printerId ? (printerNames.get(entry.printerId) ?? entry.printerId) : null}
+                        printerName={derived.printerId ? (printerNames.get(derived.printerId) ?? derived.printerId) : null}
                         action={deleteAction}
                       />
                     )

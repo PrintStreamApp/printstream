@@ -60,6 +60,12 @@ services:
       # Other durable stores default to siblings of this path, so it must stay
       # on the mounted volume rather than the container filesystem.
       LIBRARY_DIR: /data/library
+      # Built-in whole-install backups (database dump + stored files), written
+      # to a host directory OUTSIDE the app's volumes (bind-mounted below) so
+      # recreating containers or wiping volumes never takes the backups with
+      # it. Set the interval to 0 for manual-only backups from Settings.
+      BACKUPS_DIR: /backups
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
       # Bridge release artifacts (published by CI, promoted by deploys) live in
       # the repo checkout and are bind-mounted so the API can serve them.
       BRIDGE_RELEASES_DIR: /data/bridge-releases
@@ -105,6 +111,10 @@ services:
     volumes:
       - printstream-data:/data
       - ./data/bridge-releases:/data/bridge-releases
+      # Server backups. The container runs as uid 1000; if Docker creates this
+      # host directory it will be root-owned and backups fail with a permission
+      # error. Create it first: mkdir -p backups && chown 1000:1000 backups
+      - ${APP_BACKUP_HOST_DIR:-./backups}:/backups
       # Carries the auto-generated managed-bridge provisioning token to the
       # bundled bridge. The API (which mounts this first via depends_on) owns it.
       - printstream-provision:/run/provision
@@ -119,9 +129,10 @@ services:
     #   context: .
     #   dockerfile: apps/slicer/Dockerfile
     restart: unless-stopped
-    # Run an init (tini) as PID 1. BambuStudio's CLI spawns Xvfb/mkdir children that
-    # become zombies when a slice is cancelled; node-as-PID-1 never reaps them and they
-    # accumulate until the slicer can't start new slices or serve profiles. tini reaps.
+    # Run an init (tini) as PID 1. The CLI launcher runs helper processes (a per-slice
+    # weston; qemu on arm64) that can become zombies when a slice is cancelled mid-flight;
+    # node-as-PID-1 never reaps them and they accumulate until the slicer can't start new
+    # slices or serve profiles. tini reaps.
     init: true
     environment:
       SLICER_PORT: 4010
@@ -165,6 +176,12 @@ services:
       BRIDGE_LIBRARY_DIR: /data/library
       BRIDGE_NAME: ${BRIDGE_NAME:-PrintStream Bridge}
       BRIDGE_STATE_FILE: /data/bridge-state.json
+      # Daily on-disk backups of the bridge's identity + library files, written
+      # to a host directory OUTSIDE the app's volumes (bind-mounted below) so
+      # recreating containers or wiping volumes never takes the only copy of
+      # your files with it. Set to 0 hours for manual-only backups.
+      BRIDGE_BACKUP_DIR: /backups
+      BRIDGE_BACKUP_INTERVAL_HOURS: ${BRIDGE_BACKUP_INTERVAL_HOURS:-24}
       # Reads the API-generated provisioning token from the shared mount so the
       # managed server auto-pairs this bridge. Harmless when MANAGED_BRIDGE is
       # off (the file simply won't exist).
@@ -175,6 +192,10 @@ services:
     # API address reachable from the host network.
     volumes:
       - printstream-bridge-data:/data
+      # The container runs as uid 1000; if Docker creates this host directory
+      # it will be root-owned and backups fail with a permission error. Create
+      # it first: mkdir -p bridge-backups && chown 1000:1000 bridge-backups
+      - ${BRIDGE_BACKUP_HOST_DIR:-./bridge-backups}:/backups
       - printstream-provision:/run/provision:ro
 
 volumes:

@@ -18,9 +18,10 @@
  * the produced sysroot. Keeping the package closure and the Ubuntu base in one place keeps
  * dev and the production image byte-for-byte identical in what they emulate against.
  *
- * Idempotent: skips the rebuild when a populated sysroot (loader + ready stamp) is present.
+ * Idempotent: skips the rebuild when a populated sysroot is present whose ready stamp carries
+ * the current SYSROOT_REVISION; a closure change bumps the revision and forces a rebuild.
  */
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,21 +36,30 @@ export const APT_SUITE = 'noble'
 
 // Top-level runtime packages the BambuStudio CLI links; apt pulls the full transitive closure.
 //
-// Mesa (libgl1-mesa-dri and its llvmpipe/gallium payload) is listed for the offscreen GL the
-// CLI *tries* to use, NOT because plate thumbnails depend on it. Measured 2026-08-06: glfwInit
-// fails with "Wayland: Failed to connect to display" on every deployment we run — arm64 dev AND
-// the amd64 production slicer container, under Xvfb — and slicing exits 0 regardless. Thumbnails
-// reach the output another way entirely: the API bakes editor-rendered PNGs into the INPUT 3MF
-// (`embedPlateThumbnails`) and `backfillPlateThumbnails` copies any the CLI did not write. So
-// `trimSysrootForHeadlessSlicing` can drop Mesa without losing thumbnails; see it for what else
-// goes and why.
+// Mesa appears twice, for two different GL paths:
+// - libgl1-mesa-dri (llvmpipe/gallium) backs the generic software GL the CLI's GTK side may touch.
+// - libosmesa6 backs the OFFSCREEN context the CLI's thumbnail renderer explicitly asks GLFW for
+//   (GLFW_OSMESA_CONTEXT_API on Linux). Together with a headless Wayland compositor and the
+//   gl-osmesa-shim preload — both provided by bambu-studio-cli.sh — this is what lets a headless
+//   slice render real plate thumbnails into its output. Each piece degrades gracefully when
+//   missing: the CLI skips thumbnail generation (slicing is unaffected) and the service backfills
+//   covers from the input 3MF (`backfillPlateThumbnails`; editor saves bake their own previews via
+//   `embedPlateThumbnails`). `trimSysrootForHeadlessSlicing` drops the whole GL stack on purpose —
+//   see it for what goes and the trade.
 export const APT_PACKAGES = [
   'libgtk-3-0t64', 'libwebkit2gtk-4.1-0', 'libgstreamer1.0-0', 'libgstreamer-plugins-base1.0-0',
   'libgl1', 'libglx-mesa0', 'libgl1-mesa-dri', 'libegl1', 'libegl-mesa0', 'libgbm1', 'libglu1-mesa',
+  'libosmesa6',
   'libx11-6', 'libcairo2', 'libdbus-1-3', 'libdrm2', 'libfontconfig1', 'libgdk-pixbuf-2.0-0',
   'libglib2.0-0t64', 'libpango-1.0-0', 'libpangocairo-1.0-0', 'libpangoft2-1.0-0',
   'libwayland-client0', 'libwayland-server0', 'libwayland-egl1', 'libgomp1', 'libxcb1'
 ]
+
+// Bumped whenever the closure above (or the base rootfs) changes shape. Written into the ready
+// stamp so an already-populated sysroot from before the change is rebuilt instead of silently
+// reused — the stamp used to be existence-only, which pinned dev/native sysroots to whatever
+// closure they were first built with.
+export const SYSROOT_REVISION = 2
 
 /**
  * Build (or reuse) an x86-64 sysroot at `sysroot`, caching downloads under `cacheDir`.
@@ -59,7 +69,7 @@ export function buildX86Sysroot({ sysroot, cacheDir, log = console.log } = {}) {
   if (!sysroot) throw new Error('buildX86Sysroot: sysroot is required')
   if (!cacheDir) throw new Error('buildX86Sysroot: cacheDir is required')
 
-  if (existsSync(path.join(sysroot, 'lib64/ld-linux-x86-64.so.2')) && existsSync(sysrootStamp(sysroot))) {
+  if (existsSync(path.join(sysroot, 'lib64/ld-linux-x86-64.so.2')) && sysrootStampIsCurrent(sysroot)) {
     log(`sysroot present (${sysroot}); skipping rebuild.`)
     return sysroot
   }
@@ -97,8 +107,16 @@ export function buildX86Sysroot({ sysroot, cacheDir, log = console.log } = {}) {
   const debs = execFileSync('sh', ['-c', `ls ${archives}/*.deb`], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
   log(`  unpacking ${debs.length} packages into the sysroot`)
   for (const deb of debs) run('dpkg-deb', ['-x', deb, sysroot])
-  writeFileSync(sysrootStamp(sysroot), `${new Date().toISOString()}\n`)
+  writeFileSync(sysrootStamp(sysroot), `revision=${SYSROOT_REVISION}\n${new Date().toISOString()}\n`)
   return sysroot
+}
+
+function sysrootStampIsCurrent(sysroot) {
+  try {
+    return readFileSync(sysrootStamp(sysroot), 'utf8').startsWith(`revision=${SYSROOT_REVISION}\n`)
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -108,8 +126,11 @@ export function buildX86Sysroot({ sysroot, cacheDir, log = console.log } = {}) {
  * here (the AppImage bundles only libavcodec/libavutil/libswscale). Every one of those is
  * DT_NEEDED and stays. What goes is everything the loader never opens:
  *
- * - Mesa's software rasteriser — `libLLVM.so` (137 MB) and `libgallium*.so` (41 MB) — dlopen'd
- *   only for the GL context that never initialises here. See the note on APT_PACKAGES.
+ * - The GL stack behind thumbnail rendering: Mesa's software rasteriser — `libLLVM.so` (137 MB)
+ *   and `libgallium*.so` (41 MB) — plus `libOSMesa` (which needs libLLVM anyway). The native app
+ *   therefore ships without CLI thumbnail rendering, a deliberate trade against a ~180 MB
+ *   customer download; its outputs keep covers via the input-backfill path instead. See the note
+ *   on APT_PACKAGES.
  * - GTK furniture that no headless process reads: icon themes (46 MB), locales (23 MB), docs
  *   and man pages (16 MB).
  * - Executables: `usr/bin`, `usr/sbin`, systemd and apt. We need libraries and the loader; the
@@ -130,7 +151,7 @@ export function trimSysrootForHeadlessSlicing(sysroot, { log = console.log } = {
   ]) {
     rmSync(path.join(sysroot, relative), { recursive: true, force: true })
   }
-  for (const glob of ['libLLVM.so*', 'libgallium*.so*', 'libvulkan*', 'libVkLayer*']) {
+  for (const glob of ['libLLVM.so*', 'libgallium*.so*', 'libOSMesa*', 'libvulkan*', 'libVkLayer*']) {
     run('sh', ['-c', `rm -f ${path.join(sysroot, 'usr/lib/x86_64-linux-gnu', glob)}`])
   }
   const after = duMegabytes(sysroot)

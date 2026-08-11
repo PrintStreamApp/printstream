@@ -163,6 +163,69 @@ export function deriveBridgeCrashState(crash: BridgeCrashHealth, nowMs: number):
   return crash.recentCrashCount >= BRIDGE_CRASH_LOOP_THRESHOLD ? 'looping' : 'unstable'
 }
 
+/**
+ * Live state of a bridge's on-disk backups. The bridge owns the backups
+ * (snapshots of its identity file + library written to `BRIDGE_BACKUP_DIR`, a
+ * directory outside its own data dir) and reports this status to the API, which
+ * mirrors it into the bridge summary and broadcasts changes over the
+ * `bridge.backup` WS event — same delivery shape as the debug-capture status.
+ * `configured` is false when the bridge has no backup directory set (or the
+ * bridge predates the feature and never reports).
+ */
+export const bridgeBackupStatusSchema = z.object({
+  configured: z.boolean(),
+  /** Backup directory as the bridge sees it (an operator path, not a secret). */
+  directory: z.string().nullable(),
+  /** Scheduled cadence in hours; 0 = manual backups only. Null when unconfigured. */
+  intervalHours: z.number().nonnegative().nullable(),
+  running: z.boolean(),
+  snapshotCount: z.number().int().nonnegative(),
+  lastBackupAt: z.string().datetime().nullable(),
+  /** When the next scheduled backup becomes due; null when unconfigured or manual-only. */
+  nextDueAt: z.string().datetime().nullable(),
+  /** Why the most recent backup attempt failed, or null when it succeeded. */
+  lastError: z.string().nullable()
+})
+
+export type BridgeBackupStatus = z.infer<typeof bridgeBackupStatusSchema>
+
+/** A bridge with no backup directory configured (or one that never reported). */
+export const unconfiguredBridgeBackupStatus: BridgeBackupStatus = {
+  configured: false,
+  directory: null,
+  intervalHours: null,
+  running: false,
+  snapshotCount: 0,
+  lastBackupAt: null,
+  nextDueAt: null,
+  lastError: null
+}
+
+/** One completed backup snapshot on the bridge's disk, as listed to the web. */
+export const bridgeBackupSnapshotSchema = z.object({
+  /** Snapshot directory name inside the backup dir (`backup-<timestamp>`). */
+  name: z.string().min(1),
+  createdAt: z.string().datetime(),
+  trigger: z.enum(['scheduled', 'manual']),
+  fileCount: z.number().int().nonnegative(),
+  /** Logical size of the snapshot's files (hardlinked files count in full). */
+  totalBytes: z.number().int().nonnegative(),
+  /** Bytes physically copied by this run (the rest was hardlinked, unchanged). */
+  copiedBytes: z.number().int().nonnegative(),
+  /** Files skipped because they were still being written; picked up next run. */
+  skippedInFlightCount: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative()
+})
+
+export type BridgeBackupSnapshot = z.infer<typeof bridgeBackupSnapshotSchema>
+
+export const bridgeBackupListResponseSchema = z.object({
+  status: bridgeBackupStatusSchema,
+  snapshots: z.array(bridgeBackupSnapshotSchema)
+})
+
+export type BridgeBackupListResponse = z.infer<typeof bridgeBackupListResponseSchema>
+
 export const bridgeSummarySchema = z.object({
   id: z.string(),
   name: z.string().min(1).max(120),
@@ -173,6 +236,7 @@ export const bridgeSummarySchema = z.object({
   connectionStats: bridgeConnectionStatsSchema,
   update: bridgeUpdateSummarySchema,
   debugCapture: bridgeDebugCaptureStatusSchema,
+  backup: bridgeBackupStatusSchema,
   crash: bridgeCrashHealthSchema
 })
 

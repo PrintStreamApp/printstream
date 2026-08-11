@@ -1,8 +1,8 @@
 import { summarizeSliceProgress } from './slice-progress.js'
 
 /**
- * Turns a BambuStudio CLI *engine crash* (a signal death — SIGABRT/SIGSEGV, which the xvfb-run
- * wrapper surfaces as exit code 134-139) that happened **after the slice started** into a clear,
+ * Turns a BambuStudio CLI *engine crash* (a signal death — SIGABRT/SIGSEGV, which the launcher
+ * shell surfaces as exit code 134-139) that happened **after the slice started** into a clear,
  * user-facing message that names the stage it died in.
  *
  * Why the post-load gate: a signal death during project *load/teardown* is often a transient

@@ -20,10 +20,13 @@ import {
   fillPlateFromScene,
   instanceFromStagedImport,
   isObjectMarkedForRepair,
+  mintPlateId,
+  movePlate,
   printedParts,
   replaceInstanceGeometry,
   findFreePlatePosition,
   seedEditorState,
+  seededActivePlateIndex,
   seedEmptyEditorState,
   stagedFootprint,
   summarizeInstanceMaterial,
@@ -356,6 +359,94 @@ test('seedEditorState seeds plates without a scene empty, and fillPlateFromScene
   assert.equal(filled.bed.maxX, 256)
   // The original placeholder plate is left untouched (fill returns a new plate).
   assert.equal(state.plates[1]?.instances.length, 0)
+})
+
+test('seeded plates carry a unique session identity and remember their source index', () => {
+  const index = threeMfIndexSchema.parse({
+    plates: [1, 2, 3].map((plateIndex) => ({
+      index: plateIndex, name: null, hasThumbnail: false, plateType: null,
+      nozzleSizes: [], filaments: [], objects: []
+    })),
+    projectFilaments: [],
+    compatiblePrinterModels: []
+  })
+  const state = seedEditorState(index, new Map())
+  const plateIds = state.plates.map((plate) => plate.plateId)
+  assert.equal(new Set(plateIds).size, 3, 'plateIds must be unique')
+  assert.deepEqual(state.plates.map((plate) => plate.sourcePlateIndex), [1, 2, 3])
+  // A scaffold plate has no archive plate behind it.
+  assert.equal(seedEmptyEditorState().plates[0]?.sourcePlateIndex, null)
+  // Identity survives the undo snapshot — dropping it there would resurrect the index-keyed
+  // thumbnail drift the moment a reorder is undone.
+  const snapshot = cloneEditorState(state)
+  assert.deepEqual(snapshot.plates.map((plate) => plate.plateId), plateIds)
+  assert.deepEqual(snapshot.plates.map((plate) => plate.sourcePlateIndex), [1, 2, 3])
+})
+
+test('seededActivePlateIndex maps the preferred SOURCE plate onto the reindexed live plates', () => {
+  // The regression shape: a Bambu per-plate "export sliced file" carries ONLY the exported plate,
+  // keeping its number — the parsed index has one plate whose index is 2, which reindexes to live
+  // index 1. Assigning the source index (2) directly left activePlate unresolvable and the editor
+  // on "Loading plates…" forever, state fully seeded behind it.
+  const singleExported = threeMfIndexSchema.parse({
+    plates: [{ index: 2, name: null, hasThumbnail: false, plateType: null, nozzleSizes: [], filaments: [], objects: [] }],
+    projectFilaments: [],
+    compatiblePrinterModels: []
+  })
+  const exported = seedEditorState(singleExported, new Map())
+  assert.equal(exported.plates[0]?.index, 1, 'the sole plate reindexes to live 1')
+  assert.equal(seededActivePlateIndex(exported.plates, 2), 1, 'source plate 2 opens at its live position')
+
+  // The usual contiguous archive: the two spaces coincide and the preference passes through.
+  const contiguous = threeMfIndexSchema.parse({
+    plates: [1, 2, 3].map((plateIndex) => ({
+      index: plateIndex, name: null, hasThumbnail: false, plateType: null,
+      nozzleSizes: [], filaments: [], objects: []
+    })),
+    projectFilaments: [],
+    compatiblePrinterModels: []
+  })
+  const seeded = seedEditorState(contiguous, new Map())
+  assert.equal(seededActivePlateIndex(seeded.plates, 2), 2)
+
+  // No usable preference falls back to the first plate; no plates at all to the scaffold's 1.
+  assert.equal(seededActivePlateIndex(seeded.plates, 9), 1, 'an unknown source index falls back')
+  assert.equal(seededActivePlateIndex(seeded.plates, null), 1)
+  assert.equal(seededActivePlateIndex([], null), 1)
+})
+
+test('movePlate drops into an insertion gap and renumbers, keeping identity with each plate', () => {
+  const index = threeMfIndexSchema.parse({
+    plates: [1, 2, 3].map((plateIndex) => ({
+      index: plateIndex, name: null, hasThumbnail: false, plateType: null,
+      nozzleSizes: [], filaments: [], objects: []
+    })),
+    projectFilaments: [],
+    compatiblePrinterModels: []
+  })
+  const plates = seedEditorState(index, new Map()).plates
+  const idOf = (sourceIndex: number) => plates.find((plate) => plate.sourcePlateIndex === sourceIndex)!.plateId
+
+  // Backward: plate 3 into gap 0 (before plate 1).
+  const backward = movePlate(plates, 3, 0)
+  assert.deepEqual(backward.map((plate) => plate.index), [1, 2, 3], 'indices stay contiguous')
+  assert.deepEqual(backward.map((plate) => plate.plateId), [idOf(3), idOf(1), idOf(2)])
+  assert.deepEqual(backward.map((plate) => plate.sourcePlateIndex), [3, 1, 2], 'source addressing travels with the plate')
+
+  // Forward: plate 1 into gap 3 (after the last plate). Gap semantics are direction-independent.
+  const forward = movePlate(plates, 1, 3)
+  assert.deepEqual(forward.map((plate) => plate.plateId), [idOf(2), idOf(3), idOf(1)])
+
+  // The inverse restores the original order exactly.
+  const roundTripped = movePlate(backward, backward[0]!.index, 3)
+  assert.deepEqual(roundTripped.map((plate) => plate.plateId), plates.map((plate) => plate.plateId))
+
+  // No-ops return the input array so callers can skip the history checkpoint: the gaps on either
+  // side of the plate's own position, an unknown plate, and out-of-range gaps clamp.
+  assert.equal(movePlate(plates, 2, 1), plates)
+  assert.equal(movePlate(plates, 2, 2), plates)
+  assert.equal(movePlate(plates, 99, 0), plates)
+  assert.deepEqual(movePlate(plates, 3, 99).map((plate) => plate.plateId), plates.map((plate) => plate.plateId), 'over-range gap clamps to the end')
 })
 
 test('buildSceneEdit emits support paint only for objects still placed; clone deep-copies it', async () => {
@@ -760,6 +851,8 @@ test('buildSingleObjectExportState isolates one object on a fresh single plate',
   exportedSource.position.set(30, 40, 0)
   state.plates.push({
     index: 2,
+    plateId: mintPlateId(),
+    sourcePlateIndex: 2,
     name: 'Plate two',
     plateType: null,
     bed: { minX: 0, maxX: 200, minY: 0, maxY: 180, excludeAreas: [] },

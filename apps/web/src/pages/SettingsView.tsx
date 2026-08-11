@@ -17,6 +17,7 @@ import { NestedViewHeader } from '../components/NestedViewHeader'
 import { NotificationChannelsPanel } from '../components/NotificationChannelsPanel'
 import { NotificationTemplatesPanel } from '../components/NotificationTemplatesPanel'
 import { BridgeSettingsSection } from '../components/settings/BridgeManagementSection'
+import { ServerBackupsSection } from '../components/settings/ServerBackupsSection'
 import { NavTabOrderEditor } from '../components/settings/NavTabOrderEditor'
 import { PluginManagerSection } from '../components/PluginManagerSection'
 import { apiFetch } from '../lib/apiClient'
@@ -40,7 +41,7 @@ type LandingPageSettingSelectValue = AppLandingPageSetting
 type DeviceLandingPageSettingSelectValue = 'follow-default' | LandingPageSettingSelectValue
 type WidthSettingSelectValue = 'centered' | 'full-width'
 type DeviceWidthSettingSelectValue = 'follow-default' | WidthSettingSelectValue
-type SettingsSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'bridges' | 'slicing' | 'auth-users' | 'auth-roles'
+type SettingsSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'bridges' | 'slicing' | 'backups' | 'auth-users' | 'auth-roles'
 
 /**
  * Settings shell. Uses a card index on the root route and dedicated
@@ -136,6 +137,9 @@ export function SettingsView({
   // workspace SHOWS is a per-workspace preference that matters most on the
   // hosted plan, where every version is installed and most workspaces want one.
   const showsSlicerEngines = hasWorkspaceContext && canManageSettings
+  // Whole-install backups exist on self-hosted deployments only; the cloud has
+  // operator-level backups and the API 404s the surface there.
+  const showsServerBackups = hasWorkspaceContext && canManageSettings && selfHosted
   const workspacePath = parseWorkspacePathname(location.pathname)
   const currentSubview = resolveSettingsSubview(workspacePath.appPathname)
   const settingsPath = (path = '/settings') => workspacePath.workspaceSlug
@@ -148,6 +152,7 @@ export function SettingsView({
     showsWorkspaceLogs,
     showsWorkspaceBridges,
     showsSlicerEngines,
+    showsServerBackups,
     canViewAuth
   })
   const authManagementStatusQuery = useQuery({
@@ -236,6 +241,14 @@ export function SettingsView({
               title="Slicing"
               description="Bambu Studio versions this workspace slices with, and the printer, process and material presets it has uploaded."
               onAction={() => navigate(settingsPath('/settings/slicing'))}
+            />
+          )}
+
+          {showsServerBackups && (
+            <SettingsOverviewCard
+              title="Backups"
+              description="Automatic whole-install backups, manual backups, and restore."
+              onAction={() => navigate(settingsPath('/settings/backups'))}
             />
           )}
 
@@ -572,6 +585,17 @@ export function SettingsView({
           <Typography level="title-sm">Slicing presets</Typography>
           <SlicingPresetsSettingsSection />
         </Stack>
+      ) : visibleSubview === 'backups' ? (
+        <Stack spacing={1.5}>
+          <NestedViewHeader
+            crumbs={[
+              { label: 'Settings', onClick: () => navigate(settingsPath()) },
+              { label: 'Backups' }
+            ]}
+            description="Automatic whole-install backups, manual backups, and restore."
+          />
+          <ServerBackupsSection canManage={canManageSettings} />
+        </Stack>
       ) : visibleSubview === 'notifications' ? (
         <Stack spacing={1.5}>
           <NestedViewHeader
@@ -611,6 +635,7 @@ function resolveSettingsSubview(pathname: string): SettingsSubview {
   if (pathname === '/settings/logs') return 'logs'
   if (pathname === '/settings/bridges') return 'bridges'
   if (pathname === '/settings/slicing') return 'slicing'
+  if (pathname === '/settings/backups') return 'backups'
   if (pathname === '/settings/auth/users') return 'auth-users'
   if (pathname === '/settings/auth/roles') return 'auth-roles'
   if (pathname === '/settings/general') return 'general'
@@ -626,6 +651,7 @@ function resolveVisibleWorkspaceSettingsSubview(
     showsWorkspaceLogs: boolean
     showsWorkspaceBridges: boolean
     showsSlicerEngines: boolean
+    showsServerBackups: boolean
     canViewAuth: boolean
   }
 ) {
@@ -637,6 +663,7 @@ function resolveVisibleWorkspaceSettingsSubview(
   if (subview === 'logs' && !options.showsWorkspaceLogs) return 'root'
   if (subview === 'bridges' && !options.showsWorkspaceBridges) return 'root'
   if (subview === 'slicing' && !options.showsSlicerEngines) return 'root'
+  if (subview === 'backups' && !options.showsServerBackups) return 'root'
   return subview
 }
 

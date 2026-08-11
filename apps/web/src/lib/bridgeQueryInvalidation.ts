@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query'
-import type { BridgeDebugCaptureStatus, BridgeListResponse } from '@printstream/shared'
+import type { BridgeBackupStatus, BridgeDebugCaptureStatus, BridgeListResponse, BridgeSummary } from '@printstream/shared'
 
 type QueryInvalidator = Pick<QueryClient, 'invalidateQueries'>
 
@@ -16,14 +16,14 @@ export async function invalidateBridgeQueries(queryClient: QueryInvalidator): Pr
 }
 
 /**
- * Patch a bridge's debug-capture status into the cached bridge lists in place,
- * so the capture banner and settings reflect live `bridge.debug.capture` WS
- * events (including the frame counter) without an HTTP refetch.
+ * Patch one bridge's entry in both cached bridge lists in place, so live WS
+ * status events update the UI without an HTTP refetch. Untouched bridges keep
+ * their identity so React Query's structural sharing skips their re-renders.
  */
-export function applyBridgeDebugCaptureStatus(
+function patchBridgeInLists(
   queryClient: Pick<QueryClient, 'setQueryData'>,
   bridgeId: string,
-  status: BridgeDebugCaptureStatus
+  patch: (bridge: BridgeSummary) => BridgeSummary
 ): void {
   for (const key of BRIDGE_LIST_QUERY_KEYS) {
     queryClient.setQueryData<BridgeListResponse>(key, (existing) => {
@@ -32,9 +32,33 @@ export function applyBridgeDebugCaptureStatus(
       const bridges = existing.bridges.map((bridge) => {
         if (bridge.id !== bridgeId) return bridge
         changed = true
-        return { ...bridge, debugCapture: status }
+        return patch(bridge)
       })
       return changed ? { ...existing, bridges } : existing
     })
   }
+}
+
+/**
+ * Reflect a live `bridge.debug.capture` WS event (including the frame counter)
+ * into the capture banner and settings.
+ */
+export function applyBridgeDebugCaptureStatus(
+  queryClient: Pick<QueryClient, 'setQueryData'>,
+  bridgeId: string,
+  status: BridgeDebugCaptureStatus
+): void {
+  patchBridgeInLists(queryClient, bridgeId, (bridge) => ({ ...bridge, debugCapture: status }))
+}
+
+/**
+ * Reflect a live `bridge.backup` WS event (a backup starting, finishing, or
+ * failing) into the bridge settings, where a backup can run for minutes.
+ */
+export function applyBridgeBackupStatus(
+  queryClient: Pick<QueryClient, 'setQueryData'>,
+  bridgeId: string,
+  status: BridgeBackupStatus
+): void {
+  patchBridgeInLists(queryClient, bridgeId, (bridge) => ({ ...bridge, backup: status }))
 }

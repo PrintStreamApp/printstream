@@ -2562,7 +2562,7 @@ test('re-saving an editor-born project onto its own output is stable (no duplica
   // re-mounting on the just-saved file: because `SceneEdit.instances` is authoritative for what is
   // placed, re-baking the same edit onto the previous save's output neither duplicates the import
   // nor strands the old object's geometry — and per-part materials survive the round trip (the
-  // failure mode of the remapPartExtruders double-remap bug, which surfaced on exactly this path).
+  // failure mode of the remapModelSettingsFilamentRefs (then remapPartExtruders) double-remap bug, which surfaced on exactly this path).
   const { buildEditedThreeMf } = await import('./three-mf.js')
   const tempDir = await mkdtemp(path.join(tmpdir(), 'bambu-three-mf-resave-'))
   try {
@@ -2906,7 +2906,7 @@ test('buildEditedThreeMf bakes a multi-solid import as one object with many norm
 
 test('buildEditedThreeMf keeps a multi-solid import\'s per-part materials when the filament set changes (no double-remap)', async () => {
   // Regression (fresh multi-solid STEP import saved as "everything material 1"): the material
-  // add/remove `remapPartExtruders` pass used to run over the WHOLE model_settings, so it
+  // add/remove part-extruder remap pass used to run over the WHOLE model_settings, so it
   // double-remapped the freshly-baked import parts — which are ALREADY authored in new-filament-id
   // space — through an OLD-slot->NEW-id map. When that map didn't cover a part's id it fell back to
   // filament 1, collapsing every solid onto material 1. The remap must touch only the BASE project's

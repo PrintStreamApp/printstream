@@ -6,9 +6,11 @@ import {
   findFilamentCompatibilityIssues,
   findNozzleDiameterCompatibilityIssues,
   formatNozzleLabel,
+  formatPrinterNozzleSizesLabel,
   isPrinterModelCompatible,
   normalizeFilamentFamily,
   resolvePrinterNozzleDiameters,
+  resolvePrinterNozzleSizeLabels,
   trayCanSatisfyRequirement
 } from './print-compatibility.js'
 
@@ -74,6 +76,32 @@ test('resolvePrinterNozzleDiameters prefers detected nozzles over saved selectio
     { extruderId: 1, diameter: '0.4' },
     { extruderId: 2, diameter: '0.8' }
   ])
+})
+
+test('nozzle size labels dedupe matching nozzles and combine differing ones', () => {
+  const dualDiffering = {
+    nozzles: [
+      { extruderId: 0, diameter: '0.4', typeCode: null, material: null, flow: null, currentTemp: null, targetTemp: null },
+      { extruderId: 1, diameter: '0.2', typeCode: null, material: null, flow: null, currentTemp: null, targetTemp: null }
+    ]
+  }
+  assert.deepEqual(resolvePrinterNozzleSizeLabels(dualDiffering, []), ['0.4 mm', '0.2 mm'])
+  assert.equal(formatPrinterNozzleSizesLabel(dualDiffering, []), '0.4 mm / 0.2 mm')
+
+  const dualMatching = {
+    nozzles: [
+      { extruderId: 0, diameter: '0.4', typeCode: null, material: null, flow: null, currentTemp: null, targetTemp: null },
+      { extruderId: 1, diameter: '0.4', typeCode: null, material: null, flow: null, currentTemp: null, targetTemp: null }
+    ]
+  }
+  assert.deepEqual(resolvePrinterNozzleSizeLabels(dualMatching, []), ['0.4 mm'])
+  assert.equal(formatPrinterNozzleSizesLabel(dualMatching, []), '0.4 mm')
+})
+
+test('nozzle size labels fall back to saved selections and go empty when nothing is known', () => {
+  assert.equal(formatPrinterNozzleSizesLabel(undefined, [{ extruderId: 0, diameter: '0.6' }]), '0.6 mm')
+  assert.deepEqual(resolvePrinterNozzleSizeLabels(undefined, []), [])
+  assert.equal(formatPrinterNozzleSizesLabel(undefined, null), null)
 })
 
 test('formatNozzleLabel uses generic wording for single-nozzle printers', () => {

@@ -19,7 +19,7 @@ import type {
   SlicingOutputLine,
   SlicingMetadata
 } from '@printstream/shared'
-import { isDirectPrintableFileName } from '@printstream/shared'
+import { isActiveSlicingJob, isDirectPrintableFileName } from '@printstream/shared'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
 import yazl from 'yazl'
 import { env } from './env.js'
@@ -52,6 +52,8 @@ import { prisma } from './prisma.js'
 import { resolveLibraryFileToLocalPath } from './bridge-library-files.js'
 
 const DEFAULT_SLICING_PROGRESS_POLL_INTERVAL_MS = 750
+/** How long a finished job stays in `listActive` — see its doc for who relies on this. */
+const ACTIVE_LIST_RECENT_WINDOW_MS = 5 * 60_000
 const DEFAULT_SLICING_PROGRESS_HEARTBEAT_INTERVAL_MS = 10_000
 const DEFAULT_SLICING_STATE_FILE = path.resolve(path.dirname(env.LIBRARY_DIR), 'slicing-jobs-state.json')
 const INTERRUPTED_SLICING_MESSAGE = 'Slicing was interrupted by a server restart. Slice again to retry.'
@@ -215,6 +217,22 @@ export class SlicingJobs {
       .filter((job) => job.workspaceId === workspaceId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((job) => (isActiveSlicingJobState(job) ? toDto(job) : toFinishedListDto(job)))
+  }
+
+  /**
+   * The workspace's ACTIVE jobs plus anything that finished within the recency window, newest
+   * first. This is what the polled `GET /jobs` list serves (its consumers — the slicing toast
+   * stack and the Jobs view's in-progress section — only ever look at running/just-finished
+   * work), so the polled payload stays bounded while history grows; the full history is paged
+   * by `GET /api/jobs/history` through {@link list}. The window exists for the toast stack,
+   * which keeps a finished job's toast up for a beat after it settles — comfortably inside
+   * five minutes.
+   */
+  listActive(workspaceId: string): SlicingJob[] {
+    const cutoff = Date.now() - ACTIVE_LIST_RECENT_WINDOW_MS
+    return this.list(workspaceId).filter(
+      (job) => isActiveSlicingJob(job) || Date.parse(job.updatedAt) >= cutoff
+    )
   }
 
   get(workspaceId: string, jobId: string): SlicingJob {

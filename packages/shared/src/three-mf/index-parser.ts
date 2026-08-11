@@ -64,8 +64,11 @@ export { decodeXmlAttributeValue }
  *      `extruder` metadata (the CLI slices by the OBJECT-level entry, so they print with filament
  *      1), and `filamentPhysics` detection was blunted (ANY missing sentinel or a stale-width
  *      filament array flags, not only the all-dropped shape). Same VALUE-change reasoning as v23.
+ * v27: `flushMatrix` also flags a `flush_multiplier` the engine's g-code-time size check rejects
+ *      (exit 156, "Flush volumes matrix do not match to the correct size!") — see
+ *      `isFlushMultiplierInconsistent`. Same VALUE-change reasoning as v23.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 26
+export const THREE_MF_INDEX_PARSER_VERSION = 27
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {

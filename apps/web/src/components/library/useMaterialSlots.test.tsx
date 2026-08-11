@@ -24,7 +24,7 @@ function slot(projectFilamentId: number, color: string): SliceProjectFilament {
   return { projectFilamentId, label: 'PLA', color, nozzleId: null, usedOnSelectedPlate: true }
 }
 
-function renderSlots(initial?: { baseProjectFilaments?: SliceProjectFilament[]; onFilamentRemoved?: (position: number) => void }) {
+function renderSlots(initial?: { baseProjectFilaments?: SliceProjectFilament[]; onFilamentRemoved?: (position: number) => void; onFilamentReordered?: (remap: ReadonlyMap<number, number>) => void }) {
   const props = {
     file: FILE,
     bakedIndex: null as ThreeMfIndex | null,
@@ -33,7 +33,8 @@ function renderSlots(initial?: { baseProjectFilaments?: SliceProjectFilament[]; 
     compatibleFilamentProfiles: [],
     materialOptions: [],
     selectedMachineProfile: null,
-    onFilamentRemoved: initial?.onFilamentRemoved
+    onFilamentRemoved: initial?.onFilamentRemoved,
+    onFilamentReordered: initial?.onFilamentReordered
   }
   const view = renderHook((p: typeof props) => useMaterialSlots(p), { initialProps: props })
   return { ...view, props }
@@ -428,4 +429,33 @@ test('a baked nozzle assignment still lands when the slot list catches up late',
   })
   assert.equal(view.result.current.filamentToolheadIds[3], 'nozzle-0', 'the late slot picks up its baked nozzle')
   assert.equal(view.result.current.filamentColors[3], '#333333', 'and its baked colour')
+})
+
+test('reordering moves the slot, keeps its id, and reports the position permutation', () => {
+  const remaps: Array<ReadonlyMap<number, number>> = []
+  const { result } = renderSlots({
+    baseProjectFilaments: [slot(1, '#111111'), slot(2, '#222222'), slot(3, '#333333')],
+    onFilamentReordered: (remap) => remaps.push(remap)
+  })
+  // Drag slot 1 (index 0) into the gap after slot 3 (gap 3): order becomes [2, 3, 1].
+  act(() => { result.current.handleReorderFilament(0, 3) })
+  assert.deepEqual(result.current.projectFilaments.map((entry) => entry.projectFilamentId), [2, 3, 1],
+    'session ids travel with their slots — paint and picks stay attached')
+  assert.equal(remaps.length, 1)
+  assert.deepEqual([...remaps[0]!.entries()].sort((a, b) => a[0] - b[0]), [[1, 3], [2, 1], [3, 2]],
+    'the host gets the old-position -> new-position permutation')
+  // The baked list follows the new order via each slot's carried sourceIndex.
+  assert.deepEqual(result.current.desiredFilaments?.map((entry) => entry.sourceIndex), [1, 2, 0])
+})
+
+test('a no-op drop (same position) reports nothing and keeps list identity', () => {
+  const remaps: Array<ReadonlyMap<number, number>> = []
+  const { result } = renderSlots({ onFilamentReordered: (remap) => remaps.push(remap) })
+  const before = result.current.projectFilaments
+  // Gaps 0 and 1 both mean "stay first" for the slot at index 0.
+  act(() => { result.current.handleReorderFilament(0, 0) })
+  act(() => { result.current.handleReorderFilament(0, 1) })
+  assert.equal(remaps.length, 0, 'no permutation callback for a drop that moves nothing')
+  assert.deepEqual(result.current.projectFilaments.map((entry) => entry.projectFilamentId),
+    before.map((entry) => entry.projectFilamentId))
 })

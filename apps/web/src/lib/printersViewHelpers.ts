@@ -40,7 +40,6 @@ import {
   type PrinterFanId,
   type PrinterLightMode,
   type PrinterModel,
-  type PrinterNozzleDiameterSelection,
   type PrinterPrintOptionKey,
   type PrinterPrintOptionSensitivity,
   type PrinterStatus,
@@ -427,21 +426,6 @@ export function humidityLevelLabel(level: number): string {
     case 5: return 'Wet'
     default: return 'Unknown'
   }
-}
-
-export function formatPrinterCardNozzleSizes(
-  status: PrinterStatus | undefined,
-  savedSelections: readonly PrinterNozzleDiameterSelection[] | null | undefined
-): string | null {
-  const labels = Array.from(new Set(
-    resolvePrinterNozzleDiameters(status, savedSelections)
-      .map((selection) => formatNozzleDiameterLabel(selection.diameter))
-      .filter((label): label is string => Boolean(label))
-  ))
-
-  if (labels.length === 0) return null
-  if (labels.length === 1) return labels[0] ?? null
-  return labels.join(' / ')
 }
 
 export function resolveFilamentChangeTargetTemp(

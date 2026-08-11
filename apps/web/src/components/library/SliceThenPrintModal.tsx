@@ -35,7 +35,7 @@ import { buildDefaultAmsMappingFromSlicingTarget, resolveSlicingLeaveAction } fr
 import { SliceEstimates } from './SliceEstimates'
 import { toast } from '../../lib/toast'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
-import { useSlicingJobs } from '../../hooks/useSlicingJobs'
+import { useSlicingJob } from '../../hooks/useSlicingJob'
 import { PrintModal } from './PrintModal'
 
 /** A slicing job is still running (and therefore cancellable) until a terminal state. */
@@ -124,13 +124,12 @@ export function SliceThenPrintModal({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const slicingJobsQuery = useSlicingJobs({ suppressGlobalErrorToast: true })
+  // The job's own record, not the list: the list carries only active/recent jobs now, and a
+  // dialog left open after its slice settles must keep seeing the job (seeded by seedSlicingJob).
+  const slicingJobQuery = useSlicingJob(jobId)
   // While this dialog tracks the job, suppress its redundant global toast.
   useEffect(() => suppressJobToast('slicing', jobId), [jobId])
-  const job = useMemo(
-    () => slicingJobsQuery.data?.jobs.find((entry) => entry.id === jobId) ?? null,
-    [jobId, slicingJobsQuery.data?.jobs]
-  )
+  const job = slicingJobQuery.data?.job ?? null
   const defaultAmsMapping = useMemo(
     () => (job?.target.mode === 'realPrinter' ? buildDefaultAmsMappingFromSlicingTarget(job.target) : null),
     [job?.target]
@@ -252,14 +251,14 @@ export function SliceThenPrintModal({
                 : (trackingCopy?.pendingText ?? 'This stays here until slicing is ready, then it switches into the normal print setup.'))}
             </Typography>
 
-            {slicingJobsQuery.isLoading && !job && (
+            {slicingJobQuery.isLoading && !job && (
               <Stack direction="row" spacing={1} alignItems="center">
                 <CircularProgress size="sm" />
                 <Typography level="body-sm" textColor="text.secondary">Loading slicing job…</Typography>
               </Stack>
             )}
 
-            {!slicingJobsQuery.isLoading && !job && (
+            {!slicingJobQuery.isLoading && !job && (
               <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
                 The slicing job is no longer available. If it already finished, you can find it in Jobs.
               </Alert>
@@ -339,16 +338,14 @@ export function SliceResultModal({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const slicingJobsQuery = useSlicingJobs({ suppressGlobalErrorToast: true })
+  // The job's own record, not the list — see the sibling dialog above.
+  const slicingJobQuery = useSlicingJob(jobId)
   useEffect(() => suppressJobToast('slicing', jobId), [jobId])
   const [printing, setPrinting] = useState(false)
   const [saved, setSaved] = useState(false)
   const [printed, setPrinted] = useState(false)
   const [previewing, setPreviewing] = useState(false)
-  const job = useMemo(
-    () => slicingJobsQuery.data?.jobs.find((entry) => entry.id === jobId) ?? null,
-    [jobId, slicingJobsQuery.data?.jobs]
-  )
+  const job = slicingJobQuery.data?.job ?? null
   // Keep the latest job/commit state in refs so the close handler and the unmount cleanup
   // act on current values without re-subscribing.
   const jobRef = useRef(job)
@@ -445,13 +442,13 @@ export function SliceResultModal({
         <Typography level="h4">Slice results</Typography>
         <ScrollableDialogBody sx={{ mt: 1 }}>
           <Stack spacing={1.25}>
-            {slicingJobsQuery.isLoading && !job && (
+            {slicingJobQuery.isLoading && !job && (
               <Stack direction="row" spacing={1} alignItems="center">
                 <CircularProgress size="sm" />
                 <Typography level="body-sm" textColor="text.secondary">Loading slicing job…</Typography>
               </Stack>
             )}
-            {!slicingJobsQuery.isLoading && !job && (
+            {!slicingJobQuery.isLoading && !job && (
               <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>
                 The slicing job is no longer available. If it already finished, you can find it in Jobs.
               </Alert>

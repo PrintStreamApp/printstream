@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile } from '@prisma/client'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
-import { mergeAmsMapping, parseAmsMapping, parsePrintOptions, parseRequiredFilaments, resolveQueueableLibraryFile, withUsedGramsFrom } from './store.js'
+import { mergeAmsMapping, parseAmsMapping, parsePrintOptions, parseRequiredFilaments, resolveQueueableLibraryFile, withPlateSliceDataFrom } from './store.js'
 
 type FakeRow = Pick<LibraryFile, 'id' | 'name' | 'hidden' | 'origin' | 'deletedAt'>
 
@@ -59,27 +59,27 @@ test('parsePrintOptions round-trips skipObjects so a queued selection survives s
   assert.equal(parsePrintOptions(JSON.stringify({ timelapse: false })).skipObjects, undefined)
 })
 
-test('withUsedGramsFrom backfills slice grams onto a material override that omits them, by filament id', () => {
-  // A "any printer" override carries identity (type/color/brand) the user chose, but no grams.
+test('withPlateSliceDataFrom backfills slice grams + nozzle binding onto a material override that omits them, by filament id', () => {
+  // A "any printer" override carries identity (type/color/brand) the user chose, but no grams or nozzle.
   const override = [
     { id: 1, filamentType: 'PETG', color: '#1D7C6A', filamentName: 'Generic' },
     { id: 2, filamentType: 'PLA', color: '#000000', filamentName: 'Bambu' }
   ]
-  // The slice (plate inspection) knows the grams per filament slot, regardless of the chosen material.
+  // The slice (plate inspection) knows the grams + extruder binding per filament slot, regardless of the chosen material.
   const plate = [
-    { id: 1, filamentType: 'PLA', color: '#408080', filamentName: 'Bambu', usedGrams: 339.14 },
-    { id: 2, filamentType: 'PLA', color: '#000000', filamentName: 'Bambu', usedGrams: null }
+    { id: 1, filamentType: 'PLA', color: '#408080', filamentName: 'Bambu', usedGrams: 339.14, nozzleId: 1 },
+    { id: 2, filamentType: 'PLA', color: '#000000', filamentName: 'Bambu', usedGrams: null, nozzleId: null }
   ]
-  assert.deepEqual(withUsedGramsFrom(override, plate), [
-    { id: 1, filamentType: 'PETG', color: '#1D7C6A', filamentName: 'Generic', usedGrams: 339.14 },
-    { id: 2, filamentType: 'PLA', color: '#000000', filamentName: 'Bambu', usedGrams: null }
+  assert.deepEqual(withPlateSliceDataFrom(override, plate), [
+    { id: 1, filamentType: 'PETG', color: '#1D7C6A', filamentName: 'Generic', usedGrams: 339.14, nozzleId: 1 },
+    { id: 2, filamentType: 'PLA', color: '#000000', filamentName: 'Bambu', usedGrams: null, nozzleId: null }
   ])
   // An override that already carries grams keeps its own; unknown ids and an empty source fall back to null.
-  assert.deepEqual(withUsedGramsFrom([{ id: 1, filamentType: 'PLA', color: null, usedGrams: 5 }], plate), [
-    { id: 1, filamentType: 'PLA', color: null, usedGrams: 5 }
+  assert.deepEqual(withPlateSliceDataFrom([{ id: 1, filamentType: 'PLA', color: null, usedGrams: 5 }], plate), [
+    { id: 1, filamentType: 'PLA', color: null, usedGrams: 5, nozzleId: 1 }
   ])
-  assert.deepEqual(withUsedGramsFrom([{ id: 9, filamentType: 'PLA', color: null }], plate), [
-    { id: 9, filamentType: 'PLA', color: null, usedGrams: null }
+  assert.deepEqual(withPlateSliceDataFrom([{ id: 9, filamentType: 'PLA', color: null }], plate), [
+    { id: 9, filamentType: 'PLA', color: null, usedGrams: null, nozzleId: null }
   ])
 })
 

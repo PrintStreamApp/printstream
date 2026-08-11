@@ -41,19 +41,41 @@ RUN set -eux; \
 		rm -rf /tmp/x86root-cache; \
 	fi
 
+# Compile the offscreen-GL preload shim (see docker/gl-osmesa-shim.c). The CLI is x86-64 on
+# BOTH image arches, so the shim always targets x86-64: native gcc on amd64, the cross
+# compiler on arm64 (where it is preloaded into the qemu-emulated guest).
+FROM base AS glshim
+ARG TARGETARCH
+ARG DEBIAN_FRONTEND=noninteractive
+COPY apps/slicer/docker/gl-osmesa-shim.c /tmp/gl-osmesa-shim.c
+RUN set -eux; \
+	apt-get update; \
+	if [ "$TARGETARCH" = "arm64" ]; then \
+		apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu libc6-dev-amd64-cross; \
+		x86_64-linux-gnu-gcc -shared -fPIC -O2 -o /tmp/gl-osmesa-shim.so /tmp/gl-osmesa-shim.c; \
+	else \
+		apt-get install -y --no-install-recommends gcc libc6-dev; \
+		gcc -shared -fPIC -O2 -o /tmp/gl-osmesa-shim.so /tmp/gl-osmesa-shim.c; \
+	fi; \
+	rm -rf /var/lib/apt/lists/*
+
 FROM base AS runtime
 ENV NODE_ENV=production
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
 # amd64: install the native GTK/WebKit/Mesa closure BambuStudio links (the AppImage does
 # not bundle it). arm64: the x86-64 CLI runs under qemu-user against the baked sysroot, so
-# install the emulator + the native tools (Xvfb/gosu) only; the x86-64 libs come from the
-# sysroot copied in below.
+# install the emulator + the native tools (gosu/weston) only; the x86-64 libs come from
+# the sysroot copied in below. `weston` (native on both arches — Wayland is a socket
+# protocol, so an arm64 compositor serves the emulated x86-64 client) and amd64's
+# `libosmesa6` are the launcher's offscreen-GL pieces for plate thumbnail rendering; see
+# bambu-studio-cli.sh. No X server: the CLI never initialises GTK in CLI mode, and the
+# Xvfb this image used to carry only leaked an unreaped zombie per invocation.
 RUN set -eux; \
 	apt-get update; \
 	if [ "$TARGETARCH" = "arm64" ]; then \
 		apt-get install -y --no-install-recommends \
-			ca-certificates gosu qemu-user-static xauth xvfb; \
+			ca-certificates gosu qemu-user-static weston; \
 	else \
 		apt-get install -y --no-install-recommends \
 			ca-certificates \
@@ -72,12 +94,12 @@ RUN set -eux; \
 			libmspack0 \
 			libnss3 \
 			libopengl0 \
+			libosmesa6 \
 			libsoup-3.0-0 \
 			libwebkit2gtk-4.1-0 \
 			libxkbcommon0 \
 			libxss1 \
-			xauth \
-			xvfb; \
+			weston; \
 		ln -sf /lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 /lib/x86_64-linux-gnu/libwebkit2gtk-4.0.so.37; \
 		ln -sf /lib/x86_64-linux-gnu/libjavascriptcoregtk-4.1.so.0 /lib/x86_64-linux-gnu/libjavascriptcoregtk-4.0.so.18; \
 	fi; \
@@ -116,6 +138,9 @@ RUN mkdir -p /data/engines && chown -R node:node /data/engines
 COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/bambu-studio-cli
 COPY apps/slicer/docker/bambu-studio-cli.sh /usr/local/bin/slicer-cli
 RUN chmod +x /usr/local/bin/bambu-studio-cli /usr/local/bin/slicer-cli
+# Next to the launcher — its default shim lookup is "beside this script" (SLICER_GL_SHIM
+# overrides). Always x86-64, matching the CLI, on both image arches.
+COPY --from=glshim /tmp/gl-osmesa-shim.so /usr/local/bin/gl-osmesa-shim.so
 COPY apps/slicer/docker/entrypoint.sh /usr/local/bin/slicer-entrypoint.sh
 RUN chmod +x /usr/local/bin/slicer-entrypoint.sh
 # Ship the third-party license notices alongside the bundled (AGPL-3.0) slicer
@@ -128,11 +153,7 @@ COPY apps/slicer/THIRD-PARTY-SLICERS.md apps/slicer/THIRD-PARTY-NOTICES.txt LICE
 # unprivileged process can write its slicing scratch. A work volume created by an
 # older root-running image stays root-owned; the entrypoint (see below) self-heals
 # that on boot, so no manual volume recreation is needed.
-RUN mkdir -p /work && chown node:node /work \
-	# Xvfb needs the X11 socket dir to exist and be world-writable; create it now
-	# so the unprivileged user can bind a display (running as root used to create
-	# it implicitly).
-	&& mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+RUN mkdir -p /work && chown node:node /work
 WORKDIR /app/apps/slicer
 EXPOSE 4010
 # Drop privileges: the slicer runs a large third-party native binary (BambuStudio)

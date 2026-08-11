@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { inactiveBridgeDebugCaptureStatus } from '@printstream/shared'
+import { inactiveBridgeDebugCaptureStatus, unconfiguredBridgeBackupStatus } from '@printstream/shared'
 import { bridgeRuntimeRouter } from './bridge-runtime.js'
 import { HttpError } from '../lib/http-error.js'
 import { env } from '../lib/env.js'
@@ -242,6 +242,7 @@ test('bridge runtime register refreshes an existing bridge when credentials matc
         },
         update: currentBridgeUpdate,
         debugCapture: inactiveBridgeDebugCaptureStatus,
+        backup: unconfiguredBridgeBackupStatus,
         crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
       },
       runtimeToken,
@@ -330,6 +331,7 @@ test('bridge runtime register preserves a connected bridge name on reconnect', a
         },
         update: currentBridgeUpdate,
         debugCapture: inactiveBridgeDebugCaptureStatus,
+        backup: unconfiguredBridgeBackupStatus,
         crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
       },
       runtimeToken,

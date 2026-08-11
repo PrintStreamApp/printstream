@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { LibraryFile, SlicingPresetSummary, ThreeMfFilament, ThreeMfIndex, ThreeMfProjectFilament } from '@printstream/shared'
-import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
+import { resolveInitialManualPrinterModel, isProcessProfileCompatible, buildFilamentMappings, buildBakedFilamentProfileSelection, buildProcessFilamentChoices, buildProjectSlicingPresets, buildSliceDialogProjectFilaments, plateModelFilamentIds, buildProfileMaterialOptionId, buildRedundantProjectPresetCandidates, buildSliceMaterialOptions, filterSliceMaterialOptions, isFilamentProfileCompatible, repointMaterialOptionToCompatibleAlias, narrowMaterialOptions, resolveProfileMaterialType, slicingPresetsResponseIsUsable, type SliceMaterialOption } from './slicingPresetMatching'
 
 function materialOption(overrides: Partial<SliceMaterialOption> & { id: string }): SliceMaterialOption {
   return {
@@ -756,4 +756,133 @@ test("a slot whose preset is not installed binds to the project's own preset, no
     projectPresets[0]?.id,
     'the slot must bind to the project preset carrying its authored settings'
   )
+})
+
+// --- plateModelFilamentIds (the support-recommendation model-material set) ---
+
+/** Shape of Ryan's real repro file: unsliced plates, PLA slot referenced as the interface. */
+function unslicedPetgPlaIndex(): ThreeMfIndex {
+  const filament = (id: number, filamentType: string, isSupport = false): Partial<ThreeMfProjectFilament> =>
+    ({ id, filamentType, filamentName: filamentType, isSupport })
+  const plate = (index: number, ids: number[]): Record<string, unknown> =>
+    ({ index, weight: null, prediction: null, filaments: ids.map((id) => ({ id, usedGrams: null })) })
+  return {
+    projectFilaments: [filament(1, 'PETG'), filament(2, 'PETG'), filament(3, 'PLA')],
+    supportFilamentIds: [3],
+    plates: [plate(1, [1]), plate(2, [1, 2]), plate(3, [1, 2, 3])]
+  } as unknown as ThreeMfIndex
+}
+
+test('plateModelFilamentIds excludes the support-referenced slot on an UNSLICED plate', () => {
+  // The unsliced estimate attributes the interface slot to opted-in objects (plate 3 lists it),
+  // and `usedOnSelectedPlate` treats every material as used when no plate is sliced — both of
+  // which wrongly broke homogeneity for the issue-#79 repro file.
+  assert.deepEqual([...plateModelFilamentIds(unslicedPetgPlaIndex(), 3) ?? []].sort(), [1, 2])
+  assert.deepEqual([...plateModelFilamentIds(unslicedPetgPlaIndex(), 1) ?? []].sort(), [1])
+})
+
+test('plateModelFilamentIds falls back to every project material for plate 0 / unknown plates', () => {
+  assert.deepEqual([...plateModelFilamentIds(unslicedPetgPlaIndex(), 0) ?? []].sort(), [1, 2])
+})
+
+test('plateModelFilamentIds excludes filament_is_support slots even when the plate lists them', () => {
+  const index = {
+    projectFilaments: [
+      { id: 1, filamentType: 'PETG', filamentName: 'PETG', isSupport: false },
+      { id: 2, filamentType: 'PLA-S', filamentName: 'Bambu Support For PLA/PETG', isSupport: true }
+    ],
+    supportFilamentIds: [2],
+    plates: [{ index: 1, weight: 12, prediction: 900, filaments: [{ id: 1, usedGrams: 10 }, { id: 2, usedGrams: 2 }] }]
+  } as unknown as ThreeMfIndex
+  assert.deepEqual([...plateModelFilamentIds(index, 1) ?? []], [1])
+})
+
+test('plateModelFilamentIds never subtracts down to an empty set', () => {
+  // A single-colour project whose one colour is ALSO set as the support base: the referenced
+  // slot is the only candidate, so it IS the model material — dropping it would silently
+  // disable the recommendation for exactly the projects that configured support.
+  const index = {
+    projectFilaments: [{ id: 1, filamentType: 'PETG', filamentName: 'PETG', isSupport: false }],
+    supportFilamentIds: [1],
+    plates: [{ index: 1, weight: null, prediction: null, filaments: [{ id: 1, usedGrams: null }] }]
+  } as unknown as ThreeMfIndex
+  assert.deepEqual([...plateModelFilamentIds(index, 1) ?? []], [1])
+})
+
+test('plateModelFilamentIds returns null with no baked index', () => {
+  assert.equal(plateModelFilamentIds(null, 1), null)
+})
+
+// --- buildProcessFilamentChoices (the shared choices builder every process-dialog host uses) ---
+
+test('choice ids are the 1-based POSITION, with classification from the baked config', () => {
+  // Slot 2 was removed this session: positions and projectFilamentIds diverge, and the
+  // config's filament indices speak positions.
+  const bakedIndex = {
+    projectFilaments: [
+      { id: 1, filamentType: 'PETG', filamentName: 'PETG', filamentPresetName: 'Bambu PETG Basic @BBL X1C', isSupport: false, isSoluble: false },
+      { id: 3, filamentType: 'PLA-S', filamentName: 'Support', filamentPresetName: 'Bambu Support For PLA/PETG @BBL X1C', isSupport: true, isSoluble: false }
+    ],
+    supportFilamentIds: [3],
+    plates: []
+  } as unknown as ThreeMfIndex
+  const choices = buildProcessFilamentChoices({
+    projectFilaments: [
+      { projectFilamentId: 1, label: 'PETG', color: '#00AE42' },
+      { projectFilamentId: 3, label: 'Support', color: '#FFFFFF' }
+    ],
+    materialOptions: [],
+    filamentMaterialOptionIds: {},
+    filamentColors: {},
+    bakedIndex,
+    selectedPlate: 0
+  })
+  assert.deepEqual(choices.map((choice) => choice.id), [1, 2], 'positions, not projectFilamentIds')
+  assert.deepEqual(choices.map((choice) => choice.filamentType), ['PETG', 'PLA-S'])
+  assert.deepEqual(choices.map((choice) => choice.isSupport), [false, true])
+  assert.deepEqual(
+    choices.map((choice) => choice.materialName),
+    ['Bambu PETG Basic @BBL X1C', 'Bambu Support For PLA/PETG @BBL X1C'],
+    'the FULL preset name, so the combination table can name-match'
+  )
+  // Plate 0 (all-plates/editor mode): the model set is every non-support project material.
+  assert.deepEqual(choices.map((choice) => choice.usedByPlateModels), [true, false])
+})
+
+test('a session-added slot classifies from its selected option and is never a model material', () => {
+  const bakedIndex = {
+    projectFilaments: [{ id: 1, filamentType: 'PLA', filamentName: 'PLA', isSupport: false }],
+    plates: []
+  } as unknown as ThreeMfIndex
+  const choices = buildProcessFilamentChoices({
+    projectFilaments: [
+      { projectFilamentId: 1, label: 'PLA', color: '#101010' },
+      // Added this session: no baked entry exists for id 2.
+      { projectFilamentId: 2, label: 'Added', color: null }
+    ],
+    materialOptions: [materialOption({ id: 'opt-support', materialType: 'PLA-S', material: 'Bambu Support For PLA/PETG @BBL X1C', label: 'Support For PLA/PETG' })],
+    filamentMaterialOptionIds: { 2: 'opt-support' },
+    filamentColors: { 2: '#EE7700' },
+    bakedIndex,
+    selectedPlate: 0
+  })
+  const added = choices[1]!
+  assert.equal(added.label, 'Support For PLA/PETG', 'the chosen option names the slot')
+  assert.equal(added.filamentType, 'PLA-S', "the option's type fills the missing baked entry")
+  assert.equal(added.materialName, 'Bambu Support For PLA/PETG @BBL X1C')
+  assert.equal(added.color, '#ee7700', 'normalized (lowercased) like every slice colour')
+  assert.equal(added.usedByPlateModels, false, "the file's objects cannot print with a session-added slot")
+})
+
+test('with no baked index every plate-model flag is null so the table lookup is skipped', () => {
+  const choices = buildProcessFilamentChoices({
+    projectFilaments: [{ projectFilamentId: 1, label: 'PLA', color: '#101010' }],
+    materialOptions: [],
+    filamentMaterialOptionIds: {},
+    filamentColors: {},
+    bakedIndex: null,
+    selectedPlate: 0
+  })
+  assert.equal(choices[0]!.usedByPlateModels, null)
+  assert.equal(choices[0]!.filamentType, null)
 })

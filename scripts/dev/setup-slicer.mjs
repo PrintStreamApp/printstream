@@ -14,7 +14,7 @@
  * `SLICER_TARGETS_FILE=<data>/targets.json`.
  */
 import { existsSync, chmodSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,6 +33,12 @@ if (process.arch !== 'x64') {
   console.log('[setup-slicer] arm64 dev uses scripts/dev/setup-slicer-qemu.mjs (x86-64 qemu emulation) — run-dev.mjs picks it automatically.')
   process.exit(0)
 }
+
+// The launcher's offscreen-GL preload (CLI-rendered plate thumbnails; see gl-osmesa-shim.c).
+// Compiled BEFORE the populated-volume early exit so existing dev volumes self-heal on every
+// boot — the AppImage bootstrap below is the only once-only part. run-dev.mjs points
+// SLICER_GL_SHIM here. Missing tools degrade to thumbnail-less slicing, never a failed boot.
+installGlShim()
 
 if (existsSync(TARGETS_FILE)) {
   console.log(`[setup-slicer] already populated (${TARGETS_FILE}); skipping. Remove ${DATA_ROOT} to re-bootstrap.`)
@@ -53,3 +59,17 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1)
 }
 console.log(`[setup-slicer] done. SLICER_TARGETS_FILE=${TARGETS_FILE}`)
+
+function installGlShim() {
+  const shimSource = path.join(repoRoot, 'apps/slicer/docker/gl-osmesa-shim.c')
+  const shim = path.join(DATA_ROOT, 'gl-osmesa-shim.so')
+  if (spawnSync('sh', ['-c', 'command -v gcc'], { stdio: 'ignore' }).status !== 0) {
+    console.warn('[setup-slicer] gcc not found; sliced output will not get CLI-rendered plate thumbnails.')
+    return
+  }
+  execFileSync('gcc', ['-shared', '-fPIC', '-O2', '-o', shim, shimSource])
+  if (spawnSync('sh', ['-c', 'command -v weston'], { stdio: 'ignore' }).status !== 0) {
+    console.warn('[setup-slicer] weston not found; the CLI\'s thumbnail GL needs a headless Wayland compositor.')
+    console.warn('[setup-slicer] Rebuild the devcontainer (it installs weston) to enable plate thumbnails.')
+  }
+}

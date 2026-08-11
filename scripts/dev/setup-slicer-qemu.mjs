@@ -13,9 +13,11 @@
  *   2. Download + extract the default BambuStudio AppImage and flatten its profiles (shared with
  *      the x86 path via generate-bambustudio-full-profiles.mjs).
  *   3. Point a slicer target's cliPath at the unified launcher apps/slicer/docker/bambu-studio-cli.sh,
- *      which on arm64 execs bin/bambu-studio through `qemu-x86_64-static -L <sysroot>` under Xvfb.
+ *      which on arm64 runs bin/bambu-studio through `qemu-x86_64-static -L <sysroot>` (plus a
+ *      per-slice headless weston + the cross-compiled GL shim for plate thumbnails).
  *
- * qemu-user-static + xvfb are baked into the arm64 devcontainer image (.devcontainer/Dockerfile);
+ * qemu-user-static, weston and the x86-64 cross compiler are baked into the arm64 devcontainer
+ * image (.devcontainer/Dockerfile);
  * everything heavy this script produces lands in the persistent slicer data volume, so it only
  * runs the downloads once. Every step is idempotent (skips populated outputs) and the wrapper +
  * targets manifest are rewritten on each run, so an existing data volume self-heals after a
@@ -53,6 +55,11 @@ const TARGETS_FILE = path.join(INSTALL_ROOT, 'targets.json')
 // repo mount.
 const CLI_WRAPPER_SRC = path.join(repoRoot, 'apps/slicer/docker/bambu-studio-cli.sh')
 const CLI_WRAPPER = path.join(DATA_ROOT, 'bambu-studio-cli.sh')
+// The launcher's offscreen-GL preload (plate thumbnail rendering) lives NEXT TO the wrapper —
+// that is its default lookup. The CLI is x86-64 even on this arm64 host, so the shim always
+// compiles with the cross toolchain.
+const GL_SHIM_SRC = path.join(repoRoot, 'apps/slicer/docker/gl-osmesa-shim.c')
+const GL_SHIM = path.join(DATA_ROOT, 'gl-osmesa-shim.so')
 
 if (process.arch === 'x64') {
   console.log('[setup-slicer-qemu] arch=x64: use scripts/dev/setup-slicer.mjs (native AppImage). Skipping.')
@@ -61,7 +68,7 @@ if (process.arch === 'x64') {
 
 if (!hasCommand('qemu-x86_64-static')) {
   console.error('[setup-slicer-qemu] qemu-x86_64-static not found. Rebuild the arm64 devcontainer')
-  console.error('[setup-slicer-qemu] (it installs qemu-user-static + xvfb) or `apt-get install qemu-user-static`.')
+  console.error('[setup-slicer-qemu] (it installs qemu-user-static + weston + the x86-64 cross compiler) or `apt-get install qemu-user-static`.')
   process.exit(1)
 }
 
@@ -153,6 +160,22 @@ function extractAppImage(appImagePath, appDir) {
 function installWrapper() {
   copyFileSync(CLI_WRAPPER_SRC, CLI_WRAPPER)
   chmodSync(CLI_WRAPPER, 0o755)
+  installGlShim()
+}
+
+// Recompiled on every run (sub-second), so a shim source change self-heals like the wrapper
+// copy above. Missing tools degrade to thumbnail-less slicing, never a failed bootstrap.
+function installGlShim() {
+  if (!hasCommand('x86_64-linux-gnu-gcc')) {
+    console.warn('[setup-slicer-qemu] x86_64-linux-gnu-gcc not found; sliced output will not get CLI-rendered plate thumbnails.')
+    console.warn('[setup-slicer-qemu] Rebuild the arm64 devcontainer (it installs the cross compiler + weston) to enable them.')
+    return
+  }
+  execFileSync('x86_64-linux-gnu-gcc', ['-shared', '-fPIC', '-O2', '-o', GL_SHIM, GL_SHIM_SRC])
+  if (!hasCommand('weston')) {
+    console.warn('[setup-slicer-qemu] weston not found; the CLI\'s thumbnail GL needs a headless Wayland compositor.')
+    console.warn('[setup-slicer-qemu] Rebuild the arm64 devcontainer (it installs weston) to enable plate thumbnails.')
+  }
 }
 
 function writeTargets(entries) {

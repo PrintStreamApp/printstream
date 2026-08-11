@@ -350,6 +350,13 @@ export function useEditorHistory({
         recordSliceConfigHistory()
         sliceConfig.onRemoveFilament(projectFilamentId)
       },
+      // A reorder is one drop gesture — one checkpoint, one Ctrl+Z. The snapshot's sessionSlots
+      // carry the order, so undo restores the pre-drag list (and the filament-INDEX overrides,
+      // which live in the same snapshot).
+      onReorderFilament: (fromIndex: number, insertAt: number) => {
+        recordSliceConfigHistory()
+        sliceConfig.onReorderFilament(fromIndex, insertAt)
+      },
       // The plate type feeds the plates' `plateType` (written as `curr_bed_type`) into the saved
       // 3MF and is part of the config snapshot, so it undoes like the rest of the target.
       setPlateType: (value) => { recordSliceConfigHistory(); sliceConfig.setPlateType(value) },

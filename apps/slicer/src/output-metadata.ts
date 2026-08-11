@@ -401,6 +401,42 @@ function cleanFilamentProfileName(value: string | null | undefined): string | nu
   return trimmed || null
 }
 
+/**
+ * True when applying `metadata` will change a filament colour the project already carries —
+ * the exact condition under which the source file's embedded plate previews (rendered with
+ * the OLD colours) go stale. This is our side of BambuStudio's own `filament_color_changed`
+ * check, which the CLI can never hit for us: we rewrite the colours INTO the project before
+ * it looks (nothing rides `--filament-colour`), so from where it sits nothing ever changed.
+ * The caller reacts by dropping the stale previews (see `isPlatePreviewEntry`). Comparison
+ * is RGB — alpha is ignored, matching what `normalizeFilamentColor` keeps.
+ */
+export function metadataChangesFilamentColours(
+  settings: Record<string, unknown>,
+  metadata: SlicedArtifactMetadata
+): boolean {
+  const embedded = stringArray(settings.filament_colour)
+  for (const [projectFilamentId, filament] of metadata.filamentByProjectId.entries()) {
+    if (!filament.color) continue
+    const index = projectFilamentId - 1
+    if (index < 0) continue
+    if (normalizeFilamentColor(embedded[index]) !== filament.color) return true
+  }
+  return false
+}
+
+/**
+ * Entry names of the per-plate preview assets BambuStudio embeds in a 3MF (cover, small
+ * cover, no-light, top and pick renders). The slice pipeline drops these from the prepared
+ * input when `metadataChangesFilamentColours` says they are stale, so the CLI's thumbnail
+ * stage re-renders them with the new colours instead of carrying the old ones into the
+ * sliced output. Runtimes that cannot render (no weston/OSMesa/shim — see
+ * bambu-studio-cli.sh) regain the originals via `backfillPlateThumbnails`, which reads the
+ * ORIGINAL input, not the prepared copy.
+ */
+export function isPlatePreviewEntry(name: string): boolean {
+  return /^Metadata\/(?:plate_\d+(?:_small)?|plate_no_light_\d+|top_\d+|pick_\d+)\.png$/.test(name)
+}
+
 function normalizeFilamentColor(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? ''
   if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed.toUpperCase()

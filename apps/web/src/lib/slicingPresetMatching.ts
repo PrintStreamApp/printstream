@@ -78,6 +78,7 @@ export {
   tokenBoundaryIncludes
 }
 import { resolveFilamentIdentity } from './filamentColor'
+import type { SettingFilamentChoice } from '../components/settings/SettingValueField'
 import type { SlotFilamentIdentityLookup } from './slotFilamentIdentity'
 import { resolveFilamentPreset, resolveProjectFilamentPreset } from './filamentPresetResolver'
 import { formatSlicingPresetBrandedName, formatSlicingPresetDisplayName } from './slicingPresetSelection'
@@ -690,6 +691,98 @@ export function buildSliceDialogProjectFilaments(
     nozzleId: null,
     usedOnSelectedPlate: true
   }))
+}
+
+/**
+ * The 1-based project-filament ids the selected plate's MODEL OBJECTS print with — the
+ * model-material side of the support-interface recommendation (`modelFilamentIds` on
+ * `recommendSupportSettingsForInterfaceFilament`), approximating BambuStudio's scan of the
+ * current plate's volume extruders. Null when there is no baked index (host cannot tell;
+ * the combination-table lookup is then skipped).
+ *
+ * This deliberately does NOT reuse `usedOnSelectedPlate`: that is a display flag whose
+ * fallback is "every material is in use" (unsliced plates, plate 0), and which unions the
+ * support-referenced slots in — both exactly wrong for the homogeneity gate, which needs the
+ * set NARROW (the issue-#79 repro file read as PETG+PLA and never consulted the table). The
+ * trust calculus differs too: narrowing the print-mapping list can drop a needed material
+ * from a print, while narrowing this set only changes whether a confirm-only prompt appears —
+ * so the unsliced geometry estimate is good enough here even though the mapping list refuses
+ * to trust it.
+ *
+ * Slots referenced only by the support process settings (`supportFilamentIds`: the configured
+ * base/interface plus `filament_is_support` slots) are subtracted — Studio's volume scan never
+ * sees them unless geometry also prints with them, which the index cannot distinguish. The one
+ * guard: never subtract down to an empty set, because then the referenced slot IS the model
+ * material (a single-colour project whose colour doubles as the support base).
+ */
+export function plateModelFilamentIds(bakedIndex: ThreeMfIndex | null, selectedPlate: number): Set<number> | null {
+  if (!bakedIndex || bakedIndex.projectFilaments.length === 0) return null
+  const supportReferenced = new Set(bakedIndex.supportFilamentIds ?? [])
+  const knownIds = new Set(bakedIndex.projectFilaments.map((filament) => filament.id))
+  const plate = bakedIndex.plates.find((entry) => entry.index === selectedPlate) ?? null
+  // The plate's own list when it has one (sliced consumption, or the unsliced geometry
+  // estimate); otherwise every project material (plate 0 / plates with no filament metadata).
+  const candidateIds = plate && plate.filaments.length > 0
+    ? plate.filaments.map((filament) => filament.id).filter((id) => knownIds.has(id))
+    : bakedIndex.projectFilaments.map((filament) => filament.id)
+  const supportFlagged = new Set(
+    bakedIndex.projectFilaments.filter((filament) => filament.isSupport).map((filament) => filament.id)
+  )
+  const modelIds = new Set(candidateIds.filter((id) => !supportFlagged.has(id) && !supportReferenced.has(id)))
+  if (modelIds.size > 0) return modelIds
+  // Dedicated support materials stay excluded even in the fallback — they are never model
+  // geometry, whereas a support-REFERENCED ordinary colour can be.
+  return new Set(candidateIds.filter((id) => !supportFlagged.has(id)))
+}
+
+/**
+ * Material choices for filament-index process settings ("Support/raft base" etc.) in the global
+ * `ProcessSettingsDialog` — ONE builder for every host that renders that dialog (the workspace
+ * slice/print dialog and the public editor's local controller), so the hosts cannot drift.
+ * Ids are the 1-based POSITION in the full ordered list — the index the slicer reads — not
+ * `projectFilamentId`, which can diverge from position after a removal.
+ *
+ * `filamentType`/`isSupport`/`isSoluble`/`materialName`/`usedByPlateModels` ride along for
+ * the support-interface recommendation prompt in ProcessSettingsDialog (they are never
+ * rendered). The character fields come from the project's baked config, with the currently
+ * selected option filling the gaps (a session-ADDED slot has no baked entry at all, and
+ * without its option's type the table's type-matched entries could never fire for it); a
+ * wrong classification only means the prompt is offered or withheld, and the user still
+ * decides. `usedByPlateModels` comes from `plateModelFilamentIds` — NOT `usedOnSelectedPlate`,
+ * whose unsliced-plate fallback marks every material used and broke the homogeneity gate
+ * (see that helper's doc). A session-added slot is never a model material (the file's objects
+ * cannot print with it), which the id-space lookup gives for free.
+ *
+ * `selectedPlate` is the slice target: a real plate index when one plate is targeted, 0 in
+ * all-plates/editor mode (no single plate is targeted, so every project material is a model
+ * candidate).
+ */
+export function buildProcessFilamentChoices(params: {
+  projectFilaments: Array<{ projectFilamentId: number; label: string; color: string | null }>
+  materialOptions: SliceMaterialOption[]
+  filamentMaterialOptionIds: Record<number, string>
+  filamentColors: Record<number, string>
+  bakedIndex: ThreeMfIndex | null
+  selectedPlate: number
+}): SettingFilamentChoice[] {
+  const { projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, bakedIndex, selectedPlate } = params
+  const plateModelIds = plateModelFilamentIds(bakedIndex, selectedPlate)
+  return projectFilaments.map((filament, index) => {
+    const option = materialOptions.find((entry) => entry.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
+    const baked = bakedIndex?.projectFilaments.find((entry) => entry.id === filament.projectFilamentId) ?? null
+    return {
+      id: index + 1,
+      label: option?.label ?? filament.label,
+      color: normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF'),
+      filamentType: baked?.filamentType ?? option?.materialType ?? null,
+      isSupport: baked?.isSupport ?? null,
+      isSoluble: baked?.isSoluble ?? null,
+      // The currently-chosen preset's full name, so the table's name entries can match even
+      // when the picker label is vendor-stripped; the baked preset name is the fallback.
+      materialName: option?.material ?? baked?.filamentPresetName ?? baked?.filamentName ?? null,
+      usedByPlateModels: plateModelIds ? plateModelIds.has(filament.projectFilamentId) : null
+    }
+  })
 }
 
 /** A project filament slot that produced no mapping, and why. */

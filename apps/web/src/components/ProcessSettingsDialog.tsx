@@ -12,6 +12,11 @@
  * (`useEffectiveSlicerDeveloperMode` — the workspace default from the Slicing
  * settings page, optionally overridden per device); see
  * `isProcessOptionVisibleInMode`.
+ *
+ * Per-object mode (`baseOverlay` present) additionally supports BULK editing — one dialog for a
+ * multi-selection of objects or parts (`initialOverridesByMember`): keys the members disagree on
+ * render as "Mixed" and, untouched, keep each member's own value on apply. The seed/apply rules
+ * live in `lib/processBulkOverrides.ts`.
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -24,6 +29,7 @@ import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import {
   applyProcessConfigDefaults,
+  applySupportRecommendationChanges,
   computeProcessFieldStates,
   createProcessConfigAccessor,
   defaultProcessVisibilityContext,
@@ -42,6 +48,7 @@ import {
   type SlicingPresetSummary
 } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
+import { collectBulkOverridesResult, summarizeBulkOverrides } from '../lib/processBulkOverrides'
 import { useEffectiveSlicerDeveloperMode } from '../lib/slicerDeveloperMode'
 import { BackAwareModal } from './BackAwareModal'
 import { DialogSection } from './DialogSection'
@@ -59,6 +66,15 @@ export interface ProcessSettingsDialogProps {
   /** Source library file id; required to resolve project-embedded (`project:`) profiles. */
   sourceFileId?: string | null
   initialOverrides: ProcessSettingOverrides
+  /**
+   * Per-object BULK editing (a multi-selection): one override map per selected member, in
+   * selection order. When present with more than one entry, the dialog seeds from ALL of them —
+   * keys the members agree on show their value, keys they disagree on show as "Mixed" and, left
+   * untouched, preserve each member's own value on apply (see `lib/processBulkOverrides.ts`).
+   * Only meaningful with `baseOverlay` (per-object mode); `initialOverrides` should then be the
+   * first member's map for back-compat. Absent, the dialog edits `initialOverrides` exactly.
+   */
+  initialOverridesByMember?: ReadonlyArray<ProcessSettingOverrides>
   /** Machine context affecting conditional visibility (printer model, flavor). */
   visibilityContext?: Partial<ProcessVisibilityContext>
   /**
@@ -120,8 +136,15 @@ export interface ProcessSettingsDialogProps {
    * where changes are shown against the standard preset it's based on rather than the custom one.
    */
   baselineNote?: string
-  /** Omitted for `applyScope: 'preset'`, which has nothing to apply to. */
-  onApply?: (overrides: ProcessSettingOverrides) => void
+  /**
+   * Omitted for `applyScope: 'preset'`, which has nothing to apply to.
+   *
+   * `meta.clearedKeys` names keys the user RESET (relevant to per-object bulk editing, where the
+   * caller merges per member: assign `overrides`, delete `clearedKeys`, and leave everything else
+   * — the untouched "Mixed" keys — alone). Single-target callers may ignore it: there `overrides`
+   * is the complete final map, so replacement is equivalent.
+   */
+  onApply?: (overrides: ProcessSettingOverrides, meta: { clearedKeys: string[] }) => void
 }
 
 /** Resolves a preset's base config for the dialog. See {@link ProcessSettingsDialogProps.resolveConfig}. */
@@ -138,6 +161,22 @@ export type ProcessConfigResolver = (request: {
  */
 const SUPPORT_INTERFACE_FILAMENT_KEY = 'support_interface_filament'
 
+/**
+ * Display form of a recommended serialized scalar for the suggestion prompt: bools as on/off,
+ * enum codes through the catalogue's labels, numbers with the option's unit. The combination
+ * table changes up to a dozen settings — including turning support ON and switching its type —
+ * so the prompt names what each setting becomes, not just which settings move.
+ */
+function formatRecommendedSettingValue(option: ProcessSettingOption | undefined, value: string): string {
+  if (!option) return value
+  if (option.type === 'bool') return value === '1' ? 'on' : 'off'
+  if (option.type === 'enum') {
+    const index = option.enumValues?.indexOf(value) ?? -1
+    return option.enumLabels?.[index] ?? value
+  }
+  return option.sidetext ? `${value} ${option.sidetext}` : value
+}
+
 type ResolveResponse = {
   config: Record<string, string | string[]>
   baseConfig?: Record<string, string | string[]>
@@ -151,7 +190,7 @@ type ResolveResponse = {
 }
 
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, resolveConfig, baselineNote, onApply } = props
+  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, initialOverridesByMember, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, resolveConfig, baselineNote, onApply } = props
   const allowedKeySet = useMemo(() => (allowedKeys ? new Set(allowedKeys) : null), [allowedKeys])
   const isKeyAllowed = (key: string): boolean => allowedKeySet === null || allowedKeySet.has(key)
   // Reveal BambuStudio's develop-tier options only when developer mode is on (workspace
@@ -191,6 +230,13 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   // (empty), where overrides are the value-diff, so global behaviour is unchanged.
   const perObjectMode = Boolean(baseOverlay)
   const [explicitKeys, setExplicitKeys] = useState<Set<string>>(new Set())
+  // BULK per-object mode (several members): keys the members disagree on. Shown as "Mixed";
+  // editing one makes it uniform (leaves this set), resetting clears it from every member.
+  const [mixedKeys, setMixedKeys] = useState<Set<string>>(new Set())
+  // The explicit-key union AT LOAD, so apply can name the keys the user reset (`clearedKeys`).
+  const [initialSetKeys, setInitialSetKeys] = useState<Set<string>>(new Set())
+  /** Whether this dialog edits several members at once (enables the "Mixed" affordances). */
+  const bulkSelection = (initialOverridesByMember?.length ?? 0) > 1
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [corrections, setCorrections] = useState<string[]>([])
@@ -218,7 +264,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   // re-render — flashing "Loading…" and resetting the form mid-edit. Depend on a stable
   // content hash instead so it reloads only when the values actually change.
   const baseOverlayKey = JSON.stringify(baseOverlay ?? null)
-  const initialOverridesKey = JSON.stringify(initialOverrides ?? null)
+  const initialOverridesKey = JSON.stringify(initialOverridesByMember ?? initialOverrides ?? null)
 
   useEffect(() => {
     if (!open || !processProfileId) return
@@ -248,9 +294,16 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           setBakedKeys(new Set())
           // Per-object: the inherited config IS the baseline, so it always resolves.
           setBaselineResolved(true)
-          // Every key the object explicitly overrides is "set", value-matching or not.
-          setExplicitKeys(new Set(Object.keys(initialOverrides)))
-          setConfig({ ...globalEffective, ...initialOverrides })
+          // Every key a member explicitly overrides is "set", value-matching or not. With several
+          // members the form seeds from ALL of them: agreed keys carry their value, disagreements
+          // become "Mixed" (holding the inherited value so field-state computation stays sane).
+          const seed = summarizeBulkOverrides(
+            initialOverridesByMember && initialOverridesByMember.length > 0 ? initialOverridesByMember : [initialOverrides]
+          )
+          setExplicitKeys(new Set(seed.explicitKeys))
+          setInitialSetKeys(new Set(seed.explicitKeys))
+          setMixedKeys(seed.mixedKeys)
+          setConfig({ ...globalEffective, ...seed.uniformOverrides })
         } else {
           const baseline = applyProcessConfigDefaults((response.baseConfig ?? response.config) as ProcessConfig)
           setSliceBase(effective)
@@ -262,6 +315,8 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           setDeclaresOverrides(response.declaresOverrides === true)
           setBaselineResolved(response.baselineResolved !== false)
           setExplicitKeys(new Set())
+          setMixedKeys(new Set())
+          setInitialSetKeys(new Set())
           setConfig({ ...effective, ...initialOverrides })
         }
       })
@@ -415,9 +470,17 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   }
 
   // Editing a per-object value makes that key an explicit override (it stays set until reset, even
-  // if edited back to the inherited value) — BambuStudio's model.
+  // if edited back to the inherited value) — BambuStudio's model. Editing also resolves a "Mixed"
+  // key: the typed value now applies uniformly to every member.
   const markExplicit = (key: string) => {
-    if (perObjectMode) setExplicitKeys((prev) => prev.has(key) ? prev : new Set(prev).add(key))
+    if (!perObjectMode) return
+    setExplicitKeys((prev) => prev.has(key) ? prev : new Set(prev).add(key))
+    setMixedKeys((prev) => {
+      if (!prev.has(key)) return prev
+      const next = new Set(prev)
+      next.delete(key)
+      return next
+    })
   }
 
   const setValue = (key: string, value: string | string[]) => {
@@ -455,30 +518,42 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const offerSupportRecommendation = async (nextConfig: ProcessConfig, interfaceScalar: string) => {
     if (!filamentChoices || filamentChoices.length === 0) return
     const accessorForNext = createProcessConfigAccessor(nextConfig)
+    // The combination-table lookup needs to know which materials the plate's model objects
+    // print with; only hosts with plate context declare `usedByPlateModels`. When none do,
+    // pass undefined (host cannot tell) so the table path is skipped rather than treating
+    // "unknown" as "no model materials".
+    const declaresPlateModels = filamentChoices.some((choice) => choice.usedByPlateModels != null)
     const recommendation = recommendSupportSettingsForInterfaceFilament({
       interfaceFilamentId: Number.parseInt(interfaceScalar, 10) || 0,
       supportFilamentId: Number.parseInt(accessorForNext.str('support_filament'), 10) || 0,
       filaments: filamentChoices.map((choice) => ({
         id: choice.id,
         filamentType: choice.filamentType ?? null,
-        filamentName: choice.label,
+        filamentName: choice.materialName ?? choice.label,
         isSupport: choice.isSupport ?? null,
         isSoluble: choice.isSoluble ?? null
       })),
+      modelFilamentIds: declaresPlateModels
+        ? filamentChoices.filter((choice) => choice.usedByPlateModels).map((choice) => choice.id)
+        : undefined,
       config: nextConfig
     })
     if (!recommendation) return
 
-    const changedLabels = Object.keys(recommendation.changes)
-      .map((key) => processSettingsCatalog.options[key]?.label ?? key)
+    const changedEntries = Object.entries(recommendation.changes).map(([key, value]) => {
+      const option = processSettingsCatalog.options[key]
+      return { key, label: option?.label ?? key, value: formatRecommendedSettingValue(option, value) }
+    })
     const accepted = await confirm({
       title: 'Suggestion',
       description: (
         <Stack spacing={1}>
           <Typography level="body-sm">{recommendation.reason} We recommend changing:</Typography>
           <Stack component="ul" spacing={0.25} sx={{ pl: 2.5, my: 0 }}>
-            {changedLabels.map((label) => (
-              <Typography key={label} component="li" level="body-sm">{label}</Typography>
+            {changedEntries.map((entry) => (
+              <Typography key={entry.key} component="li" level="body-sm">
+                {entry.label}: <Typography fontWeight="lg">{entry.value}</Typography>
+              </Typography>
             ))}
           </Stack>
         </Stack>
@@ -487,7 +562,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
       cancelLabel: 'Leave them as they are'
     })
     if (!accepted) return
-    commit({ ...nextConfig, ...recommendation.changes })
+    commit(applySupportRecommendationChanges(nextConfig, recommendation.changes))
   }
 
   /** Reverts a key to its resolved system value (BambuStudio "back to system value"). */
@@ -498,8 +573,15 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     else next[key] = baseConfig[key]
     // Resetting a per-object override REMOVES it (the object goes back to inheriting the global),
     // even when its value already matched — that is the whole point of the "set but matching" case.
+    // On a "Mixed" key, reset clears the override from EVERY member (back to inherited for all).
     if (perObjectMode && explicitKeys.has(key)) {
       setExplicitKeys((prev) => { const nextKeys = new Set(prev); nextKeys.delete(key); return nextKeys })
+      setMixedKeys((prev) => {
+        if (!prev.has(key)) return prev
+        const nextKeys = new Set(prev)
+        nextKeys.delete(key)
+        return nextKeys
+      })
     }
     commit(next)
   }
@@ -553,31 +635,31 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   /**
    * The overrides to emit. Per-object mode preserves EVERY explicitly-set key (even one whose value
    * matches the inherited config), so a value-matching pin survives an apply instead of being
-   * dropped by the value-diff. Global mode emits the value-diff relative to the slice base so
-   * baked-but-untouched keys aren't re-sent.
+   * dropped by the value-diff — while still-mixed keys are emitted in NEITHER set, which is what
+   * lets each member keep its own value. Global mode emits the value-diff relative to the slice
+   * base so baked-but-untouched keys aren't re-sent.
    */
-  const computeAppliedOverrides = (): ProcessSettingOverrides => {
+  const computeAppliedOverrides = (): { overrides: ProcessSettingOverrides; clearedKeys: string[] } => {
     if (perObjectMode) {
-      const overrides: ProcessSettingOverrides = {}
-      for (const key of explicitKeys) {
-        if (config[key] !== undefined) overrides[key] = config[key]
-      }
-      return overrides
+      return collectBulkOverridesResult({ config, explicitKeys, mixedKeys, initialSetKeys })
     }
-    return diffProcessConfig(sliceBase, config)
+    return { overrides: diffProcessConfig(sliceBase, config), clearedKeys: [] }
   }
 
   const handleApply = () => {
     if (!baseConfig) return
-    onApply?.(computeAppliedOverrides())
+    const result = computeAppliedOverrides()
+    onApply?.(result.overrides, { clearedKeys: result.clearedKeys })
     onClose()
   }
 
-  /** Reverts every setting to the preset baseline (BambuStudio "reset to default"). */
+  /** Reverts every setting to the preset baseline (BambuStudio "reset to default"). In bulk
+   * per-object mode that clears every member's overrides, mixed ones included. */
   const handleResetAll = () => {
     if (!baseConfig) return
     setConfig({ ...baseConfig })
     setExplicitKeys(new Set())
+    setMixedKeys(new Set())
     setCorrections([])
   }
 
@@ -597,7 +679,8 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           content: JSON.stringify(presetConfig, null, 2)
         }
       })
-      onApply?.(computeAppliedOverrides())
+      const result = computeAppliedOverrides()
+      onApply?.(result.overrides, { clearedKeys: result.clearedKeys })
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save preset')
@@ -760,6 +843,8 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
                                 accessor={accessor}
                                 config={config}
                                 perObjectMode={perObjectMode}
+                                bulkSelection={bulkSelection}
+                                isMixed={(key) => mixedKeys.has(key)}
                                 isModified={isModified}
                                 isUnsaved={isUnsaved}
                                 isValueChanged={isValueChanged}
@@ -846,6 +931,10 @@ interface ProcessSettingLineRowProps {
   config: ProcessConfig
   /** Per-object dialog: enables the "set but value-matching" (dot + bold) treatment. */
   perObjectMode: boolean
+  /** Editing several members at once — adjusts the "set" copy from "this object" to the selection. */
+  bulkSelection: boolean
+  /** The members disagree on this key (bulk editing): render the "Mixed" state. */
+  isMixed: (key: string) => boolean
   isModified: (key: string) => boolean
   isUnsaved: (key: string) => boolean
   /** Value differs from the baseline (the orange "changed" state), vs merely being explicitly set. */
@@ -862,7 +951,7 @@ interface ProcessSettingLineRowProps {
 }
 
 function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element | null {
-  const { keys, lineLabel, showDeveloperOptions, code, fullWidth, fieldStates, accessor, perObjectMode, isModified, isUnsaved, isValueChanged, isPresetOverride, originalOf, canReset, onReset, onScalarChange, filamentChoices } = props
+  const { keys, lineLabel, showDeveloperOptions, code, fullWidth, fieldStates, accessor, perObjectMode, bulkSelection, isMixed, isModified, isUnsaved, isValueChanged, isPresetOverride, originalOf, canReset, onReset, onScalarChange, filamentChoices } = props
   const visibleKeys = keys.filter((key) => {
     const option = processSettingsCatalog.options[key]
     return option && isProcessOptionVisibleInMode(option, showDeveloperOptions) && getProcessFieldState(fieldStates.states, key).visible
@@ -880,9 +969,17 @@ function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element |
   const lineValueChanged = visibleKeys.some((key) => isValueChanged(key))
   const lineModified = visibleKeys.some((key) => isModified(key))
   const lineUnsaved = visibleKeys.some((key) => isUnsaved(key))
+  const lineMixed = visibleKeys.some((key) => isMixed(key))
   // Full-width lines take the label above and the whole row: the G-code editors and Notes.
   const spansRow = Boolean(code || fullWidth)
   const lineSetOnly = perObjectMode && lineModified && !lineValueChanged
+  // Three "set" flavours behind the one dot: mixed across a bulk selection, uniformly set on a
+  // bulk selection, or set on the single object — each names what reset will do.
+  const setDotTooltip = lineMixed
+    ? 'Set to different values across the selection — edit to apply one value to everything, or reset to clear it everywhere'
+    : bulkSelection
+      ? 'Set on every selected item (matches the inherited value) — reset to inherit'
+      : 'Set for this object (matches the inherited value) — reset to inherit'
   // Outside per-object mode this is the same three-state rule per-object mode already used, applied
   // to the preset: an UNSAVED edit is coloured, an override the preset carries is bold only.
   const labelColor = perObjectMode
@@ -910,7 +1007,7 @@ function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element |
             fontWeight: lineModified || lineUnsaved ? 'xl' : undefined
           }}>
             {lineSetOnly && (
-              <Tooltip title="Set for this object (matches the inherited value) — reset to inherit" variant="soft">
+              <Tooltip title={setDotTooltip} variant="soft">
                 <Box component="span" sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'primary.solidBg', flexShrink: 0 }} />
               </Tooltip>
             )}
@@ -941,6 +1038,7 @@ function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element |
                   showOwnLabel={visibleKeys.length > 1}
                   modified={isPresetOverride(key)}
                   unsaved={isValueChanged(key)}
+                  mixed={isMixed(key)}
                   original={originalOf(key)}
                   filamentChoices={filamentChoices}
                   onScalarChange={onScalarChange}

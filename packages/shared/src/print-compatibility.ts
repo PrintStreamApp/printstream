@@ -183,6 +183,35 @@ export function resolvePrinterNozzleDiameters(
     .sort((left, right) => left.extruderId - right.extruderId)
 }
 
+/**
+ * Distinct formatted nozzle-size labels for a machine ("0.4 mm"), resolved detected-over-saved
+ * like `resolvePrinterNozzleDiameters` and deduped so a dual-extruder machine with matching
+ * nozzles reads as one size. Order follows extruder id, so the first label is extruder 0's.
+ */
+export function resolvePrinterNozzleSizeLabels(
+  status: Pick<PrinterStatus, 'nozzles'> | null | undefined,
+  savedSelections: readonly PrinterNozzleDiameterSelection[] | null | undefined
+): string[] {
+  return Array.from(new Set(
+    resolvePrinterNozzleDiameters(status, savedSelections)
+      .map((selection) => formatNozzleDiameterLabel(selection.diameter))
+      .filter((label): label is string => Boolean(label))
+  ))
+}
+
+/**
+ * The one-chip nozzle-size label ("0.4 mm", or "0.4 mm / 0.2 mm" on a dual-extruder machine with
+ * differing nozzles) shared by the printer card header and the printer picker rows, so a machine
+ * reads identically on both. Null when no nozzle size is known from status or saved selections.
+ */
+export function formatPrinterNozzleSizesLabel(
+  status: Pick<PrinterStatus, 'nozzles'> | null | undefined,
+  savedSelections: readonly PrinterNozzleDiameterSelection[] | null | undefined
+): string | null {
+  const labels = resolvePrinterNozzleSizeLabels(status, savedSelections)
+  return labels.length > 0 ? labels.join(' / ') : null
+}
+
 export function buildRequiredNozzleDiametersByExtruder(
   requirements: ReadonlyArray<{ nozzleId?: number | null; nozzleDiameter?: string | null }>,
   fallbackDiameters?: readonly string[] | null

@@ -92,7 +92,10 @@ ENV BRIDGE_AUTO_UPDATE=true
 ENV BRIDGE_RUNNER_ABI_VERSION=node${NODE_VERSION}-ffmpeg7-v1
 WORKDIR /app
 # Library files, bridge state, and other bridge-owned assets live under /data.
-RUN mkdir -p /data && chown -R node:node /data
+# /backups is the default BRIDGE_BACKUP_DIR mount point; pre-owned so a named
+# volume mounted there is writable by the unprivileged runtime user. (A host
+# bind mount keeps the host directory's ownership — see compose.bridge.example.yml.)
+RUN mkdir -p /data /backups && chown -R node:node /data /backups
 COPY --chown=node:node --from=bridge-build /app/apps/bridge/dist/bridge-runner.cjs /app/bridge-runner.cjs
 COPY --chown=node:node --from=bridge-build /app/apps/bridge/dist/bridge-launcher.cjs /app/bridge-launcher.cjs
 # Build identity for the footer version/update hint (env.ts reads it from cwd).
@@ -102,12 +105,25 @@ ENTRYPOINT ["node", "/app/bridge-launcher.cjs"]
 
 FROM base AS runtime
 ENV NODE_ENV=production
+# Postgres client tools for the built-in server backups (pg_dump/pg_restore),
+# from PGDG so the client major matches the compose `db` image (postgres:16 —
+# bookworm's own postgresql-client is 15, and a 15 pg_dump refuses a 16
+# server). Keep this major and the compose file's `db` image pinned together.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends gnupg \
+  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+  && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends postgresql-client-16 \
+  && apt-get purge -y gnupg \
+  && apt-get autoremove -y \
+  && rm -rf /var/lib/apt/lists/*
 # Serve the embedded web SPA from this image by default (the `api` role).
 ENV SERVE_WEB_DIR=/app/apps/web/dist
 WORKDIR /app
 # /run/provision holds the managed-bridge provisioning token; owning the
 # mountpoint as `node` lets a fresh named volume inherit that ownership.
-RUN mkdir -p /data /run/provision && chown -R node:node /data /run/provision
+RUN mkdir -p /data /backups /run/provision && chown -R node:node /data /backups /run/provision
 COPY --chown=node:node --from=build /app /app
 COPY --chown=node:node docker/app-entrypoint.sh /usr/local/bin/app-entrypoint.sh
 RUN chmod +x /usr/local/bin/app-entrypoint.sh

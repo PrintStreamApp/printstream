@@ -1,122 +1,32 @@
 /**
- * Bambu/PrusaSlicer TriangleSelector paint-tree codec and splitting brush.
+ * TriangleSelector paint GEOMETRY: the splitting brush, cursors, and leaf walking.
  *
- * A painted triangle's 3MF attribute (`paint_supports`/`paint_seam`/`paint_color`) is a
- * hex string encoding a recursive split tree (TriangleSelector::serialize):
- * - The bitstream is read 4 bits per hex digit, LSB-first, digits consumed from the
- *   END of the string (FacetsAnnotation builds the string reversed).
- * - Each node: 2 bits split-side count. Leaves follow with 2 bits of state; state 3
- *   (0b11) marks an extension — 4-bit chunks follow, each `15` adding 15, the final
- *   chunk (<15) completing `state = 3 + sum`. Split nodes follow with 2 bits special
- *   side, then their `splits + 1` children serialized in REVERSE child order.
- * - Child sub-triangle layout mirrors TriangleSelector::perform_split: vertices are
- *   rotated so the special side leads, split edges are bisected at midpoints.
+ * The string codec (decode/encode of the `paint_supports`/`paint_seam`/`paint_color` hex trees,
+ * plus the colour-channel filament-id remaps) lives in `@printstream/shared/three-mf`
+ * (`triangle-paint-codec.ts`) because the BAKE re-keys base-file paint with it too; this module
+ * re-exports it so the plugin keeps one import site. What stays here is everything that needs
+ * vertex positions: child sub-triangle layout mirrors TriangleSelector::perform_split (vertices
+ * rotated so the special side leads, split edges bisected at midpoints), and the brush mirrors
+ * select_patch/split_triangle.
  *
- * States are channel-dependent: supports/seam use 1 = enforcer, 2 = blocker; colour
- * paint uses the 1-based filament id. State 0 is unpainted.
+ * States are channel-dependent: supports/seam use 1 = enforcer, 2 = blocker; colour paint uses the
+ * 1-based filament id. State 0 is unpainted.
  */
+import type { PaintTreeNode } from '@printstream/shared/three-mf'
 
-export type PaintTreeNode =
-  | { kind: 'leaf'; state: number }
-  | { kind: 'split'; splits: 1 | 2 | 3; special: 0 | 1 | 2; children: PaintTreeNode[] }
+export {
+  decodePaintTree,
+  encodePaintTree,
+  isPaintTreeEmpty,
+  remapColorPaintCode,
+  remapColorPaintMap,
+  type PaintTreeNode
+} from '@printstream/shared/three-mf'
 
 export interface PaintVec3 {
   x: number
   y: number
   z: number
-}
-
-const EXTENSION_MARKER = 3
-
-/** Decode a paint code into its tree, or null when the code is malformed. */
-export function decodePaintTree(code: string): PaintTreeNode | null {
-  const bits: boolean[] = []
-  for (let i = code.length - 1; i >= 0; i -= 1) {
-    const value = Number.parseInt(code[i]!, 16)
-    if (!Number.isFinite(value)) return null
-    for (let bit = 0; bit < 4; bit += 1) bits.push(Boolean(value & (1 << bit)))
-  }
-  let cursor = 0
-  const read = (count: number): number | null => {
-    if (cursor + count > bits.length) return null
-    let value = 0
-    for (let bit = 0; bit < count; bit += 1) {
-      if (bits[cursor + bit]) value |= 1 << bit
-    }
-    cursor += count
-    return value
-  }
-  const parse = (): PaintTreeNode | null => {
-    const splits = read(2)
-    if (splits == null) return null
-    if (splits === 0) {
-      let state = read(2)
-      if (state == null) return null
-      if (state === EXTENSION_MARKER) {
-        state = EXTENSION_MARKER
-        let chunk = read(4)
-        if (chunk == null) return null
-        while (chunk === 15) {
-          state += 15
-          chunk = read(4)
-          if (chunk == null) return null
-        }
-        state += chunk
-      }
-      return { kind: 'leaf', state }
-    }
-    const special = read(2)
-    if (special == null || special > 2) return null
-    const reversed: PaintTreeNode[] = []
-    for (let child = 0; child <= splits; child += 1) {
-      const node = parse()
-      if (!node) return null
-      reversed.push(node)
-    }
-    return { kind: 'split', splits: splits as 1 | 2 | 3, special: special as 0 | 1 | 2, children: reversed.reverse() }
-  }
-  const root = parse()
-  // Trailing bits are only the implicit nibble padding (always zero in practice).
-  return root
-}
-
-/** Encode a paint tree back into the reversed-hex attribute string. */
-export function encodePaintTree(root: PaintTreeNode): string {
-  const bits: boolean[] = []
-  const write = (value: number, count: number) => {
-    for (let bit = 0; bit < count; bit += 1) bits.push(Boolean(value & (1 << bit)))
-  }
-  const emit = (node: PaintTreeNode) => {
-    if (node.kind === 'leaf') {
-      write(0, 2)
-      if (node.state >= EXTENSION_MARKER) {
-        write(EXTENSION_MARKER, 2)
-        let remaining = node.state - EXTENSION_MARKER
-        while (remaining >= 15) {
-          write(15, 4)
-          remaining -= 15
-        }
-        write(remaining, 4)
-      } else {
-        write(node.state, 2)
-      }
-      return
-    }
-    write(node.splits, 2)
-    write(node.special, 2)
-    // Children serialized in reverse order (TriangleSelector compatibility).
-    for (let child = node.splits; child >= 0; child -= 1) emit(node.children[child]!)
-  }
-  emit(root)
-  let out = ''
-  for (let offset = 0; offset < bits.length; offset += 4) {
-    let value = 0
-    for (let bit = 0; bit < 4; bit += 1) {
-      if (bits[offset + bit]) value |= 1 << bit
-    }
-    out = value.toString(16).toUpperCase() + out
-  }
-  return out
 }
 
 function midpoint(a: PaintVec3, b: PaintVec3): PaintVec3 {
@@ -411,64 +321,4 @@ export function paintTreeWithBrush(
     return { kind: 'leaf', state: first.state }
   }
   return { kind: 'split', splits: node.splits, special: node.special, children: painted }
-}
-
-/** True when the tree paints nothing (every leaf is state 0). */
-export function isPaintTreeEmpty(node: PaintTreeNode): boolean {
-  if (node.kind === 'leaf') return node.state === 0
-  return node.children.every(isPaintTreeEmpty)
-}
-
-/**
- * Rewrite every COLOUR-paint leaf through a filament-id remap, returning the re-encoded code.
- *
- * Colour paint is the one channel whose leaf `state` IS a filament id (supports/seam use fixed
- * enforcer/blocker constants), so a save that renumbers filaments has to rewrite these codes or the
- * paint silently repoints at whatever material now sits at the old number. That is worse than
- * losing it: the model keeps its painted regions and quietly prints them in the wrong colour.
- *
- * A state the remap cannot translate — its material was removed by this save — becomes 0
- * (unpainted), mirroring how every other seam drops a reference to a deleted material rather than
- * inventing a substitute. State 0 is already unpainted and is never remapped.
- *
- * Returns the input unchanged when the code is malformed or nothing moved, so callers can assign
- * unconditionally without churning identities.
- */
-export function remapColorPaintCode(code: string, remap: ReadonlyMap<number, number>): string {
-  const root = decodePaintTree(code)
-  if (!root) return code
-  let changed = false
-  const rewrite = (node: PaintTreeNode): PaintTreeNode => {
-    if (node.kind === 'leaf') {
-      if (node.state === 0) return node
-      const moved = remap.get(node.state) ?? 0
-      if (moved === node.state) return node
-      changed = true
-      return { kind: 'leaf', state: moved }
-    }
-    return { ...node, children: node.children.map(rewrite) }
-  }
-  const next = rewrite(root)
-  if (!changed) return code
-  return isPaintTreeEmpty(next) ? '' : encodePaintTree(next)
-}
-
-/**
- * Apply {@link remapColorPaintCode} across a whole `colorPaint` map (part key -> triangle -> code),
- * dropping triangles whose paint became empty and parts left with none.
- */
-export function remapColorPaintMap(
-  paint: Record<string, Record<number, string>>,
-  remap: ReadonlyMap<number, number>
-): Record<string, Record<number, string>> {
-  const out: Record<string, Record<number, string>> = {}
-  for (const [partKey, triangles] of Object.entries(paint)) {
-    const nextTriangles: Record<number, string> = {}
-    for (const [triangleKey, code] of Object.entries(triangles)) {
-      const next = remapColorPaintCode(code, remap)
-      if (next) nextTriangles[Number(triangleKey)] = next
-    }
-    if (Object.keys(nextTriangles).length > 0) out[partKey] = nextTriangles
-  }
-  return out
 }

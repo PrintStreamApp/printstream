@@ -57,6 +57,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
     resolveFilamentConfig,
     installedFilamentPresets,
     processSettingsDialogOpen,
+    processFilamentChoices,
     filamentSettingsFilamentId,
     setFilamentSettingsFilamentId,
     setFilamentSettingOverridesById,
@@ -123,6 +124,7 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
             initialOverrides={controller.processSettingOverrides}
             visibilityContext={{ printerModel: controller.selectedPrinterModel }}
             profileOptions={controller.compatibleProcessProfiles}
+            filamentChoices={processFilamentChoices}
             applyScope="project"
             resolveConfig={resolveProcessConfig}
             baselineNote={processBaselineNote ?? undefined}

@@ -19,6 +19,11 @@ import {
   bridgeDebugCaptureReadParamsSchema,
   bridgeDebugCaptureReadResultSchema,
   bridgeDebugCaptureStatusResultSchema,
+  bridgeBackupRunParamsSchema,
+  bridgeBackupListParamsSchema,
+  bridgeBackupListResponseSchema,
+  bridgeBackupListResultSchema,
+  bridgeBackupStatusResultSchema,
   bridgeTestResponseSchema,
   bridgeUpdateActionResponseSchema,
   bridgeUpdateActionResultSchema,
@@ -31,6 +36,7 @@ import {
 import { annotateRequestAuditLog } from '../lib/audit-logs.js'
 import { requireRequestPermission } from '../lib/authorization.js'
 import { getBridgeDebugCaptureStatus } from '../lib/bridge-debug-capture.js'
+import { getBridgeBackupStatus, setBridgeBackupStatus } from '../lib/bridge-backup-status.js'
 import { pairBridgeToWorkspace } from '../lib/bridge-pairing.js'
 import { listBridgeStandaloneDownloads } from '../lib/bridge-standalone-downloads.js'
 import { buildBridgeUpdateSummary, resolveBridgeAssetOrigin } from '../lib/bridge-update-policy.js'
@@ -372,6 +378,47 @@ bridgesRouter.get('/:id/debug-capture/download', async (request, response) => {
   response.send(`${lines.join('\n')}\n`)
 })
 
+/**
+ * On-disk bridge backups. The bridge owns the snapshots and the schedule (see
+ * `apps/bridge/src/backup-manager.ts`); these routes are thin RPC pass-throughs
+ * like the debug-capture trio. `run` only STARTS a backup — completion arrives
+ * as a pushed `bridge.backup.status` message broadcast over the `bridge.backup`
+ * WS event.
+ */
+bridgesRouter.get('/:id/backups', async (request, response) => {
+  const bridge = await requireConnectedWorkspaceBridge(request)
+  const result = bridgeBackupListResultSchema.parse(await bridgeSessionManager.requestRpc(
+    bridge.id,
+    'bridge.backup.list',
+    bridgeBackupListParamsSchema.parse({}),
+    { timeoutMs: 15_000 }
+  ))
+  response.json(bridgeBackupListResponseSchema.parse({
+    status: getBridgeBackupStatus(bridge.id),
+    snapshots: result.snapshots
+  }))
+})
+
+bridgesRouter.post('/:id/backups/run', async (request, response) => {
+  const bridge = await requireConnectedWorkspaceBridge(request)
+  const status = bridgeBackupStatusResultSchema.parse(await bridgeSessionManager.requestRpc(
+    bridge.id,
+    'bridge.backup.run',
+    bridgeBackupRunParamsSchema.parse({}),
+    { timeoutMs: 15_000 }
+  ))
+  // Keep the mirror current immediately: the bridge's own status push races
+  // this response, and the UI refetches the bridge list on mutation success.
+  setBridgeBackupStatus(bridge.id, status)
+  annotateRequestAuditLog(request, {
+    action: 'run-bridge-backup',
+    resource: 'bridge',
+    summary: `Started a backup on bridge ${bridge.name}.`,
+    metadata: { bridgeId: bridge.id, bridgeName: bridge.name }
+  })
+  response.json(status)
+})
+
 bridgesRouter.post('/:id/update/check', async (request, response) => {
   const bridge = await loadWorkspaceBridgeForUpdate(request)
   if (isSelfHostedDeployment()) {
@@ -562,6 +609,7 @@ function toBridgeSummary(bridge: {
     connectionStats: bridgeSessionManager.getConnectionStats(bridge.id),
     update: buildBridgeUpdateSummary(bridge),
     debugCapture: getBridgeDebugCaptureStatus(bridge.id),
+    backup: getBridgeBackupStatus(bridge.id),
     crash: {
       lastCrashAt: bridge.lastCrashAt?.toISOString() ?? null,
       recentCrashCount: bridge.recentCrashCount ?? 0,

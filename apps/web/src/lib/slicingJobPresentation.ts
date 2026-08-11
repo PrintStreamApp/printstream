@@ -1,27 +1,15 @@
-import type { PrintJob, SlicingJob, SlicingMetadata } from '@printstream/shared'
+import { getSlicingJobStatusLabel, isActiveSlicingJob, type SlicingJob, type SlicingMetadata } from '@printstream/shared'
 import { formatLibraryFileName } from './libraryDisplay'
 import { formatSecondsDuration } from './time'
+
+// Status classification/labels and the history-result mapping moved to @printstream/shared
+// (`slicing.ts` / `job-history.ts`) so the server-side job-history search filters on the same
+// text these cards render; re-exported so the web's import sites keep one path.
+export { getSlicingJobStatusLabel, isActiveSlicingJob, slicingHistoryResult } from '@printstream/shared'
 
 export interface SlicingProgressFrame {
   message: string
   totalPercent: number | null
-}
-
-export function isActiveSlicingJob(job: SlicingJob): boolean {
-  return job.status === 'queued' || job.status === 'preparing' || job.status === 'slicing' || job.status === 'saving'
-}
-
-export function getSlicingJobStatusLabel(job: SlicingJob): string {
-  if (job.status === 'queued' && job.queuePosition) return `Queued #${job.queuePosition}`
-  switch (job.status) {
-    case 'queued': return 'Queued'
-    case 'preparing': return 'Preparing'
-    case 'slicing': return 'Slicing'
-    case 'saving': return 'Saving'
-    case 'ready': return 'Ready'
-    case 'failed': return 'Failed'
-    case 'cancelled': return 'Cancelled'
-  }
 }
 
 /** The engine's own progress, parsed from the JSON frames it writes to stdout. */
@@ -90,15 +78,6 @@ export function slicingStatusColor(status: SlicingJob['status']): 'neutral' | 'p
     case 'ready': return 'success'
     case 'cancelled': return 'warning'
     case 'failed': return 'danger'
-  }
-}
-
-export function slicingHistoryResult(job: SlicingJob): PrintJob['result'] {
-  switch (job.status) {
-    case 'ready': return 'success'
-    case 'failed': return 'failed'
-    case 'cancelled': return 'cancelled'
-    default: return 'unknown'
   }
 }
 

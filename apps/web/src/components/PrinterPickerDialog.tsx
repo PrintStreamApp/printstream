@@ -12,10 +12,18 @@
  * can say so without this component learning about queues, slicing or calibration: `meta` renders
  * per-row (readiness chips), `rank` orders a "best match" sort, `disabled` blocks a row. It stays
  * a core component — plugins may import it, it must never import them.
+ *
+ * Machine state and hardware identity are the picker's own: every row carries the card's stage
+ * chip (Idle / Printing / Offline) and hardware chips (model, nozzle size, installed plate, via
+ * PrinterHardwareChips), read from live statuses the picker subscribes to itself rather than
+ * asking callers to plumb them through the entries — so every surface gets identical chips for
+ * free, and `meta` stays purely surface-specific. The subscription strips telemetry (see
+ * usePrinterStatuses) and every caller mounts this dialog only while it is open, so status ticks
+ * cannot thrash a closed picker or its dropdowns.
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Button, DialogActions, DialogTitle, FormControl, FormLabel, Select, Sheet, Stack, Typography } from '@mui/joy'
-import type { Printer } from '@printstream/shared'
+import { Button, Chip, DialogActions, DialogTitle, FormControl, FormLabel, Select, Sheet, Stack, Typography } from '@mui/joy'
+import { formatPrinterNozzleSizesLabel, normalizePlateType, resolvePrinterNozzleSizeLabels, type Printer } from '@printstream/shared'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { DirectoryPrimaryToolbar } from './DirectoryToolbar'
@@ -23,12 +31,17 @@ import { MultiSelectOption } from './MultiSelectOption'
 import { PaginatedSection } from './PaginationFooter'
 import { EmptyState } from './EmptyState'
 import { Printer3dRoundedIcon } from './Printer3dRoundedIcon'
-import { formatPrinterModelLabel } from '../lib/slicingPresetMatching'
+import { PrinterHardwareChips } from './printers/PrinterHardwareChips'
+import { stageLabelColor } from './printerJobProgressTone'
+import { usePrinterStatuses } from '../hooks/usePrinterStatuses'
+import { formatStageLabel } from '../lib/printersViewHelpers'
+import { formatPlateTypeLabel, formatPrinterModelLabel } from '../lib/slicingPresetMatching'
 
 /** One selectable machine, plus whatever the calling surface knows about it. */
 export interface PrinterPickerEntry {
   printer: Printer
-  /** Right-aligned per-row content — readiness chips, status, anything the caller can judge. */
+  /** Right-aligned per-row content — readiness chips, anything the caller can judge. Don't
+   * restate stage or hardware identity: the picker renders those chips on every row itself. */
   meta?: ReactNode
   /** Lower sorts first under "Best match". Absent everywhere hides that sort option entirely. */
   rank?: number
@@ -64,31 +77,59 @@ export function PrinterPickerDialog({
 }) {
   const [search, setSearch] = useState('')
   const [models, setModels] = useState<string[]>([])
-  const [group, setGroup] = useState<'none' | 'model'>('model')
+  const [nozzleSizes, setNozzleSizes] = useState<string[]>([])
+  // Ungrouped by default: every row carries its own model chip, so the group headings add
+  // little until a farm is large enough that the user reaches for them deliberately.
+  const [group, setGroup] = useState<'none' | 'model'>('none')
   const hasRanks = entries.some((entry) => entry.rank != null)
   const [sort, setSort] = useState<PrinterSort>(hasRanks ? 'match' : 'name')
   const [direction, setDirection] = useState<'asc' | 'desc'>('asc')
   const [pageSize, setPageSize] = useState(25)
   const [page, setPage] = useState(1)
 
+  const statuses = usePrinterStatuses({ ignoreTelemetry: true })
+
+  /**
+   * Per-machine hardware labels, resolved once for the facet list, the search haystack and the
+   * row chips. `nozzleLabels` keeps the per-diameter labels (a dual-extruder machine faceted as
+   * BOTH "0.4 mm" and "0.2 mm"); `nozzleSizeLabel` is the card's combined one-chip form;
+   * `plateTypeLabel` is the manually-set installed plate.
+   */
+  const hardwareById = useMemo(() => new Map(entries.map(({ printer }) => {
+    const status = statuses[printer.id]
+    const plateType = normalizePlateType(printer.currentPlateType)
+    return [printer.id, {
+      nozzleLabels: resolvePrinterNozzleSizeLabels(status, printer.currentNozzleDiameters),
+      nozzleSizeLabel: formatPrinterNozzleSizesLabel(status, printer.currentNozzleDiameters),
+      plateTypeLabel: plateType ? formatPlateTypeLabel(plateType) : null
+    }] as const
+  })), [entries, statuses])
+
   const modelFacets = useMemo(
     () => Array.from(new Set(entries.map((entry) => formatPrinterModelLabel(entry.printer.model)))).sort(),
     [entries]
+  )
+  const nozzleFacets = useMemo(
+    () => Array.from(new Set([...hardwareById.values()].flatMap((hardware) => hardware.nozzleLabels))).sort(),
+    [hardwareById]
   )
 
   const filtered = useMemo(() => {
     const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
     return entries.filter((entry) => {
       const modelLabel = formatPrinterModelLabel(entry.printer.model)
+      const hardware = hardwareById.get(entry.printer.id)
+      const nozzleLabels = hardware?.nozzleLabels ?? []
       if (models.length > 0 && !models.includes(modelLabel)) return false
+      if (nozzleSizes.length > 0 && !nozzleLabels.some((label) => nozzleSizes.includes(label))) return false
       if (terms.length === 0) return true
       // Address included on purpose: on a farm of identically-named machines it is what tells
       // them apart, and it is what an operator has in front of them.
-      const haystack = [entry.printer.name, modelLabel, entry.printer.model, entry.printer.host]
+      const haystack = [entry.printer.name, modelLabel, entry.printer.model, entry.printer.host, ...nozzleLabels, hardware?.plateTypeLabel]
         .filter(Boolean).join(' ').toLowerCase()
       return terms.every((term) => haystack.includes(term))
     })
-  }, [entries, search, models])
+  }, [entries, search, models, nozzleSizes, hardwareById])
 
   const sorted = useMemo(() => {
     const factor = direction === 'asc' ? 1 : -1
@@ -110,7 +151,7 @@ export function PrinterPickerDialog({
 
   useEffect(() => {
     setPage(1)
-  }, [search, models, sort, direction, pageSize])
+  }, [search, models, nozzleSizes, sort, direction, pageSize])
 
   const sortOptions = useMemo(() => [
     ...(hasRanks ? [{ value: 'match' as const, label: 'Best match' }] : []),
@@ -119,7 +160,7 @@ export function PrinterPickerDialog({
   ], [hasRanks])
 
   // Group headings are drawn from the PAGE, so a heading never promises rows the page does not
-  // hold. Grouping by model is the default because a farm is usually rows of the same machine.
+  // hold. When grouped, the heading takes over the model duty and the rows drop their model chip.
   const groupedPage = useMemo(() => {
     if (group === 'none') return [{ label: null as string | null, items: pageItems }]
     const byModel = new Map<string, PrinterPickerEntry[]>()
@@ -148,27 +189,48 @@ export function PrinterPickerDialog({
             searchValue={search}
             onSearchChange={setSearch}
             searchPlaceholder="Search printers…"
-            searchAriaLabel="Search printers by name, model or address"
-            filters={modelFacets.length > 1 ? {
-              activeCount: models.length,
-              onClear: () => setModels([]),
-              clearDisabled: models.length === 0,
+            searchAriaLabel="Search printers by name, model, nozzle size, plate or address"
+            filters={modelFacets.length > 1 || nozzleFacets.length > 1 ? {
+              activeCount: models.length + nozzleSizes.length,
+              onClear: () => { setModels([]); setNozzleSizes([]) },
+              clearDisabled: models.length === 0 && nozzleSizes.length === 0,
               children: (
-                <FormControl>
-                  <FormLabel>Model</FormLabel>
-                  <Select
-                    multiple
-                    value={models}
-                    onChange={(_event, value) => setModels(value)}
-                    placeholder="All models"
-                    renderValue={() => (models.length === 0 ? null : models.join(', '))}
-                    slotProps={{ listbox: { disablePortal: true } }}
-                  >
-                    {modelFacets.map((model) => (
-                      <MultiSelectOption key={model} value={model} selected={models.includes(model)}>{model}</MultiSelectOption>
-                    ))}
-                  </Select>
-                </FormControl>
+                <>
+                  {modelFacets.length > 1 && (
+                    <FormControl>
+                      <FormLabel>Model</FormLabel>
+                      <Select
+                        multiple
+                        value={models}
+                        onChange={(_event, value) => setModels(value)}
+                        placeholder="All models"
+                        renderValue={() => (models.length === 0 ? null : models.join(', '))}
+                        slotProps={{ listbox: { disablePortal: true } }}
+                      >
+                        {modelFacets.map((model) => (
+                          <MultiSelectOption key={model} value={model} selected={models.includes(model)}>{model}</MultiSelectOption>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  )}
+                  {nozzleFacets.length > 1 && (
+                    <FormControl>
+                      <FormLabel>Nozzle</FormLabel>
+                      <Select
+                        multiple
+                        value={nozzleSizes}
+                        onChange={(_event, value) => setNozzleSizes(value)}
+                        placeholder="All nozzle sizes"
+                        renderValue={() => (nozzleSizes.length === 0 ? null : nozzleSizes.join(', '))}
+                        slotProps={{ listbox: { disablePortal: true } }}
+                      >
+                        {nozzleFacets.map((size) => (
+                          <MultiSelectOption key={size} value={size} selected={nozzleSizes.includes(size)}>{size}</MultiSelectOption>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  )}
+                </>
               )
             } : undefined}
             grouping={modelFacets.length > 1 ? {
@@ -208,7 +270,7 @@ export function PrinterPickerDialog({
                   title={entries.length === 0 ? 'No printers yet' : 'No matching printers'}
                   description={entries.length === 0
                     ? 'Add a printer to choose one here.'
-                    : 'Try a different search, or clear the model filter.'}
+                    : 'Try a different search, or clear the filters.'}
                 />
               ) : (
                 <PaginatedSection
@@ -226,17 +288,39 @@ export function PrinterPickerDialog({
                             {bucket.label}
                           </Typography>
                         )}
-                        {bucket.items.map((entry) => (
-                          <PrinterPickerRow
-                            key={entry.printer.id}
-                            selected={entry.printer.id === selectedPrinterId}
-                            title={entry.printer.name}
-                            subtitle={entry.disabledReason ?? entry.printer.host}
-                            meta={entry.meta}
-                            disabled={Boolean(entry.disabledReason)}
-                            onClick={() => choose(entry.printer)}
-                          />
-                        ))}
+                        {bucket.items.map((entry) => {
+                          // Under a model group heading the model chip would restate the heading
+                          // on every row, so it only renders when grouping is off; the nozzle and
+                          // plate chips render whenever the value is known. The stage chip always
+                          // renders — unlike the card (empty row = healthy), a picker is where
+                          // Idle-vs-Printing-vs-Offline decides the choice.
+                          const status = statuses[entry.printer.id]
+                          const showModelChip = bucket.label == null
+                          const hardware = hardwareById.get(entry.printer.id)
+                          return (
+                            <PrinterPickerRow
+                              key={entry.printer.id}
+                              selected={entry.printer.id === selectedPrinterId}
+                              title={entry.printer.name}
+                              subtitle={entry.disabledReason ?? entry.printer.host}
+                              status={(
+                                <Chip size="sm" variant="soft" color={stageLabelColor(status)} sx={{ flexShrink: 0 }}>
+                                  {formatStageLabel(status)}
+                                </Chip>
+                              )}
+                              meta={entry.meta}
+                              hardware={showModelChip || hardware?.nozzleSizeLabel || hardware?.plateTypeLabel ? (
+                                <PrinterHardwareChips
+                                  model={showModelChip ? entry.printer.model : null}
+                                  nozzleSizeLabel={hardware?.nozzleSizeLabel ?? null}
+                                  plateTypeLabel={hardware?.plateTypeLabel ?? null}
+                                />
+                              ) : undefined}
+                              disabled={Boolean(entry.disabledReason)}
+                              onClick={() => choose(entry.printer)}
+                            />
+                          )
+                        })}
                       </Stack>
                     ))}
                   </Stack>
@@ -258,14 +342,21 @@ function PrinterPickerRow({
   selected,
   title,
   subtitle,
+  status,
   meta,
+  hardware,
   disabled,
   onClick
 }: {
   selected: boolean
   title: string
   subtitle?: ReactNode
+  /** The machine's live stage chip — leads the cluster, mirroring the card's live-state-first order. */
+  status?: ReactNode
   meta?: ReactNode
+  /** The machine's fixed identity chips (model, nozzle, plate) — rendered after `meta`, mirroring
+   * the card's transient-state-first, hardware-last order. */
+  hardware?: ReactNode
   disabled?: boolean
   onClick: () => void
 }) {
@@ -283,12 +374,20 @@ function PrinterPickerRow({
         '&:hover': disabled ? undefined : { borderColor: 'primary.500' }
       }}
     >
-      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ minWidth: 0 }}>
-        <Stack sx={{ minWidth: 0 }}>
+      {/* The chip cluster wraps under the name at phone widths instead of crushing it — a picker
+          exists to compare machines, so the chips must stay readable rather than clamp away. */}
+      <Stack direction="row" spacing={1} rowGap={0.5} useFlexGap alignItems="center" flexWrap="wrap" sx={{ minWidth: 0 }}>
+        <Stack sx={{ minWidth: 0, flex: '1 1 auto' }}>
           <Typography level="body-sm" noWrap>{title}</Typography>
           {subtitle && <Typography level="body-xs" textColor="text.tertiary" noWrap>{subtitle}</Typography>}
         </Stack>
-        {meta && <Stack sx={{ flexShrink: 0 }}>{meta}</Stack>}
+        {(status || meta || hardware) && (
+          <Stack direction="row" spacing={0.5} rowGap={0.5} useFlexGap flexWrap="wrap" alignItems="center" justifyContent="flex-end" sx={{ ml: 'auto', minWidth: 0 }}>
+            {status}
+            {meta}
+            {hardware}
+          </Stack>
+        )}
       </Stack>
     </Sheet>
   )

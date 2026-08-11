@@ -18,6 +18,8 @@ import { deleteOperationDispatcher } from './lib/delete-operation-dispatcher.js'
 import { startHmsCodeService } from './lib/hms-codes.js'
 import { startLibraryCleanup, stopLibraryCleanup } from './lib/library-cleanup.js'
 import { startAppUpdateChecks } from './lib/app-update-check.js'
+import { startServerBackups, stopServerBackups } from './lib/server-backup-manager.js'
+import { registerCorePlatformNotificationEvents } from './lib/core-platform-events.js'
 import { registerBuiltinPlugins } from './plugin/builtin.js'
 import { pluginRegistry } from './plugin/registry.js'
 import { loadInstalledExternalPlugins } from './plugin/installer.js'
@@ -37,6 +39,11 @@ import { ensureManagedBridgeToken, isManagedBridgeMode } from './lib/managed-bri
 const httpServer = createServer(app)
 attachWebSocketServer(httpServer)
 attachBridgeSessionServer(httpServer)
+
+// Core platform notification events must exist before anything can emit them
+// (an unregistered event is silently dropped); cloud-only operator events are
+// registered separately by the private module during finalizeApp.
+registerCorePlatformNotificationEvents()
 
 // Create the managed-bridge provisioning token before accepting connections so
 // the bundled bridge can read it from the shared mount on its first register.
@@ -165,6 +172,12 @@ void finalizeApp()
     } catch (error) {
       console.error('Failed to start app update checks', error)
     }
+    try {
+      // No-op on cloud; self-hosted installs get the scheduled backup due-check.
+      startServerBackups()
+    } catch (error) {
+      console.error('Failed to start server backups', error)
+    }
       })()
     })
   })
@@ -187,6 +200,7 @@ function shutdown(signal: NodeJS.Signals) {
   shutdownStartedAt = Date.now()
   console.log(`Received ${signal}, shutting down (Ctrl-C again to force-quit)`)
   stopLibraryCleanup()
+  stopServerBackups()
   stopPrintJobRecorder()
   stopDispatchReconcile()
   stopActivePrintObjectCache()

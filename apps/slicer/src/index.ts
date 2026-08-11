@@ -58,7 +58,7 @@ import { formatSliceEngineCrashError, formatSliceFileVersionError, formatSlicePr
 import { ensureEmbeddedProjectSettings } from './project-settings-fallback.js'
 import { mergeInheritedMachineProfile, retargetProjectSettingsToMachine } from './machine-switch-repair.js'
 import { sliceInfoCarriesNozzleGroupIds, stripSliceInfoNozzleGroupIds } from './stale-slice-info.js'
-import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
+import { applyManualFilamentMapToModelSettings, buildManualNozzleAssignment, buildSlicedArtifactMetadata, isPlatePreviewEntry, metadataChangesFilamentColours, rewriteProjectSettingsMetadata, rewriteSliceInfoMetadata, type SlicedArtifactMetadata } from './output-metadata.js'
 import { resolveCustomProfileConfig } from './custom-profile-resolve.js'
 import { sanitizeProfileFileName } from './profile-file-name.js'
 import { buildFilamentSlotCoverage, type FilamentSlotRequest } from './filament-slot-coverage.js'
@@ -394,9 +394,10 @@ app.post('/slice', async (request, response) => {
       outputFileName,
       metadata: slicedArtifactMetadata
     })
-    // All-plate export of an editor-arranged project can omit the per-plate model thumbnails;
-    // backfill any missing plate_N.png from the input so the library shows the model, not a
-    // toolpath fallback / kind label. No-op for single-plate slices (they already have one).
+    // Backfill any plate_N.png the CLI did not render (GL unavailable, or an all-plate export
+    // that skipped the thumbnail stage) from the ORIGINAL input — deliberately not the prepared
+    // copy, which may have had stale previews stripped (see prepareInputThreeMf). No-op when
+    // the CLI rendered fresh covers.
     if (outputFileName.toLowerCase().endsWith('.3mf')) {
       await backfillPlateThumbnails(outputPath, inputPath)
     }
@@ -732,8 +733,7 @@ async function recenterRepairedProjectForLargerBed(repairedPath: string, sourceP
     repairedPath,
     recenteredPath,
     (settings) => settings,
-    undefined,
-    (modelXml) => recenterBuildItemsXml(modelXml, objectPlateIndex, plateCount, sourceBed, targetBed)
+    { model3dTransform: (modelXml) => recenterBuildItemsXml(modelXml, objectPlateIndex, plateCount, sourceBed, targetBed) }
   )
   await rename(recenteredPath, repairedPath)
   appendStructuredOutput(input.outputLines, 'system', `Re-centered objects onto ${targetBed.width}x${targetBed.depth} bed`)
@@ -850,8 +850,8 @@ async function executeCli(input: {
       let stdoutCombined = ''
       const child = spawn(input.slicerTarget.cliPath, [...input.slicerTarget.cliArgsPrefix, ...args], {
         // `detached` makes the child its own process-group leader so termination can
-        // signal the whole group — BambuStudio spawns helper processes under Xvfb
-        // that a bare child.kill() would orphan.
+        // signal the whole group — the launcher runs the CLI with helper processes
+        // (a per-slice weston; qemu on arm64) that a bare child.kill() would orphan.
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
@@ -876,7 +876,7 @@ async function executeCli(input: {
       // Stall + completion guard (polled):
       //  - Once BambuStudio reports "All done, Success" the artifact is fully written; give
       //    the process a short grace to exit, then force it (qemu teardown can hang without
-      //    ever firing 'close', leaving zombie Xvfb procs) and treat the slice as done.
+      //    ever firing 'close', leaving orphaned launcher helpers) and treat the slice as done.
       //  - Otherwise, if the CLI has produced no output for SLICER_STALL_TIMEOUT_MS it is
       //    wedged (commonly the emulated "Exporting 3mf" step at 97%); terminate and fail
       //    fast rather than waiting out the full SLICER_TIMEOUT_MS.
@@ -969,7 +969,7 @@ async function executeCli(input: {
             reject(new Error(presetError))
             return
           }
-          // A signal death (134-139, surfaced by the xvfb-run wrapper) AFTER the slice started is a
+          // A signal death (134-139, surfaced by the launcher shell) AFTER the slice started is a
           // deterministic engine crash on this model's geometry. Name the stage and mark it
           // non-transient so the API surfaces guidance and skips its (futile) crash retry. A signal
           // death during load/teardown returns null here and stays retryable (emulation flake).
@@ -1406,6 +1406,13 @@ async function prepareInputThreeMf(input: {
   const modelSettingsTransform = manualNozzle
     ? (xml: string) => applyManualFilamentMapToModelSettings(xml, manualNozzle.filament_map.join(' '))
     : undefined
+  // A colour change makes the source's embedded plate previews stale (they were rendered
+  // with the OLD colours), and because the colours are rewritten into the project below,
+  // the CLI's own filament_color_changed check can never notice. Drop the previews from
+  // the prepared copy instead: a GL-capable runtime re-renders them into the sliced output
+  // (see bambu-studio-cli.sh), and one that cannot render leaves them missing for
+  // `backfillPlateThumbnails` to restore from the ORIGINAL input — today's behaviour.
+  const stripStalePlatePreviews = Boolean(metadata && projectSettings && metadataChangesFilamentColours(projectSettings, metadata))
   const hasEmbeddedProjectSettings = await rewriteThreeMfProjectSettings(input.inputPath, input.outputPath, (settings) => {
     let rewrittenSettings = settings
     if (machineSwitchProfile && machineSwitchProfileName) {
@@ -1418,9 +1425,16 @@ async function prepareInputThreeMf(input: {
     if (input.stripEmbeddedProfileRefs) rewrittenSettings = stripEmbeddedProfileRefs(rewrittenSettings)
     if (applyEmbeddedProcessOverrides) rewrittenSettings = mergeProcessOverridesIntoProjectSettings(rewrittenSettings, input.processSettingOverrides)
     return rewrittenSettings
-  }, modelSettingsTransform, undefined, hasStaleNozzleGroups ? stripSliceInfoNozzleGroupIds : undefined)
+  }, {
+    modelSettingsTransform,
+    sliceInfoTransform: hasStaleNozzleGroups ? stripSliceInfoNozzleGroupIds : undefined,
+    omitEntry: stripStalePlatePreviews ? isPlatePreviewEntry : undefined
+  })
   if (hasStaleNozzleGroups) {
     appendStructuredOutput(input.outputLines, 'system', 'Dropped a previous slice\'s nozzle groups from slice_info.config')
+  }
+  if (stripStalePlatePreviews) {
+    appendStructuredOutput(input.outputLines, 'system', 'Filament colours changed; dropped the source\'s plate previews so fresh ones can be rendered')
   }
   if (!hasEmbeddedProjectSettings) {
     // No embedded settings means the Manual mode this assignment depends on was never written —
@@ -1497,10 +1511,15 @@ async function rewriteThreeMfProjectSettings(
   inputPath: string,
   outputPath: string,
   transform: (settings: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>,
-  modelSettingsTransform?: (modelSettingsXml: string) => string,
-  model3dTransform?: (modelXml: string) => string,
-  sliceInfoTransform?: (sliceInfoXml: string) => string
+  options?: {
+    modelSettingsTransform?: (modelSettingsXml: string) => string
+    model3dTransform?: (modelXml: string) => string
+    sliceInfoTransform?: (sliceInfoXml: string) => string
+    /** Entries this returns true for are dropped from the rewritten copy entirely. */
+    omitEntry?: (fileName: string) => boolean
+  }
 ): Promise<boolean> {
+  const { modelSettingsTransform, model3dTransform, sliceInfoTransform, omitEntry } = options ?? {}
   const sourceZip = await openZip(inputPath)
   const outputZip = new yazl.ZipFile()
   const output = createWriteStream(outputPath)
@@ -1529,6 +1548,10 @@ async function rewriteThreeMfProjectSettings(
     sourceZip.on('entry', (entry: Entry) => {
       if (/\/$/.test(entry.fileName)) {
         outputZip.addEmptyDirectory(entry.fileName, { mtime: entry.getLastModDate() })
+        sourceZip.readEntry()
+        return
+      }
+      if (omitEntry?.(entry.fileName)) {
         sourceZip.readEntry()
         return
       }

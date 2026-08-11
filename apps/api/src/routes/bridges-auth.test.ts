@@ -5,7 +5,7 @@ import { afterEach, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { SETTINGS_MANAGE_PERMISSION, inactiveBridgeDebugCaptureStatus } from '@printstream/shared'
+import { SETTINGS_MANAGE_PERMISSION, inactiveBridgeDebugCaptureStatus, unconfiguredBridgeBackupStatus } from '@printstream/shared'
 import { bridgesRouter } from './bridges.js'
 import type { RequestAuthContext } from '../lib/auth-context.js'
 import { bridgeSessionManager } from '../lib/bridge-session-manager.js'
@@ -161,6 +161,7 @@ test('bridge list returns connected workspace bridges for settings managers', as
           },
           update: unknownBridgeUpdate,
           debugCapture: inactiveBridgeDebugCaptureStatus,
+          backup: unconfiguredBridgeBackupStatus,
           crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
         }
       ]
@@ -243,6 +244,7 @@ test('bridge connect attaches a dormant bridge to the current workspace', async 
         },
         update: unknownBridgeUpdate,
         debugCapture: inactiveBridgeDebugCaptureStatus,
+        backup: unconfiguredBridgeBackupStatus,
         crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
       }
     })
@@ -432,6 +434,7 @@ test('bridge connect reattaches orphaned workspace printers when this is the onl
         },
         update: unknownBridgeUpdate,
         debugCapture: inactiveBridgeDebugCaptureStatus,
+        backup: unconfiguredBridgeBackupStatus,
         crash: { lastCrashAt: null, recentCrashCount: 0, lastReason: null }
       }
     })

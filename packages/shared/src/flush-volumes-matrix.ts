@@ -1,8 +1,9 @@
 /**
- * The `flush_volumes_matrix` sizing invariant for Bambu `project_settings.config`.
+ * The flush-volume sizing invariants for Bambu `project_settings.config`: `flush_volumes_matrix`
+ * and its per-extruder companion `flush_multiplier`.
  *
- * OWNS: deciding whether a project's flush matrix matches its machine topology, and rebuilding it
- * when it does not. Pure string/array work — the callers own their own ZIP/HTTP I/O.
+ * OWNS: deciding whether a project's flush sizing matches its machine topology, and rebuilding the
+ * pieces that do not. Pure string/array work — the callers own their own ZIP/HTTP I/O.
  *
  * CONTRACT. BambuStudio stores the matrix as `extruder_count` CONSECUTIVE BLOCKS, each a
  * `filament_count x filament_count` row-major matrix (`PrintConfig.hpp`
@@ -10,11 +11,13 @@
  * `[size/nozzles*e, size/nozzles*(e+1))`; `BambuStudio.cpp` sizes it
  * `project_filament_count * project_filament_count * new_extruder_count`). So the required length
  * is filaments^2 x extruders, NOT filaments^2 — the extruder factor is the part that is easy to
- * miss on a single-nozzle machine, where it is 1.
+ * miss on a single-nozzle machine, where it is 1. `flush_multiplier` (and `flush_multiplier_fast`)
+ * carry ONE ENTRY PER EXTRUDER; old single-nozzle saves store a bare scalar, which BambuStudio
+ * parses as a one-entry list.
  *
- * WHY THIS EXISTS. A machine retarget that changes the extruder count (P1P 1 -> X2D/H2D 2) leaves
- * a matrix sized for the OLD extruder count. BambuStudio only *repairs* an undersized matrix
- * inside its flush-volume recompute block, which it skips unless the CLI passed
+ * WHY THE MATRIX RULE EXISTS. A machine retarget that changes the extruder count (P1P 1 ->
+ * X2D/H2D 2) leaves a matrix sized for the OLD extruder count. BambuStudio only *repairs* an
+ * undersized matrix inside its flush-volume recompute block, which it skips unless the CLI passed
  * `--filament-colour`, the matrix is absent entirely, the extruder count differs from the
  * project's own, or `nozzle_volume_type` mismatches. A retarget satisfies none of those, so the
  * short matrix survives and the engine reads the second extruder's block out of bounds —
@@ -22,17 +25,39 @@
  * 2026-07-21 against BambuStudio 2.7.1.62; reproduced with a one-entry matrix on a 2-extruder
  * project and fixed by nothing but padding it to two entries.
  *
+ * WHY THE MULTIPLIER RULE EXISTS. `GCode.cpp` validates the matrix against
+ * `filament_colour.size()^2 * flush_multiplier.size()` — the heads count comes from
+ * `flush_multiplier`, NOT `nozzle_diameter` — escaping only when the filament count is exactly 1.
+ * So a project whose matrix is correct by OUR rule but whose multiplier still has the old
+ * machine's length fails every multi-filament slice at "Generating G-code" with
+ * "Flush volumes matrix do not match to the correct size!" (CLI exit 156, return -100). An ABSENT
+ * multiplier is just as fatal on a multi-extruder machine: the engine's default is the one-entry
+ * `{1.0}`. Diagnosed 2026-08-11 (prod, an X2D project), A/B-reproduced against the real CLI:
+ * `['1']` -> exit 156, `['1','1']` -> clean g-code.
+ *
  * An ABSENT matrix is deliberately NOT a defect: absence is one of the conditions that makes
- * BambuStudio compute the matrix itself, so those projects slice correctly.
+ * BambuStudio compute the matrix itself, so those projects slice correctly. The multiplier
+ * detection is likewise gated on the recompute NOT firing — see
+ * {@link isFlushMultiplierInconsistent} for the exact model.
  */
 
-/** What a project's stored matrix looks like next to what its topology requires. */
+/** What a project's stored flush sizing looks like next to what its topology requires. */
 export interface FlushVolumesMatrixInspection {
   filamentCount: number
   extruderCount: number
-  /** Stored entry count; 0 when the key is absent (which is not a defect). */
+  /** Stored matrix entry count; 0 when the key is absent (which is not a defect). */
   actualLength: number
   expectedLength: number
+  /**
+   * The `flush_multiplier` length the ENGINE will see: stored entries, a scalar counting as one,
+   * and absence counting as one (the engine default is the one-entry `{1.0}`).
+   */
+  multiplierLength: number
+  /** The matrix does not match the topology (the exit-139 out-of-bounds/segfault class). */
+  matrixInconsistent: boolean
+  /** The multiplier will fail the engine's g-code-time size check (the exit-156 class). */
+  multiplierInconsistent: boolean
+  /** Either defect — what `collectSettingsRepairReasons` reports as `flushMatrix`. */
   inconsistent: boolean
 }
 
@@ -60,12 +85,17 @@ export function inspectProjectFlushVolumesMatrix(projectSettingsJson: string | n
   const extruderCount = Array.isArray(record.nozzle_diameter) ? Math.max(record.nozzle_diameter.length, 1) : 1
   if (filamentCount <= 0) return null
   const matrix = Array.isArray(record.flush_volumes_matrix) ? record.flush_volumes_matrix : null
+  const matrixInconsistent = isFlushVolumesMatrixInconsistent(matrix, filamentCount, extruderCount)
+  const multiplierInconsistent = isFlushMultiplierInconsistent(record, filamentCount, extruderCount)
   return {
     filamentCount,
     extruderCount,
     actualLength: matrix?.length ?? 0,
     expectedLength: expectedFlushVolumesMatrixLength(filamentCount, extruderCount),
-    inconsistent: isFlushVolumesMatrixInconsistent(matrix, filamentCount, extruderCount)
+    multiplierLength: effectiveFlushMultiplierLength(record.flush_multiplier),
+    matrixInconsistent,
+    multiplierInconsistent,
+    inconsistent: matrixInconsistent || multiplierInconsistent
   }
 }
 
@@ -90,6 +120,47 @@ export function isFlushVolumesMatrixInconsistent(
   if (!matrix || matrix.length === 0) return false
   if (filamentCount <= 0) return false
   return matrix.length !== expectedFlushVolumesMatrixLength(filamentCount, extruderCount)
+}
+
+/**
+ * True when the stored `flush_multiplier` will make BambuStudio reject the slice outright
+ * (exit 156, "Flush volumes matrix do not match to the correct size!").
+ *
+ * This deliberately models the ENGINE's behaviour rather than flagging every off-length value,
+ * because a flagged file blocks print-prep and several off-length shapes slice fine today:
+ *  - matrix absent: the CLI recomputes matrix AND multiplier itself — healthy.
+ *  - one filament: `GCode.cpp` escapes its size check entirely — healthy.
+ *  - `nozzle_volume_type` length differing from the extruder count (including absent): that very
+ *    mismatch triggers the CLI's flush recompute, which resizes the multiplier — healthy. Verified
+ *    against real library files (a 5-filament dual-nozzle project with `['1']` + a one-entry
+ *    `nozzle_volume_type` slices clean; the same multiplier with a consistent two-entry
+ *    `nozzle_volume_type` is the reproduced exit 156). The recompute's remaining triggers cannot
+ *    apply to a file we hand the CLI: we never pass `--filament-colour`, and the loaded machine's
+ *    extruder count always equals the project's own (a cross-machine slice retargets the project
+ *    natively before the CLI sees it).
+ *  - `flush_multiplier_fast` is NOT checked: the engine reads it only in fast purge mode, and
+ *    genuine Bambu Studio dual-nozzle saves routinely carry a one-entry value there — flagging it
+ *    would mark shipping-and-slicing files defective.
+ */
+export function isFlushMultiplierInconsistent(
+  record: Record<string, unknown>,
+  filamentCount: number,
+  extruderCount: number
+): boolean {
+  if (filamentCount < 2) return false
+  const matrix = Array.isArray(record.flush_volumes_matrix) ? record.flush_volumes_matrix : null
+  if (!matrix || matrix.length === 0) return false
+  const nozzleVolumeTypeLength = Array.isArray(record.nozzle_volume_type)
+    ? record.nozzle_volume_type.length
+    : record.nozzle_volume_type != null ? 1 : 0
+  if (nozzleVolumeTypeLength !== Math.max(extruderCount, 1)) return false
+  return effectiveFlushMultiplierLength(record.flush_multiplier) !== Math.max(extruderCount, 1)
+}
+
+/** The multiplier length the engine sees: entries, a scalar as 1, absence as the default's 1. */
+function effectiveFlushMultiplierLength(value: unknown): number {
+  if (Array.isArray(value)) return value.length
+  return 1
 }
 
 /**
@@ -122,4 +193,28 @@ export function repairFlushVolumesMatrix(
     }
   }
   return next
+}
+
+/**
+ * Resize a `flush_multiplier`/`flush_multiplier_fast` value to one entry per extruder: existing
+ * entries are kept (a legacy bare scalar counts as one), a grown tail repeats the last entry, and
+ * a value with no entries at all is authored from `padDefault` — BambuStudio's own defaults are
+ * `'1'` (normal) and `'1.2'` (fast), which is also exactly what its recompute writes, so this is a
+ * derivation rather than a guess.
+ *
+ * Returns null when the value already has one entry per extruder, or when it is ABSENT and the
+ * machine has one extruder (absence equals the engine's one-entry default there, and writing a key
+ * the file never carried would churn bytes for nothing).
+ */
+export function repairFlushMultiplier(
+  value: unknown,
+  extruderCount: number,
+  padDefault = '1'
+): unknown[] | null {
+  const extruders = Math.max(extruderCount, 1)
+  const entries = Array.isArray(value) ? value : value != null ? [value] : []
+  if (entries.length === extruders) return null
+  if (entries.length === 0 && extruders === 1) return null
+  return Array.from({ length: extruders }, (_unused, index) =>
+    entries[Math.min(index, entries.length - 1)] ?? padDefault)
 }

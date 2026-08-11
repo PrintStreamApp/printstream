@@ -9,7 +9,7 @@
  * Grouped by `material` so the AMS slot editor can show only the
  * swatches that apply to a selected preset (e.g. PLA Basic vs. PLA Silk).
  */
-import { normalizeHexColor } from './print-queue.js'
+import { normalizeHexColor } from './filament-color.js'
 
 export interface BambuColorSwatch {
   /** Bambu's display name (e.g. "Jade White"). */

@@ -29,8 +29,14 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded'
 import { StickySectionHeader } from './StickySectionHeader'
 
-/** A selectable project material (1-based id) with its live colour + display labels. */
-export type FilamentOption = { id: number; color: string | null; label: string | null; colorName: string | null }
+/**
+ * A selectable project material with its live colour + display labels. `id` is the 1-based
+ * project filament id (what paint codes and `extruder` metadata reference); `number` is the
+ * 1-based DISPLAY position in the sidebar's current order. They diverge after a mid-session
+ * material remove or reorder (ids stay stable until the save renumbers the slots), and every
+ * number a user sees must come from `number` so the badges and the Materials rows always agree.
+ */
+export type FilamentOption = { id: number; number: number; color: string | null; label: string | null; colorName: string | null }
 
 /** One layer-based filament change: swap to `filamentId` at print height `z` (mm). */
 export interface PlateFilamentChange {
@@ -48,7 +54,7 @@ export function FilamentOptionContent({ option }: { option: FilamentOption }) {
   return (
     <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
       <Typography level="body-xs" textColor="text.tertiary" sx={{ flexShrink: 0, minWidth: '1.1em', textAlign: 'right' }}>
-        {option.id}
+        {option.number}
       </Typography>
       <Box sx={{ width: 12, height: 12, borderRadius: '3px', flexShrink: 0, bgcolor: option.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
       <Typography level="body-sm" noWrap>{option.label}</Typography>
@@ -252,7 +258,7 @@ export function PlateFilamentChangesSection({ changes, filamentOptions, onChange
                   return (
                     <Stack direction="row" spacing={0.5} alignItems="center">
                       <Box sx={{ width: 12, height: 12, borderRadius: '3px', flexShrink: 0, bgcolor: option.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
-                      <span>{option.id}</span>
+                      <span>{option.number}</span>
                     </Stack>
                   )
                 }}

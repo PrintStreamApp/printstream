@@ -17,16 +17,18 @@
  * Counterparts: `useSlicingJobs` reads this key; `GET /api/slicing/jobs` fills it.
  */
 import type { QueryClient } from '@tanstack/react-query'
-import type { SlicingJob, SlicingJobsResponse } from '@printstream/shared'
+import type { SlicingJob, SlicingJobResponse, SlicingJobsResponse } from '@printstream/shared'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from './workspaceScope'
 
 /**
- * Place a job the API just returned into the current workspace's cached list, so a dialog that
- * looks the job up by id finds it on its first render instead of after a refetch.
+ * Place a job the API just returned into the current workspace's cached list — and into the
+ * job's own single-job cache (`useSlicingJob`'s key), so a dialog watching it by id renders on
+ * the first frame instead of after a refetch.
  *
- * No-op when nothing is cached yet: writing a one-entry list there would tell every reader that
- * the workspace's other jobs are gone. Insertion is at the front to match the API's `createdAt`
- * DESC ordering, and replaces any existing entry so a re-seed cannot duplicate the row.
+ * The LIST write is a no-op when nothing is cached yet: writing a one-entry list there would
+ * tell every reader that the workspace's other jobs are gone. Insertion is at the front to match
+ * the API's `createdAt` DESC ordering, and replaces any existing entry so a re-seed cannot
+ * duplicate the row. The single-job write has no such hazard and always lands.
  */
 export function seedSlicingJob(queryClient: QueryClient, job: SlicingJob): void {
   queryClient.setQueryData<SlicingJobsResponse>(
@@ -35,6 +37,7 @@ export function seedSlicingJob(queryClient: QueryClient, job: SlicingJob): void 
       ? { ...current, jobs: [job, ...current.jobs.filter((entry) => entry.id !== job.id)] }
       : current)
   )
+  queryClient.setQueryData<SlicingJobResponse>(['slicing-job', job.id], { job })
 }
 
 /**

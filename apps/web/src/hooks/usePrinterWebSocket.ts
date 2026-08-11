@@ -6,7 +6,7 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { wsEventSchema, type DiscoveredPrinter, type PrinterStatus } from '@printstream/shared'
-import { applyBridgeDebugCaptureStatus, invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
+import { applyBridgeBackupStatus, applyBridgeDebugCaptureStatus, invalidateBridgeQueries } from '../lib/bridgeQueryInvalidation'
 import { clearPrinterFtpActivity, markPrinterFtpActivity } from './usePrinterFtpActivity'
 import { markSnapshotUpdated } from './useSnapshotInterest'
 import { invalidateLibraryListQueries } from '../lib/libraryQueryInvalidation'
@@ -25,6 +25,7 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
       clearPrinterFtpActivity()
       if (seenSocketOpen) {
         void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+        void queryClient.invalidateQueries({ queryKey: ['job-history'] })
         void queryClient.invalidateQueries({ queryKey: ['print-dispatch'] })
         return
       }
@@ -123,13 +124,19 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
         if (event.resource === 'slicing') {
           // Job state/progress only — NOT the profiles catalogue. Slice progress fires sub-second;
           // refetching the (slow) profiles query on every tick is the slice-time network spam.
+          // Every source a slicing change can be read through goes stale together: the active
+          // list, any watched single job, and the merged history (a finishing job moves there).
           void queryClient.invalidateQueries({ queryKey: ['slicing-jobs'] })
+          void queryClient.invalidateQueries({ queryKey: ['slicing-job'] })
+          void queryClient.invalidateQueries({ queryKey: ['job-history'] })
         }
         if (event.resource === 'slicing.profiles') {
           void queryClient.invalidateQueries({ queryKey: ['slicing-profiles'] })
         }
         if (event.resource === 'jobs') {
           void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+          // Print jobs are half of the merged Jobs history.
+          void queryClient.invalidateQueries({ queryKey: ['job-history'] })
         }
         if (event.resource === 'logs') {
           void queryClient.invalidateQueries({ queryKey: ['logs'] })
@@ -141,6 +148,9 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
       }
       if (event.type === 'bridge.debug.capture') {
         applyBridgeDebugCaptureStatus(queryClient, event.bridgeId, event.status)
+      }
+      if (event.type === 'bridge.backup') {
+        applyBridgeBackupStatus(queryClient, event.bridgeId, event.status)
       }
       if (event.type === 'auth.changed') {
         clearPrinterFtpActivity()

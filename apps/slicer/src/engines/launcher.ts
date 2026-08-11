@@ -14,7 +14,8 @@
  *   failing, and plate thumbnails are supplied by the caller), and on Linux it
  *   must bind to the sysroot we installed rather than the host's libraries.
  * - `container` — our own image, which already carries the runtime libraries as
- *   OS packages (amd64) or a baked x86-64 sysroot for qemu (arm64), plus Xvfb.
+ *   OS packages (amd64) or a baked x86-64 sysroot for qemu (arm64), plus the
+ *   weston + GL-shim thumbnail stack.
  *   `docker/bambu-studio-cli.sh` is what knows how to combine those, and it
  *   takes the engine's directory through `SLICER_APPDIR`, which every spawn site
  *   already sets from the manifest.
@@ -48,7 +49,7 @@ export interface SlicerEngineCommand {
  */
 export type SlicerEngineLaunchStrategy = 'native' | 'container'
 
-/** Where the container image keeps the launcher that knows about Xvfb and qemu. */
+/** Where the container image keeps the launcher that knows about weston and qemu. */
 export const CONTAINER_LAUNCHER_PATH = '/usr/local/bin/slicer-cli'
 
 /**

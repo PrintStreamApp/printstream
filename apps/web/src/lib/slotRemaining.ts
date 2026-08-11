@@ -1,14 +1,21 @@
 /**
- * Refill-aware remaining-filament helpers for print-dialog tray choices.
+ * Refill-aware remaining-filament state for print-dialog tray choices (the
+ * insufficiency highlight and the auto-refill badge on `SlotOptionLabel`).
  *
- * The printer only reports tray remaining as a percentage, so the UI uses
- * Bambu Studio's rough 1kg spool convention (`percent * 10`) to estimate
- * grams. When AMS auto-refill is enabled, compatible AMS trays are treated
- * as a shared pool for the low-filament warning state.
+ * The primitives — the percent→grams estimate, the low-filament headroom, and
+ * the auto-refill pooling test — live in `@printstream/shared`'s
+ * `slot-remaining.ts` so the shared print matcher's sufficiency-guarded
+ * tie-break and this warning state can never disagree; this module only owns
+ * the per-slot UI grading (which pool a slot belongs to, combined remaining).
  */
-import { trayCanSatisfyRequirement } from '@printstream/shared'
+import {
+  LOW_FILAMENT_HEADROOM_GRAMS,
+  estimateRemainGrams,
+  trayCanSatisfyRequirement,
+  traysMatchForAutoRefill
+} from '@printstream/shared'
 
-const LOW_FILAMENT_HEADROOM_GRAMS = 25
+export { estimateRemainGrams }
 
 export interface SlotRemainingTray {
   kind: 'ams' | 'external'
@@ -103,61 +110,4 @@ function trayCanUseAutoRefill(
 
 function trayHasLoadedFilament(tray: Pick<SlotRemainingTray, 'filamentType' | 'color' | 'colors'>): boolean {
   return tray.filamentType != null || tray.color != null || tray.colors.length > 0
-}
-
-function traysMatchForAutoRefill(anchor: SlotRemainingTray, candidate: SlotRemainingTray): boolean {
-  if (!sameExactText(anchor.filamentType, candidate.filamentType)) return false
-  if (!samePalette(anchor, candidate)) return false
-
-  const anchorTrayInfoIdx = normalizeText(anchor.trayInfoIdx)
-  const candidateTrayInfoIdx = normalizeText(candidate.trayInfoIdx)
-  if (anchorTrayInfoIdx || candidateTrayInfoIdx) {
-    return anchorTrayInfoIdx !== '' && anchorTrayInfoIdx === candidateTrayInfoIdx
-  }
-
-  const anchorTrayName = normalizeText(anchor.trayName)
-  const candidateTrayName = normalizeText(candidate.trayName)
-  if (anchorTrayName || candidateTrayName) {
-    return anchorTrayName !== '' && anchorTrayName === candidateTrayName
-  }
-
-  return false
-}
-
-function samePalette(left: SlotRemainingTray, right: SlotRemainingTray): boolean {
-  const leftPalette = normalizePalette(left)
-  const rightPalette = normalizePalette(right)
-  if (leftPalette.length === 0 || rightPalette.length === 0) return false
-  if (leftPalette.length !== rightPalette.length) return false
-  return leftPalette.every((color, index) => color === rightPalette[index])
-}
-
-function normalizePalette(tray: Pick<SlotRemainingTray, 'colors' | 'color'>): string[] {
-  const colors = tray.colors
-    .map((color) => normalizeText(color))
-    .filter((color) => color !== '')
-  if (colors.length > 0) return colors
-
-  const fallback = normalizeText(tray.color)
-  return fallback ? [fallback] : []
-}
-
-function sameExactText(left: string | null | undefined, right: string | null | undefined): boolean {
-  const normalizedLeft = normalizeText(left)
-  const normalizedRight = normalizeText(right)
-  return normalizedLeft !== '' && normalizedLeft === normalizedRight
-}
-
-function normalizeText(value: string | null | undefined): string {
-  return value?.trim().toUpperCase() ?? ''
-}
-
-/**
- * Estimate grams remaining from the printer's percent-only reading using Bambu
- * Studio's rough 1kg-spool convention (`percent * 10`). Callers that only have a
- * percentage (e.g. the loaded-material picker) reuse this so every surface shows
- * the same estimate.
- */
-export function estimateRemainGrams(remainPercent: number | null): number | null {
-  return remainPercent != null ? Math.round(remainPercent * 10) : null
 }

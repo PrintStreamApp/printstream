@@ -38,6 +38,7 @@ import {
   Typography
 } from '@mui/joy'
 import OpenWithRoundedIcon from '@mui/icons-material/OpenWith'
+import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded'
 import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import UndoRoundedIcon from '@mui/icons-material/UndoRounded'
 import RedoRoundedIcon from '@mui/icons-material/RedoRounded'
@@ -75,6 +76,7 @@ import { downloadBlob } from '../../lib/downloadBlob'
 import { enqueueLibraryUploads } from '../../lib/libraryUploadQueue'
 import { toast } from '../../lib/toast'
 import { machineSwitchWarnings } from '../../lib/machineSwitchWarnings'
+import { applyBulkOverridesToMember } from '../../lib/processBulkOverrides'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
 import { DialogFileTitle } from '../../components/DialogFileTitle'
@@ -89,7 +91,7 @@ import { createBedModelObject, loadBedModelGeometry } from './lib/bedModel'
 import { EditorSettingsDialog } from '../../components/library/EditorSettingsDialog'
 import { SliceSettingsPanel, type SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
-import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, type RepairedFilamentPreset } from './lib/filamentConfigAuthoring'
+import { applyRepairedFilamentConfigs, attachResolvedFilamentConfigs, rekeyByBakedSlot, type RepairedFilamentPreset } from './lib/filamentConfigAuthoring'
 import { StickySectionHeader, StickySectionScope } from '../../components/library/StickySectionHeader'
 import {
   createPreviewPlateSurface,
@@ -131,6 +133,8 @@ import {
   instanceFromStagedImport,
   replaceInstanceGeometry,
   reindexPlates,
+  mintPlateId,
+  movePlate,
   addedPartHostId,
   dropAddedPartsForReplacedHost,
   makeInstanceIndependent,
@@ -142,6 +146,7 @@ import {
   printedParts,
   seedEditorState,
   seedEmptyEditorState,
+  seededActivePlateIndex,
   stagedFootprint,
   partSlotKey,
   supportPaintKey,
@@ -257,6 +262,7 @@ import { BrimEarsPanel } from './BrimEarsPanel'
 import { CutToolPanel } from './CutToolPanel'
 import { EditorContextMenu } from './EditorContextMenu'
 import { EditorPartContextMenu } from './EditorPartContextMenu'
+import { selectionPivot } from './lib/multiSelectionTransform'
 import {
   prunePartSelection,
   rangePartSelection,
@@ -909,16 +915,21 @@ function EditorView({
   const isInstancePrinted = useCallback((instance: EditorInstance) => instance.printable, [])
   const isInstancePrintedRef = useRef(isInstancePrinted)
   isInstancePrintedRef.current = isInstancePrinted
-  // Object(s) whose per-object process overrides are being edited. Multiple ids = the
-  // bulk context-menu action: the dialog seeds from the first and applies to all.
+  // Object(s) whose per-object process overrides are being edited. Multiple ids = the bulk
+  // context-menu action: the dialog seeds from every member ("Mixed" where they disagree) and
+  // merges edits back onto each one (see lib/processBulkOverrides.ts).
   const [editingObject, setEditingObject] = useState<{ ids: ReadonlyArray<number>; name: string } | null>(null)
   // Normal part(s) of one multi-part object whose per-part process overrides are being
-  // edited. Multiple ids = the part-selection bulk action (seed from first, apply to all).
+  // edited. Multiple ids = the part-selection bulk action (same mixed-value bulk semantics).
   const [editingPart, setEditingPart] = useState<{ objectId: number; partIndexes: ReadonlyArray<number>; name: string } | null>(null)
   // Modifier part whose per-volume process overrides are being edited (dialog open).
   const [editingPartKey, setEditingPartKey] = useState<string | null>(null)
-  const editingObjectOverrides = useMemo(
-    () => (editingObject && perObject ? perObject.value[String(editingObject.ids[0])] ?? EMPTY_OBJECT_OVERRIDES : EMPTY_OBJECT_OVERRIDES),
+  // One override map per selected object, in selection order — the bulk dialog seeds from ALL of
+  // them (disagreements render as "Mixed") rather than only the first member's map.
+  const editingObjectMemberOverrides = useMemo(
+    () => (editingObject && perObject
+      ? editingObject.ids.map((id) => perObject.value[String(id)] ?? EMPTY_OBJECT_OVERRIDES)
+      : null),
     [editingObject, perObject]
   )
   const { sidebarWidth, resizeHandleProps } = useSidebarResize(sidebarSide)
@@ -980,20 +991,23 @@ function EditorView({
   const [uniformScale, setUniformScale] = useState(true)
   // Rotation readout shown while the rotate gizmo or body-rotate is dragging.
   const [rotationReadout, setRotationReadout] = useState<number | null>(null)
-  // Per-plate thumbnail data URLs, keyed by plate index (live plate-strip previews).
+  // Per-plate thumbnail data URLs, keyed by the plate's session identity (`plateId`, NEVER the
+  // live index — reorders/removes renumber indices and an index-keyed cache leaves each image
+  // parked on the position it was captured at while the plates move out from under it).
   const [plateThumbnails, setPlateThumbnails] = useState<Record<number, string>>({})
   /**
-   * Plates whose thumbnail can no longer be trusted after a material was recoloured — BOTH sources.
-   * The embedded PNG was baked by an earlier save, and a live thumbnail is just a cached image of a
-   * plate that is not currently built, so neither follows a colour change. Only the ACTIVE plate is
-   * genuinely repainted (the recolour traversal walks the groups in the live scene, which are its).
+   * Plates (by `plateId`) whose thumbnail can no longer be trusted after a material was recoloured
+   * — BOTH sources. The embedded PNG was baked by an earlier save, and a live thumbnail is just a
+   * cached image of a plate that is not currently built, so neither follows a colour change. Only
+   * the ACTIVE plate is genuinely repainted (the recolour traversal walks the groups in the live
+   * scene, which are its).
    *
    * The strip stops showing a stale plate immediately — one advertising the wrong colour is worse
    * than one that admits it is loading — and a background pass re-renders them one at a time.
    */
   const [staleEmbeddedPlates, setStaleEmbeddedPlates] = useState<ReadonlySet<number>>(() => new Set())
-  // Live (client-rendered) thumbnails keyed by plate index — only set for plates the user
-  // has opened/edited. Read via a ref at save time to know which plates to re-render.
+  // Live (client-rendered) thumbnails — only set for plates the user has opened/edited. Read via
+  // a ref at save time to know which plates to re-render.
   const plateThumbnailsRef = useRef(plateThumbnails)
   plateThumbnailsRef.current = plateThumbnails
 
@@ -1138,17 +1152,22 @@ function EditorView({
     [platesQuery.data]
   )
 
-  // Plates whose source 3MF carries an embedded PNG thumbnail. The plate strip shows that
+  // SOURCE plate indices whose 3MF carries an embedded PNG thumbnail. The plate strip shows that
   // cheap image for plates the user hasn't opened, so a large multi-plate project no longer
   // has to fetch + render every plate's geometry up front just to fill the selector.
   const platesWithEmbeddedThumbnail = useMemo(
     () => new Set((platesQuery.data?.plates ?? []).filter((plate) => plate.hasThumbnail).map((plate) => plate.index)),
     [platesQuery.data]
   )
+  // Resolved through the plate's SOURCE index — the archive's numbering — never its live index:
+  // after a reorder the plate at position 1 must keep fetching the PNG of the source plate it
+  // came from, and a session-added plate (no source) has no embedded image at any position.
   const embeddedPlateThumbnailUrl = useCallback(
-    (plateIndex: number): string | null => (
-      platesWithEmbeddedThumbnail.has(plateIndex) && !staleEmbeddedPlates.has(plateIndex)
-        ? projectSource.plateThumbnailUrl(plateIndex)
+    (plate: EditorPlate): string | null => (
+      plate.sourcePlateIndex !== null
+      && platesWithEmbeddedThumbnail.has(plate.sourcePlateIndex)
+      && !staleEmbeddedPlates.has(plate.plateId)
+        ? projectSource.plateThumbnailUrl(plate.sourcePlateIndex)
         : null
     ),
     [platesWithEmbeddedThumbnail, projectSource, staleEmbeddedPlates]
@@ -1242,10 +1261,16 @@ function EditorView({
     }
     if (!platesQuery.data || !initialSceneSettled) return
     const seeded = seedEditorState(platesQuery.data, scenesByPlate)
+    // Keyed by plateId (scenes fetch by SOURCE index, but the set must follow the plate through
+    // any reorder/remove that happens before its scene lands).
     pendingScenePlatesRef.current = new Set(
-      seeded.plates.map((plate) => plate.index).filter((index) => !scenesByPlate.has(index))
+      seeded.plates
+        .filter((plate) => plate.sourcePlateIndex !== null && !scenesByPlate.has(plate.sourcePlateIndex))
+        .map((plate) => plate.plateId)
     )
-    setActivePlateIndex(preferredPlateIndex ?? seeded.plates[0]?.index ?? 1)
+    // `preferredPlateIndex` is a SOURCE index; the seeded plates are positional. Assigning it
+    // directly deadlocked on archives whose plate list doesn't start at 1 — see the helper's doc.
+    setActivePlateIndex(seededActivePlateIndex(seeded.plates, preferredPlateIndex))
     setState(seeded)
   }, [hasNoBaseFile, platesQuery.data, initialSceneSettled, scenesByPlate, preferredPlateIndex])
 
@@ -1267,18 +1292,26 @@ function EditorView({
     // `stateRef.current` snapshot, the last writer would clobber the others (this is how
     // late-loaded plates ended up empty — the per-part re-hydrate effect overwrote the
     // plate fill). Composing over `prev` makes the writes additive.
+    // All three maps key on `plateId`: scenes are fetched by SOURCE index and the updater below
+    // composes over a `prev` whose LIVE indices may have moved since this snapshot (a reorder
+    // setState in the same flush), so neither index can address "the same plate" reliably.
     const filledPlates = new Map<number, EditorPlate>()
     const nextBeds = new Map<number, EditorPlate['bed']>()
     // Per-plate {dx,dy} to shift already-placed instances when the bed's ORIGIN moves under them —
     // see below. Absent for plates whose bed didn't move that way.
     const recenter = new Map<number, { dx: number; dy: number }>()
+    // Session-added plates have no scene of their own but share the project's one printer bed,
+    // so they borrow any loaded scene's bed — otherwise a printer switch would leave them on the
+    // bed they copied from their template plate at add time.
+    const anyScene = scenesByPlate.values().next().value as LibraryThreeMfScene | undefined
     for (const plate of snapshot.plates) {
-      const scene = scenesByPlate.get(plate.index)
+      const ownScene = plate.sourcePlateIndex !== null ? scenesByPlate.get(plate.sourcePlateIndex) : undefined
+      const scene = ownScene ?? (plate.sourcePlateIndex === null ? anyScene : undefined)
       if (!scene) continue
-      if (pendingScenePlatesRef.current.has(plate.index)) {
-        pendingScenePlatesRef.current.delete(plate.index)
+      if (ownScene && pendingScenePlatesRef.current.has(plate.plateId)) {
+        pendingScenePlatesRef.current.delete(plate.plateId)
         if (plate.instances.length === 0) {
-          filledPlates.set(plate.index, fillPlateFromScene(plate, scene))
+          filledPlates.set(plate.plateId, fillPlateFromScene(plate, ownScene))
           continue
         }
       }
@@ -1287,7 +1320,7 @@ function EditorView({
         excludeAreas: scene.bed.excludeAreas
       }
       if (!bedsEqual(plate.bed, nextBed)) {
-        nextBeds.set(plate.index, nextBed)
+        nextBeds.set(plate.plateId, nextBed)
         // Objects placed before the real printer bed resolved were positioned against the
         // origin-centred FALLBACK bed (min < 0, centre at 0,0). When the real, 0-based bed
         // (min >= 0) arrives, an object left at its fallback coordinates sits near the machine's
@@ -1301,7 +1334,7 @@ function EditorView({
         if (wasFallback && isRealBed && plate.instances.length > 0) {
           const dx = (nextBed.minX + nextBed.maxX) / 2 - (plate.bed.minX + plate.bed.maxX) / 2
           const dy = (nextBed.minY + nextBed.maxY) / 2 - (plate.bed.minY + plate.bed.maxY) / 2
-          if (dx !== 0 || dy !== 0) recenter.set(plate.index, { dx, dy })
+          if (dx !== 0 || dy !== 0) recenter.set(plate.plateId, { dx, dy })
         }
       }
     }
@@ -1311,11 +1344,13 @@ function EditorView({
       return {
         ...prev,
         plates: prev.plates.map((plate) => {
-          const filled = filledPlates.get(plate.index)
-          if (filled) return filled
-          const bed = nextBeds.get(plate.index)
+          const filled = filledPlates.get(plate.plateId)
+          // Keep `prev`'s live index: the fill was built from the snapshot, and a reorder may
+          // have landed in between.
+          if (filled) return { ...filled, index: plate.index }
+          const bed = nextBeds.get(plate.plateId)
           if (!bed) return plate
-          const shift = recenter.get(plate.index)
+          const shift = recenter.get(plate.plateId)
           if (!shift) return { ...plate, bed }
           return {
             ...plate,
@@ -1430,7 +1465,14 @@ function EditorView({
   const filamentNozzleRef = useRef<Map<number, number>>(new Map())
   {
     const map = new Map<number, number>()
-    const indexPlate = platesQuery.data?.plates.find((plate) => plate.index === activePlateIndex)
+    // The baked index speaks SOURCE plate numbers, so resolve through the active plate's own
+    // source identity — the live index drifts from it after a reorder, and never matched at all
+    // on archives whose plate list doesn't start at 1. A session-added plate has no baked entry
+    // and gets an empty map: the index knows nothing about it.
+    const activeSourceIndex = activePlate?.sourcePlateIndex ?? null
+    const indexPlate = activeSourceIndex !== null
+      ? platesQuery.data?.plates.find((plate) => plate.index === activeSourceIndex)
+      : undefined
     for (const filament of indexPlate?.filaments ?? []) {
       if (typeof filament.nozzleId === 'number') map.set(filament.id, filament.nozzleId)
     }
@@ -1457,6 +1499,9 @@ function EditorView({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const orbitRef = useRef<OrbitControls | null>(null)
   const transformRef = useRef<TransformControls | null>(null)
+  // The multi-selection pivot proxy the gizmo attaches to when several objects are selected
+  // (created/owned by useEditorScene; seated at the selection's centre by reattachGizmo).
+  const multiPivotRef = useRef<THREE.Object3D | null>(null)
   const plateRootRef = useRef<THREE.Group | null>(null)
   const geometryCacheRef = useRef<GeometryCache>(new Map())
   const importGeometryCacheRef = useRef<ImportGeometryCache>(new Map())
@@ -2230,6 +2275,7 @@ function EditorView({
     setSelectionHighlightRef,
     gizmoModeRef,
     setGizmoModeRef,
+    multiPivotRef,
     bakeExactMatrixRef,
     syncSelectedTransformRef,
     setRotationReadoutRef,
@@ -2637,6 +2683,30 @@ function EditorView({
         transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
         transform.setMode(gizmoMode)
       }
+    } else if (extraSelectedKeys.length > 0) {
+      // MULTI-selection: the gizmo attaches to the pivot proxy at the selection's centre —
+      // BambuStudio renders its gizmos there (AABB centre for move/scale, min-enclosing-sphere
+      // centre for rotate) and transforms the selection as ONE rigid body about that pivot;
+      // useEditorScene applies the proxy's per-frame delta to every member. Cheap boxes on
+      // purpose: this runs on every selection change, where a precise per-vertex walk is the
+      // select-hitch the cheap selection box already removed. The readout panel keeps showing
+      // the PRIMARY object's values (panelTarget stays `group`).
+      const proxy = multiPivotRef.current
+      const boxes: THREE.Box3[] = []
+      for (const key of allSelectedKeysRef.current()) {
+        const memberGroup = groupByKeyRef.current.get(key)
+        if (memberGroup) boxes.push(printableMeshBox(memberGroup, false))
+      }
+      const pivot = selectionPivot(boxes, gizmoMode)
+      if (proxy && pivot) {
+        proxy.position.copy(pivot)
+        proxy.quaternion.identity()
+        proxy.scale.set(1, 1, 1)
+        transform.attach(proxy)
+      } else {
+        transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
+      }
+      transform.setMode(gizmoMode)
     } else {
       transform.attach(gizmoMode === 'rotate' ? rotorOf(group) : group)
       transform.setMode(gizmoMode)
@@ -2645,7 +2715,7 @@ function EditorView({
     // panel (the gate) and re-seeds its value. Live drag updates then flow through the setter ref.
     const seeded = computeSelectedTransform(panelTarget)
     if (seeded) setSelectedTransform(seeded)
-  }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, computeSelectedTransform])
+  }, [selectedKey, gizmoMode, selectedAddedPartKey, selectedBakedPart, extraSelectedKeys, computeSelectedTransform])
 
   const reattachGizmoRef = useRef(reattachGizmo)
   reattachGizmoRef.current = reattachGizmo
@@ -2836,7 +2906,7 @@ function EditorView({
     if (!plateRoot || !plate) return
     try {
       const url = getThumbnailRenderer().render(plateRoot, plate.bed)
-      setPlateThumbnails((current) => ({ ...current, [plate.index]: url }))
+      setPlateThumbnails((current) => ({ ...current, [plate.plateId]: url }))
     } catch {
       // Thumbnail rendering is best-effort; ignore failures.
     } finally {
@@ -2864,14 +2934,21 @@ function EditorView({
       const out: Array<{ plateIndex: number; png: string }> = []
       for (const plate of current.plates) {
         if (plate.index <= 0) continue
-        // `only` narrows a FORCED capture to specific plates, so refreshing a stale embedded
-        // thumbnail costs one plate's geometry rather than the whole project's.
-        if (options?.only && !options.only.has(plate.index)) continue
-        // Only re-render plates the user has actually opened — they have a live thumbnail and
-        // their geometry is already cached, so this is cheap. Unopened plates are skipped: the
-        // bake (embedPlateThumbnails) preserves their original embedded PNG, so a large
-        // multi-plate project never loads every plate's geometry just to save.
-        if (!options?.force && !plateThumbnailsRef.current[plate.index]) continue
+        // `only` (plateIds) narrows a FORCED capture to specific plates, so refreshing a stale
+        // embedded thumbnail costs one plate's geometry rather than the whole project's.
+        if (options?.only && !options.only.has(plate.plateId)) continue
+        // Re-render plates the user has actually opened — they have a live thumbnail and their
+        // geometry is already cached, so this is cheap — plus plates whose POSITION no longer
+        // matches the source archive's. The bake copies the source's per-plate PNG entries in
+        // place and the reopened file resolves each plate's preview by position, so a displaced
+        // plate saved without a fresh capture shows another plate's image after reopen. Other
+        // unopened plates are skipped: their original embedded PNG is still right, so a large
+        // multi-plate project never loads every plate's geometry just to save. A displaced plate
+        // whose scene has not arrived yet renders nothing useful — leave it skipped (its bytes
+        // are no staler than they were).
+        const displaced = plate.sourcePlateIndex !== plate.index
+          && !pendingScenePlatesRef.current.has(plate.plateId)
+        if (!options?.force && !plateThumbnailsRef.current[plate.plateId] && !displaced) continue
         const group = new THREE.Group()
         try {
           for (const instance of plate.instances) {
@@ -2879,7 +2956,7 @@ function EditorView({
             if (built) group.add(built)
           }
           const url = renderer.render(group, plate.bed)
-          if (options?.updateLive !== false) setPlateThumbnails((existing) => ({ ...existing, [plate.index]: url }))
+          if (options?.updateLive !== false) setPlateThumbnails((existing) => ({ ...existing, [plate.plateId]: url }))
           const png = url.replace(/^data:image\/png;base64,/, '')
           if (png.length > 0) out.push({ plateIndex: plate.index, png })
         } catch {
@@ -2918,12 +2995,12 @@ function EditorView({
     // live thumbnail was wrong: after one recolour they all HAVE a live thumbnail (this pass made
     // it), so undoing that colour marked nothing and the strip kept the undone colour.
     const affected = current.plates
-      .map((plate) => plate.index)
-      .filter((index) => index > 0 && index !== activePlateIndex)
+      .filter((plate) => plate.index > 0 && plate.index !== activePlateIndex)
+      .map((plate) => plate.plateId)
     // Drop the cached live renders too, or the strip keeps preferring them over the loading tile.
     setPlateThumbnails((existing) => {
       const next = { ...existing }
-      for (const index of affected) delete next[index]
+      for (const plateId of affected) delete next[plateId]
       return next
     })
     setStaleEmbeddedPlates(new Set(affected))
@@ -3174,8 +3251,13 @@ function EditorView({
     }
     if (printableTop <= 0) return 0
     // A material the baked index attributes to this plate but that owns no mesh here (support) may
-    // purge at any layer its objects reach.
-    for (const filament of platesQuery.data?.plates.find((entry) => entry.index === plateIndex)?.filaments ?? []) {
+    // purge at any layer its objects reach. The baked index speaks SOURCE plate numbers — resolve
+    // through the live plate's own source identity (the live index drifts after a reorder); a
+    // session-added plate has no baked entry to consult.
+    const bakedPlate = plate.sourcePlateIndex !== null
+      ? platesQuery.data?.plates.find((entry) => entry.index === plate.sourcePlateIndex)
+      : undefined
+    for (const filament of bakedPlate?.filaments ?? []) {
       if (!filamentTop.has(filament.id)) return printableTop
     }
     let purgeTop = 0
@@ -4431,8 +4513,9 @@ function EditorView({
   }, [selectionFor, reassignFilament])
 
   /**
-   * Open per-object process settings for the clicked object — or the whole selection when
-   * it belongs to one (bulk: the dialog seeds from the first object and applies to all).
+   * Open per-object process settings for the clicked object — or the whole selection when it
+   * belongs to one (bulk: the dialog seeds from every member's overrides, showing "Mixed" where
+   * they disagree, and merges edits back onto each member).
    */
   const openObjectSettingsFor = useCallback((key: string) => {
     const keySet = new Set(selectionFor(key))
@@ -4815,16 +4898,18 @@ function EditorView({
   }, [mutateSelectedGroup, mutateSelectedPart, selectedPartObject, nudgeSelection])
 
   const handleAddPlate = useCallback(() => {
-    // Compute the new (contiguous) index from current state, NOT inside the setState updater —
-    // React runs the updater later, so reading a var it mutates would select the wrong plate.
+    // Compute the new (contiguous) index and mint the identity from current state, NOT inside the
+    // setState updater — React runs the updater later (and may run it twice), so reading a var it
+    // mutates would select the wrong plate, and minting inside would burn ids per invocation.
     const newIndex = (stateRef.current?.plates.length ?? 0) + 1
+    const plateId = mintPlateId()
     updatePlates((plates) => {
       const template = plates[plates.length - 1]
       const bed = template ? { ...template.bed } : { minX: -128, maxX: 128, minY: -128, maxY: 128, excludeAreas: [] }
       const plateType = template?.plateType ?? null
       return reindexPlates([
         ...plates,
-        { index: plates.length + 1, name: null, plateType, bed, instances: [], primeTower: null }
+        { index: plates.length + 1, plateId, sourcePlateIndex: null, name: null, plateType, bed, instances: [], primeTower: null }
       ])
     })
     setActivePlateIndex(newIndex)
@@ -4864,19 +4949,23 @@ function EditorView({
     updatePlates((plates) => plates.map((entry) => entry.index === index ? { ...entry, name: nextName } : entry), 'inert')
   }, [promptText, updatePlates])
 
-  const handleReorderPlate = useCallback((fromIndex: number, toIndex: number) => {
-    updatePlates((plates) => {
-      const from = plates.findIndex((plate) => plate.index === fromIndex)
-      const to = plates.findIndex((plate) => plate.index === toIndex)
-      if (from < 0 || to < 0 || from === to) return plates
-      const reordered = [...plates]
-      const [moved] = reordered.splice(from, 1)
-      if (!moved) return plates
-      reordered.splice(to, 0, moved)
-      return reindexPlates(reordered)
-    })
+  /**
+   * Move a plate into an insertion gap (0-based, 0 = before the first plate) — the strip's
+   * between-tile drop zones. Thumbnail caches need no remapping here: they key on the plates'
+   * session identity (`plateId`), so any renumbering path is covered by construction.
+   */
+  const handleReorderPlate = useCallback((fromIndex: number, insertAt: number) => {
+    // Compute the landing position from current state (not inside the updater — see
+    // handleAddPlate) so a no-op drop skips the history checkpoint and scene rebuild entirely.
+    const plates = stateRef.current?.plates ?? []
+    const from = plates.findIndex((plate) => plate.index === fromIndex)
+    if (from < 0) return
+    const gap = Math.max(0, Math.min(plates.length, insertAt))
+    const target = gap > from ? gap - 1 : gap
+    if (target === from) return
+    updatePlates((current) => movePlate(current, fromIndex, insertAt))
     // Keep viewing the plate that was dragged (it now sits at the drop position).
-    setActivePlateIndex(toIndex)
+    setActivePlateIndex(target + 1)
   }, [updatePlates])
 
   // Bake the controller's desired filament list (Bambu-style add/remove of materials) and its
@@ -4959,17 +5048,27 @@ function EditorView({
   // drop path as a save's (`applyFilamentList`), so a slice that omitted the configs handed the
   // slicer a project stripped of its filament physics and leaned on the settings-repair export —
   // which cannot run when the slice loads a machine preset without a process preset (exit 239).
-  const authorFilamentConfigs = useCallback(async (edit: SceneEdit) => attachResolvedFilamentConfigs(
-    applyRepairedFilamentConfigs(edit, stateRef.current?.repairedFilamentConfigs),
-    resolveFilamentConfig,
-    {
-      targetId: sliceConfigRef.current?.selectedSlicerTargetId ?? null,
-      sourceFileId: baseFileId ?? null,
-      profileIdByFilamentId: Object.fromEntries(Object.entries(sliceConfigRef.current?.filamentMaterialOptionIds ?? {}).map(
-        ([filamentId, optionId]) => [filamentId, sliceConfigRef.current?.materialOptions.find((option) => option.id === optionId)?.profileId ?? undefined]
-      ))
-    }
-  ), [resolveFilamentConfig, stateRef, sliceConfigRef, baseFileId])
+  const authorFilamentConfigs = useCallback(async (edit: SceneEdit) => {
+    // The edit's filaments are the session slots in list order, so slot i+1 of the bake is
+    // projectFilaments[i] — but the controller and the physics repair key their records by SESSION
+    // id, which drifts from position after a mid-session remove or reorder. Re-key both records
+    // into the baked slot space here, at the one boundary that knows the current order; passing
+    // them through raw is what once resolved one slot's preset from another slot's pick.
+    const controller = sliceConfigRef.current
+    const orderedSessionIds = (controller?.projectFilaments ?? []).map((filament) => filament.projectFilamentId)
+    const profileIdBySessionId = Object.fromEntries(Object.entries(controller?.filamentMaterialOptionIds ?? {}).map(
+      ([filamentId, optionId]) => [filamentId, controller?.materialOptions.find((option) => option.id === optionId)?.profileId ?? undefined]
+    ))
+    return attachResolvedFilamentConfigs(
+      applyRepairedFilamentConfigs(edit, rekeyByBakedSlot(stateRef.current?.repairedFilamentConfigs, orderedSessionIds)),
+      resolveFilamentConfig,
+      {
+        targetId: controller?.selectedSlicerTargetId ?? null,
+        sourceFileId: baseFileId ?? null,
+        profileIdByFilamentId: rekeyByBakedSlot(profileIdBySessionId, orderedSessionIds)
+      }
+    )
+  }, [resolveFilamentConfig, stateRef, sliceConfigRef, baseFileId])
 
   const {
     savedFile,
@@ -5238,6 +5337,13 @@ function EditorView({
       : restScenesQuery.error instanceof Error
         ? restScenesQuery.error.message
         : null
+  // Re-run only the reads that actually failed: the project source's archive memo is cleared on
+  // rejection, so an errored query's refetch re-downloads, while a healthy query's data stays put.
+  const retryProjectLoad = () => {
+    if (platesQuery.isError) void platesQuery.refetch()
+    if (initialSceneQuery.isError) void initialSceneQuery.refetch()
+    if (restScenesQuery.isError) void restScenesQuery.refetch()
+  }
   const dialogMode = dialogPresentationProps(presentation)
 
   return (
@@ -5335,6 +5441,11 @@ function EditorView({
               icon={<OpenWithRoundedIcon />}
               title="Unable to load this project"
               description={loadError}
+              action={(
+                <Button size="sm" startDecorator={<ReplayRoundedIcon />} onClick={retryProjectLoad}>
+                  Try again
+                </Button>
+              )}
             />
           </Box>
         ) : !state || !activePlate ? (
@@ -6297,26 +6408,27 @@ function EditorView({
         processProfileId={perObject.processProfileId}
         processProfileName={editingObject.name}
         sourceFileId={perObject.sourceFileId}
-        initialOverrides={editingObjectOverrides}
+        initialOverrides={editingObjectMemberOverrides?.[0] ?? EMPTY_OBJECT_OVERRIDES}
+        initialOverridesByMember={editingObjectMemberOverrides ?? undefined}
         visibilityContext={{ ...perObject.visibilityContext, isGlobalConfig: false }}
         allowedKeys={PER_OBJECT_PROCESS_KEYS}
         baseOverlay={perObject.globalOverrides}
         resolveConfig={resolveProcessConfig}
         titlePrefix="Object settings"
-        onApply={(overrides) => {
+        onApply={(overrides, { clearedKeys }) => {
           // Snapshot for undo (overrides live in the borrowed slice config, captured by the
           // slice-config history); recording also flags the project dirty so Save lights up / close warns.
           recordSliceConfigHistory()
           const next = { ...perObject.value }
-          // Bulk apply (context menu on a multi-selection) REPLACES every selected
-          // object's override set with the dialog result, like BambuStudio's
-          // multi-object per-object settings.
+          // Bulk apply (context menu on a multi-selection) MERGES the dialog result onto each
+          // member: uniform values land on every selected object, reset keys are cleared
+          // everywhere, and untouched "Mixed" keys keep each object's own value.
           for (const id of editingObject.ids) {
             // A cleared object keeps an EXPLICIT empty entry rather than being deleted. Absence
             // must never mean "delete this object's saved overrides": the map only ever holds the
             // objects currently in scope, so a deleted entry is indistinguishable from one the
             // user never opened — and the save used to strip both. See collectObjectProcessOverrides.
-            next[String(id)] = overrides
+            next[String(id)] = applyBulkOverridesToMember(perObject.value[String(id)], overrides, clearedKeys)
           }
           perObject.onChange(next)
           setEditingObject(null)
@@ -6327,9 +6439,11 @@ function EditorView({
       // Per-PART process overrides: same restricted catalog as the per-object dialog, baselined on
       // the inherited global + object overrides; the result is stored per part and baked into that
       // part's model_settings block (separate from the object's overall overrides). With several
-      // parts selected (bulk), the dialog seeds from the FIRST part and applies to all of them.
+      // parts selected (bulk), the dialog seeds from ALL of them — disagreements render as "Mixed"
+      // and, untouched, each part keeps its own value on apply.
       const partKeys = editingPart.partIndexes.map((partIndex) => partSlotKey(editingPart.objectId, partIndex))
       const objectOverrides = perObject.value[String(editingPart.objectId)] ?? {}
+      const memberOverrides = partKeys.map((partKey) => stateRef.current?.partProcessOverrides?.[partKey] ?? EMPTY_OBJECT_OVERRIDES)
       return (
         <ProcessSettingsDialog
           open
@@ -6339,22 +6453,28 @@ function EditorView({
           processProfileId={perObject.processProfileId}
           processProfileName={editingPart.name}
           sourceFileId={perObject.sourceFileId}
-          initialOverrides={(partKeys[0] != null ? stateRef.current?.partProcessOverrides?.[partKeys[0]] : undefined) ?? EMPTY_OBJECT_OVERRIDES}
+          initialOverrides={memberOverrides[0] ?? EMPTY_OBJECT_OVERRIDES}
+          initialOverridesByMember={memberOverrides}
           visibilityContext={{ ...perObject.visibilityContext, isGlobalConfig: false }}
           allowedKeys={PER_OBJECT_PROCESS_KEYS}
           baseOverlay={{ ...perObject.globalOverrides, ...objectOverrides }}
           resolveConfig={resolveProcessConfig}
           titlePrefix="Part settings"
-          onApply={(overrides) => {
+          onApply={(overrides, { clearedKeys }) => {
             recordHistory()
             const serialized: Record<string, string> = {}
             for (const [key, value] of Object.entries(overrides)) serialized[key] = Array.isArray(value) ? value.join(';') : value
             setState((current) => {
               if (!current) return current
               const map = { ...(current.partProcessOverrides ?? {}) }
+              // Merge per part (uniform values + cleared keys; untouched "Mixed" keys survive).
+              // Unlike objects, an empty part entry is dropped: part overrides live in session
+              // state keyed by slot, so absence simply means "no overrides" — there is no
+              // scope-pruning ambiguity to guard against.
               for (const partKey of partKeys) {
-                if (Object.keys(serialized).length === 0) delete map[partKey]
-                else map[partKey] = serialized
+                const merged = applyBulkOverridesToMember(map[partKey], serialized, clearedKeys)
+                if (Object.keys(merged).length === 0) delete map[partKey]
+                else map[partKey] = merged
               }
               return { ...current, partProcessOverrides: map }
             })

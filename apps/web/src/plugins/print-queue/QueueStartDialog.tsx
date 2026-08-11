@@ -13,7 +13,7 @@ import { useMemo, useState } from 'react'
 import { Alert, Button, DialogActions, DialogContent, DialogTitle, FormControl, FormLabel, ModalDialog, Stack, Typography } from '@mui/joy'
 import {
   evaluateQueueMatch,
-  loadedSlotsFromStatus,
+  mergeAmsMapping,
   type Printer,
   type PrinterStatus,
   type QueueItem,
@@ -23,6 +23,8 @@ import { BackAwareModal as Modal } from '../../components/BackAwareModal'
 import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
 import { PrinterMapping } from '../../components/library/PrinterMapping'
 import { PrinterPickerDialog } from '../../components/PrinterPickerDialog'
+import { autoSelectedFilamentIds, buildAutoMatchSlots } from '../../lib/autoTrayMatch'
+import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { matchPrinterAspects, type PrinterAspectMatch } from './printerAspectMatch'
 import { MatchChip } from './MatchChip'
 
@@ -48,14 +50,16 @@ function PrinterOptionRow({ name, match }: { name: string; match: PrinterAspectM
   )
 }
 
-/** Adapt the queue item's required filaments to the shape `PrinterMapping` renders (no per-filament nozzle). */
+/** Adapt the queue item's required filaments to the shape `PrinterMapping` renders. */
 function toMappingFilaments(item: QueueItem): ThreeMfProjectFilament[] {
   return item.requiredFilaments.map((filament) => ({
     id: filament.id,
     filamentType: filament.filamentType,
     filamentName: filament.filamentName ?? null,
     color: filament.color,
-    nozzleId: null,
+    // The extruder binding snapshotted at add time — lets the slot picker and the
+    // auto match keep a dual-nozzle filament on its own side.
+    nozzleId: filament.nozzleId ?? null,
     chamberTemperature: null
   }))
 }
@@ -107,7 +111,9 @@ export function QueueStartDialog({
     .sort((left, right) => right.match.score - left.match.score), [printers, statuses, item, allowTypeOnlyMatch])
 
   // Auto-match the materials so a printer that already has them pre-fills every slot (and a partial
-  // match pre-fills what it can); the user only picks the slots the match left at -1.
+  // match pre-fills what it can); the user only picks the slots the match left at -1. The match is
+  // nozzle-, refill-, and remaining-aware (tracked spool grams via the identity lookup).
+  const resolveSlotFilament = useSlotFilamentIdentityLookup()
   const autoMappingFor = useMemo(() => {
     const cache = new Map<string, number[]>()
     return (printerId: string): number[] => {
@@ -115,21 +121,27 @@ export function QueueStartDialog({
       if (cached) return cached
       const status = statuses[printerId]
       const mapping = status
-        ? evaluateQueueMatch(item.requiredFilaments, loadedSlotsFromStatus(status), { allowTypeOnlyMatch }).amsMapping
+        ? evaluateQueueMatch(item.requiredFilaments, buildAutoMatchSlots(printerId, status, resolveSlotFilament), {
+          allowTypeOnlyMatch,
+          autoRefillEnabled: status.amsSettings.autoRefill === true
+        }).amsMapping
         : baseMapping(item)
       cache.set(printerId, mapping)
       return mapping
     }
-  }, [statuses, item, allowTypeOnlyMatch])
+  }, [statuses, item, allowTypeOnlyMatch, resolveSlotFilament])
 
   const defaultPrinterId = ranked[0]?.printer.id ?? null
   const [picked, setPicked] = useState<string | null>(null)
+  /** Explicit user picks only (per printer); `-1` rows fall back to the auto match via `mergeAmsMapping`. */
   const [edits, setEdits] = useState<Record<string, number[]>>({})
   const [printerPickerOpen, setPrinterPickerOpen] = useState(false)
   const selectedPrinterId = picked && ranked.some((entry) => entry.printer.id === picked) ? picked : defaultPrinterId
 
   const autoMapping = selectedPrinterId ? autoMappingFor(selectedPrinterId) : baseMapping(item)
-  const mapping = (selectedPrinterId && edits[selectedPrinterId]) || autoMapping
+  const explicitMapping = (selectedPrinterId ? edits[selectedPrinterId] : undefined) ?? []
+  const mapping = mergeAmsMapping(explicitMapping, autoMapping) ?? baseMapping(item)
+  const autoSelectedIds = autoSelectedFilamentIds(filaments, autoMapping, explicitMapping)
   const selectedPrinter = printers.find((printer) => printer.id === selectedPrinterId) ?? null
   const selectedEntry = ranked.find((entry) => entry.printer.id === selectedPrinterId) ?? null
   const allMapped = item.requiredFilaments.every((filament) => (mapping[filament.id - 1] ?? -1) >= 0)
@@ -137,8 +149,8 @@ export function QueueStartDialog({
   const handleMappingChange = (filamentId: number, tray: number) => {
     if (!selectedPrinterId) return
     setEdits((prev) => {
-      const current = prev[selectedPrinterId] ?? autoMapping
-      const next = [...current]
+      const next = [...(prev[selectedPrinterId] ?? baseMapping(item))]
+      while (next.length <= filamentId - 1) next.push(-1)
       next[filamentId - 1] = tray
       return { ...prev, [selectedPrinterId]: next }
     })
@@ -192,7 +204,18 @@ export function QueueStartDialog({
                     entries={ranked.map(({ printer, match }, index) => ({
                       printer,
                       rank: index,
-                      meta: <PrinterMatchChips match={match} />
+                      // The picker itself renders each machine's stage + hardware chips (model,
+                      // nozzle, plate), so restating them here would print every label twice per
+                      // row. Meta keeps what is queue-specific: the material-readiness count,
+                      // plus a match chip only for an aspect that needs attention. The collapsed
+                      // button row (PrinterOptionRow) keeps the full set — no hardware chips there.
+                      meta: (
+                        <>
+                          {match.nozzle !== 'match' && <MatchChip label={match.nozzleLabel} state={match.nozzle} />}
+                          {match.plate !== 'match' && <MatchChip label={match.plateLabel} state={match.plate} />}
+                          <MatchChip label={match.materialLabel} state={match.material} icon={<FilamentSpoolIcon />} />
+                        </>
+                      )
                     }))}
                     selectedPrinterId={selectedPrinterId}
                     onSelect={(printer) => { if (printer) setPicked(printer.id) }}
@@ -212,6 +235,7 @@ export function QueueStartDialog({
                       usedGramsById={usedGramsById}
                       mapping={mapping}
                       issues={EMPTY_ISSUES}
+                      autoSelectedFilamentIds={autoSelectedIds}
                       onChange={handleMappingChange}
                     />
                   </>

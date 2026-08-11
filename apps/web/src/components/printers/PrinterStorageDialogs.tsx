@@ -37,9 +37,7 @@ export function PrinterStorageDialogs({
     <>
       {storageOpen && (
         <PrinterStorageModal
-          printerId={printer.id}
-          printerName={printer.name}
-          printerModel={printer.model}
+          printer={printer}
           allowPrint={canDispatchPrints}
           allowUpload={canManagePrinter && !demoMode}
           allowDownload={canDownloadPrinterStorage}
@@ -49,9 +47,7 @@ export function PrinterStorageDialogs({
       )}
       {modelsOpen && (
         <PrinterStorageModal
-          printerId={printer.id}
-          printerName={printer.name}
-          printerModel={printer.model}
+          printer={printer}
           title={`Models on ${printer.name}`}
           description="Sliced 3MF/G-code files stored on the printer. Tap a file to print it."
           acceptExtensions={/\.(3mf|gcode)$/i}
@@ -66,9 +62,7 @@ export function PrinterStorageDialogs({
       )}
       {timelapsesOpen && (
         <PrinterStorageModal
-          printerId={printer.id}
-          printerName={printer.name}
-          printerModel={printer.model}
+          printer={printer}
           title={`Timelapses on ${printer.name}`}
           description="Recorded timelapses on the printer's SD card."
           initialPath="/timelapse"

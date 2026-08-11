@@ -36,6 +36,27 @@ test('repairSettings fixes an undersized flush matrix and a stale inherits_group
   assert.equal(repaired.inherits_group.length, 3)
 })
 
+test('repairSettings resizes a flush_multiplier the engine would reject', () => {
+  // The exit-156 shape: matrix correct for the topology, but `flush_multiplier` (which the engine
+  // uses as the heads count in its g-code-time size check) still one entry, with a consistent
+  // `nozzle_volume_type` so the CLI's own recompute never fires to hide it.
+  const settings = JSON.stringify({
+    filament_colour: ['#000000', '#F4EE2A'],
+    filament_settings_id: ['Bambu PLA Basic @BBL X2D', 'Bambu PLA Basic @BBL X2D'],
+    nozzle_diameter: ['0.4', '0.4'],
+    nozzle_volume_type: ['Standard', 'Standard'],
+    flush_volumes_matrix: ['0', '632', '136', '0', '0', '632', '136', '0'],
+    flush_multiplier: ['1'],
+    // A one-entry fast multiplier is Studio-normal (fast purge mode only) and must ride through.
+    flush_multiplier_fast: ['1.2'],
+    inherits_group: ['', '', '', '']
+  })
+  const repaired = JSON.parse(repairProjectSettingsDocument(settings)) as Record<string, unknown>
+  assert.deepEqual(repaired.flush_multiplier, ['1', '1'])
+  assert.deepEqual(repaired.flush_multiplier_fast, ['1.2'])
+  assert.deepEqual(repaired.flush_volumes_matrix, ['0', '632', '136', '0', '0', '632', '136', '0'])
+})
+
 test('a healthy document rides through the repair transform byte-identical', () => {
   const settings = JSON.stringify({
     filament_colour: ['#111111'],

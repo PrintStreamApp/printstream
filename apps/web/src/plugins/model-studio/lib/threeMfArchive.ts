@@ -14,7 +14,7 @@
  * (the user is about to look at every plate anyway) but means peak memory is roughly the
  * uncompressed project — hence {@link MAX_CLIENT_THREE_MF_BYTES}.
  */
-import { unzip } from 'fflate'
+import { unzipArchiveBytes } from './zipArchiveClient'
 import { CUSTOM_GCODE_PER_LAYER_ENTRY, THREE_MF_SLICE_INFO_ENTRY as SLICE_INFO_ENTRY, type ThreeMfSceneEntries } from '@printstream/shared/three-mf'
 
 const ROOT_MODEL_ENTRY = '3D/3dmodel.model'
@@ -140,16 +140,13 @@ function createArchive(entries: Record<string, Uint8Array>): ThreeMfArchive {
   }
 }
 
-function inflateArchive(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
-  return new Promise((resolve, reject) => {
-    // fflate's async unzip moves the inflate off the main thread (it spawns its own worker), which
-    // matters here: a large project would otherwise freeze the page for seconds mid-drop.
-    unzip(bytes, (error, unzipped) => {
-      if (error) {
-        reject(new ThreeMfArchiveError('This file could not be opened as a 3MF archive.'))
-        return
-      }
-      resolve(unzipped)
-    })
-  })
+async function inflateArchive(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
+  // Off the main thread via the dedicated zip worker (a large project would otherwise freeze the
+  // page for seconds mid-open), and guaranteed to settle — fflate's own async API could wedge
+  // without erroring, which is exactly the never-resolving open this call must not produce.
+  try {
+    return await unzipArchiveBytes(bytes)
+  } catch {
+    throw new ThreeMfArchiveError('This file could not be opened as a 3MF archive.')
+  }
 }

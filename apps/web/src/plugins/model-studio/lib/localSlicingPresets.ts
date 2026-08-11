@@ -8,14 +8,14 @@
  * PARSING is the shared one (`@printstream/shared`), deliberately: the rules for what counts as a
  * valid BambuStudio preset and what kind it is mirror BambuStudio's own `import_json_presets()`,
  * and a file accepted here but rejected by the workspace would be indefensible. Only the ZIP inflate
- * is local, via fflate.
+ * is local, via the bounded zip worker (`zipArchiveClient.ts`).
  *
  * Storage is `localStorage` rather than IndexedDB on purpose: a preset is a few KB of JSON, a whole
  * bundle a few hundred, so the simpler synchronous store is a better fit than an async schema — and
  * a quota failure is reported plainly rather than being swallowed. Revisit if presets ever grow to
  * megabytes.
  */
-import { unzip } from 'fflate'
+import { unzipArchiveBytes } from './zipArchiveClient'
 import {
   extractUploadedProfiles,
   parseProfileJson,
@@ -101,22 +101,18 @@ async function readUpload(file: File): Promise<UploadedProfileEntry[]> {
   }
 }
 
-/** fflate's callback unzip, keeping only the JSON entries a preset archive is made of. */
-function inflatePresetArchive(bytes: Uint8Array): Promise<UploadedProfileEntry[]> {
-  return new Promise((resolve, reject) => {
-    unzip(bytes, (error, files) => {
-      if (error) { reject(error); return }
-      const decoder = new TextDecoder()
-      const entries: UploadedProfileEntry[] = []
-      for (const [path, content] of Object.entries(files)) {
-        // Directory markers and anything that is not a preset document are not errors — a
-        // BambuStudio export carries other files alongside the presets.
-        if (path.endsWith('/') || !path.toLowerCase().endsWith('.json')) continue
-        entries.push({ content: decoder.decode(content) })
-      }
-      resolve(entries)
-    })
-  })
+/** Unzip via the bounded zip worker, keeping only the JSON entries a preset archive is made of. */
+async function inflatePresetArchive(bytes: Uint8Array): Promise<UploadedProfileEntry[]> {
+  const files = await unzipArchiveBytes(bytes)
+  const decoder = new TextDecoder()
+  const entries: UploadedProfileEntry[] = []
+  for (const [path, content] of Object.entries(files)) {
+    // Directory markers and anything that is not a preset document are not errors — a
+    // BambuStudio export carries other files alongside the presets.
+    if (path.endsWith('/') || !path.toLowerCase().endsWith('.json')) continue
+    entries.push({ content: decoder.decode(content) })
+  }
+  return entries
 }
 
 function parseOrThrow(entry: UploadedProfileEntry): { raw: Record<string, unknown>; kind: SlicingPresetKind; name: string } {

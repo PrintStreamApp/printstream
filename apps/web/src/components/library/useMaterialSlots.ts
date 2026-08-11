@@ -270,6 +270,13 @@ export interface MaterialSlotsParams {
    * process state, not here. Called BEFORE the removal mutates the list.
    */
   onFilamentRemoved?: (removedPosition: number) => void
+  /**
+   * The list was reordered: `remap` is the 1-based old-position → new-position permutation over
+   * the pre-reorder ordered list. Same host duty as `onFilamentRemoved` — remap the filament-INDEX
+   * references (`permuteFilamentIndexOverrides` and friends). Called BEFORE the move mutates the
+   * list.
+   */
+  onFilamentReordered?: (remap: ReadonlyMap<number, number>) => void
 }
 
 /**
@@ -313,6 +320,8 @@ export interface MaterialSlots {
   /** Append a material slot from the choice the user confirmed in the add dialog. */
   handleAddFilament: (choice: AddedMaterialChoice) => void
   handleRemoveFilament: (projectFilamentId: number) => void
+  /** Move a slot to an insertion gap (0..N, between-tiles drag semantics). */
+  handleReorderFilament: (fromIndex: number, insertAt: number) => void
   handleMaterialOptionChange: (projectFilamentId: number, option: SliceMaterialOption | null) => void
   /** See `SliceSettingsController.materialEditListenerRef` — the editor's unsaved-flag hook. */
   materialEditListenerRef: React.MutableRefObject<(() => void) | null>
@@ -341,7 +350,7 @@ export interface MaterialSlots {
 export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
   const {
     file, bakedIndex, baseProjectFilaments, filamentProfiles, compatibleFilamentProfiles,
-    materialOptions, selectedMachineProfile, toolheadOptions, visibleFilamentsFilter, onFilamentRemoved
+    materialOptions, selectedMachineProfile, toolheadOptions, visibleFilamentsFilter, onFilamentRemoved, onFilamentReordered
   } = params
 
   // The session's material list. ALWAYS a real list, never "null, so read the file instead" —
@@ -586,6 +595,37 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     setSessionSlots((slots) => slots.filter((slot) => slot.projectFilamentId !== projectFilamentId))
   }, [projectFilaments, onFilamentRemoved])
 
+  /**
+   * Move the slot at `fromIndex` into insertion gap `insertAt` (0..N, the between-tiles semantics
+   * the drag strip produces — same conversion as `movePlate`). Session ids stay untouched, so
+   * paint, badges, and every id-keyed pick follow their material through the move; the SAVE turns
+   * the new order into new slot numbers via `sourceIndex`, exactly as removal does. Position-space
+   * references (the filament-INDEX process settings) are the one thing that must move NOW, via
+   * `onFilamentReordered` — they name positions, not ids.
+   */
+  const handleReorderFilament = useCallback((fromIndex: number, insertAt: number) => {
+    const count = projectFilaments.length
+    if (fromIndex < 0 || fromIndex >= count) return
+    const target = insertAt > fromIndex ? insertAt - 1 : insertAt
+    if (target === fromIndex || target < 0 || target >= count) return
+    // 1-based old position → new position, resolved against the pre-move list (dependency on
+    // `projectFilaments` is load-bearing, as in removal: stale capture = wrong permutation).
+    const order = projectFilaments.map((_unused, index) => index)
+    const [movedIndex] = order.splice(fromIndex, 1)
+    order.splice(target, 0, movedIndex as number)
+    const remap = new Map<number, number>()
+    order.forEach((oldIndex, newIndex) => remap.set(oldIndex + 1, newIndex + 1))
+    onFilamentReordered?.(remap)
+    setSessionOwned(true)
+    setSessionSlots((slots) => {
+      if (fromIndex >= slots.length) return slots
+      const next = [...slots]
+      const [movedSlot] = next.splice(fromIndex, 1)
+      next.splice(target, 0, movedSlot as SessionFilamentSlot)
+      return next
+    })
+  }, [projectFilaments, onFilamentReordered])
+
   const handleMaterialOptionChange = useCallback((projectFilamentId: number, option: SliceMaterialOption | null) => {
     setFilamentMaterialOptionIds((current) => ({ ...current, [projectFilamentId]: option?.id ?? '' }))
     // Both slot-carried fields in ONE write, so a pick is a single state update rather than two
@@ -786,6 +826,7 @@ export function useMaterialSlots(params: MaterialSlotsParams): MaterialSlots {
     profileEditedFilamentIds,
     handleAddFilament,
     handleRemoveFilament,
+    handleReorderFilament,
     handleMaterialOptionChange,
     materialEditListenerRef,
     desiredFilaments,

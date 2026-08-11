@@ -20,14 +20,20 @@ import type { PrinterStage, PrinterStatus } from './printer.js'
 const EXACT = { allowTypeOnlyMatch: false }
 const TYPE_ONLY = { allowTypeOnlyMatch: true }
 
-function slot(trayIndex: number, filamentType: string | null, color: string | null, remainPercent: number | null = 100): QueueLoadedSlot {
-  return { trayIndex, filamentType, color, remainPercent, occupied: true }
+function slot(
+  trayIndex: number,
+  filamentType: string | null,
+  color: string | null,
+  remainPercent: number | null = 100,
+  extras: Partial<QueueLoadedSlot> = {}
+): QueueLoadedSlot {
+  return { trayIndex, filamentType, color, remainPercent, occupied: true, nozzleId: null, ...extras }
 }
 
 function status(options: {
   online?: boolean
   stage?: PrinterStage
-  ams?: Array<{ unitId: number; slots: Array<Record<string, unknown>> }>
+  ams?: Array<Record<string, unknown>>
   externalSpools?: Array<Record<string, unknown>>
 }): PrinterStatus {
   return {
@@ -105,17 +111,179 @@ test('evaluateQueueMatch reports a missing filament when no type matches', () =>
   assert.deepEqual(result.missing, [required(1, 'ABS', '#FFFFFF')])
 })
 
+test('display-type drift: a genuine tray naming the required preset matches despite differing type text', () => {
+  // The SAME spool's declared type differs across Studio releases (2.7.1.57 writes Bambu PETG HF
+  // as "PETG", 2.7.1.62 as "PETG-HF"), so the sliced plate and the AMS wire can legitimately
+  // disagree. Identity (trayInfoIdx -> preset family vs the required preset name) must bridge it,
+  // mirroring BambuStudio's mapping order (filament_id equality beats type text).
+  const drifted = { ...required(1, 'PETG-HF', '#515151'), filamentName: 'Bambu PETG HF', nozzleId: 1 }
+  const slots = [
+    slot(1, 'PETG', '#515151', 100, { nozzleId: 1, trayInfoIdx: 'GFG02', trayUuid: 'B714F39048F54B0FB36D648919F732B4' })
+  ]
+  const match = evaluateQueueMatch([drifted], slots, EXACT)
+  assert.equal(match.matched, true)
+  assert.deepEqual(match.amsMapping, [1])
+})
+
+test('the -BASIC grade equals its base type; other granular grades stay distinct', () => {
+  // Studio 2.7.1.62 writes granular types into sliced files ("PLA-BASIC" for Generic PLA) while
+  // the AMS wire stays coarse ("PLA"). BASIC is the plain grade, so it must bridge without any
+  // Bambu identity — but flow/fill-distinct grades (HF, CF) must NOT match a plain tray.
+  const basic = { ...required(1, 'PLA-BASIC', '#000000'), filamentName: 'Generic PLA' }
+  const plainTray = evaluateQueueMatch([basic], [slot(0, 'PLA', '#000000')], EXACT)
+  assert.equal(plainTray.matched, true)
+  assert.deepEqual(plainTray.amsMapping, [0])
+  const hfOnPlain = evaluateQueueMatch(
+    [{ ...required(1, 'PETG-HF', '#000000'), filamentName: 'Generic PETG HF' }],
+    [slot(0, 'PETG', '#000000')],
+    EXACT
+  )
+  assert.equal(hfOnPlain.matched, false)
+})
+
+test('display-type drift does NOT bridge to a non-genuine tray or a different material', () => {
+  const drifted = { ...required(1, 'PETG-HF', '#515151'), filamentName: 'Bambu PETG HF' }
+  // Same raw type text but no RFID identity: the type gate stays hard.
+  const anonymous = evaluateQueueMatch([drifted], [slot(1, 'PETG', '#515151')], EXACT)
+  assert.equal(anonymous.matched, false)
+  // Genuine identity for a DIFFERENT preset family never bridges either.
+  const otherPreset = evaluateQueueMatch(
+    [drifted],
+    [slot(1, 'PLA', '#515151', 100, { trayInfoIdx: 'GFA00', trayUuid: '61ADD0E49F1046B7BBFCBD5CAC034C9A' })],
+    EXACT
+  )
+  assert.equal(otherPreset.matched, false)
+})
+
+test('a nozzle binding is hard: never auto-select across it, even for the only colour match', () => {
+  // The only black PLA feeds the right extruder; the filament is bound to the left.
+  const slots = [slot(0, 'PLA', '#000000', 100, { nozzleId: 0 })]
+  const leftBound = { ...required(1, 'PLA', '#000000'), nozzleId: 1 }
+
+  const strict = evaluateQueueMatch([leftBound], slots, EXACT)
+  assert.equal(strict.matched, false)
+  assert.deepEqual(strict.amsMapping, [-1])
+
+  // The type-only fallback must not cross the binding either.
+  assert.deepEqual(evaluateQueueMatch([leftBound], slots, TYPE_ONLY).amsMapping, [-1])
+
+  // The same slot satisfies a right-bound (or unbound) filament.
+  assert.deepEqual(evaluateQueueMatch([{ ...leftBound, nozzleId: 0 }], slots, EXACT).amsMapping, [0])
+  assert.deepEqual(evaluateQueueMatch([{ ...leftBound, nozzleId: null }], slots, EXACT).amsMapping, [0])
+})
+
+test('a slot with no nozzle binding (Track Switch unit, single nozzle) is eligible for both extruders', () => {
+  const slots = [slot(4, 'PLA', '#000000', 100, { nozzleId: null })]
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), nozzleId: 0 }], slots, EXACT).amsMapping, [4])
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), nozzleId: 1 }], slots, EXACT).amsMapping, [4])
+})
+
+test('an external spool keeps its extruder binding', () => {
+  // 254 is the deputy/left extruder's spool on dual-nozzle machines.
+  const slots = [slot(254, 'PETG', '#FFFFFF', null, { nozzleId: 1 })]
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PETG', '#FFFFFF'), nozzleId: 0 }], slots, EXACT).amsMapping, [-1])
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PETG', '#FFFFFF'), nozzleId: 1 }], slots, EXACT).amsMapping, [254])
+})
+
+test('AMS HT (N3S) slots match at their 128+ band tray index', () => {
+  const slots = loadedSlotsFromStatus(status({
+    ams: [{ unitId: 130, type: 'ams-ht', nozzleId: null, slots: [{ slot: 0, filamentType: 'PETG', color: '#00FF00', occupied: true }] }]
+  }))
+  assert.equal(slots[0]?.trayIndex, 130)
+  assert.deepEqual(evaluateQueueMatch([required(1, 'PETG', '#00FF00')], slots, EXACT).amsMapping, [130])
+})
+
+test('exact ties prefer the emptiest slot that still holds enough, else the fullest', () => {
+  // Two identical RFID spools: 800g and 100g remaining (percent * 10 convention).
+  const slots = [
+    slot(0, 'PLA', '#000000', 80, { trayUuid: 'A1B2C3' }),
+    slot(1, 'PLA', '#000000', 10, { trayUuid: 'D4E5F6' })
+  ]
+  // Needs less than either holds → the emptier one, so partials get consumed first.
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), usedGrams: 50 }], slots, EXACT).amsMapping, [1])
+  // Needs more than the emptier one holds → the fuller one.
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), usedGrams: 200 }], slots, EXACT).amsMapping, [0])
+  // Needs more than both hold → the fullest, letting the insufficiency warning surface.
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), usedGrams: 900 }], slots, EXACT).amsMapping, [0])
+  // Headroom counts: 100g remaining is NOT enough for an 80g job (80 + 25 > 100).
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), usedGrams: 80 }], slots, EXACT).amsMapping, [0])
+  // No usage data → no sufficiency guard, deterministic tray order.
+  assert.deepEqual(evaluateQueueMatch([required(1, 'PLA', '#000000')], slots, EXACT).amsMapping, [0])
+})
+
+test('remaining precedence: tracked-spool grams first; percent only for RFID trays; unknown beats known-insufficient', () => {
+  // Tracked grams (60g) grade as sufficient and emptier than the RFID estimate (900g).
+  const tracked = [
+    slot(0, 'PLA', '#000000', 90, { trayUuid: 'A1B2C3' }),
+    slot(1, 'PLA', '#000000', null, { remainingGrams: 60 })
+  ]
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), usedGrams: 30 }], tracked, EXACT).amsMapping, [1])
+
+  // A third-party tray's percent is not trusted: it grades unknown, which outranks a
+  // slot KNOWN to be too empty.
+  const unknownVsInsufficient = [
+    slot(0, 'PLA', '#000000', 5, { trayUuid: 'A1B2C3' }),
+    slot(1, 'PLA', '#000000', 90)
+  ]
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), usedGrams: 100 }], unknownVsInsufficient, EXACT).amsMapping, [1])
+})
+
+test('AMS auto-refill pooling suppresses drain-the-smallest and grades combined remaining', () => {
+  const pooledSlots = [
+    slot(0, 'PLA', '#000000', 80, { trayUuid: 'A1B2C3', trayInfoIdx: 'GFA00' }),
+    slot(1, 'PLA', '#000000', 10, { trayUuid: 'D4E5F6', trayInfoIdx: 'GFA00' })
+  ]
+  const needs50 = [{ ...required(1, 'PLA', '#000000'), usedGrams: 50 }]
+  // Refill off → the emptier sufficient spool (drain partials first).
+  assert.deepEqual(evaluateQueueMatch(needs50, pooledSlots, EXACT).amsMapping, [1])
+  // Refill on → the printer chains the pool itself; no deliberate draining, tray order.
+  assert.deepEqual(evaluateQueueMatch(needs50, pooledSlots, { ...EXACT, autoRefillEnabled: true }).amsMapping, [0])
+  // The pool's combined remaining (900g) covers a job neither tray covers alone.
+  assert.deepEqual(evaluateQueueMatch([{ ...required(1, 'PLA', '#000000'), usedGrams: 850 }], pooledSlots, { ...EXACT, autoRefillEnabled: true }).amsMapping, [0])
+  // A partial spool OUTSIDE the pool still gets drained first when it suffices.
+  const withSolo = [...pooledSlots, slot(2, 'PLA', '#000000', 12, { trayUuid: '0F0F0F', trayInfoIdx: 'GFA01' })]
+  assert.deepEqual(evaluateQueueMatch(needs50, withSolo, { ...EXACT, autoRefillEnabled: true }).amsMapping, [2])
+})
+
+test('a genuine Bambu tray naming the required preset wins the tie; the genuine gate is not bypassed', () => {
+  const bambuMatte = { ...required(1, 'PLA', '#000000'), filamentName: 'Bambu PLA Matte @BBL X1C' }
+  // GFA01 = "Bambu PLA Matte". With an RFID tag the identity is genuine → preferred despite tray order.
+  const genuine = [
+    slot(0, 'PLA', '#000000'),
+    slot(1, 'PLA', '#000000', 100, { trayUuid: 'A1B2C3', trayInfoIdx: 'GFA01' })
+  ]
+  assert.deepEqual(evaluateQueueMatch([bambuMatte], genuine, EXACT).amsMapping, [1])
+  // A user-assigned Bambu preset id on an untagged spool claims nothing → plain tray order.
+  const untagged = [
+    slot(0, 'PLA', '#000000'),
+    slot(1, 'PLA', '#000000', 100, { trayInfoIdx: 'GFA01' })
+  ]
+  assert.deepEqual(evaluateQueueMatch([bambuMatte], untagged, EXACT).amsMapping, [0])
+})
+
 test('loadedSlotsFromStatus flattens AMS units and external spools to tray indices', () => {
   const slots = loadedSlotsFromStatus(status({
-    ams: [{ unitId: 1, slots: [{ slot: 2, filamentType: 'PLA', color: '#111111', remainPercent: 40, occupied: true }] }],
-    externalSpools: [{ amsId: 255, filamentType: 'PETG', color: '#222222', remainPercent: null }]
+    ams: [{ unitId: 1, nozzleId: 0, slots: [{ slot: 2, filamentType: 'PLA', color: '#111111', remainPercent: 40, occupied: true, trayUuid: 'A1B2', trayInfoIdx: 'GFA00' }] }],
+    externalSpools: [{ amsId: 255, nozzleId: 0, filamentType: 'PETG', color: '#222222', remainPercent: null }]
   }))
-  // AMS tray index = unitId * 4 + slot.
+  // AMS tray index = unitId * 4 + slot; the unit's nozzle binding and tray identity ride along.
   assert.equal(slots[0]?.trayIndex, 6)
   assert.equal(slots[0]?.filamentType, 'PLA')
-  // External spool keeps its virtual tray id and is occupied when it has a type.
+  assert.equal(slots[0]?.nozzleId, 0)
+  assert.equal(slots[0]?.trayUuid, 'A1B2')
+  assert.equal(slots[0]?.trayInfoIdx, 'GFA00')
+  // External spool keeps its virtual tray id, nozzle, and is occupied when it has a type.
   assert.equal(slots[1]?.trayIndex, 255)
   assert.equal(slots[1]?.occupied, true)
+  assert.equal(slots[1]?.nozzleId, 0)
+})
+
+test('loadedSlotsFromStatus clears the nozzle binding of a unit behind a Filament Track Switch', () => {
+  const slots = loadedSlotsFromStatus(status({
+    ams: [{ unitId: 0, nozzleId: 0, switchInput: 'A', slots: [{ slot: 0, filamentType: 'PLA', color: '#111111', occupied: true }] }]
+  }))
+  // The unit is reachable by BOTH extruders, so it must not be filtered out for either side.
+  assert.equal(slots[0]?.nozzleId, null)
 })
 
 test('evaluateQueueItemForPrinter respects a printer pin', () => {

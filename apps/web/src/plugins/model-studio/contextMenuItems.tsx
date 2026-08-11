@@ -44,7 +44,7 @@ export function FilamentMenuItems({ options, onPick }: {
       {options.map((option) => (
         <MenuItem key={option.id} onClick={() => onPick(option.id)} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Box sx={{ flexShrink: 0, width: 16, height: 16, borderRadius: '3px', bgcolor: option.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)' }} />
-          <span>Material {option.id}{option.label ? ` — ${option.label}` : ''}{option.colorName ? ` (${option.colorName})` : ''}</span>
+          <span>Material {option.number}{option.label ? ` — ${option.label}` : ''}{option.colorName ? ` (${option.colorName})` : ''}</span>
         </MenuItem>
       ))}
     </>

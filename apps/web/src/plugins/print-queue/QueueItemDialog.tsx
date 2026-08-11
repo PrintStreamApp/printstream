@@ -24,8 +24,8 @@ import {
   evaluateQueueMatch,
   getPrinterPrintStartOptions,
   isPrinterModelCompatible,
-  loadedSlotsFromStatus,
   queuePrintOptionsSchema,
+  queueRequiredFilamentFromPlate,
   type PrinterModel,
   type PrinterPrintStartOptions,
   type PrinterStatus,
@@ -39,6 +39,8 @@ import {
   type ThreeMfProjectFilament
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
+import { autoSelectedFilamentIds, buildAutoMatchSlots } from '../../lib/autoTrayMatch'
+import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../../components/ScrollableDialog'
 import { DialogSection } from '../../components/DialogSection'
 import { LibraryPlateCardPicker } from '../../components/LibraryPlateSelect'
@@ -190,9 +192,10 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
     [printers, compatibleModels]
   )
 
-  // The file's own required filaments on the active plate.
+  // The file's own required filaments on the active plate (the shared builder keeps
+  // usedGrams + nozzleId flowing — hand-built copies silently dropped them).
   const fileFilaments = useMemo<QueueRequiredFilament[]>(
-    () => (activePlate?.filaments ?? []).map((filament) => ({ id: filament.id, filamentType: filament.filamentType, color: filament.color, filamentName: filament.filamentName })),
+    () => (activePlate?.filaments ?? []).map(queueRequiredFilamentFromPlate),
     [activePlate]
   )
   const projectFilaments = useMemo(() => (activePlate?.filaments ?? []).map(toProjectFilament), [activePlate])
@@ -216,14 +219,28 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
   }
 
   // Default AMS mapping for a specific-printer target (overridden once the user edits a slot).
+  // Exact matches only, nozzle/refill/remaining-aware — the same suggestion the print dialogs show.
+  const resolveSlotFilament = useSlotFilamentIdentityLookup()
   const computedMapping = useMemo(() => {
     if (target.kind !== 'printer' || !target.printerId) return []
     const status = statuses[target.printerId]
     if (!status) return []
-    const required = visibleFilaments.map((filament) => ({ id: filament.id, filamentType: filament.filamentType, color: filament.color }))
-    return evaluateQueueMatch(required, loadedSlotsFromStatus(status), { allowTypeOnlyMatch: false }).amsMapping
-  }, [target.kind, target.printerId, statuses, visibleFilaments])
+    const required = visibleFilaments.map((filament) => queueRequiredFilamentFromPlate({
+      ...filament,
+      usedGrams: usedGramsById.get(filament.id) ?? null
+    }))
+    return evaluateQueueMatch(required, buildAutoMatchSlots(target.printerId, status, resolveSlotFilament), {
+      allowTypeOnlyMatch: false,
+      autoRefillEnabled: status.amsSettings.autoRefill === true
+    }).amsMapping
+  }, [target.kind, target.printerId, statuses, usedGramsById, visibleFilaments, resolveSlotFilament])
   const effectiveMapping = mappingOverride ?? computedMapping
+  // With no explicit override every filled row is the matcher's suggestion; an override's
+  // rows are the user's (its -1 entries mean "resolve by material at dispatch", not auto).
+  const autoSelectedIds = useMemo(
+    () => (mappingOverride == null ? autoSelectedFilamentIds(visibleFilaments, computedMapping, []) : undefined),
+    [computedMapping, mappingOverride, visibleFilaments]
+  )
 
   const changePlate = (next: number) => {
     setPlateIndex(next)
@@ -376,6 +393,7 @@ export function QueueItemDialog({ open, onClose, onBack, fixedFile, defaultPlate
                         usedGramsById={usedGramsById}
                         mapping={effectiveMapping}
                         materials={effectiveMaterials}
+                        autoSelectedFilamentIds={autoSelectedIds}
                         onMappingChange={setMappingOverride}
                         onMaterialsChange={setMaterialsOverride}
                       />

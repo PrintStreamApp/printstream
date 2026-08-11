@@ -15,9 +15,10 @@ const repoRoot = path.resolve(here, '../../..')
 test('the x86 sysroot closure includes the libraries the BambuStudio CLI needs under qemu', () => {
   assert.ok(Array.isArray(APT_PACKAGES) && APT_PACKAGES.length > 0)
   // These are the load-bearing pieces: drop the GTK/WebKit toolkit and the CLI fails to start;
-  // drop the Mesa DRI/llvmpipe driver and slicing still works but produces thumbnail-less output
-  // (the offscreen GL that renders plate previews has no software rasteriser). Guard them both.
-  for (const required of ['libgtk-3-0t64', 'libwebkit2gtk-4.1-0', 'libgl1-mesa-dri', 'libegl1']) {
+  // drop the Mesa DRI/llvmpipe driver and slicing still works but loses generic software GL;
+  // drop libosmesa6 and the CLI's thumbnail renderer loses the offscreen OSMesa context it
+  // explicitly asks GLFW for (sliced output then ships without freshly rendered covers).
+  for (const required of ['libgtk-3-0t64', 'libwebkit2gtk-4.1-0', 'libgl1-mesa-dri', 'libegl1', 'libosmesa6']) {
     assert.ok(APT_PACKAGES.includes(required), `expected APT_PACKAGES to include ${required}`)
   }
 })

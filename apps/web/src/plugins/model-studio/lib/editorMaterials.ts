@@ -55,12 +55,13 @@ export interface SliceConfigMaterialsSource {
 export function editorMaterialsFromSliceConfig(sliceConfig: SliceConfigMaterialsSource | undefined): EditorMaterials {
   const filaments = sliceConfig?.projectFilaments ?? []
   if (filaments.length === 0) return EMPTY_EDITOR_MATERIALS
-  const options = filaments.map((filament) => {
+  const options = filaments.map((filament, index) => {
     const optionId = sliceConfig?.filamentMaterialOptionIds?.[filament.projectFilamentId]
     const option = optionId ? sliceConfig?.materialOptions?.find((entry) => entry.id === optionId) ?? null : null
     const color = sliceConfig?.filamentColors?.[filament.projectFilamentId] ?? filament.color
     return {
       id: filament.projectFilamentId,
+      number: index + 1,
       color,
       label: option?.materialType ?? option?.label ?? filament.label,
       colorName: resolveProjectFilamentColorName({
@@ -82,8 +83,9 @@ export function editorMaterialsFromSliceConfig(sliceConfig: SliceConfigMaterials
 export function editorMaterialsFromProjectFilaments(
   filaments: ReadonlyArray<Pick<BridgeLibraryThreeMfProjectFilament, 'id' | 'filamentName' | 'color' | 'filamentType'>>
 ): EditorMaterials {
-  const options = filaments.map((filament) => ({
+  const options = filaments.map((filament, index) => ({
     id: filament.id,
+    number: index + 1,
     color: filament.color,
     // The project's own type is the label the editor shows (`PLA`, `PETG`), matching what the
     // library host surfaces once a material option is selected.

@@ -5,13 +5,12 @@
  * {@link useFooterActionOverflow}; this component only renders the live row and the hidden
  * measurement copy. Extracted from PrinterCard to keep the card body render-focused.
  */
-import { Fragment, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react'
-import { Box, Button, ButtonGroup, CardActions, CardOverflow, Divider, Dropdown, IconButton, Menu, MenuButton, MenuItem } from '@mui/joy'
+import { Fragment, type MutableRefObject } from 'react'
+import { Box, CardActions, CardOverflow, Divider, Dropdown, IconButton, Menu, MenuButton, MenuItem } from '@mui/joy'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
-import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import type { Printer } from '@printstream/shared'
 import { MoreVertIcon } from './PrinterGlyphs'
-import { withDisabledActionReason } from './printerActionHelpers'
+import { SplitButton } from '../SplitButton'
 import type { PrinterCardFooterAction } from './useFooterActionOverflow'
 
 export interface PrinterCardFooterActionsProps {
@@ -26,9 +25,6 @@ export interface PrinterCardFooterActionsProps {
   canShowPrintAction: boolean
   canPrintFromPrinter: boolean
   printDisabledReason: string | null
-  printAnchorRef: RefObject<HTMLDivElement>
-  printMenuOpen: boolean
-  setPrintMenuOpen: Dispatch<SetStateAction<boolean>>
   onPrint: (printer: Printer) => void
   onPrintLocal: (printer: Printer) => void
 }
@@ -45,9 +41,6 @@ export function PrinterCardFooterActions({
   canShowPrintAction,
   canPrintFromPrinter,
   printDisabledReason,
-  printAnchorRef,
-  printMenuOpen,
-  setPrintMenuOpen,
   onPrint,
   onPrintLocal
 }: PrinterCardFooterActionsProps) {
@@ -121,57 +114,22 @@ export function PrinterCardFooterActions({
           }}
         >
           {canShowPrintAction && (
-            <>
-              {withDisabledActionReason(
-                <ButtonGroup
-                  ref={printAnchorRef}
-                  size="sm"
-                  variant="solid"
-                  color="primary"
-                  aria-label="print"
-                >
-                  <Button disabled={!canPrintFromPrinter} onClick={() => onPrint(printer)} startDecorator={<PrintRoundedIcon />}>Print</Button>
-                  <IconButton
-                    size="sm"
-                    disabled={!canPrintFromPrinter}
-                    aria-controls={printMenuOpen ? `print-menu-${printer.id}` : undefined}
-                    aria-expanded={printMenuOpen ? 'true' : undefined}
-                    aria-haspopup="menu"
-                    aria-label="More print options"
-                    onClick={() => setPrintMenuOpen((value) => !value)}
-                  >
-                    <ArrowDropDownIcon />
-                  </IconButton>
-                </ButtonGroup>,
-                printDisabledReason
-              )}
-              <Menu
-                id={`print-menu-${printer.id}`}
-                open={canPrintFromPrinter && printMenuOpen}
-                onClose={() => setPrintMenuOpen(false)}
-                anchorEl={printAnchorRef.current}
-                placement="bottom-end"
-              >
-                <MenuItem
-                  disabled={!canPrintFromPrinter}
-                  onClick={() => {
-                    setPrintMenuOpen(false)
-                    onPrint(printer)
-                  }}
-                >
-                  Print from library…
-                </MenuItem>
-                <MenuItem
-                  disabled={!canPrintFromPrinter}
-                  onClick={() => {
-                    setPrintMenuOpen(false)
-                    onPrintLocal(printer)
-                  }}
-                >
-                  Print from local file…
-                </MenuItem>
-              </Menu>
-            </>
+            <SplitButton
+              label="Print"
+              onClick={() => onPrint(printer)}
+              ariaLabel="print"
+              menuAriaLabel="More print options"
+              startDecorator={<PrintRoundedIcon />}
+              size="sm"
+              // Both halves gate together: every print path needs the plate clear
+              // and no dispatch in flight. `printDisabledReason` is non-null exactly
+              // when the gate fails (see PrinterCard).
+              disabled={!canPrintFromPrinter}
+              disabledReason={printDisabledReason ?? undefined}
+            >
+              <MenuItem onClick={() => onPrint(printer)}>Print from library…</MenuItem>
+              <MenuItem onClick={() => onPrintLocal(printer)}>Print from local file…</MenuItem>
+            </SplitButton>
           )}
           {visibleFooterActions.map((action) => (
             <Box

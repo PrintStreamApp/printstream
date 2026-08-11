@@ -4,7 +4,7 @@
  * added to the discriminated union so both ends stay aligned.
  */
 import { z } from 'zod'
-import { bridgeDebugCaptureStatusSchema } from './bridges.js'
+import { bridgeBackupStatusSchema, bridgeDebugCaptureStatusSchema } from './bridges.js'
 import { discoveredPrinterSchema, printerStatusSchema, printerSchema } from './printer.js'
 
 export const wsHelloEventSchema = z.object({
@@ -112,6 +112,18 @@ export const wsBridgeDebugCaptureEventSchema = z.object({
 })
 export type WsBridgeDebugCaptureEvent = z.infer<typeof wsBridgeDebugCaptureEventSchema>
 
+/**
+ * Live on-disk backup state for a bridge. Emitted when a backup starts,
+ * finishes, or fails so the settings controls update in real time without
+ * polling — a full first backup can run for minutes.
+ */
+export const wsBridgeBackupEventSchema = z.object({
+  type: z.literal('bridge.backup'),
+  bridgeId: z.string(),
+  status: bridgeBackupStatusSchema
+})
+export type WsBridgeBackupEvent = z.infer<typeof wsBridgeBackupEventSchema>
+
 export const wsErrorEventSchema = z.object({
   type: z.literal('error'),
   message: z.string()
@@ -143,6 +155,7 @@ export const wsEventSchema = z.discriminatedUnion('type', [
   wsResourceChangedEventSchema,
   wsAuthChangedEventSchema,
   wsBridgeDebugCaptureEventSchema,
+  wsBridgeBackupEventSchema,
   wsPluginEventSchema,
   wsErrorEventSchema
 ])

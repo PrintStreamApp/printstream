@@ -79,6 +79,13 @@ const envSchema = z.object({
   // installs, which pair by hand.
   MANAGED_BRIDGE_TOKEN_FILE: z.string().default('/run/provision/managed-bridge-token'),
   BRIDGE_STATE_FILE: z.string().default('/data/bridge-state.json'),
+  // On-disk backups of the bridge's identity + library. Unset disables backups
+  // entirely; the whole point of the directory is to live OUTSIDE the bridge's
+  // own data dir (its own bind mount in Docker) so wiping or recreating the app
+  // cannot take the only copy of the user's files with it.
+  BRIDGE_BACKUP_DIR: z.string().optional(),
+  // Scheduled backup cadence. 0 keeps backups manual-only ("Back up now").
+  BRIDGE_BACKUP_INTERVAL_HOURS: z.coerce.number().nonnegative().default(24),
   BRIDGE_BUILD_REVISION: z.string().trim().min(1).max(120).optional(),
   BRIDGE_SOURCE_FINGERPRINT: z.string().trim().min(1).max(120).optional(),
   // Content hash identifying this build for lockstep updates; bridges update
@@ -116,6 +123,7 @@ export const env = {
   BRIDGE_RELEASE_FINGERPRINT: parsedEnv.BRIDGE_RELEASE_FINGERPRINT ?? bridgeBuildMetadata.releaseFingerprint,
   BRIDGE_LIBRARY_DIR: resolveWorkspacePath(parsedEnv.BRIDGE_LIBRARY_DIR),
   BRIDGE_STATE_FILE: resolveWorkspacePath(parsedEnv.BRIDGE_STATE_FILE),
+  BRIDGE_BACKUP_DIR: parsedEnv.BRIDGE_BACKUP_DIR ? resolveWorkspacePath(parsedEnv.BRIDGE_BACKUP_DIR) : undefined,
   BRIDGE_RELEASES_DIR: resolveWorkspacePath(parsedEnv.BRIDGE_RELEASES_DIR),
   BRIDGE_UPDATE_PUBLIC_KEY: normalizePemEnvValue(parsedEnv.BRIDGE_UPDATE_PUBLIC_KEY) ?? OFFICIAL_BRIDGE_UPDATE_PUBLIC_KEY
 }

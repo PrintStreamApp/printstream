@@ -13,26 +13,54 @@ a model file's bytes are not reconstructible from the database alone.
 
 | Volume | Holds | Backup priority |
 | --- | --- | --- |
-| `printstream-postgres-data` | The entire application database | Critical |
-| `printstream-data` | Library files, plugins, bridge release artifacts, snapshots | Critical (model bytes) |
-| `printstream-bridge-data` | A bundled bridge's identity + library files | Important |
+| `printstream-postgres-data` | The entire application database | Critical — covered by the built-in server backups (below) |
+| `printstream-data` | Library files, plugins, bridge release artifacts, snapshots | Critical (model bytes) — covered by the built-in server backups (below) |
+| `printstream-bridge-data` | A bundled bridge's identity + library files | Important — covered automatically by the built-in bridge backups (below) |
 
-## Backup
+## Server backups (built in — use these first)
 
-**Database (preferred: logical dump).** A `pg_dump` is portable across Postgres
-versions and restores cleanly:
+The app backs itself up: with `BACKUPS_DIR` set (the compose example bind-mounts
+a host `./backups` directory), it takes a whole-install backup on a schedule
+(`BACKUP_INTERVAL_HOURS`, default daily; `0` = manual-only) and from
+Settings → Backups ("Back up now"). Each backup is one directory:
+
+- `db.dump` — a `pg_dump -Fc` of the entire database (all workspaces, printers,
+  jobs, auth, settings, and every plugin's tables), verified with
+  `pg_restore --list` before the backup is declared complete.
+- `data/` — the persistent file tree (library, plugins, job-history snapshots
+  and thumbnails, state files), with regenerable caches excluded. Unchanged
+  files are hardlinked between snapshots, so a daily backup costs only the
+  delta and deleting any snapshot never breaks another.
+- `manifest.json` — app build, Postgres version, and the applied-migration set,
+  which is how restore refuses a backup taken by a newer version.
+
+Retention is automatic (7 daily, then 4 weekly, then 12 monthly); manual and
+pre-restore backups are kept until deleted. A failed scheduled backup raises a
+notification through the configured channels. Same-disk backups do not protect
+against disk loss — sync the backups directory off-host with any tool (the
+artifacts are plain files).
+
+**Restore (from Settings → Backups).** Restoring replaces the whole install
+with the chosen backup. The app first takes a `pre-restore` safety backup, then
+restarts; on the way up — before anything opens the database — it recreates the
+database from the dump, replaces the data tree, runs migrations forward, and
+serves normally. Expect a short outage; the readiness probe stays red until the
+restore completes. A backup taken by a newer app version or a newer Postgres
+major is refused up front.
+
+## Manual backup (disaster path / off-host copies)
+
+The built-in system covers routine protection; these commands remain for
+scripted off-host copies and for disasters where the app itself cannot run.
+
+**Database:**
 
 ```sh
 # Docker Compose
 docker compose exec -T db pg_dump -U postgres -Fc printstream > printstream-$(date +%F).dump
 ```
 
-Schedule it (cron/systemd timer) at a cadence matching your tolerance for data
-loss (daily is a reasonable default), and copy the dump **off the host**. Keep a
-rolling set (e.g. 7 daily + 4 weekly).
-
-**Library / data volume.** Snapshot or archive the data volume alongside each DB
-dump so the model bytes match the database state:
+**Library / data volume:**
 
 ```sh
 docker run --rm -v printstream-data:/data -v "$PWD":/backup alpine \
@@ -42,12 +70,54 @@ docker run --rm -v printstream-data:/data -v "$PWD":/backup alpine \
 **Native build.** Stop the service, then archive the data dir (or use a
 filesystem/volume snapshot). Stopping ensures the embedded Postgres is quiesced;
 a hot copy of a running cluster's data dir is not crash-consistent — prefer
-`pg_dump` against the running instance if you cannot stop it.
+`pg_dump` against the running instance if you cannot stop it. (Current native
+builds ship `pg_dump`/`pg_restore` and use the built-in system; a build from
+before they were bundled reports backups unavailable — update it, or point
+`PG_DUMP_PATH`/`PG_RESTORE_PATH` at an installed PostgreSQL of the same major.)
 
 **Always back up before an upgrade.** Migrations run forward on start and are not
 auto-reverted; a pre-upgrade dump is your rollback.
 
-## Restore (drill this before you need it)
+## Bridge backups (built in)
+
+The bridge backs itself up: with `BRIDGE_BACKUP_DIR` set (the compose examples
+mount a host `./backups` directory), it snapshots its identity
+file (`bridge-state.json`) and every library file on a schedule
+(`BRIDGE_BACKUP_INTERVAL_HOURS`, default daily; `0` = manual-only), and you can
+run one any time from Settings → Bridges → Manage → "Back up now".
+
+- Each snapshot is a complete, restorable directory:
+  `backup-<timestamp>/{manifest.json, bridge-state.json, library/...}`.
+  Unchanged files are hardlinked between snapshots, so a snapshot costs only
+  the delta; deleting any snapshot never breaks another.
+- Retention is automatic: everything kept 7 days, then one per week for
+  4 weeks, then one per month for 12 months.
+- The backup directory is deliberately **outside** the bridge's data volume so
+  wiping/recreating the app cannot take the backups with it. Same-disk backups
+  do not protect against disk loss — point `BRIDGE_BACKUP_DIR` at another disk,
+  or sync the directory off-host with any tool (the snapshots are plain files).
+- Snapshots contain the bridge's runtime token (`bridge-state.json`); treat the
+  backup directory as sensitive (it is created `0700`).
+
+**Restoring a bridge from a snapshot** (dead disk, corrupted volume, or a
+`bridge-state.json.corrupt` error):
+
+```sh
+docker compose stop bridge   # or stop the whole bridge stack / native service
+# Copy the newest snapshot's contents back into the bridge data volume:
+#   bridge-state.json -> /data/bridge-state.json
+#   library/*         -> /data/library/
+docker compose start bridge
+```
+
+The restored bridge re-registers with its preserved `installationId`, and the
+server re-binds it to its existing record — printers, pairing, and library
+intact, no re-pairing needed. Library metadata (names, folders, versions) lives
+in the server database, so restore the newest snapshot even if it is newer than
+a server backup you also restored; files the database doesn't reference are
+simply ignored.
+
+## Manual restore (drill this before you need it)
 
 Docker Compose:
 

@@ -155,7 +155,16 @@ triangle paint maps (`paint_supports` / `paint_seam` codes: `'4'` enforcer, `'8'
 blocker; `paint_color` whole-triangle states map to 1-based filament ids, '4'/'8'/'0C'/
 '1C'...; longer split codes from the source file are preserved verbatim). The api rewrites a painted
 part's `<triangle>` attributes inside the mesh's model entry (root or
-`3D/Objects/*.model`); parts never painted in the session are copied byte-for-byte.
+`3D/Objects/*.model`); parts never painted in the session are copied byte-for-byte —
+unless the save PERMUTES the filament slots (a material reorder or mid-list removal), in which
+case the bake re-keys every entry's `paint_color` codes through the old→new slot map
+(`remapColorPaintInModelXml` in the shared `three-mf/triangle-paint-codec.ts`), because colour
+paint states ARE 1-based filament ids and stale codes silently print painted regions in whatever
+material now holds the old number. The same permutation pass re-keys part/object `extruder` and
+filament-index metadata in `model_settings.config`, tool changes on unedited plates in
+`custom_gcode_per_layer.xml`, the scalar filament-index process keys and layer print sequences in
+`project_settings.config`, and drops a same-count `slice_info.config` (its per-id records and
+group ids describe the old order).
 The editor parses existing paint from the scene-entry XML (`lib/threeMfScene.ts` →
 `geometry.userData.supportPaint`/`seamPaint`), renders each channel as a
 vertex-coloured overlay (blue/red supports, green/orange seam), and authors paint with
@@ -580,18 +589,26 @@ model-studio gcode overlay via the `library.overlays` `PluginSlot` on `run.outpu
   (state predating a printer switch) blocks submission with a named reason instead of reaching
   the slicer at all (`printerProfileIncompatible`/`processProfileIncompatible` in
   `SliceFileModal`).
-- **`flush_volumes_matrix` is `filaments^2 x extruders`, not `filaments^2`.** BambuStudio stores
+- **`flush_volumes_matrix` is `filaments^2 x extruders`, not `filaments^2` — and `flush_multiplier`
+  is one entry per extruder.** BambuStudio stores the matrix as
   one `filaments x filaments` block PER EXTRUDER (`PrintConfig.hpp` `get_flush_volumes_matrix`
   slices block `e`; `BambuStudio.cpp` sizes it `project_filament_count^2 * new_extruder_count`).
   A machine retarget changes the extruder count, so anything that rewrites project settings must
-  re-derive the matrix for the NEW topology — `retargetProjectSettingsToMachine` and
-  `applyFilamentList` both do, via `repairFlushVolumesMatrix`
+  re-derive both for the NEW topology — `retargetProjectSettingsToMachine` and
+  `applyFilamentList` both do, via `repairFlushVolumesMatrix`/`repairFlushMultiplier`
   (`packages/shared/src/flush-volumes-matrix.ts`). Getting this wrong is not a soft failure:
   BambuStudio only repairs an undersized matrix inside its flush-volume recompute block, which it
   SKIPS unless `--filament-colour` was passed, the matrix is absent entirely, the extruder count
   differs from the project's own, or `nozzle_volume_type` mismatches — a retarget satisfies none
   of them, so the short matrix survives and the engine reads the missing block out of bounds:
-  a deterministic SIGSEGV at ~71% ("Detect overhangs for auto-lift", CLI exit 139). An ABSENT
+  a deterministic SIGSEGV at ~71% ("Detect overhangs for auto-lift", CLI exit 139). The multiplier
+  half fails later and louder: `GCode.cpp` validates the matrix against
+  `filament_colour.size()^2 * flush_multiplier.size()` — the heads count comes from
+  `flush_multiplier`, NOT `nozzle_diameter`, and an ABSENT multiplier defaults to ONE entry — so a
+  correct matrix beside a stale multiplier fails every multi-filament slice at "Generating G-code"
+  with "Flush volumes matrix do not match to the correct size!" (exit 156; the check escapes only
+  single-filament projects). The multiplier detection (`isFlushMultiplierInconsistent`) models the
+  engine's escapes exactly so working files are never flagged. An ABSENT
   matrix is safe (absence is one of the recompute triggers), so it is deliberately not flagged.
   Projects already saved with the defect are NOT healed at rest — the shared index parser flags
   them (`needsSettingsRepair` on the 3MF index and the `LibraryFile` DTO), the editor shows the

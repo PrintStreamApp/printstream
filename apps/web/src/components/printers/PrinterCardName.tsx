@@ -1,33 +1,33 @@
 /**
- * The leading identity cluster of a printer card's header: the printer name (a button that opens
- * the detail view when `onOpenDetails` is supplied, plain text otherwise), the model chip with an
- * IP / Wi-Fi tooltip, and the current nozzle-size chip. Extracted from PrinterCard to keep the
- * header row readable.
+ * The printer name leading a printer card's header: a button that opens the detail view when
+ * `onOpenDetails` is supplied, plain text otherwise. It flexes to fill the header row, which is
+ * what pushes every chip that follows it to the trailing edge — but it also reserves a minimum
+ * width, because the name matters more than the trailing chips: when the row runs short the
+ * header's chip clamp in PrinterCard drops chips instead of letting them crush the name to
+ * nothing. Extracted from PrinterCard to keep the header row readable; its counterpart at the
+ * trailing edge is PrinterCardHardwareChips.
  */
 import { type RefObject } from 'react'
-import { Box, Chip, Stack, Tooltip, Typography } from '@mui/joy'
+import { Box, Stack } from '@mui/joy'
 import type { Printer } from '@printstream/shared'
 import { OverflowTooltipText } from '../OverflowTooltipText'
 
-export interface PrinterCardIdentityProps {
+export interface PrinterCardNameProps {
   printer: Printer
   cardRef: RefObject<HTMLElement | null>
-  printerIpAddress: string
-  wifiSignalLabel: string
-  nozzleSizeLabel: string | null
   onOpenDetails?: (printer: Printer) => void
 }
 
-export function PrinterCardIdentity({
-  printer,
-  cardRef,
-  printerIpAddress,
-  wifiSignalLabel,
-  nozzleSizeLabel,
-  onOpenDetails
-}: PrinterCardIdentityProps) {
+export function PrinterCardName({ printer, cardRef, onOpenDetails }: PrinterCardNameProps) {
   return (
-    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0, flex: 1 }}>
+    <Stack
+      direction="row"
+      spacing={1}
+      alignItems="center"
+      // The minWidth is the name's guaranteed floor — chips wrap out of the header's
+      // one-line clamp (see PrinterCard) before the name can shrink past it.
+      sx={{ minWidth: '4.5rem', flex: 1 }}
+    >
       {onOpenDetails ? (
         <Box
           component="button"
@@ -72,23 +72,6 @@ export function PrinterCardIdentity({
         </Box>
       ) : (
         <OverflowTooltipText level="title-md" noWrap sx={{ minWidth: 0 }} text={printer.name} observeRef={cardRef} />
-      )}
-      <Tooltip
-        arrow
-        placement="top"
-        title={(
-          <Stack spacing={0.25} sx={{ py: 0.25 }}>
-            <Typography level="body-xs">IP: {printerIpAddress}</Typography>
-            <Typography level="body-xs">Wi-Fi signal: {wifiSignalLabel}</Typography>
-          </Stack>
-        )}
-      >
-        <Chip size="sm" variant="soft" color="neutral" sx={{ flexShrink: 0 }}>{printer.model}</Chip>
-      </Tooltip>
-      {nozzleSizeLabel && (
-        <Tooltip arrow placement="top" title="Current nozzle size">
-          <Chip size="sm" variant="soft" color="primary" sx={{ flexShrink: 0 }}>{nozzleSizeLabel}</Chip>
-        </Tooltip>
       )}
     </Stack>
   )

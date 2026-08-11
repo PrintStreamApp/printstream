@@ -194,12 +194,14 @@ slicingRouter.delete('/engines/:id', requireRequestPermission(SETTINGS_MANAGE_PE
 })
 
 slicingRouter.get('/jobs', requireRequestPermission(JOBS_VIEW_PERMISSION), async (request, response) => {
-  // Every job the workspace has ever sliced, and the Jobs view pages it CLIENT-side, so the body
-  // grows with history and cannot simply be truncated without blinding that view. Sent through the
-  // gzip sender for the same reason `/profiles` is: it is repetitive JSON (status lines and slice
-  // targets dominate it), and a large one-shot `response.json()` is also what the Vite dev proxy
-  // intermittently stalls on — the failure that first wedged the slice dialog.
-  const jobs = slicingJobs.list(requireRequestWorkspaceId(request))
+  // ACTIVE jobs plus a short just-finished window — the subset the polled consumers (the
+  // slicing toast stack, the Jobs view's in-progress section; web counterpart
+  // `hooks/useSlicingJobs.ts`) actually read — so this frequently-polled body stays bounded as
+  // history grows. The full history is paged with filters by `GET /api/jobs/history`, and a
+  // single job (any age) by `GET /jobs/:id`. Sent through the gzip sender for the same reason
+  // `/profiles` is: repetitive JSON, and a one-shot `response.json()` is what the Vite dev proxy
+  // used to stall on.
+  const jobs = slicingJobs.listActive(requireRequestWorkspaceId(request))
   await sendModelBuffer(request, response, Buffer.from(JSON.stringify({ jobs }), 'utf8'), 'application/json')
 })
 

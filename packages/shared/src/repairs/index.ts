@@ -48,8 +48,10 @@ export function collectSettingsRepairReasons(
   modelSettingsXml?: string | null
 ): ThreeMfSettingsRepairReason[] {
   const reasons: ThreeMfSettingsRepairReason[] = []
-  // Undersized `flush_volumes_matrix`: BambuStudio reads the missing block out of bounds and
-  // segfaults mid-slice (exit 139).
+  // Flush sizing vs machine topology, two engine failures under one reason: an undersized
+  // `flush_volumes_matrix` (BambuStudio reads the missing block out of bounds and segfaults
+  // mid-slice, exit 139), and a `flush_multiplier` whose length the engine's g-code-time size
+  // check rejects (exit 156, "Flush volumes matrix do not match to the correct size!").
   if (inspectProjectFlushVolumesMatrix(projectSettingsJson)?.inconsistent === true) reasons.push('flushMatrix')
   // `filament_self_index` not matching the variant layout it is decoded against.
   if (inspectProjectFilamentSelfIndex(projectSettingsJson)?.inconsistent === true) reasons.push('variantIndex')

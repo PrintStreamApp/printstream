@@ -15,10 +15,14 @@ import { apiFetch } from '../lib/apiClient'
 import { authQueryKeys, resolveAuthScope, useAuthBootstrapQuery } from '../lib/authQuery'
 import { ThemeSettingCard } from '../components/settings/ThemeSettingCard'
 import { resolveSettingsAuthState } from '../lib/settingsAuth'
+import { useRuntimePolicy } from '../lib/runtimePolicy'
+import { ServerBackupsSection } from '../components/settings/ServerBackupsSection'
 import { StaticPluginSlot } from '../plugin/StaticPluginSlot'
 import { LogsPanel } from './LogsView'
 
-type PlatformSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'logs' | 'auth-users' | 'auth-roles'
+type PlatformSubview = 'root' | 'general' | 'authentication' | 'plugins' | 'notifications' | 'backups' | 'logs' | 'auth-users' | 'auth-roles'
+
+const PLATFORM_BACKUPS_DESCRIPTION = 'Automatic whole-install backups of the database and stored files, manual backups, and restore.'
 
 const PLATFORM_NOTIFICATIONS_DESCRIPTION = 'Platform event notifications for operators: new workspaces, support messages, suggestions, and your delivery opt-in.'
 
@@ -70,6 +74,11 @@ export function PlatformView({
   // the platform surface (enabled or not — the panel's empty state guides
   // enabling); deployments with none hide the section entirely.
   const hasPlatformNotificationChannels = useNotificationChannelEntries().availableChannels.length > 0
+  // Cloud only: on self-hosted installs the same section lives in the
+  // workspace Settings (install = workspace there), and showing it twice would
+  // present one system as two.
+  const { selfHosted } = useRuntimePolicy()
+  const showsBackups = canManageSettings && !selfHosted
   const authManagementStatusQuery = useQuery({
     queryKey: authQueryKeys.managementStatus(authScopeKey),
     queryFn: () => apiFetch<AuthManagementStatus>('/api/auth/status'),
@@ -84,7 +93,8 @@ export function PlatformView({
     showsAuthenticationSection,
     canViewAuth,
     canManagePlugins,
-    canViewLogs
+    canViewLogs,
+    showsBackups
   })
 
   return (
@@ -117,6 +127,13 @@ export function PlatformView({
               title="Notifications"
               description={PLATFORM_NOTIFICATIONS_DESCRIPTION}
               onAction={() => navigate('/platform/settings/notifications')}
+            />
+          )}
+          {showsBackups && (
+            <PlatformOverviewCard
+              title="Backups"
+              description={PLATFORM_BACKUPS_DESCRIPTION}
+              onAction={() => navigate('/platform/settings/backups')}
             />
           )}
           {canViewLogs && (
@@ -256,6 +273,17 @@ export function PlatformView({
           <NotificationChannelsPanel description="Configure how platform events reach you. Each channel delivers through its platform-scope configuration, separate from any workspace's setup." />
           <NotificationTemplatesPanel scope="platform" />
         </Stack>
+      ) : visibleSubview === 'backups' ? (
+        <Stack spacing={1.5}>
+          <NestedViewHeader
+            crumbs={[
+              { label: 'Platform settings', onClick: () => navigate('/platform/settings') },
+              { label: 'Backups' }
+            ]}
+            description={PLATFORM_BACKUPS_DESCRIPTION}
+          />
+          <ServerBackupsSection canManage={canManageSettings} />
+        </Stack>
       ) : visibleSubview === 'plugins' ? (
         <Stack spacing={1.5}>
           <NestedViewHeader
@@ -289,6 +317,7 @@ function resolvePlatformSubview(pathname: string): PlatformSubview {
   if (pathname === '/platform/settings/authentication') return 'authentication'
   if (pathname === '/platform/settings/plugins') return 'plugins'
   if (pathname === '/platform/settings/notifications') return 'notifications'
+  if (pathname === '/platform/settings/backups') return 'backups'
   if (pathname === '/platform/settings/logs') return 'logs'
   if (pathname === '/platform/settings/auth/users') return 'auth-users'
   if (pathname === '/platform/settings/auth/roles') return 'auth-roles'
@@ -302,12 +331,14 @@ function resolveVisiblePlatformSubview(
     canViewAuth: boolean
     canManagePlugins: boolean
     canViewLogs: boolean
+    showsBackups: boolean
   }
 ): PlatformSubview {
   if (subview === 'authentication' && !options.showsAuthenticationSection) return 'root'
   if ((subview === 'auth-users' || subview === 'auth-roles') && !options.showsAuthenticationSection) return 'root'
   if ((subview === 'auth-users' || subview === 'auth-roles') && !options.canViewAuth) return 'authentication'
   if (subview === 'plugins' && !options.canManagePlugins) return 'root'
+  if (subview === 'backups' && !options.showsBackups) return 'root'
   if (subview === 'logs' && !options.canViewLogs) return 'root'
   return subview
 }

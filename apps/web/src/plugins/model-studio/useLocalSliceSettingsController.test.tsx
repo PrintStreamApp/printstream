@@ -137,6 +137,27 @@ test('it exposes the target printer model for the bed (separate from the control
   assert.equal(result!.targetPrinterModel, 'X1C')
 })
 
+test('it builds filament choices for the global process dialog (issue #86)', async () => {
+  // Without these the public editor's ProcessSettingsDialog renders filament-index settings as
+  // bare number inputs and the support-interface suggestion prompt can never fire.
+  const client = seededClient()
+  let result: ReturnType<typeof useLocalSliceSettingsController> | null = null
+  // Stable across renders, like the real host's project prop — an inline fakeProject() would
+  // change identity every render, which no real caller does.
+  const project = fakeProject()
+  function Probe() {
+    result = useLocalSliceSettingsController({ project, isMobileViewport: false, onClose: () => undefined })
+    return null
+  }
+  await act(async () => { render(React.createElement(QueryClientProvider, { client }, React.createElement(Probe))) })
+  await act(async () => {})
+  const choices = result!.processFilamentChoices
+  assert.deepEqual(choices.map((choice) => choice.id), [1, 2], 'one choice per project material, position-indexed')
+  assert.deepEqual(choices.map((choice) => choice.filamentType), ['PLA', 'PLA'], 'classification rides along for the recommendation')
+  // The editor targets no single plate, so every non-support material is a model candidate.
+  assert.deepEqual(choices.map((choice) => choice.usedByPlateModels), [true, true])
+})
+
 test('add then remove a material moves the project filament count', async () => {
   const get = await renderController()
   assert.equal(get().projectFilaments.length, 2)

@@ -1,8 +1,9 @@
 /**
- * The conditional status chips that trail the printer name/model in the card header: current
- * stage, pending-dispatch state, HMS error alerts, and the connection-issue warning. Each chip is
- * gated on live status, so the row is empty for an idle, healthy, connected printer. Extracted
- * from PrinterCard to keep the card body render-focused.
+ * The conditional status chips that trail the printer name in the card header: current stage,
+ * pending-dispatch state, HMS error alerts, and the connection-issue warning. Each chip is gated
+ * on live status, so the row is empty for an idle, healthy, connected printer. They render before
+ * the static PrinterCardHardwareChips so live state reads first. Extracted from PrinterCard to
+ * keep the card body render-focused.
  */
 import { Chip, Tooltip } from '@mui/joy'
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'

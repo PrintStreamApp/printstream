@@ -31,8 +31,34 @@ export interface FilamentConfigAuthoringContext {
   targetId: string | null
   /** The library file the project came from, for a project-scoped preset. Null for a local file. */
   sourceFileId: string | null
-  /** Preset id per 1-based project filament id, for the slots the user has resolved. */
+  /**
+   * Preset id per BAKED slot (1..N by desired-list position), for the slots the user has resolved.
+   * Controller records are keyed by SESSION `projectFilamentId`, which drifts from position after a
+   * mid-session remove or reorder — convert them with {@link rekeyByBakedSlot} before passing.
+   */
   profileIdByFilamentId: Record<number, string | undefined>
+}
+
+/**
+ * Re-key a session-id-keyed per-material record into the baked slot space (1..N by list position).
+ *
+ * The slice controller keys per-material state by session `projectFilamentId`, which equals the
+ * baked slot number only while the session list still matches the file. After a mid-session remove
+ * or reorder the two diverge until the save renumbers — and reading a session-keyed record by
+ * position hands one slot another slot's data. Callers convert at this boundary, against the
+ * CURRENT ordered slot list, so the authoring functions below can trust their keys to be baked
+ * slots. Entries whose session id no longer appears in the list (a removed slot) are dropped.
+ */
+export function rekeyByBakedSlot<T>(
+  record: Record<number, T> | undefined,
+  orderedSessionIds: number[]
+): Record<number, T> {
+  if (!record) return {}
+  const rekeyed: Record<number, T> = {}
+  orderedSessionIds.forEach((sessionId, index) => {
+    if (sessionId in record) rekeyed[index + 1] = record[sessionId] as T
+  })
+  return rekeyed
 }
 
 /**
@@ -68,8 +94,8 @@ export function applyRepairedFilamentConfigs(
   return {
     ...edit,
     filaments: edit.filaments.map((filament, index) => {
-      // Slots bake as 1..N, so the position IS the project filament id here — the same rule
-      // `attachResolvedFilamentConfigs` relies on below.
+      // Keys are baked slots (1..N by position) — the caller re-keyed its session-id record via
+      // `rekeyByBakedSlot`, the same contract `attachResolvedFilamentConfigs` relies on below.
       const preset = repaired[index + 1]
       if (!preset) return filament
       return {
@@ -98,8 +124,9 @@ export async function attachResolvedFilamentConfigs(
   if (!resolve || !edit.filaments || edit.filaments.length === 0) return edit
 
   const resolved = await Promise.all(edit.filaments.map(async (filament, index) => {
-    // Slots are 1-based project filament ids, and the desired list bakes as slots 1..N — so the
-    // position IS the id by the time an edit is built (see `buildSessionFilamentIdRemap`).
+    // The desired list bakes as slots 1..N, and the context keys on those baked slots — the
+    // caller converted its session-id records via `rekeyByBakedSlot`, so a session that removed
+    // or reordered materials still resolves each slot's own preset.
     const profileId = context.profileIdByFilamentId[index + 1]
     // Already carries the user's repaired config — do not overwrite it with a fresh resolve.
     if (filament.config) return filament

@@ -30,6 +30,7 @@ import type {
 } from '@printstream/shared'
 import { isProjectNewerThanSlicer, isProjectSlicingPresetId, slicingPresetProvenance } from '@printstream/shared'
 import {
+  buildProcessFilamentChoices,
   buildProjectSlicingPresets,
   buildRedundantProjectPresetCandidates,
   buildSliceDialogProjectFilaments,
@@ -40,10 +41,11 @@ import {
   isVisibleProcessProfile,
   mergeProjectSlicingPresets
 } from '../../lib/slicingPresetMatching'
-import { remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
+import { permuteFilamentIndexOverrides, permutePerObjectFilamentIndexOverrides, remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
 import { useDeepStableValue } from '../../hooks/useDeepStableValue'
 import type { ProcessConfigResolver } from '../../components/ProcessSettingsDialog'
 import type { FilamentConfigResolver } from '../../components/library/FilamentSettingsDialog'
+import type { SettingFilamentChoice } from '../../components/settings/SettingValueField'
 import type { SliceConfigSnapshot, SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { useMachineTarget } from '../../components/library/useMachineTarget'
 import { useMaterialSlots } from '../../components/library/useMaterialSlots'
@@ -92,6 +94,13 @@ export interface LocalSliceSettings {
   resolveFilamentConfig: FilamentConfigResolver
   /** Whether the global process settings dialog is open (the controller owns the toggle state). */
   processSettingsDialogOpen: boolean
+  /**
+   * Material choices for the global process dialog's filament-index settings ("Support/raft
+   * base" etc.) and its support-interface suggestion prompt — the same shared builder the
+   * workspace host feeds its dialog from. Without them those settings render as bare number
+   * inputs and the suggestion never fires.
+   */
+  processFilamentChoices: SettingFilamentChoice[]
   /**
    * The INSTALLED filament catalogue (built-ins + the user's browser-stored presets), for the save's
    * machine retarget to pick each slot's rebind from. Project-embedded presets are deliberately not
@@ -309,6 +318,11 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition))
     setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition))
   }, [setProcessSettingOverrides])
+  // A reorder renumbers every position at once — same duty, permutation form.
+  const handleFilamentIndexPermute = useCallback((remap: ReadonlyMap<number, number>) => {
+    setProcessSettingOverrides((current) => permuteFilamentIndexOverrides(current, remap))
+    setObjectProcessOverrides((current) => permutePerObjectFilamentIndexOverrides(current, remap))
+  }, [setProcessSettingOverrides])
   // Declared BEFORE the material core: it feeds the core's nozzle-validity clamp.
   const sliceToolheads = useMemo(() => buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, undefined, selectedPrinterModel), [nozzleDiameter, nozzleFlow, selectedPrinterModel])
   const {
@@ -318,7 +332,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     filamentToolheadIds, setFilamentToolheadIds,
     filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentSettingOverridesById, setFilamentSettingOverridesById,
-    handleAddFilament, handleRemoveFilament, handleMaterialOptionChange,
+    handleAddFilament, handleRemoveFilament, handleReorderFilament, handleMaterialOptionChange,
     materialEditListenerRef,
     desiredFilaments, filamentMappingResult,
     onProjectSaved: handleProjectSaved,
@@ -333,12 +347,22 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     selectedMachineProfile,
     toolheadOptions: sliceToolheads,
     // The editor shows every project material (no per-plate narrowing) — see the modal's rule.
-    onFilamentRemoved: handleFilamentIndexRemap
+    onFilamentRemoved: handleFilamentIndexRemap,
+    onFilamentReordered: handleFilamentIndexPermute
   })
   const materialToolheadOptions = useMemo(() => {
     const toolheads = buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, undefined, selectedPrinterModel)
     return toolheads.length > 1 ? toolheads : []
   }, [nozzleDiameter, nozzleFlow, selectedPrinterModel])
+
+  // Choices for the global process dialog's filament-index settings + suggestion prompt.
+  // Plate 0 = all-plates: the editor targets no single plate, exactly as the library editor
+  // host does (SliceFileModal in editor mode keeps plateMode 'all'), so every project
+  // material counts as a model candidate for the recommendation's homogeneity gate.
+  const processFilamentChoices = useMemo(
+    () => buildProcessFilamentChoices({ projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, bakedIndex, selectedPlate: 0 }),
+    [projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, bakedIndex]
+  )
 
   const retargetTarget: SlicingManualProfileTarget | null = (printerProfileId.length > 0 && processProfileId.length > 0 && Boolean(targetPrinterModel))
     ? {
@@ -493,6 +517,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     retargetTarget,
     onAddFilament: handleAddFilament,
     onRemoveFilament: handleRemoveFilament,
+    onReorderFilament: handleReorderFilament,
     configSnapshot,
     restoreConfig,
     materialEditListenerRef,
@@ -521,6 +546,7 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     resolveFilamentConfig,
     installedFilamentPresets: installedFilamentProfiles,
     processSettingsDialogOpen,
+    processFilamentChoices,
     filamentSettingsFilamentId,
     setFilamentSettingsFilamentId,
     setFilamentSettingOverridesById,

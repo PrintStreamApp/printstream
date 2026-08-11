@@ -53,7 +53,7 @@ import {
   resolveQueueableLibraryFile,
   toQueueItemDto,
   toQueueItemPlacement,
-  withUsedGramsFrom,
+  withPlateSliceDataFrom,
   type QueueItemRow
 } from './store.js'
 
@@ -84,7 +84,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     const options = queuePrintOptionsSchema.parse(parsed.data.options ?? {})
     // Explicit required-material overrides (general "any printer" mapping) win over what the plate reports
     // for identity, but per-filament grams always come from the slice (the override omits them).
-    const requiredFilaments = withUsedGramsFrom(parsed.data.requiredFilaments ?? plate.requiredFilaments, plate.requiredFilaments)
+    const requiredFilaments = withPlateSliceDataFrom(parsed.data.requiredFilaments ?? plate.requiredFilaments, plate.requiredFilaments)
     const sortKey = await nextSortKey(prisma)
 
     // An order-linked item maps 1:1 to a single order print, so it is always a single
@@ -176,7 +176,7 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
     // plate (when the plate changed) or the prior stored row, matched by filament id.
     const gramsSource = inspectedRequiredFilaments ?? parseRequiredFilaments(existing.requiredFilamentsJson)
     const requiredFilamentsJson = parsed.data.requiredFilaments !== undefined
-      ? JSON.stringify(withUsedGramsFrom(parsed.data.requiredFilaments, gramsSource))
+      ? JSON.stringify(withPlateSliceDataFrom(parsed.data.requiredFilaments, gramsSource))
       : inspectedRequiredFilaments !== undefined
         ? JSON.stringify(inspectedRequiredFilaments)
         : undefined

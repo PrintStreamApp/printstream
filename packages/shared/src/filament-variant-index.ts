@@ -110,6 +110,34 @@ export function repairFilamentSelfIndex(record: Record<string, unknown>): string
   return null
 }
 
+/**
+ * Recompute `filament_self_index` for the CURRENT filament order, regardless of whether the stored
+ * index still has the right length.
+ *
+ * Used by `applyFilamentList` after it permutes the per-filament arrays: uniform variant blocks
+ * make the index order-invariant (`[1,1,2,2]` describes any order of two same-width materials),
+ * but blocks are NOT uniform — a moved TPU slot changes the widths and the stored index silently
+ * misdescribes the layout while keeping the length that {@link repairFilamentSelfIndex}'s
+ * length-only check passes. Same derivation and same refusal contract as the repair: null when the
+ * project has no variant topology or the rebuilt layout disagrees with the stored row count,
+ * because a plausible-looking wrong index is exactly as fatal as the defect being fixed.
+ */
+export function rebuildFilamentSelfIndex(record: Record<string, unknown>): string[] | null {
+  if (!Array.isArray(record.extruder_variant_list) || record.extruder_variant_list.length === 0) return null
+  if (!Array.isArray(record.filament_self_index)) return null
+  const filamentTypes = Array.isArray(record.filament_type)
+    ? record.filament_type.map((entry) => String(entry))
+    : []
+  const printerVariants = Array.isArray(record.printer_extruder_variant)
+    ? record.printer_extruder_variant.map((entry) => String(entry))
+    : []
+  if (filamentTypes.length === 0 || printerVariants.length === 0) return null
+  const rebuilt = buildFilamentVariantRows(printerVariants, filamentTypes)
+  const variants = Array.isArray(record.filament_extruder_variant) ? record.filament_extruder_variant : null
+  if (variants && rebuilt.variants.length !== variants.length) return null
+  return rebuilt.selfIndex
+}
+
 /** What a project's stored variant index looks like next to what its topology requires. */
 export interface FilamentSelfIndexInspection {
   /** Variant rows the project declares (`filament_extruder_variant`). */

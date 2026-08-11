@@ -26,7 +26,7 @@ import { PluginSlot } from '../../plugin/PluginSlot'
 import { toast } from '../../lib/toast'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
 import { buildWorkspacePath, parseWorkspacePathname } from '../../lib/workspaceRoute'
-import { useSlicingJobs } from '../../hooks/useSlicingJobs'
+import { useSlicingJob } from '../../hooks/useSlicingJob'
 import {
   formatSlicingProgress,
   getLatestSlicingProgressFrame,
@@ -64,13 +64,12 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
     [runsQuery.data, initialRun]
   )
 
-  const slicingJobsQuery = useSlicingJobs({ suppressGlobalErrorToast: true })
+  // The job's own record, not the list: the list carries only active/recent jobs now, and this
+  // dialog can be reopened on a run whose slice finished long ago.
+  const slicingJobQuery = useSlicingJob(run.slicingJobId)
   // This dialog shows the slice inline, so its redundant global toast is suppressed while open.
   useEffect(() => (run.slicingJobId ? suppressJobToast('slicing', run.slicingJobId) : undefined), [run.slicingJobId])
-  const job = useMemo(
-    () => (run.slicingJobId ? slicingJobsQuery.data?.jobs.find((entry) => entry.id === run.slicingJobId) ?? null : null),
-    [run.slicingJobId, slicingJobsQuery.data?.jobs]
-  )
+  const job = slicingJobQuery.data?.job ?? null
 
   // Every exit lands on the Calibration page so the run is visible where it is managed.
   const handleClose = useCallback(() => {
@@ -111,7 +110,7 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
                   : 'Preparing your calibration print. This stays here until it is ready to print.'}
             </Typography>
 
-            {slicingJobsQuery.isLoading && !job && isSlicing && (
+            {slicingJobQuery.isLoading && !job && isSlicing && (
               <Stack direction="row" spacing={1} alignItems="center">
                 <CircularProgress size="sm" />
                 <Typography level="body-sm" textColor="text.secondary">Loading slice progress…</Typography>

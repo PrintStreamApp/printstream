@@ -162,6 +162,86 @@ test('retarget preserves an already correctly sized flush_volumes_matrix', () =>
   assert.deepEqual(out.flush_volumes_matrix, ['0', '632', '136', '0', '0', '632', '136', '0'])
 })
 
+test('retarget to a dual-nozzle machine resizes flush_multiplier for the new extruder count', () => {
+  // Regression (prod, exit 156): the engine validates the matrix against `flush_multiplier.size()`,
+  // so a repaired 2-block matrix beside the source machine's one-entry multiplier fails every
+  // multi-filament slice at "Generating G-code" with "Flush volumes matrix do not match to the
+  // correct size!". A/B-reproduced against BambuStudio 2.7.1.62.
+  const project = {
+    ...a1Project,
+    filament_colour: ['#000000', '#FFFFFF'],
+    flush_volumes_matrix: ['0', '632', '136', '0'],
+    flush_multiplier: ['1']
+  }
+  const out = retargetProjectSettingsToMachine(project, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(out.flush_multiplier, ['1', '1'])
+  // A legacy bare-scalar multiplier (old single-nozzle saves) resizes the same way.
+  const scalar = retargetProjectSettingsToMachine({ ...project, flush_multiplier: '1' }, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(scalar.flush_multiplier, ['1', '1'])
+  // An absent multiplier is authored outright — the engine's default is one entry, which fails the
+  // same check on a two-extruder machine.
+  const absent = retargetProjectSettingsToMachine({ ...project, flush_multiplier: undefined }, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(absent.flush_multiplier, ['1', '1'])
+})
+
+test('retarget resizes flush_multiplier_fast only when the project carries it', () => {
+  const base = {
+    ...a1Project,
+    filament_colour: ['#000000', '#FFFFFF'],
+    flush_volumes_matrix: ['0', '632', '136', '0'],
+    flush_multiplier: ['1']
+  }
+  const withFast = retargetProjectSettingsToMachine({ ...base, flush_multiplier_fast: ['1.2'] }, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.deepEqual(withFast.flush_multiplier_fast, ['1.2', '1.2'])
+  // Genuine Bambu saves routinely omit the fast multiplier; absence is safe (only fast purge mode
+  // reads it), so the retarget must not invent the key.
+  const withoutFast = retargetProjectSettingsToMachine(base, h2dMachine, {
+    printerSettingsId: 'Bambu Lab H2D 0.4 nozzle',
+    printerModel: 'Bambu Lab H2D'
+  })
+  assert.equal(withoutFast.flush_multiplier_fast, undefined)
+})
+
+test('retarget to a single-nozzle machine truncates a dual-length flush_multiplier', () => {
+  // A resolved single-extruder machine (only the fields that matter here).
+  const a1Machine = {
+    name: 'Bambu Lab A1 0.4 nozzle',
+    type: 'machine',
+    printer_model: 'Bambu Lab A1',
+    printable_area: ['0x0', '256x0', '256x256', '0x256'],
+    nozzle_diameter: ['0.4'],
+    physical_extruder_map: ['0'],
+    extruder_variant_list: ['Direct Drive Standard']
+  }
+  const dualProject = {
+    ...a1Project,
+    printer_settings_id: 'Bambu Lab H2D 0.4 nozzle',
+    printer_model: 'Bambu Lab H2D',
+    nozzle_diameter: ['0.4', '0.4'],
+    filament_colour: ['#000000', '#FFFFFF'],
+    flush_volumes_matrix: ['0', '632', '136', '0', '0', '632', '136', '0'],
+    flush_multiplier: ['1', '0.9']
+  }
+  const out = retargetProjectSettingsToMachine(dualProject, a1Machine, {
+    printerSettingsId: 'Bambu Lab A1 0.4 nozzle',
+    printerModel: 'Bambu Lab A1'
+  })
+  assert.deepEqual(out.flush_volumes_matrix, ['0', '632', '136', '0'])
+  assert.deepEqual(out.flush_multiplier, ['1'])
+})
+
 // `filament_nozzle_map` is indexed by FILAMENT, not by extruder. Copying `physical_extruder_map`
 // into it produced a wrong-LENGTH map whenever the filament count differed from the extruder count,
 // and BambuStudio then read a filament's extruder past the end of that vector — the documented

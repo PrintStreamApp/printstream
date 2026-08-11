@@ -13,7 +13,7 @@
  * through the controller.
  */
 import type React from 'react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Alert, Box, Button, ButtonGroup, Chip, CircularProgress, Dropdown, FormControl, FormLabel, IconButton, Input,
   List, ListItem, Menu, MenuButton, Option, Select, Sheet, Stack, Switch, Tooltip, Typography
@@ -22,6 +22,7 @@ import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import InventoryRoundedIcon from '@mui/icons-material/Inventory2Rounded'
 import { Printer3dRoundedIcon } from '../Printer3dRoundedIcon'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
+import DragIndicatorRoundedIcon from '@mui/icons-material/DragIndicatorRounded'
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import RestoreRoundedIcon from '@mui/icons-material/RestoreRounded'
@@ -73,6 +74,7 @@ import type { ProcessConfigResolver } from '../ProcessSettingsDialog'
 import type { FilamentConfigResolver } from './FilamentSettingsDialog'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
+import { useListReorderDrag } from '../../hooks/useListReorderDrag'
 
 /**
  * Stateful bridge from `SliceFileModal` to the shared `SliceSettingsPanel`.
@@ -268,6 +270,13 @@ export interface SliceSettingsController {
   onAddFilament: (choice: AddedMaterialChoice) => void
   onRemoveFilament: (projectFilamentId: number) => void
   /**
+   * Drag-reorder a material to an insertion gap (0..N, between-rows semantics — same conversion
+   * as the plate strip's `movePlate`). Slot NUMBERS are positional identity in the saved 3MF, so
+   * the reorder is persisted by the next save renumbering the slots; session ids stay stable
+   * meanwhile and row numbers are derived from position. Editor mode only, like add/remove.
+   */
+  onReorderFilament: (fromIndex: number, insertAt: number) => void
+  /**
    * Whether a material is assigned to any object/part (the 3D editor supplies live usage).
    * When it returns true the material can't be removed — BambuStudio parity. Absent → not gated.
    */
@@ -416,7 +425,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, embedded
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
     filamentSettingOverridesById, openFilamentSettings,
     handleMaterialOptionChange,
-    onAddFilament, onRemoveFilament, filamentInUse, filamentSupportOnly
+    onAddFilament, onRemoveFilament, onReorderFilament, filamentInUse, filamentSupportOnly
   } = controller
   const showPlateSection = mode === 'simple'
   // The inline Objects + per-plate G-code sections are simple-mode only: the 3D editor
@@ -424,6 +433,13 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, embedded
   const showInlineObjects = mode === 'simple'
   // Add/remove materials is an editing affordance (Bambu-style) — only in the editor.
   const showMaterialEditing = mode === 'editor'
+  // Drag-reorder for the material rows (editor only, like add/remove). Items are POSITIONS in the
+  // ordered list — slot order is positional identity in the saved 3MF, so the drop hands the
+  // controller a (fromIndex, insertion gap) pair and the save renumbers the slots. Same pointer
+  // state machine as the editor's plate strip, so touch gets hold-to-drag here too.
+  const materialRowIndices = useMemo(() => projectFilaments.map((_unused, index) => index), [projectFilaments])
+  const materialDrag = useListReorderDrag({ vertical: true, itemIndices: materialRowIndices, onDrop: onReorderFilament })
+  const showMaterialReorder = showMaterialEditing && projectFilaments.length > 1
   // What the printer has loaded, for the Add button's menu. Unlike a material ROW there is no slot
   // to prioritize by nozzle yet, so the list is the plain grouped one; empty for a manual-profile
   // target, which is exactly when Add falls back to opening the dialog directly.
@@ -814,7 +830,7 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, embedded
             ))}
           </StickySectionHeader>
           <Sheet variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
-            <Stack spacing={0.75}>
+            <Stack spacing={0.75} ref={materialDrag.setContainerElement} sx={{ position: 'relative' }}>
               {projectFilaments.length === 0 && showMaterialEditing && (
                 <Typography level="body-sm" textColor="text.tertiary">No materials yet. Add one to choose a material.</Typography>
               )}
@@ -840,7 +856,43 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, embedded
                   ? prioritizeLoadedMaterialOptionsForFilament(loadedMaterialOptions, filament.nozzleId ?? null)
                   : []
                 return (
-                  <Stack key={filament.projectFilamentId} direction="row" alignItems="center" sx={{ flexWrap: 'wrap', columnGap: 0.75, rowGap: 0.5 }}>
+                  <Stack
+                    key={filament.projectFilamentId}
+                    ref={(element: HTMLElement | null) => materialDrag.setTileElement(filamentIndex, element)}
+                    direction="row"
+                    alignItems="center"
+                    sx={{
+                      flexWrap: 'wrap',
+                      columnGap: 0.75,
+                      rowGap: 0.5,
+                      // Reorder feedback matches the plate strip: dim the row being dragged; the
+                      // landing position is the caret drawn in the target gap.
+                      ...(materialDrag.drag?.itemIndex === filamentIndex ? { opacity: 0.45 } : {})
+                    }}
+                  >
+                    {showMaterialReorder && (
+                      // Dedicated handle rather than whole-row drag: unlike a plate tile, the row
+                      // is made of interactive controls, and arming a drag from a button press
+                      // would eat their clicks. Hold-to-drag on touch, per the shared hook.
+                      <Box
+                        onPointerDown={(event) => materialDrag.handleTilePointerDown(filamentIndex, event)}
+                        onClick={(event) => { if (materialDrag.shouldSuppressClick()) event.stopPropagation() }}
+                        aria-label={`Reorder material ${filamentIndex + 1}`}
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          flexShrink: 0,
+                          cursor: 'grab',
+                          color: 'text.tertiary',
+                          // The handle is a drag surface: without this, touch presses pick native
+                          // scrolling before the hold timer can arm the drag.
+                          touchAction: 'none',
+                          '&:hover': { color: 'text.secondary' }
+                        }}
+                      >
+                        <DragIndicatorRoundedIcon fontSize="small" />
+                      </Box>
+                    )}
                     <MaterialSwatchButton
                       filamentIndex={filamentIndex}
                       presetName={presetName}
@@ -962,6 +1014,25 @@ export function SliceSettingsPanel({ controller, mode, onManagePresets, embedded
                   </Stack>
                 )
               })}
+              {/* Insertion caret: drawn in the gap the drop would land in (plate-strip pattern).
+                  Rendered last with zeroed margins so the Stack's sibling spacing never shifts a
+                  row; positioned in the Stack's content coordinates. */}
+              {materialDrag.drag && materialDrag.drag.caretOffset !== null && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    m: '0 !important',
+                    pointerEvents: 'none',
+                    zIndex: 1,
+                    borderRadius: '2px',
+                    bgcolor: 'primary.400',
+                    left: 4,
+                    right: 4,
+                    height: 3,
+                    top: materialDrag.drag.caretOffset - 1.5
+                  }}
+                />
+              )}
             </Stack>
           </Sheet>
       </>)}

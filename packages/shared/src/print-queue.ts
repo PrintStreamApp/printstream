@@ -1,14 +1,29 @@
 /**
  * Print-queue contracts shared by the API and web client (the `print-queue`
- * plugin): the queued-item DTO and its request bodies, plus a **pure, reusable
- * matcher** that decides which printers a queued item can run on.
+ * plugin), plus the **pure material matcher** every print surface consolidates
+ * on: the queue's dispatch/eligibility paths AND the print dialogs' auto
+ * slot-selection (library `PrintModal`, printer-storage `StoragePrintModal`,
+ * `QueueStartDialog`) all place a plate's required filaments onto a printer's
+ * loaded slots through `evaluateQueueMatch` — no per-dialog heuristics.
  *
  * The matcher lives here on purpose so both sides use one implementation: the API
  * computes the AMS tray mapping at dispatch time, while the web recomputes
  * per-printer eligibility live as printer status (loaded AMS material) streams in —
- * no extra round-trips. Matching is type + exact-color against the printer's loaded
- * AMS slots; an opt-in "type-only" fallback ignores color. v1 is manual-dispatch
- * only (no autonomous auto-advance).
+ * no extra round-trips. Matching rules:
+ *
+ *   - An exact match is filament type + colour (an opt-in "type-only" fallback
+ *     ignores colour). Only exact matches should ever be surfaced as automatic
+ *     selections; near matches stay the user's call.
+ *   - A nozzle binding is a HARD constraint: a filament bound to one extruder is
+ *     never matched to a slot feeding the other, even when it is the only
+ *     colour match. Slots with no known nozzle (single-nozzle machines, Filament
+ *     Track Switch units, unknown wiring) remain eligible for every filament.
+ *   - Ties break toward genuine preset-identity matches first, then the slot
+ *     with the least filament that still holds ENOUGH for the job (so partial
+ *     spools are consumed before fresh ones, without picking a remnant that
+ *     would run out mid-print); AMS auto-refill pooling suppresses that
+ *     drain-the-smallest preference because the printer chains matching trays
+ *     itself. See `pickSlot`.
  */
 import { z } from 'zod'
 import {
@@ -17,22 +32,50 @@ import {
   type PrinterModel,
   type PrinterStatus
 } from './printer.js'
-import { amsTrayIndex } from './ams-tray-index.js'
+import { amsTrayIndex, isPhysicalAmsTrayIndex } from './ams-tray-index.js'
 import { isPrinterModelCompatible } from './print-compatibility.js'
+import { normalizeHexColor } from './filament-color.js'
+import { hasBambuRfidTag, isGenuineBambuTray } from './filament-identity.js'
+import { filamentPresetNameFromId } from './bambu-filament-presets.js'
+import { filamentPresetFamilyName } from './filament-rebind.js'
+import { estimateRemainGrams, LOW_FILAMENT_HEADROOM_GRAMS, traysMatchForAutoRefill } from './slot-remaining.js'
+
+export { normalizeHexColor }
 
 // ---------------------------------------------------------------------------
 // Pure matcher (used by both the API dispatch path and the web eligibility view)
 // ---------------------------------------------------------------------------
 
-/** A filament a plate requires: 1-based project filament id, type, and color. */
+/**
+ * A filament a plate requires: 1-based project filament id, type, and color.
+ *
+ * `filamentType` is the DERIVED display type (`PLA-S`, not a support preset's
+ * raw `PLA`) — a producer building requirements from preset data must derive
+ * through `resolveDisplayFilamentType` first, never hand the matcher a raw
+ * base type. Do NOT assume the two sides then agree textually: the declared
+ * type of the SAME material drifts across Studio releases (Bambu PETG HF is
+ * "PETG" in 2.7.1.57 and "PETG-HF" in 2.7.1.62), so the matcher's type gate
+ * also accepts equal genuine preset identity (see `pickSlot`).
+ */
 export interface QueueRequiredFilament {
   id: number
   filamentType: string | null
   color: string | null
-  /** Optional brand/preset name. Display only — the matcher routes on type + color. */
+  /**
+   * Optional brand/preset name ("Bambu PLA Basic @BBL X1C"). Never a
+   * constraint — used for display and, when a loaded slot's genuine-Bambu
+   * identity names the same preset, as a tie-break preference among exact
+   * matches.
+   */
   filamentName?: string | null
-  /** Grams this filament needs on the plate (from the slice), for the "how much is needed" / sufficiency UI. */
+  /** Grams this filament needs on the plate (from the slice); also guards the lowest-remaining tie-break. */
   usedGrams?: number | null
+  /**
+   * Extruder this filament is bound to (0 = right/main, 1 = left/deputy);
+   * null/absent = unconstrained. A binding is HARD for matching: the matcher
+   * leaves the filament unmatched rather than crossing it.
+   */
+  nozzleId?: number | null
 }
 
 /** A filament currently loaded on a printer, flattened across AMS units + external spools. */
@@ -43,11 +86,34 @@ export interface QueueLoadedSlot {
   color: string | null
   remainPercent: number | null
   occupied: boolean
+  /**
+   * Extruder this slot feeds (0 = right/main, 1 = left/deputy); null = reachable
+   * by any extruder (single-nozzle machine, Filament Track Switch unit, unknown).
+   */
+  nozzleId: number | null
+  /** RFID tray uuid; the percent-based remaining estimate is only trusted when this reads as a real tag. */
+  trayUuid?: string | null
+  /** Bambu preset id (`GFA00`); feeds the genuine-identity tie-break and auto-refill pooling. */
+  trayInfoIdx?: string | null
+  trayName?: string | null
+  /** Full tray palette, for auto-refill pooling. */
+  colors?: readonly string[]
+  /**
+   * Tracked-spool remaining grams (filament-manager), when the caller knows it.
+   * Takes precedence over the percent estimate — mirrors `SlotOptionLabel`.
+   */
+  remainingGrams?: number | null
 }
 
 export interface QueueMatchOptions {
   /** When true, a required filament matches a slot on type alone, ignoring color. */
   allowTypeOnlyMatch: boolean
+  /**
+   * The printer's AMS auto-refill setting. When on, trays that pool for refill
+   * are graded on their combined remaining and skip the drain-the-smallest
+   * preference — the printer chains them itself.
+   */
+  autoRefillEnabled?: boolean
 }
 
 export interface QueueMatchResult {
@@ -59,26 +125,26 @@ export interface QueueMatchResult {
   missing: QueueRequiredFilament[]
 }
 
-/** Normalize a color to `#RRGGBB` (uppercase), or null when unparseable. */
-export function normalizeHexColor(value: string | null | undefined): string | null {
-  if (!value) return null
-  const trimmed = value.trim()
-  const match = /^#?([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(trimmed)
-  if (!match) return null
-  return `#${match[1]!.toUpperCase()}`
-}
-
 /** Flatten a printer's AMS units and external spools into a list of loaded slots. */
 export function loadedSlotsFromStatus(status: PrinterStatus): QueueLoadedSlot[] {
   const slots: QueueLoadedSlot[] = []
   for (const unit of status.ams) {
+    // A unit behind a Filament Track Switch is reachable by BOTH extruders; the
+    // parser already leaves its nozzleId null (see `amsUnitSchema.switchInput`),
+    // but re-derive here so a stale binding can never filter such a unit out.
+    const unitNozzleId = unit.switchInput != null ? null : unit.nozzleId
     for (const slot of unit.slots) {
       slots.push({
         trayIndex: amsTrayIndex(unit.type, unit.unitId, slot.slot),
         filamentType: slot.filamentType,
         color: slot.color,
+        colors: slot.colors,
         remainPercent: slot.remainPercent,
-        occupied: slot.occupied ?? slot.filamentType != null
+        occupied: slot.occupied ?? slot.filamentType != null,
+        nozzleId: unitNozzleId,
+        trayUuid: slot.trayUuid,
+        trayInfoIdx: slot.trayInfoIdx,
+        trayName: slot.trayName
       })
     }
   }
@@ -87,17 +153,33 @@ export function loadedSlotsFromStatus(status: PrinterStatus): QueueLoadedSlot[] 
       trayIndex: spool.amsId,
       filamentType: spool.filamentType,
       color: spool.color,
+      colors: spool.colors,
       remainPercent: spool.remainPercent,
-      occupied: spool.filamentType != null
+      occupied: spool.filamentType != null,
+      nozzleId: spool.nozzleId,
+      trayUuid: spool.trayUuid,
+      trayInfoIdx: spool.trayInfoIdx,
+      trayName: spool.trayName
     })
   }
   return slots
 }
 
+/**
+ * Canonical form for display-type comparison: the `-BASIC` suffix is dropped because it IS the
+ * plain grade — Studio 2.7.1.62 writes "PLA-BASIC" into a sliced file where the AMS wire (and
+ * older Studio catalogues) say "PLA" for the same material. Only BASIC collapses: HF, CF, MATTE
+ * and friends are real material/flow differences and must never equal the plain type by text
+ * (a Bambu-branded variant still matches its own spools through the identity leg in `pickSlot`).
+ */
+function canonicalDisplayType(type: string): string {
+  return type.trim().toLowerCase().replace(/-basic$/, '')
+}
+
 function typeMatches(required: string | null, slot: string | null): boolean {
   if (required == null) return true
   if (slot == null) return false
-  return required.trim().toLowerCase() === slot.trim().toLowerCase()
+  return canonicalDisplayType(required) === canonicalDisplayType(slot)
 }
 
 function colorSatisfied(required: string | null, slot: string | null): boolean {
@@ -108,19 +190,134 @@ function colorSatisfied(required: string | null, slot: string | null): boolean {
   return wanted === have
 }
 
-/** Pick the best loaded slot for a required filament, or null when none matches. */
+/**
+ * A nozzle binding is HARD: never match across it, even when the mismatched
+ * slot is the only colour match — an empty row is the correct outcome there.
+ * A slot with no known nozzle stays eligible for every filament (mirrors the
+ * web's `filterTrayGroupsForFilament`).
+ */
+function nozzleCompatible(requiredNozzleId: number | null, slotNozzleId: number | null): boolean {
+  if (requiredNozzleId == null || slotNozzleId == null) return true
+  return requiredNozzleId === slotNozzleId
+}
+
+/**
+ * Grams known to remain in a slot: the tracked spool's own figure first
+ * (filament-manager covers non-RFID custom spools); otherwise the percent
+ * estimate, trusted only for RFID (Bambu-tagged) trays. Untracked third-party
+ * filament reports null — ungradeable, not zero. Same precedence as the
+ * remaining label in the web's `SlotOptionLabel`.
+ */
+function knownSlotRemainGrams(slot: QueueLoadedSlot): number | null {
+  if (slot.remainingGrams != null) return slot.remainingGrams
+  if (hasBambuRfidTag(slot.trayUuid)) return estimateRemainGrams(slot.remainPercent)
+  return null
+}
+
+/** The genuine-Bambu preset family a slot's identity declares, or null. The genuine gate is `isGenuineBambuTray` — never bypassed. */
+function slotGenuinePresetFamily(slot: QueueLoadedSlot): string | null {
+  if (!isGenuineBambuTray(slot)) return null
+  const presetName = filamentPresetNameFromId(slot.trayInfoIdx?.trim() ?? '')
+  return presetName ? filamentPresetFamilyName(presetName).toLowerCase() : null
+}
+
+interface GradedSlotCandidate {
+  slot: QueueLoadedSlot
+  /** 0 = the slot's genuine identity names the required preset; 1 = plain type+colour match. */
+  identityRank: number
+  /** 0 = holds enough for the job (with headroom), 1 = ungradeable, 2 = known-insufficient. */
+  sufficiencyRank: number
+  /** Known remaining grams (combined across the refill pool when pooled); null when ungradeable. */
+  remainGrams: number | null
+  /** Pooled by AMS auto-refill — the printer chains these trays itself. */
+  pooled: boolean
+}
+
+function gradeCandidate(
+  required: QueueRequiredFilament,
+  slot: QueueLoadedSlot,
+  compatible: QueueLoadedSlot[],
+  options: QueueMatchOptions,
+  requiredPresetFamily: string | null
+): GradedSlotCandidate {
+  const identityRank =
+    requiredPresetFamily != null && slotGenuinePresetFamily(slot) === requiredPresetFamily ? 0 : 1
+  // Poolmates are drawn from the nozzle+type-compatible set (not just the exact
+  // pool): a matching tray must also be reachable by the print to chain into it.
+  const poolmates = options.autoRefillEnabled === true && isPhysicalAmsTrayIndex(slot.trayIndex)
+    ? compatible.filter((candidate) => isPhysicalAmsTrayIndex(candidate.trayIndex) && traysMatchForAutoRefill(slot, candidate))
+    : []
+  const pooled = poolmates.length > 1
+  // Pooled remaining mirrors the web's low-filament pool (`getSlotRemainingState`):
+  // a plain sum of percent estimates, unreported trays counting zero.
+  const remainGrams = pooled
+    ? poolmates.reduce((total, mate) => total + (estimateRemainGrams(mate.remainPercent) ?? 0), 0)
+    : knownSlotRemainGrams(slot)
+  const requiredGrams = required.usedGrams ?? null
+  const sufficiencyRank = requiredGrams == null || remainGrams == null
+    ? 1
+    : remainGrams >= requiredGrams + LOW_FILAMENT_HEADROOM_GRAMS ? 0 : 2
+  return { slot, identityRank, sufficiencyRank, remainGrams, pooled }
+}
+
+function compareCandidates(left: GradedSlotCandidate, right: GradedSlotCandidate): number {
+  if (left.identityRank !== right.identityRank) return left.identityRank - right.identityRank
+  if (left.sufficiencyRank !== right.sufficiencyRank) return left.sufficiencyRank - right.sufficiencyRank
+  if (left.sufficiencyRank === 0) {
+    // Among slots that hold enough: consume the emptiest first, so partial
+    // spools are used up before fresh ones. A pooled slot sorts after known
+    // solos — deliberately draining the smallest of a chained pool gains
+    // nothing, the printer refills it from its mates anyway.
+    const leftKey = left.pooled ? Number.POSITIVE_INFINITY : left.remainGrams ?? Number.POSITIVE_INFINITY
+    const rightKey = right.pooled ? Number.POSITIVE_INFINITY : right.remainGrams ?? Number.POSITIVE_INFINITY
+    if (leftKey !== rightKey) return leftKey - rightKey
+  } else if (left.sufficiencyRank === 2) {
+    // Nothing holds enough: take the fullest and let the insufficiency warning surface.
+    const leftKey = left.remainGrams ?? -1
+    const rightKey = right.remainGrams ?? -1
+    if (leftKey !== rightKey) return rightKey - leftKey
+  }
+  return left.slot.trayIndex - right.slot.trayIndex
+}
+
+/**
+ * Pick the best loaded slot for a required filament, or null when none matches.
+ *
+ * Constraint order: occupied + same material (display type text, or genuine
+ * preset identity when the text drifted) + nozzle-reachable (hard) → exact
+ * colour (or the opt-in type-only fallback) → preference ranking (genuine
+ * preset identity, then the sufficiency-guarded lowest-remaining tie-break,
+ * then tray index for determinism).
+ */
 function pickSlot(
   required: QueueRequiredFilament,
   slots: QueueLoadedSlot[],
   options: QueueMatchOptions
 ): QueueLoadedSlot | null {
-  const typeCandidates = slots.filter((slot) => slot.occupied && typeMatches(required.filamentType, slot.filamentType))
-  if (typeCandidates.length === 0) return null
-  const exact = typeCandidates.filter((slot) => colorSatisfied(required.color, slot.color))
-  const pool = exact.length > 0 ? exact : options.allowTypeOnlyMatch ? typeCandidates : []
+  const requiredPresetFamily = required.filamentName?.trim()
+    ? filamentPresetFamilyName(required.filamentName).toLowerCase() || null
+    : null
+  // The type gate accepts EITHER equal display-type text OR equal genuine preset identity.
+  // Identity must bridge because the type text for the SAME material drifts across Studio
+  // releases (2.7.1.57 declares Bambu PETG HF as "PETG", 2.7.1.62 as "PETG-HF"), so a sliced
+  // plate and the AMS wire can legitimately disagree about one spool. Mirrors BambuStudio's
+  // mapping order: tray `setting_id` vs preset `filament_id` outranks type text
+  // (`MachineObject::ams_filament_mapping`). The identity leg stays behind the genuine gate —
+  // a hand-typed trayInfoIdx proves nothing.
+  const typeSatisfied = (slot: QueueLoadedSlot) =>
+    typeMatches(required.filamentType, slot.filamentType)
+    || (requiredPresetFamily != null && slotGenuinePresetFamily(slot) === requiredPresetFamily)
+  const compatible = slots.filter((slot) =>
+    slot.occupied
+    && typeSatisfied(slot)
+    && nozzleCompatible(required.nozzleId ?? null, slot.nozzleId))
+  if (compatible.length === 0) return null
+  const exact = compatible.filter((slot) => colorSatisfied(required.color, slot.color))
+  const pool = exact.length > 0 ? exact : options.allowTypeOnlyMatch ? compatible : []
   if (pool.length === 0) return null
-  // Deterministic tie-break by tray index. (Phase 2 may prefer lowest-remaining.)
-  return pool.reduce((best, slot) => (slot.trayIndex < best.trayIndex ? slot : best))
+  const graded = pool.map((slot) => gradeCandidate(required, slot, compatible, options, requiredPresetFamily))
+  graded.sort(compareCandidates)
+  return graded[0]!.slot
 }
 
 /**
@@ -143,6 +340,26 @@ export function evaluateQueueMatch(
     else missing.push(filament)
   }
   return { matched: missing.length === 0, amsMapping, missing }
+}
+
+/**
+ * Combine an explicit per-filament tray mapping with the matcher's computed mapping. An explicit
+ * slot (>= 0) wins; an entry left at the `-1` "auto" sentinel takes the computed (material-matched)
+ * slot. This is THE precedence model for every surface that layers user picks over automatic
+ * matches — the API's queue dispatch (mixing slot-mapped and material-matched filaments) and the
+ * web print dialogs (user edits over auto-selected suggestions) share it so a user's explicit
+ * choice can never be clobbered by a recomputed match. `null`/empty override → computed as-is.
+ */
+export function mergeAmsMapping(override: number[] | null, computed: number[] | undefined): number[] | undefined {
+  if (!override || override.length === 0) return computed && computed.length > 0 ? computed : undefined
+  if (!computed || computed.length === 0) return override
+  const length = Math.max(override.length, computed.length)
+  const merged: number[] = []
+  for (let index = 0; index < length; index += 1) {
+    const explicit = override[index]
+    merged[index] = explicit != null && explicit >= 0 ? explicit : computed[index] ?? -1
+  }
+  return merged
 }
 
 /** Human-readable list of missing materials, e.g. `PLA #1A1A1A, PETG`. */
@@ -226,7 +443,13 @@ export function evaluateQueueItemForPrinter(
   if (!base.eligible) {
     return { printerId: printer.printerId, eligible: false, idle: base.idle, amsMapping: null, reason: base.reason, missing: [] }
   }
-  const { matched, amsMapping, missing } = evaluateQueueMatch(item.requiredFilaments, loadedSlotsFromStatus(printer.status), options)
+  const { matched, amsMapping, missing } = evaluateQueueMatch(item.requiredFilaments, loadedSlotsFromStatus(printer.status), {
+    ...options,
+    // Auto-refill is printer truth, not a caller preference — derive it from the
+    // status this evaluation already targets. (Optional chain: test stubs and
+    // older cached statuses may omit amsSettings.)
+    autoRefillEnabled: printer.status.amsSettings?.autoRefill === true
+  })
   if (!matched) {
     return { printerId: printer.printerId, eligible: false, idle: base.idle, amsMapping: null, reason: `Needs ${describeMissingFilaments(missing)}`, missing }
   }
@@ -323,11 +546,38 @@ export const queueRequiredFilamentSchema = z.object({
   id: z.number().int().positive(),
   filamentType: z.string().nullable(),
   color: z.string().nullable(),
-  /** Optional brand/preset name. Display only — the matcher routes on type + color. */
+  /** Optional brand/preset name. Display + identity tie-break preference — never a hard constraint. */
   filamentName: z.string().nullable().optional(),
-  /** Grams this filament needs on the plate (from the slice). Display only. */
-  usedGrams: z.number().nullable().optional()
+  /** Grams this filament needs on the plate (from the slice); guards the lowest-remaining tie-break. */
+  usedGrams: z.number().nullable().optional(),
+  /** Extruder binding (0 = right/main, 1 = left/deputy); a HARD matching constraint. Absent on rows queued before it existed. */
+  nozzleId: z.number().int().nullable().optional()
 })
+
+/**
+ * Build a matcher requirement from a plate's filament entry (the shared 3MF
+ * index shape). One builder on purpose: the API's queue add-time inspection and
+ * every web dialog flow through it, so a field the contract grows (usedGrams
+ * and nozzleId were each silently dropped by hand-built copies) reaches the
+ * matcher everywhere at once.
+ */
+export function queueRequiredFilamentFromPlate(filament: {
+  id: number
+  filamentType: string | null
+  filamentName?: string | null
+  color: string | null
+  usedGrams?: number | null
+  nozzleId?: number | null
+}): QueueRequiredFilament {
+  return {
+    id: filament.id,
+    filamentType: filament.filamentType,
+    filamentName: filament.filamentName ?? null,
+    color: filament.color,
+    usedGrams: filament.usedGrams ?? null,
+    nozzleId: filament.nozzleId ?? null
+  }
+}
 
 /** A concrete slicer-slot -> AMS-tray mapping (indexed by `filament.id - 1`; `-1` = unmapped). */
 export const queueAmsMappingSchema = z.array(z.number().int())

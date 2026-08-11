@@ -90,7 +90,7 @@ export function AddedPartPanel({
                   bgcolor: option.color || 'neutral.softBg', border: '1px solid rgba(255,255,255,0.18)'
                 }}
               />
-              Material {option.id}{option.label ? ` — ${option.label}` : ''}
+              Material {option.number}{option.label ? ` — ${option.label}` : ''}
             </Option>
           ))}
         </Select>

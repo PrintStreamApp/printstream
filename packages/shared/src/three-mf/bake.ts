@@ -24,10 +24,14 @@ import {
   appendImportPartRelationships,
   applyGlobalProcessOverrides,
   applyModelKindMarker,
+  allSubModelPaths,
   applyTrianglePaintToModelEntry,
   buildEditedThreeMfDocuments,
   buildProjectSettingsTransforms,
+  filamentSlotIdRemap,
+  isIdentityFilamentSlotRemap,
   mergeCustomGcodePerLayer,
+  remapCustomGcodeFilamentIds,
   resolvePartPaintByEntry,
   resolveRepairMeshesByEntry,
   rewriteSliceInfoNozzleGroups,
@@ -36,6 +40,7 @@ import {
   type ImportedObjectInput,
   type TrianglePaintAttribute
 } from './bake-documents.js'
+import { remapColorPaintInModelXml } from './triangle-paint-codec.js'
 import {
   THREE_MF_MODEL_ENTRY,
   THREE_MF_MODEL_RELS_ENTRY,
@@ -255,11 +260,23 @@ export function planEditedThreeMf(
   const brimEarPointsContent = edit.brimEars !== undefined || importEars.length > 0
     ? serializeBrimEarPoints([...(edit.brimEars ?? []), ...importEars], modelXml)
     : null
+  // The old-slot → new-slot permutation this save's filament list implies, or null when slots keep
+  // their numbers. Non-null gates every base-content re-key below (untouched plates' tool changes,
+  // untouched mesh entries' colour paint, the stale slice_info drop) — base bytes stream through
+  // the save verbatim otherwise, still speaking the old slot order.
+  const slotRemap = edit.filaments && edit.filaments.length > 0 ? filamentSlotIdRemap(edit.filaments) : null
+  const basePaintRemap = slotRemap && !isIdentityFilamentSlotRemap(slotRemap) ? slotRemap : null
+
   // Layer-based filament changes + layer pauses: merged with the source sidecar
-  // (preserving unedited entry types and plates); both absent keeps the source file untouched.
+  // (preserving unedited entry types and plates); both absent keeps the source file untouched —
+  // unless a slot permutation re-keyed the sidecar's tool changes, which must save even without
+  // an edit (the merge covers only plates the session touched).
+  const baseCustomGcodeForMerge = basePaintRemap && baseCustomGcodeXml !== null
+    ? remapCustomGcodeFilamentIds(baseCustomGcodeXml, basePaintRemap)
+    : baseCustomGcodeXml
   const customGcodeContent = edit.filamentChanges !== undefined || edit.pauses !== undefined
-    ? mergeCustomGcodePerLayer(baseCustomGcodeXml, edit.filamentChanges, edit.pauses)
-    : null
+    ? mergeCustomGcodePerLayer(baseCustomGcodeForMerge, edit.filamentChanges, edit.pauses)
+    : (baseCustomGcodeForMerge !== baseCustomGcodeXml ? baseCustomGcodeForMerge : null)
   // Compose project_settings.config rewrites: filament set first (add/remove materials), then the
   // per-slot dual-nozzle assignment, the plate type, and per-plate prime-tower corners. When the
   // base carries no project_settings.config (a new-project scaffold), the composed result is
@@ -322,20 +339,26 @@ export function planEditedThreeMf(
       if (repairedRoot) modelXml = repairedRoot.xml
     }
     // Parts whose meshes live in per-object sub-entries (Bambu's 3D/Objects/*.model): painted,
-    // repaired, or both. One transform per entry composes everything that touches it. Paint MUST be
-    // applied before repair — repair preserves each triangle's attributes while welding/dropping, so
-    // painting first rides through it, whereas painting after would index triangles repair removed.
+    // repaired, or both. One transform per entry composes everything that touches it, in a fixed
+    // order: base paint re-key FIRST (a slot permutation must re-key EVERY entry's colour paint,
+    // including entries no edit touched — their old-slot codes would otherwise stream through
+    // byte-for-byte; parts the session painted arrive in the edit already re-keyed and simply
+    // overwrite this), then edit paint, then repair — repair preserves each triangle's attributes
+    // while welding/dropping, so painting first rides through it, whereas painting after would
+    // index triangles repair removed.
     const touchedEntryPaths = new Set([
+      ...(basePaintRemap ? allSubModelPaths(baseModelXml) : []),
       ...paintChannels.flatMap((channel) => [...channel.byEntry.keys()]),
       ...repairMeshesByEntry.keys()
     ])
     touchedEntryPaths.delete('3D/3dmodel.model')
     for (const entryPath of touchedEntryPaths) {
       transforms.set(entryPath, (xml) => {
+        const rekeyed = basePaintRemap ? remapColorPaintInModelXml(xml, basePaintRemap) : xml
         const painted = paintChannels.reduce((acc, channel) => {
           const paints = channel.byEntry.get(entryPath)
           return paints ? applyTrianglePaintToModelEntry(acc, channel.attribute, paints) : acc
-        }, xml)
+        }, rekeyed)
         const repairIds = repairMeshesByEntry.get(entryPath)
         if (!repairIds) return painted
         return repairObjectMeshesInModelEntry(painted, repairIds)?.xml ?? painted
@@ -377,7 +400,11 @@ export function planEditedThreeMf(
       const recordedIds = sliceRecordFilamentIds(baseSliceInfoXml)
       const describesSavedFilaments = recordedIds.length === filaments.length
         && recordedIds.every((id) => id >= 1 && id <= filaments.length)
-      if (recordedIds.length > 0 && !describesSavedFilaments) {
+      // A slot PERMUTATION stales the record even at the same count: its per-id type/colour/usage
+      // and group_id describe the old order, and the reader prefers those group ids over
+      // `filament_nozzle_map`, so a reopened project would report the pre-reorder nozzle
+      // assignment. Same honest answer as the count mismatch — no record until the next slice.
+      if (recordedIds.length > 0 && (!describesSavedFilaments || basePaintRemap !== null)) {
         transforms.set(SLICE_INFO_ENTRY, () => null)
       } else if (physicalExtruderMap.length >= 2) {
         transforms.set(SLICE_INFO_ENTRY, (xml) => rewriteSliceInfoNozzleGroups(xml, filaments, physicalExtruderMap))

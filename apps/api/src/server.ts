@@ -28,13 +28,25 @@ async function main(): Promise<void> {
     // race past it. The registry is env-free, so importing it here is pre-env safe.
     const { registerShutdownHook } = await import('./lib/shutdown-hooks.js')
     registerShutdownHook(() => embedded.stop())
+  }
+
+  // A staged backup restore applies HERE — the one window where the database
+  // URL is settled but neither Prisma nor migrations have touched the DB. A
+  // no-op on every ordinary boot. (Dynamic import: the module reads the env
+  // snapshot, which must not be taken before the URL above is published. On
+  // the Docker path the entrypoint has already migrated the pre-restore
+  // database; harmless, since a restore drops it.)
+  const { applyStagedServerRestoreIfPending } = await import('./lib/server-backup-restore.js')
+  const restored = await applyStagedServerRestoreIfPending()
+
+  if (embedded || restored) {
     // The CLI-free applier provisions a fresh cluster from the baseline snapshot
     // and forward-applies any new migrations — the Docker stack's CLI bootstrap
-    // is not in this bundle. (Dynamic import so nothing DB-related loads before
-    // the URL above is set.)
+    // is not in this bundle, and a freshly-restored database (either stack)
+    // must be migrated forward to the installed schema before the app opens it.
     const { applyPendingMigrations } = await import('./lib/apply-migrations.js')
     await applyPendingMigrations({
-      databaseUrl: embedded.databaseUrl,
+      databaseUrl: embedded?.databaseUrl ?? restored!.databaseUrl,
       log: (message) => console.log('[migrate]', message)
     })
   }

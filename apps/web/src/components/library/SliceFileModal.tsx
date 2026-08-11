@@ -45,12 +45,13 @@ import { PER_OBJECT_PROCESS_KEYS,
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
 import { deriveProjectCarryOverrides } from '../../lib/processCarryOverrides'
-import { remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
+import { permuteFilamentIndexOverrides, permutePerObjectFilamentIndexOverrides, remapFilamentIndexOverrides, remapPerObjectFilamentIndexOverrides } from '../../lib/filamentIndexOverrides'
 import { resolveSliceDisabledReason } from '../../lib/slicingPresetSelection'
 import {
   buildLoadedPrinterMaterialOptions,
   buildProjectSlicingPresets,
   buildRedundantProjectPresetCandidates,
+  buildProcessFilamentChoices,
   buildSliceDialogProjectFilaments,
   buildSliceDialogToolheads,
   buildSliceMaterialOptions,
@@ -515,6 +516,11 @@ export function SliceFileModal({
     setProcessSettingOverrides((current) => remapFilamentIndexOverrides(current, removedPosition))
     setObjectProcessOverrides((current) => remapPerObjectFilamentIndexOverrides(current, removedPosition))
   }, [setProcessSettingOverrides])
+  // A reorder renumbers every position at once — same duty, permutation form.
+  const handleFilamentIndexPermute = useCallback((remap: ReadonlyMap<number, number>) => {
+    setProcessSettingOverrides((current) => permuteFilamentIndexOverrides(current, remap))
+    setObjectProcessOverrides((current) => permutePerObjectFilamentIndexOverrides(current, remap))
+  }, [setProcessSettingOverrides])
   // Declared BEFORE the material core: it feeds the core's nozzle-validity clamp (a stale
   // dual-nozzle assignment on a single-nozzle machine segfaults the slicer).
   const sliceToolheads = buildSliceDialogToolheads(nozzleDiameter, nozzleFlow, targetMode === 'realPrinter' ? selectedPrinterStatus : undefined, selectedPrinterModel)
@@ -528,7 +534,8 @@ export function SliceFileModal({
     selectedMachineProfile,
     toolheadOptions: sliceToolheads,
     visibleFilamentsFilter: isFullProjectEditor ? undefined : visibleFilamentsFilter,
-    onFilamentRemoved: handleFilamentIndexRemap
+    onFilamentRemoved: handleFilamentIndexRemap,
+    onFilamentReordered: handleFilamentIndexPermute
   })
   const {
     projectFilaments, visibleProjectFilaments,
@@ -537,7 +544,7 @@ export function SliceFileModal({
     filamentToolheadIds, setFilamentToolheadIds,
     filamentMaterialTypeFilters, setFilamentMaterialTypeFilters,
     filamentSettingOverridesById, setFilamentSettingOverridesById,
-    handleAddFilament, handleRemoveFilament, handleMaterialOptionChange,
+    handleAddFilament, handleRemoveFilament, handleReorderFilament, handleMaterialOptionChange,
     materialEditListenerRef,
     desiredFilaments, filamentMappingResult,
     onProjectSaved: handleProjectSaved,
@@ -633,29 +640,12 @@ export function SliceFileModal({
       .filter(([objectId, overrides]) => JSON.stringify(overrides) !== JSON.stringify(baked[objectId] ?? {}))
     return entries.length > 0 ? Object.fromEntries(entries) : undefined
   }, [objectProcessOverrides, bakedObjectOverridesKey])
-  // Material choices for filament-index process settings ("Support/raft base" etc.).
-  // Ids are the 1-based POSITION in the full ordered list — the index the slicer reads —
-  // not projectFilamentId, which can diverge from position after a removal.
-  //
-  // `filamentType`/`isSupport`/`isSoluble` ride along for the support-interface recommendation
-  // prompt in ProcessSettingsDialog (they are never rendered). They come from the project's
-  // baked config; a slot the user has since pointed at a different material profile keeps the
-  // baked character, which is acceptable — a wrong classification only means the prompt is
-  // offered or withheld, and the user still decides.
+  // Material choices for filament-index process settings + the support-interface recommendation
+  // prompt — the shared builder, so this host and the public editor's controller cannot drift
+  // (see `buildProcessFilamentChoices` for the field semantics).
   const processFilamentChoices = useMemo(
-    () => projectFilaments.map((filament, index) => {
-      const option = materialOptions.find((entry) => entry.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
-      const baked = bakedIndex?.projectFilaments.find((entry) => entry.id === filament.projectFilamentId) ?? null
-      return {
-        id: index + 1,
-        label: option?.label ?? filament.label,
-        color: normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF'),
-        filamentType: baked?.filamentType ?? null,
-        isSupport: baked?.isSupport ?? null,
-        isSoluble: baked?.isSoluble ?? null
-      }
-    }),
-    [projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, bakedIndex]
+    () => buildProcessFilamentChoices({ projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, bakedIndex, selectedPlate }),
+    [projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors, bakedIndex, selectedPlate]
   )
   // Slice-time layer G-code (filament changes + pauses): session edits keyed by plate
   // index, displayed over the file's baked entries (now part of the plates index). Edits
@@ -668,12 +658,15 @@ export function SliceFileModal({
       const option = materialOptions.find((entry) => entry.id === filamentMaterialOptionIds[filament.projectFilamentId]) ?? null
       return {
         id: filament.projectFilamentId,
+        // Position in the FULL ordered list, not this narrowed one — the dialog only shows the
+        // selected plate's materials, and a subset-relative number would disagree with the file.
+        number: projectFilaments.findIndex((entry) => entry.projectFilamentId === filament.projectFilamentId) + 1,
         color: normalizeSliceFilamentColor(filamentColors[filament.projectFilamentId] ?? filament.color ?? '#FFFFFF'),
         label: option?.label ?? filament.label,
         colorName: null
       }
     }),
-    [visibleProjectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors]
+    [visibleProjectFilaments, projectFilaments, materialOptions, filamentMaterialOptionIds, filamentColors]
   )
   const submitFilamentChanges = useMemo<SceneEditPlateFilamentChanges[] | undefined>(() => {
     const entries = Object.entries(plateFilamentChangeEdits).map(([plateIndex, changes]) => ({
@@ -945,7 +938,7 @@ export function SliceFileModal({
     filamentToolheadIds, setFilamentToolheadIds, filamentColors, setFilamentColors,
     filamentSettingOverridesById, openFilamentSettings: setFilamentSettingsFilamentId,
     handleMaterialOptionChange,
-    desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onRemoveFilament: handleRemoveFilament,
+    desiredFilaments, retargetTarget, onAddFilament: handleAddFilament, onRemoveFilament: handleRemoveFilament, onReorderFilament: handleReorderFilament,
     configSnapshot, restoreConfig, materialEditListenerRef, onProjectSaved: handleProjectSaved, processEditListenerRef,
     // The editor resolves each slot's preset at SAVE time from this, so the saved project carries the
     // material's physics and not just its name. Omitting it is not a smaller feature — it silently

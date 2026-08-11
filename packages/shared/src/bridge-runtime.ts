@@ -7,6 +7,8 @@
 import { z } from 'zod'
 import { threeMfSettingsRepairReasonSchema } from './printer-contracts.js'
 import {
+  bridgeBackupSnapshotSchema,
+  bridgeBackupStatusSchema,
   bridgeDebugCaptureStatusSchema,
   bridgeSummarySchema,
   bridgeUpdateActionResponseSchema
@@ -333,6 +335,39 @@ export const bridgeDebugCaptureStatusMessageSchema = z.object({
 })
 
 export type BridgeDebugCaptureStatusMessage = z.infer<typeof bridgeDebugCaptureStatusMessageSchema>
+
+/**
+ * On-disk backup RPCs (`bridge.backup.*`), mirroring the debug-capture trio.
+ * `run` only STARTS a backup (a first full copy can take minutes, far past the
+ * RPC timeout) and returns the status snapshot with `running: true`; completion
+ * arrives as a pushed `bridge.backup.status` message. Counterparts:
+ * `apps/bridge/src/backup-manager.ts` and `apps/api/src/routes/bridges.ts`.
+ */
+export const bridgeBackupRunParamsSchema = z.object({})
+
+export type BridgeBackupRunParams = z.infer<typeof bridgeBackupRunParamsSchema>
+
+export const bridgeBackupListParamsSchema = z.object({})
+
+export type BridgeBackupListParams = z.infer<typeof bridgeBackupListParamsSchema>
+
+export const bridgeBackupStatusResultSchema = bridgeBackupStatusSchema
+
+export type BridgeBackupStatusResult = z.infer<typeof bridgeBackupStatusResultSchema>
+
+export const bridgeBackupListResultSchema = z.object({
+  snapshots: z.array(bridgeBackupSnapshotSchema)
+})
+
+export type BridgeBackupListResult = z.infer<typeof bridgeBackupListResultSchema>
+
+/** Pushed bridge→API when a backup starts, finishes, or fails (and on connect). */
+export const bridgeBackupStatusMessageSchema = z.object({
+  type: z.literal('bridge.backup.status'),
+  status: bridgeBackupStatusSchema
+})
+
+export type BridgeBackupStatusMessage = z.infer<typeof bridgeBackupStatusMessageSchema>
 
 export const bridgeReleaseBinarySchema = z.object({
   url: z.string().url(),
@@ -854,6 +889,7 @@ export const bridgeRuntimeInboundMessageSchema = z.discriminatedUnion('type', [
   bridgePrinterOfflineMessageSchema,
   bridgePrinterRemovedMessageSchema,
   bridgeDebugCaptureStatusMessageSchema,
+  bridgeBackupStatusMessageSchema,
   bridgePrinterConnectionMessageSchema,
   bridgeMetricsMessageSchema,
   bridgeCrashReportMessageSchema
