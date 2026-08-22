@@ -36,6 +36,32 @@ test('the range still brackets the content when the camera dollies inside it', (
   assert.ok(depthResolutionMm(40, near, far) < 0.01 / 10, 'close-up precision must still clear the grid lift')
 })
 
+test('the near plane keeps giving way as the camera closes in, so zoom never dead-ends', () => {
+  // The reported bug: on a 350mm plate the near floor was a content-sized constant
+  // (radius * 0.005 = 1.25mm), so past that distance the camera sat inside its own near plane and
+  // the view clipped to nothing — zooming looked broken. The near plane must stay in FRONT of the
+  // camera at every distance, including well inside a single extrusion.
+  for (const distance of [10, 4, 1, 0.4, 0.1]) {
+    const { near, far } = fitPerspectiveDepthRange(distance, BED_RADIUS)
+    assert.ok(near < distance, `near ${near} must stay in front of a camera ${distance}mm from the target`)
+    assert.ok(far > near, 'far must stay behind near')
+  }
+
+  // And prove the previous rule did NOT, or the loop above would pass either way.
+  const legacyFloor = BED_RADIUS * 0.005
+  assert.ok(legacyFloor > 0.4, `the old content-sized floor (${legacyFloor}mm) clipped a 0.4mm approach`)
+})
+
+test('just inside the content sphere the content-sized floor still binds, so precision is untouched', () => {
+  // Only the CLOSE range changes. Just inside the sphere the radius floor is still the smaller of
+  // the two, so the depth resolution this module exists to protect is exactly as before.
+  const { near } = fitPerspectiveDepthRange(200, BED_RADIUS)
+  assert.equal(near, BED_RADIUS * 0.005)
+
+  // Outside the sphere the geometric answer wins, as it always did.
+  assert.equal(fitPerspectiveDepthRange(260, BED_RADIUS).near, 10)
+})
+
 test('near never reaches zero even with degenerate content', () => {
   for (const radius of [0, -5, Number.NaN]) {
     const { near, far } = fitPerspectiveDepthRange(0, radius)

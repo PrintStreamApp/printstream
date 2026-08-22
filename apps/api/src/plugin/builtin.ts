@@ -19,11 +19,14 @@ import { emailSmtpPlugin } from '../plugins/email-smtp/index.js'
 import { modelStudioPlugin } from '../plugins/model-studio/index.js'
 import { plateClearingPlugin } from '../plugins/plate-clearing/index.js'
 import { firmwareUpdatesPlugin } from '../plugins/firmware-updates/index.js'
+import { bambuCloudSyncPlugin } from '../plugins/bambu-cloud-sync/index.js'
 import { ordersPlugin } from '../plugins/orders/index.js'
 import { filamentManagerPlugin } from '../plugins/filament-manager/index.js'
 import { calibrationPlugin } from '../plugins/calibration/index.js'
+import { maintenancePlugin } from '../plugins/maintenance/index.js'
 import { printQueuePlugin } from '../plugins/print-queue/index.js'
 import { homeAssistantPlugin } from '../plugins/home-assistant/index.js'
+import { remoteImportsPlugin } from '../plugins/remote-imports/index.js'
 
 export async function registerBuiltinPlugins(): Promise<void> {
   // Build-exclusive auth providers. The self-hosted (OSS) build uses only
@@ -113,6 +116,14 @@ export async function registerBuiltinPlugins(): Promise<void> {
     managerSurfaces: ['platform', 'workspace'],
     workspaceAccess: 'controlled'
   })
+  await pluginRegistry.register(bambuCloudSyncPlugin, {
+    // OFF by default, unlike firmware awareness: this one holds a credential for the
+    // user's whole Bambu account and reaches an external service, so it should be an
+    // explicit choice rather than something an install discovers it is already doing.
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
+  })
   await pluginRegistry.register(ordersPlugin, {
     runtimeSurfaces: ['workspace'],
     managerSurfaces: ['platform', 'workspace'],
@@ -136,6 +147,20 @@ export async function registerBuiltinPlugins(): Promise<void> {
     workspaceAccess: 'controlled'
   })
   await pluginRegistry.register(homeAssistantPlugin, {
+    defaultEnabled: false,
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
+  })
+  await pluginRegistry.register(maintenancePlugin, {
+    defaultEnabled: false,
+    runtimeSurfaces: ['workspace'],
+    managerSurfaces: ['platform', 'workspace'],
+    workspaceAccess: 'controlled'
+  })
+  // Off by default like the other external-service integrations: the provider-page
+  // flow is unusable without the companion Chrome extension installed.
+  await pluginRegistry.register(remoteImportsPlugin, {
     defaultEnabled: false,
     runtimeSurfaces: ['workspace'],
     managerSurfaces: ['platform', 'workspace'],

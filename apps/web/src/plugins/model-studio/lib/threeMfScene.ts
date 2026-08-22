@@ -727,7 +727,7 @@ export function disposeObject3D(object: THREE.Object3D): void {
  * Resolves one of a 3MF's mesh entries (`3D/Objects/*.model`) to its raw XML.
  *
  * The indirection exists because the bytes have two sources: a library file streams them from the
- * API's `scene-entry` endpoint, while the public 3MF viewer already holds the whole archive in
+ * API's `scene-entry` endpoint, while the public 3MF editor already holds the whole archive in
  * memory and never uploads it. Both hand back the SAME unmodified zip-entry XML — `scene-entry`
  * does no server-side parsing — so the rest of the pipeline cannot tell them apart.
  */
@@ -748,7 +748,7 @@ export function createLibraryThreeMfEntryLoader(fileId: string): ThreeMfEntryLoa
  * Build a plated 3MF scene's MESH parts (coloured by material) as a group — no plate
  * surface. Shared by the modal previewer (which adds a plate around it), the library
  * thumbnail fallback (which wants the bare model at Bambu's iso angle), and the public
- * 3MF viewer. Throws if no previewable geometry is found.
+ * 3MF editor. Throws if no previewable geometry is found.
  */
 export async function buildThreeMfMeshGroup(
   loadEntry: ThreeMfEntryLoader,

@@ -11,7 +11,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Box, Button, Checkbox, Dropdown, IconButton, LinearProgress, Menu, MenuButton, MenuItem,
+  Box, Button, Checkbox, Dropdown, IconButton, Menu, MenuButton, MenuItem,
   ModalClose, Stack, Typography
 } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -45,6 +45,7 @@ import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { SquareMediaFrame } from './SquareMediaFrame'
 import { StoragePrintModal } from './StoragePrintModal'
 import { ListSkeleton } from '../components/ListSkeleton'
+import { ProgressBar } from './ProgressBar'
 
 /** Three-dot vertical glyph. Inlined here to avoid importing back into the pages layer. */
 function MoreVertIcon() {
@@ -189,6 +190,8 @@ export function PrinterStorageModal({
       nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
       amsMapping?: PrinterTrayMapping[]
       allowIncompatibleFilament: boolean
+      allowFilamentTrackSwitchMismatch: boolean
+      allowInsufficientFilament: boolean
       /** Plate objects (`objects[].id`) to exclude from the print, when any were deselected. */
       skipObjects?: number[]
     }) =>
@@ -206,6 +209,8 @@ export function PrinterStorageModal({
           nozzleOffsetCalibration: args.nozzleOffsetCalibration,
           amsMapping: args.amsMapping,
           allowIncompatibleFilament: args.allowIncompatibleFilament,
+          allowFilamentTrackSwitchMismatch: args.allowFilamentTrackSwitchMismatch,
+          allowInsufficientFilament: args.allowInsufficientFilament,
           ...(args.skipObjects && args.skipObjects.length > 0 ? { skipObjects: args.skipObjects } : {})
         }
       }),
@@ -446,9 +451,8 @@ export function PrinterStorageModal({
                 </Stack>
                 {uploadProgress != null && (
                   <Stack spacing={0.5}>
-                    <LinearProgress
-                      determinate={uploadProgress > 0}
-                      value={Math.round(uploadProgress * 100)}
+                    <ProgressBar
+                      value={uploadProgress > 0 ? Math.round(uploadProgress * 100) : null}
                     />
                     <Typography level="body-xs" textColor="text.tertiary">
                       Uploading… {Math.round(uploadProgress * 100)}%

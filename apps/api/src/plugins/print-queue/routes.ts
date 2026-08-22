@@ -28,12 +28,14 @@ import { requireRequestPermission } from '../../lib/authorization.js'
 import { badRequest, conflict, notFound } from '../../lib/http-error.js'
 import { enqueueLibraryPrint, validateLibraryPrint } from '../../lib/library-printing.js'
 import { getPrintSourceKind } from '../../lib/print-dispatcher.js'
+import { InsufficientFilamentError } from '../../lib/print-filament-compatibility.js'
 import { printerEvents } from '../../lib/printer-events.js'
 import { printerManager } from '../../lib/printer-manager.js'
 import type { AnyPrismaClient } from '../../lib/prisma.js'
 import { requireRequestWorkspaceId, requireRouteParam } from '../../lib/request-helpers.js'
 import { broadcastPluginSettingsChanged, broadcastPrintDispatchChanged, broadcastQueueChanged } from '../../lib/ws-resource-events.js'
 import type { ApiPluginContext } from '../../plugin/types.js'
+import { allowsInsufficientFilament } from './dispatch-consent.js'
 import {
   buildOrderedPrinterContexts,
   loadQueueSettings,
@@ -250,7 +252,14 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
 
     // Dry run ("Check"): report what a real Start would do — without uploading or starting.
     if (parsed.data.dryRun) {
-      response.json(await buildQueueDryRunResult(item, target, contexts, parsed.data.amsMapping, workspaceId))
+      response.json(await buildQueueDryRunResult(
+        item,
+        target,
+        contexts,
+        parsed.data.amsMapping,
+        workspaceId,
+        allowsInsufficientFilament('dry-run')
+      ))
       return
     }
 
@@ -258,7 +267,15 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
 
     // An explicit mapping is the user's per-start material choice and wins outright; the auto path still
     // merges the item's stored slot overrides with the matcher's result.
-    const job = await applyDispatch(prisma, item, target.printerId, target.amsMapping, workspaceId, parsed.data.amsMapping)
+    const job = await applyDispatch(
+      prisma,
+      item,
+      target.printerId,
+      target.amsMapping,
+      workspaceId,
+      parsed.data.amsMapping,
+      allowsInsufficientFilament('person-start', parsed.data.allowInsufficientFilament === true)
+    )
 
     annotateRequestAuditLog(request, {
       action: 'queue-item-dispatch',
@@ -299,7 +316,15 @@ export function registerQueueRoutes(context: ApiPluginContext): void {
         if (claimResult.count !== 1) break
 
         try {
-          const job = await applyDispatch(prisma, item, printer.printerId, evaluation.amsMapping, workspaceId)
+          const job = await applyDispatch(
+            prisma,
+            item,
+            printer.printerId,
+            evaluation.amsMapping,
+            workspaceId,
+            undefined,
+            allowsInsufficientFilament('unattended-sweep')
+          )
           dispatched.push({ itemId: item.id, printerId: printer.printerId, jobId: job.printJobId })
         } catch (error) {
           await prisma.queueItem.updateMany({ where: { id: item.id, status: 'dispatching' }, data: { status: 'queued' } }).catch(() => undefined)
@@ -412,7 +437,11 @@ async function applyDispatch(
   printerId: string,
   computedAmsMapping: number[] | null,
   workspaceId: string,
-  explicitAmsMapping?: number[]
+  explicitAmsMapping: number[] | undefined,
+  // Required, not defaulted: this is a consent flag, and a default hands every
+  // caller that forgets it the unattended sweep's override. See
+  // `allowsInsufficientFilament`.
+  allowInsufficientFilament: boolean
 ) {
   if (!item.libraryFileId) throw notFound('The library file for this queued item is no longer available')
 
@@ -421,7 +450,10 @@ async function applyDispatch(
   // library / custom material) resolve from the matcher's computed mapping for this printer.
   const amsMapping = explicitAmsMapping ?? mergeAmsMapping(parseAmsMapping(item.amsMappingJson), computedAmsMapping ?? undefined)
 
-  const job = await enqueueLibraryPrint(buildQueueDispatchInput(item, item.libraryFileId, printerId, amsMapping), workspaceId)
+  const job = await enqueueLibraryPrint(
+    buildQueueDispatchInput(item, item.libraryFileId, printerId, amsMapping, allowInsufficientFilament),
+    workspaceId
+  )
 
   await prisma.queueItem.update({
     where: { id: item.id },
@@ -461,22 +493,29 @@ async function buildQueueDryRunResult(
   target: DispatchTarget,
   contexts: ServerPrinterContext[],
   explicitAmsMapping: number[] | undefined,
-  workspaceId: string
+  workspaceId: string,
+  allowInsufficientFilament: boolean
 ): Promise<QueueDryRunResult> {
   if (!item.libraryFileId) {
-    return { ok: false, reason: 'The library file for this queued item is no longer available', printerId: null, printerName: null }
+    return { ok: false, reason: 'The library file for this queued item is no longer available', warning: null, printerId: null, printerName: null }
   }
   if (!target.ok) {
-    return { ok: false, reason: target.reason, printerId: null, printerName: null }
+    return { ok: false, reason: target.reason, warning: null, printerId: null, printerName: null }
   }
   const printerName = contexts.find((ctx) => ctx.printerId === target.printerId)?.name ?? null
   const amsMapping = explicitAmsMapping ?? mergeAmsMapping(parseAmsMapping(item.amsMappingJson), target.amsMapping ?? undefined)
-  const input = buildQueueDispatchInput(item, item.libraryFileId, target.printerId, amsMapping)
+  const input = buildQueueDispatchInput(item, item.libraryFileId, target.printerId, amsMapping, allowInsufficientFilament)
   try {
     await validateLibraryPrint(input, workspaceId)
-    return { ok: true, reason: null, printerId: target.printerId, printerName }
+    return { ok: true, reason: null, warning: null, printerId: target.printerId, printerName }
   } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : 'A real Start would fail', printerId: target.printerId, printerName }
+    // A low-filament slot is not a failure: the unattended sweep waives it and a person is
+    // offered a confirmation, so both real paths start the print. The check withholds consent
+    // (see `allowsInsufficientFilament`) purely so this guard RUNS and can be reported.
+    if (error instanceof InsufficientFilamentError) {
+      return { ok: true, reason: null, warning: error.message, printerId: target.printerId, printerName }
+    }
+    return { ok: false, reason: error instanceof Error ? error.message : 'A real Start would fail', warning: null, printerId: target.printerId, printerName }
   }
 }
 
@@ -491,7 +530,8 @@ function buildQueueDispatchInput(
   item: QueueItemRow,
   libraryFileId: string,
   printerId: string,
-  amsMapping: number[] | undefined
+  amsMapping: number[] | undefined,
+  allowInsufficientFilament: boolean
 ): PrintFromLibrary {
   const printer = printerManager.getPrinter(printerId)
   return {
@@ -500,6 +540,13 @@ function buildQueueDispatchInput(
     printerId,
     plate: item.plateIndex,
     amsMapping,
+    // True for the unattended sweep over idle printers, which has nobody to answer a
+    // low-filament confirmation: holding the item would stall a queue on an ESTIMATE (the
+    // printer reports only a percent, only for tagged spools) to avoid something it already
+    // handles by pausing when a slot runs dry. A person pressing Start passes their own
+    // answer through, so the start dialog's confirmation means the same as every other one
+    // and the "Check" dry run reports exactly what that Start would do.
+    allowInsufficientFilament,
     currentPlateType: printer?.currentPlateType ?? null,
     currentNozzleDiameters: printer?.currentNozzleDiameters ?? []
   }

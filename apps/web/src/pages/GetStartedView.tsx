@@ -1,5 +1,6 @@
 import CelebrationRoundedIcon from '@mui/icons-material/CelebrationRounded'
 import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
+import ExtensionRoundedIcon from '@mui/icons-material/ExtensionRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
 import PaletteRoundedIcon from '@mui/icons-material/PaletteRounded'
@@ -23,10 +24,15 @@ import { ListSkeleton } from '../components/ListSkeleton'
 
 /**
  * Workspace onboarding page. Shows the quick-start checklist for a fresh
- * workspace, plus a short "Good to know" tips list (theme customization and,
- * on cloud installs, the support-access privacy toggle), and serves as the
- * default landing page until someone with settings access dismisses it (a
- * shared, workspace-wide choice).
+ * workspace, plus a short "Good to know" tips list (the plugin catalogue, theme
+ * customization and, on cloud installs, the support-access privacy toggle), and
+ * serves as the default landing page until someone with settings access
+ * dismisses it (a shared, workspace-wide choice).
+ *
+ * The "Good to know" cards are the only place a new workspace is pointed at the
+ * plugin catalogue at all: most plugins ship disabled, so without this the
+ * optional half of the product is invisible unless someone goes looking in
+ * settings.
  */
 export function GetStartedView({
   canOpenSettings,
@@ -124,6 +130,15 @@ export function GetStartedView({
           <Typography level="title-md" startDecorator={<TipsAndUpdatesRoundedIcon />} sx={{ pt: 1 }}>
             Good to know
           </Typography>
+          {/* Links only for someone who can MANAGE settings: the plugins subview
+              redirects to the settings root without that permission, so a link
+              here would silently land them somewhere else. */}
+          <QuickStartCard
+            icon={<ExtensionRoundedIcon />}
+            title="Add more features"
+            description="Plugins cover the optional extras: print notifications, 3D model editing, filament and spool tracking, calibration, a print queue, and maintenance reminders. Turn on the ones you want in Plugin settings."
+            actionTo={canManageSettings ? workspacePath('/settings/plugins') : undefined}
+          />
           <QuickStartCard
             icon={<PaletteRoundedIcon />}
             title="Make it yours"

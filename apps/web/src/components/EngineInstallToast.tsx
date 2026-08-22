@@ -20,12 +20,13 @@
  * Counterpart: `apps/slicer/src/engines/progress.ts`, which is what
  * `engineInstall` is reporting.
  */
-import { Box, LinearProgress, Stack, Typography } from '@mui/joy'
+import { Box, Stack, Typography } from '@mui/joy'
 import type { SlicingCapabilities } from '@printstream/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { apiFetch } from '../lib/apiClient'
 import { StatusToast, StatusToastDismissButton } from './StatusToast'
+import { ProgressBar } from './ProgressBar'
 
 /** Brisk while a download runs — the label and percentage are the whole point. */
 const INSTALLING_POLL_MS = 4_000
@@ -87,10 +88,9 @@ export function EngineInstallToast() {
             </Typography>
             {/* Determinate only where there is a real total: a bar that invents
                 a position is worse than one that admits it is working. */}
-            <LinearProgress
+            <ProgressBar
               size="sm"
-              determinate={percent != null}
-              {...(percent != null ? { value: percent } : {})}
+              value={percent}
               sx={{ mt: 0.5 }}
             />
           </Box>

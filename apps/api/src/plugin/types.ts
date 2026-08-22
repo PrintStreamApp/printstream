@@ -33,6 +33,7 @@ import type { PrinterEventBus } from '../lib/printer-events.js'
 import type { RegisteredAuthProvider, RegisteredAuthProviderResolver } from '../lib/auth-registry.js'
 import type { PrintGuard } from '../lib/print-guards.js'
 import type { SlotFilamentResolver } from '../lib/slot-filament-registry.js'
+import type { BambuAccountResolver } from '../lib/bambu-account-registry.js'
 import type { WorkspaceScopedPrismaClient } from '../lib/prisma.js'
 import type { WsBroadcaster } from '../lib/ws-server.js'
 
@@ -109,6 +110,15 @@ export interface ApiPluginContext {
    * is removed automatically when the plugin stops.
    */
   registerSlotFilamentResolver(resolver: SlotFilamentResolver): () => void
+  /**
+   * Register a resolver that returns the workspace's connected Bambu Lab account.
+   * The plugin owning that connection registers one; plugins that need to act as the
+   * signed-in Bambu user consult `bambuAccountResolvers` rather than importing this
+   * one. Scoped to workspaces the registering plugin is enabled for, and removed
+   * automatically when it stops. The resolved token is the user's whole account —
+   * see the trust boundary in `lib/bambu-account-registry.ts` before consuming it.
+   */
+  registerBambuAccountResolver(resolver: BambuAccountResolver): () => void
 }
 
 export interface ApiPlugin {

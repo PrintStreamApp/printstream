@@ -10,13 +10,17 @@
  * The function returns a discriminated result describing the dispatch so the
  * route handler can write the audit-log annotation and HTTP response without
  * needing the orchestration internals. External-started jobs are rejected the
- * same way the route previously rejected them. Behavior — including error
- * messages, side-effect ordering, and audit metadata — mirrors the original
- * inline route handler exactly.
+ * same way the route previously rejected them.
+ *
+ * Print-start options come from `print-job-options.ts`, which the jobs DTO also
+ * reads, so this path and the print dialog restore the same job identically. The
+ * consent flags (`allow*`) are the exception and are never restored: see the note
+ * at the call site.
  */
 import { printFromLibrarySchema } from '@printstream/shared'
 import type { PrintDispatchJob, PrintFromLibrary } from '@printstream/shared'
 import { badRequest, conflict, notFound } from './http-error.js'
+import { readRecordedPrintStartOptions } from './print-job-options.js'
 import { prisma } from './prisma.js'
 import { printerManager } from './printer-manager.js'
 import { printGuards } from './print-guards.js'
@@ -36,6 +40,8 @@ export interface ReprintJobRow {
   bedLevel: boolean | null
   plate: number | null
   amsMapping: string | null
+  /** Serialized print-start selection; see {@link readRecordedPrintStartOptions}. */
+  printOptionsJson?: string | null
 }
 
 /**
@@ -81,6 +87,53 @@ export function parseAmsMapping(value: string | null): number[] | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Rebuild the dispatch options for a re-print of `row`.
+ *
+ * Each knob resolves in one order: request override -> what the row RECORDED -> the schema
+ * default. The middle step is the point: before it existed, an override-less re-print
+ * dropped to the defaults and silently changed the print (issue #97: an Auto bed-leveling
+ * job came back as On, and six other options came back as their defaults). A field the row
+ * never recorded is absent rather than guessed, which is what lets `??` chain straight
+ * through to the schema.
+ *
+ * The four `allow*` consent flags are deliberately NOT restored: each means "I accept this
+ * risk right now", so replaying one would re-grant a safety bypass nobody was shown. They
+ * are not recorded on the row at all, so this cannot later regress into reading them.
+ *
+ * Pure, and exported for its tests: the option reconstruction is the whole behavior worth
+ * pinning, and `reprintJobFromRow` around it is I/O.
+ */
+export function buildReprintOptions(
+  row: ReprintJobRow,
+  overrides: ReprintJobInput
+): Omit<PrintFromLibrary, 'fileId'> {
+  const recorded = readRecordedPrintStartOptions(row) ?? {}
+  return printFromLibrarySchema.omit({ fileId: true }).parse({
+    printerId: overrides.printerId ?? row.printerId,
+    useAms: overrides.useAms ?? row.useAms ?? true,
+    bedLevel: overrides.bedLevel ?? recorded.bedLevel,
+    vibrationCompensation: overrides.vibrationCompensation ?? recorded.vibrationCompensation,
+    flowCalibration: overrides.flowCalibration ?? recorded.flowCalibration,
+    firstLayerInspection: overrides.firstLayerInspection ?? recorded.firstLayerInspection,
+    timelapse: overrides.timelapse ?? recorded.timelapse,
+    filamentDynamicsCalibration: overrides.filamentDynamicsCalibration ?? recorded.filamentDynamicsCalibration,
+    nozzleOffsetCalibration: overrides.nozzleOffsetCalibration ?? recorded.nozzleOffsetCalibration,
+    allowIncompatibleFilament: overrides.allowIncompatibleFilament,
+    allowPlateTypeMismatch: overrides.allowPlateTypeMismatch,
+    allowFilamentTrackSwitchMismatch: overrides.allowFilamentTrackSwitchMismatch,
+    allowInsufficientFilament: overrides.allowInsufficientFilament,
+    currentPlateType: overrides.currentPlateType,
+    currentNozzleDiameters: overrides.currentNozzleDiameters,
+    plate: overrides.plate ?? row.plate ?? 1,
+    // `?? undefined`, not the raw parse: `amsMapping` is optional on the wire but NOT
+    // nullable, so handing it an explicit null makes the whole parse throw. The browser
+    // always sends its own mapping and so never hit this; an override-less API re-print of
+    // a job that recorded no mapping did, and failed before it could dispatch.
+    amsMapping: overrides.amsMapping ?? parseAmsMapping(row.amsMapping) ?? undefined
+  })
 }
 
 /**
@@ -131,24 +184,7 @@ export async function reprintJobFromRow(input: {
     assertPermission(jobKind)
     if (!row.fileId) throw badRequest('File details are missing for this job')
 
-    const targetPrinterId = overrides.printerId ?? row.printerId
-    const restartOptions = printFromLibrarySchema.omit({ fileId: true }).parse({
-      printerId: targetPrinterId,
-      useAms: overrides.useAms ?? row.useAms ?? true,
-      bedLevel: overrides.bedLevel ?? (row.bedLevel === false ? 'off' : 'on'),
-      vibrationCompensation: overrides.vibrationCompensation,
-      flowCalibration: overrides.flowCalibration,
-      firstLayerInspection: overrides.firstLayerInspection,
-      timelapse: overrides.timelapse,
-      filamentDynamicsCalibration: overrides.filamentDynamicsCalibration,
-      nozzleOffsetCalibration: overrides.nozzleOffsetCalibration,
-      allowIncompatibleFilament: overrides.allowIncompatibleFilament,
-      allowPlateTypeMismatch: overrides.allowPlateTypeMismatch,
-      currentPlateType: overrides.currentPlateType,
-      currentNozzleDiameters: overrides.currentNozzleDiameters,
-      plate: overrides.plate ?? row.plate ?? 1,
-      amsMapping: overrides.amsMapping ?? parseAmsMapping(row.amsMapping)
-    })
+    const restartOptions = buildReprintOptions(row, overrides)
 
     const job = await enqueueLibraryPrint({
       fileId: row.fileId,

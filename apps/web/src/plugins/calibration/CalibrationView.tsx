@@ -36,7 +36,6 @@ const STATUS_LABELS: Record<CalibrationRun['status'], { label: string; color: 'n
   printing: { label: 'Printing', color: 'primary' },
   awaitingResult: { label: 'Awaiting result', color: 'warning' },
   saved: { label: 'Saved', color: 'success' },
-  discarded: { label: 'Discarded', color: 'neutral' },
   failed: { label: 'Failed', color: 'danger' }
 }
 
@@ -47,7 +46,6 @@ const NEXT_STEP: Record<CalibrationRun['status'], string | null> = {
   printing: 'Printing… measure the result and enter it once it finishes.',
   awaitingResult: 'Measure the print, then enter the result to save it.',
   saved: null,
-  discarded: null,
   failed: null
 }
 
@@ -182,7 +180,10 @@ export function CalibrationView() {
           <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
             <Table size="sm" borderAxis="xBetween" hoverRow>
               <thead>
-                <tr><th>Test</th><th>Value</th><th>Applies to</th><th>Printer</th><th aria-label="Actions" style={{ width: 48 }} /></tr>
+                {/* 64, not 48: the theme gives a row's outer cells a wider gutter than the
+                    gaps between columns, and a fixed-layout table would squeeze the
+                    action button rather than grow the column. */}
+                <tr><th>Test</th><th>Value</th><th>Applies to</th><th>Printer</th><th aria-label="Actions" style={{ width: 64 }} /></tr>
               </thead>
               <tbody>
                 {results.map((result) => (

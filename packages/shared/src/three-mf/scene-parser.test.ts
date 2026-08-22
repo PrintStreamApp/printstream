@@ -4,7 +4,7 @@ import { buildSceneManifest } from './scene-parser.js'
 
 /**
  * These lock the contract the parser gained when it moved out of `apps/api` so the browser could
- * call it too (the public 3MF viewer unzips locally and never uploads the file). The API's
+ * call it too (the public 3MF editor unzips locally and never uploads the file). The API's
  * `readSceneManifest` tests cover the same logic through Node ZIP I/O; these prove it works from
  * plain strings, with no filesystem, which is the only thing the browser can offer.
  */

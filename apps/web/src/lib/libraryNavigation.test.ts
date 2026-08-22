@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildLibraryBreadcrumb, buildLibraryFolderRoute, toBridgeFolderId } from './libraryNavigation.js'
+import { buildLibraryBreadcrumb, buildLibraryFolderRoute, buildLibrarySliceHandoffRoute, toBridgeFolderId } from './libraryNavigation.js'
 
 test('buildLibraryFolderRoute keeps library navigation inside the active workspace', () => {
   assert.equal(buildLibraryFolderRoute('Default', null, null), '/workspaces/default/library')
@@ -91,5 +91,27 @@ test('buildLibraryBreadcrumb keeps folder crumbs droppable beneath the bridge cr
         dropTarget: 'folder'
       }
     ]
+  )
+})
+// The handoff a surface uses when it produced a file but does not own the slice/print
+// dialogs. `LibraryView` strips these params after acting on them, so they are a
+// one-shot instruction rather than sticky state.
+test('buildLibrarySliceHandoffRoute targets the file\'s folder and asks for the print flow', () => {
+  assert.equal(
+    buildLibrarySliceHandoffRoute({
+      workspaceSlug: 'default',
+      fileId: 'file-1',
+      folderId: 'folder-1',
+      bridgeId: 'bridge-1',
+      flow: 'print'
+    }),
+    '/workspaces/default/library/folder-1?bridge=bridge-1&slice=file-1&sliceFlow=print'
+  )
+})
+
+test('buildLibrarySliceHandoffRoute omits what it does not have', () => {
+  assert.equal(
+    buildLibrarySliceHandoffRoute({ workspaceSlug: 'default', fileId: 'file-1', folderId: null, bridgeId: null }),
+    '/workspaces/default/library?slice=file-1'
   )
 })

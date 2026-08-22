@@ -222,6 +222,57 @@ test('an unresolvable process preset leaves the project its own settings', async
   }
 })
 
+test('the project records the Filament Track Switch machine it was sliced for', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'authoring-fts-'))
+  try {
+    stubNoCustomPresets()
+
+    // Sliced for an FTS machine: the flag is written so the file states what it was made for.
+    const withSwitch = path.join(dir, 'with.3mf')
+    await writeProject(withSwitch, { layer_height: '0.2' })
+    const authored = await authorSliceSettingsIntoProject({
+      workspaceId: 'workspace-1',
+      slicerTargetId: 'bambustudio-2-7-1',
+      target: makeTarget({}),
+      projectPath: withSwitch,
+      fileName: 'with.3mf',
+      hasFilamentTrackSwitch: true
+    })
+    assert.ok(authored)
+    assert.equal((await readProjectSettings(authored)).has_filament_switcher, true)
+
+    // Sliced WITHOUT one: nothing is written, because an absent key already means "no switch" to
+    // BambuStudio's CLI. Writing `false` everywhere would rewrite every project on every slice.
+    const withoutSwitch = path.join(dir, 'without.3mf')
+    await writeProject(withoutSwitch, { layer_height: '0.2' })
+    assert.equal(await authorSliceSettingsIntoProject({
+      workspaceId: 'workspace-1',
+      slicerTargetId: 'bambustudio-2-7-1',
+      target: makeTarget({}),
+      projectPath: withoutSwitch,
+      fileName: 'without.3mf',
+      hasFilamentTrackSwitch: false
+    }), null)
+
+    // A project carrying a STALE `true`, re-sliced for a machine without the switch, is corrected —
+    // otherwise the file would keep claiming a machine it was not sliced for and be refused.
+    const stale = path.join(dir, 'stale.3mf')
+    await writeProject(stale, { layer_height: '0.2', has_filament_switcher: true })
+    const cleared = await authorSliceSettingsIntoProject({
+      workspaceId: 'workspace-1',
+      slicerTargetId: 'bambustudio-2-7-1',
+      target: makeTarget({}),
+      projectPath: stale,
+      fileName: 'stale.3mf',
+      hasFilamentTrackSwitch: false
+    })
+    assert.ok(cleared)
+    assert.equal('has_filament_switcher' in await readProjectSettings(cleared), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 function makeTarget(overrides: Partial<Extract<SlicingTarget, { mode: 'manualProfile' }>>): SlicingTarget {
   return {
     mode: 'manualProfile',

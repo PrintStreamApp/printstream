@@ -1,0 +1,21 @@
+-- Record the print-start options a print was started with (issue #97).
+--
+-- The bug: `bedLevel` is a Boolean but the choice is tri-state ('on' | 'off' | 'auto'), so
+-- every writer collapsed 'auto' and 'on' to true and a re-print could only guess 'on'. The
+-- rest of the option set had no column at all, so a re-print silently fell back to the Zod
+-- schema defaults. Widening `bedLevel` would fix one option and leave the other six broken,
+-- hence a serialized set, matching `QueueItem.printOptionsJson`.
+--
+-- It stores the user's SELECTION, not the printer-clamped values that were sent: clamping is
+-- a property of the target machine, so re-printing onto a different printer must re-clamp
+-- from the original choice rather than inherit the first printer's downgrade.
+--
+-- `bedLevel` stays for the rows already written (and for the jobs DTO, which still exposes
+-- it); re-print reads this column first and falls back to that Boolean, so existing history
+-- reprints exactly as it does today.
+--
+-- GUARDED, like every migration after `init`: `reconcileMigrationHistory` collapses a
+-- pre-squash history into a satisfied `init` row and then applies everything recorded after
+-- it, against a database that may already have this column. See `apply-migrations.test.ts`.
+
+ALTER TABLE "PrintJob" ADD COLUMN IF NOT EXISTS "printOptionsJson" TEXT;

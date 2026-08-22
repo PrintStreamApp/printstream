@@ -22,13 +22,28 @@ export interface SlotFilamentIdentity {
   filamentType: string | null
   materialSubtype: string | null
   colorName: string | null
+  /**
+   * Grams the owning plugin believes are left on the spool, if it tracks a figure.
+   *
+   * Carried here because the browser grades low-filament warnings with this number
+   * and `knownRemainGrams` REPLACES the printer's percent estimate with it rather
+   * than taking the lower of the two. A server-side guard that cannot read it
+   * therefore grades a DIFFERENT and sometimes stricter number than the dialog did,
+   * and refuses prints the user was shown no warning for.
+   */
+  remainingGrams: number | null
 }
 
 export interface SlotFilamentQuery {
   workspaceId: string
   printerId: string
   amsId: number
-  slotId: number
+  /**
+   * Null for an external spool, which has an `amsId` but no slot. The owning
+   * plugin stores it that way too (`loadedSlotId` is nullable), so narrowing this
+   * to a number would silently drop every external spool from the answer.
+   */
+  slotId: number | null
 }
 
 /** Returns the loaded spool's identity for a slot, or `null` if none is tracked. */

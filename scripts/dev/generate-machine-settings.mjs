@@ -45,10 +45,17 @@ function parseArgs(argv) {
 const LAYOUT = [
   ['Basic information', [
     ['Printable space', ['printable_height', 'best_object_pos']],
+    // Transcribed from the LIVE lines of TabPrinter::build_fff's "Advanced" optgroup. BambuStudio
+    // has commented several neighbours out (`silent_mode`, `spaghetti_detector`, and
+    // `single_extruder_multi_material`'s whole `#if 0` block) — and a commented-out option is not
+    // merely unused, it has no `def->label` either, so including one rendered a nameless switch
+    // that changed a setting the slicer ignores. `silent_mode` is still READ (it decides whether
+    // the motion limits get a Silent column, see `machineSupportsSilentMode`); BambuStudio just
+    // does not let anyone edit it here, and neither do we.
     ['Advanced', [
-      'single_extruder_multi_material', 'silent_mode', 'printer_structure', 'gcode_flavor',
+      'printer_structure', 'gcode_flavor', { key: 'thumbnail_size', fullWidth: true },
       'scan_first_layer', 'print_in_clockwise', 'use_relative_e_distances', 'use_firmware_retraction',
-      'bed_temperature_formula', 'spaghetti_detector', 'machine_load_filament_time',
+      'bed_temperature_formula', 'machine_load_filament_time',
       'machine_unload_filament_time', 'machine_switch_extruder_time', 'machine_hotend_change_time'
     ]],
     ['Extruder Clearance', [
@@ -173,6 +180,8 @@ function main() {
           options[key] = { type: 'string', label: key, tooltip: '', mode: 'simple' }
           continue
         }
+        // The `full_label` fallback that names the machine limits lives in `parseBlock` — see the
+        // note there; without it five acceleration/feedrate fields render as unnamed number boxes.
         options[key] = parseBlock(entry.coType, entry.block)
       }
     }

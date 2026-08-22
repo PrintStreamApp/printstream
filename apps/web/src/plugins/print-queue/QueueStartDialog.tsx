@@ -24,6 +24,8 @@ import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
 import { PrinterMapping } from '../../components/library/PrinterMapping'
 import { PrinterPickerDialog } from '../../components/PrinterPickerDialog'
 import { autoSelectedFilamentIds, buildAutoMatchSlots } from '../../lib/autoTrayMatch'
+import { findPrinterLowFilamentSlots, printerSlotLabeller } from '../../lib/lowFilament'
+import { LowFilamentAlert } from '../../components/LowFilamentAlert'
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { matchPrinterAspects, type PrinterAspectMatch } from './printerAspectMatch'
 import { MatchChip } from './MatchChip'
@@ -83,7 +85,7 @@ export function QueueStartDialog({
   statuses: Record<string, PrinterStatus>
   allowTypeOnlyMatch: boolean
   busy: boolean
-  onStart: (printerId: string, amsMapping: number[]) => void
+  onStart: (printerId: string, amsMapping: number[], allowInsufficientFilament: boolean) => void
   onClose: () => void
 }) {
   const filaments = useMemo(() => toMappingFilaments(item), [item])
@@ -136,6 +138,7 @@ export function QueueStartDialog({
   /** Explicit user picks only (per printer); `-1` rows fall back to the auto match via `mergeAmsMapping`. */
   const [edits, setEdits] = useState<Record<string, number[]>>({})
   const [printerPickerOpen, setPrinterPickerOpen] = useState(false)
+  const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
   const selectedPrinterId = picked && ranked.some((entry) => entry.printer.id === picked) ? picked : defaultPrinterId
 
   const autoMapping = selectedPrinterId ? autoMappingFor(selectedPrinterId) : baseMapping(item)
@@ -145,6 +148,33 @@ export function QueueStartDialog({
   const selectedPrinter = printers.find((printer) => printer.id === selectedPrinterId) ?? null
   const selectedEntry = ranked.find((entry) => entry.printer.id === selectedPrinterId) ?? null
   const allMapped = item.requiredFilaments.every((filament) => (mapping[filament.id - 1] ?? -1) >= 0)
+
+  /**
+   * Mapped slots that will run out on the chosen printer. Unlike the queue's unattended sweep,
+   * which allows a shortfall outright (nobody is there to answer), a person pressing Start here
+   * gets the same confirmation as every other print dialog, and their answer rides the request.
+   *
+   * Plain, like `mapping` and `autoSelectedIds` above: `mapping` is rebuilt on every render, so a
+   * `useMemo` keyed on it would recompute every render anyway while reading as though it did not.
+   */
+  const lowFilamentIssues = selectedPrinterId
+    ? findPrinterLowFilamentSlots(
+      selectedPrinterId,
+      statuses[selectedPrinterId],
+      filaments,
+      usedGramsById,
+      mapping,
+      resolveSlotFilament
+    )
+    : []
+  const lowFilamentEntries = lowFilamentIssues.length > 0
+    ? [{
+      printerId: selectedPrinterId ?? '',
+      printerName: null,
+      issues: lowFilamentIssues,
+      slotLabel: printerSlotLabeller(statuses[selectedPrinterId ?? ''])
+    }]
+    : []
 
   const handleMappingChange = (filamentId: number, tray: number) => {
     if (!selectedPrinterId) return
@@ -238,6 +268,11 @@ export function QueueStartDialog({
                       autoSelectedFilamentIds={autoSelectedIds}
                       onChange={handleMappingChange}
                     />
+                    <LowFilamentAlert
+                      entries={lowFilamentEntries}
+                      confirmed={allowInsufficientFilament}
+                      onConfirmedChange={setAllowInsufficientFilament}
+                    />
                   </>
                 ) : (
                   <Typography level="body-xs" textColor="text.tertiary">
@@ -253,8 +288,15 @@ export function QueueStartDialog({
           <Button
             color="primary"
             loading={busy}
-            disabled={!selectedPrinterId || !allMapped || busy}
-            onClick={() => { if (selectedPrinterId) onStart(selectedPrinterId, mapping) }}
+            disabled={
+              !selectedPrinterId
+              || !allMapped
+              || busy
+              || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
+            }
+            onClick={() => {
+              if (selectedPrinterId) onStart(selectedPrinterId, mapping, allowInsufficientFilament)
+            }}
           >
             Start print
           </Button>

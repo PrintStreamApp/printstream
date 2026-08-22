@@ -7,7 +7,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import type { Request } from 'express'
-import { classifyLibraryFileKind } from '@printstream/shared'
+import { classifyLibraryFileKind, type LibraryFile } from '@printstream/shared'
 import { annotateRequestAuditLog } from './audit-logs.js'
 import { badRequest, notFound } from './http-error.js'
 import { prisma } from './prisma.js'
@@ -36,6 +36,45 @@ type LibraryOverwriteTarget = {
   restoredFromVersionNumber: number | null
 }
 
+/**
+ * DTO for a row that was just persisted, before its derived 3MF metadata exists.
+ *
+ * Non-route creators (plugins, background jobs) need to answer with a `LibraryFile`
+ * but have no access to the listing's chip cache or the bridge parse behind it. The
+ * chips are therefore reported as PENDING rather than empty: on the wire an empty
+ * chip array without `metadataPending` asserts "derived: nothing there", which for a
+ * file nothing has parsed is a lie the web latches decisions on (`geometryOnly`
+ * routing). Marked pending only for the kinds that carry derived metadata, matching
+ * `toDto` in the library routes.
+ *
+ * Self-healing: the row lands with no chip cache, so the next listing warms and
+ * persists it and broadcasts a library change. Callers do not need to follow up.
+ */
+export function toCreatedLibraryFileDto(row: PersistedLibraryFileRow): LibraryFile {
+  const carriesDerivedMetadata = row.kind === '3mf' || row.kind === 'gcode'
+  return {
+    id: row.id,
+    name: row.name,
+    sizeBytes: row.sizeBytes,
+    uploadedAt: row.uploadedAt.toISOString(),
+    kind: row.kind as LibraryFile['kind'],
+    thumbnailPath: row.thumbnailPath,
+    folderId: row.folderId,
+    compatiblePrinterModels: [],
+    plateTypeChips: [],
+    nozzleSizeChips: [],
+    projectFilamentChips: [],
+    plateCount: 0,
+    ...(carriesDerivedMetadata ? { metadataPending: true } : {}),
+    ...(row.currentVersionNumber ? { currentVersionNumber: row.currentVersionNumber } : {}),
+    createdByName: row.createdByName ?? null,
+    restoredFromVersionNumber: row.restoredFromVersionNumber ?? null,
+    favorite: false,
+    printCount: 0,
+    lastPrintedAt: null
+  }
+}
+
 export async function persistLibraryFileFromLocalPath(input: {
   workspaceId: string
   sourcePath: string
@@ -45,9 +84,9 @@ export async function persistLibraryFileFromLocalPath(input: {
   bridgeId: string | null
   hidden: boolean
   request?: Request
-  auditAction?: 'upload' | 'slice'
+  auditAction?: 'upload' | 'slice' | 'import'
   /** Lifecycle origin override; defaults from `auditAction` ('slice' or 'upload'). */
-  origin?: 'upload' | 'slice' | 'scaffold'
+  origin?: 'upload' | 'slice' | 'scaffold' | 'import'
   missingBridgeMessage?: string
   onBridgeProgress?: (transferredBytes: number) => Promise<void> | void
   onBridgeComplete?: () => Promise<void> | void
@@ -55,7 +94,7 @@ export async function persistLibraryFileFromLocalPath(input: {
   const attribution = await resolveRequestActorAttribution(input.request)
   // Lifecycle origin drives cleanup windows (unsaved sliced outputs age out
   // faster than transient uploads).
-  const origin = input.origin ?? (input.auditAction === 'slice' ? 'slice' : 'upload')
+  const origin = input.origin ?? (input.auditAction === 'slice' ? 'slice' : input.auditAction === 'import' ? 'import' : 'upload')
   const parentFolder = input.folderId
     ? await prisma.libraryFolder.findUnique({ where: { id: input.folderId }, select: { ownerBridgeId: true } })
     : null
@@ -161,7 +200,9 @@ export async function persistLibraryFileFromLocalPath(input: {
         ? `Overwrote library file ${created.name}.`
         : action === 'slice'
           ? `Saved sliced library file ${created.name}.`
-          : `Uploaded library file ${created.name}.`,
+          : action === 'import'
+            ? `Imported library file ${created.name} from a remote source.`
+            : `Uploaded library file ${created.name}.`,
       metadata: {
         fileId: created.id,
         fileName: created.name,

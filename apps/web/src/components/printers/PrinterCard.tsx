@@ -786,8 +786,7 @@ function PrinterCardComponent({
                         {dispatchStatusLabel(dispatchJob.status)}
                       </Chip>
                     )}
-                    determinate={dispatchJob.uploadPercent != null}
-                    value={dispatchJob.uploadPercent ?? 0}
+                    value={dispatchJob.uploadPercent ?? null}
                     color={dispatchProgressColor(dispatchJob.status)}
                     fillColor={dispatchProgressFill(dispatchJob.status)}
                     trackColor={dispatchProgressTrack(dispatchJob.status)}
@@ -799,8 +798,7 @@ function PrinterCardComponent({
                 <>
                   <PrinterJobProgressBlock
                     header={<Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>{activeTrackedDisplayJobName || activeJob.jobName}</Typography>}
-                    determinate={false}
-                    value={0}
+                    value={null}
                     color={pendingStartWarning ? 'warning' : 'success'}
                     footer={(
                       <Typography level="body-xs" textColor="text.tertiary" sx={{ textWrap: 'pretty' }}>
@@ -828,7 +826,6 @@ function PrinterCardComponent({
                   headerAside={status?.progressPercent != null ? (
                     <Typography level="body-xs">{Math.round(status.progressPercent)}%</Typography>
                   ) : undefined}
-                  determinate
                   value={status.progressPercent}
                   color={progressBarColor(status)}
                   fillColor={progressBarFill(status)}
@@ -917,7 +914,6 @@ function PrinterCardComponent({
                       observeRef={cardRef}
                     />
                   )}
-                  determinate
                   value={100}
                   color="danger"
                   afterProgress={(
@@ -949,8 +945,7 @@ function PrinterCardComponent({
                     />
                   )}
                   showProgress={latestJobProgressPercent != null}
-                  determinate
-                  value={latestJobProgressPercent ?? 0}
+                  value={latestJobProgressPercent ?? null}
                   color={printerHistoryResultColor(latestJob.result)}
                   footer={(
                     <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
@@ -1011,6 +1006,7 @@ function PrinterCardComponent({
             onOpenTemperatureControls={() => openControlsDialog('temperature')}
             onOpenSpeedControls={() => openControlsDialog('speed')}
             onOpenNozzleControls={() => openControlsDialog('nozzles')}
+            onOpenTrackSwitchControls={() => openControlsDialog('trackSwitch')}
             showChamberTemperature={showChamberTemperature}
             chamberTemperature={chamberTemperature}
             chamberTarget={chamberTarget}

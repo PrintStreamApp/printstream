@@ -1,4 +1,4 @@
-import { Box, Button, CircularProgress, IconButton, ModalClose, ModalDialog, Stack, Tooltip, Typography } from '@mui/joy'
+import { Box, Button, IconButton, ModalClose, ModalDialog, Stack, Tooltip, Typography } from '@mui/joy'
 import FullscreenExitRoundedIcon from '@mui/icons-material/FullscreenExitRounded'
 import FullscreenRoundedIcon from '@mui/icons-material/FullscreenRounded'
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined'
@@ -13,6 +13,7 @@ import { usePrinterDispatchUploadActive } from '../hooks/usePrintDispatchJobs'
 import { useSnapshotInterest } from '../hooks/useSnapshotInterest'
 import { buildApiUrl } from '../lib/apiUrl'
 import { resolveBufferedSnapshotSrc } from '../lib/printerCardMedia'
+import { ProgressSpinner } from './ProgressSpinner'
 
 interface CoverMedia {
   title: string
@@ -232,8 +233,8 @@ function CoverTile({ cover, tileSize }: { cover: CoverMedia; tileSize: { xs: num
           {showImage && cover.src ? (
             <Box component="img" src={cover.src} alt={`${cover.title} cover`} sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
           ) : null}
-          {showDeterminateProgress && <CircularProgress size="sm" determinate value={cover.progress ?? 0} sx={{ position: 'absolute' }} />}
-          {showIndeterminateProgress && <CircularProgress size="sm" determinate={false} />}
+          {showDeterminateProgress && <ProgressSpinner size="sm" value={cover.progress ?? 0} sx={{ position: 'absolute' }} />}
+          {showIndeterminateProgress && <ProgressSpinner size="sm" />}
           {cover.failed && <PlaceholderImageIcon />}
         </Box>
       </Tooltip>

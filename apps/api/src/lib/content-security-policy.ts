@@ -28,6 +28,8 @@
  * modes) are POSTed to the `routes/csp-report.ts` sink via `report-uri`, so
  * real-user regressions surface in the server logs, not just user consoles.
  */
+import { REMOTE_IMPORT_THUMBNAIL_CSP_SOURCES } from '@printstream/shared'
+
 // Paddle Billing checkout (cloud-only). Paddle.js is served from `cdn.paddle.com`
 // and opens the checkout in an iframe from `*.paddle.com` (e.g. `buy.paddle.com`,
 // `sandbox-buy.paddle.com`), calling Paddle's APIs and loading card-brand images
@@ -44,13 +46,21 @@ const PADDLE = 'https://*.paddle.com'
 const CLOUDFLARE_INSIGHTS_SCRIPT = 'https://static.cloudflareinsights.com'
 const CLOUDFLARE_INSIGHTS_BEACON = 'https://cloudflareinsights.com'
 
+// Model-provider cover images shown by the remote-imports plugin's import page.
+// Candidate cards render the provider's own thumbnail before anything has been
+// downloaded, so there is no same-origin copy to point at yet. Derived from the
+// same host list the URL sanitizer uses (`sanitizeRemoteImportThumbnailUrl`), so
+// the policy and the gate cannot drift; CSP is the backstop, not the only check.
+// Host-scoped, and inert unless that plugin is in use.
+const PROVIDER_IMAGES = REMOTE_IMPORT_THUMBNAIL_CSP_SOURCES
+
 const CSP_DIRECTIVES: Record<string, string[]> = {
   'default-src': ["'self'"],
   'base-uri': ["'self'"],
   'frame-ancestors': ["'none'"],
   'object-src': ["'none'"],
   'form-action': ["'self'"],
-  'img-src': ["'self'", 'data:', 'blob:', PADDLE],
+  'img-src': ["'self'", 'data:', 'blob:', PADDLE, ...PROVIDER_IMAGES],
   'media-src': ["'self'", 'data:', 'blob:'],
   'font-src': ["'self'", 'data:'],
   'style-src': ["'self'", "'unsafe-inline'", PADDLE],

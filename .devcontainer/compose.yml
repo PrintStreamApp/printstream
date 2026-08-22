@@ -33,6 +33,12 @@ services:
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
+    # `command: sleep infinity` makes PID 1 a process that never calls wait(),
+    # so every orphaned child is reparented to it and stays a zombie forever.
+    # Measured before this was added: 1118 zombies in a container up ~1.5 days
+    # (964 esbuild from the dev server, 115 git, 30 node).
+    # `init: true` runs tini as PID 1, which forwards signals and reaps orphans.
+    init: true
     command: sleep infinity
     working_dir: /workspace/printstream
     group_add:

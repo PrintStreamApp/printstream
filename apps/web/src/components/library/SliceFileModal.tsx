@@ -39,8 +39,7 @@ import type {
 } from '@printstream/shared'
 import { PER_OBJECT_PROCESS_KEYS,
   isProjectNewerThanSlicer,
-  isProjectSlicingPresetId,
-  type ResolveProcessConfigResponse
+  isProjectSlicingPresetId
 } from '@printstream/shared'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiFetch } from '../../lib/apiClient'
@@ -90,7 +89,9 @@ import { useMachineTarget } from './useMachineTarget'
 import { useMaterialSlots } from './useMaterialSlots'
 import { useProcessProfileSelection } from './useProcessProfileSelection'
 import { SliceSettingsPanel, type SliceSettingsController, type SliceConfigSnapshot } from './SliceSettingsPanel'
+import { SlicingPresetsDialog } from './SlicingPresetsDialog'
 import { resolveWorkspaceFilamentConfig } from './workspaceFilamentResolver'
+import { resolveWorkspaceProcessConfig } from '../workspaceProcessResolver'
 import type { FilamentOption } from './PlateGcodeSections'
 
 const ProcessSettingsDialog = lazy(() => import('../ProcessSettingsDialog'))
@@ -400,6 +401,7 @@ export function SliceFileModal({
   // those edits light Save and land in undo history. Null in the simple slice path.
   const processEditListenerRef = useRef<(() => void) | null>(null)
   const [saveDestinationOpen, setSaveDestinationOpen] = useState(false)
+  const [slicingPresetsOpen, setSlicingPresetsOpen] = useState(false)
   // Slice-time object selection (single-plate only). Tracks the kept objects; defaults to all.
   const [selectedSliceObjectIds, setSelectedSliceObjectIds] = useState<Set<number>>(new Set())
   // Subscribed HERE rather than passed in: statuses arrive several times a second and every
@@ -423,11 +425,10 @@ export function SliceFileModal({
   )
   const projectProcessResolveQuery = useQuery({
     queryKey: ['slice-project-process-carry', projectProcessProfileId, file.id],
-    queryFn: ({ signal }) => apiFetch<ResolveProcessConfigResponse>('/api/slicing/profiles/resolve-process', {
-      method: 'POST',
-      body: { processProfileId: projectProcessProfileId, targetId: null, sourceFileId: file.id },
-      signal
-    }),
+    queryFn: ({ signal }) => resolveWorkspaceProcessConfig(
+      { processProfileId: projectProcessProfileId as string, targetId: null, sourceFileId: file.id },
+      { signal }
+    ),
     enabled: Boolean(projectProcessProfileId && file.id),
     staleTime: Infinity
   })
@@ -875,6 +876,10 @@ export function SliceFileModal({
   // Settings tab. State stays here (single source of truth); the controller is
   // the bridge. See SliceSettingsController.
   const sliceController: SliceSettingsController = {
+    // Purge volumes are project-FILE content edited (and saved) by the editor, which injects this
+    // itself from the archive it holds. The prepare-print dialog has no project save to ride, so
+    // it offers no button rather than an edit that would silently go nowhere.
+    flushVolumes: null,
     file, resourceBasePath, flow, requiresSinglePlate, canOpenThreeDimensionalPreview, isMobileViewport,
     workspaceSlug, navigate, onClose,
     slicerTargets, selectedSlicerTargetId, setSelectedSlicerTargetId,
@@ -1061,7 +1066,17 @@ export function SliceFileModal({
               {needsSettingsRepair && <RepairProjectSettingsAlert reasons={file.settingsRepairReasons} />}
               {sliceController.projectVersionWarning && <ProjectVersionWarningAlert {...sliceController.projectVersionWarning} />}
               {/* The panel renders its own slicer availability/loading notices. */}
-              <SliceSettingsPanel controller={sliceController} mode="simple" />
+              {/* Same manager the editor offers. This dialog is inside a workspace, so its
+                  presets are the stored ones — the reason the public editor has no button
+                  does not apply here, and preparing a print is exactly when someone wants
+                  to add or fix a process preset. */}
+              <SliceSettingsPanel
+                controller={sliceController}
+                mode="simple"
+                onManagePresets={() => setSlicingPresetsOpen(true)}
+                canEditPrinterPreset
+                presetSourceStatus={<PluginSlot name="slicing.presets.syncStatus" />}
+              />
               {(!saveDestinationOpen || submitAction !== 'save') && submitError && <Typography level="body-sm" color="danger">{submitError}</Typography>}
             </Stack>
           </ScrollableDialogBody>
@@ -1109,6 +1124,9 @@ export function SliceFileModal({
         </ScrollableModalDialog>
       </Modal>
       )}
+      {/* Top level for the same reason as the settings dialogs below: it has to stack
+          above this dialog rather than inside its scrolling body. */}
+      <SlicingPresetsDialog open={slicingPresetsOpen} onClose={() => setSlicingPresetsOpen(false)} />
       {/* Per-object + process settings dialogs live at the top level so they stack
           above the editor in editor-only mode (and above the slim dialog otherwise). */}
       {editingSliceObject && selectedProcessProfile && (

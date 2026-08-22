@@ -32,6 +32,7 @@ import { bridgeCrashChip } from '../../lib/bridgeCrashHealth'
 import { BackAwareModal } from '../BackAwareModal'
 import { BridgeBackupsSection } from './BridgeBackupsSection'
 import { BridgeInstallCard } from '../BridgeInstallCard'
+import { ClearBridgeCrashHistoryButton } from '../ClearBridgeCrashHistoryButton'
 import { ConnectivityGuideButton } from '../ConnectivityGuideButton'
 import { ConfirmActionDialog } from '../ConfirmActionDialog'
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
@@ -418,6 +419,13 @@ function BridgeDetailsDialog({ bridge, onClose }: { bridge: BridgeSummary; onClo
                         {bridge.crash.lastReason}
                       </Typography>
                     )}
+                    <Stack sx={{ mt: 1 }}>
+                      <ClearBridgeCrashHistoryButton
+                        bridgeId={bridge.id}
+                        color={crashChip.color}
+                        disabled={bridgeActionPending}
+                      />
+                    </Stack>
                   </Stack>
                 </Alert>
               )}

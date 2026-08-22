@@ -6,6 +6,7 @@ import cors from 'cors'
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import helmet from 'helmet'
+import { buildSecurityHeaderOptions } from './lib/security-headers.js'
 import { clientOrigins } from './lib/client-origins.js'
 import { env } from './lib/env.js'
 import { buildContentSecurityPolicy } from './lib/content-security-policy.js'
@@ -42,6 +43,7 @@ import { bridgeRuntimeRouter } from './routes/bridge-runtime.js'
 import { workspaceStatsRouter } from './routes/stats.js'
 import { pluginRegistry } from './plugin/registry.js'
 import { installAuditLogCapture } from './lib/audit-logs.js'
+import { installFeatureUsageCapture } from './lib/feature-usage.js'
 import { installLogCapture } from './lib/logs.js'
 import { createRateLimitMiddleware } from './lib/rate-limit.js'
 import { registerPrivateModules } from './lib/private-modules.js'
@@ -110,8 +112,9 @@ app.use(
   })
 )
 // Helmet's other protections stay on; we set our own CSP below (helmet's strict
-// default would block the proxied MJPEG / blob: camera frames).
-app.use(helmet({ crossOriginResourcePolicy: false, contentSecurityPolicy: false }))
+// default would block the proxied MJPEG / blob: camera frames). HSTS is production-only —
+// see `lib/security-headers.ts` for why sending it over plain-HTTP dev is actively harmful.
+app.use(helmet(buildSecurityHeaderOptions(env.NODE_ENV)))
 // Content-Security-Policy for the served SPA — restores XSS defense-in-depth while
 // allowing the camera/stream resource paths. Report-only by default (safe); set
 // CSP_ENFORCE=true to enforce. See content-security-policy.ts.
@@ -150,6 +153,9 @@ app.use(express.json({
 app.use(installAuthContext({ demoMode: false }))
 app.use(installWorkspaceContext())
 app.use(installAuditLogCapture())
+// Feature-usage telemetry: a no-op unless a deployment registers a recorder
+// (the private cloud module does; OSS never does). See lib/feature-usage.ts.
+app.use(installFeatureUsageCapture())
 
 app.use('/api/auth', createRateLimitMiddleware({
   name: 'auth',

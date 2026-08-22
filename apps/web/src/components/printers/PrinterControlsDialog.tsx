@@ -27,6 +27,7 @@ import {
 import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { DialogSection } from '../DialogSection'
 import { NozzleRackSection } from './NozzleRackSection'
+import { FilamentTrackSwitchSection } from './FilamentTrackSwitchSection'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { LightbulbIcon } from './PrinterGlyphs'
 import {
@@ -131,6 +132,7 @@ export function PrinterControlsDialog({
             <Tab value="speed">Speed</Tab>
             <Tab value="temperature">Temperatures</Tab>
             {status.nozzleRack != null && <Tab value="nozzles">Nozzles</Tab>}
+            {status.filamentTrackSwitch?.installed === true && <Tab value="trackSwitch">Track switch</Tab>}
             {hasFanControls && <Tab value="fans">Fans</Tab>}
             <Tab value="motion">Motion</Tab>
             {hasExtruderControls && <Tab value="extruder">Extruder</Tab>}
@@ -391,6 +393,10 @@ export function PrinterControlsDialog({
 
               {activeTab === 'nozzles' && status.nozzleRack != null && (
                 <NozzleRackSection rack={status.nozzleRack} />
+              )}
+
+              {activeTab === 'trackSwitch' && status.filamentTrackSwitch?.installed === true && (
+                <FilamentTrackSwitchSection status={status} />
               )}
 
               {activeTab === 'fans' && hasFanControls && (

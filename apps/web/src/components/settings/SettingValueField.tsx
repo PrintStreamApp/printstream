@@ -55,6 +55,13 @@ export interface SettingValueFieldProps {
   enumRestriction?: string[]
   /** Whether to render the option's own label beside a bool switch (multi-control lines). */
   showOwnLabel: boolean
+  /**
+   * What that own label says, when the option's name is not the answer. A line carrying one control
+   * per extruder repeats a single option, so naming each control after the option would print the
+   * same word three times — the column ("Extruder 2", "Silent") is what tells them apart. Defaults
+   * to `option.label`.
+   */
+  ownLabel?: string
   isCode?: boolean
   /** Differs from the preset's PARENT — i.e. an override this preset carries. Bold, plain colour. */
   modified?: boolean
@@ -105,7 +112,7 @@ function FilamentSwatch({ color }: { color: string | null }) {
 }
 
 function SettingControl(props: SettingValueFieldProps): JSX.Element {
-  const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, isCode, modified, unsaved, mixed, filamentChoices, onScalarChange } = props
+  const { settingKey, option, value: scalar, enabled = true, enumRestriction, showOwnLabel, ownLabel, isCode, modified, unsaved, mixed, filamentChoices, onScalarChange } = props
   // A nil is BambuStudio's "not overridden", not a value: show an empty field, never the word.
   // A mixed key likewise has no single value to show — empty control, "Mixed" placeholder.
   const value = mixed ? '' : isNilSettingValue(scalar) ? '' : scalar
@@ -192,7 +199,7 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
         />
         {showOwnLabel && (
           <Typography level="body-sm" sx={changeSx}>
-            {option.label}
+            {ownLabel ?? option.label}
           </Typography>
         )}
         {/* A switch has no empty state, so the mixed hint must be text: the off position would
@@ -305,8 +312,9 @@ function SettingControl(props: SettingValueFieldProps): JSX.Element {
  */
 export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
   const control = <SettingControl {...props} />
+  const ownLabel = props.ownLabel ?? props.option.label
   // A bool renders its own label inline with the switch, so it is already handled.
-  if (!props.showOwnLabel || !props.option.label || props.option.type === 'bool') return control
+  if (!props.showOwnLabel || !ownLabel || props.option.type === 'bool') return control
   // The state is per KEY, so the per-field label is where it belongs: on a two-value line the row
   // label alone cannot say WHICH value changed.
   const changed = props.unsaved
@@ -319,7 +327,7 @@ export function SettingValueField(props: SettingValueFieldProps): JSX.Element {
       noWrap
       sx={{ flexShrink: 0, textAlign: 'right', minWidth: 88, ...changed }}
     >
-      {props.option.label}
+      {ownLabel}
     </Typography>
   )
   return (

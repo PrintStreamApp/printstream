@@ -68,7 +68,7 @@ export { decodeXmlAttributeValue }
  *      (exit 156, "Flush volumes matrix do not match to the correct size!") — see
  *      `isFlushMultiplierInconsistent`. Same VALUE-change reasoning as v23.
  */
-export const THREE_MF_INDEX_PARSER_VERSION = 27
+export const THREE_MF_INDEX_PARSER_VERSION = 28
 
 /** Per-plate metadata recovered from `model_settings.config` (labels + object/filament backfill). */
 export interface ModelSettingsPlateMetadata {
@@ -254,8 +254,12 @@ export function buildThreeMfIndex(
   // newer version than the engine slicing it (major.minor only — see bambu-file-version.ts), so
   // the slice dialog needs this to warn before the user burns a job on an exit-232 refusal.
   const projectVersion = extractProjectVersion(projectSettingsJson)
+  // Which kind of machine this was sliced for. A file sliced with a Filament Track Switch must not
+  // be printed on a machine without one (and vice versa) — BambuStudio refuses the mismatch
+  // outright, so the print dialogs need this to say why before the printer does.
+  const slicedWithFilamentTrackSwitch = extractSlicedWithFilamentTrackSwitch(projectSettingsJson)
 
-  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, settingsRepairReasons, projectVersion, ...bakedProfiles }
+  return { plates, projectFilaments, compatiblePrinterModels, supportFilamentIds, geometryOnly, objectExport, needsSettingsRepair, settingsRepairReasons, projectVersion, slicedWithFilamentTrackSwitch, ...bakedProfiles }
 }
 
 /**
@@ -545,6 +549,34 @@ export function extractProjectVersion(projectSettingsJson: string | null): strin
   if (typeof raw !== 'string') return null
   const trimmed = raw.trim()
   return /^\d+(\.\d+)*$/.test(trimmed) ? trimmed : null
+}
+
+/**
+ * Was this project sliced for a machine with a Filament Track Switch
+ * (`has_filament_switcher` in `project_settings.config`)?
+ *
+ * BambuStudio writes this from the connected printer's switch readiness and then refuses to print
+ * a file whose value disagrees with the machine in front of it, because the two cases produce
+ * different filament-to-extruder groupings and the baked tool changes assume one of them.
+ *
+ * An ABSENT key is `false`, not unknown: that is how BambuStudio's CLI defaults it
+ * (`BambuStudio.cpp`), and it is how every project saved before the switch existed must read.
+ */
+export function extractSlicedWithFilamentTrackSwitch(projectSettingsJson: string | null): boolean {
+  if (!projectSettingsJson) return false
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(projectSettingsJson)
+  } catch {
+    return false
+  }
+  if (!parsed || typeof parsed !== 'object') return false
+  const raw = (parsed as Record<string, unknown>).has_filament_switcher
+  // BambuStudio serializes bools as `"1"`/`"0"` in some writers and as JSON true/false in others.
+  if (typeof raw === 'boolean') return raw
+  if (typeof raw === 'string') return raw.trim() === '1' || raw.trim().toLowerCase() === 'true'
+  if (typeof raw === 'number') return raw === 1
+  return false
 }
 
 /**

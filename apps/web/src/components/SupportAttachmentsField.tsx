@@ -10,11 +10,12 @@
  * upload from a stuck one.
  */
 import { useRef } from 'react'
-import { Button, Chip, ChipDelete, CircularProgress, Stack, Tooltip } from '@mui/joy'
+import { Button, Chip, ChipDelete, Stack, Tooltip } from '@mui/joy'
 import AttachFileRoundedIcon from '@mui/icons-material/AttachFileRounded'
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined'
 import { SUPPORT_ATTACHMENTS_MAX_PER_MESSAGE, formatBytes } from '@printstream/shared'
 import type { SupportAttachmentDraftsState } from '../hooks/useSupportAttachmentDrafts'
+import { ProgressSpinner } from './ProgressSpinner'
 
 export function SupportAttachmentsField({
   drafts,
@@ -36,12 +37,11 @@ export function SupportAttachmentsField({
             color={draft.status === 'error' ? 'danger' : 'neutral'}
             startDecorator={draft.status === 'uploading'
               ? (
-                <CircularProgress
+                <ProgressSpinner
                   size="sm"
                   // Indeterminate until the first chunk lands, so opening the
                   // session does not read as a stalled 0%.
-                  determinate={draft.progress > 0}
-                  value={Math.round(draft.progress * 100)}
+                  value={draft.progress > 0 ? Math.round(draft.progress * 100) : null}
                   sx={{ '--CircularProgress-size': '14px' }}
                 />
               )

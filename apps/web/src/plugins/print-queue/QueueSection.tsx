@@ -184,12 +184,12 @@ export function QueueSection(props: Record<string, unknown>) {
     await runMutation(itemId, () => reorderQueue.mutateAsync(next), 'Could not reorder the queue')
   }
 
-  const handleStart = async (printerId: string, amsMapping: number[]) => {
+  const handleStart = async (printerId: string, amsMapping: number[], allowInsufficientFilament: boolean) => {
     if (!startingItem) return
     const id = startingItem.id
     setPendingItemId(id)
     try {
-      await dispatchItem.mutateAsync({ id, printerId, amsMapping })
+      await dispatchItem.mutateAsync({ id, printerId, amsMapping, allowInsufficientFilament })
       setStartingItem(null)
       toast.success('Print started')
     } catch (error) {
@@ -203,7 +203,12 @@ export function QueueSection(props: Record<string, unknown>) {
     setPendingItemId(item.id)
     try {
       const result = await dryRunItem.mutateAsync(item.id)
-      if (result.ok) {
+      if (result.ok && result.warning) {
+        // Would start, but a real Start asks about this first (or waives it unattended).
+        // Reported as a caution rather than an error: saying "would fail" for something both
+        // real paths go ahead with is what this check used to get wrong.
+        toast.warn(result.printerName ? `Would start on ${result.printerName}. ${result.warning}` : result.warning)
+      } else if (result.ok) {
         toast.success(result.printerName ? `Ready — would start on ${result.printerName}` : 'Ready to start')
       } else {
         toast.error(`Start would fail: ${result.reason ?? 'unknown reason'}`)

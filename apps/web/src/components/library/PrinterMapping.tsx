@@ -35,6 +35,24 @@ import { OverflowTooltipText } from '../OverflowTooltipText'
 import { AmsSpoolSetupDialog, type AmsSpoolSetupTarget } from '../AmsSpoolSetupDialog'
 
 /**
+ * A tray option carrying the tracked spool's remaining grams, which the printer
+ * itself cannot report for a non-RFID spool. Local to this editor because
+ * `buildPrinterTrayGroups` derives from printer status alone and has no way to
+ * reach the filament-manager lookup, which is a React hook.
+ */
+type MappingTrayOption = PrinterTrayOption & { remainingGrams?: number | null }
+
+/** AMS unit id for the tracked-spool lookup; an external spool is addressed by its mapping value. */
+function trayAmsId(tray: PrinterTrayOption): number | null {
+  return tray.kind === 'ams' ? tray.amsUnitId ?? null : tray.mappingValue
+}
+
+/** Slot id for the tracked-spool lookup; null for external spools, which have no slot. */
+function traySlotId(tray: PrinterTrayOption): number | null {
+  return tray.kind === 'ams' ? tray.amsSlotId ?? null : null
+}
+
+/**
  * Per-printer tray mapping editor. For each project filament, the user
  * picks which printer tray should feed it. Filaments not
  * actually used by the selected plate are dimmed but still configurable
@@ -68,7 +86,20 @@ export function PrinterMapping({
   autoSelectedFilamentIds?: ReadonlySet<number>
   onChange: (filamentId: number, tray: number) => void
 }) {
-  const trayGroups = useMemo(() => buildPrinterTrayGroups(status), [status])
+  const resolveSlotFilament = useSlotFilamentIdentityLookup()
+  // Tracked grams are attached to EVERY tray, not just the one being labelled: an
+  // auto-refill pool is graded on its combined remaining, so a mate whose figure was
+  // left off would silently count as zero and make a well-stocked pool read as short.
+  const trayGroups = useMemo(
+    () => buildPrinterTrayGroups(status).map((group) => ({
+      ...group,
+      trays: group.trays.map((tray): MappingTrayOption => {
+        const spool = resolveSlotFilament(printer.id, trayAmsId(tray), traySlotId(tray))
+        return spool?.remainingGrams != null ? { ...tray, remainingGrams: spool.remainingGrams } : tray
+      })
+    })),
+    [status, printer.id, resolveSlotFilament]
+  )
   const printerTrays = useMemo(() => trayGroups.flatMap((group) => group.trays), [trayGroups])
   const nozzleCount = resolvePrinterNozzleCount(printer, status)
   // Spool-setup dialog for unrecognized-but-occupied slots picked in the mapping.
@@ -283,8 +314,8 @@ function SlotOptionLabel({
   autoRefillEnabled,
   autoSelected
 }: {
-  tray: PrinterTrayOption
-  trays: readonly PrinterTrayOption[]
+  tray: MappingTrayOption
+  trays: readonly MappingTrayOption[]
   printerId?: string | null
   nozzleCount?: number | null
   requiredFilamentType?: string | null
@@ -301,11 +332,7 @@ function SlotOptionLabel({
   // for genuine (RFID) Bambu trays; custom filament reads as its type + common
   // colour ("PLA · White") — never a fabricated "Bambu <family>" brand claim.
   const resolveSlotFilament = useSlotFilamentIdentityLookup()
-  const spool = resolveSlotFilament(
-    printerId,
-    tray.kind === 'ams' ? tray.amsUnitId ?? null : tray.mappingValue,
-    tray.kind === 'ams' ? tray.amsSlotId ?? null : null
-  )
+  const spool = resolveSlotFilament(printerId, trayAmsId(tray), traySlotId(tray))
   const identity = resolveFilamentIdentity({ ...tray, spool })
   const filamentDetail = unknownSpool
     ? 'Unknown spool'
@@ -318,15 +345,20 @@ function SlotOptionLabel({
     requiredGrams,
     autoRefillEnabled
   })
-  const remainGrams = remainingState.remainGrams
-  // Remaining: the tracked spool's figure first (filament-manager covers non-RFID
-  // custom spools); otherwise only RFID/Bambu spools report a reliable estimate —
-  // untracked third-party filament shows nothing rather than a guess.
-  const remainingDetail = hasFilament && spool?.remainingGrams != null
-    ? formatFilamentRemaining(spool.remainingGrams, spool.remainPercent ?? null)
-    : hasFilament && tray.trayUuid != null && tray.remainPercent != null && remainGrams != null
-      ? formatFilamentRemaining(remainGrams, tray.remainPercent)
-      : null
+  // Which of a slot's remaining signals may be believed is `knownRemainGrams`' call, made
+  // once inside `getSlotRemainingState` — the tracked spool's figure first (filament-manager
+  // covers non-RFID custom spools), then the percent estimate for RFID trays only. Untracked
+  // third-party filament grades to null and shows nothing rather than a guess. Re-deriving
+  // that precedence here is how the label and the insufficiency highlight came to disagree.
+  // The percent has to accompany whichever grams figure won, not merge the two sources: pairing a
+  // tracked spool's weight with the printer's own percent prints two readings of one slot as if
+  // they agreed.
+  const remainingDetail = hasFilament && remainingState.remainGrams != null
+    ? formatFilamentRemaining(
+      remainingState.remainGrams,
+      spool?.remainingGrams != null ? spool.remainPercent ?? null : tray.remainPercent
+    )
+    : null
   const typeMismatch = Boolean(
     requiredFilamentType
     && tray.filamentType
@@ -387,25 +419,32 @@ function SlotOptionLabel({
         {!incompatibilityLabel && autoSelected && (
           <AutoSelectedGlyph />
         )}
-        {remainingDetail && (
+        {/* The refill badge is NOT nested under the remaining figure. It used to be, and
+            `remainingDetail` is null for any spool that is neither RFID-tagged nor tracked —
+            so the badge could never appear on exactly the manually-set spools the printer
+            happily chains, and auto-refill looked like a Bambu-spool-only feature. */}
+        {(remainingDetail || remainingState.usesAutoRefill) && (
           <Stack
             direction="row"
             spacing={0.5}
             alignItems="center"
             sx={{ gridColumn: '1 / 2', minWidth: 0 }}
           >
-            <Typography
-              level="body-xs"
-              textColor={remainingState.insufficient ? 'danger.plainColor' : 'text.tertiary'}
-              noWrap
-              sx={{ minWidth: 0, fontWeight: remainingState.insufficient ? 'md' : undefined }}
-            >
-              {remainingDetail}
-            </Typography>
+            {remainingDetail && (
+              <Typography
+                level="body-xs"
+                textColor={remainingState.insufficient ? 'danger.plainColor' : 'text.tertiary'}
+                noWrap
+                sx={{ minWidth: 0, fontWeight: remainingState.insufficient ? 'md' : undefined }}
+              >
+                {remainingDetail}
+              </Typography>
+            )}
             {remainingState.usesAutoRefill && (
               <Tooltip title="AMS auto-refill can continue this filament from another matching AMS slot." variant="soft" size="sm">
                 <Box
                   component="span"
+                  aria-label="Backed by AMS auto-refill"
                   sx={{
                     display: 'inline-flex',
                     alignItems: 'center',

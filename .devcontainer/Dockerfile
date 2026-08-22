@@ -90,5 +90,5 @@ RUN set -eux; \
 # and lets the fresh volume initialize with node ownership. Do not fold this
 # back into the generic volume-perms script.
 RUN set -eux; \
-    mkdir -p /home/node/.vscode-server/extensions; \
+    mkdir -p /home/node/.vscode-server/extensions /home/node/.vscode-server/data/agent-host /home/node/.vscode-server/data/agentSessionData; \
     chown -R node:node /home/node/.vscode-server

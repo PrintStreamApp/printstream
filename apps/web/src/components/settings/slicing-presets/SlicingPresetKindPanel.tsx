@@ -17,11 +17,14 @@ import { apiFetch } from '../../../lib/apiClient'
 import {
   DEFAULT_SLICING_PRESET_SORT_DIRECTION,
   DEFAULT_SLICING_PRESET_SORT_VALUE,
+  defaultSlicingPresetSources,
   setAllFilteredSlicingPresetsSelected,
+  slicingPresetSourcesAreDefault,
   sortSlicingPresets,
   toggleSlicingPresetSelection,
   type SlicingPresetKind,
-  type SlicingPresetSortValue
+  type SlicingPresetSortValue,
+  type SlicingPresetSource
 } from '../../../lib/slicingPresetDirectory'
 import {
   SLICING_PRESET_FACETS,
@@ -40,6 +43,7 @@ import { LazyDialogFallback } from '../../LazyDialogFallback'
 // Code-split like every other host of these dialogs: they pull in the whole settings catalog.
 const ProcessSettingsDialog = lazy(() => import('../../ProcessSettingsDialog'))
 const FilamentSettingsDialog = lazy(() => import('../../library/FilamentSettingsDialog'))
+const MachineSettingsDialog = lazy(() => import('../MachineSettingsDialog'))
 import { MultiSelectOption } from '../../MultiSelectOption'
 import { PaginatedSection } from '../../PaginationFooter'
 import { usePromptDialog } from '../../PromptDialogProvider'
@@ -49,18 +53,6 @@ import { SlicingPresetRow } from './SlicingPresetRow'
 const SLICING_PRESET_PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 type SlicingPresetPageSize = (typeof SLICING_PRESET_PAGE_SIZE_OPTIONS)[number]
 
-type SlicingPresetSource = 'custom' | 'builtin'
-
-/**
- * What the panel opens on: the workspace's own presets. Built-ins outnumber them by orders of
- * magnitude, so showing everything by default would bury the presets someone came here to manage.
- */
-const DEFAULT_SOURCES: ReadonlyArray<SlicingPresetSource> = ['custom']
-
-/** Whether the source filter is untouched — order-insensitive, since the Select returns its own. */
-function sourcesAreDefault(sources: ReadonlyArray<SlicingPresetSource>): boolean {
-  return sources.length === DEFAULT_SOURCES.length && DEFAULT_SOURCES.every((source) => sources.includes(source))
-}
 
 // 'kind' is gone from the sort options: every row in a panel is the same kind now.
 const SLICING_PRESET_SORT_OPTIONS: ReadonlyArray<DirectorySortOption<SlicingPresetSortValue>> = [
@@ -113,7 +105,9 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   // profiles), so the manager opens on YOUR presets and browsing the built-ins is one filter away.
   // Kept as a filter rather than a tab or section so the toolbar's search/sort/grouping/paging
   // serves both without being duplicated.
-  const [sources, setSources] = React.useState<SlicingPresetSource[]>([...DEFAULT_SOURCES])
+  // Null until the user picks, so the default can follow the data: the list arrives after mount, and
+  // seeding state from an empty list would lock in the wrong default for the whole session.
+  const [sourceSelection, setSourceSelection] = React.useState<SlicingPresetSource[] | null>(null)
   const [openProfile, setOpenProfile] = React.useState<SlicingPresetSummary | null>(null)
   // A preset's values are resolved against a slicer engine, so the editor needs a target. The
   // manager has no project to take one from, so it uses the capabilities' default.
@@ -149,11 +143,13 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   const facets = SLICING_PRESET_FACETS[kind]
   // Options come from the unfiltered list so picking one filter never empties the other's menu.
   const facetOptions = React.useMemo(() => collectSlicingPresetFacetOptions(profiles, facets), [facets, profiles])
+  const defaultSources = React.useMemo(() => defaultSlicingPresetSources(profiles), [profiles])
+  const sources = sourceSelection ?? defaultSources
   // Counted against the DEFAULT, not against "showing everything". The panel opens on the
   // workspace's own presets, so counting that as an active filter lit up "Filters (1)" on a
   // list nobody had filtered yet — and since Clear returns to that same default, clearing
   // left the badge at 1 and read as a button that does nothing.
-  const activeFilterCount = countActiveSlicingPresetFacets(facetSelections) + (sourcesAreDefault(sources) ? 0 : 1)
+  const activeFilterCount = countActiveSlicingPresetFacets(facetSelections) + (slicingPresetSourcesAreDefault(sources, defaultSources) ? 0 : 1)
   const selectedProfileIdSet = React.useMemo(() => new Set(selectedProfileIds), [selectedProfileIds])
 
   const filteredProfiles = React.useMemo(
@@ -213,9 +209,9 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
   function clearFilters() {
     setPage(0)
     setFacetSelections({})
-    // Back to the default view (your own presets), not to "everything" — clearing should return
-    // the manager to what it opens as.
-    setSources([...DEFAULT_SOURCES])
+    // Back to the default view, not to "everything" — clearing should return the manager to what it
+    // opens as, whichever default that kind resolved to.
+    setSourceSelection(null)
   }
 
   function resetSearchAndFilters() {
@@ -261,8 +257,9 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
         deleting={singleDeletingProfileId === profile.id}
         onToggleSelected={() => setSelectedProfileIds((current) => toggleSlicingPresetSelection(current, profile.id))}
         onDelete={() => void handleDeleteProfile(profile)}
-        // Machine presets have no editor yet, so their rows carry no open action.
-        onOpen={profile.kind === 'machine' || !slicerTargetId ? undefined : () => setOpenProfile(profile)}
+        // Every kind has an editor; a preset's values still have to be resolved against a slicer
+        // engine, so with no target there is nothing to open.
+        onOpen={!slicerTargetId ? undefined : () => setOpenProfile(profile)}
       />
     )
   }
@@ -299,7 +296,18 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
         applyScope="preset"
         canEditOriginal={openProfile.source === 'custom'}
       />
-      ) : null}
+      ) : (
+      // No `sourceFileId` or overrides: a 3MF names its printer rather than embedding it, so a
+      // machine preset is always an installed one and there is no slice to apply it to.
+      <MachineSettingsDialog
+        open
+        onClose={() => setOpenProfile(null)}
+        slicerTargetId={slicerTargetId}
+        machineProfileId={openProfile.id}
+        machineProfileName={openProfile.name}
+        canEditOriginal={openProfile.source === 'custom'}
+      />
+      )}
     </Suspense>
   )
 
@@ -366,7 +374,7 @@ export function SlicingPresetKindPanel({ kind, profiles, emptyDescription, stick
                 multiple
                 size="sm"
                 value={sources}
-                onChange={(_event, value) => { setPage(0); setSources((value ?? []) as SlicingPresetSource[]) }}
+                onChange={(_event, value) => { setPage(0); setSourceSelection((value ?? []) as SlicingPresetSource[]) }}
                 placeholder="All sources"
                 renderValue={() => sources.length === 0 ? null : sources.map((source) => source === 'custom' ? 'User presets' : 'Built-in presets').join(', ')}
                 slotProps={{ listbox: { disablePortal: true } }}

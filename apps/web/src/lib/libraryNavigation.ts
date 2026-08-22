@@ -86,6 +86,33 @@ export function buildLibraryFolderRoute(workspaceSlug: string, folderId: string 
   return buildWorkspacePath(workspaceSlug, route)
 }
 
+/**
+ * Route that opens the library on a file AND asks it to start the slice flow for it.
+ *
+ * The handoff for surfaces that produce a file but do not own the slice/print dialog
+ * stack — today the remote-import view, whose "Import and print" lands an unsliced
+ * project. `LibraryView` consumes `slice`/`sliceFlow` once and strips them, so this is
+ * a one-shot instruction rather than sticky state: sharing or refreshing the resulting
+ * URL will not reopen the dialog.
+ *
+ * `flow: 'print'` is the prepare-print path (slice, then send to a printer); 'library'
+ * just opens the slice settings.
+ */
+export function buildLibrarySliceHandoffRoute(input: {
+  workspaceSlug: string
+  fileId: string
+  folderId: string | null
+  bridgeId: string | null
+  flow?: 'library' | 'print'
+}): string {
+  const base = input.folderId ? `${LIBRARY_ROUTE}/${encodeURIComponent(input.folderId)}` : LIBRARY_ROUTE
+  const params = new URLSearchParams()
+  if (input.bridgeId) params.set('bridge', input.bridgeId)
+  params.set('slice', input.fileId)
+  if (input.flow === 'print') params.set('sliceFlow', 'print')
+  return buildWorkspacePath(input.workspaceSlug, `${base}?${params.toString()}`)
+}
+
 /** Static path segment for the "Favorite Files" view (its own route, so it is bookmarkable + in history). */
 export const LIBRARY_FAVORITES_SEGMENT = 'favorites'
 

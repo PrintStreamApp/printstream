@@ -13,6 +13,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { readFile, stat } from 'node:fs/promises'
 import WebSocket from 'ws'
 import {
+  bridgeBambuCloudRequestParamsSchema,
+  bridgeBambuCloudRequestResultSchema,
   bridgeCameraFrameMessageSchema,
   bridgePrinterFtpActivityMessageSchema,
   bridgePingParamsSchema,
@@ -119,6 +121,7 @@ import {
   readBridgeLibraryThumbnail
 } from './library-3mf.js'
 import { THREE_MF_INDEX_PARSER_VERSION } from '@printstream/shared/three-mf'
+import { performBambuCloudRequest } from './bambu-cloud-relay.js'
 import { BridgePrinterMonitor } from './printer-monitor.js'
 import { collectBridgeMetrics, recordApiReconnect } from './bridge-metrics.js'
 import { clearBridgeCredentials, loadBridgeState, writeBridgeState, type BridgeState } from './state-store.js'
@@ -960,6 +963,18 @@ export class BridgeRuntimeClient {
             eof: chunk?.eof ?? true,
             sizeBytes: chunk?.sizeBytes
           })
+        }))
+        return
+      }
+
+      if (request.method === 'bambu.cloud.request') {
+        const parsed = bridgeBambuCloudRequestParamsSchema.parse(request.params)
+        socket.send(JSON.stringify({
+          type: 'bridge.rpc.success',
+          id: request.id,
+          result: bridgeBambuCloudRequestResultSchema.parse(
+            await performBambuCloudRequest(parsed, abortController.signal)
+          )
         }))
         return
       }

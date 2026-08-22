@@ -162,6 +162,35 @@ export function annotateRequestAuditLog(
 }
 
 /**
+ * The safety gates a print request may deliberately bypass, as audit metadata.
+ *
+ * Every one of these means the user was SHOWN a reason not to print and chose to anyway, so the
+ * durable trail is the only place that record survives — the request body is long gone by the time
+ * anyone asks why a print came out wrong, and "was this dispatched over a warning?" is the first
+ * question worth answering. Mirrors how the slicing route records `allowNewerProjectFile`.
+ *
+ * Only overrides actually USED are recorded: a metadata bag carrying three `false`s on every print
+ * says nothing and buries the entries where one is true. Callers spread the result into their
+ * `metadata`, so an untouched print contributes no keys at all.
+ *
+ * Shared by all three dispatch routes (library print, reprint, printer-storage print) so a new gate
+ * cannot be recorded by one and silently dropped by the others.
+ */
+export function printOverrideAuditMetadata(overrides: {
+  allowIncompatibleFilament?: boolean
+  allowPlateTypeMismatch?: boolean
+  allowFilamentTrackSwitchMismatch?: boolean
+  allowInsufficientFilament?: boolean
+}): AuditLogMetadata {
+  return {
+    ...(overrides.allowIncompatibleFilament ? { allowIncompatibleFilament: true } : {}),
+    ...(overrides.allowPlateTypeMismatch ? { allowPlateTypeMismatch: true } : {}),
+    ...(overrides.allowFilamentTrackSwitchMismatch ? { allowFilamentTrackSwitchMismatch: true } : {}),
+    ...(overrides.allowInsufficientFilament ? { allowInsufficientFilament: true } : {})
+  }
+}
+
+/**
  * Excludes the current request from the durable audit trail. Reserve this for
  * high-frequency endpoints with no audit value (per-notification dismissal
  * syncs, polling-style mutations) where a row per request would be noise —

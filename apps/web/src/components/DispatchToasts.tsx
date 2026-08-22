@@ -1,21 +1,33 @@
+/**
+ * Global dispatch status toasts for long-running print sends.
+ *
+ * Sending to several printers at once is the normal case (and a P1S upload is
+ * slow), so every in-flight send shares ONE grouped toast: a line each while
+ * collapsed, full detail and the Cancel/Retry/Jobs buttons behind the chevron.
+ * Status labels and progress wording come from `printersViewHelpers` so this
+ * reads exactly like the Jobs view it links to.
+ */
 import { useEffect, useMemo, useState } from 'react'
-import { Box, Button, Chip, CircularProgress, Stack, Typography } from '@mui/joy'
+import ArchiveRoundedIcon from '@mui/icons-material/ArchiveRounded'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
+import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
+import StopCircleRoundedIcon from '@mui/icons-material/StopCircleRounded'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { formatBytes, type PrintDispatchJob } from '@printstream/shared'
-import { PrinterJobProgressBlock } from './PrinterJobProgressBlock'
+import type { PrintDispatchJob } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { isActiveDispatchJob, selectVisibleDispatchJobs } from '../lib/dispatchToastVisibility'
 import { usePrintDispatchJobs } from '../hooks/usePrintDispatchJobs'
 import { formatLibraryFileName } from '../lib/libraryDisplay'
+import { dispatchStatusColor, dispatchStatusLabel, formatDispatchProgress } from '../lib/printersViewHelpers'
 import { buildWorkspacePath, buildWorkspaceSelectionPath, parseWorkspacePathname } from '../lib/workspaceRoute'
 import { toast } from '../lib/toast'
-import { StatusToast, StatusToastDismissButton } from './StatusToast'
+import { StatusToastIconAction } from './StatusToast'
+import { StatusToastGroup, type StatusToastGroupItem } from './StatusToastGroup'
 
 const FINISHED_AUTO_DISMISS_MS = 5_000
+const DISPATCH_WORDING = { activeVerb: 'Sending', noun: 'print', doneWord: 'sent' }
 
-/** Global dispatch status toasts for long-running print sends. */
 export function DispatchToasts() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -77,157 +89,78 @@ export function DispatchToasts() {
     }
   }, [dismissed, jobs])
 
-  if (visibleJobs.length === 0) return null
+  const dismiss = (id: string) => setDismissed((current) => new Set(current).add(id))
+
+  const items = visibleJobs.map((job): StatusToastGroupItem => {
+    const active = isActiveDispatchJob(job)
+    const color = dispatchStatusColor(job.status)
+    return {
+      id: job.id,
+      title: formatLibraryFileName(job.fileName),
+      statusLabel: dispatchStatusLabel(job.status),
+      color,
+      active,
+      progress: active ? job.uploadPercent ?? null : null,
+      summary: `${job.printerName} - ${formatDispatchProgress(job)}`,
+      error: job.error,
+      onDismiss: () => dismiss(job.id),
+      dismissLabel: `Dismiss the notification for ${job.fileName}`,
+      actions: (
+        <>
+          {job.status === 'failed' && (
+            <StatusToastIconAction
+              label={`Retry sending ${job.fileName}`}
+              color="primary"
+              loading={retryDispatch.isPending && retryDispatch.variables === job.id}
+              onClick={() => retryDispatch.mutate(job.id)}
+            >
+              <RefreshRoundedIcon />
+            </StatusToastIconAction>
+          )}
+          {/* Cancel and "move to history" are the same call on the server but
+              read as different acts, so they get their own icon and wording
+              rather than one control that means two things. */}
+          {active && (
+            <StatusToastIconAction
+              label={`Cancel sending ${job.fileName}`}
+              color="danger"
+              loading={cancelDispatch.isPending && cancelDispatch.variables?.id === job.id}
+              onClick={() => cancelDispatch.mutate(job)}
+            >
+              <StopCircleRoundedIcon />
+            </StatusToastIconAction>
+          )}
+          {job.status === 'failed' && (
+            <StatusToastIconAction
+              label={`Move ${job.fileName} to history`}
+              loading={cancelDispatch.isPending && cancelDispatch.variables?.id === job.id}
+              onClick={() => cancelDispatch.mutate(job)}
+            >
+              <ArchiveRoundedIcon />
+            </StatusToastIconAction>
+          )}
+        </>
+      )
+    }
+  })
+
+  if (items.length === 0) return null
 
   return (
-    <>
-      {visibleJobs.map((job) => {
-        const active = isActive(job)
-        const cancellable = active || job.status === 'failed'
-        const retryable = job.status === 'failed'
-        return (
-          <StatusToast
-            key={job.id}
-            color={statusColor(job.status)}
-            role={job.status === 'failed' ? 'alert' : 'status'}
-            startDecorator={active ? <CircularProgress size="sm" determinate={false} /> : <StatusDot status={job.status} />}
-          >
-            <Stack spacing={1}>
-              <Stack spacing={0.25} sx={{ flex: 1, minWidth: 0 }}>
-                <PrinterJobProgressBlock
-                  header={<Typography level="title-sm" noWrap sx={{ minWidth: 0, flex: 1 }}>{formatLibraryFileName(job.fileName)}</Typography>}
-                  headerAside={(
-                    <Chip size="sm" variant="soft" color={statusColor(job.status)} sx={{ flexShrink: 0 }}>
-                      {statusLabel(job.status)}
-                    </Chip>
-                  )}
-                  headerAction={(
-                    <StatusToastDismissButton
-                      ariaLabel="Dismiss dispatch notification"
-                      onClick={() => setDismissed((current) => new Set(current).add(job.id))}
-                    />
-                  )}
-                  determinate={active && job.uploadPercent != null}
-                  value={active ? (job.uploadPercent ?? 0) : 0}
-                  color={active ? 'primary' : 'neutral'}
-                  footer={<Typography level="body-xs" textColor="text.tertiary" noWrap>{job.printerName} - {formatDispatchProgress(job)}</Typography>}
-                />
-                {job.error && (
-                  <Typography level="body-xs" color="danger" noWrap>{job.error}</Typography>
-                )}
-              </Stack>
-
-              <Stack
-                direction="row"
-                spacing={1}
-                useFlexGap
-                justifyContent="flex-start"
-                sx={{ width: '100%', flexWrap: 'wrap' }}
-              >
-                {cancellable && (
-                  <Button
-                    size="sm"
-                    variant="plain"
-                    color="danger"
-                    loading={cancelDispatch.isPending && cancelDispatch.variables?.id === job.id}
-                    onClick={() => cancelDispatch.mutate(job)}
-                  >
-                    Cancel
-                  </Button>
-                )}
-                {retryable && (
-                  <Button
-                    size="sm"
-                    variant="plain"
-                    color="primary"
-                    loading={retryDispatch.isPending && retryDispatch.variables === job.id}
-                    onClick={() => retryDispatch.mutate(job.id)}
-                  >
-                    Retry
-                  </Button>
-                )}
-                <Button size="sm" variant="soft" startDecorator={<HistoryRoundedIcon />} onClick={() => navigate(jobsPath)}>
-                  Jobs
-                </Button>
-              </Stack>
-            </Stack>
-          </StatusToast>
-        )
+    <StatusToastGroup
+      items={items}
+      wording={DISPATCH_WORDING}
+      headerActions={(
+        <StatusToastIconAction label="Open jobs" onClick={() => navigate(jobsPath)}>
+          <HistoryRoundedIcon />
+        </StatusToastIconAction>
+      )}
+      onDismissAll={() => setDismissed((current) => {
+        const next = new Set(current)
+        for (const job of visibleJobs) next.add(job.id)
+        return next
       })}
-    </>
-  )
-}
-
-function isActive(job: PrintDispatchJob): boolean {
-  return isActiveDispatchJob(job)
-}
-
-function formatDispatchProgress(job: PrintDispatchJob): string {
-  if (job.status === 'uploading' && job.uploadTotalBytes) {
-    const percent = job.uploadPercent != null ? ` (${Math.round(job.uploadPercent)}%)` : ''
-    const attempt = job.uploadAttempt > 1 && job.uploadMaxAttempts > 1 ? ` - attempt ${job.uploadAttempt} of ${job.uploadMaxAttempts}` : ''
-    return `${formatBytes(job.uploadBytesSent)} of ${formatBytes(job.uploadTotalBytes)}${percent}${attempt}`
-  }
-  return job.progressMessage
-}
-
-function statusLabel(status: PrintDispatchJob['status']): string {
-  switch (status) {
-    case 'queued':
-      return 'Queued'
-    case 'uploading':
-      return 'Sending'
-    case 'sent':
-      return 'Sent'
-    case 'cancelled':
-      return 'Cancelled'
-    case 'failed':
-      return 'Failed'
-  }
-}
-
-function statusColor(status: PrintDispatchJob['status']): 'neutral' | 'primary' | 'success' | 'warning' | 'danger' {
-  switch (status) {
-    case 'queued':
-      return 'neutral'
-    case 'uploading':
-      return 'primary'
-    case 'sent':
-      return 'success'
-    case 'cancelled':
-      return 'warning'
-    case 'failed':
-      return 'danger'
-  }
-}
-
-function statusBorder(status: PrintDispatchJob['status']): string {
-  switch (status) {
-    case 'queued':
-      return 'var(--joy-palette-neutral-600)'
-    case 'uploading':
-      return 'var(--joy-palette-primary-500)'
-    case 'sent':
-      return 'var(--joy-palette-success-500)'
-    case 'cancelled':
-      return 'var(--joy-palette-warning-500)'
-    case 'failed':
-      return 'var(--joy-palette-danger-500)'
-  }
-}
-
-function StatusDot({ status }: { status: PrintDispatchJob['status'] }) {
-  return (
-    <Box
-      aria-hidden
-      sx={{
-        width: 12,
-        height: 12,
-        mt: 0.5,
-        borderRadius: '50%',
-        backgroundColor: statusBorder(status),
-        boxShadow: `0 0 0 3px color-mix(in srgb, ${statusBorder(status)} 22%, transparent)`
-      }}
+      dismissAllLabel="Dismiss the print send notifications"
     />
   )
 }

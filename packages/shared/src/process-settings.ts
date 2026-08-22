@@ -13,6 +13,7 @@
  * ("0.2", "20%", enum keys, "1"/"0" booleans) and vector options are arrays
  * of those strings. Overrides carry only the keys the user changed.
  */
+import type { SettingsBaselineOrigin } from './settings-baseline.js'
 import { z } from 'zod'
 import { processSettingsCatalog } from './generated/process-settings.generated.js'
 
@@ -187,6 +188,12 @@ export interface ResolveProcessConfigResponse {
    * always resolves needs no change.
    */
   baselineResolved?: boolean
+  /**
+   * Which preset the returned `baseConfig` actually IS, when it is not the one that was asked for.
+   * Absent means it is — see {@link SettingsBaselineOrigin}. The dialog turns this into the caveat
+   * it shows; only the anonymous resolvers ever set it.
+   */
+  baselineOrigin?: SettingsBaselineOrigin
 }
 
 /** Machine-derived context that affects conditional visibility. */
@@ -292,10 +299,18 @@ export function createProcessConfigAccessor(config: ProcessConfig): ProcessConfi
  * filled from `option.default`. This mirrors BambuStudio's model where a preset
  * stores only its overrides and the rest come from `FullPrintConfig` defaults,
  * so the editor shows real values instead of blanks for un-inherited keys.
+ *
+ * `catalog` defaults to the PROCESS catalog; the machine catalog passes its own
+ * (see `applyMachineConfigDefaults`). Keys outside the catalog are carried through
+ * untouched — that is what keeps a machine preset's non-catalog values
+ * (`printable_area`, `bed_shape`, `printer_model`) alive across an edit-and-save.
  */
-export function applyProcessConfigDefaults(config: ProcessConfig): ProcessConfig {
+export function applyProcessConfigDefaults(
+  config: ProcessConfig,
+  catalog: ProcessSettingsCatalog = processSettingsCatalog
+): ProcessConfig {
   const result: ProcessConfig = { ...config }
-  for (const [key, option] of Object.entries(processSettingsCatalog.options)) {
+  for (const [key, option] of Object.entries(catalog.options)) {
     if (result[key] !== undefined) continue
     if (option.default !== undefined) result[key] = option.default
   }

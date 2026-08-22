@@ -55,7 +55,10 @@ export function createLocalSaveTarget(options: LocalSaveTargetOptions): EditorSa
     const resolveRetargetPlan = retarget && !payload.objectExport
       ? (projectSettings: ProfileRecord) => buildLocalMachineRetargetPlan({
         target: retarget,
-        slicerTargetId: (payload as SaveArrangedThreeMf).slicerTargetId ?? '',
+        // `?? null`, never `?? ''`: an empty string is REJECTED by the resolve routes, so a save
+        // made before the slicer-targets query settles would 400 and drop the printer switch
+        // silently. Null means "the default build", which is what an unresolved target should mean.
+        slicerTargetId: (payload as SaveArrangedThreeMf).slicerTargetId || null,
         projectSettings,
         filamentPresets: options.filamentPresets()
       })

@@ -1,4 +1,4 @@
-import { Box, Button, Card, CardContent, Chip, FormControl, LinearProgress, ListItemDecorator, MenuItem, Select, Stack, Typography } from '@mui/joy'
+import { Box, Button, Card, CardContent, Chip, FormControl, ListItemDecorator, MenuItem, Select, Stack, Typography } from '@mui/joy'
 import ContentCutRoundedIcon from '@mui/icons-material/ContentCutRounded'
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
@@ -35,6 +35,7 @@ import { ConfirmActionDialog } from '../components/ConfirmActionDialog'
 import { NoConnectedBridgesEmptyState } from '../components/NoConnectedBridgesEmptyState'
 import { PaginatedSection } from '../components/PaginationFooter'
 import { PrinterJobProgressBlock } from '../components/PrinterJobProgressBlock'
+import { ProgressBar } from '../components/ProgressBar'
 import { printerJobProgressSx } from '../components/printerJobProgressStyles'
 import {
   dispatchProgressColor,
@@ -608,18 +609,16 @@ export function JobsView() {
                             </Typography>
                           )}
                         </Stack>
-                        <LinearProgress
-                          determinate={showUploadProgress && uploadPercent != null}
-                          value={showUploadProgress ? uploadPercent ?? 0 : 0}
+                        <ProgressBar
+                          value={showUploadProgress ? uploadPercent : null}
                           color={dispatchProgressColor(dispatchJob.status)}
                           sx={{
-                            ...printerJobProgressSx,
-                            my: 0.5,
-                            backgroundColor: dispatchProgressTrack(dispatchJob.status),
-                            '&::before': {
-                              ...printerJobProgressSx['&::before'],
-                              backgroundColor: dispatchProgressFill(dispatchJob.status)
-                            }
+                            ...printerJobProgressSx({
+                              value: showUploadProgress ? uploadPercent : null,
+                              fillColor: dispatchProgressFill(dispatchJob.status),
+                              trackColor: dispatchProgressTrack(dispatchJob.status)
+                            }),
+                            my: 0.5
                           }}
                         />
                         <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
@@ -901,7 +900,7 @@ export function JobsView() {
           printers={printers}
           defaultPrinterId={reprintJob.printerId}
           defaultPlate={reprintJob.plate ?? 1}
-          defaultBedLevel={reprintJob.bedLevel ?? true}
+          defaultPrintOptions={reprintJob.printOptions}
           defaultAmsMapping={reprintJob.amsMapping}
           submitPrint={async ({ printerId, body }) => {
             await restartJob.mutateAsync({
@@ -1043,8 +1042,7 @@ function ActiveSlicingJobCard({
                     {Math.round(progressPercent)}%
                   </Typography>
                 ) : undefined}
-                determinate={progressPercent != null}
-                value={progressPercent ?? 0}
+                value={progressPercent}
                 color={slicingStatusColor(job.status)}
                 footer={(
                   <Typography level="body-xs" textColor="text.tertiary" sx={{ minWidth: 0, whiteSpace: { xs: 'normal', sm: 'nowrap' }, overflowWrap: 'anywhere' }}>
@@ -1251,8 +1249,7 @@ function ActiveJobCard({ job, canViewCamera, workspaceSlug }: { job: LiveJob; ca
                     {Math.round(job.progressPercent)}%
                   </Typography>
                 ) : undefined}
-                determinate={job.progressPercent != null}
-                value={job.progressPercent ?? 0}
+                value={job.progressPercent}
                 color={waitingForPrinterStart ? (pendingStartWarning ? 'warning' : 'success') : progressBarColor(livePrinterStatus)}
                 fillColor={waitingForPrinterStart ? undefined : progressBarFill(livePrinterStatus)}
                 trackColor={waitingForPrinterStart ? undefined : progressBarTrack(livePrinterStatus)}

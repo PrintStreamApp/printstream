@@ -23,6 +23,7 @@ import type {
   PrintDispatchJob,
   PrintNozzleOffsetCalibrationMode,
   PrintOnOffAutoMode,
+  PrintStartOptionSelection,
   Printer,
   PrinterStatus,
   StartOrderPrintInput,
@@ -37,12 +38,14 @@ import {
   formatNozzleDiameterLabel,
   getPrinterPrintStartOptions,
   getPrinterPrintOptionCapabilities,
+  filamentTrackSwitchMismatch,
   isPlateTypeCompatible,
   isPrinterModelCompatible,
   mergeAmsMapping,
   resolvePrinterNozzleDiameters
 } from '@printstream/shared'
 import { autoSelectedFilamentIds, computeAutoTrayMapping } from '../../lib/autoTrayMatch'
+import { findPrinterLowFilamentSlots, printerSlotLabeller } from '../../lib/lowFilament'
 import { useSlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
@@ -57,6 +60,8 @@ import {
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { BackAwareModal as Modal } from '../BackAwareModal'
 import { DialogFileTitle } from '../DialogFileTitle'
+import { FilamentTrackSwitchMismatchAlert } from '../FilamentTrackSwitchMismatchAlert'
+import { LowFilamentAlert } from '../LowFilamentAlert'
 import { LibraryPlateCardPicker } from '../LibraryPlateSelect'
 import { PrintObjectsSection } from './PrintObjectsSection'
 import { PrinterMapping } from './PrinterMapping'
@@ -67,6 +72,7 @@ import { PluginSlot } from '../../plugin/PluginSlot'
 import { formatLibraryFileName } from '../../lib/libraryDisplay'
 import { filterTrayGroupsForFilament, sanitizeTrayMapping } from '../../lib/printerTrayMapping'
 import {
+  applyRecordedPrintStartOptions,
   buildPrintStartPreferenceKey,
   DEFAULT_STORED_PRINT_START_OPTIONS,
   mergePrintStartOptions,
@@ -109,7 +115,14 @@ interface PrintModalProps {
   defaultPrinterId?: string
   lockPrinterSelection?: boolean
   defaultPlate?: number
-  defaultBedLevel?: boolean
+  /**
+   * Print-start options to open with instead of this browser's remembered preferences:
+   * how a re-print restores the settings the original print was started with. Each field is
+   * independent: one the job never recorded is absent, and that control falls back to the
+   * remembered preference exactly as a fresh print would. Values are still clamped to what
+   * the selected printer supports, so an `auto` from an H2D shows as `on` on a P1S.
+   */
+  defaultPrintOptions?: Partial<PrintStartOptionSelection> | null
   defaultAmsMapping?: number[] | null
   projectFilamentOverrides?: ThreeMfProjectFilament[]
   selectionMode?: 'single' | 'multiple'
@@ -154,7 +167,7 @@ export function PrintModal({
   defaultPrinterId,
   lockPrinterSelection = false,
   defaultPlate,
-  defaultBedLevel,
+  defaultPrintOptions,
   defaultAmsMapping,
   projectFilamentOverrides,
   selectionMode = 'multiple',
@@ -281,6 +294,8 @@ export function PrintModal({
   const [submitting, setSubmitting] = useState(false)
   const [allowIncompatibleFilament, setAllowIncompatibleFilament] = useState(false)
   const [allowPlateTypeMismatch, setAllowPlateTypeMismatch] = useState(false)
+  const [allowFilamentTrackSwitchMismatch, setAllowFilamentTrackSwitchMismatch] = useState(false)
+  const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
   const [showOtherPrinters, setShowOtherPrinters] = useState(false)
   const [previewFileId, setPreviewFileId] = useState<string | null>(null)
   const canOpenThreeDimensionalPreview = (file.kind === '3mf' || file.kind === 'gcode') && plates.length > 0
@@ -515,6 +530,46 @@ export function PrintModal({
       .filter(([, issues]) => issues.length > 0),
     [compatibilityIssueEntries]
   )
+  // A file sliced for a machine WITH a Filament Track Switch groups its filaments across the
+  // extruders differently from one sliced without, so it must be printed on the kind of machine it
+  // was made for. `file.slicedWithFilamentTrackSwitch` is undefined on an older server, which the
+  // shared rule treats as unknown rather than "no switch" — so a lagging deployment warns about
+  // nothing instead of warning about everything.
+  const trackSwitchMismatches = useMemo(
+    () => selectedIds.flatMap((printerId) => {
+      const mismatch = filamentTrackSwitchMismatch(file.slicedWithFilamentTrackSwitch, statuses[printerId])
+      if (!mismatch) return []
+      return [{
+        printerId,
+        printerName: printers.find((entry) => entry.id === printerId)?.name ?? printerId,
+        printerHasSwitch: mismatch.printerHasSwitch
+      }]
+    }),
+    [file.slicedWithFilamentTrackSwitch, printers, selectedIds, statuses]
+  )
+  /**
+   * Mapped slots that will run out, per selected printer. Reads `effectiveMappings` — the merge of
+   * the user's picks over the matcher's suggestion — so it grades exactly what submit will send,
+   * and recomputes as the user re-picks a slot or status streams in.
+   */
+  const lowFilamentEntries = useMemo(
+    () => selectedIds.map((printerId) => ({
+      printerId,
+      printerName: selectedIds.length > 1
+        ? printers.find((entry) => entry.id === printerId)?.name ?? printerId
+        : null,
+      issues: findPrinterLowFilamentSlots(
+        printerId,
+        statuses[printerId],
+        visibleFilaments,
+        usedGramsById,
+        effectiveMappings[printerId],
+        resolveSlotFilament
+      ),
+      slotLabel: printerSlotLabeller(statuses[printerId])
+    })).filter((entry) => entry.issues.length > 0),
+    [effectiveMappings, printers, resolveSlotFilament, selectedIds, statuses, usedGramsById, visibleFilaments]
+  )
   const hasHardCompatibilityIssues = hardCompatibilityIssueEntries.length > 0
   const hasSoftCompatibilityIssues = softCompatibilityIssueEntries.length > 0
   const highTemperatureFilamentLabels = useMemo(() => {
@@ -625,9 +680,16 @@ export function PrintModal({
     timelapse: visiblePrintStartOptions?.timelapse.supported ?? false,
     nozzleOffsetCalibration: visiblePrintStartOptions?.nozzleOffsetCalibration.supported ?? false
   }), [visiblePrintStartOptions])
+  // What the form opens with: this browser's remembered preferences, with any options the
+  // job being re-printed actually recorded layered over them, then clamped to what the
+  // selected printer supports. Clamping LAST is what keeps a restored `auto` from rendering
+  // as an empty dropdown on a printer that has no Auto.
   const resolvedStoredPrintOptions = useMemo(
-    () => resolvePrintStartPreferenceDefaults(storedPrintOptions, visiblePrintStartOptions),
-    [storedPrintOptions, visiblePrintStartOptions]
+    () => resolvePrintStartPreferenceDefaults(
+      applyRecordedPrintStartOptions(storedPrintOptions, defaultPrintOptions),
+      visiblePrintStartOptions
+    ),
+    [defaultPrintOptions, storedPrintOptions, visiblePrintStartOptions]
   )
   const selectedPrinterSelectionKey = useMemo(
     () => selectedIds.slice().sort().join(','),
@@ -651,14 +713,13 @@ export function PrintModal({
     if (printOptionsTouched) return
     if (!storedPrintOptionsReady) return
     if (initializedPrintOptionsSelectionKey === selectedPrinterSelectionKey) return
-    setBedLevel(defaultBedLevel == null ? resolvedStoredPrintOptions.bedLevel : defaultBedLevel ? 'on' : 'off')
+    setBedLevel(resolvedStoredPrintOptions.bedLevel)
     setVibrationCompensation(resolvedStoredPrintOptions.vibrationCompensation)
     setFlowCalibration(resolvedStoredPrintOptions.flowCalibration)
     setTimelapse(resolvedStoredPrintOptions.timelapse)
     setNozzleOffsetCalibration(resolvedStoredPrintOptions.nozzleOffsetCalibration)
     setInitializedPrintOptionsSelectionKey(selectedPrinterSelectionKey)
   }, [
-    defaultBedLevel,
     hasSelectedPrinters,
     initializedPrintOptionsSelectionKey,
     printOptionsTouched,
@@ -743,6 +804,11 @@ export function PrintModal({
     if (!hasSelectedPrinters) return
     if (!storedPrintOptionsReady) return
     if (!printOptionsTouched && initializedPrintOptionsSelectionKey !== selectedPrinterSelectionKey) return
+    // Re-opening an old print's settings is not the user choosing them, so a re-print does
+    // not rewrite the remembered defaults until a control is actually touched. Without this,
+    // re-printing one job would quietly make that job's options the default for every
+    // subsequent print from this browser.
+    if (defaultPrintOptions && !printOptionsTouched) return
     setStoredPrintOptions({
       bedLevel,
       vibrationCompensation,
@@ -752,6 +818,7 @@ export function PrintModal({
     })
   }, [
     bedLevel,
+    defaultPrintOptions,
     vibrationCompensation,
     flowCalibration,
     hasSelectedPrinters,
@@ -890,6 +957,8 @@ export function PrintModal({
                 capabilities.nozzleOffsetCalibration ? nozzleOffsetCalibration : 'off',
               allowIncompatibleFilament,
               allowPlateTypeMismatch,
+              allowFilamentTrackSwitchMismatch,
+              allowInsufficientFilament,
               currentPlateType: printer?.currentPlateType ?? null,
               currentNozzleDiameters: resolvePrinterNozzleDiameters(
                 statuses[printerId],
@@ -1280,6 +1349,18 @@ export function PrintModal({
             </Alert>
           )}
 
+          <FilamentTrackSwitchMismatchAlert
+            entries={trackSwitchMismatches}
+            confirmed={allowFilamentTrackSwitchMismatch}
+            onConfirmedChange={setAllowFilamentTrackSwitchMismatch}
+          />
+
+          <LowFilamentAlert
+            entries={lowFilamentEntries}
+            confirmed={allowInsufficientFilament}
+            onConfirmedChange={setAllowInsufficientFilament}
+          />
+
           {(hasHardCompatibilityIssues || hasSoftCompatibilityIssues) && (
             <Alert
               color={hasHardCompatibilityIssues ? 'danger' : 'warning'}
@@ -1358,6 +1439,8 @@ export function PrintModal({
                 || !allMappingsComplete
                 || hasHardNozzleDiameterIssues
                 || (hasPlateTypeIssues && !allowPlateTypeMismatch)
+                || (trackSwitchMismatches.length > 0 && !allowFilamentTrackSwitchMismatch)
+                || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
                 || ((hasHardCompatibilityIssues || hasSoftCompatibilityIssues) && !allowIncompatibleFilament)
               }
               onClick={submit}

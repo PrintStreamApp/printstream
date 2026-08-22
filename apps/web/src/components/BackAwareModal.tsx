@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, type ComponentProps } from 'react'
 import { Modal } from '@mui/joy'
 import React from 'react'
-import { setOpenDialogCount } from '../lib/openDialogRegistry'
 
 type BackAwareModalProps = ComponentProps<typeof Modal>
 type BackAwareModalOnClose = NonNullable<BackAwareModalProps['onClose']>
@@ -83,7 +82,6 @@ function registerActiveDialog(token: string, requestClose: () => void) {
     return false
   }
   activeDialogEntries.push({ token, requestClose })
-  setOpenDialogCount(activeDialogEntries.length)
   return true
 }
 
@@ -92,7 +90,6 @@ function unregisterActiveDialog(token: string) {
   if (entryIndex === -1) return false
   activeDialogEntries.splice(entryIndex, 1)
   disableDialogManualScrollRestoration()
-  setOpenDialogCount(activeDialogEntries.length)
   return true
 }
 

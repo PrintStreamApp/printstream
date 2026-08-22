@@ -82,6 +82,7 @@ export async function withBrowserNotificationsApp(
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
     registerSlotFilamentResolver() { return () => undefined },
+    registerBambuAccountResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 

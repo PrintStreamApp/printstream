@@ -8,6 +8,16 @@ type QueryInvalidator = Pick<QueryClient, 'invalidateQueries'>
  * refreshes (a WS `resource.changed: library` from any library mutation, anywhere) so an
  * open editor isn't yanked out from under the user: refetching its scene rebuilds the 3D
  * view, and the editor is showing an immutable version snapshot that didn't change.
+ *
+ * These are PREFIX matches, which is the whole contract a new library surface has to
+ * honour: a picker's key must READ as `['library-browse', '<surface>', …]` (or
+ * `['library-folders', …]`), never `['library-<surface>-browse', …]`. The two spellings
+ * look equally reasonable and behave completely differently — the second is unreachable
+ * from here, so that dialog simply never refreshes while it is open. The file picker and
+ * the destination dialog were both spelled the second way while the printer and orders
+ * pickers were spelled the first, so uploads landing mid-session showed up in two of the
+ * four. Same rule for the optimistic favourite toggle in `LibraryView`, which patches
+ * every `['library-browse']` query at once.
  */
 export async function invalidateLibraryListQueries(queryClient: QueryInvalidator): Promise<void> {
   await queryClient.invalidateQueries({ queryKey: ['library-browse'] })

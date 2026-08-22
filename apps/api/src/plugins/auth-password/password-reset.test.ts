@@ -62,6 +62,7 @@ async function buildApp(options: {
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
     registerSlotFilamentResolver() { return () => undefined },
+    registerBambuAccountResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 

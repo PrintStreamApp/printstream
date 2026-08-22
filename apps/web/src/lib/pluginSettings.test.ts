@@ -12,6 +12,7 @@ import {
   isPluginActiveByName,
   isNotificationPlugin,
   mergePlugins,
+  shouldMountPluginRouteByName,
   shouldRenderPluginSettingsPanel,
   type ApiPluginInfo,
   type MergedPluginEntry
@@ -34,6 +35,28 @@ const panelPlugin: WebPlugin = {
   name: 'notifications-browser',
   settingsPanel: () => null
 }
+
+// A route must outlive the plugin-state load window that a nav tab deliberately
+// waits out — otherwise a cold-loaded deep link 404s before the answer arrives.
+test('shouldMountPluginRouteByName keeps plugin deep links mounted until plugin state loads', () => {
+  const apiPluginsByName = new Map<string, ApiPluginInfo>()
+  assert.equal(shouldMountPluginRouteByName('remote-imports', apiPluginsByName, false), true)
+  assert.equal(isPluginActiveByName('remote-imports', apiPluginsByName, false), false)
+})
+
+test('shouldMountPluginRouteByName unmounts disabled plugin routes once plugin state is ready', () => {
+  const apiPluginsByName = new Map<string, ApiPluginInfo>([
+    ['remote-imports', createApiPlugin({ name: 'remote-imports', enabled: false })]
+  ])
+  assert.equal(shouldMountPluginRouteByName('remote-imports', apiPluginsByName, true), false)
+})
+
+test('shouldMountPluginRouteByName mounts active plugin routes once plugin state is ready', () => {
+  const apiPluginsByName = new Map<string, ApiPluginInfo>([
+    ['remote-imports', createApiPlugin({ name: 'remote-imports' })]
+  ])
+  assert.equal(shouldMountPluginRouteByName('remote-imports', apiPluginsByName, true), true)
+})
 
 test('shouldRenderPluginSettingsPanel hides disabled plugin panels and routes notification panels to the notifications surface', () => {
   const notificationsEntry: MergedPluginEntry = {

@@ -1,19 +1,30 @@
 /**
- * Where the toast stack sits above the bottom edge.
+ * Which viewport edge the toast stack anchors to.
  *
- * Toasts render above the modal layer (`zIndex.tooltip`), so on a phone they must clear the mobile
- * tab bar — but that tab bar is covered whenever a dialog is open, and a toast still lifted clear of
- * it then floats in empty space over the dialog. Desktop has no bottom chrome, so its offset is
- * constant.
+ * Phones anchor toasts to the TOP. The bottom of a phone screen is the busiest part of the app —
+ * the fixed tab bar, a dialog's footer actions, the on-screen keyboard and the home indicator all
+ * live there — so a toast in that corner lands on whatever the user is reaching for, and it needed
+ * a dialog-aware lift just to stay out of the tab bar's way. No surface at any width puts fixed
+ * chrome along the top edge, so one constant offset (clear of the notch / PWA title bar, which is
+ * what `--app-top-inset` measures) is the whole rule.
+ *
+ * Desktop keeps the bottom-right corner, where there is nothing to collide with.
  *
  * Pure so the rule is testable without mounting the portal; `StatusToastStack` applies it.
  */
 
-/** Height of the phone tab bar the stack lifts clear of. */
-export const MOBILE_TAB_BAR_CLEARANCE = 84
-/** Plain breathing room from the viewport edge. */
+/** Breathing room between the stack and the viewport edge it anchors to. */
 export const TOAST_EDGE_GAP = 12
 
-export function resolveToastBottomGap(input: { dialogOpen: boolean }): number {
-  return input.dialogOpen ? TOAST_EDGE_GAP : MOBILE_TAB_BAR_CLEARANCE
-}
+/**
+ * The stack's vertical anchors, as a responsive `sx` fragment.
+ *
+ * Both edges are named at both breakpoints on purpose: a responsive `sx` value cannot be undone by
+ * a flat one, because MUI emits the `xs` entry as `@media (min-width:0px)` — which still matches on
+ * a desktop. Leaving `top` unset at `sm` would therefore keep the phone's top anchor everywhere, so
+ * each breakpoint has to state `auto` for the edge it does not use.
+ */
+export const TOAST_STACK_PLACEMENT = {
+  top: { xs: `calc(var(--app-top-inset, 0px) + ${TOAST_EDGE_GAP}px)`, sm: 'auto' },
+  bottom: { xs: 'auto', sm: `calc(var(--app-safe-bottom, 0px) + ${TOAST_EDGE_GAP}px)` }
+} as const

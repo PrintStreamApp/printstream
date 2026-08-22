@@ -69,7 +69,12 @@ export function PageSectionHeading({
             level={level}
             startDecorator={icon}
             endDecorator={count != null && count > 0 ? (
-              <Chip size="sm" variant="soft" color="neutral">{count}</Chip>
+              // `component="span"`, not Chip's default `div`: Typography renders as a
+              // `<p>` at every level this takes, and a `<div>` inside a `<p>` is invalid
+              // HTML — React logs a validateDOMNesting error, and the browser's parser
+              // is entitled to close the paragraph early and reparent the chip. Joy sets
+              // the chip's `display` from its own class, so the tag swap is visually inert.
+              <Chip component="span" size="sm" variant="soft" color="neutral">{count}</Chip>
             ) : null}
           >
             {title}

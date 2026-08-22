@@ -31,6 +31,7 @@ import {
   formatBytes,
   isPhysicalAmsTrayIndex,
   printerModelHasDualNozzles,
+  printStartOptionSelectionSchema,
   trayIndexToAmsSlot,
   VIRTUAL_TRAY_DEPUTY_ID,
   VIRTUAL_TRAY_MAIN_ID,
@@ -38,6 +39,7 @@ import {
   type PrintFromLibrary,
   type PrintNozzleOffsetCalibrationMode,
   type PrintOnOffAutoMode,
+  type PrintStartOptionSelection,
   type PrinterStatus,
   printerModelSchema,
   type PrinterModel
@@ -101,6 +103,15 @@ interface DispatchJobState {
   remoteName: string
   options: Omit<PrintFromLibrary, 'fileId' | 'printerId'>
   /**
+   * The print-start knobs as the USER chose them, before
+   * `normalizePrintStartOptionsForPrinter` clamped them to this printer. Kept beside the
+   * clamped `options` (which is what actually gets sent) purely to be recorded on the
+   * history row: a re-print must replay the choice and re-clamp for whatever printer it
+   * targets, or retargeting an Auto print onto a machine that supports Auto would inherit
+   * the first machine's downgrade to On. See `print-job-options.ts`.
+   */
+  selectedPrintOptions: PrintStartOptionSelection
+  /**
    * Instance `identify_id`s to skip (resolved from the request's `skipObjects` object
    * ids at enqueue time), or null when the user deselected nothing. Sent as the start
    * command's `skip_objects` field (the primary mechanism — what Bambu Handy sends);
@@ -140,17 +151,6 @@ interface EnqueueSnapshotPrintInput extends Omit<EnqueueLibraryPrintInput, 'file
   sourceProjectFileId?: string | null
   sliceSettingsJson?: string | null
 }
-
-type PrintStartOptionSelection = Pick<
-  PrintFromLibrary,
-  | 'bedLevel'
-  | 'vibrationCompensation'
-  | 'flowCalibration'
-  | 'firstLayerInspection'
-  | 'timelapse'
-  | 'filamentDynamicsCalibration'
-  | 'nozzleOffsetCalibration'
->
 
 const BAMBU_STUDIO_SEND_DIALOG_DEFAULTS = {
   vibrationCompensation: false,
@@ -308,11 +308,14 @@ class PrintDispatcher {
         nozzleOffsetCalibration: normalizedOptions.nozzleOffsetCalibration,
         allowIncompatibleFilament: input.allowIncompatibleFilament,
         allowPlateTypeMismatch: input.allowPlateTypeMismatch,
+        allowFilamentTrackSwitchMismatch: input.allowFilamentTrackSwitchMismatch,
+        allowInsufficientFilament: input.allowInsufficientFilament,
         currentPlateType: input.currentPlateType,
         currentNozzleDiameters: input.currentNozzleDiameters,
         plate: input.plate,
         amsMapping
       },
+      selectedPrintOptions: printStartOptionSelectionSchema.parse(input),
       postStartSkipObjectIds,
       dualNozzles: printerModelHasDualNozzles(printer.model),
       status: 'queued',
@@ -688,6 +691,7 @@ class PrintDispatcher {
       useAms: job.options.useAms,
       bedLevel: job.options.bedLevel !== 'off',
       amsMapping: job.options.amsMapping ?? null,
+      printOptions: job.selectedPrintOptions,
       calibrationOption: null
     }
   }

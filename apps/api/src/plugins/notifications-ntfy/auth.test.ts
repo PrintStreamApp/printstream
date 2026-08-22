@@ -164,6 +164,7 @@ async function withNtfyApp(
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
     registerSlotFilamentResolver() { return () => undefined },
+    registerBambuAccountResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 

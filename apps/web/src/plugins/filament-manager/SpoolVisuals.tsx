@@ -3,8 +3,9 @@
  * swatch (solid or multi-colour gradient) and a remaining-filament bar that
  * shows the level both graphically and numerically.
  */
-import { Box, LinearProgress, Stack, Typography } from '@mui/joy'
+import { Box, Stack, Typography } from '@mui/joy'
 import { LOW_REMAIN_PERCENT } from './constants'
+import { ProgressBar } from '../../components/ProgressBar'
 
 export function SpoolColorSwatch({
   colorHex,
@@ -59,8 +60,7 @@ export function SpoolRemaining({
   const value = remainPercent ?? Math.max(0, Math.min(100, (remainingGrams / Math.max(1, netWeightGrams)) * 100))
   return (
     <Stack spacing={0.5} sx={{ minWidth: 0, width: '100%' }}>
-      <LinearProgress
-        determinate
+      <ProgressBar
         value={value}
         color={remainingColor(remainPercent)}
         thickness={size === 'lg' ? 8 : 6}

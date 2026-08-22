@@ -27,7 +27,11 @@ export type CalibrationKind = z.infer<typeof calibrationKindSchema>
  * Run lifecycle: `slicing` (generating + slicing the test) -> `readyToPrint`
  * (sliced artifact ready) -> `printing` (dispatched to the printer) ->
  * `awaitingResult` (print finished, waiting for the user's measurement) ->
- * `saved` | `discarded`; `failed` is any terminal error.
+ * `saved`; `failed` is any terminal error.
+ *
+ * There is deliberately no `discarded` state: discarding a run is
+ * `DELETE /runs/:id`, which removes the row rather than parking it. A run that
+ * is abandoned mid-flight simply stays in whatever state it reached.
  */
 export const calibrationRunStatusSchema = z.enum([
   'slicing',
@@ -35,7 +39,6 @@ export const calibrationRunStatusSchema = z.enum([
   'printing',
   'awaitingResult',
   'saved',
-  'discarded',
   'failed'
 ])
 export type CalibrationRunStatus = z.infer<typeof calibrationRunStatusSchema>

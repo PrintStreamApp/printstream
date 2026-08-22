@@ -72,8 +72,11 @@ export function useReorderQueue() {
 export function useDispatchQueueItem() {
   const invalidate = useInvalidateQueue()
   return useMutation({
-    mutationFn: ({ id, printerId, amsMapping }: { id: string } & QueueDispatchInput) =>
-      apiFetch<{ item: QueueItem; job: PrintDispatchJob }>(`${BASE}/items/${id}/dispatch`, { method: 'POST', body: { printerId, amsMapping } }),
+    // The body is the whole input, not a hand-picked pair: rebuilding it field by field is
+    // how `allowInsufficientFilament` (and anything the contract grows next) reaches the
+    // route as undefined while typechecking perfectly.
+    mutationFn: ({ id, ...input }: { id: string } & QueueDispatchInput) =>
+      apiFetch<{ item: QueueItem; job: PrintDispatchJob }>(`${BASE}/items/${id}/dispatch`, { method: 'POST', body: input }),
     onSuccess: () => invalidate()
   })
 }

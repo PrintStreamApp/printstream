@@ -11,14 +11,17 @@ import { notificationsEmailWebPlugin } from '../plugins/notifications-email'
 import { emailSmtpWebPlugin } from '../plugins/email-smtp'
 import { plateClearingPlugin } from '../plugins/plate-clearing'
 import { firmwareUpdatesPlugin } from '../plugins/firmware-updates'
+import { bambuCloudSyncWebPlugin } from '../plugins/bambu-cloud-sync'
 import { ordersPlugin } from '../plugins/orders'
 import { filamentManagerPlugin } from '../plugins/filament-manager'
 import { calibrationPlugin } from '../plugins/calibration'
+import { maintenanceWebPlugin } from '../plugins/maintenance'
 import { printQueuePlugin } from '../plugins/print-queue'
 import { homeAssistantWebPlugin } from '../plugins/home-assistant'
 import { authPasswordWebPlugin } from '../plugins/auth-password'
 import { authOauthWebPlugin } from '../plugins/auth-oauth'
 import { privateWebPlugins } from '../lib/privateModules'
+import { remoteImportsPlugin } from '../plugins/remote-imports'
 import type { WebPlugin } from './types'
 import type { PluginSurface } from '@printstream/shared'
 
@@ -42,11 +45,14 @@ export function registerBuiltinPlugins(): void {
   registerBuiltinPlugin(emailSmtpWebPlugin, { runtimeSurfaces: ['platform', 'workspace'], managerSurfaces: ['platform', 'workspace'], selfHostedOnly: true })
   registerBuiltinPlugin(plateClearingPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(firmwareUpdatesPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(bambuCloudSyncWebPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(ordersPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(filamentManagerPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(calibrationPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(printQueuePlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   registerBuiltinPlugin(homeAssistantWebPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(maintenanceWebPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
+  registerBuiltinPlugin(remoteImportsPlugin, { runtimeSurfaces: ['workspace'], managerSurfaces: ['platform', 'workspace'] })
   webPluginRegistry.runInitHooks()
 }
 

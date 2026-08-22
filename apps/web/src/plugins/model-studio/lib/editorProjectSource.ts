@@ -65,6 +65,18 @@ export interface EditorProjectSource {
    */
   loadEmbeddedPresets?(): Promise<EmbeddedProjectPreset[]>
   /**
+   * The project's own `project_settings.config`, raw.
+   *
+   * For settings the editor edits WHOLE rather than key-by-key — today the purge volumes, which
+   * need the machine's dead volumes and flush datasets alongside the stored matrix. Like
+   * {@link loadEmbeddedPresets} this is deliberately not on the 3MF index: the index is cached per
+   * file version, so putting a settings blob there would cost a parser-version bump and a re-parse
+   * of every stored project for data only an open editor uses.
+   *
+   * Optional, and null when the project carries no settings entry (a from-scratch scaffold).
+   */
+  loadProjectSettings?(): Promise<string | null>
+  /**
    * Release what the source holds (object URLs, the inflated archive). Only the creator of a
    * source may call this — a host that supplies its own owns its lifetime.
    */
@@ -139,6 +151,8 @@ export function createArchiveProjectSource(resourceBase: string, fileName = 'pro
 
     loadEmbeddedPresets: async () => readEmbeddedProjectPresets((await open()).archive),
 
+    loadProjectSettings: async () => (await open()).archive.indexEntries().projectSettingsJson,
+
     // Releases the archive and revokes its object URLs, and leaves the source RE-OPENABLE on
     // purpose — see `generation`.
     dispose: () => {
@@ -163,6 +177,7 @@ export function createLocalProjectSource(project: ClientThreeMfProject): EditorP
     loadScene: async (plateIndex, printerModel) => project.sceneForPlate(plateIndex, printerModel as PrinterModel | null),
     loadEntry: (entryPath) => project.loadEntryBytes(entryPath),
     plateThumbnailUrl: (plateIndex) => project.plateThumbnailUrl(plateIndex),
-    loadEmbeddedPresets: async () => readEmbeddedProjectPresets(project.archive)
+    loadEmbeddedPresets: async () => readEmbeddedProjectPresets(project.archive),
+    loadProjectSettings: async () => project.archive.indexEntries().projectSettingsJson
   }
 }

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { PrinterStatus } from '@printstream/shared'
-import { assertLibraryPrintCompatibilityForIndex } from './print-filament-compatibility.js'
+import { slotFilamentResolvers } from './slot-filament-registry.js'
+import { assertAutomaticPrintCompatibility, assertLibraryPrintCompatibilityForIndex, InsufficientFilamentError } from './print-filament-compatibility.js'
 import type { ThreeMfIndex } from './three-mf.js'
 
 /**
@@ -15,9 +16,11 @@ import type { ThreeMfIndex } from './three-mf.js'
 function buildIndex(overrides: {
   filaments?: Array<Partial<ThreeMfIndex['plates'][number]['filaments'][number]> & { id: number }>
   nozzleSizes?: string[]
+  slicedWithFilamentTrackSwitch?: boolean
 } = {}): ThreeMfIndex {
   return {
     plates: [{
+      ...SCOPE,
       index: 1,
       name: null,
       gcodeFile: 'Metadata/plate_1.gcode',
@@ -46,7 +49,8 @@ function buildIndex(overrides: {
     printerProfileName: null,
     processProfileName: null,
     geometryOnly: false,
-    objectExport: false, needsSettingsRepair: false, settingsRepairReasons: [], projectVersion: null
+    objectExport: false, needsSettingsRepair: false, settingsRepairReasons: [], projectVersion: null,
+    slicedWithFilamentTrackSwitch: overrides.slicedWithFilamentTrackSwitch ?? false
   }
 }
 
@@ -54,10 +58,21 @@ function buildStatus(overrides: {
   nozzles?: Array<{ extruderId: number; diameter: string | null }>
   amsNozzleId?: number | null
   amsFilamentType?: string | null
+  filamentTrackSwitchInstalled?: boolean | null
 } = {}): PrinterStatus {
   return {
     nozzles: overrides.nozzles ?? [],
     externalSpools: [],
+    // null (the default) is what every machine reports today: no FTS signal at all.
+    filamentTrackSwitch: overrides.filamentTrackSwitchInstalled == null ? null : {
+      installed: overrides.filamentTrackSwitchInstalled,
+      inputA: null,
+      inputB: null,
+      outputAExtruderId: null,
+      outputBExtruderId: null,
+      calibrating: false,
+      filamentPresent: null
+    },
     ams: [{
       unitId: 0,
       type: 'ams',
@@ -67,10 +82,14 @@ function buildStatus(overrides: {
   } as unknown as PrinterStatus
 }
 
-test('an undetected nozzle diameter does not block dispatch', () => {
+/** Workspace + printer the guard needs to look up tracked spool grams. */
+const SCOPE = { workspaceId: 'workspace-1', printerId: 'printer-1' }
+
+test('an undetected nozzle diameter does not block dispatch', async () => {
   // No detected nozzles and no saved selection: the sliced 0.4 requirement has
   // nothing to compare against. Unknown must pass, not throw.
-  assert.doesNotThrow(() => assertLibraryPrintCompatibilityForIndex(buildIndex(), {
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(buildIndex(), {
+    ...SCOPE,
     plate: 1,
     printerModel: 'H2D',
     printerStatus: buildStatus(),
@@ -78,7 +97,7 @@ test('an undetected nozzle diameter does not block dispatch', () => {
   }))
 })
 
-test('a partially detected nozzle diameter blocks only on the known conflict', () => {
+test('a partially detected nozzle diameter blocks only on the known conflict', async () => {
   const index = buildIndex({
     filaments: [
       { id: 1, nozzleId: 0, nozzleDiameter: '0.4' },
@@ -87,15 +106,17 @@ test('a partially detected nozzle diameter blocks only on the known conflict', (
   })
 
   // Extruder 0 detected and matching; extruder 1 undetected → allowed.
-  assert.doesNotThrow(() => assertLibraryPrintCompatibilityForIndex(index, {
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(index, {
+    ...SCOPE,
     plate: 1,
     printerModel: 'H2D',
     printerStatus: buildStatus({ nozzles: [{ extruderId: 0, diameter: '0.4' }] })
   }))
 
   // Extruder 0 detected and conflicting → still blocked.
-  assert.throws(
-    () => assertLibraryPrintCompatibilityForIndex(index, {
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(index, {
+      ...SCOPE,
       plate: 1,
       printerModel: 'H2D',
       printerStatus: buildStatus({ nozzles: [{ extruderId: 0, diameter: '0.6' }] })
@@ -104,9 +125,10 @@ test('a partially detected nozzle diameter blocks only on the known conflict', (
   )
 })
 
-test('a known conflicting saved nozzle selection still blocks dispatch', () => {
-  assert.throws(
-    () => assertLibraryPrintCompatibilityForIndex(buildIndex(), {
+test('a known conflicting saved nozzle selection still blocks dispatch', async () => {
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(buildIndex(), {
+      ...SCOPE,
       plate: 1,
       printerModel: 'X1C',
       printerStatus: buildStatus(),
@@ -116,7 +138,7 @@ test('a known conflicting saved nozzle selection still blocks dispatch', () => {
   )
 })
 
-test('a tray nozzle mismatch blocks without the override and passes with it', () => {
+test('a tray nozzle mismatch blocks without the override and passes with it', async () => {
   const index = buildIndex({
     filaments: [{ id: 1, nozzleId: 1 }],
     nozzleSizes: []
@@ -124,37 +146,309 @@ test('a tray nozzle mismatch blocks without the override and passes with it', ()
   // The mapped tray's AMS feeds nozzle 0 while the filament is sliced for
   // nozzle 1 — a hard mismatch when the parsed binding is trusted.
   const input = {
+    ...SCOPE,
     plate: 1,
     printerModel: 'H2D' as const,
     printerStatus: buildStatus({ amsNozzleId: 0 }),
     amsMapping: [0]
   }
 
-  assert.throws(
-    () => assertLibraryPrintCompatibilityForIndex(index, input),
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(index, input),
     /incompatible with the sliced file/
   )
-  assert.doesNotThrow(() => assertLibraryPrintCompatibilityForIndex(index, {
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(index, {
     ...input,
     allowIncompatibleFilament: true
   }))
 })
 
-test('a filament type mismatch keeps respecting the override flag', () => {
+test('a filament type mismatch keeps respecting the override flag', async () => {
   const index = buildIndex({ nozzleSizes: [] })
   const input = {
+    ...SCOPE,
     plate: 1,
     printerModel: 'X1C' as const,
     printerStatus: buildStatus({ amsFilamentType: 'PETG' }),
     amsMapping: [0]
   }
 
-  assert.throws(
-    () => assertLibraryPrintCompatibilityForIndex(index, input),
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(index, input),
     /incompatible with the sliced file/
   )
-  assert.doesNotThrow(() => assertLibraryPrintCompatibilityForIndex(index, {
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(index, {
     ...input,
     allowIncompatibleFilament: true
   }))
+})
+
+test('a file must be printed on the kind of machine it was sliced for (Filament Track Switch)', async () => {
+  const slicedWithSwitch = buildIndex({ slicedWithFilamentTrackSwitch: true })
+  const slicedWithout = buildIndex()
+  const dispatch = (index: ReturnType<typeof buildIndex>, printerStatus: PrinterStatus, allow = false) =>
+    () => assertLibraryPrintCompatibilityForIndex(index, {
+      ...SCOPE,
+      plate: 1,
+      printerModel: 'H2D',
+      printerStatus,
+      amsMapping: [0],
+      allowFilamentTrackSwitchMismatch: allow
+    })
+
+  // Both directions are refused: the two cases group filaments across the extruders differently.
+  await assert.rejects(dispatch(slicedWithout, buildStatus({ filamentTrackSwitchInstalled: true })), /has one fitted/)
+  await assert.rejects(dispatch(slicedWithSwitch, buildStatus({ filamentTrackSwitchInstalled: false })), /does not have/)
+
+  // Agreement passes in both directions.
+  await assert.doesNotReject(dispatch(slicedWithSwitch, buildStatus({ filamentTrackSwitchInstalled: true })))
+  await assert.doesNotReject(dispatch(slicedWithout, buildStatus({ filamentTrackSwitchInstalled: false })))
+
+  // A printer that never mentions an FTS is UNKNOWN, not "no switch": refusing those would block
+  // every print on today's firmware, which reports nothing at all.
+  await assert.doesNotReject(dispatch(slicedWithSwitch, buildStatus()))
+  await assert.doesNotReject(dispatch(slicedWithout, buildStatus()))
+
+  // Offline printers cannot prove a mismatch either.
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(slicedWithSwitch, {
+    ...SCOPE,
+    plate: 1, printerModel: 'H2D', printerStatus: undefined, amsMapping: [0]
+  }))
+
+  // The SD-card / automatic path must enforce it too — a file already sitting on the printer is
+  // exactly the case where nobody re-checked what it was sliced for.
+  await assert.rejects(assertAutomaticPrintCompatibility({
+    ...SCOPE,
+    index: slicedWithout,
+    plate: 1,
+    printerModel: 'H2D',
+    printerStatus: buildStatus({ filamentTrackSwitchInstalled: true }),
+    useAms: true,
+    amsMapping: [0]
+  }), /has one fitted/)
+  await assert.doesNotReject(assertAutomaticPrintCompatibility({
+    ...SCOPE,
+    index: slicedWithSwitch,
+    plate: 1,
+    printerModel: 'H2D',
+    printerStatus: buildStatus({ filamentTrackSwitchInstalled: true }),
+    useAms: true,
+    amsMapping: [0]
+  }))
+
+  // Overridable, unlike in BambuStudio: we cannot read the capability flag that gates its hard
+  // refusal, so a confirmed user must not be stranded with a library of un-printable files.
+  await assert.doesNotReject(dispatch(slicedWithout, buildStatus({ filamentTrackSwitchInstalled: true }), true))
+
+  // ...but ONLY by its own flag. Confirming the TRAY assignments is a different judgement and must
+  // not silently also accept a file sliced for another class of machine.
+  await assert.rejects(assertLibraryPrintCompatibilityForIndex(slicedWithout, {
+    ...SCOPE,
+    plate: 1,
+    printerModel: 'H2D',
+    printerStatus: buildStatus({ filamentTrackSwitchInstalled: true }),
+    amsMapping: [0],
+    allowIncompatibleFilament: true
+  }), /has one fitted/)
+  await assert.rejects(assertAutomaticPrintCompatibility({
+    ...SCOPE,
+    index: slicedWithout,
+    plate: 1,
+    printerModel: 'H2D',
+    printerStatus: buildStatus({ filamentTrackSwitchInstalled: true }),
+    useAms: true,
+    amsMapping: [0],
+    allowIncompatibleFilament: true
+  }), /has one fitted/)
+})
+
+/**
+ * Low-filament guard: the API's half of the print dialogs' "these slots will run out"
+ * confirmation. Its job is to catch a stale tab or a third-party client, never to refuse
+ * something the dialog showed as fine -- which means grading the same NUMBERS, so it reads
+ * filament-manager's tracked grams back through the slot-filament resolver before refusing.
+ */
+function buildSufficiencyStatus(slots: Array<{
+  remainPercent: number | null
+  trayUuid?: string | null
+}>, autoRefill = false): PrinterStatus {
+  return {
+    nozzles: [],
+    externalSpools: [],
+    filamentTrackSwitch: null,
+    amsSettings: { autoRefill },
+    ams: [{
+      unitId: 0,
+      type: 'ams',
+      nozzleId: null,
+      slots: slots.map((slot, index) => ({
+        slot: index,
+        filamentType: 'PLA',
+        color: '#00B7EB',
+        colors: ['#00B7EB'],
+        trayName: 'Cyan',
+        trayInfoIdx: 'GFA01',
+        trayUuid: slot.trayUuid === undefined ? `UUID${index}` : slot.trayUuid,
+        remainPercent: slot.remainPercent,
+        occupied: true
+      }))
+    }]
+  } as unknown as PrinterStatus
+}
+
+const sufficiencyIndex = () => buildIndex({ filaments: [{ id: 1, usedGrams: 200 }] })
+
+test('a mapped slot that will run out blocks without the override and passes with it', async () => {
+  const input = {
+    ...SCOPE,
+    plate: 1,
+    printerModel: 'P1S' as const,
+    printerStatus: buildSufficiencyStatus([{ remainPercent: 4 }]),
+    amsMapping: [0]
+  }
+
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), input),
+    /Not enough filament loaded/
+  )
+  await assert.doesNotReject(
+    assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), { ...input, allowInsufficientFilament: true })
+  )
+})
+
+test('consenting to the tray assignments does not also consent to running out', async () => {
+  // One checkbox must not grant two permissions: `allowIncompatibleFilament` says the materials
+  // are right, which is silent on whether enough of them is left. If the sufficiency check ran
+  // after that flag's early return, ticking it in the dialog would wave this through unasked.
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), {
+      ...SCOPE,
+      plate: 1,
+      printerModel: 'P1S',
+      printerStatus: buildSufficiencyStatus([{ remainPercent: 4 }]),
+      amsMapping: [0],
+      allowIncompatibleFilament: true
+    }),
+    /Not enough filament loaded/
+  )
+})
+
+test('an auto-refill backup covers the shortfall, and an untagged spool is never called empty', async () => {
+  const backed = {
+    ...SCOPE,
+    plate: 1,
+    printerModel: 'P1S' as const,
+    printerStatus: buildSufficiencyStatus([{ remainPercent: 12 }, { remainPercent: 30 }], true),
+    amsMapping: [0]
+  }
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), backed))
+
+  // A hand-set spool reports nothing measurable. Blocking dispatch on that would ground every
+  // print using third-party filament.
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), {
+    ...SCOPE,
+    plate: 1,
+    printerModel: 'P1S',
+    printerStatus: buildSufficiencyStatus([{ remainPercent: null, trayUuid: null }]),
+    amsMapping: [0]
+  }))
+})
+
+test('the storage-print guard applies the same rule', async () => {
+  await assert.rejects(
+    assertAutomaticPrintCompatibility({
+      ...SCOPE,
+      index: sufficiencyIndex(),
+      plate: 1,
+      printerModel: 'P1S',
+      printerStatus: buildSufficiencyStatus([{ remainPercent: 4 }]),
+      useAms: true,
+      amsMapping: [0]
+    }),
+    /Not enough filament loaded/
+  )
+})
+
+test('a tracked spool the browser graded as sufficient is not refused by the API', async () => {
+  // The bug this pins: `knownRemainGrams` REPLACES the printer's percent with
+  // filament-manager's tracked grams rather than taking the lower of the two, so a
+  // tray the printer calls 4% full can genuinely hold 900g (a 5kg spool, or a
+  // hand-weighed figure). The dialog graded that as fine and rendered no
+  // confirmation, so a refusal here left the print unstartable from the UI.
+  const off = slotFilamentResolvers.register(async ({ amsId, slotId }) =>
+    amsId === 0 && slotId === 0
+      ? { spoolId: 's1', brand: null, filamentType: 'PLA', materialSubtype: null, colorName: null, remainingGrams: 900 }
+      : null)
+  try {
+    await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), {
+      ...SCOPE,
+      plate: 1,
+      printerModel: 'P1S',
+      printerStatus: buildSufficiencyStatus([{ remainPercent: 4 }]),
+      amsMapping: [0]
+    }))
+  } finally {
+    off()
+  }
+})
+
+test('a tracked spool that really is short is still refused', async () => {
+  // The inverse, so the lookup cannot be satisfied by ignoring the guard: tracked
+  // grams that CONFIRM the shortfall must still block.
+  const off = slotFilamentResolvers.register(async () =>
+    ({ spoolId: 's1', brand: null, filamentType: 'PLA', materialSubtype: null, colorName: null, remainingGrams: 30 }))
+  try {
+    await assert.rejects(
+      assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), {
+        ...SCOPE,
+        plate: 1,
+        printerModel: 'P1S',
+        printerStatus: buildSufficiencyStatus([{ remainPercent: 4 }]),
+        amsMapping: [0]
+      }),
+      /Not enough filament loaded/
+    )
+  } finally {
+    off()
+  }
+})
+
+test('a plate index the file does not have is not graded as plate 1', async () => {
+  // The guard used to fall back to `index.plates[0]`, so a request naming a plate
+  // that does not exist was refused over filament from a different plate entirely.
+  await assert.doesNotReject(assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), {
+    ...SCOPE,
+    plate: 7,
+    printerModel: 'P1S',
+    printerStatus: buildSufficiencyStatus([{ remainPercent: 4 }]),
+    amsMapping: [0]
+  }))
+})
+
+test('the low-filament refusal is distinguishable from a genuine blocker', async () => {
+  // The queue's "Check" reports this one as an advisory rather than a failure, because both
+  // real Start paths go ahead with it. That downgrade keys off the error's type, so a plain
+  // `conflict()` here would silently make Check call it a failure again.
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(sufficiencyIndex(), {
+      ...SCOPE,
+      plate: 1,
+      printerModel: 'P1S',
+      printerStatus: buildSufficiencyStatus([{ remainPercent: 4 }]),
+      amsMapping: [0]
+    }),
+    (error: unknown) => error instanceof InsufficientFilamentError && error.statusCode === 409
+  )
+
+  // A different guard must NOT be reported as one, or Check would wave through a real blocker.
+  await assert.rejects(
+    assertLibraryPrintCompatibilityForIndex(buildIndex({ filaments: [{ id: 1, nozzleDiameter: '0.4' }] }), {
+      ...SCOPE,
+      plate: 1,
+      printerModel: 'X1C',
+      printerStatus: buildStatus(),
+      currentNozzleDiameters: [{ extruderId: 0, diameter: '0.6' }]
+    }),
+    (error: unknown) => error instanceof Error && !(error instanceof InsufficientFilamentError)
+  )
 })

@@ -20,7 +20,6 @@ import { EmptyState } from '../../components/EmptyState'
 import { usePromptDialog } from '../../components/PromptDialogProvider'
 import { FilamentSpoolIcon } from '../../components/FilamentSpoolIcon'
 import { useSpoolsQuery, useSpoolMutations } from './api'
-import { useFilamentSync } from './useFilamentSync'
 import { SpoolList } from './SpoolList'
 import { SpoolGrid } from './SpoolGrid'
 import { SpoolFormDialog } from './SpoolFormDialog'
@@ -31,7 +30,6 @@ import { useSpoolDirectory } from './useSpoolDirectory'
 import { useSpoolSelection } from './useSpoolSelection'
 
 export function FilamentView() {
-  useFilamentSync()
   const spoolsQuery = useSpoolsQuery()
   const { recycle, unassign } = useSpoolMutations()
   const { confirm } = usePromptDialog()

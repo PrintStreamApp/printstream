@@ -2,8 +2,10 @@
  * STL parsing, welding, merging, and serialization for staged imports.
  *
  * Shared because both surfaces import geometry: the api parses an uploaded STL, and the browser
- * parses one the user picked for the public editor, where nothing is uploaded. STEP is the one
- * format that stays api-only — it needs the OpenCASCADE WASM build (`mesh-import.ts`).
+ * parses one the user picked for the public editor, where nothing is uploaded. This module covers
+ * STL only; a 3MF's geometry comes from `mesh-extract.ts` and a STEP's from `step-mesh.ts`, both
+ * equally shared. Which formats a host actually offers is declared on its import store, not
+ * inferred from here (`apps/web/src/plugins/model-studio/lib/editorImportStore.ts`).
  *
  * Byte-level work here takes `Uint8Array` and a `DataView`, not `Buffer`: Node's Buffer IS a
  * Uint8Array, so the api passes one straight through, while the browser has no Buffer at all.

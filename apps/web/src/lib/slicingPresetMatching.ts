@@ -25,6 +25,7 @@ import type {
 import {
   amsTrayIndex,
   buildProjectSlicingPresetId,
+  effectiveAmsNozzleId,
   formatNozzleLabel,
   getPrinterControlCapabilities,
   isProjectSlicingPresetId,
@@ -934,7 +935,11 @@ export function buildLoadedPrinterMaterialOptions(
   const options: SliceMaterialOption[] = []
   const nozzleCount = source.nozzleCount
   for (const unit of source.ams) {
-    const group = formatPrinterMaterialSourceGroup(`AMS ${amsUnitLetter(unit.unitId)}`, unit.nozzleId, nozzleCount)
+    // A unit behind a Filament Track Switch feeds EITHER nozzle, so it must not pin a material to
+    // one toolhead here — that assignment becomes the sliced `filament_map`, which would undo the
+    // routing freedom the switch exists to provide.
+    const unitNozzleId = effectiveAmsNozzleId(unit)
+    const group = formatPrinterMaterialSourceGroup(`AMS ${amsUnitLetter(unit.unitId)}`, unitNozzleId, nozzleCount)
     for (const slot of unit.slots) {
       if (slot.occupied === false || !hasLoadedMaterialDetails(slot.trayName, slot.filamentType, slot.color)) continue
       const fallbackLabel = slot.trayName?.trim() || slot.filamentType?.trim() || `AMS ${unit.unitId + 1} slot ${slot.slot + 1}`
@@ -975,8 +980,8 @@ export function buildLoadedPrinterMaterialOptions(
         colors: identity.colors.length > 0 ? identity.colors : slot.colors,
         source: 'ams',
         trayId,
-        nozzleId: unit.nozzleId,
-        toolheadId: unit.nozzleId != null ? buildSliceToolheadId(unit.nozzleId) : null,
+        nozzleId: unitNozzleId,
+        toolheadId: unitNozzleId != null ? buildSliceToolheadId(unitNozzleId) : null,
         metadata: [
           `Slot ${slot.slot + 1}`,
           identity.colorName,

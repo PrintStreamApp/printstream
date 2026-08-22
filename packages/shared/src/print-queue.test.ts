@@ -445,3 +445,20 @@ test('queueItemCreateSchema accepts an optional order link', () => {
   // A partial link is rejected — both ids are required to link an order print.
   assert.equal(queueItemCreateSchema.safeParse({ libraryFileId: 'f', orderLink: { orderId: 'o' } }).success, false)
 })
+
+// A queued mapping is dispatched through the same command builder as a print-dialog one, so
+// the two boundaries validated different things: this one accepted any integer and forwarded
+// out-of-band tray indices to a printer unchecked, while the dispatch one rejected the `-1`
+// the queue's own matcher emits for a slot it could not fill.
+test('queueAmsMappingSchema accepts the unmapped sentinel and rejects a bogus tray index', () => {
+  const parse = (amsMapping: number[]) =>
+    queueItemCreateSchema.safeParse({ libraryFileId: 'file-1', amsMapping }).success
+
+  // What `evaluateQueueMatch` produces for a partly-matched plate.
+  assert.equal(parse([0, -1, 255]), true)
+  assert.equal(parse([128, 152]), true)
+  // Previously forwarded to the printer as-is.
+  assert.equal(parse([160]), false)
+  assert.equal(parse([-2]), false)
+  assert.equal(parse([1.5]), false)
+})

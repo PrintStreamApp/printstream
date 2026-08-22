@@ -4,7 +4,7 @@
  * load of a marketing page (see `lib/marketingManifest`), so visiting the site never downloads
  * the app bundle.
  *
- * Supplies its own Joy theme + chrome CSS vars (App's `CssVarsProvider` lives inside App, which
+ * Supplies its own Joy theme + chrome CSS vars (App's own `AppThemeProvider` lives inside App, which
  * this branch never mounts) and renders the private marketing module's routes + footer. The
  * open-source build ships no marketing module, so `Root` never mounts this.
  *
@@ -17,7 +17,7 @@
 import { useEffect } from 'react'
 import Box from '@mui/joy/Box'
 import CssBaseline from '@mui/joy/CssBaseline'
-import { CssVarsProvider } from '@mui/joy/styles'
+import { AppThemeProvider } from './theme/AppThemeProvider'
 import { Route, Routes } from 'react-router-dom'
 import { PublicShell } from './components/PublicShell'
 import { ScrollReset } from './components/ScrollReset'
@@ -62,7 +62,7 @@ export default function MarketingApp() {
   }
 
   return (
-    <CssVarsProvider theme={theme} defaultMode="dark">
+    <AppThemeProvider theme={theme}>
       <CssBaseline />
       <Box sx={chromeVars}>
         <PublicShell footer={marketingModule?.Footer ? <marketingModule.Footer /> : undefined}>
@@ -77,6 +77,6 @@ export default function MarketingApp() {
           </Routes>
         </PublicShell>
       </Box>
-    </CssVarsProvider>
+    </AppThemeProvider>
   )
 }

@@ -1,5 +1,7 @@
-/* GetStartedView onboarding-tips tests: the theme tip always renders, while the
- * support-access privacy tip is cloud-only (hidden on self-hosted installs). */
+/* GetStartedView onboarding-tips tests: the plugin and theme tips always render,
+ * while the support-access privacy tip is cloud-only (hidden on self-hosted
+ * installs). The plugin tip links only for someone who can MANAGE settings,
+ * because the plugins subview redirects to the settings root without it. */
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
 import { CssVarsProvider } from '@mui/joy/styles'
@@ -75,6 +77,17 @@ test('GetStartedView shows the theme and support-access tips on cloud installs',
   assert.equal(supportTip.closest('a')?.getAttribute('href'), '/workspaces/alpha/settings/authentication')
 })
 
+test('GetStartedView points a new workspace at the plugin catalogue', async () => {
+  // Most plugins ship disabled, so this card is the only thing surfacing them
+  // outside settings — it must render on self-hosted as well as cloud.
+  for (const selfHosted of [false, true]) {
+    const view = renderView({ selfHosted })
+    const pluginTip = await view.findByText('Add more features')
+    assert.equal(pluginTip.closest('a')?.getAttribute('href'), '/workspaces/alpha/settings/plugins')
+    cleanup()
+  }
+})
+
 test('GetStartedView hides the support-access tip on self-hosted installs', async () => {
   const view = renderView({ selfHosted: true })
 
@@ -88,4 +101,7 @@ test('GetStartedView renders the tips without links when the viewer cannot open 
   const themeTip = await view.findByText('Make it yours')
   assert.equal(themeTip.closest('a'), null)
   assert.equal(view.getByText('Keep it private').closest('a'), null)
+  // Still shown, just not actionable — the card explains what plugins are for
+  // even to someone who cannot turn one on.
+  assert.equal(view.getByText('Add more features').closest('a'), null)
 })

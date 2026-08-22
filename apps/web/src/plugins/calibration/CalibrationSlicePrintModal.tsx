@@ -11,7 +11,7 @@
  * the run lives instead of back on wherever they launched it from.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Chip, CircularProgress, DialogActions, LinearProgress, Sheet, Stack, Typography } from '@mui/joy'
+import { Alert, Button, Chip, CircularProgress, DialogActions, Sheet, Stack, Typography } from '@mui/joy'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
 import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded'
@@ -34,6 +34,7 @@ import {
 } from '../../lib/slicingJobPresentation'
 import { calibrationKeys, fetchCalibrationRuns, isCalibrationRunActive, printCalibrationRun } from './api'
 import { runTitle } from './runPresentation'
+import { ProgressBar } from '../../components/ProgressBar'
 
 const STATUS_LABELS: Record<CalibrationRun['status'], { label: string; color: 'neutral' | 'primary' | 'success' | 'warning' | 'danger' }> = {
   slicing: { label: 'Slicing', color: 'primary' },
@@ -41,7 +42,6 @@ const STATUS_LABELS: Record<CalibrationRun['status'], { label: string; color: 'n
   printing: { label: 'Printing', color: 'primary' },
   awaitingResult: { label: 'Awaiting result', color: 'warning' },
   saved: { label: 'Saved', color: 'success' },
-  discarded: { label: 'Discarded', color: 'neutral' },
   failed: { label: 'Failed', color: 'danger' }
 }
 
@@ -128,9 +128,8 @@ export function CalibrationSlicePrintModal({ run: initialRun, onClose }: { run: 
                 </Typography>
                 {isSlicing && (
                   <>
-                    <LinearProgress
-                      determinate={progressPercent != null}
-                      value={progressPercent ?? 0}
+                    <ProgressBar
+                      value={progressPercent}
                       color={job ? slicingStatusColor(job.status) : 'primary'}
                     />
                     <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>

@@ -8,6 +8,9 @@
  * "<standard> - <suffix>" / "<standard> (n)", so "0.20mm Standard @BBL H2D - Ryan" resolves to
  * "0.20mm Standard @BBL H2D". Null when nothing matches (an entirely renamed preset), which the
  * callers treat as "fall back to the 3MF's own changed-from-system record".
+ *
+ * WHICH tier a resolver landed on is reported to the dialog as a `SettingsBaselineOrigin`, not
+ * re-derived by the host — see `packages/shared/src/settings-baseline.ts`.
  */
 import { slicingPresetProvenance, type SlicingPresetSummary } from '@printstream/shared'
 

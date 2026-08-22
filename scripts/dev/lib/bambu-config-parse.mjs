@@ -129,6 +129,12 @@ export function parseBlock(coType, block) {
     type: fieldType,
     vector,
     label: '',
+    // BambuStudio's standalone name for the option, used where a line carries ONE option and the
+    // short `label` would be meaningless on its own — the machine limits define only this
+    // ("Maximum acceleration for extruding"), and `TabPrinter::append_option_line` builds its line
+    // from `option.opt.full_label`. Captured separately rather than folded into `label` so the
+    // process and filament generators, which want the short form, are unaffected.
+    fullLabel: '',
     tooltip: '',
     sidetext: '',
     category: '',
@@ -146,7 +152,10 @@ export function parseBlock(coType, block) {
   for (const stmt of splitStatements(block)) {
     const s = stmt.trim()
     if (!s.startsWith('def->')) continue
-    if (s.startsWith('def->label')) opt.label = extractString(s)
+    // `full_label` first: `def->label` is a PREFIX of `def->full_label`, so testing label first
+    // would swallow both into `label`.
+    if (s.startsWith('def->full_label')) opt.fullLabel = extractString(s)
+    else if (s.startsWith('def->label')) opt.label = extractString(s)
     else if (s.startsWith('def->tooltip')) opt.tooltip = extractString(s)
     else if (s.startsWith('def->sidetext')) opt.sidetext = extractString(s)
     else if (s.startsWith('def->category')) opt.category = extractString(s)
@@ -200,6 +209,14 @@ export function parseBlock(coType, block) {
       }
     }
   }
+  // An option BambuStudio names ONLY with `full_label` is named by it — the machine limits define
+  // no `def->label` at all, and `TabPrinter::append_option_line` builds their line from
+  // `full_label`. Folded in here rather than in one generator so no catalog can render a nameless
+  // control, and dropped afterwards because `fullLabel` is a parse artifact, not part of the
+  // `ProcessSettingOption` contract the generated files are typed against.
+  if (!opt.label && opt.fullLabel) opt.label = opt.fullLabel
+  delete opt.fullLabel
+
   // Drop empties to keep generated data lean.
   if (!opt.sidetext) delete opt.sidetext
   if (!opt.category) delete opt.category

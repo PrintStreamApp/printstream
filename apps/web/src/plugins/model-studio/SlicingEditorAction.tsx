@@ -17,6 +17,7 @@ import ViewInArRoundedIcon from '@mui/icons-material/ViewInArRounded'
 import type { SceneEdit } from '@printstream/shared'
 import type { SliceSettingsController } from '../../components/library/SliceSettingsPanel'
 import { LazyDialogFallback } from '../../components/LazyDialogFallback'
+import { PluginSlot } from '../../plugin/PluginSlot'
 import { SlicingPresetsDialog } from '../../components/library/SlicingPresetsDialog'
 
 const EditorView = lazy(() => import('./EditorView'))
@@ -96,6 +97,7 @@ export function SlicingEditorAction(props: Record<string, unknown>) {
             initialPlateIndex={initialPlateIndex}
             targetPrinterModel={targetPrinterModel}
             presetManager={presetManager}
+            presetSourceStatus={<PluginSlot name="slicing.presets.syncStatus" />}
             onApply={(edit) => { onApply(edit); closeEditor() }}
             onSavedAs={onSavedAs}
             onClose={closeEditor}

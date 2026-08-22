@@ -11,9 +11,16 @@ import {
   amsUnitLetter,
   buildRequiredNozzleDiametersByExtruder,
   findFilamentCompatibilityIssues,
+  filamentTrackSwitchMismatch,
+  filamentTrackSwitchMismatchMessage,
+  findLowFilamentSlots,
   findNozzleDiameterCompatibilityIssues,
   formatNozzleDiameterLabel,
   formatNozzleLabel,
+  loadedSlotsFromStatus,
+  trayIndexToAmsSlot,
+  lowFilamentIssueSentence,
+  queueRequiredFilamentFromPlate,
   resolvePrinterNozzleDiameters,
   isPlateTypeCompatible,
   isPrinterModelCompatible,
@@ -23,21 +30,47 @@ import {
   type PrinterModel,
   type PrinterStatus
 } from '@printstream/shared'
-import { conflict } from './http-error.js'
+import { conflict, HttpError } from './http-error.js'
+import { slotFilamentResolvers } from './slot-filament-registry.js'
 import type { ThreeMfIndex } from './three-mf.js'
 
+/**
+ * The low-filament refusal, as its own type.
+ *
+ * Named so a caller that is REPORTING rather than starting (the queue's "Check" dry run) can tell
+ * this apart from a genuine blocker and downgrade it to an advisory. It is the one guard here that
+ * a person is routinely offered as a confirmation, so "would fail" is the wrong word for it, while
+ * saying nothing makes the check silent about the thing it was pressed for.
+ *
+ * Same status and message as any other conflict; only the name is new.
+ */
+export class InsufficientFilamentError extends HttpError {
+  constructor(message: string) {
+    super(409, message)
+    this.name = 'InsufficientFilamentError'
+  }
+}
+
 interface LibraryPrintCompatibilityIndexInput {
+  /** Required so the low-filament guard can read the same tracked grams the dialog graded with. */
+  workspaceId: string
+  printerId: string
   plate: number
   printerModel: PrinterModel
   printerStatus: PrinterStatus | undefined
   amsMapping?: number[]
   allowIncompatibleFilament?: boolean
   allowPlateTypeMismatch?: boolean
+  allowFilamentTrackSwitchMismatch?: boolean
+  allowInsufficientFilament?: boolean
   currentPlateType?: string | null
   currentNozzleDiameters?: PrinterNozzleDiameterSelection[]
 }
 
 interface AutomaticPrintCompatibilityInput {
+  /** Required so the low-filament guard can read the same tracked grams the dialog graded with. */
+  workspaceId: string
+  printerId: string
   index: ThreeMfIndex | null
   plate: number
   printerModel: PrinterModel
@@ -45,6 +78,8 @@ interface AutomaticPrintCompatibilityInput {
   useAms: boolean
   amsMapping?: number[]
   allowIncompatibleFilament?: boolean
+  allowFilamentTrackSwitchMismatch?: boolean
+  allowInsufficientFilament?: boolean
 }
 
 interface AutomaticCompatibilityIssue {
@@ -54,12 +89,16 @@ interface AutomaticCompatibilityIssue {
   nozzleId: number | null
 }
 
-export function assertLibraryPrintCompatibilityForIndex(
+export async function assertLibraryPrintCompatibilityForIndex(
   index: ThreeMfIndex,
   input: LibraryPrintCompatibilityIndexInput
-): void {
+): Promise<void> {
   assertCompatiblePrinterModel(index.compatiblePrinterModels, input.printerModel)
   assertPrinterHardwareCompatibility(index, input)
+  // Before the `allowIncompatibleFilament` early return, for the same reason the Track Switch
+  // check is: that flag consents to WHICH materials the trays hold, and "enough of it is left"
+  // is a separate judgement the dialog asks separately.
+  await assertSufficientFilament(index, input)
   const issues = getLibraryPrintCompatibilityIssues(index, input)
   // Nozzle-mismatch issues are overridable too: the tray→nozzle binding comes
   // from status parsing that can be wrong (H2D AMS/nozzle parsing is unverified
@@ -69,10 +108,19 @@ export function assertLibraryPrintCompatibilityForIndex(
   throw conflict(formatCompatibilityMessage(issues))
 }
 
-export function assertAutomaticPrintCompatibility(
+export async function assertAutomaticPrintCompatibility(
   input: AutomaticPrintCompatibilityInput
-): void {
+): Promise<void> {
   assertCompatiblePrinterModel(input.index?.compatiblePrinterModels ?? [], input.printerModel)
+  // Printing a .3mf already sitting on the printer's storage still has to agree with the machine
+  // about the switch — BambuStudio checks its SD-card path the same way (`slicing_with_fila_switch`
+  // reads the plate data under `FROM_SDCARD_VIEW`). Skipped when there is no index to read it from.
+  //
+  // BEFORE the `allowIncompatibleFilament` early return, not after: that flag consents to the TRAY
+  // assignments, and letting it also wave through "sliced for a different class of machine" would
+  // make one checkbox grant two unrelated permissions.
+  if (input.index) assertFilamentTrackSwitchMatch(input.index, input)
+  if (input.index) await assertSufficientFilament(input.index, input)
   if (input.allowIncompatibleFilament) return
   const issues = getAutomaticPrintCompatibilityIssues(input)
   if (issues.length === 0) return
@@ -116,6 +164,8 @@ function assertPrinterHardwareCompatibility(
   const plate = index.plates.find((entry) => entry.index === input.plate) ?? index.plates[0]
   if (!plate) return
 
+  assertFilamentTrackSwitchMatch(index, input)
+
   if (plate.plateType && !input.allowPlateTypeMismatch) {
     if (!input.currentPlateType) {
       throw conflict(`This plate was sliced for ${plate.plateType}. Choose the printer's current plate type or confirm the mismatch in the print dialog.`)
@@ -145,6 +195,124 @@ function assertPrinterHardwareCompatibility(
     return `${nozzleLabel}: sliced for ${requiredDiameter}, printer is set to ${selectedDiameter}`
   })
   throw conflict(`Installed nozzle size does not match the sliced file. ${details.join(' | ')}.`)
+}
+
+/**
+ * A file sliced for a Filament Track Switch machine should print on one, and vice versa: the two
+ * cases group filaments across the extruders differently and the baked tool changes assume one.
+ *
+ * OVERRIDABLE via `allowFilamentTrackSwitchMismatch`, which is a deliberate divergence from
+ * BambuStudio. Studio refuses this outright, but only when the printer sets
+ * `is_support_check_track_switch_match_slice_printer` — a capability flag we do not parse and
+ * cannot verify without FTS firmware. Without it, a hard block would make every file sliced before
+ * a switch was fitted un-printable on that machine, all at once, with re-slicing the only way out.
+ * So we surface it and let the user proceed, the same posture as the tray/nozzle checks.
+ *
+ * The override is its OWN flag rather than `allowIncompatibleFilament`: that one means "the trays I
+ * picked are right", which is not the same judgement as "this file was sliced for a different
+ * machine and I accept that". The dialogs ask the two questions separately.
+ *
+ * What counts as a mismatch is decided by the shared `filamentTrackSwitchMismatch`, the same
+ * function the print dialogs warn from, so a dispatch can never be refused by a check the dialog
+ * never showed.
+ */
+function assertFilamentTrackSwitchMatch(
+  index: ThreeMfIndex,
+  input: Pick<LibraryPrintCompatibilityIndexInput, 'printerStatus' | 'allowFilamentTrackSwitchMismatch'>
+): void {
+  if (input.allowFilamentTrackSwitchMismatch) return
+  const mismatch = filamentTrackSwitchMismatch(index.slicedWithFilamentTrackSwitch, input.printerStatus)
+  if (!mismatch) return
+  throw conflict(filamentTrackSwitchMismatchMessage(mismatch.printerHasSwitch))
+}
+
+/**
+ * A print whose mapped slots run out mid-job. OVERRIDABLE via `allowInsufficientFilament`.
+ *
+ * Overridable and not a hard block because every input is an estimate: the printer reports a
+ * percent, only for RFID spools, against an assumed 1kg reel. Refusing outright would ground
+ * prints that are perfectly fine, to prevent something the printer already handles by pausing.
+ *
+ * What counts as too little comes from the shared `findLowFilamentSlots`, and each sentence from
+ * the shared `lowFilamentIssueSentence` — the same two the print dialog warns from, so a dispatch
+ * can never be refused by a check the dialog never showed.
+ *
+ * Holding that promise means grading the SAME NUMBERS, not merely running the same function. The
+ * browser attaches filament-manager's tracked grams to each slot before grading, and
+ * `knownRemainGrams` REPLACES the printer's percent estimate with them rather than taking the
+ * lower of the two — so a tray the printer calls half empty can genuinely hold plenty (a 5kg
+ * spool, or a hand-weighed figure on a manually tracked one). Grading without those grams was
+ * therefore not a subset of the dialog's signals but a different, sometimes STRICTER answer, and
+ * it refused prints whose dialog raised no warning and offered no confirmation to tick.
+ *
+ * So the tracked figure is read back through the plugin seam before refusing. Only for trays this
+ * is about to reject: the resolver is a per-slot database read, and a print with nothing flagged
+ * must not pay for it.
+ */
+async function assertSufficientFilament(
+  index: ThreeMfIndex,
+  input: Pick<
+    LibraryPrintCompatibilityIndexInput,
+    'plate' | 'printerStatus' | 'amsMapping' | 'allowInsufficientFilament' | 'workspaceId' | 'printerId'
+  >
+): Promise<void> {
+  if (input.allowInsufficientFilament || !input.printerStatus) return
+  // No fallback to plate 1: grading a plate the caller did not ask about refuses the
+  // print over filament the dialog never showed.
+  const plate = index.plates.find((entry) => entry.index === input.plate)
+  if (!plate) return
+
+  const required = plate.filaments.map(queueRequiredFilamentFromPlate)
+  const autoRefillEnabled = input.printerStatus.amsSettings?.autoRefill === true
+  const slots = loadedSlotsFromStatus(input.printerStatus)
+  const issues = findLowFilamentSlots({ required, slots, amsMapping: input.amsMapping, autoRefillEnabled })
+  if (issues.length === 0) return
+
+  const tracked = await loadTrackedSlotGrams(input.workspaceId, input.printerId, issues.map((issue) => issue.trayIndex))
+  if (tracked.size > 0) {
+    const regraded = findLowFilamentSlots({
+      required,
+      slots: slots.map((slot) => tracked.has(slot.trayIndex)
+        ? { ...slot, remainingGrams: tracked.get(slot.trayIndex) }
+        : slot),
+      amsMapping: input.amsMapping,
+      autoRefillEnabled
+    })
+    if (regraded.length === 0) return
+    issues.splice(0, issues.length, ...regraded)
+  }
+
+  const trays = buildTrayLookup(input.printerStatus)
+  const details = issues.map((issue) =>
+    lowFilamentIssueSentence(issue, trays.get(issue.trayIndex)?.label ?? 'The selected tray'))
+  throw new InsufficientFilamentError(
+    `Not enough filament loaded for this print. ${details.join(' ')}`
+    + ' Load more filament or confirm the low-filament print in the dialog.'
+  )
+}
+
+/**
+ * Tracked grams for the given tray indexes, from whichever plugin owns spool inventory.
+ *
+ * Best-effort by design: with no resolver registered (filament-manager absent or disabled)
+ * the map is empty and grading falls back to the printer's percent, which is exactly what
+ * the browser does in the same situation.
+ */
+async function loadTrackedSlotGrams(
+  workspaceId: string,
+  printerId: string,
+  trayIndexes: readonly number[]
+): Promise<Map<number, number>> {
+  const tracked = new Map<number, number>()
+  if (slotFilamentResolvers.size() === 0) return tracked
+
+  for (const trayIndex of new Set(trayIndexes)) {
+    const ref = trayIndexToAmsSlot(trayIndex)
+    if (!ref) continue
+    const identity = await slotFilamentResolvers.resolve({ workspaceId, printerId, amsId: ref.amsId, slotId: ref.slotId })
+    if (identity?.remainingGrams != null) tracked.set(trayIndex, identity.remainingGrams)
+  }
+  return tracked
 }
 
 function buildTrayLookup(status: PrinterStatus): Map<number, { filamentType: string | null; label: string; nozzleId: number | null }> {

@@ -270,11 +270,18 @@ export async function findLoadedSpoolIdentity(
   workspaceId: string,
   printerId: string,
   amsId: number,
-  slotId: number
-): Promise<{ spoolId: string; brand: string | null; filamentType: string; materialSubtype: string | null; colorName: string | null } | null> {
+  slotId: number | null
+): Promise<{
+  spoolId: string
+  brand: string | null
+  filamentType: string
+  materialSubtype: string | null
+  colorName: string | null
+  remainingGrams: number | null
+} | null> {
   const spool = await db.filamentSpool.findFirst({
     where: { workspaceId, loadedPrinterId: printerId, loadedAmsId: amsId, loadedSlotId: slotId, deletedAt: null },
-    select: { id: true, brand: true, filamentType: true, materialSubtype: true, colorName: true },
+    select: { id: true, brand: true, filamentType: true, materialSubtype: true, colorName: true, remainingGrams: true },
     orderBy: { loadedAt: 'desc' }
   })
   if (!spool) return null
@@ -283,7 +290,10 @@ export async function findLoadedSpoolIdentity(
     brand: spool.brand,
     filamentType: spool.filamentType,
     materialSubtype: spool.materialSubtype,
-    colorName: spool.colorName
+    colorName: spool.colorName,
+    // The number the browser grades low-filament warnings with. See
+    // `SlotFilamentIdentity.remainingGrams` for why a server-side guard needs it.
+    remainingGrams: spool.remainingGrams
   }
 }
 

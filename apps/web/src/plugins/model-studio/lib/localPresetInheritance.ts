@@ -48,6 +48,15 @@ export interface FlattenedLocalPreset {
   changedKeys: string[]
   /** The parent's own values, so a caller can measure the SLOT (preset plus project drift) against it. */
   parentConfig: ProcessConfig | null
+  /**
+   * True only when the preset NAMES a parent that could not be resolved — i.e. `config` is missing
+   * inherited values it should have had.
+   *
+   * Distinct from `parentConfig: null`, which is also how a legitimately self-contained preset
+   * returns. Collapsing the two made the tune dialog tell users that a preset with no parent "is
+   * based on one that isn't available here", which is a false statement about their own file.
+   */
+  parentUnresolved: boolean
 }
 
 /**
@@ -71,7 +80,8 @@ export async function flattenLocalPreset(
   const parentName = localPresetParentName(preset)
     ?? findParentBuiltinPreset(profiles, preset.name, preset.kind)?.name
     ?? null
-  if (!parentName) return { config: own, parentName: null, changedKeys: [], parentConfig: null }
+  // Nothing to inherit FROM: the preset stands alone and `own` is already complete.
+  if (!parentName) return { config: own, parentName: null, changedKeys: [], parentConfig: null, parentUnresolved: false }
 
   let parent: ProcessConfig | null = null
   try {
@@ -80,7 +90,8 @@ export async function flattenLocalPreset(
     // Best effort: an unresolvable parent leaves the preset's own values, never a guess at the rest.
     parent = null
   }
-  if (!parent) return { config: own, parentName: null, changedKeys: [], parentConfig: null }
+  // A parent was named but did not resolve, so `own` is genuinely short of its inherited values.
+  if (!parent) return { config: own, parentName: null, changedKeys: [], parentConfig: null, parentUnresolved: true }
 
   // PER-COLUMN merge, not per-key. A variant-scoped option holds one value per extruder variant, and
   // a delta preset routinely spells out only the first: BambuStudio's own file has
@@ -100,5 +111,5 @@ export async function flattenLocalPreset(
   // Measured on the MERGED config, not on `own`: a delta preset that spells out only column 0 of a
   // variant-scoped key differs from its parent in that column alone, and declaring the key from the
   // raw delta would exempt the whole key from BambuStudio's normalization.
-  return { config: merged, parentName, changedKeys: filamentPresetChangedKeys(merged, parent), parentConfig: parent }
+  return { config: merged, parentName, changedKeys: filamentPresetChangedKeys(merged, parent), parentConfig: parent, parentUnresolved: false }
 }

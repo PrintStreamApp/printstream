@@ -5,18 +5,23 @@
  * and freeze the editor for seconds (the "stuck at N of M" the progress counter shows). Here the
  * heavy work runs in a worker and only the finished geometry's typed arrays are transferred back
  * (zero-copy), so the UI stays responsive. See `meshParseCore.ts` (DOM-free) and the client
- * `meshParseClient.ts` (which owns the pool + a main-thread fallback).
+ * `meshParseClient.ts` (which owns the pool, the deadlines, and a main-thread fallback).
+ *
+ * This module owns the wire contract: `meshParseClient.ts` imports these types rather than
+ * redeclaring them, so a change to a message shape cannot land on one side only.
  */
 /// <reference lib="webworker" />
 import { buildThreeMfGeometries, buildStlGeometry, type MeshPaintCodes } from './meshParseCore'
 
-interface ParseRequest {
+/** Client -> worker: one parse task. `buffer` is transferred, so the client sends a copy. */
+export interface MeshParseRequest {
   id: number
   kind: 'threemf' | 'stl'
   buffer: ArrayBuffer
 }
 
-interface ParsedMeshEntry {
+/** One parsed object's finished geometry, as arrays that transfer back without a copy. */
+export interface ParsedMeshEntry {
   objectId: number
   position: Float32Array
   normal?: Float32Array
@@ -25,9 +30,21 @@ interface ParsedMeshEntry {
   colorPaint?: MeshPaintCodes
 }
 
+/**
+ * Worker -> client: exactly one `ready` per worker, then one message per task.
+ *
+ * `dataError` says the BYTES failed, not the mechanism — the client uses it to decide whether a
+ * main-thread retry could possibly do better. Anything thrown by the parsers is reported that way:
+ * they are pure functions of their input, so a throw is the input's fault.
+ */
+export type MeshParseResponse =
+  | { kind: 'ready' }
+  | { kind: 'result'; id: number; entries: ParsedMeshEntry[] }
+  | { kind: 'error'; id: number; error: string; dataError: boolean }
+
 const ctx = self as unknown as DedicatedWorkerGlobalScope
 
-ctx.onmessage = (event: MessageEvent<ParseRequest>) => {
+ctx.onmessage = (event: MessageEvent<MeshParseRequest>) => {
   const { id, kind, buffer } = event.data
   try {
     const entries: ParsedMeshEntry[] = []
@@ -56,8 +73,21 @@ ctx.onmessage = (event: MessageEvent<ParseRequest>) => {
       collect(0, buildStlGeometry(buffer))
     }
 
-    ctx.postMessage({ id, entries }, transfer)
+    ctx.postMessage({ kind: 'result', id, entries } satisfies MeshParseResponse, transfer)
   } catch (error) {
-    ctx.postMessage({ id, error: error instanceof Error ? error.message : 'Mesh parse failed' })
+    ctx.postMessage({
+      kind: 'error',
+      id,
+      error: error instanceof Error ? error.message : 'Mesh parse failed',
+      dataError: true
+    } satisfies MeshParseResponse)
   }
 }
+
+// Announce readiness LAST, after the handler above is installed. This is the client's only proof
+// that this worker's module graph actually evaluated: a worker that is constructed and then never
+// runs (a dev module graph that fails to load, an attached-but-never-resumed debugger target, an
+// extension that stalls it) is otherwise indistinguishable from a slow one, because `onerror` does
+// not fire for any of them. Without this the client could only find out by waiting out a task
+// deadline, per task.
+ctx.postMessage({ kind: 'ready' } satisfies MeshParseResponse)

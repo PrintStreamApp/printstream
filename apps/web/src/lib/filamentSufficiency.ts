@@ -3,12 +3,16 @@
  * pickers' right-aligned badge. Three states so the user sees whether a material actually covers the
  * print, not just "low or not": **enough** (comfortable headroom), **low** (enough but within a thin
  * margin), **short** (less than required). Without a known requirement it just states the remaining
- * amount. The matching slot picker in the print dialog uses the same 25g headroom
- * (see `slotRemaining.ts`).
+ * amount.
+ *
+ * The headroom is imported, not restated: this module used to declare its own `= 25` alongside a
+ * comment promising it matched the slot picker's, which is two constants that must stay equal and
+ * nothing to keep them that way. `slotRemaining.ts` and the print dialogs' low-filament
+ * confirmation grade against the same shared value.
  */
+import { LOW_FILAMENT_HEADROOM_GRAMS } from '@printstream/shared'
 
-/** Headroom over the required grams below which an otherwise-sufficient material reads as "low". */
-export const LOW_FILAMENT_HEADROOM_GRAMS = 25
+export { LOW_FILAMENT_HEADROOM_GRAMS }
 
 export type FilamentRemainingTone = 'text.tertiary' | 'warning.plainColor' | 'danger.plainColor'
 

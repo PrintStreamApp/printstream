@@ -2,8 +2,9 @@
  * Workspace bridge management routes.
  *
  * Owns the workspace-facing bridge surface: listing, connect/rename/delete, the
- * connection test/ping, system-log and debug-capture retrieval, and update
- * check/start — all routed to the owning bridge through `bridgeSessionManager`.
+ * connection test/ping, system-log and debug-capture retrieval, crash-history
+ * clearing, and update check/start — the bridge-side ones routed to the owning
+ * bridge through `bridgeSessionManager`.
  */
 import express from 'express'
 import {
@@ -64,37 +65,40 @@ const SELF_HOSTED_BUNDLE_UPDATE_MESSAGE =
 
 bridgesRouter.use(requireRequestPermission(SETTINGS_MANAGE_PERMISSION))
 
+/** Every column `toBridgeSummary` reads; keep the two in step. */
+const BRIDGE_SUMMARY_SELECT = {
+  id: true,
+  name: true,
+  version: true,
+  releaseFingerprint: true,
+  buildRevision: true,
+  sourceFingerprint: true,
+  protocolVersion: true,
+  runnerAbiVersion: true,
+  updateChannel: true,
+  updateStatus: true,
+  latestAvailableVersion: true,
+  lastUpdateCheckAt: true,
+  lastUpdateError: true,
+  lastSeenAt: true,
+  lastCrashAt: true,
+  lastCrashReason: true,
+  recentCrashCount: true,
+  createdAt: true,
+  updatedAt: true,
+  _count: {
+    select: {
+      printers: true
+    }
+  }
+} as const
+
 bridgesRouter.get('/', async (request, response) => {
   const workspaceId = requireRequestWorkspaceId(request)
   const bridges = await prisma.bridge.findMany({
     where: { workspaceId },
     orderBy: { createdAt: 'asc' },
-    select: {
-      id: true,
-      name: true,
-      version: true,
-      releaseFingerprint: true,
-      buildRevision: true,
-      sourceFingerprint: true,
-      protocolVersion: true,
-      runnerAbiVersion: true,
-      updateChannel: true,
-      updateStatus: true,
-      latestAvailableVersion: true,
-      lastUpdateCheckAt: true,
-      lastUpdateError: true,
-      lastSeenAt: true,
-      lastCrashAt: true,
-      lastCrashReason: true,
-      recentCrashCount: true,
-      createdAt: true,
-      updatedAt: true,
-      _count: {
-        select: {
-          printers: true
-        }
-      }
-    }
+    select: BRIDGE_SUMMARY_SELECT
   })
 
   response.json(bridgeListResponseSchema.parse({
@@ -189,32 +193,7 @@ bridgesRouter.patch('/:id', async (request, response) => {
   const bridge = await prisma.bridge.update({
     where: { id: bridgeId },
     data: { name: parsed.name },
-    select: {
-      id: true,
-      name: true,
-      version: true,
-      releaseFingerprint: true,
-      buildRevision: true,
-      sourceFingerprint: true,
-      protocolVersion: true,
-      runnerAbiVersion: true,
-      updateChannel: true,
-      updateStatus: true,
-      latestAvailableVersion: true,
-      lastUpdateCheckAt: true,
-      lastUpdateError: true,
-      lastSeenAt: true,
-      lastCrashAt: true,
-      lastCrashReason: true,
-      recentCrashCount: true,
-      createdAt: true,
-      updatedAt: true,
-      _count: {
-        select: {
-          printers: true
-        }
-      }
-    }
+    select: BRIDGE_SUMMARY_SELECT
   })
 
   annotateRequestAuditLog(request, {
@@ -227,6 +206,67 @@ bridgesRouter.patch('/:id', async (request, response) => {
       bridgeId: bridge.id,
       previousName: previous?.name ?? null,
       bridgeName: bridge.name
+    }
+  })
+
+  broadcastBridgesChanged(workspaceId)
+  response.json(bridgeResponseSchema.parse({ bridge: toBridgeSummary(bridge) }))
+})
+
+/**
+ * Clear a bridge's recorded crash history (the `Bridge` crash summary that
+ * `deriveBridgeCrashState` reads).
+ *
+ * Why this exists: the summary is self-healing — it ages out once the last
+ * crash leaves the rolling window — but until then the crash-loop banner shows
+ * on every workspace page. This is the escape hatch for an operator who has
+ * already dealt with the cause and does not want to wait out the window. It
+ * clears the record for the WHOLE workspace, which is why it is a server action
+ * rather than a per-browser dismissal, and why the button says "clear" rather
+ * than "dismiss".
+ *
+ * Deliberately does NOT reset the bridge's own rolling crash window (its
+ * on-disk run-state marker — see `apps/bridge/src/crash-tracker.ts`): doing so
+ * would need an RPC to a bridge that, in exactly this situation, is likely to
+ * be down or restarting. So a bridge that crashes again inside its window
+ * re-reports its full count and the alert returns — correct, because it is in
+ * fact still crash-looping. Nothing is lost either way: every report also
+ * writes an operational log entry, which this does not touch.
+ *
+ * `lastCrashNotifiedAt` is cleared too, so the next crash notifies immediately
+ * instead of being swallowed by the notify cooldown (`bridge-crash-reports.ts`).
+ */
+bridgesRouter.delete('/:id/crash-history', async (request, response) => {
+  const workspaceId = requireRequestWorkspaceId(request)
+  const bridgeId = requireRouteParam(request.params.id, 'id')
+  const existing = await prisma.bridge.findFirst({
+    where: { id: bridgeId, workspaceId },
+    select: { id: true, name: true, lastCrashAt: true, recentCrashCount: true }
+  })
+  if (!existing) {
+    throw notFound('Bridge not found.')
+  }
+
+  const bridge = await prisma.bridge.update({
+    where: { id: existing.id },
+    data: {
+      lastCrashAt: null,
+      lastCrashReason: null,
+      recentCrashCount: 0,
+      lastCrashNotifiedAt: null
+    },
+    select: BRIDGE_SUMMARY_SELECT
+  })
+
+  annotateRequestAuditLog(request, {
+    action: 'clear-bridge-crash-history',
+    resource: 'bridge',
+    summary: `Cleared the recorded crash history for bridge ${existing.name}.`,
+    metadata: {
+      bridgeId: existing.id,
+      bridgeName: existing.name,
+      clearedCrashCount: existing.recentCrashCount,
+      clearedLastCrashAt: existing.lastCrashAt?.toISOString() ?? null
     }
   })
 

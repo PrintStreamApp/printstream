@@ -35,7 +35,8 @@ export function SplitButton({
   variant = 'solid',
   color = 'primary',
   menuPlacement = 'bottom-end',
-  menuSx
+  menuSx,
+  groupSx
 }: {
   /** Primary action label. */
   label: ReactNode
@@ -62,11 +63,17 @@ export function SplitButton({
   color?: ColorPaletteProp
   menuPlacement?: 'bottom-end' | 'bottom-start' | 'top-end' | 'top-start'
   menuSx?: SxProps
+  /**
+   * Layout for the control itself (flex sizing in a toolbar row, a fixed mobile
+   * width). On the GROUP rather than the primary button, so the caret is inside
+   * whatever box the caller sizes instead of overflowing it.
+   */
+  groupSx?: SxProps
 }) {
   const appearance = splitButtonGroupAppearance({ variant, color, disabled, primaryDisabled })
   const group = (
     <Dropdown>
-      <ButtonGroup size={size} variant={appearance.variant} color={appearance.color} disabled={disabled} aria-label={ariaLabel}>
+      <ButtonGroup size={size} variant={appearance.variant} color={appearance.color} disabled={disabled} aria-label={ariaLabel} sx={groupSx}>
         {/* Both gates are passed explicitly: Joy's Button prefers its OWN `disabled` prop over the
             group's whenever the prop is present, so `disabled={primaryDisabled}` alone would
             re-enable the primary half inside a fully disabled group. */}
@@ -77,7 +84,20 @@ export function SplitButton({
           <ArrowDropDownIcon />
         </MenuButton>
       </ButtonGroup>
-      <Menu placement={menuPlacement} sx={[{ minWidth: 200 }, ...(Array.isArray(menuSx) ? menuSx : [menuSx])]}>
+      {/* The decorator rule pins the icon gutter for every item. Joy sizes a
+          `ListItemDecorator` per MenuItem, and in practice it does NOT come out the
+          same for all of them — measured in this menu, the first item's decorator
+          took `--ListItemDecorator-size` (40px) while its siblings collapsed to 0,
+          so identical markup rendered labels 20px apart. Declaring it once here
+          means an item cannot be misaligned by what it happens to sit next to,
+          which matters most for the plugin-contributed items a caller never sees. */}
+      <Menu
+        placement={menuPlacement}
+        sx={[
+          { minWidth: 200, '& .MuiListItemDecorator-root': { minInlineSize: 'var(--ListItemDecorator-size)' } },
+          ...(Array.isArray(menuSx) ? menuSx : [menuSx])
+        ]}
+      >
         {children}
       </Menu>
     </Dropdown>

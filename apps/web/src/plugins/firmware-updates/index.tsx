@@ -37,7 +37,6 @@ import {
   DialogTitle,
   FormControl,
   FormLabel,
-  LinearProgress,
   MenuItem,
   ModalDialog,
   Option,
@@ -84,6 +83,7 @@ import {
   type UpdatesResponse,
   type UploadProgress
 } from './state'
+import { ProgressBar } from '../../components/ProgressBar'
 
 const UPDATES_QUERY_KEY_PREFIX = ['firmware-updates', 'updates'] as const
 const UPLOAD_QUERY_KEY_PREFIX = ['firmware-updates', 'upload'] as const
@@ -518,7 +518,7 @@ function FirmwareUpdateDetailsDialog({
                       {progress.message || progress.status}
                     </Typography>
                     {(progress.status === 'downloading' || progress.status === 'uploading') && (
-                      <LinearProgress determinate value={progress.progress} />
+                      <ProgressBar value={progress.progress} />
                     )}
                     {progress.status === 'cancelled' && (
                       <Alert color="warning" variant="soft" startDecorator={<WarningAmberRoundedIcon />}>{progress.message}</Alert>

@@ -3,7 +3,7 @@
  *
  * Both pure parses live in the shared `@printstream/shared/three-mf` module — the index parse
  * (`buildThreeMfIndex`, also consumed by the bridge in `apps/bridge/src/library-3mf.ts`) and the
- * scene parse (`buildSceneManifest`, also consumed by the web's client-side public 3MF viewer).
+ * scene parse (`buildSceneManifest`, also consumed by the web's client-side public 3MF editor).
  * This module owns only the Node-side ZIP I/O and caching around them, so there is no hand-kept
  * mirror to drift. All 3MF *writing* still lives only in the api modules.
  *

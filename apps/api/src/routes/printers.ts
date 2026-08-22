@@ -62,13 +62,14 @@ import {
   printerStatsResponseSchema,
   startPrinterStorageDeleteJobSchema,
   printerStoragePrintSchema,
+  printStartOptionSelectionSchema,
   supportsPrinterAirductMode,
   validateAmsDryingStart,
   type ThreeMfIndex,
   type Printer,
   type PrinterStatus
 } from '@printstream/shared'
-import { annotateRequestAuditLog } from '../lib/audit-logs.js'
+import { annotateRequestAuditLog, printOverrideAuditMetadata } from '../lib/audit-logs.js'
 import { prisma, rootPrisma } from '../lib/prisma.js'
 import { serializePrinterNozzleDiameters, toPrinterDto, toPublicPrinterDto } from '../lib/printer-record.js'
 import { printerManager } from '../lib/printer-manager.js'
@@ -1493,7 +1494,12 @@ printersRouter.get('/:id/storage/plates', requireRequestPermission(PRINTER_STORA
       compatiblePrinterModels: index.compatiblePrinterModels,
       supportFilamentIds: index.supportFilamentIds,
       printerProfileName: index.printerProfileName,
-      processProfileName: index.processProfileName
+      processProfileName: index.processProfileName,
+      // The print dialog warns when this disagrees with the machine, so it has to survive the
+      // narrowing above. Plate entries are reshaped here (`hasThumbnail` replaces the file name),
+      // which is why this response is projected field by field rather than passed through — when
+      // you add an index field, add it here too or the dialog silently never sees it.
+      slicedWithFilamentTrackSwitch: index.slicedWithFilamentTrackSwitch
     } satisfies ThreeMfIndex)
   } catch (error) {
     if ((error as Error).name === 'AbortError') return
@@ -1614,14 +1620,18 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
   if (path.extname(filePath).toLowerCase() === '.3mf') {
     storageThreeMfIndex = await readPrinterStorageThreeMfIndex(printer, filePath)
     try {
-      assertAutomaticPrintCompatibility({
+      await assertAutomaticPrintCompatibility({
+        workspaceId: requireRequestWorkspaceId(request),
+        printerId: printer.id,
         index: storageThreeMfIndex,
         plate: parsed.data.plate,
         printerModel: printer.model,
         printerStatus: printerManager.getStatus(printer.id),
         useAms: parsed.data.useAms,
         amsMapping: parsed.data.amsMapping,
-        allowIncompatibleFilament: parsed.data.allowIncompatibleFilament
+        allowIncompatibleFilament: parsed.data.allowIncompatibleFilament,
+        allowFilamentTrackSwitchMismatch: parsed.data.allowFilamentTrackSwitchMismatch,
+        allowInsufficientFilament: parsed.data.allowInsufficientFilament
       })
     } catch (error) {
       // Mirror the library-print pre-flight logging: a rejection here starts no
@@ -1708,6 +1718,8 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
       useAms: parsed.data.useAms,
       bedLevel: normalizedOptions.bedLevel !== 'off',
       amsMapping: parsed.data.amsMapping ?? null,
+      // The user's selection, not `normalizedOptions`. See `print-job-options.ts`.
+      printOptions: printStartOptionSelectionSchema.parse(parsed.data),
       calibrationOption: null
     },
     publish: () => printerManager.publishCommand(printer.id, {
@@ -1748,7 +1760,9 @@ printersRouter.post('/:id/storage/print', requireRequestPermission(PRINTS_DISPAT
       fileName: path.basename(filePath),
       plate: parsed.data.plate,
       jobId: trackedJobId,
-      ...(skipIdentifyIds ? { skippedObjectCount: skipIdentifyIds.length } : {})
+      ...(skipIdentifyIds ? { skippedObjectCount: skipIdentifyIds.length } : {}),
+      // Which safety gates this dispatch deliberately bypassed, when any.
+      ...printOverrideAuditMetadata(parsed.data)
     }
   })
   response.status(202).json({ path: filePath })

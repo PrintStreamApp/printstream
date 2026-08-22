@@ -137,6 +137,56 @@ test('createCustomSlicingPresets reports same-name collisions and overwrites onl
   assert.equal((await listCustomSlicingPresets('workspace-1')).filter((profile) => profile.name === '0.20mm Custom').length, 1)
 })
 
+test('overwriting a preset keeps its id so references to it survive the edit', async () => {
+  let settingValue: string | null = null
+  rootPrisma.setting.findUnique = (async () => settingValue ? { key: 'workspace.slicing.profiles.workspace-1', value: settingValue } : null) as typeof rootPrisma.setting.findUnique
+  rootPrisma.setting.upsert = (async (args) => {
+    settingValue = typeof args.update.value === 'string' ? args.update.value : null
+    return { key: args.where.key, value: settingValue }
+  }) as typeof rootPrisma.setting.upsert
+
+  const created = await createCustomSlicingPresets('workspace-1', {
+    encoding: 'utf8',
+    content: JSON.stringify({ name: 'Shared process', type: 'process', layer_height: '0.2' })
+  })
+  const originalId = created.profiles[0]?.id
+  assert.ok(originalId)
+
+  const overwritten = await createCustomSlicingPresets('workspace-1', {
+    encoding: 'utf8',
+    content: JSON.stringify({ name: 'Shared process', type: 'process', layer_height: '0.3' }),
+    overwrite: true
+  })
+
+  // The id is what every saved reference points at — a slice request, a print job's chosen
+  // preset, and the Bambu-cloud sync map. Re-minting it on each save silently orphans all of them.
+  assert.equal(overwritten.profiles[0]?.id, originalId)
+  const listed = await listCustomSlicingPresets('workspace-1')
+  assert.deepEqual(listed.map((profile) => profile.id), [originalId])
+})
+
+test('a preset keeps its id only within its own kind', async () => {
+  let settingValue: string | null = null
+  rootPrisma.setting.findUnique = (async () => settingValue ? { key: 'workspace.slicing.profiles.workspace-1', value: settingValue } : null) as typeof rootPrisma.setting.findUnique
+  rootPrisma.setting.upsert = (async (args) => {
+    settingValue = typeof args.update.value === 'string' ? args.update.value : null
+    return { key: args.where.key, value: settingValue }
+  }) as typeof rootPrisma.setting.upsert
+
+  const process = await createCustomSlicingPresets('workspace-1', {
+    encoding: 'utf8',
+    content: JSON.stringify({ name: 'Same name', type: 'process', layer_height: '0.2' })
+  })
+  const filament = await createCustomSlicingPresets('workspace-1', {
+    encoding: 'utf8',
+    content: JSON.stringify({ name: 'Same name', type: 'filament', filament_settings_id: ['f1'] })
+  })
+
+  assert.notEqual(filament.profiles[0]?.id, process.profiles[0]?.id)
+  assert.deepEqual(filament.conflicts, [])
+  assert.equal((await listCustomSlicingPresets('workspace-1')).length, 2)
+})
+
 async function createPresetArchiveBase64(entries: Array<[string, Record<string, unknown>]>): Promise<string> {
   const zip = new yazl.ZipFile()
   for (const [entryPath, payload] of entries) {

@@ -27,6 +27,7 @@ import {
   loadedSlotsFromStatus,
   mergeAmsMapping,
   trayCanSatisfyRequirement,
+  filamentTrackSwitchMismatch,
   type FilamentCompatibilityIssue,
   type PrintNozzleOffsetCalibrationMode,
   type PrintOnOffAutoMode,
@@ -48,8 +49,11 @@ import {
 } from '../lib/printStartOptions'
 import { BackAwareModal as Modal } from './BackAwareModal'
 import { DialogSection } from './DialogSection'
+import { FilamentTrackSwitchMismatchAlert } from './FilamentTrackSwitchMismatchAlert'
+import { LowFilamentAlert } from './LowFilamentAlert'
 import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { autoSelectedFilamentIds, computeAutoTrayMapping } from '../lib/autoTrayMatch'
+import { findPrinterLowFilamentSlots, printerSlotLabeller } from '../lib/lowFilament'
 import { useSlotFilamentIdentityLookup } from '../lib/slotFilamentIdentity'
 import {
   buildPrinterTrayGroups,
@@ -81,6 +85,8 @@ export function StoragePrintModal({
     nozzleOffsetCalibration: PrintNozzleOffsetCalibrationMode
     amsMapping?: PrinterTrayMapping[]
     allowIncompatibleFilament: boolean
+    allowFilamentTrackSwitchMismatch: boolean
+    allowInsufficientFilament: boolean
     /** Plate objects (`objects[].id`) to exclude from the print, when any were deselected. */
     skipObjects?: number[]
   }) => void
@@ -96,6 +102,8 @@ export function StoragePrintModal({
   const [printOptionsTouched, setPrintOptionsTouched] = useState(false)
   const [printOptionsInitialized, setPrintOptionsInitialized] = useState(false)
   const [allowIncompatibleFilament, setAllowIncompatibleFilament] = useState(false)
+  const [allowFilamentTrackSwitchMismatch, setAllowFilamentTrackSwitchMismatch] = useState(false)
+  const [allowInsufficientFilament, setAllowInsufficientFilament] = useState(false)
   /**
    * Explicit user tray picks only; `-1`/absent rows fall back to the matcher's
    * suggestion. Merged with `mergeAmsMapping` (the same precedence the queue
@@ -153,6 +161,15 @@ export function StoragePrintModal({
   })
   const plates = useMemo(() => platesQuery.data?.plates ?? [], [platesQuery.data])
   const projectFilaments = useMemo(() => platesQuery.data?.projectFilaments ?? [], [platesQuery.data])
+  // Same rule and same alert as the library print dialog — a file already on the printer's storage
+  // still has to have been sliced for the kind of machine it is about to print on. Undefined (an
+  // older server that does not send the flag) reads as unknown, not as "no switch".
+  const trackSwitchMismatches = useMemo(() => {
+    const mismatch = filamentTrackSwitchMismatch(platesQuery.data?.slicedWithFilamentTrackSwitch, status)
+    return mismatch
+      ? [{ printerId, printerName: printer.name, printerHasSwitch: mismatch.printerHasSwitch }]
+      : []
+  }, [platesQuery.data, printer.name, printerId, status])
   const activePlate = useMemo(
     () => plates.find((entry) => entry.index === plate) ?? plates[0],
     [plates, plate]
@@ -237,6 +254,27 @@ export function StoragePrintModal({
   const softCompatibilityIssues = useMemo(
     () => mappedCompatibilityIssues.filter((issue) => issue.typeMismatch && !issue.nozzleMismatch),
     [mappedCompatibilityIssues]
+  )
+  /**
+   * Mapped slots that will run out. Grades `effectiveMapping` — the merge of the user's picks over
+   * the matcher's suggestion — so it describes exactly what Start would send. One printer here, so
+   * the entry needs no name to tell it apart.
+   */
+  const lowFilamentEntries = useMemo(
+    () => [{
+      printerId,
+      printerName: null,
+      issues: findPrinterLowFilamentSlots(
+        printerId,
+        status,
+        visibleFilaments,
+        usedGramsById,
+        effectiveMapping,
+        resolveSlotFilament
+      ),
+      slotLabel: printerSlotLabeller(status)
+    }].filter((entry) => entry.issues.length > 0),
+    [effectiveMapping, printerId, resolveSlotFilament, status, usedGramsById, visibleFilaments]
   )
   const selectedTrayWarnings = useMemo(
     () => getStorageSelectedTrayWarnings({ mapping: effectiveMapping, trayByMappingValue, visibleFilaments, timelapse, status }),
@@ -461,6 +499,16 @@ export function StoragePrintModal({
                     </Stack>
                   </Alert>
                 )}
+                <FilamentTrackSwitchMismatchAlert
+                  entries={trackSwitchMismatches}
+                  confirmed={allowFilamentTrackSwitchMismatch}
+                  onConfirmedChange={setAllowFilamentTrackSwitchMismatch}
+                />
+                <LowFilamentAlert
+                  entries={lowFilamentEntries}
+                  confirmed={allowInsufficientFilament}
+                  onConfirmedChange={setAllowInsufficientFilament}
+                />
                 {mappingCapable && hardCompatibilityIssues.length > 0 && (
                   <Alert color="danger" variant="soft">
                     <Stack spacing={1}>
@@ -547,6 +595,8 @@ export function StoragePrintModal({
                 nozzleOffsetCalibration,
                 amsMapping: sanitizeTrayMapping(effectiveMapping) as PrinterTrayMapping[] | undefined,
                 allowIncompatibleFilament,
+                allowFilamentTrackSwitchMismatch,
+                allowInsufficientFilament,
                 ...(skipObjects.length > 0 ? { skipObjects } : {})
               })
             }}
@@ -556,6 +606,8 @@ export function StoragePrintModal({
               || (hardCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
               || (softCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
               || (!mappingCapable && automaticCompatibilityIssues.length > 0 && !allowIncompatibleFilament)
+              || (trackSwitchMismatches.length > 0 && !allowFilamentTrackSwitchMismatch)
+              || (lowFilamentEntries.length > 0 && !allowInsufficientFilament)
             }
           >
             Start print

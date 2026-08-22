@@ -28,7 +28,7 @@ import type {
   SlicingManualProfileTarget,
   SlicingPresetSummary
 } from '@printstream/shared'
-import { isProjectNewerThanSlicer, isProjectSlicingPresetId, slicingPresetProvenance } from '@printstream/shared'
+import { isProjectNewerThanSlicer, isProjectSlicingPresetId } from '@printstream/shared'
 import {
   buildProcessFilamentChoices,
   buildProjectSlicingPresets,
@@ -112,13 +112,6 @@ export interface LocalSliceSettings {
   setFilamentSettingsFilamentId: (filamentId: number | null) => void
   /** Record an override set for one material slot, as the host's tune dialog applies it. */
   setFilamentSettingOverridesById: React.Dispatch<React.SetStateAction<Record<number, Record<string, string | string[]>>>>
-  /**
-   * Caveat for the process dialog when the selected process is a project preset that is NOT a plain
-   * built-in — i.e. a workspace custom preset unavailable here, so its "changed" markers are relative
-   * to the standard preset it's based on. Null when the baseline is exact (a built-in). See
-   * `ProcessSettingsDialog.baselineNote`.
-   */
-  processBaselineNote: string | null
 }
 
 export function useLocalSliceSettingsController(params: LocalSliceSettingsControllerParams): LocalSliceSettings {
@@ -398,23 +391,15 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     setProcessSettingOverrides(snapshot.processSettingOverrides ?? {})
   }, [processProfileSelectionTouchedRef, restoreMachineSnapshot, restoreMaterialSnapshot, setProcessProfileId, setProcessSettingOverrides, setSelectedSlicerTargetId])
 
-  // A project preset whose name is not itself a built-in came from a workspace CUSTOM preset that
-  // does not exist here; its baseline is the standard parent, so warn what the markers mean.
-  const processBaselineNote = useMemo(() => {
-    if (!selectedProcessProfile || !isProjectSlicingPresetId(selectedProcessProfile.id)) return null
-    const isBuiltinNamed = processProfiles.some(
-      (profile) => profile.kind === 'process' && profile.name === selectedProcessProfile.name && slicingPresetProvenance(profile.id) === 'builtin'
-    )
-    if (isBuiltinNamed) return null
-    return "This project's own process preset isn't available here, so changes are shown relative to the standard preset it's based on — edits whose value matches the standard aren't flagged."
-  }, [selectedProcessProfile, processProfiles])
-
   const selectedSlicerTarget = slicerTargets.find((target) => target.id === selectedSlicerTargetId) ?? null
   const projectIsNewerThanSlicer = isProjectNewerThanSlicer(file.projectVersion, selectedSlicerTarget?.version)
   const [allowNewerProjectFile, setAllowNewerProjectFile] = useState(false)
   const slicerDataReady = Boolean(targetsQuery.data) && !profilesQuery.isLoading && (profilesQuery.data?.length ?? 0) > 0
 
   const controller: SliceSettingsController = {
+    // Supplied by `EditorView`, which holds the archive these are read from — see the note on the
+    // library host's controller.
+    flushVolumes: null,
     file,
     resourceBasePath: '',
     flow: 'library',
@@ -549,7 +534,6 @@ export function useLocalSliceSettingsController(params: LocalSliceSettingsContro
     processFilamentChoices,
     filamentSettingsFilamentId,
     setFilamentSettingsFilamentId,
-    setFilamentSettingOverridesById,
-    processBaselineNote
+    setFilamentSettingOverridesById
   }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, Checkbox, Chip, FormControl, FormHelperText, FormLabel, Input, LinearProgress, ListDivider, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, Checkbox, Chip, FormControl, FormHelperText, FormLabel, Input, ListDivider, ModalDialog, Option, Select, Stack, Typography } from '@mui/joy'
 import AddIcon from '@mui/icons-material/Add'
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
@@ -21,6 +21,7 @@ import { useRuntimePolicy } from '../../lib/runtimePolicy'
 import { uploadLibraryFileInChunks, type ChunkedLibraryUploadPhase } from '../../lib/chunkedLibraryUpload'
 import { NOZZLE_DIAMETER_OPTIONS, COMMON_PLATE_TYPES, formatLocalUploadPhase, printerNozzles, formatNozzleHardwareSummary } from '../../lib/printersViewHelpers'
 import { DUAL_NOZZLE_PRINTER_MODELS, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, DEMO_TEMP_UPLOAD_MAX_BYTES } from '../../lib/printerViewConstants'
+import { ProgressBar } from '../ProgressBar'
 
 /**
  * Printer add/edit form modal and its supporting types/constants.
@@ -184,9 +185,8 @@ export function LocalFilePrintGate({
             <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }}>
               {uploadProgress ? formatLocalUploadPhase(uploadProgress.phase) : 'Preparing upload'}
             </Typography>
-            <LinearProgress
-              determinate={uploadProgress != null}
-              value={uploadProgress ? (uploadProgress.uploadedBytes / Math.max(uploadProgress.totalBytes, 1)) * 100 : undefined}
+            <ProgressBar
+              value={uploadProgress ? (uploadProgress.uploadedBytes / Math.max(uploadProgress.totalBytes, 1)) * 100 : null}
               sx={{
                 mt: 1,
                 '--LinearProgress-thickness': '8px',

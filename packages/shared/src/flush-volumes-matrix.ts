@@ -99,6 +99,24 @@ export function inspectProjectFlushVolumesMatrix(projectSettingsJson: string | n
   }
 }
 
+/**
+ * Which multiplier key a project's purge volumes are scaled by.
+ *
+ * BambuStudio keeps two, and `prime_volume_mode` picks between them: its flushing dialog reads and
+ * WRITES `flush_multiplier_fast` in Fast mode and `flush_multiplier` otherwise
+ * (`WipeTowerDialog.cpp`). Both the editor and the bake go through this so an edit made in one mode
+ * cannot be written to the key the other reads — which would look like the edit silently did
+ * nothing. Any unrecognised/absent mode means the default, matching the config's own default.
+ */
+export function flushMultiplierKeyForPrimeVolumeMode(mode: unknown): 'flush_multiplier' | 'flush_multiplier_fast' {
+  return mode === 'Fast' ? 'flush_multiplier_fast' : 'flush_multiplier'
+}
+
+/** BambuStudio's per-key defaults: 1 for the normal multiplier, 1.2 for the fast one. */
+export function defaultFlushMultiplierFor(key: 'flush_multiplier' | 'flush_multiplier_fast'): string {
+  return key === 'flush_multiplier_fast' ? '1.2' : '1'
+}
+
 /** Required entry count: one `filaments x filaments` block per extruder. */
 export function expectedFlushVolumesMatrixLength(filamentCount: number, extruderCount: number): number {
   return filamentCount * filamentCount * Math.max(extruderCount, 1)
@@ -193,6 +211,60 @@ export function repairFlushVolumesMatrix(
     }
   }
   return next
+}
+
+/**
+ * Read one extruder's `filaments x filaments` block out of the stored flat matrix.
+ *
+ * Mirrors BambuStudio's `get_flush_volumes_matrix`, which slices block `e` as
+ * `[size/nozzles*e, size/nozzles*(e+1))`. Returns null when the stored matrix is absent or does not
+ * hold that block at the given topology — callers must then show "not set" (BambuStudio computes
+ * the matrix itself when it is absent) rather than rendering a grid of zeroes, which would read as
+ * "purge nothing" and, if saved, mean exactly that.
+ */
+export function readFlushVolumesMatrixBlock(
+  matrix: readonly unknown[] | null | undefined,
+  extruderIndex: number,
+  filamentCount: number,
+  extruderCount: number
+): number[][] | null {
+  if (!matrix || matrix.length === 0 || filamentCount <= 0) return null
+  if (matrix.length !== expectedFlushVolumesMatrixLength(filamentCount, extruderCount)) return null
+  if (extruderIndex < 0 || extruderIndex >= Math.max(extruderCount, 1)) return null
+  const block = filamentCount * filamentCount
+  const base = extruderIndex * block
+  return Array.from({ length: filamentCount }, (_unused, row) =>
+    Array.from({ length: filamentCount }, (_cell, column) => {
+      const value = Number(matrix[base + row * filamentCount + column])
+      return Number.isFinite(value) ? value : 0
+    }))
+}
+
+/**
+ * Flatten per-extruder blocks back into the stored representation (strings, as Bambu writes them).
+ *
+ * The inverse of {@link readFlushVolumesMatrixBlock}. Every block must be `filaments x filaments`
+ * and there must be one per extruder: this is the shape whose violation segfaults the engine
+ * (see the module header), so it throws rather than writing a matrix that would.
+ */
+export function writeFlushVolumesMatrixBlocks(blocks: ReadonlyArray<ReadonlyArray<readonly number[]>>): string[] {
+  const filamentCount = blocks[0]?.length ?? 0
+  if (blocks.length === 0 || filamentCount === 0) {
+    throw new Error('flush_volumes_matrix needs at least one filament x filament block')
+  }
+  const out: string[] = []
+  for (const block of blocks) {
+    if (block.length !== filamentCount) {
+      throw new Error(`flush_volumes_matrix blocks must all be ${filamentCount} rows`)
+    }
+    for (const row of block) {
+      if (row.length !== filamentCount) {
+        throw new Error(`flush_volumes_matrix rows must be ${filamentCount} wide`)
+      }
+      for (const cell of row) out.push(String(Math.round(cell)))
+    }
+  }
+  return out
 }
 
 /**

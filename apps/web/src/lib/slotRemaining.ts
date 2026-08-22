@@ -2,22 +2,24 @@
  * Refill-aware remaining-filament state for print-dialog tray choices (the
  * insufficiency highlight and the auto-refill badge on `SlotOptionLabel`).
  *
- * The primitives — the percent→grams estimate, the low-filament headroom, and
- * the auto-refill pooling test — live in `@printstream/shared`'s
- * `slot-remaining.ts` so the shared print matcher's sufficiency-guarded
- * tie-break and this warning state can never disagree; this module only owns
- * the per-slot UI grading (which pool a slot belongs to, combined remaining).
+ * The rule itself — which of a slot's remaining signals may be believed, the
+ * low-filament headroom, auto-refill pooling and the grade that falls out of
+ * them — lives in `@printstream/shared`'s `slot-remaining.ts`, so the shared
+ * print matcher's tie-break, the dialog-level low-filament confirmation and this
+ * badge can never disagree. This module only owns the adaptation: which of THIS
+ * printer's trays the print could chain into, in the web's tray shape.
  */
 import {
-  LOW_FILAMENT_HEADROOM_GRAMS,
+  gradeSlotSufficiency,
   estimateRemainGrams,
+  knownRemainGrams,
   trayCanSatisfyRequirement,
-  traysMatchForAutoRefill
+  type RemainingFilamentTray
 } from '@printstream/shared'
 
 export { estimateRemainGrams }
 
-export interface SlotRemainingTray {
+export interface SlotRemainingTray extends RemainingFilamentTray {
   kind: 'ams' | 'external'
   filamentType: string | null
   color: string | null
@@ -29,6 +31,13 @@ export interface SlotRemainingTray {
 }
 
 export interface SlotRemainingState {
+  /**
+   * What this slot alone holds — the figure the label prints, so it is the BELIEVABLE
+   * one (`knownRemainGrams`: the tracked spool first, then the RFID-only percent
+   * estimate) and never the refill pool's total, which would contradict the number
+   * printed beside it. Null when nothing about the slot is measurable, which is the
+   * signal to print no figure at all rather than a guess.
+   */
   remainGrams: number | null
   insufficient: boolean
   usesAutoRefill: boolean
@@ -51,49 +60,36 @@ export function getSlotRemainingState({
   requiredGrams,
   autoRefillEnabled
 }: SlotRemainingInput): SlotRemainingState {
-  const remainGrams = estimateRemainGrams(tray.remainPercent)
-  if (requiredGrams == null || remainGrams == null) {
-    return { remainGrams, insufficient: false, usesAutoRefill: false }
-  }
-
-  const minimumRequiredGrams = requiredGrams + LOW_FILAMENT_HEADROOM_GRAMS
-  const matchingAmsTrays = autoRefillEnabled
-    ? trays.filter((candidate) => trayCanUseAutoRefill(candidate, tray, requiredFilamentType, requiredNozzleId))
-    : []
-  const trayUsesAutoRefill =
-    autoRefillEnabled === true
-    && trayCanUseAutoRefill(tray, tray, requiredFilamentType, requiredNozzleId)
-    && matchingAmsTrays.length > 1
-
-  if (!trayUsesAutoRefill) {
-    return {
-      remainGrams,
-      insufficient: remainGrams < minimumRequiredGrams,
-      usesAutoRefill: false
-    }
-  }
-
-  const combinedRemainGrams = matchingAmsTrays.reduce(
-    (total, candidate) => total + (estimateRemainGrams(candidate.remainPercent) ?? 0),
-    0
-  )
-
+  const trayIsRefillable = trayCanUseAutoRefill(tray, requiredFilamentType, requiredNozzleId)
+  const grade = gradeSlotSufficiency({
+    tray,
+    trayIsRefillable,
+    refillCandidates: trays.filter((candidate) =>
+      trayCanUseAutoRefill(candidate, requiredFilamentType, requiredNozzleId)),
+    requiredGrams: requiredGrams ?? null,
+    autoRefillEnabled
+  })
   return {
-    remainGrams,
-    insufficient: combinedRemainGrams < minimumRequiredGrams,
-    usesAutoRefill: true
+    remainGrams: knownRemainGrams(tray),
+    insufficient: grade.sufficiency === 'short',
+    usesAutoRefill: grade.pooled
   }
 }
 
+/**
+ * Whether the printer's auto-refill could chain this tray for the print: a loaded
+ * physical AMS slot that satisfies the requirement. Deliberately says nothing
+ * about RFID — the printer chains a manually-set pair exactly as it chains two
+ * tagged spools, and gating this on `trayUuid` is what made the refill badge look
+ * like a Bambu-only feature.
+ */
 function trayCanUseAutoRefill(
   tray: SlotRemainingTray,
-  anchor: SlotRemainingTray,
   requiredFilamentType: string | null | undefined,
   requiredNozzleId: number | null | undefined
 ): boolean {
   return tray.kind === 'ams'
     && trayHasLoadedFilament(tray)
-    && traysMatchForAutoRefill(anchor, tray)
     && trayCanSatisfyRequirement(
       {
         filamentId: 1,

@@ -27,18 +27,20 @@
  */
 import { z } from 'zod'
 import {
+  amsMappingEntrySchema,
   printFromLibrarySchema,
   isPrinterActiveJobStage,
   type PrinterModel,
   type PrinterStatus
 } from './printer.js'
 import { amsTrayIndex, isPhysicalAmsTrayIndex } from './ams-tray-index.js'
+import { effectiveAmsNozzleId } from './filament-track-switch.js'
 import { isPrinterModelCompatible } from './print-compatibility.js'
 import { normalizeHexColor } from './filament-color.js'
-import { hasBambuRfidTag, isGenuineBambuTray } from './filament-identity.js'
+import { isGenuineBambuTray } from './filament-identity.js'
 import { filamentPresetNameFromId } from './bambu-filament-presets.js'
 import { filamentPresetFamilyName } from './filament-rebind.js'
-import { estimateRemainGrams, LOW_FILAMENT_HEADROOM_GRAMS, traysMatchForAutoRefill } from './slot-remaining.js'
+import { gradeSlotSufficiency, type SlotSufficiency } from './slot-remaining.js'
 
 export { normalizeHexColor }
 
@@ -132,7 +134,7 @@ export function loadedSlotsFromStatus(status: PrinterStatus): QueueLoadedSlot[] 
     // A unit behind a Filament Track Switch is reachable by BOTH extruders; the
     // parser already leaves its nozzleId null (see `amsUnitSchema.switchInput`),
     // but re-derive here so a stale binding can never filter such a unit out.
-    const unitNozzleId = unit.switchInput != null ? null : unit.nozzleId
+    const unitNozzleId = effectiveAmsNozzleId(unit)
     for (const slot of unit.slots) {
       slots.push({
         trayIndex: amsTrayIndex(unit.type, unit.unitId, slot.slot),
@@ -202,16 +204,25 @@ function nozzleCompatible(requiredNozzleId: number | null, slotNozzleId: number 
 }
 
 /**
- * Grams known to remain in a slot: the tracked spool's own figure first
- * (filament-manager covers non-RFID custom spools); otherwise the percent
- * estimate, trusted only for RFID (Bambu-tagged) trays. Untracked third-party
- * filament reports null — ungradeable, not zero. Same precedence as the
- * remaining label in the web's `SlotOptionLabel`.
+ * The physical AMS slots the printer's auto-refill could chain a filament's tray to:
+ * occupied, and on the right side of the nozzle binding.
+ *
+ * Includes the mapped tray itself, which is why a real pool is `length > 1`. It does
+ * NOT filter on material — `traysMatchForAutoRefill` is the far stricter identity test
+ * and applying a looser type check first would only mask which rule rejected a mate.
+ * External spools are excluded because the printer cannot refill from them.
+ *
+ * Exported for `print-filament-sufficiency.ts`, so the dialog's low-filament warning
+ * pools exactly the trays this matcher pools.
  */
-function knownSlotRemainGrams(slot: QueueLoadedSlot): number | null {
-  if (slot.remainingGrams != null) return slot.remainingGrams
-  if (hasBambuRfidTag(slot.trayUuid)) return estimateRemainGrams(slot.remainPercent)
-  return null
+export function refillCandidateSlots(
+  required: Pick<QueueRequiredFilament, 'nozzleId'>,
+  slots: readonly QueueLoadedSlot[]
+): QueueLoadedSlot[] {
+  return slots.filter((slot) =>
+    slot.occupied
+    && isPhysicalAmsTrayIndex(slot.trayIndex)
+    && nozzleCompatible(required.nozzleId ?? null, slot.nozzleId))
 }
 
 /** The genuine-Bambu preset family a slot's identity declares, or null. The genuine gate is `isGenuineBambuTray` — never bypassed. */
@@ -225,45 +236,42 @@ interface GradedSlotCandidate {
   slot: QueueLoadedSlot
   /** 0 = the slot's genuine identity names the required preset; 1 = plain type+colour match. */
   identityRank: number
-  /** 0 = holds enough for the job (with headroom), 1 = ungradeable, 2 = known-insufficient. */
-  sufficiencyRank: number
+  /** How the slot (or its refill pool) measures up against the plate's stated usage. */
+  sufficiency: SlotSufficiency
   /** Known remaining grams (combined across the refill pool when pooled); null when ungradeable. */
   remainGrams: number | null
   /** Pooled by AMS auto-refill — the printer chains these trays itself. */
   pooled: boolean
 }
 
+/** Preference order for the tie-break: a slot that demonstrably holds enough beats one we cannot grade. */
+const SUFFICIENCY_PREFERENCE: Record<SlotSufficiency, number> = { enough: 0, unknown: 1, short: 2 }
+
 function gradeCandidate(
   required: QueueRequiredFilament,
   slot: QueueLoadedSlot,
-  compatible: QueueLoadedSlot[],
+  refillCandidates: QueueLoadedSlot[],
   options: QueueMatchOptions,
   requiredPresetFamily: string | null
 ): GradedSlotCandidate {
   const identityRank =
     requiredPresetFamily != null && slotGenuinePresetFamily(slot) === requiredPresetFamily ? 0 : 1
-  // Poolmates are drawn from the nozzle+type-compatible set (not just the exact
-  // pool): a matching tray must also be reachable by the print to chain into it.
-  const poolmates = options.autoRefillEnabled === true && isPhysicalAmsTrayIndex(slot.trayIndex)
-    ? compatible.filter((candidate) => isPhysicalAmsTrayIndex(candidate.trayIndex) && traysMatchForAutoRefill(slot, candidate))
-    : []
-  const pooled = poolmates.length > 1
-  // Pooled remaining mirrors the web's low-filament pool (`getSlotRemainingState`):
-  // a plain sum of percent estimates, unreported trays counting zero.
-  const remainGrams = pooled
-    ? poolmates.reduce((total, mate) => total + (estimateRemainGrams(mate.remainPercent) ?? 0), 0)
-    : knownSlotRemainGrams(slot)
-  const requiredGrams = required.usedGrams ?? null
-  const sufficiencyRank = requiredGrams == null || remainGrams == null
-    ? 1
-    : remainGrams >= requiredGrams + LOW_FILAMENT_HEADROOM_GRAMS ? 0 : 2
-  return { slot, identityRank, sufficiencyRank, remainGrams, pooled }
+  const grade = gradeSlotSufficiency({
+    tray: slot,
+    trayIsRefillable: refillCandidates.some((candidate) => candidate.trayIndex === slot.trayIndex),
+    refillCandidates,
+    requiredGrams: required.usedGrams ?? null,
+    autoRefillEnabled: options.autoRefillEnabled
+  })
+  return { slot, identityRank, ...grade }
 }
 
 function compareCandidates(left: GradedSlotCandidate, right: GradedSlotCandidate): number {
   if (left.identityRank !== right.identityRank) return left.identityRank - right.identityRank
-  if (left.sufficiencyRank !== right.sufficiencyRank) return left.sufficiencyRank - right.sufficiencyRank
-  if (left.sufficiencyRank === 0) {
+  const leftSufficiency = SUFFICIENCY_PREFERENCE[left.sufficiency]
+  const rightSufficiency = SUFFICIENCY_PREFERENCE[right.sufficiency]
+  if (leftSufficiency !== rightSufficiency) return leftSufficiency - rightSufficiency
+  if (left.sufficiency === 'enough') {
     // Among slots that hold enough: consume the emptiest first, so partial
     // spools are used up before fresh ones. A pooled slot sorts after known
     // solos — deliberately draining the smallest of a chained pool gains
@@ -271,8 +279,9 @@ function compareCandidates(left: GradedSlotCandidate, right: GradedSlotCandidate
     const leftKey = left.pooled ? Number.POSITIVE_INFINITY : left.remainGrams ?? Number.POSITIVE_INFINITY
     const rightKey = right.pooled ? Number.POSITIVE_INFINITY : right.remainGrams ?? Number.POSITIVE_INFINITY
     if (leftKey !== rightKey) return leftKey - rightKey
-  } else if (left.sufficiencyRank === 2) {
-    // Nothing holds enough: take the fullest and let the insufficiency warning surface.
+  } else if (left.sufficiency === 'short') {
+    // Nothing holds enough: take the fullest, and let the print dialog's low-filament
+    // confirmation (`print-filament-sufficiency.ts`) surface the shortfall.
     const leftKey = left.remainGrams ?? -1
     const rightKey = right.remainGrams ?? -1
     if (leftKey !== rightKey) return rightKey - leftKey
@@ -315,7 +324,12 @@ function pickSlot(
   const exact = compatible.filter((slot) => colorSatisfied(required.color, slot.color))
   const pool = exact.length > 0 ? exact : options.allowTypeOnlyMatch ? compatible : []
   if (pool.length === 0) return null
-  const graded = pool.map((slot) => gradeCandidate(required, slot, compatible, options, requiredPresetFamily))
+  // Refill mates are the print-reachable AMS slots, computed once rather than per candidate. They
+  // are deliberately NOT narrowed to `compatible`: `traysMatchForAutoRefill` demands identical type
+  // text, which is strictly stronger than the type gate above, so filtering first could only hide
+  // which of the two rules rejected a mate.
+  const refillCandidates = refillCandidateSlots(required, slots)
+  const graded = pool.map((slot) => gradeCandidate(required, slot, refillCandidates, options, requiredPresetFamily))
   graded.sort(compareCandidates)
   return graded[0]!.slot
 }
@@ -579,8 +593,16 @@ export function queueRequiredFilamentFromPlate(filament: {
   }
 }
 
-/** A concrete slicer-slot -> AMS-tray mapping (indexed by `filament.id - 1`; `-1` = unmapped). */
-export const queueAmsMappingSchema = z.array(z.number().int())
+/**
+ * A concrete slicer-slot -> AMS-tray mapping (indexed by `filament.id - 1`; `-1` = unmapped).
+ *
+ * Shares `amsMappingEntrySchema` with the print-dispatch payloads rather than restating a bare
+ * integer array: a queued mapping is dispatched through the same command builder, so the two
+ * boundaries validating different things is how they came to disagree about `-1` at all. This
+ * is the tighter of the two former rules, so it now rejects out-of-band tray indices the queue
+ * used to forward to a printer unchecked.
+ */
+export const queueAmsMappingSchema = z.array(amsMappingEntrySchema)
 
 const queueLabelSchema = z.string().trim().max(120).nullish()
 
@@ -644,7 +666,14 @@ export const queueDispatchSchema = z.object({
    * printer connected, print guards, plate/filament compatibility) and report what *would* happen,
    * WITHOUT uploading or starting — the "Check" / dry-run action. Returns a {@link QueueDryRunResult}.
    */
-  dryRun: z.boolean().optional()
+  dryRun: z.boolean().optional(),
+  /**
+   * Consent to start when a mapped slot will run out (see `print-filament-sufficiency.ts`).
+   * Only this route carries it, because only this route is a person pressing Start: the
+   * unattended sweep over idle printers allows the shortfall unconditionally, since there is
+   * nobody there to answer and a stalled queue is worse than a print that pauses when dry.
+   */
+  allowInsufficientFilament: z.boolean().optional()
 }).refine((value) => !value.amsMapping || !!value.printerId, {
   message: 'Choose a printer when overriding the AMS slots'
 })
@@ -654,6 +683,16 @@ export type QueueDispatchInput = z.infer<typeof queueDispatchSchema>
 export const queueDryRunResultSchema = z.object({
   ok: z.boolean(),
   reason: z.string().nullable(),
+  /**
+   * Something a real Start would ASK about rather than fail on: a low-filament slot, which
+   * a person confirms in the start dialog and the unattended sweep waives outright.
+   *
+   * Separate from `reason` because the two mean opposite things to the reader. Reporting an
+   * overridable guard as a failure told people a print would not start when both real paths
+   * start it; dropping it entirely made "Check" quietly the one surface that would not
+   * mention the thing they most wanted checked.
+   */
+  warning: z.string().nullable(),
   printerId: z.string().nullable(),
   printerName: z.string().nullable()
 })

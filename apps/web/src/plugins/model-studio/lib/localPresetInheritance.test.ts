@@ -74,3 +74,32 @@ test('a delta at full width replaces the parent value', async () => {
   assert.deepEqual(out.config.filament_max_volumetric_speed, ['30', '50'])
   assert.deepEqual(out.changedKeys, ['filament_max_volumetric_speed'])
 })
+
+/**
+ * "No parent" and "parent would not resolve" both return `parentConfig: null`, but they mean
+ * opposite things about COMPLETENESS, and a caller that conflates them tells the user something
+ * false about their own file — the tune dialog said a self-contained preset "is based on one that
+ * isn't available here". Only the second case is short of inherited values.
+ */
+test('a self-contained preset is complete, not a preset whose parent went missing', async () => {
+  const standalone = {
+    id: 'local:filament:Solo', kind: 'filament' as const, name: 'Solo',
+    raw: { nozzle_temperature: ['240'] }, addedAt: ''
+  }
+  let asked = false
+  const out = await flattenLocalPreset(standalone, [], async () => { asked = true; return null })
+  assert.equal(out.parentUnresolved, false, 'nothing was inherited, so nothing is missing')
+  assert.equal(asked, false, 'a preset naming no parent must not go looking for one')
+  assert.equal(out.parentConfig, null)
+})
+
+test('a preset whose named parent will not resolve is flagged as incomplete', async () => {
+  const delta = {
+    id: 'local:filament:Derived', kind: 'filament' as const, name: 'Derived',
+    raw: { inherits: 'Some Missing Preset', nozzle_temperature: ['240'] }, addedAt: ''
+  }
+  const out = await flattenLocalPreset(delta, [], async () => null)
+  // The values it inherits are absent, so anything measured against `config` is measured short.
+  assert.equal(out.parentUnresolved, true)
+  assert.equal(out.parentConfig, null)
+})

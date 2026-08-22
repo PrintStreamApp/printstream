@@ -8,7 +8,8 @@ const identity = (spoolId: string): SlotFilamentIdentity => ({
   brand: 'Acme',
   filamentType: 'PLA',
   materialSubtype: null,
-  colorName: 'White'
+  colorName: 'White',
+  remainingGrams: null
 })
 
 test('resolve returns null when no resolver is registered', async () => {

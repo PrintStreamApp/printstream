@@ -183,13 +183,17 @@ async function assertLibraryPrintSourceReady(input: PrintFromLibrary, source: Li
     }
 
     const printerModel = printerModelSchema.safeParse(printer.model)
-    assertLibraryPrintCompatibilityForIndex(index, {
+    await assertLibraryPrintCompatibilityForIndex(index, {
+      workspaceId: source.workspaceId,
+      printerId: printer.id,
       plate: input.plate,
       printerModel: printerModel.success ? printerModel.data : 'unknown',
       printerStatus: printerManager.getStatus(printer.id),
       amsMapping: input.amsMapping,
       allowIncompatibleFilament: input.allowIncompatibleFilament,
       allowPlateTypeMismatch: input.allowPlateTypeMismatch,
+      allowFilamentTrackSwitchMismatch: input.allowFilamentTrackSwitchMismatch,
+      allowInsufficientFilament: input.allowInsufficientFilament,
       currentPlateType: input.currentPlateType,
       currentNozzleDiameters: input.currentNozzleDiameters
     })

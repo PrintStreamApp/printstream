@@ -278,3 +278,337 @@ test('parseReport derives AmsUnit.switchInput from info bits 24-27 when routed v
   assert.equal(direct?.switchInput, null)
   assert.equal(direct?.nozzleId, 0)
 })
+
+test('parseReport reports an unmeasurable remain as unknown rather than empty', () => {
+  // Firmware sends `remain: -1` for any spool it cannot weigh — every third-party and
+  // manually-set one. Clamping that to 0 made the whole AMS read as empty spools, so the
+  // print dialogs marked every hand-set slot as too low to finish anything.
+  const delta = parseReport(
+    {
+      print: {
+        ams: {
+          ams: [{
+            id: 0,
+            info: '1',
+            tray: [
+              { id: 0, tray_type: 'PLA', remain: -1 },
+              { id: 1, tray_type: 'PLA', remain: 64 },
+              { id: 2, tray_type: 'PLA', remain: 140 }
+            ]
+          }]
+        }
+      }
+    },
+    printer
+  )
+
+  const slots = delta?.ams?.[0]?.slots
+  assert.equal(slots?.[0]?.remainPercent, null)
+  assert.equal(slots?.[1]?.remainPercent, 64)
+  // An over-100 reading is still clamped: that one is a real measurement, just out of range.
+  assert.equal(slots?.[2]?.remainPercent, 100)
+})
+
+/**
+ * A loaded 4-slot AMS to merge deltas over. `tray_exist_bits: 'f'` = slots 0-3 all occupied.
+ */
+function loadedAmsStatus() {
+  const full = parseReport(
+    {
+      print: {
+        ams: {
+          tray_exist_bits: 'f',
+          ams: [{
+            id: 0,
+            info: '1',
+            tray: [
+              { id: 0, tray_type: 'PLA', tray_info_idx: 'GFA00', tray_uuid: 'AAAA0000000000000000000000000001', tray_color: 'FF0000FF', remain: 80 },
+              { id: 1, tray_type: 'PETG', tray_info_idx: 'GFG00', tray_uuid: 'AAAA0000000000000000000000000002', tray_color: '00FF00FF', remain: 70 },
+              { id: 2, tray_type: 'PLA', tray_info_idx: 'GFA00', tray_uuid: 'AAAA0000000000000000000000000003', tray_color: '0000FFFF', remain: 60 },
+              { id: 3, tray_type: 'ABS', tray_info_idx: 'GFB00', tray_uuid: 'AAAA0000000000000000000000000004', tray_color: 'FFFFFFFF', remain: 50 }
+            ]
+          }]
+        }
+      }
+    },
+    printer
+  )
+  return { ...makeOfflineStatus(printer), ams: full?.ams ?? [] }
+}
+
+const slotOf = (delta: ReturnType<typeof parseReport>, slotId: number) =>
+  delta?.ams?.[0]?.slots.find((slot) => slot.slot === slotId)
+
+test('parseReport clears a removed AMS slot whose tray object is absent from the delta', () => {
+  // A delta usually carries only the trays it has something to say about. The removal
+  // is announced by dropping slot 2's exist bit ('f' -> 'b'), and slot 2's tray object
+  // is simply not in the payload — so the bits are the ONLY signal that it is gone.
+  const delta = parseReport(
+    {
+      print: {
+        ams: {
+          tray_exist_bits: 'b',
+          ams: [{ id: 0, tray: [{ id: 0, tray_type: 'PLA', remain: 79 }] }]
+        }
+      }
+    },
+    printer,
+    loadedAmsStatus()
+  )
+
+  const removed = slotOf(delta, 2)
+  assert.equal(removed?.occupied, false)
+  assert.equal(removed?.trayUuid, null)
+  assert.equal(removed?.filamentType, null)
+  assert.equal(removed?.trayInfoIdx, null)
+  assert.equal(removed?.color, null)
+  assert.deepEqual(removed?.colors, [])
+  assert.equal(removed?.remainPercent, null)
+  // The untouched neighbours keep everything.
+  assert.equal(slotOf(delta, 3)?.trayUuid, 'AAAA0000000000000000000000000004')
+  assert.equal(slotOf(delta, 3)?.occupied, true)
+})
+
+test('parseReport clears a removed AMS slot from a delta carrying only the exist bits', () => {
+  const delta = parseReport(
+    { print: { ams: { tray_exist_bits: 'b' } } },
+    printer,
+    loadedAmsStatus()
+  )
+
+  assert.equal(slotOf(delta, 2)?.occupied, false)
+  assert.equal(slotOf(delta, 2)?.trayUuid, null)
+  assert.equal(slotOf(delta, 2)?.filamentType, null)
+  assert.equal(slotOf(delta, 1)?.filamentType, 'PETG')
+  assert.equal(slotOf(delta, 1)?.occupied, true)
+})
+
+test('parseReport leaves every slot alone when a delta carries no exist bits', () => {
+  // Absence is not emptiness: a delta that says nothing about occupancy must never
+  // clear a slot, or every partial AMS report would wipe the trays it did not mention.
+  const delta = parseReport(
+    { print: { ams: { ams: [{ id: 0, tray: [{ id: 0, tray_type: 'PLA', remain: 79 }] }] } } },
+    printer,
+    loadedAmsStatus()
+  )
+
+  assert.equal(slotOf(delta, 2)?.trayUuid, 'AAAA0000000000000000000000000003')
+  assert.equal(slotOf(delta, 2)?.filamentType, 'PLA')
+  assert.equal(slotOf(delta, 2)?.occupied, true)
+})
+
+test('parseReport reads a shortened exist bitmap as the higher units being empty', () => {
+  // `tray_exist_bits` is one device-wide bitmap on `print.ams`, and Bambu omits its
+  // leading zeroes — so '1f' means unit 1 slot 0 is loaded, and a later 'f' means it
+  // is not. This is the assumption the sweep rests on; pin it so a firmware that
+  // reports per-unit bitmaps instead would fail here rather than silently wiping a unit.
+  const both = parseReport(
+    {
+      print: {
+        ams: {
+          tray_exist_bits: '1f',
+          ams: [
+            { id: 0, info: '1', tray: [{ id: 0, tray_type: 'PLA', tray_uuid: 'BBBB0000000000000000000000000001' }] },
+            { id: 1, info: '1', tray: [{ id: 0, tray_type: 'ABS', tray_uuid: 'BBBB0000000000000000000000000002' }] }
+          ]
+        }
+      }
+    },
+    printer
+  )
+  assert.equal(both?.ams?.find((unit) => unit.unitId === 1)?.slots[0]?.occupied, true)
+
+  const afterRemoval = parseReport(
+    { print: { ams: { tray_exist_bits: 'f' } } },
+    printer,
+    { ...makeOfflineStatus(printer), ams: both?.ams ?? [] }
+  )
+  const unitOne = afterRemoval?.ams?.find((unit) => unit.unitId === 1)?.slots[0]
+  assert.equal(unitOne?.occupied, false)
+  assert.equal(unitOne?.trayUuid, null)
+  // Unit 0 is untouched by the same bitmap.
+  assert.equal(afterRemoval?.ams?.find((unit) => unit.unitId === 0)?.slots[0]?.trayUuid, 'BBBB0000000000000000000000000001')
+})
+
+test('an external slot reporting a tray uuid is not treated as empty', () => {
+  // Guards a contradiction rather than a live scenario: no populated `tray_uuid` has
+  // been observed from an external holder, so this payload is not expected in the field. But `tray_uuid` is
+  // in the virtual-tray wire format and BambuStudio parses it, and if one ever did
+  // arrive, omitting it from the emptiness test published a slot that reads as empty
+  // (colour blanked) while still carrying the uuid that tells `collectPresences` a spool
+  // IS loaded there. Cheap to make unreachable; do not read it as evidence of external RFID.
+  const delta = parseReport(
+    { print: { vt_tray: { id: 255, tray_uuid: 'ABCDEF1234567890ABCDEF1234567890', tray_color: 'FF0000FF' } } },
+    printer
+  )
+
+  const spool = delta?.externalSpools?.find((entry) => entry.amsId === 255)
+  assert.equal(spool?.trayUuid, 'ABCDEF1234567890ABCDEF1234567890')
+  assert.equal(spool?.color, '#FF0000')
+  assert.deepEqual(spool?.colors, ['#FF0000'])
+})
+
+test('an emptied external slot drops its calibration alongside its identity', () => {
+  // Half-clearing is what leaves a phantom: an empty slot must not keep the removed
+  // spool's K profile any more than it keeps its colour.
+  const offline = makeOfflineStatus(printer)
+  const seeded: typeof offline = {
+    ...offline,
+    externalSpools: offline.externalSpools.map((spool) => (
+      spool.amsId === 255
+        ? { ...spool, caliIdx: 3, k: 0.02, trayUuid: 'ABCDEF1234567890ABCDEF1234567890' }
+        : spool
+    ))
+  }
+
+  const delta = parseReport({ print: { vt_tray: { id: 255, tray_uuid: '' } } }, printer, seeded)
+
+  const spool = delta?.externalSpools?.find((entry) => entry.amsId === 255)
+  assert.equal(spool?.trayUuid, null)
+  assert.equal(spool?.caliIdx, null)
+  assert.equal(spool?.k, null)
+})
+
+test('the exist-bits sweep uses each AMS family\'s own bit band', () => {
+  // Ported from `DevAms::GetTrayId`, which is the same index BambuStudio feeds to
+  // `get_flag_bits(tray_exist_bits, ...)`: AMS Lite Mixed (N9, DevAmsType 5) lives at
+  // 24 + slotId, NOT unitId * 4 + slotId. Reading the classic band for it lands on
+  // another unit's bits -- and since the sweep CLEARS on a false bit, that emptied
+  // loaded slots. Bit 24 is the 7th nibble from the right: '1000000'.
+  const loaded = parseReport(
+    {
+      print: {
+        ams: {
+          tray_exist_bits: '1000000',
+          ams: [{ id: 0, info: '5', tray: [{ id: 0, tray_type: 'PLA', tray_uuid: 'CCCC0000000000000000000000000001' }] }]
+        }
+      }
+    },
+    printer
+  )
+
+  const unit = loaded?.ams?.find((entry) => entry.unitId === 0)
+  assert.equal(unit?.type, 'ams-lite-mixed')
+  assert.equal(unit?.slots[0]?.occupied, true)
+  assert.equal(unit?.slots[0]?.trayUuid, 'CCCC0000000000000000000000000001')
+})
+
+test('an unparseable exist bitmap reads as unknown, never as every tray being empty', () => {
+  // `isHexBitSet` answers false for both "bit clear" and "cannot read this string",
+  // and callers CLEAR a slot's whole spool identity on false. So a bitmap this parser
+  // cannot read used to wipe every loaded slot in every unit, and because identity
+  // falls back to the previous slot, the wipe then persisted across later deltas
+  // until a full pushall re-described each tray.
+  const delta = parseReport(
+    { print: { ams: { tray_exist_bits: '0x1f' } } },
+    printer,
+    loadedAmsStatus()
+  )
+
+  assert.equal(slotOf(delta, 0)?.trayUuid, 'AAAA0000000000000000000000000001')
+  assert.equal(slotOf(delta, 0)?.filamentType, 'PLA')
+  assert.equal(slotOf(delta, 0)?.occupied, true)
+  assert.equal(slotOf(delta, 3)?.trayUuid, 'AAAA0000000000000000000000000004')
+  assert.equal(slotOf(delta, 3)?.occupied, true)
+})
+
+test('a well-formed exist bitmap still empties the slot it clears', () => {
+  // Pairs with the test above so the unknown-bitmap guard cannot be satisfied by
+  // disabling the sweep altogether.
+  const delta = parseReport(
+    { print: { ams: { tray_exist_bits: 'b' } } },
+    printer,
+    loadedAmsStatus()
+  )
+
+  assert.equal(slotOf(delta, 2)?.occupied, false)
+  assert.equal(slotOf(delta, 2)?.trayUuid, null)
+})
+
+test('the reading bitmap uses the same bit bands as the exist bitmap', () => {
+  // Both fields are indexed by `DevAms::GetTrayId`. A running counter over the slots
+  // agrees only for a contiguous set of classic 4-slot units: an AMS HT unit lives at
+  // 16 + (unitId - 128) + slotId, so with AMS 0 in front of it the counter read bit 4
+  // -- AMS 0's would-be fifth slot -- and the rescanning indicator landed on the wrong
+  // tray. Bit 16 is the 5th nibble from the right: '10000'.
+  const delta = parseReport(
+    {
+      print: {
+        ams: {
+          tray_reading_bits: '10000',
+          ams: [
+            { id: 0, info: '1', tray: [{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }] },
+            { id: 128, info: '4', tray: [{ id: 0 }] }
+          ]
+        }
+      }
+    },
+    printer
+  )
+
+  const ht = delta?.ams?.find((entry) => entry.unitId === 128)
+  assert.equal(ht?.type, 'ams-ht')
+  assert.equal(ht?.slots[0]?.isReading, true)
+  const classic = delta?.ams?.find((entry) => entry.unitId === 0)
+  assert.deepEqual(classic?.slots.map((slot) => slot.isReading), [false, false, false, false])
+})
+
+test('the reading bitmap skips a gap in the unit ids instead of shifting past it', () => {
+  // AMS 0 + AMS 2 with unit 1 unplugged: unit 2 slot 0 is bit 2*4+0 = 8 ('100'),
+  // not the running counter's 4.
+  const delta = parseReport(
+    {
+      print: {
+        ams: {
+          tray_reading_bits: '100',
+          ams: [
+            { id: 0, info: '1', tray: [{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }] },
+            { id: 2, info: '1', tray: [{ id: 0 }] }
+          ]
+        }
+      }
+    },
+    printer
+  )
+
+  assert.equal(delta?.ams?.find((entry) => entry.unitId === 2)?.slots[0]?.isReading, true)
+  assert.equal(delta?.ams?.find((entry) => entry.unitId === 0)?.slots.some((slot) => slot.isReading), false)
+})
+
+test('an unparseable reading bitmap leaves the previous reading state alone', () => {
+  // `isReading` carries forward from the previous slot, so the failure to pin is a
+  // junk bitmap silently reporting "nothing is reading" over a tray that is.
+  const reading = parseReport(
+    { print: { ams: { tray_reading_bits: '1', ams: [{ id: 0, info: '1', tray: [{ id: 0 }] }] } } },
+    printer
+  )
+  assert.equal(reading?.ams?.[0]?.slots[0]?.isReading, true)
+
+  const delta = parseReport(
+    { print: { ams: { tray_reading_bits: 'not-hex' } } },
+    printer,
+    { ...makeOfflineStatus(printer), ams: reading?.ams ?? [] }
+  )
+
+  assert.equal(delta?.ams?.[0]?.slots[0]?.isReading, true)
+})
+
+test('a unit whose bit band is unknown is never emptied by the sweep', () => {
+  // `GetTrayId` asserts and returns -1 for a DevAmsType it does not know; we return
+  // null so the slot reads as "not stated" instead of "empty". Guessing a band for a
+  // future unit family would wipe its loaded slots on the first report.
+  const seeded = parseReport(
+    { print: { ams: { ams: [{ id: 0, info: 'd', tray: [{ id: 0, tray_type: 'PLA', tray_uuid: 'DDDD0000000000000000000000000001' }] }] } } },
+    printer
+  )
+  assert.equal(seeded?.ams?.[0]?.type, 'unknown')
+
+  const swept = parseReport(
+    { print: { ams: { tray_exist_bits: '0' } } },
+    printer,
+    { ...makeOfflineStatus(printer), ams: seeded?.ams ?? [] }
+  )
+
+  assert.equal(swept?.ams?.[0]?.slots[0]?.trayUuid, 'DDDD0000000000000000000000000001')
+  assert.equal(swept?.ams?.[0]?.slots[0]?.filamentType, 'PLA')
+})

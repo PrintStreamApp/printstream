@@ -8,7 +8,7 @@ import EditRoundedIcon from '@mui/icons-material/EditRounded'
 import StraightenRoundedIcon from '@mui/icons-material/StraightenRounded'
 import EjectRoundedIcon from '@mui/icons-material/EjectRounded'
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
-import { Dropdown, IconButton, ListDivider, Menu, MenuButton, MenuItem } from '@mui/joy'
+import { Dropdown, IconButton, ListDivider, ListItemDecorator, Menu, MenuButton, MenuItem } from '@mui/joy'
 import type { FilamentSpool } from '@printstream/shared'
 
 export function SpoolActionsMenu({
@@ -30,14 +30,24 @@ export function SpoolActionsMenu({
         <MoreVertRoundedIcon />
       </MenuButton>
       <Menu size="sm" placement="bottom-end">
-        <MenuItem onClick={() => onEdit(spool)}><EditRoundedIcon /> Edit</MenuItem>
-        <MenuItem onClick={() => onAdjust(spool)}><StraightenRoundedIcon /> Adjust remaining</MenuItem>
+        <MenuItem onClick={() => onEdit(spool)}>
+          <ListItemDecorator><EditRoundedIcon /></ListItemDecorator>
+          Edit
+        </MenuItem>
+        <MenuItem onClick={() => onAdjust(spool)}>
+          <ListItemDecorator><StraightenRoundedIcon /></ListItemDecorator>
+          Adjust remaining
+        </MenuItem>
         {spool.loadedPrinterId && (
-          <MenuItem onClick={() => onUnassign(spool)}><EjectRoundedIcon /> Unload from printer</MenuItem>
+          <MenuItem onClick={() => onUnassign(spool)}>
+            <ListItemDecorator><EjectRoundedIcon /></ListItemDecorator>
+            Unload from printer
+          </MenuItem>
         )}
         <ListDivider />
         <MenuItem color="danger" onClick={() => onRecycle(spool)}>
-          <DeleteOutlineRoundedIcon /> Move to recycle bin
+          <ListItemDecorator><DeleteOutlineRoundedIcon /></ListItemDecorator>
+          Move to recycle bin
         </MenuItem>
       </Menu>
     </Dropdown>

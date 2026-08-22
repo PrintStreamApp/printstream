@@ -6,9 +6,10 @@ import {
   amsUnitTypeFromCode,
   isPhysicalAmsTrayIndex,
   trayIndexToAmsSlot,
-  AMS_HT_TRAY_INDEX_MIN
+  AMS_HT_TRAY_INDEX_MIN,
+  AMS_TRAY_UNMAPPED
 } from './ams-tray-index.js'
-import { printerTrayMappingSchema } from './printer-contracts.js'
+import { amsMappingEntrySchema, printerTrayMappingSchema } from './printer-contracts.js'
 
 test('amsUnitTypeFromCode maps DevAmsType codes', () => {
   assert.equal(amsUnitTypeFromCode(0), 'ext-spool')
@@ -82,7 +83,26 @@ test('printerTrayMappingSchema accepts H2 AMS HT indices (regression for max(15)
   assert.equal(printerTrayMappingSchema.safeParse(255).success, true)
   // Still rejects the invalid gap between bands.
   assert.equal(printerTrayMappingSchema.safeParse(160).success, false)
+  // -1 is not a tray. It is a legitimate ENTRY of a mapping array, which is a different
+  // question and a different schema (below).
   assert.equal(printerTrayMappingSchema.safeParse(-1).success, false)
+})
+
+test('amsMappingEntrySchema accepts the unmapped sentinel that a tray index rejects', () => {
+  // The bug: `ams_mapping` is positional over the project's filaments, so a plate that skips
+  // one carries -1 at that index (BambuStudio does the same). Validating those entries as
+  // TRAY INDICES made an override-less re-print of any such job throw "Invalid AMS tray
+  // index" before it could dispatch.
+  assert.equal(amsMappingEntrySchema.safeParse(AMS_TRAY_UNMAPPED).success, true)
+  assert.equal(amsMappingEntrySchema.safeParse(-1).success, true)
+  // Everything a tray index accepts, an entry still accepts.
+  assert.equal(amsMappingEntrySchema.safeParse(0).success, true)
+  assert.equal(amsMappingEntrySchema.safeParse(128).success, true)
+  assert.equal(amsMappingEntrySchema.safeParse(255).success, true)
+  // And the sentinel is exactly -1: no other negative, and no widening of the invalid gap.
+  assert.equal(amsMappingEntrySchema.safeParse(-2).success, false)
+  assert.equal(amsMappingEntrySchema.safeParse(160).success, false)
+  assert.equal(amsMappingEntrySchema.safeParse(-1.5).success, false)
 })
 
 test('amsUnitLetter folds the AMS HT band (128+) back to A-Y', () => {

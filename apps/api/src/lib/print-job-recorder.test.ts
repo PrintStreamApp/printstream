@@ -8,6 +8,7 @@ import path from 'node:path'
 import { afterEach, mock, test } from 'node:test'
 import type { Printer, PrinterStatus } from '@printstream/shared'
 import yazl from 'yazl'
+import { readRecordedPrintStartOptions } from './print-job-options.js'
 import { rootPrisma } from './prisma.js'
 import { clearAllPendingPrintJobSources, peekPendingPrintJobSource, registerPendingPrintJobSource } from './pending-print-job-source.js'
 import { printerEvents } from './printer-events.js'
@@ -170,6 +171,64 @@ test('createPrintJobStartRecord falls back when calibration history columns are 
     jobName: 'Calibration'
   })
   assert.equal(attempts, 2)
+})
+
+// The write half of issue #97: the recorder is the only module that writes `PrintJob`, so if
+// the selection does not survive this hop nothing downstream can restore it.
+test('createPrintJobStartRecord stores the print-start selection for re-print', async () => {
+  let stored: Record<string, unknown> | null = null
+
+  Object.defineProperty(rootPrisma.printer, 'findUnique', {
+    value: async () => ({ workspaceId: 'workspace-1' }),
+    configurable: true
+  })
+  Object.defineProperty(rootPrisma.printJob, 'create', {
+    value: async ({ data }: { data: Record<string, unknown> }) => {
+      stored = data
+      return { id: 'job-1', jobName: String(data.jobName ?? '') }
+    },
+    configurable: true
+  })
+
+  // Every option away from its schema default, so a dropped field cannot pass by coincidence.
+  const printOptions = {
+    bedLevel: 'auto',
+    vibrationCompensation: true,
+    flowCalibration: 'auto',
+    firstLayerInspection: false,
+    timelapse: true,
+    filamentDynamicsCalibration: true,
+    nozzleOffsetCalibration: 'off'
+  } as const
+
+  await createPrintJobStartRecord({
+    printerId: 'printer-1',
+    jobName: 'Widget',
+    metadata: {
+      jobKind: 'file',
+      jobId: 'job-1',
+      fileId: 'file-1',
+      fileName: 'widget.3mf',
+      fileSizeBytes: 1024,
+      sourceKind: '3mf',
+      plate: 1,
+      useAms: true,
+      bedLevel: true,
+      amsMapping: null,
+      printOptions,
+      calibrationOption: null
+    }
+  })
+
+  assert.deepEqual(
+    readRecordedPrintStartOptions({
+      printOptionsJson: (stored as unknown as { printOptionsJson: string | null }).printOptionsJson,
+      bedLevel: (stored as unknown as { bedLevel: boolean | null }).bedLevel
+    }),
+    printOptions
+  )
+  // The lossy legacy column still records what it always did, for older readers.
+  assert.equal((stored as unknown as { bedLevel: boolean | null }).bedLevel, true)
 })
 
 test('reserveTrackedPrintJobStart precreates a durable job id and pending source', async () => {

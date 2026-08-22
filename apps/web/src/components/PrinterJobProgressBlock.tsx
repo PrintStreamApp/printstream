@@ -1,5 +1,6 @@
-import { LinearProgress, Stack, type ColorPaletteProp } from '@mui/joy'
+import { Stack, type ColorPaletteProp } from '@mui/joy'
 import type { ReactNode } from 'react'
+import { ProgressBar } from './ProgressBar'
 import { printerJobProgressSx } from './printerJobProgressStyles'
 
 export function PrinterJobProgressBlock({
@@ -7,7 +8,6 @@ export function PrinterJobProgressBlock({
   headerAside,
   headerAction,
   showProgress = true,
-  determinate,
   value,
   color,
   fillColor,
@@ -19,8 +19,8 @@ export function PrinterJobProgressBlock({
   headerAside?: ReactNode
   headerAction?: ReactNode
   showProgress?: boolean
-  determinate: boolean
-  value: number
+  /** Percentage 0-100, or `null` while the job is running with no reported extent. */
+  value: number | null
   color: ColorPaletteProp
   fillColor?: string
   trackColor?: string
@@ -50,25 +50,10 @@ export function PrinterJobProgressBlock({
         ) : null}
       </Stack>
       {showProgress && (
-        <LinearProgress
-          determinate={determinate}
+        <ProgressBar
           value={value}
           color={color}
-          sx={{
-            ...printerJobProgressSx,
-            backgroundColor: trackColor,
-            '&::before': determinate
-              ? {
-                  ...printerJobProgressSx['&::before'],
-                  backgroundColor: fillColor,
-                }
-              : fillColor
-                ? {
-                    ...printerJobProgressSx['&::before'],
-                    backgroundColor: fillColor
-                  }
-                : undefined
-          }}
+          sx={printerJobProgressSx({ value, fillColor, trackColor })}
         />
       )}
       {lowerContent && (

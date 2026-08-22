@@ -12,7 +12,7 @@
  * to rebuild after a lost WebGL context.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, Chip, CircularProgress, DialogContent, Divider, IconButton, LinearProgress, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
+import { Alert, Box, Button, Chip, CircularProgress, DialogContent, Divider, IconButton, ModalClose, Sheet, Slider, Stack, Switch, Typography, Tooltip } from '@mui/joy'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
 import ExpandLessRoundedIcon from '@mui/icons-material/ExpandLessRounded'
 import { choosePlateStripOrientation, EDITOR_GRID_GAP_PX } from './lib/editorChromeLayout'
@@ -24,6 +24,7 @@ import { apiFetch } from '../../lib/apiClient'
 import { buildApiUrl } from '../../lib/apiUrl'
 import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import { fitPerspectiveDepthRange } from './lib/previewDepthRange'
+import { previewChromeLayout } from './lib/previewChromeLayout'
 import { buildLayeredGcodePreview, GCODE_FEATURE_COLORS, GCODE_FEATURE_NAMES, parseGcodeLayers, type GcodeStats, type LayeredGcodePreview } from './lib/gcodePreview'
 import { formatSecondsDuration } from '../../lib/time'
 import { BackAwareModal as Modal } from '../../components/BackAwareModal'
@@ -54,6 +55,7 @@ import {
   createViewCube,
   type ViewPreset
 } from './lib/viewCube'
+import { ProgressBar } from '../../components/ProgressBar'
 
 const PLATED_PREVIEW_GRID_SIZE = 320
 // Normalized editor "home" direction, so the G-code preview opens at the same angle the full
@@ -815,14 +817,14 @@ export function PreviewView(props: Record<string, unknown>) {
   // Either enlarged mode switches the body from a scrolling column to a flex column so the viewer
   // fills the freed height instead of keeping its fixed dvh band.
   const expanded = presentation !== 'standard'
-  /**
-   * Vertical space the top-right viewport controls need INSIDE the 3D area. The full-screen toggle
-   * lives ON the viewport (it enlarges the 3D area, not the dialog) and the dialog's close joins it
-   * there once full screen drops the padding — while the layer scrubber runs the full right edge,
-   * exactly where they land. Anything anchored top-right in the viewport must start below this.
-   */
-  const VIEWPORT_TOP_RESERVE = 52
+  const gcodeOverlaysReady = previewMode === 'plate-gcode' && !viewerState.loading && !viewerState.error
+  const showsGcodeLayerColumn = gcodeOverlaysReady && gcodeLayerCount > 1
+  const showsGcodeMovesStrip = gcodeOverlaysReady && gcodeMoveCount > 1
   const showPreviewChrome = !fullScreen
+  // Where the viewport's floating controls sit. Extracted because four of them share two
+  // corners and which are present changes with the mode: two absolutely-positioned boxes
+  // landing on each other throws nothing, the higher z-index just eats the other's clicks.
+  const chrome = previewChromeLayout({ fullScreen, showsGcodeLayerColumn, showsGcodeMovesStrip })
   // Same rule the editor uses: the strip runs along whichever axis leaves the 3D area best
   // proportioned. There is no sidebar here, so the whole body width is the viewport's to spend.
   const plateStripOrientation = choosePlateStripOrientation({
@@ -917,13 +919,14 @@ export function PreviewView(props: Record<string, unknown>) {
                   the control belongs on the thing it resizes — the editor's viewport toolbar carries
                   its twin the same way. `soft` because `plain` disappears against the scene. Full
                   screen drops the dialog's padding, which brings the close X down over this corner,
-                  so step left of it there. */}
+                  so step left of it there. With the G-code scrubbers up it steps clear of each one
+                  present, into the inner corner between them. */}
               <FullScreenDialogButton
                 active={fullScreen}
                 onToggle={setFullScreen}
                 contentLabel="3D only"
                 variant="soft"
-                sx={{ position: 'absolute', top: 12, right: fullScreen ? 52 : 12, zIndex: 2 }}
+                sx={{ position: 'absolute', ...chrome.fullScreenToggle, zIndex: 2 }}
               />
               {viewerState.loading && (
                 <Stack
@@ -942,11 +945,7 @@ export function PreviewView(props: Record<string, unknown>) {
                   variant="soft"
                   sx={{
                     position: 'absolute',
-                    top: 12,
-                    left: 12,
-                    // Clears the viewport's own top-right controls: the full-screen toggle always,
-                    // plus the dialog's close X once full screen drops the padding between them.
-                    right: fullScreen ? 96 : 52,
+                    ...chrome.sceneProgress,
                     zIndex: 2,
                     px: 1.5,
                     py: 0.75,
@@ -962,8 +961,7 @@ export function PreviewView(props: Record<string, unknown>) {
                   <Typography level="body-xs" textColor="neutral.200" sx={{ whiteSpace: 'nowrap' }}>
                     Loading models… {sceneProgress.done} of {sceneProgress.total}
                   </Typography>
-                  <LinearProgress
-                    determinate
+                  <ProgressBar
                     value={(sceneProgress.done / Math.max(sceneProgress.total, 1)) * 100}
                     sx={{ flex: 1 }}
                   />
@@ -1007,14 +1005,12 @@ export function PreviewView(props: Record<string, unknown>) {
                   )}
                 </Stack>
               )}
-              {previewMode === 'plate-gcode' && gcodeLayerCount > 1 && !viewerState.loading && !viewerState.error && (
+              {showsGcodeLayerColumn && (
                 <Sheet
                   variant="soft"
                   sx={{
                     position: 'absolute',
-                    top: 12 + VIEWPORT_TOP_RESERVE,
-                    right: 12,
-                    bottom: 12,
+                    ...chrome.gcodeLayerColumn,
                     zIndex: 1,
                     px: 1,
                     py: 1.5,
@@ -1055,7 +1051,7 @@ export function PreviewView(props: Record<string, unknown>) {
                   </Typography>
                 </Sheet>
               )}
-              {previewMode === 'plate-gcode' && gcodeMoveCount > 1 && !viewerState.loading && !viewerState.error && (
+              {showsGcodeMovesStrip && (
                 // Top edge: the bottom-left corner belongs to the view cube and the right
                 // edge to the layer panel, so the move scrubber gets the top strip
                 // (stopping short of the layer panel's column).
@@ -1063,9 +1059,7 @@ export function PreviewView(props: Record<string, unknown>) {
                   variant="soft"
                   sx={{
                     position: 'absolute',
-                    left: 12,
-                    right: { xs: 88, sm: 96 },
-                    top: 12,
+                    ...chrome.gcodeMovesStrip,
                     zIndex: 1,
                     px: 1.5,
                     py: 0.75,

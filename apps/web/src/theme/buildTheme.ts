@@ -220,6 +220,42 @@ const ROW_HOVER_STYLES = {
 }
 
 /**
+ * Cell padding for every `Table` in the app, by size.
+ *
+ * Joy's stock values are tighter than anything else we draw — a `size="sm"`
+ * table (our directory baseline) gives a row 4px of vertical padding and sits
+ * its outermost cells 8px from the surrounding Sheet's border, so a table reads
+ * as a denser block than the cards and lists beside it.
+ *
+ * `edgePaddingX` is the part that is not just "more padding": the FIRST and
+ * LAST cell in each row get a wider outer gutter than the gaps between columns,
+ * so the row's content clears the container edge instead of hugging the border.
+ * Without it, evening out the interior gaps alone still leaves both ends tight.
+ *
+ * Any table with a narrow fixed-width column has to budget for this — the outer
+ * gutter eats into a fixed width, and Joy's tables are `table-layout: fixed`,
+ * so an icon-only column sized to the old padding overflows its cell.
+ */
+const TABLE_DENSITY = {
+  sm: { paddingY: '8px', paddingX: '12px', edgePaddingX: '16px' },
+  md: { paddingY: '10px', paddingX: '14px', edgePaddingX: '20px' },
+  lg: { paddingY: '12px', paddingX: '16px', edgePaddingX: '24px' }
+} as const
+
+function buildTableDensityStyles(size: keyof typeof TABLE_DENSITY) {
+  const density = TABLE_DENSITY[size]
+  return {
+    '--TableCell-paddingY': density.paddingY,
+    '--TableCell-paddingX': density.paddingX,
+    // `:first-child`/`:last-child`, NOT `:first-of-type`: a row that mixes a
+    // `th` header cell with `td`s has a first-of-type of EACH, so the outer
+    // gutter would land on the second column too.
+    '& tr > :first-child': { paddingInlineStart: density.edgePaddingX },
+    '& tr > :last-child': { paddingInlineEnd: density.edgePaddingX }
+  }
+}
+
+/**
  * Root styling for the button-family controls, so a Button, an IconButton and a MenuButton with the
  * same `variant`/`color` render as the same control. Registered against each component below
  * because Joy has no shared "button" slot: a MenuButton's root class is `MuiMenuButton-root`, NOT
@@ -462,7 +498,12 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
       },
       JoyTable: {
         styleOverrides: {
-          root: usesGlassSurfacePanels
+          // Density applies under every theme; only the glass chrome below is
+          // conditional. Written as a callback because the padding scales with
+          // the table's own `size`.
+          root: ({ ownerState }: { ownerState: { size?: keyof typeof TABLE_DENSITY } }) => ({
+            ...buildTableDensityStyles(ownerState.size ?? 'md'),
+            ...(usesGlassSurfacePanels
             ? {
                 '--TableCell-headBackground': 'var(--printstream-table-header-background)',
                 '--TableCell-selectedBackground': 'var(--printstream-table-row-hover-background)',
@@ -485,7 +526,8 @@ export function createAppTheme(palette: PrintStreamThemePalette) {
                   backgroundColor: 'var(--printstream-table-row-hover-background)'
                 }
               }
-            : {}
+            : {})
+          })
         }
       },
       JoyStack: {

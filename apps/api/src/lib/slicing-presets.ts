@@ -39,7 +39,8 @@ const storedSlicingPresetSchema = z.object({
   updatedAt: z.string()
 })
 
-type StoredSlicingPreset = z.infer<typeof storedSlicingPresetSchema>
+/** A custom preset exactly as persisted: identity, the raw BambuStudio JSON, and our last-write time. */
+export type StoredSlicingPreset = z.infer<typeof storedSlicingPresetSchema>
 /**
  * A preset summary's metadata: everything that is NOT its identity.
  *
@@ -89,13 +90,20 @@ export async function createCustomSlicingPreset(workspaceId: string, input: Uplo
 export async function createCustomSlicingPresets(workspaceId: string, input: UploadSlicingPreset): Promise<CreateCustomSlicingPresetsResult> {
   const uploadedProfiles = await extractUploadedProfiles(input)
   const existingProfiles = await readProfiles(workspaceId)
+  const existingByName = new Map(existingProfiles.map((profile) => [buildProfileLookupKey(profile.kind, profile.name), profile]))
   const now = new Date().toISOString()
   const createdProfiles = uploadedProfiles.map((uploadedProfile) => {
     const parsedJson = parseProfileJson(uploadedProfile.content, uploadedProfile.kind)
+    const kind = parsedJson.kind
+    const name = uploadedProfile.name?.trim() || parsedJson.name
     return {
-      id: `custom:${randomUUID()}`,
-      kind: parsedJson.kind,
-      name: uploadedProfile.name?.trim() || parsedJson.name,
+      // A save that replaces a same-kind+name preset REUSES its id rather than minting a new one:
+      // this is an edit of that preset, and the id is what every stored reference points at (a
+      // slice request's chosen preset, a PrintJob's record of it, the Bambu cloud sync map's
+      // setting_id binding). Re-minting silently orphaned all of them on every edit.
+      id: existingByName.get(buildProfileLookupKey(kind, name))?.id ?? `custom:${randomUUID()}`,
+      kind,
+      name,
       content: JSON.stringify(parsedJson.raw, null, 2),
       updatedAt: now
     } satisfies StoredSlicingPreset
@@ -118,6 +126,69 @@ export async function createCustomSlicingPresets(workspaceId: string, input: Upl
     replaced: collisionNames,
     conflicts: []
   }
+}
+
+/**
+ * Every custom preset with its stored JSON and last-write time.
+ *
+ * The listing API returns summaries, which is right for the manager but not enough for
+ * a caller that has to reason about a preset's CONTENT — currently the Bambu cloud sync
+ * (`plugins/bambu-cloud-sync/`), which diffs a preset against its parent to build a
+ * push payload and compares `updatedAt` against the value it recorded at last sync to
+ * tell whether the user has edited it here since.
+ */
+export async function listCustomSlicingPresetRecords(workspaceId: string): Promise<StoredSlicingPreset[]> {
+  return await readProfiles(workspaceId)
+}
+
+/**
+ * Write presets programmatically, replacing any with the same id (or, failing that,
+ * the same kind + name).
+ *
+ * Separate from `createCustomSlicingPresets` because that one is the UPLOAD path: it
+ * parses files, reports name collisions, and refuses to overwrite without consent. A
+ * caller that already holds parsed preset JSON and has decided what should win — a
+ * cloud sync applying a pull — needs neither, and routing it through the upload path
+ * would make it re-serialize its content into a fake file just to be parsed back.
+ *
+ * All records are written in ONE read-modify-write so a multi-preset sync cannot
+ * interleave with itself and drop presets. It can still race the upload path; both are
+ * user-initiated and rare, and the loser is a single lost write rather than corruption.
+ *
+ * Returns the records as stored, including the ids assigned to newly created presets.
+ */
+export async function upsertCustomSlicingPresetRecords(
+  workspaceId: string,
+  inputs: Array<{ id?: string; kind: SlicingPresetKind; name: string; content: string; updatedAt?: string }>
+): Promise<StoredSlicingPreset[]> {
+  if (inputs.length === 0) return []
+  const existing = await readProfiles(workspaceId)
+  const byId = new Map(existing.map((profile) => [profile.id, profile]))
+  const byName = new Map(existing.map((profile) => [buildProfileLookupKey(profile.kind, profile.name), profile]))
+  const now = new Date().toISOString()
+
+  const written: StoredSlicingPreset[] = []
+  const next = [...existing]
+  for (const input of inputs) {
+    const name = input.name.trim()
+    const matched = (input.id ? byId.get(input.id) : undefined) ?? byName.get(buildProfileLookupKey(input.kind, name))
+    const record: StoredSlicingPreset = {
+      id: matched?.id ?? input.id ?? `custom:${randomUUID()}`,
+      kind: input.kind,
+      name,
+      content: input.content,
+      updatedAt: input.updatedAt ?? now
+    }
+    const index = next.findIndex((profile) => profile.id === record.id)
+    if (index >= 0) next[index] = record
+    else next.push(record)
+    byId.set(record.id, record)
+    byName.set(buildProfileLookupKey(record.kind, record.name), record)
+    written.push(record)
+  }
+
+  await writeProfiles(workspaceId, next)
+  return written
 }
 
 export async function deleteCustomSlicingPreset(workspaceId: string, profileId: string): Promise<void> {

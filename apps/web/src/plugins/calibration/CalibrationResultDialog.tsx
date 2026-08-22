@@ -62,6 +62,15 @@ export const CalibrationResultDialog = memo(function CalibrationResultDialog({ r
     onSuccess: () => {
       void invalidate()
       void queryClient.invalidateQueries({ queryKey: calibrationKeys.results })
+      // Saving with `applyToPrinter` writes a K profile onto the printer itself, which
+      // the AMS slot editor lists — and that editor is usually still open behind this
+      // dialog, since the wizard is launched from the slot's own menu. Without this it
+      // kept showing the pre-run list, so the profile the user just made looked like it
+      // had not been created. Only refreshes THIS browser; a second client still needs
+      // to reopen the editor, which would take a broadcast the API does not send.
+      if (!isFlow && applyToPrinter) {
+        void queryClient.invalidateQueries({ queryKey: ['printer-pressure-advance-profiles'] })
+      }
       toast.success('Calibration saved')
       onClose()
     }

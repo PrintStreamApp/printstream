@@ -18,6 +18,7 @@ import type {
   LibraryThreeMfScene,
   LibraryThreeMfSceneInstance,
   SceneEdit,
+  SceneEditFlushVolumes,
   SceneEditImportPartFilament,
   SceneEditPartFilament,
   SceneEditPartSubtype,
@@ -310,6 +311,17 @@ export interface EditorState {
    * a preset a slot still names is never offered.
    */
   removedEmbeddedPresets?: string[]
+  /**
+   * Purge volumes edited this session (the flushing-volumes dialog), or absent while the project's
+   * own values stand.
+   *
+   * Session state like every other edit: undoable, applied only on save. Held here rather than in
+   * the slice controller because it is project-FILE content — it is written into
+   * `project_settings.config` — not a per-slice choice, so it must survive alongside the scene and
+   * ride the same save. Sized for the material list that was on screen when it was made; the bake
+   * checks it against the list it actually writes (see `applyFlushVolumes`).
+   */
+  flushVolumes?: SceneEditFlushVolumes
   /**
    * Per-PART process overrides made this session (process settings on one part of an object,
    * separate from the object's overall overrides), keyed by {@link supportPaintKey}
@@ -1060,6 +1072,11 @@ export function buildSceneEdit(state: EditorState): SceneEdit {
     // emitted as undefined so an untouched project's save carries nothing about them.
     removedEmbeddedPresets: state.removedEmbeddedPresets && state.removedEmbeddedPresets.length > 0
       ? [...state.removedEmbeddedPresets]
+      : undefined,
+    // Absent unless the session edited them: a project that legitimately carries NO matrix must
+    // not have one materialised just because the editor was opened.
+    flushVolumes: state.flushVolumes
+      ? { matrix: state.flushVolumes.matrix.map((block) => block.map((row) => [...row])), multiplier: [...state.flushVolumes.multiplier] }
       : undefined,
     repairedImportIds: collectRepairedImportIds(state),
     objectClones: collectObjectClones(state)
@@ -1881,6 +1898,9 @@ export function cloneEditorState(state: EditorState): EditorState {
     ...(state.repairedObjectIds ? { repairedObjectIds: [...state.repairedObjectIds] } : {}),
     ...(state.settingsRepairStaged ? { settingsRepairStaged: true } : {}),
     ...(state.removedEmbeddedPresets ? { removedEmbeddedPresets: [...state.removedEmbeddedPresets] } : {}),
+    ...(state.flushVolumes
+      ? { flushVolumes: { matrix: state.flushVolumes.matrix.map((block) => block.map((row) => [...row])), multiplier: [...state.flushVolumes.multiplier] } }
+      : {}),
     ...(state.objectClones ? { objectClones: { ...state.objectClones } } : {}),
     ...(state.addedParts
       ? {

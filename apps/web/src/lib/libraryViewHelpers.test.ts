@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ThreeMfProjectFilament } from '@printstream/shared'
-import { buildCreateSlicingJobBody, buildSlicedOutputFileName, buildSlicedPlateLabel, filamentsForMapping, visibleMappingFilaments, type SliceFileSubmitInput } from './libraryViewHelpers'
+import { buildCreateSlicingJobBody, buildPrinterTrayGroups, buildSlicedOutputFileName, buildSlicedPlateLabel, filamentsForMapping, visibleMappingFilaments, type SliceFileSubmitInput } from './libraryViewHelpers'
+import { filterTrayGroupsForFilament } from './printerTrayMapping'
 
 const filament = (id: number, color: string): ThreeMfProjectFilament => ({
 	id,
@@ -122,4 +123,56 @@ test('a single-plate project does not get a "Plate 1" suffix it cannot be distin
   assert.equal(buildSlicedOutputFileName('Test.3mf', { plateNumber: 2, plateCount: 4 }), 'Test - Plate 2.gcode.3mf')
   assert.equal(buildSlicedPlateLabel(null, 1), 'Plate 1')
   assert.equal(buildSlicedPlateLabel(null, 1, null), 'Plate 1')
+})
+
+test('an AMS behind a Filament Track Switch stays available to both nozzles', () => {
+  const unit = (unitId: number, over: Record<string, unknown> = {}) => ({
+    unitId,
+    type: 'ams',
+    nozzleId: 0,
+    supportDrying: false,
+    dryTimeRemainingMinutes: null,
+    dryingActive: false,
+    dryFilament: null,
+    dryTemperature: null,
+    dryDurationHours: null,
+    humidityPercent: null,
+    humidityLevel: null,
+    temperature: null,
+    slots: [{
+      slot: 0,
+      trayName: null,
+      filamentType: 'PLA',
+      color: null,
+      colors: [],
+      remainPercent: null,
+      active: false,
+      isReading: false,
+      trayInfoIdx: 'GFA00',
+      trayUuid: null,
+      occupied: true
+    }],
+    ...over
+  })
+
+  const status = {
+    nozzles: [{ extruderId: 0 }, { extruderId: 1 }],
+    externalSpools: [],
+    // Unit 0 is wired straight to nozzle 0; unit 1 reaches BOTH through switch input A, even though
+    // its reported nozzleId still says 0 — a stale binding the switch has made meaningless.
+    ams: [unit(0), unit(1, { switchInput: 'A' })]
+  } as never
+
+  const groups = buildPrinterTrayGroups(status)
+  const [direct, switched] = groups
+  assert.equal(direct?.trays[0]?.nozzleId, 0)
+  assert.equal(switched?.trays[0]?.nozzleId, null, 'a switched unit must carry no nozzle binding')
+
+  // The group label says how it is reached rather than naming one nozzle it is not limited to.
+  assert.match(direct?.label ?? '', /Right nozzle/)
+  assert.match(switched?.label ?? '', /Track switch A/)
+
+  // The point of all of it: filtering for the OTHER nozzle keeps the switched unit.
+  const forLeftNozzle = filterTrayGroupsForFilament(groups, 1)
+  assert.deepEqual(forLeftNozzle.map((group) => group.key), ['ams-1'])
 })

@@ -26,6 +26,7 @@ const rp = rootPrisma as unknown as Record<string, Record<string, unknown>>
 // Auto-restore the prisma/rootPrisma methods these tests override (was a per-method save/restore block).
 restorePrismaMethodsAfterEach([
   [p.bridge, 'findMany'],
+  [p.bridge, 'findFirst'],
   [p.bridge, 'findUnique'],
   [p.bridge, 'update'],
   [p.bridge, 'count'],
@@ -783,6 +784,96 @@ test('bridge delete requires settings manage permission', async () => {
     runtimePolicy: { demoMode: false }
   }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/bridges/bridge-1`, {
+      method: 'DELETE'
+    })
+
+    assert.equal(response.status, 403)
+    assert.deepEqual(await response.json(), { error: 'You do not have permission to perform this action.' })
+  })
+})
+
+test('clearing crash history resets the stored crash summary and the notify cooldown', async () => {
+  prisma.bridge.findFirst = ((async () => ({
+    id: 'bridge-1',
+    name: 'Bridge One',
+    lastCrashAt: new Date('2026-05-08T18:35:00.000Z'),
+    recentCrashCount: 4
+  })) as unknown) as typeof prisma.bridge.findFirst
+  let bridgeUpdateArgs: unknown = null
+  prisma.bridge.update = ((async (args: unknown) => {
+    bridgeUpdateArgs = args
+    return {
+      id: 'bridge-1',
+      name: 'Bridge One',
+      lastSeenAt: new Date('2026-05-08T18:30:00.000Z'),
+      createdAt: new Date('2026-05-08T18:00:00.000Z'),
+      updatedAt: new Date('2026-05-08T18:40:00.000Z'),
+      lastCrashAt: null,
+      lastCrashReason: null,
+      recentCrashCount: 0,
+      _count: { printers: 0 }
+    }
+  }) as unknown) as typeof prisma.bridge.update
+
+  await withBridgesApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [SETTINGS_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/bridges/bridge-1/crash-history`, {
+      method: 'DELETE'
+    })
+
+    assert.equal(response.status, 200)
+    const payload = await response.json()
+    assert.deepEqual(payload.bridge.crash, { lastCrashAt: null, recentCrashCount: 0, lastReason: null })
+  })
+
+  // The notify cooldown is cleared with the summary so the NEXT crash is
+  // reported immediately rather than suppressed by the 15-minute throttle.
+  assert.deepEqual((bridgeUpdateArgs as { where: unknown; data: unknown }).where, { id: 'bridge-1' })
+  assert.deepEqual((bridgeUpdateArgs as { where: unknown; data: unknown }).data, {
+    lastCrashAt: null,
+    lastCrashReason: null,
+    recentCrashCount: 0,
+    lastCrashNotifiedAt: null
+  })
+})
+
+test('clearing crash history rejects a bridge outside the current workspace', async () => {
+  prisma.bridge.findFirst = ((async () => null) as unknown) as typeof prisma.bridge.findFirst
+  let updateCalled = false
+  prisma.bridge.update = ((async () => {
+    updateCalled = true
+    return {}
+  }) as unknown) as typeof prisma.bridge.update
+
+  await withBridgesApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [SETTINGS_MANAGE_PERMISSION],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/bridges/bridge-1/crash-history`, {
+      method: 'DELETE'
+    })
+
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), { error: 'Bridge not found.' })
+  })
+
+  assert.equal(updateCalled, false)
+})
+
+test('clearing crash history requires settings manage permission', async () => {
+  await withBridgesApp({
+    authEnabled: true,
+    actor: { type: 'user', userId: 'user-1' },
+    permissions: [],
+    runtimePolicy: { demoMode: false }
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/bridges/bridge-1/crash-history`, {
       method: 'DELETE'
     })
 

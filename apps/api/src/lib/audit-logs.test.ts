@@ -5,7 +5,9 @@ import { afterEach, test } from 'node:test'
 import express from 'express'
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
-import { annotateRequestAuditLog, installAuditLogCapture, noteRequestAuditPermission, skipRequestAuditLog } from './audit-logs.js'
+import { printFromLibrarySchema, printerStoragePrintSchema } from '@printstream/shared'
+import { annotateRequestAuditLog, installAuditLogCapture, noteRequestAuditPermission, printOverrideAuditMetadata, skipRequestAuditLog } from './audit-logs.js'
+import { reprintJobSchema } from '../routes/jobs.js'
 import type { RequestAuthContext } from './auth-context.js'
 import { rootPrisma } from './prisma.js'
 import { wsBroadcaster } from './ws-server.js'
@@ -369,3 +371,64 @@ function close(server: Server): Promise<void> {
     })
   })
 }
+test('print override metadata records only the gates a dispatch actually bypassed', () => {
+  // Nothing recorded for an ordinary print: a bag of `false`s on every dispatch says nothing and
+  // buries the entries where one is true.
+  assert.deepEqual(printOverrideAuditMetadata({}), {})
+  assert.deepEqual(printOverrideAuditMetadata({
+    allowIncompatibleFilament: false,
+    allowPlateTypeMismatch: false,
+    allowFilamentTrackSwitchMismatch: false,
+    allowInsufficientFilament: false
+  }), {})
+
+  assert.deepEqual(printOverrideAuditMetadata({ allowPlateTypeMismatch: true }), { allowPlateTypeMismatch: true })
+  assert.deepEqual(printOverrideAuditMetadata({
+    allowIncompatibleFilament: true,
+    allowPlateTypeMismatch: true,
+    allowFilamentTrackSwitchMismatch: true,
+    allowInsufficientFilament: true
+  }), {
+    allowIncompatibleFilament: true,
+    allowPlateTypeMismatch: true,
+    allowFilamentTrackSwitchMismatch: true,
+    allowInsufficientFilament: true
+  })
+})
+
+test('every dispatch route feeds the audit helper the gates its own schema exposes', () => {
+  // The helper takes every flag as OPTIONAL, so a route whose schema stopped carrying one
+  // would silently record nothing and still typecheck. These assertions are what makes that
+  // visible: they run each real schema's parsed output through the helper, exactly as the routes
+  // do, and pin which gates each dispatch path can record.
+  const allOverrides = {
+    allowIncompatibleFilament: true,
+    allowPlateTypeMismatch: true,
+    allowFilamentTrackSwitchMismatch: true,
+    allowInsufficientFilament: true
+  }
+
+  // Library print — carries all three.
+  const libraryPrint = printFromLibrarySchema.parse({
+    fileId: 'file-1', printerId: 'printer-1', ...allOverrides
+  })
+  assert.deepEqual(printOverrideAuditMetadata(libraryPrint), allOverrides)
+
+  // Re-print of a history job. The REAL route schema, not a stand-in: it is
+  // `.partial()`, so every gate is optional and a dropped one is invisible to the
+  // compiler here of all places.
+  const reprint = reprintJobSchema.parse({ printerId: 'printer-1', ...allOverrides })
+  assert.deepEqual(printOverrideAuditMetadata(reprint), allOverrides)
+  // And an override-less re-print bypasses nothing, so it records nothing: consent is never
+  // restored from the history row, only re-granted per request.
+  assert.deepEqual(printOverrideAuditMetadata(reprintJobSchema.parse({})), {})
+
+  // Printer-storage print — deliberately has NO plate-type gate to bypass (nothing compares a
+  // stored file against the printer's plate), so it records the other two and only those.
+  const storagePrint = printerStoragePrintSchema.parse({ path: '/model.3mf', ...allOverrides })
+  assert.deepEqual(printOverrideAuditMetadata(storagePrint), {
+    allowIncompatibleFilament: true,
+    allowFilamentTrackSwitchMismatch: true,
+    allowInsufficientFilament: true
+  })
+})

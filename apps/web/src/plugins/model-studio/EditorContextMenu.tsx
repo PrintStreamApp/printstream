@@ -81,7 +81,8 @@ export interface EditorContextMenuProps {
   canAssemble: boolean
   assembleCount: number
   onAssemble: () => void
-  onReplaceFromLibrary: (key: string) => void
+  /** Omitted on a host with no library (`EditorImportStore.supportsLibrarySource`), which hides the row. */
+  onReplaceFromLibrary?: (key: string) => void
   onReplaceFromFile: (key: string) => void
   /**
    * Export targets (BambuStudio's "Export as one STL" / "Export as STLs…", plus the
@@ -110,8 +111,11 @@ export interface EditorContextMenuProps {
   onAddPartVolume: (key: string, subtype: SceneEditPartSubtype, shape: PrimitiveKind) => void
   /** Add a part of `subtype` from a model file on the user's device (opens the file picker). */
   onAddPartFromFile: (key: string, subtype: SceneEditPartSubtype) => void
-  /** Add a part of `subtype` from a library model (opens the library picker). */
-  onAddPartFromLibrary: (key: string, subtype: SceneEditPartSubtype) => void
+  /**
+   * Add a part of `subtype` from a library model (opens the library picker). Omitted on a host
+   * with no library (`EditorImportStore.supportsLibrarySource`), which hides the row.
+   */
+  onAddPartFromLibrary?: (key: string, subtype: SceneEditPartSubtype) => void
   /** Project materials for the "Change material" submenu; hidden when empty. */
   filamentOptions: ReadonlyArray<FilamentOption>
   /** Assign one material to every part of every selected object. */
@@ -197,7 +201,7 @@ export function EditorContextMenu({
           <AddPartSourceMenuItems
             onPickPrimitive={(shape) => { onAddPartVolume(key, view.subtype, shape); onClose() }}
             onPickFile={() => { onClose(); onAddPartFromFile(key, view.subtype) }}
-            onPickLibrary={() => { onClose(); onAddPartFromLibrary(key, view.subtype) }}
+            onPickLibrary={onAddPartFromLibrary ? () => { onClose(); onAddPartFromLibrary(key, view.subtype) } : undefined}
           />
         </>
       ) : view.kind === 'export' ? (
@@ -338,10 +342,12 @@ export function EditorContextMenu({
             </MenuItem>
           )}
           <ListDivider />
-          <MenuItem onClick={() => { onClose(); onReplaceFromLibrary(key) }}>
-            <ListItemDecorator><SwapHorizRoundedIcon /></ListItemDecorator>
-            Replace from library…
-          </MenuItem>
+          {onReplaceFromLibrary && (
+            <MenuItem onClick={() => { onClose(); onReplaceFromLibrary(key) }}>
+              <ListItemDecorator><SwapHorizRoundedIcon /></ListItemDecorator>
+              Replace from library…
+            </MenuItem>
+          )}
           <MenuItem onClick={() => { onClose(); onReplaceFromFile(key) }}>
             <ListItemDecorator><SwapHorizRoundedIcon /></ListItemDecorator>
             Replace from file…

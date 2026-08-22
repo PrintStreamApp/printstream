@@ -7,7 +7,7 @@
  *   (what plates and filaments the project has). Used by the API
  *   (`apps/api/src/lib/three-mf-reader.ts`) and the bridge (`apps/bridge/src/library-3mf.ts`).
  * - `scene-parser.ts` — root model / model-settings → `ThreeMfScene` (where every object sits on a
- *   plate). Used by the API's `readSceneManifest` and by the web's public 3MF viewer, which unzips
+ *   plate). Used by the API's `readSceneManifest` and by the web's public 3MF editor, which unzips
  *   in the browser so the file never leaves the user's machine.
  *
  * The 3MF *writer* lives here for the same reason. `bake.ts` is the entry point — it says which
@@ -32,6 +32,8 @@ export * from './index-parser.js'
 export * from './scene-parser.js'
 export * from './mesh-repair.js'
 export * from './mesh-stl.js'
+export * from './mesh-extract.js'
+export * from './step-mesh.js'
 export * from './object-overrides.js'
 export * from './object-clone.js'
 export * from './triangle-paint-codec.js'

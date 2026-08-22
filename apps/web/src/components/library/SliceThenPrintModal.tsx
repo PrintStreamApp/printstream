@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Alert, Button, Chip, CircularProgress, DialogActions, LinearProgress, Sheet, Stack, Typography
+  Alert, Button, Chip, CircularProgress, DialogActions, Sheet, Stack, Typography
 } from '@mui/joy'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
@@ -37,6 +37,7 @@ import { toast } from '../../lib/toast'
 import { suppressJobToast } from '../../lib/dialogToastSuppression'
 import { useSlicingJob } from '../../hooks/useSlicingJob'
 import { PrintModal } from './PrintModal'
+import { ProgressBar } from '../ProgressBar'
 
 /** A slicing job is still running (and therefore cancellable) until a terminal state. */
 function isSlicingInProgress(status: string): boolean {
@@ -275,9 +276,8 @@ export function SliceThenPrintModal({
                       {getSlicingJobStatusLabel(job)}
                     </Chip>
                   </Stack>
-                  <LinearProgress
-                    determinate={progressPercent != null}
-                    value={progressPercent ?? 0}
+                  <ProgressBar
+                    value={progressPercent}
                     color={slicingStatusColor(job.status)}
                   />
                   <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
@@ -462,7 +462,7 @@ export function SliceResultModal({
                   </Stack>
                   {!ready && job.status !== 'failed' && job.status !== 'cancelled' && (
                     <>
-                      <LinearProgress determinate={progressPercent != null} value={progressPercent ?? 0} color={slicingStatusColor(job.status)} />
+                      <ProgressBar value={progressPercent} color={slicingStatusColor(job.status)} />
                       <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
                         {formatSlicingProgress(job, progressFrame)}
                       </Typography>

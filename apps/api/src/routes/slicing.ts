@@ -264,6 +264,33 @@ slicingRouter.get('/bed-model', requireRequestPermission(LIBRARY_VIEW_PERMISSION
   await sendModelBuffer(request, response, bytes, 'model/stl')
 })
 
+/**
+ * BambuStudio's measured flush tables, proxied from the slicer's bundled resources for the
+ * editor's flushing-volumes calculation (the browser cannot reach the slicer directly).
+ *
+ * Always 200, even with no slicer configured or an engine that ships no tables: the client then
+ * calculates from colours alone, which is Studio's own fallback. A 404 here would read as a
+ * failure and push the dialog into an error state over a supported condition.
+ */
+slicingRouter.get('/flush-data', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const datasets = await slicerClient.flushDatasets(targetId)
+  // Immutable per slicer image; let the browser keep it for the session.
+  response.setHeader('Cache-Control', 'private, max-age=86400')
+  response.json({ datasets })
+})
+
+/**
+ * BambuStudio's own computed flush matrix, so the editor can verify our port against the engine
+ * that will actually slice. Diagnostic only — `{ calibration: null }` when it cannot be probed.
+ */
+slicingRouter.get('/flush-calibration', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const calibration = await slicerClient.flushCalibration(targetId)
+  response.setHeader('Cache-Control', 'private, max-age=86400')
+  response.json({ calibration })
+})
+
 slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY_VIEW_PERMISSION), async (request, response) => {
   const parsed = resolveProcessConfigRequestSchema.safeParse(request.body)
   if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? 'Invalid resolve request')
@@ -294,7 +321,12 @@ slicingRouter.post('/profiles/resolve-process', requireRequestPermission(LIBRARY
           // No preset resolved: `baseConfig` is a stand-in copy, so a value diff is empty by
           // construction and only the declared record can say what changed. Say so explicitly —
           // the payload alone cannot be told apart from a project that changed nothing.
-          baselineResolved: false
+          baselineResolved: false,
+          // Same fact, in the form the DIALOG renders: the markers are the file's own record rather
+          // than a comparison. The workspace hits this whenever a project names a preset that was
+          // since renamed or deleted, and stayed silent about it while the anonymous host explained
+          // itself — the same file, two different amounts of honesty.
+          baselineOrigin: { kind: 'declared' }
         }
     response.json(responseBody)
     return
@@ -359,7 +391,12 @@ slicingRouter.post('/profiles/resolve-filament', requireRequestPermission(LIBRAR
           // No preset resolved: `baseConfig` is a stand-in copy, so a value diff is empty by
           // construction and only the declared record can say what changed. Say so explicitly —
           // the payload alone cannot be told apart from a project that changed nothing.
-          baselineResolved: false
+          baselineResolved: false,
+          // Same fact, in the form the DIALOG renders: the markers are the file's own record rather
+          // than a comparison. The workspace hits this whenever a project names a preset that was
+          // since renamed or deleted, and stayed silent about it while the anonymous host explained
+          // itself — the same file, two different amounts of honesty.
+          baselineOrigin: { kind: 'declared' }
         }
     response.json(responseBody)
     return

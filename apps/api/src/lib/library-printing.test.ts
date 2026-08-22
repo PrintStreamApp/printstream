@@ -250,6 +250,8 @@ function makePrintInput(): PrintFromLibrary {
     nozzleOffsetCalibration: 'auto',
     allowIncompatibleFilament: false,
     allowPlateTypeMismatch: false,
+    allowFilamentTrackSwitchMismatch: false,
+    allowInsufficientFilament: false,
     currentPlateType: null,
     currentNozzleDiameters: [],
     plate: 1

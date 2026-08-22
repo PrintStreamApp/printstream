@@ -13,7 +13,7 @@
 import { z } from 'zod'
 import { auditLogEntrySchema } from './logs.js'
 import { preservedSliceSettingsSchema } from './slicing.js'
-import { AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
+import { AMS_TRAY_UNMAPPED, AMS_UNIT_TYPES, isPhysicalAmsTrayIndex, type AmsUnitType } from './ams-tray-index.js'
 
 /**
  * AMS generation for a unit. Derived by the status parser from the MQTT
@@ -233,7 +233,18 @@ export const amsSlotSchema = z.object({
   active: z.boolean(),
   /** Whether the printer currently reports this slot as being read/scanned. */
   isReading: z.boolean(),
-  /** Whether the AMS reports physical filament/spool presence in this slot. */
+  /**
+   * Whether the AMS reports physical filament/spool presence in this slot, from
+   * the printer's `tray_exist_bits`.
+   *
+   * **Absent means the report did not say — never that the slot is empty.** Read it
+   * as `slot.occupied ?? <your own fallback>`; treating a missing value as `false`
+   * empties slots that are physically loaded.
+   *
+   * Present does not mean the bits were sent, though: when they are absent the parser
+   * still derives this from whether anything identifies the slot. Only the sweep that
+   * CLEARS a slot is gated on the bits actually arriving.
+   */
   occupied: z.boolean().optional(),
   /** Bambu filament preset id reported by the printer, e.g. `GFA00`. */
   trayInfoIdx: z.string().nullable(),
@@ -391,6 +402,27 @@ export const printerTrayMappingSchema = z.union([
   virtualTrayAmsIdSchema
 ])
 export type PrinterTrayMapping = z.infer<typeof printerTrayMappingSchema>
+
+/**
+ * One entry of an `ams_mapping` ARRAY: a tray, or {@link AMS_TRAY_UNMAPPED} for a filament
+ * index with no tray.
+ *
+ * Separate from {@link printerTrayMappingSchema} because they answer different questions.
+ * That one is "is this a tray?", and -1 is not one; this one is "may this appear at
+ * position `i` of a positional mapping?", and -1 must, because the array is indexed by
+ * project filament and a plate rarely uses every filament. BambuStudio writes -1 in exactly
+ * those positions (see {@link AMS_TRAY_UNMAPPED}), the dispatcher's own plate pruning
+ * writes it, the queue's matcher writes it for a slot it could not fill, and every guard
+ * that walks a mapping skips entries below zero.
+ *
+ * It was the missing half of this pair that made an override-less re-print of any
+ * multi-filament plate fail validation before it could dispatch.
+ */
+export const amsMappingEntrySchema = z.union([
+  printerTrayMappingSchema,
+  z.literal(AMS_TRAY_UNMAPPED)
+])
+export type AmsMappingEntry = z.infer<typeof amsMappingEntrySchema>
 
 export const printerNozzleSchema = z.object({
   /** 0 = right/default, 1 = left/deputy on dual-nozzle machines. */
@@ -855,8 +887,17 @@ export const printerCommandSchema = z.discriminatedUnion('type', [
     extruderId: z.number().int().min(0).max(1).default(0)
   }),
   /**
-   * Directly set the pressure-advance K value for an AMS slot via
-   * `extrusion_cali_set` with the firmware's `filaments[]` payload.
+   * Directly set the pressure-advance K value for an AMS slot. Sends
+   * `extrusion_cali_set` with a flat `tray_id`/`k_value` payload — NOT the
+   * `filaments[]` structure the profile commands use — mirroring how BambuStudio
+   * saves a manual PA entry.
+   *
+   * **API-only: nothing in the web app calls this.** The AMS slot editor manages K
+   * through the profile commands (`createAmsPressureAdvanceProfile` then
+   * `selectAmsPressureAdvanceProfile`, in that order — creating a profile without
+   * selecting it does not apply it). This variant stays for direct API consumers and
+   * for firmware that has no profile support; do not wire it into the slot editor as
+   * a shortcut, or a slot ends up with a K value no profile accounts for.
    */
   z.object({
     type: z.literal('setAmsKValue'),
@@ -923,6 +964,50 @@ export const printerConnectionValidationSchema = z.object({
 })
 export type PrinterConnectionValidation = z.infer<typeof printerConnectionValidationSchema>
 
+export const printOnOffAutoModeSchema = z.preprocess((value) => {
+  if (value === true) return 'on'
+  if (value === false) return 'off'
+  return value
+}, z.enum(['off', 'on', 'auto']))
+export type PrintOnOffAutoMode = z.infer<typeof printOnOffAutoModeSchema>
+
+export const printNozzleOffsetCalibrationModeSchema = z.preprocess((value) => {
+  if (value === true) return 'auto'
+  if (value === false) return 'off'
+  return value
+}, z.enum(['off', 'on', 'auto']))
+export type PrintNozzleOffsetCalibrationMode = z.infer<typeof printNozzleOffsetCalibrationModeSchema>
+
+/**
+ * The print-start knobs a user chooses in the send dialog: the settings that are a
+ * PROPERTY OF THE PRINT and so should come back when that print is repeated.
+ *
+ * This is the BASE that {@link printFromLibrarySchema} spreads, rather than a `.pick()` off
+ * it, only because it has to be defined before `printJobSchema` below. Same guarantee
+ * either way: there is one declaration of these seven, so a knob cannot be added to the
+ * dispatch payload and silently left out of what gets recorded.
+ *
+ * Recorded per print job (`PrintJob.printOptionsJson`) and replayed by re-print; see
+ * `apps/api/src/lib/print-job-options.ts`, which owns both directions.
+ *
+ * Deliberately EXCLUDES the four `allow*` flags. Those are per-dispatch consent ("I accept
+ * this risk right now"), not settings, so replaying one would re-grant a safety bypass the
+ * dialog is not showing; they are recorded in the audit log instead, where a consent
+ * belongs. Also excludes `plate`/`useAms`/`amsMapping` (their own `PrintJob` columns) and
+ * the live hardware facts (`currentPlateType`, `currentNozzleDiameters`), which are read
+ * fresh at dispatch and are not a choice at all.
+ */
+export const printStartOptionSelectionSchema = z.object({
+  bedLevel: printOnOffAutoModeSchema.default('on'),
+  vibrationCompensation: z.boolean().default(false),
+  flowCalibration: printOnOffAutoModeSchema.default('off'),
+  firstLayerInspection: z.boolean().default(true),
+  timelapse: z.boolean().default(false),
+  filamentDynamicsCalibration: z.boolean().default(false),
+  nozzleOffsetCalibration: printNozzleOffsetCalibrationModeSchema.default('auto')
+})
+export type PrintStartOptionSelection = z.infer<typeof printStartOptionSelectionSchema>
+
 export const projectFilamentChipSchema = z.object({
   label: z.string(),
   color: z.string().nullable()
@@ -956,8 +1041,25 @@ export const printJobSchema = z.object({
   projectFilamentChips: z.array(projectFilamentChipSchema),
   plate: z.number().int().positive().nullable(),
   useAms: z.boolean().nullable(),
+  /**
+   * Lossy legacy record of the bed-leveling choice, kept for rows written before
+   * `printOptions` existed. `true` covers both `'on'` and `'auto'`, which is exactly why
+   * it is not the re-print source of truth. Read `printOptions` instead.
+   */
   bedLevel: z.boolean().nullable(),
-  amsMapping: z.array(printerTrayMappingSchema).nullable(),
+  amsMapping: z.array(amsMappingEntrySchema).nullable(),
+  /**
+   * The print-start options this print was actually started with, so repeating it repeats
+   * those choices rather than the schema defaults or whatever this browser last used.
+   *
+   * PARTIAL by design, and null when nothing at all was recorded: a field is absent when
+   * the job never captured it, which a client must not confuse with a field captured at its
+   * default value. Absent means "fall back": to the remembered preference in the print
+   * dialog, to the schema default on the API's re-print path. Jobs recorded before the
+   * options were persisted carry at most `bedLevel`, and externally started prints carry
+   * nothing, since their options were never ours to see.
+   */
+  printOptions: printStartOptionSelectionSchema.partial().nullable().default(null),
   activity: z.array(auditLogEntrySchema),
   thumbnailPath: z.string().nullable(),
   snapshotPath: z.string().nullable()
@@ -1040,6 +1142,14 @@ export const libraryFileSchema = z.object({
    * slicing it (major.minor only), so the slice dialog warns before the job is queued.
    */
   projectVersion: z.string().nullable().optional(),
+  /**
+   * Sliced for a machine with a Filament Track Switch (`has_filament_switcher` in the project's
+   * settings). Absent/false for every project saved without one, which is also how BambuStudio
+   * reads an absent key. The print dialogs compare it against the target printer, because a file
+   * groups its filaments across the extruders differently in the two cases and the printer refuses
+   * the mismatch.
+   */
+  slicedWithFilamentTrackSwitch: z.boolean().optional(),
   /**
    * How many times this file's content has been replaced (1 for a file never overwritten).
    *
@@ -1333,20 +1443,6 @@ export const libraryBrowseResponseSchema = z.object({
 })
 export type LibraryBrowseResponse = z.infer<typeof libraryBrowseResponseSchema>
 
-export const printOnOffAutoModeSchema = z.preprocess((value) => {
-  if (value === true) return 'on'
-  if (value === false) return 'off'
-  return value
-}, z.enum(['off', 'on', 'auto']))
-export type PrintOnOffAutoMode = z.infer<typeof printOnOffAutoModeSchema>
-
-export const printNozzleOffsetCalibrationModeSchema = z.preprocess((value) => {
-  if (value === true) return 'auto'
-  if (value === false) return 'off'
-  return value
-}, z.enum(['off', 'on', 'auto']))
-export type PrintNozzleOffsetCalibrationMode = z.infer<typeof printNozzleOffsetCalibrationModeSchema>
-
 export const printerPrintStartBooleanStateSchema = z.object({
   supported: z.boolean(),
   current: z.boolean().nullable()
@@ -1381,15 +1477,30 @@ export const printFromLibrarySchema = z.object({
   fileId: z.string(),
   printerId: z.string(),
   useAms: z.boolean().default(true),
-  bedLevel: printOnOffAutoModeSchema.default('on'),
-  vibrationCompensation: z.boolean().default(false),
-  flowCalibration: printOnOffAutoModeSchema.default('off'),
-  firstLayerInspection: z.boolean().default(true),
-  timelapse: z.boolean().default(false),
-  filamentDynamicsCalibration: z.boolean().default(false),
-  nozzleOffsetCalibration: printNozzleOffsetCalibrationModeSchema.default('auto'),
+  // The seven recorded/replayable print-start knobs, declared once in
+  // `printStartOptionSelectionSchema` so this payload and the print history cannot drift.
+  ...printStartOptionSelectionSchema.shape,
   allowIncompatibleFilament: z.boolean().default(false),
   allowPlateTypeMismatch: z.boolean().default(false),
+  /**
+   * Consent to print a file sliced for a different class of machine than the target — one with a
+   * Filament Track Switch, or one without. Deliberately SEPARATE from
+   * `allowIncompatibleFilament`: that flag means "the tray assignments I chose are right", which is
+   * a different judgement from "this file was sliced for a different machine and I accept that".
+   * Following `allowPlateTypeMismatch`, which is separate for the same reason.
+   */
+  allowFilamentTrackSwitchMismatch: z.boolean().default(false),
+  /**
+   * Consent to start a print whose mapped slots will run out (see
+   * `print-filament-sufficiency.ts`). Its own flag, again: `allowIncompatibleFilament` means
+   * "these are the right materials", which says nothing about whether enough of them is left,
+   * and one checkbox must never grant two unrelated permissions.
+   *
+   * The queue's unattended dispatch sets this true. A queue that stalls on an ESTIMATE — the
+   * printer only reports a percent, and only for tagged spools — would be worse than a print
+   * that pauses when it runs dry, which is what the printer does anyway.
+   */
+  allowInsufficientFilament: z.boolean().default(false),
   currentPlateType: z.string().trim().min(1).nullable().optional(),
   currentNozzleDiameters: printerBaseSchema.shape.currentNozzleDiameters.optional(),
   /** 1-based plate index inside a multi-plate 3MF. Defaults to 1. */
@@ -1400,7 +1511,7 @@ export const printFromLibrarySchema = z.object({
    * index or one of the external-spool virtual tray ids. Missing entries
    * fall back to the printer's default behavior.
    */
-  amsMapping: z.array(printerTrayMappingSchema).optional(),
+  amsMapping: z.array(amsMappingEntrySchema).optional(),
   /**
    * Objects on the selected pre-sliced plate to EXCLUDE from the print, as the
    * plate's `objects[].id` values (Bambu model `object_id`s from the plates
@@ -1440,7 +1551,7 @@ export const printDispatchJobSchema = z.object({
   plateName: z.string().nullable(),
   useAms: z.boolean(),
   bedLevel: printOnOffAutoModeSchema,
-  amsMapping: z.array(printerTrayMappingSchema).nullable(),
+  amsMapping: z.array(amsMappingEntrySchema).nullable(),
   status: printDispatchStatusSchema,
   progressMessage: z.string(),
   uploadAttempt: z.number().int().nonnegative(),
@@ -1568,7 +1679,13 @@ export const threeMfIndexSchema = z.object({
    * already been repaired. Optional: absent from an older server.
    */
   needsSettingsRepair: z.boolean().optional(),
-  settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional()
+  settingsRepairReasons: z.array(threeMfSettingsRepairReasonSchema).optional(),
+  /**
+   * Sliced for a machine with a Filament Track Switch. Optional for the same reason as the repair
+   * flags above: absent from an older server, where it must read as "unknown" rather than `false`,
+   * so a dialog does not warn about a mismatch it cannot actually see.
+   */
+  slicedWithFilamentTrackSwitch: z.boolean().optional()
 })
 export type ThreeMfIndex = z.infer<typeof threeMfIndexSchema>
 
@@ -1609,15 +1726,15 @@ export const printerStoragePrintSchema = z.object({
   path: z.string().min(1),
   plate: z.number().int().positive().default(1),
   useAms: z.boolean().default(true),
-  bedLevel: printOnOffAutoModeSchema.default('on'),
-  vibrationCompensation: z.boolean().default(false),
-  flowCalibration: printOnOffAutoModeSchema.default('off'),
-  firstLayerInspection: z.boolean().default(true),
-  timelapse: z.boolean().default(false),
-  filamentDynamicsCalibration: z.boolean().default(false),
-  nozzleOffsetCalibration: printNozzleOffsetCalibrationModeSchema.default('auto'),
-  amsMapping: z.array(printerTrayMappingSchema).optional(),
+  // Same seven knobs as a library print, from the same declaration; printing off the
+  // printer's own storage is the same start command with a different source.
+  ...printStartOptionSelectionSchema.shape,
+  amsMapping: z.array(amsMappingEntrySchema).optional(),
   allowIncompatibleFilament: z.boolean().default(false),
+  /** See {@link printFromLibrarySchema}.allowFilamentTrackSwitchMismatch. */
+  allowFilamentTrackSwitchMismatch: z.boolean().default(false),
+  /** See {@link printFromLibrarySchema}.allowInsufficientFilament. */
+  allowInsufficientFilament: z.boolean().default(false),
   /**
    * Objects on the selected pre-sliced plate to EXCLUDE from the print, as the storage
    * plates index's `objects[].id` values (same wire semantics as

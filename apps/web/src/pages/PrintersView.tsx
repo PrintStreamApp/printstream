@@ -1,5 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, type ComponentProps } from 'react'
-import { Alert, Box, Button, CircularProgress, Divider, FormControl, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, CircularProgress, Divider, FormControl, ListItemDecorator, MenuItem, Option, Select, Sheet, Stack, Typography } from '@mui/joy'
+import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
 import AddIcon from '@mui/icons-material/Add'
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded'
 import QueryStatsRoundedIcon from '@mui/icons-material/QueryStatsRounded'
@@ -12,7 +13,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PaginatedSection } from '../components/PaginationFooter'
 import { Printer3dRoundedIcon } from '../components/Printer3dRoundedIcon'
 import { useNavigate, useParams } from 'react-router-dom'
-import { LIBRARY_UPLOAD_PERMISSION, CAMERA_VIEW_PERMISSION, JOBS_DELETE_PERMISSION, JOBS_VIEW_PERMISSION, PRINTERS_CONTROL_PERMISSION, PRINTERS_MANAGE_PERMISSION, PRINTERS_VIEW_PERMISSION, PRINTER_STORAGE_DOWNLOAD_PERMISSION, PRINTER_STORAGE_VIEW_PERMISSION, PRINTS_DISPATCH_PERMISSION, type BridgeListResponse, defaultPrinterViewSort, extractErrorMessage, type Permission, type DiscoveredPrinter, type LibraryFile, type PrintDispatchJob, type PrintJob, type PrinterStatsResponse, type PrinterCardContentSettings, type Printer, type PrinterModel, type StartOrderPrintInput, type PrinterStatus, type SlicingCapabilities, type SlicingJobResponse, type PrinterView, type PrinterViewInput, type PrinterViewSort } from '@printstream/shared'
+import { LIBRARY_UPLOAD_PERMISSION, CAMERA_VIEW_PERMISSION, JOBS_DELETE_PERMISSION, JOBS_VIEW_PERMISSION, PRINTERS_CONTROL_PERMISSION, PRINTERS_MANAGE_PERMISSION, PRINTERS_VIEW_PERMISSION, PRINTER_STORAGE_DOWNLOAD_PERMISSION, PRINTER_STORAGE_VIEW_PERMISSION, PRINTS_DISPATCH_PERMISSION, type BridgeListResponse, defaultPrinterViewSort, extractErrorMessage, type Permission, type DiscoveredPrinter, type LibraryFile, type PrintDispatchJob, type PrintJob, type PrintStartOptionSelection, type PrinterStatsResponse, type PrinterCardContentSettings, type Printer, type PrinterModel, type StartOrderPrintInput, type PrinterStatus, type SlicingCapabilities, type SlicingJobResponse, type PrinterView, type PrinterViewInput, type PrinterViewSort } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { prefetchSlicingPresets } from '../lib/slicingPresetsQuery'
 import { refreshSlicingJobs, seedSlicingJob } from '../lib/slicingJobsCache'
@@ -52,6 +53,9 @@ import { buildWorkspacePath, buildWorkspaceSelectionPath } from '../lib/workspac
 import { HISTORY_RESULTS, OVERVIEW_VIEW_LABEL, DEFAULT_PRINTER_CARD_CONTENT_SETTINGS, type PrinterStateFilter, parseHistoryViewMode, formatHistoryResultsSummary, formatPrinterViewSelectValue, parseCardsPerRow, parsePrinterStateFilter, encodePrinterViewSort, jobToLibraryFile, printerStateFilterLabel, matchesPrinterStateFilter, matchesPrinterViewAttributeFilters, matchesPrinterSearch, filterPrintersForView, sortPrintersForView, groupPrintersForOverview, parseStoredStringArray, parsePrinterModelFilter, parsePrinterViewSort, parsePrinterCardContentSettings, parsePrinterGroupBy, parsePrinterOverviewPageSize, sameStringSet, PRINTER_OVERVIEW_PAGE_SIZE_OPTIONS, type PrinterGroupBy } from '../lib/printersViewHelpers'
 import { EMPTY_PRINTERS, EMPTY_PRINT_JOBS, EMPTY_PRINTER_VIEWS, HISTORY_PAGE_SIZE_OPTIONS, HISTORY_SORT_OPTIONS, PRINTER_HISTORY_VIEW_MODE_KEY, PRINTER_HISTORY_SORT_DIR_KEY, PRINTER_HISTORY_RESULT_FILTER_KEY, PRINTER_HISTORY_PAGE_SIZE_KEY, OVERVIEW_VIEW_OPTION_VALUE, NEW_VIEW_OPTION_VALUE, PUBLIC_DEMO_PRINTER_MUTATION_NOTICE, showDemoPrinterMutationNotice, showDemoFileUploadNotice, DEFAULT_SINGLE_PRINTER_CARD_CONTENT_SETTINGS } from '../lib/printerViewConstants'
 import { PrinterHistoryCard, PrinterStatsCardGrid } from '../components/printers/PrinterSummaryCards'
+import { PluginSlot } from '../plugin/PluginSlot'
+import { usePluginSlots } from '../plugin/usePluginSlots'
+import { SplitButton } from '../components/SplitButton'
 import { PrinterCard } from '../components/printers/PrinterCard'
 import { PrinterSortModal, PrinterViewsModal } from '../components/printers/PrinterViewModals'
 import { PrinterCardContentSettingsModal } from '../components/printers/PrinterCardContentSettingsModal'
@@ -119,7 +123,7 @@ export function PrintersView() {
     file: LibraryFile
     printerId: string
     defaultPlate?: number
-    defaultBedLevel?: boolean
+    defaultPrintOptions?: Partial<PrintStartOptionSelection> | null
     defaultAmsMapping?: number[] | null
     submitPrint?: (input: {
       printerId: string
@@ -155,11 +159,15 @@ export function PrintersView() {
   )
   // Page-level Print flow (button next to "Add printer"). Mirrors the
   // per-card library flow but with no preselected printer - the user picks
-  // one in the subsequent PrintModal. Unlike the per-card Print it is a
-  // plain button, not a split button: "Print from local file" needs a
-  // printer up front (the upload targets that printer's bridge), so it
-  // has no second action to offer here.
+  // one in the subsequent PrintModal. "Print from local file" is still absent
+  // here (it needs a printer up front, since the upload targets that printer's
+  // bridge), but plugins can contribute further sources through the
+  // `printers.print.menu` slot, so this is a split button whose menu collapses
+  // to a plain button when nothing contributes.
   const [pageLibraryPickerOpen, setPageLibraryPickerOpen] = useState(false)
+  // Decides the Print control's SHAPE, so it has to be known before render — an empty
+  // split-button menu is a caret that opens nothing.
+  const hasPrintSourcePlugins = usePluginSlots('printers.print.menu').length > 0
   const [sortDialogOpen, setSortDialogOpen] = useState(false)
   const [printerViewsDialogOpen, setPrinterViewsDialogOpen] = useState(false)
   const [printerViewsDialogMode, setPrinterViewsDialogMode] = useState<'settings' | 'create'>('settings')
@@ -907,14 +915,32 @@ export function PrintersView() {
               )}
               {canDispatchPrints && <Divider orientation="vertical" sx={{ alignSelf: 'stretch', mx: 0.25 }} />}
               {canDispatchPrints && (
-                <Button
-                  size="sm"
-                  onClick={() => setPageLibraryPickerOpen(true)}
-                  startDecorator={<PrintRoundedIcon />}
-                  sx={{ flex: '0 0 auto', minWidth: 0 }}
-                >
-                  Print
-                </Button>
+                hasPrintSourcePlugins ? (
+                  <SplitButton
+                    size="sm"
+                    label="Print"
+                    ariaLabel="print"
+                    menuAriaLabel="More print sources"
+                    startDecorator={<PrintRoundedIcon />}
+                    onClick={() => setPageLibraryPickerOpen(true)}
+                    groupSx={{ flex: '0 0 auto', minWidth: 0 }}
+                  >
+                    <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
+                      <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
+                      Print from library…
+                    </MenuItem>
+                    <PluginSlot name="printers.print.menu" />
+                  </SplitButton>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={() => setPageLibraryPickerOpen(true)}
+                    startDecorator={<PrintRoundedIcon />}
+                    sx={{ flex: '0 0 auto', minWidth: 0 }}
+                  >
+                    Print
+                  </Button>
+                )
               )}
             </Stack>
             <Stack
@@ -934,14 +960,32 @@ export function PrintersView() {
                 </Button>
               )}
               {canDispatchPrints && (
-                <Button
-                  size="sm"
-                  onClick={() => setPageLibraryPickerOpen(true)}
-                  startDecorator={<PrintRoundedIcon />}
-                  sx={{ width: 119, flex: '0 0 auto', minWidth: 0 }}
-                >
-                  Print
-                </Button>
+                hasPrintSourcePlugins ? (
+                  <SplitButton
+                    size="sm"
+                    label="Print"
+                    ariaLabel="print"
+                    menuAriaLabel="More print sources"
+                    startDecorator={<PrintRoundedIcon />}
+                    onClick={() => setPageLibraryPickerOpen(true)}
+                    groupSx={{ width: 119, flex: '0 0 auto', minWidth: 0 }}
+                  >
+                    <MenuItem onClick={() => setPageLibraryPickerOpen(true)}>
+                      <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
+                      Print from library…
+                    </MenuItem>
+                    <PluginSlot name="printers.print.menu" />
+                  </SplitButton>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={() => setPageLibraryPickerOpen(true)}
+                    startDecorator={<PrintRoundedIcon />}
+                    sx={{ width: 119, flex: '0 0 auto', minWidth: 0 }}
+                  >
+                    Print
+                  </Button>
+                )
               )}
             </Stack>
           </Stack>
@@ -1065,6 +1109,13 @@ export function PrintersView() {
                 <PrinterStatsCardGrid stats={printerStatsQuery.data.stats} />
               )}
             </Stack>
+          )}
+
+          {selectedPrinter && (
+            <PluginSlot
+              name="printer.detail.sections"
+              context={{ printerId: selectedPrinter.id, printerName: selectedPrinter.name, printerModel: selectedPrinter.model }}
+            />
           )}
 
           {selectedPrinter && (
@@ -1194,7 +1245,7 @@ export function PrintersView() {
                             file: jobToLibraryFile(reprintJob),
                             printerId: reprintJob.printerId,
                             defaultPlate: reprintJob.plate ?? 1,
-                            defaultBedLevel: reprintJob.bedLevel ?? true,
+                            defaultPrintOptions: reprintJob.printOptions,
                             defaultAmsMapping: reprintJob.amsMapping,
                             submitPrint: async ({ printerId, body }) => {
                               await restartJob.mutateAsync({
@@ -1563,7 +1614,7 @@ export function PrintersView() {
           defaultPrinterId={printTarget.printerId}
           lockPrinterSelection={Boolean(printTarget.printerId)}
           defaultPlate={printTarget.defaultPlate}
-          defaultBedLevel={printTarget.defaultBedLevel}
+          defaultPrintOptions={printTarget.defaultPrintOptions}
           defaultAmsMapping={printTarget.defaultAmsMapping}
           submitPrint={printTarget.submitPrint}
           onSubmitted={() => {

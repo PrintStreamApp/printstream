@@ -38,9 +38,11 @@ import type {
 import { createSlicingJobSchema } from '@printstream/shared'
 import {
   amsTrayIndex,
+  effectiveAmsNozzleId,
   formatNozzleDiameterLabel,
   formatNozzleLabel,
   getPrinterControlCapabilities,
+  isDualReachableAmsUnit,
   normalizeFallbackPlateLabel,
   supportsPrinterDoorSensor
 } from '@printstream/shared'
@@ -328,11 +330,17 @@ export function buildPrinterTrayGroups(status: PrinterStatus | undefined): Print
   }
   for (const unit of status.ams) {
     const groupLabel = `AMS ${amsUnitLetter(unit.unitId)}`
+    // A unit behind a Filament Track Switch feeds EITHER nozzle, so it must not
+    // carry a nozzle binding into the pickers — `filterTrayGroupsForFilament`
+    // would otherwise hide it from the nozzle it can also reach.
+    const unitNozzleId = effectiveAmsNozzleId(unit)
     groups.push({
       key: `ams-${unit.unitId}`,
       label: [
         groupLabel,
-        formatNozzleLabel(unit.nozzleId, 'long', nozzleCount)
+        isDualReachableAmsUnit(unit)
+          ? `Track switch ${unit.switchInput}`
+          : formatNozzleLabel(unitNozzleId, 'long', nozzleCount)
       ].filter(Boolean).join(' · '),
       trays: unit.slots.map((slot) => ({
         mappingValue: amsTrayIndex(unit.type, unit.unitId, slot.slot),
@@ -348,7 +356,7 @@ export function buildPrinterTrayGroups(status: PrinterStatus | undefined): Print
         trayInfoIdx: slot.trayInfoIdx,
         remainPercent: slot.remainPercent,
         trayUuid: slot.trayUuid,
-        nozzleId: unit.nozzleId,
+        nozzleId: unitNozzleId,
         occupied: slot.occupied ?? null,
         amsUnitId: unit.unitId,
         amsSlotId: slot.slot

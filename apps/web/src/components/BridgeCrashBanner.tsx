@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Alert, Chip, Stack, Typography } from '@mui/joy'
 import { deriveBridgeCrashState, type BridgeListResponse, type BridgeSummary } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
+import { ClearBridgeCrashHistoryButton } from './ClearBridgeCrashHistoryButton'
 
 /**
  * Cross-page notice for bridges that are actively crash-looping. Mounted once
@@ -10,6 +11,11 @@ import { apiFetch } from '../lib/apiClient'
  * flaps, so this warrants app-wide attention. A one-off crash is deliberately NOT
  * shown here (it is surfaced by a settings chip + a user notification); this banner
  * is reserved for the ongoing crash-loop case.
+ *
+ * The banner clears itself once the last crash leaves the rolling window; the
+ * inline {@link ClearBridgeCrashHistoryButton} is for the operator who fixed the
+ * cause and does not want to wait that out. It clears the record workspace-wide,
+ * not just in this browser.
  *
  * Renders nothing when no bridge is looping, or when the bridges list is
  * unavailable (e.g. the viewer lacks settings access).
@@ -47,13 +53,17 @@ function BridgeCrashBannerItem({ bridge }: { bridge: BridgeSummary }) {
           </Chip>
         </Stack>
         <Typography level="body-sm">
-          It keeps stopping and restarting, so its printers may repeatedly disconnect. Check the bridge machine and its logs.
+          It keeps stopping and restarting, so its printers may repeatedly disconnect. Check the bridge machine and its
+          logs. Once it is sorted out, clear the crash history to hide this — it returns if the bridge crashes again.
         </Typography>
         {bridge.crash.lastReason && (
           <Typography level="body-xs" textColor="text.tertiary" sx={{ wordBreak: 'break-word' }}>
             {bridge.crash.lastReason}
           </Typography>
         )}
+        <Stack sx={{ pt: 0.5 }}>
+          <ClearBridgeCrashHistoryButton bridgeId={bridge.id} />
+        </Stack>
       </Stack>
     </Alert>
   )

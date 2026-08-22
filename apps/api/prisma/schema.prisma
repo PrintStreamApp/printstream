@@ -203,6 +203,9 @@ model Workspace {
   auditLogs              AuditLog[]
   stats                  WorkspaceStats?
   printerStats           PrinterStats[]
+  maintenanceTasks       PrinterMaintenanceTask[]
+  maintenanceLogs        PrinterMaintenanceLog[]
+  featureUsage           WorkspaceFeatureUsage[]
   subscription           WorkspaceSubscription?
   customer               Customer?                 @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
@@ -502,8 +505,18 @@ model PrintJob {
   sliceSettingsJson      String?
   plate                  Int?
   useAms                 Boolean?
+  /// Lossy legacy record of the bed-leveling choice: true covers BOTH 'on' and 'auto'.
+  /// Kept because rows written before `printOptionsJson` have nothing else, and because the
+  /// jobs DTO still surfaces it, but it is not what a re-print reads. See `printOptionsJson`.
   bedLevel               Boolean?
   amsMapping             String?
+  /// Serialized `PrintStartOptionSelection` (bedLevel, flowCalibration, timelapse, ...) as the
+  /// user chose it, so re-printing this job repeats those choices instead of falling back to
+  /// the schema defaults. Snapshot, not live: it records the SELECTION rather than the
+  /// printer-clamped values that were sent, so a re-print onto a different printer re-clamps
+  /// exactly as a fresh print would. Null for rows written before this column and for
+  /// externally started prints, where the choices were never ours to see.
+  printOptionsJson       String?
   progressPercent        Int?
   startedAt              DateTime  @default(now())
   finishedAt             DateTime?
@@ -672,6 +685,38 @@ model PrinterStats {
   @@index([workspaceId, updatedAt])
 }
 
+/// Cloud-only feature-usage rollup: one counter per workspace x usage key x UTC
+/// day. Written exclusively by the private cloud telemetry recorder
+/// (`src/private/cloud/feature-usage/`) — batched increments, never one write
+/// per request — and read by the platform-admin usage surfaces. OSS/self-hosted
+/// installs never write or read it (the recorder ships only in the private
+/// tree), so the table simply stays empty there. Rows age out via the
+/// retention sweep (`FEATURE_USAGE_RETENTION_DAYS`); counts are best-effort
+/// telemetry, not an audit trail — `AuditLog` remains the durable record of who
+/// did what.
+model WorkspaceFeatureUsage {
+  workspaceId String
+  /// Namespaced usage key: `plugin:<name>` (plugin API mutations),
+  /// `feature:<area>` (curated core API mutations), `view:<view>`
+  /// (client-reported page visits). The namespaces come from
+  /// `@printstream/shared/private` (`feature-usage.ts`); keys are bounded by
+  /// validation at the ingest boundary and by the curated server-side map.
+  feature     String
+  /// UTC calendar-day bucket (midnight UTC), matching the UTC-day convention in
+  /// `lib/stats-activity-history.ts`.
+  day         DateTime @db.Date
+  count       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, feature, day])
+  /// Platform aggregates scan by key over a window; the sweep scans by day alone.
+  @@index([feature, day])
+  @@index([day])
+}
+
 /// A file in a workspace's model library (the current content; prior contents
 /// live in `LibraryFileVersion`). Bridge-owned by default: `ownerBridgeId` names
 /// the bridge that holds the bytes (null = the unsupported local/API-stored
@@ -707,9 +752,10 @@ model LibraryFile {
   // stay restorable until the cleanup task hard-deletes them after the
   // retention window (LIBRARY_RECYCLE_RETENTION_DAYS).
   deletedAt                 DateTime?
-  // What created the row: 'upload' | 'slice' | 'scaffold' | 'snapshot'.
+  // What created the row: 'upload' | 'slice' | 'scaffold' | 'snapshot' | 'import'.
   // Null on rows created before origin tracking. Drives transient-file
-  // cleanup (unsaved sliced outputs age out faster than uploads).
+  // cleanup (unsaved sliced outputs age out faster than uploads); 'import'
+  // (remote-imports plugin) shares the plain-upload window.
   origin                    String?
   // Actor attribution for the current content (denormalized for display;
   // the audit log remains the authoritative record).
@@ -1598,6 +1644,79 @@ model QueueItem {
   @@index([workspaceId, lastPrinterId])
   @@index([workspaceId, lastPrintJobId])
   @@index([workspaceId, orderPrintId])
+}
+
+/// Per-printer maintenance customization for the `maintenance` plugin: a row
+/// exists ONLY when the user changed something about a task (retimed it,
+/// switched it off) or defined one of their own. The catalog in
+/// `@printstream/shared` (`printer-maintenance.ts`) supplies every default, so
+/// an untouched printer has no rows here and picks up catalog changes for free.
+///
+/// Tenancy: keyed by `printerSerial`, not `printerId`, matching `PrinterStats` —
+/// maintenance is a fact about the physical machine, so removing and re-adding a
+/// printer must not lose which jobs are due. `taskKey` is a catalog key
+/// (`z-lead-screw`) or `custom:<cuid>` for a user-defined job; a custom row is
+/// the ONLY place a task's title lives, so deleting it deletes the task.
+///
+/// A null interval column means "inherit the catalog value"; `intervalsCleared`
+/// names the ones the user deliberately turned off, because null cannot say the
+/// difference between "not set" and "set to never".
+model PrinterMaintenanceTask {
+  id                        String   @id @default(cuid())
+  workspaceId               String
+  printerSerial             String
+  taskKey                   String
+  /// Set only for `custom:` tasks. Null means the catalog owns the wording.
+  customTitle               String?
+  /// Set only for `custom:` tasks: 'oil' | 'grease' | 'none'.
+  customLubricant           String?
+  intervalDays              Int?
+  intervalPrintHours        Int?
+  intervalFilamentKilograms Decimal? @db.Decimal(10, 3)
+  /// Interval kinds the user explicitly cleared ('days' | 'printHours' |
+  /// 'filamentKilograms'), so a cleared interval is not re-inherited from the
+  /// catalog on the next read.
+  intervalsCleared          String[] @default([])
+  /// Set when the user switched the task off. It then never reports due, not
+  /// even for an HMS request.
+  disabledAt                DateTime?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @default(now()) @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, printerSerial, taskKey])
+  @@index([workspaceId, printerSerial])
+}
+
+/// Append-only record of maintenance actually performed (the `maintenance`
+/// plugin). Each row snapshots the usage counters as they read at completion,
+/// because that is what the next due date is measured from — reading today's
+/// `PrinterStats` and subtracting would silently shift every past interval
+/// whenever the stats are adjusted.
+///
+/// Tenancy: keyed by `printerSerial` like `PrinterMaintenanceTask`, so history
+/// follows the physical printer. `performedByUserId` is a soft reference (no FK):
+/// the log outlives the account that wrote it. Rows are never edited or swept —
+/// the newest row per `taskKey` drives the due date, and the rest is history.
+model PrinterMaintenanceLog {
+  id                String   @id @default(cuid())
+  workspaceId       String
+  printerSerial     String
+  taskKey           String
+  completedAt       DateTime @default(now())
+  /// Lifetime print hours at completion; null when stats were unavailable.
+  printHours        Decimal? @db.Decimal(12, 3)
+  /// Lifetime filament kilograms at completion; null when no print has recorded
+  /// filament use, which is distinct from zero and must stay distinguishable.
+  filamentKilograms Decimal? @db.Decimal(12, 3)
+  performedByUserId String?
+  note              String?
+  createdAt         DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, printerSerial, taskKey, completedAt])
 }
 
 /// A two-way support conversation between a workspace user and the platform

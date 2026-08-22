@@ -3,7 +3,7 @@
  * `readPlateIndex` / `readSceneManifest`.
  *
  * Everywhere else a 3MF is parsed on the server because the bytes live on a bridge. The public
- * 3MF viewer has no server copy on purpose: the user picks a file from their disk and it never
+ * 3MF editor has no server copy on purpose: the user picks a file from their disk and it never
  * leaves the machine. So this module pairs the browser ZIP reader (`threeMfArchive.ts`) with the
  * SAME shared parsers the API uses (`@printstream/shared/three-mf`) — the parse is identical, only
  * the byte source differs, which is what keeps the two surfaces from drifting.
@@ -13,7 +13,8 @@
  * inflated archive. The caller MUST call {@link ClientThreeMfProject.dispose} to release the object
  * URLs handed out for plate thumbnails.
  */
-import { buildSceneManifest, buildThreeMfIndex, parseModelSettingsPlates } from '@printstream/shared/three-mf'
+import { buildSceneManifest } from '@printstream/shared/three-mf'
+import { threeMfIndexFromArchive } from './threeMfArchiveIndex'
 import type { BridgeLibraryThreeMfIndex, LibraryThreeMfScene, PrinterModel } from '@printstream/shared'
 import { openThreeMfArchive, type ThreeMfArchive } from './threeMfArchive'
 import type { ThreeMfEntryBytesLoader } from './threeMfSceneStream'
@@ -65,17 +66,7 @@ export async function openClientThreeMfProjectFromBytes(
 }
 
 function createProject(file: { name: string; size: number }, archive: ThreeMfArchive): ClientThreeMfProject {
-  const entries = archive.indexEntries()
-  const index = buildThreeMfIndex(
-    entries.sliceInfoXml,
-    entries.projectSettingsJson,
-    // The API feeds the pre-parsed plate metadata rather than the raw XML (`readPlateIndex`);
-    // match it so both surfaces take the identical code path through the parser.
-    entries.modelSettingsXml ? parseModelSettingsPlates(entries.modelSettingsXml, entries.projectSettingsJson) : [],
-    entries.thumbnailPlateFiles,
-    entries.customGcodeXml,
-    entries.modelSettingsXml
-  )
+  const index = threeMfIndexFromArchive(archive)
 
   // Scenes are re-requested on every plate switch and re-parsing the root model XML is the
   // expensive part of opening a project, so memoize exactly like the API's scene cache. Keyed on

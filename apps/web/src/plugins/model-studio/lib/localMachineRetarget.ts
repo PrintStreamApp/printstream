@@ -43,10 +43,47 @@ interface ResolveMachineConfigResponse {
   name: string
 }
 
+/**
+ * The three anonymous preset lookups this module needs, injected so the retarget's DECISIONS can be
+ * exercised without a server — the same seam shape as `localFilamentResolver`'s `resolveBuiltin`.
+ * {@link PUBLIC_RETARGET_RESOLVERS} is the real one and the default; nothing in the app passes
+ * anything else.
+ */
+export interface LocalRetargetResolvers {
+  machine(profileId: string, targetId: string | null): Promise<ResolveMachineConfigResponse>
+  process(profileId: string, targetId: string | null): Promise<ResolveProcessConfigResponse>
+  filament(profileId: string, targetId: string | null): Promise<ResolveFilamentConfigResponse>
+}
+
+/** The anonymous catalogue endpoints. Built-ins only — see the module header. */
+export const PUBLIC_RETARGET_RESOLVERS: LocalRetargetResolvers = {
+  machine: (machineProfileId, targetId) =>
+    apiFetch<ResolveMachineConfigResponse>('/api/public/slicing/resolve-machine', {
+      method: 'POST',
+      body: { machineProfileId, targetId }
+    }),
+  process: (processProfileId, targetId) =>
+    apiFetch<ResolveProcessConfigResponse>('/api/public/slicing/resolve-process', {
+      method: 'POST',
+      body: { processProfileId, targetId }
+    }),
+  filament: (filamentProfileId, targetId) =>
+    apiFetch<ResolveFilamentConfigResponse>('/api/public/slicing/resolve-filament', {
+      method: 'POST',
+      body: { filamentProfileId, targetId }
+    })
+}
+
 export interface LocalMachineRetargetInput {
   /** The editor's current target — the controller's `retargetTarget`. Null means nothing to do. */
   target: SlicingManualProfileTarget | null
-  slicerTargetId: string
+  /**
+   * Which slicer build to resolve the presets from. NULL — never `''` — while the targets query is
+   * unsettled: the routes take a nullable `targetId` and fall back to the default build, but they
+   * REJECT an empty string, which 400s the whole retarget and saves the project on its OLD printer
+   * with only a console warning.
+   */
+  slicerTargetId: string | null
   /**
    * The project's settings as the bake will write them, used ONLY to pick filament rebind targets.
    * Null skips the rebind pass (the slots keep their values), which is what an unreadable or absent
@@ -55,6 +92,8 @@ export interface LocalMachineRetargetInput {
   projectSettings: ProfileRecord | null
   /** The catalogue the rebind picks from — built-ins plus the user's browser-stored presets. */
   filamentPresets: readonly SlicingPresetSummary[]
+  /** Defaults to the anonymous endpoints; overridden only by tests. */
+  resolvers?: LocalRetargetResolvers
 }
 
 /**
@@ -66,14 +105,12 @@ export interface LocalMachineRetargetInput {
  */
 export async function buildLocalMachineRetargetPlan(input: LocalMachineRetargetInput): Promise<MachineRetargetPlan | null> {
   const { target } = input
+  const resolvers = input.resolvers ?? PUBLIC_RETARGET_RESOLVERS
   if (!target || slicingPresetProvenance(target.printerProfileId) !== 'builtin') return null
 
   let machine: ResolveMachineConfigResponse
   try {
-    machine = await apiFetch<ResolveMachineConfigResponse>('/api/public/slicing/resolve-machine', {
-      method: 'POST',
-      body: { machineProfileId: target.printerProfileId, targetId: input.slicerTargetId }
-    })
+    machine = await resolvers.machine(target.printerProfileId, input.slicerTargetId)
   } catch (error) {
     // The one failure the user can SEE the consequence of: the save proceeds and silently keeps the
     // project's embedded printer, so leave a trace of why the switch did not stick.
@@ -87,13 +124,13 @@ export async function buildLocalMachineRetargetPlan(input: LocalMachineRetargetI
     machineConfig: machine.config,
     printerSettingsId: machine.name,
     printerModel,
-    processConfig: await resolveTargetProcessConfig(target, input.slicerTargetId),
+    processConfig: await resolveTargetProcessConfig(target, input.slicerTargetId, resolvers),
     processSettingOverrides: target.processSettingOverrides ?? {},
     filamentRebinds: null
   }
   return {
     ...plan,
-    filamentRebinds: await resolveFilamentRebinds(input, plan)
+    filamentRebinds: await resolveFilamentRebinds(input, plan, resolvers)
   }
 }
 
@@ -106,14 +143,12 @@ export async function buildLocalMachineRetargetPlan(input: LocalMachineRetargetI
  */
 async function resolveTargetProcessConfig(
   target: SlicingManualProfileTarget,
-  slicerTargetId: string
+  slicerTargetId: string | null,
+  resolvers: LocalRetargetResolvers
 ): Promise<ProfileRecord | null> {
   if (!target.processProfileId || slicingPresetProvenance(target.processProfileId) !== 'builtin') return null
   try {
-    const body = await apiFetch<ResolveProcessConfigResponse>('/api/public/slicing/resolve-process', {
-      method: 'POST',
-      body: { processProfileId: target.processProfileId, targetId: slicerTargetId }
-    })
+    const body = await resolvers.process(target.processProfileId, slicerTargetId)
     return body.config
   } catch (error) {
     // Best-effort by contract: the project keeps its embedded process rather than blocking the
@@ -134,7 +169,8 @@ async function resolveTargetProcessConfig(
  */
 async function resolveFilamentRebinds(
   input: LocalMachineRetargetInput,
-  plan: MachineRetargetPlan
+  plan: MachineRetargetPlan,
+  resolvers: LocalRetargetResolvers
 ): Promise<FilamentSlotRebind[] | null> {
   if (!input.projectSettings) return null
   const targetModelKey = canonicalBambuModelKey(plan.printerModel)
@@ -167,10 +203,7 @@ async function resolveFilamentRebinds(
       // slot to a near-empty config, and `rebindProjectFilamentPhysics` drops every key no slot
       // defines, deleting the physics a repair had just restored.
       const flattened = await flattenLocalPreset(stored, [], async (builtinId) => {
-        const body = await apiFetch<ResolveFilamentConfigResponse>('/api/public/slicing/resolve-filament', {
-          method: 'POST',
-          body: { filamentProfileId: builtinId, targetId: input.slicerTargetId }
-        })
+        const body = await resolvers.filament(builtinId, input.slicerTargetId)
         return body.config ?? null
       })
       rebinds.push({ config: flattened.config, settingsId: null })
@@ -182,10 +215,7 @@ async function resolveFilamentRebinds(
     }
     let config: ResolveFilamentConfigResponse['config'] | null = null
     try {
-      const body = await apiFetch<ResolveFilamentConfigResponse>('/api/public/slicing/resolve-filament', {
-        method: 'POST',
-        body: { filamentProfileId: target.id, targetId: input.slicerTargetId }
-      })
+      const body = await resolvers.filament(target.id, input.slicerTargetId)
       config = body.config
     } catch (error) {
       // Per-slot best effort: an unresolvable slot keeps its current values. Warned rather than

@@ -59,14 +59,17 @@ export function FilamentMenuItems({ options, onPick }: {
 export function AddPartSourceMenuItems({ onPickPrimitive, onPickFile, onPickLibrary }: {
   onPickPrimitive: (shape: PrimitiveKind) => void
   onPickFile: () => void
-  onPickLibrary: () => void
+  /** Omitted on a host with no library (`EditorImportStore.supportsLibrarySource`), which hides the row. */
+  onPickLibrary?: () => void
 }) {
   return (
     <>
-      <MenuItem onClick={onPickLibrary}>
-        <ListItemDecorator><InventoryRoundedIcon /></ListItemDecorator>
-        Load from library…
-      </MenuItem>
+      {onPickLibrary && (
+        <MenuItem onClick={onPickLibrary}>
+          <ListItemDecorator><InventoryRoundedIcon /></ListItemDecorator>
+          Load from library…
+        </MenuItem>
+      )}
       <MenuItem onClick={onPickFile}>
         <ListItemDecorator><FolderOpenRoundedIcon /></ListItemDecorator>
         Load from file…

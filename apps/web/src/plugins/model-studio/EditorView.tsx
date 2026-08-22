@@ -23,7 +23,6 @@ import {
   ButtonGroup,
   Chip,
   CircularProgress,
-  LinearProgress,
   DialogActions,
   IconButton,
   Link,
@@ -55,6 +54,7 @@ import type {
   LibraryThreeMfScene,
   ProcessSettingOverrides,
   SceneEdit,
+  SceneEditFlushVolumes,
   SceneEditPartSubtype,
   StagedImport
 } from '@printstream/shared'
@@ -67,8 +67,10 @@ import {
   threeMfPartSubtypeCarriesFilament,
   FILAMENT_SETTING_KEYS,
   isFilamentIdentitySettingKey,
+  readProjectFlushContext,
   type ThreeMfSettingsRepairReason
 } from '@printstream/shared'
+import { useFlushCalibration, useFlushDatasets } from './lib/flushDatasets'
 import { afterNextPaint } from '../../lib/afterNextPaint'
 import { apiFetch } from '../../lib/apiClient'
 import { useAuthBootstrapQuery } from '../../lib/authQuery'
@@ -175,7 +177,7 @@ import { useLocalStorageState } from '../../hooks/useLocalStorageState'
 import {
   createApiImportStore
 } from './lib/editorImports'
-import type { EditorImportStore } from './lib/editorImportStore'
+import { importFileAccept, type EditorImportStore } from './lib/editorImportStore'
 import { createArchiveProjectSource, type EditorProjectSource } from './lib/editorProjectSource'
 import type { EditorSaveTarget } from './lib/editorSaveTarget'
 import { parseStlGeometryAsync, parseThreeMfModelEntryAsync } from './lib/meshParseClient'
@@ -300,6 +302,8 @@ function supportFilamentRefs(overrides: Record<string, string | string[]> | unde
 // that first open suspends just the dialog, not the whole editor (which sits under an ancestor
 // Suspense via the slot's lazy load). Matches LibraryView's treatment of the same component.
 import type { ProcessConfigResolver } from '../../components/ProcessSettingsDialog'
+import { ProgressBar } from '../../components/ProgressBar'
+import { ProgressSpinner } from '../../components/ProgressSpinner'
 const ProcessSettingsDialogImpl = lazy(() => import('../../components/ProcessSettingsDialog'))
 function ProcessSettingsDialog(props: ComponentProps<typeof ProcessSettingsDialogImpl>) {
   return (
@@ -336,6 +340,14 @@ interface EditorViewProps {
    */
   bedModelPath?: string
   /**
+   * Where to fetch BambuStudio's measured flush tables. Defaults to the workspace route; the
+   * public editor passes the anonymous one. Same shape as {@link bedModelPath}, and for the same
+   * reason — the data is engine-owned and identical either way, only the surface differs.
+   */
+  flushDataPath?: string
+  /** Sibling of {@link flushDataPath} for the engine self-check; same workspace/public split. */
+  flushCalibrationPath?: string
+  /**
    * How the per-object/part process dialogs resolve a preset's base config. Defaults to the workspace
    * route (inside `ProcessSettingsDialog`); the public editor passes an anonymous resolver. Must be
    * a stable reference. The GLOBAL process dialog is rendered by the host, which passes this itself.
@@ -366,6 +378,12 @@ interface EditorViewProps {
    * no manager passes nothing and the button does not render at all.
    */
   presetManager?: (props: { open: boolean; onClose: () => void }) => ReactNode
+  /**
+   * Status for a host-provided preset source (the Bambu Cloud sync chip), forwarded to
+   * `SliceSettingsPanel`. Only the workspace host passes one — the public editor has no
+   * workspace or plugin graph. See the prop's doc there.
+   */
+  presetSourceStatus?: ReactNode
   /** Slice-time apply (only present when launched from the slice dialog). */
   onApply?: (edit: SceneEdit) => void
   /** Library folder + bridge to save new files into (from the host context). */
@@ -476,10 +494,13 @@ function EditorView({
   initialPlateIndex,
   targetPrinterModel,
   bedModelPath,
+  flushDataPath,
+  flushCalibrationPath,
   resolveProcessConfig,
   resolveFilamentConfig,
   repairReasons,
   presetManager,
+  presetSourceStatus,
   onApply,
   folderId = null,
   bridgeId = null,
@@ -538,6 +559,11 @@ function EditorView({
   // The api store is stateless and shared; a host-supplied one owns its own lifetime (the caller
   // disposes it), so this must not create or dispose anything itself.
   const importStore = useMemo(() => importStoreProp ?? createApiImportStore(), [importStoreProp])
+  // Both are read off the store rather than a public-host flag, so the rule stays "what this store
+  // supports" and cannot drift from the store that has to honour it. Today the hosts differ only in
+  // the library (a server-less one has none); the formats they stage are the same.
+  const canImportFromLibrary = importStore.supportsLibrarySource
+  const importAccept = useMemo(() => importFileAccept(importStore), [importStore])
   // A save target that is not library-backed writes to the user's own file. There is no library
   // folder to choose and no "version" concept, so Save means "write it back" and Save-as means
   // "ask the OS where" — never the library destination dialog.
@@ -635,6 +661,16 @@ function EditorView({
     queryKey: ['library-editor-embedded-presets', baseFileId, baseVersionId ?? 'current'],
     enabled: !hasNoBaseFile && typeof projectSource.loadEmbeddedPresets === 'function',
     queryFn: () => projectSource.loadEmbeddedPresets?.() ?? Promise.resolve([]),
+    staleTime: Infinity
+  })
+
+  // The project's own settings, for the purge volumes the flushing dialog edits. Same
+  // `staleTime: Infinity` reasoning as the embedded presets above: it comes from the archive this
+  // session already holds, and the file is not re-read until the next open.
+  const projectSettingsQuery = useQuery({
+    queryKey: ['library-editor-project-settings', baseFileId, baseVersionId ?? 'current'],
+    enabled: !hasNoBaseFile && typeof projectSource.loadProjectSettings === 'function',
+    queryFn: () => projectSource.loadProjectSettings?.() ?? Promise.resolve(null),
     staleTime: Infinity
   })
 
@@ -5202,6 +5238,27 @@ function EditorView({
     [embeddedPresetsQuery.data, state?.removedEmbeddedPresets]
   )
 
+  // Machine + stored purge values for the flushing dialog. Null while the settings are still
+  // loading, for a project that carries none (a from-scratch scaffold), or for a host whose source
+  // cannot read them — in each case the Materials section simply shows no button.
+  const projectFlushContext = useMemo(
+    () => readProjectFlushContext(projectSettingsQuery.data ?? null),
+    [projectSettingsQuery.data]
+  )
+  const flushDatasets = useFlushDatasets(sliceConfig?.selectedSlicerTargetId, flushDataPath)
+  // Does the engine agree with our port? A diagnostic, cached per target — it only decides how
+  // confidently the dialog's footnote can speak. See `flushDatasets.ts`.
+  const flushCalibration = useFlushCalibration(sliceConfig?.selectedSlicerTargetId, flushDatasets, flushCalibrationPath)
+
+  /**
+   * Record the session's purge volumes. Checkpointed like every other scene edit, so it is
+   * undoable and marks the project dirty; the stored file is untouched until the user saves.
+   */
+  const handleFlushVolumesChange = useCallback((next: SceneEditFlushVolumes) => {
+    recordHistoryRef.current?.()
+    setState((prev) => prev ? { ...prev, flushVolumes: next } : prev)
+  }, [recordHistoryRef])
+
   /**
    * Remove one embedded preset. Checkpointed like every other scene edit, so it is undoable and
    * marks the project dirty; nothing touches the stored file until the user saves.
@@ -5330,6 +5387,11 @@ function EditorView({
   // same-plate dimming rebuild.
   const showBuildOverlay = viewportBuilding || !sceneReady
   const buildOverlayIncremental = buildIncremental || !sceneReady
+  // Null — not 0 — while the part count is unknown or a single part: the bar and spinner are then
+  // indeterminate, and a 0 would size their moving segment to nothing (see `ProgressBar`).
+  const buildProgressPercent = buildProgress && buildProgress.total > 1
+    ? Math.round((buildProgress.done / buildProgress.total) * 100)
+    : null
   const loadError = platesQuery.error instanceof Error
     ? platesQuery.error.message
     : initialSceneQuery.error instanceof Error
@@ -5508,9 +5570,8 @@ function EditorView({
                   // lets each model show as it lands. The bar/count are part-based, so even a single
                   // multi-solid assembly shows real progress.
                   <>
-                    <LinearProgress
-                      determinate={!!buildProgress && buildProgress.total > 1}
-                      value={buildProgress && buildProgress.total > 1 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}
+                    <ProgressBar
+                      value={buildProgressPercent}
                       thickness={4}
                       sx={{
                         position: 'absolute',
@@ -5536,11 +5597,7 @@ function EditorView({
                         bgcolor: 'rgba(13, 19, 34, 0.4)'
                       }}
                     >
-                      <CircularProgress
-                        size="md"
-                        determinate={!!buildProgress && buildProgress.total > 1}
-                        value={buildProgress && buildProgress.total > 1 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}
-                      />
+                      <ProgressSpinner size="md" value={buildProgressPercent} />
                       <Typography level="body-sm" textColor="common.white">
                         {buildProgress && buildProgress.total > 1
                           ? `Loading models… ${buildProgress.done} of ${buildProgress.total}`
@@ -5568,7 +5625,7 @@ function EditorView({
                   >
                     {buildProgress && buildProgress.total > 1 ? (
                       <>
-                        <CircularProgress size="md" determinate value={Math.round((buildProgress.done / buildProgress.total) * 100)} />
+                        <ProgressSpinner size="md" value={buildProgressPercent} />
                         <Typography level="body-sm" textColor="common.white">
                           Loading models… ({buildProgress.done}/{buildProgress.total})
                         </Typography>
@@ -5897,7 +5954,7 @@ function EditorView({
                     importing={importing}
                     disabled={sliceConfig != null && !hasMaterials}
                     disabledReason="Add a material before adding objects."
-                    onAddFromLibrary={() => { setModelRequest(null); setLibraryPickerOpen(true) }}
+                    onAddFromLibrary={canImportFromLibrary ? () => { setModelRequest(null); setLibraryPickerOpen(true) } : undefined}
                     onImportFile={() => { setModelRequest(null); fileInputRef.current?.click() }}
                     onAddPrimitive={(kind) => void handleAddPrimitive(kind)}
                   />
@@ -5997,10 +6054,33 @@ function EditorView({
             ) : null
             const settingsPanel = sliceConfigForPanel
               ? <SliceSettingsPanel
-                  controller={sliceConfigForPanel}
+                  controller={{
+                    ...sliceConfigForPanel,
+                    // Injected HERE rather than by either host's controller: the purge volumes are
+                    // project-file content read from the archive the editor holds and edited as
+                    // session state it owns, so this is the one place both hosts already share.
+                    // The edit records its own history checkpoint, so it does not go through the
+                    // controller wrapper the way the slice-config setters do.
+                    flushVolumes: projectFlushContext
+                      ? {
+                          context: projectFlushContext,
+                          datasets: flushDatasets,
+                          calibration: flushCalibration,
+                          value: state?.flushVolumes ?? null,
+                          onChange: handleFlushVolumesChange,
+                          // Same staged repair the banner offers, reachable from where the defect
+                          // is actually visible.
+                          onRepair: settingsRepairReasons.includes('flushMatrix') ? handleRepairInEditor : undefined
+                        }
+                      : null
+                  }}
                   mode="editor"
                   activePlateIndex={activePlateIndex}
                   onManagePresets={presetManager ? openSlicingPresets : undefined}
+                  // Same signal as the manager: a host that supplies one has a workspace, so its
+                  // stored presets can be read and written. The public editor has neither.
+                  canEditPrinterPreset={Boolean(presetManager)}
+                  presetSourceStatus={presetSourceStatus}
                   embeddedPresets={embeddedPresets}
                   onRemoveEmbeddedPreset={handleRemoveEmbeddedPreset}
                 />
@@ -6146,11 +6226,12 @@ function EditorView({
           </DialogActions>
         )}
 
-        {/* Hidden picker for "Import file…" — STL parsed, STEP server-tessellated, 3MF geometry-extracted. */}
+        {/* Hidden picker for "Import file…". Narrowed to what THIS host's store can stage, so the
+            picker never offers a format the import then refuses. */}
         <input
           ref={fileInputRef}
           type="file"
-          accept=".stl,.step,.stp,.3mf"
+          accept={importAccept}
           hidden
           onChange={(event) => {
             const file = event.target.files?.[0]
@@ -6177,7 +6258,7 @@ function EditorView({
             canAssemble={extraSelectedKeys.length > 0 && (selectedKey === contextMenu.key || extraSelectedKeys.includes(contextMenu.key))}
             assembleCount={extraSelectedKeys.length + 1}
             onAssemble={() => { void handleAssembleSelection() }}
-            onReplaceFromLibrary={(key) => { setModelRequest({ kind: 'replace', key }); setLibraryPickerOpen(true) }}
+            onReplaceFromLibrary={canImportFromLibrary ? (key) => { setModelRequest({ kind: 'replace', key }); setLibraryPickerOpen(true) } : undefined}
             onReplaceFromFile={(key) => { setModelRequest({ kind: 'replace', key }); fileInputRef.current?.click() }}
             onExportDownload={canExportDownload ? (key) => handleExportMergedDownload([key]) : undefined}
             onExportToLibrary={canExportToLibrary ? (key) => setExportRequest({ kind: 'object', key }) : undefined}
@@ -6204,7 +6285,7 @@ function EditorView({
             })()}
             onAddPartVolume={(key, subtype, shape) => { void handleAddPartVolume(key, subtype, { kind: 'primitive', shape }) }}
             onAddPartFromFile={(key, subtype) => { setModelRequest({ kind: 'addPart', key, subtype }); fileInputRef.current?.click() }}
-            onAddPartFromLibrary={(key, subtype) => { setModelRequest({ kind: 'addPart', key, subtype }); setLibraryPickerOpen(true) }}
+            onAddPartFromLibrary={canImportFromLibrary ? (key, subtype) => { setModelRequest({ kind: 'addPart', key, subtype }); setLibraryPickerOpen(true) } : undefined}
             filamentOptions={filamentOptions}
             onChangeMaterial={(filamentId) => reassignSelectionFilament(contextMenu.key, filamentId)}
             onSetPrintable={(printable) => handleSetPrintableSelection(selectionFor(contextMenu.key), printable)}

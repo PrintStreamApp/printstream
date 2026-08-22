@@ -5,10 +5,13 @@
  * conditionally, so the "no project yet" branch must not host it.
  *
  * Slicing is deliberately NOT wired here (`onSlice` omitted): a browser cannot reach printers or the
- * slicer, so the editor renders its Slice control disabled. Everything else — arrange, transform,
- * materials, process presets, plate/nozzle/model — works against the settings sidebar the controller
- * feeds. Materials are derived by `EditorView` from the controller (no separate `materials` prop), so
- * a material pick or recolour in the sidebar updates the 3D view live.
+ * slicer. With neither `onSlice` nor `onApply`, `EditorView`'s footer renders NO slice control at all
+ * — not a disabled one — so the surface never advertises an action this host cannot perform.
+ * Everything else — arrange, transform, materials, process presets, plate/nozzle/model — works
+ * against the settings sidebar the controller feeds. The import seam differs in ONE way here — the
+ * local store has no library to import from, which `EditorView` reads off the store; formats are
+ * the same on both hosts. Materials are derived by `EditorView` from the controller (no separate
+ * `materials` prop), so a material pick or recolour in the sidebar updates the 3D view live.
  *
  * This host renders the three surfaces that have no still-mounted slice dialog to render them from:
  * the global process tune dialog, the per-material tune dialog, and the slicing-preset manager. The
@@ -61,7 +64,6 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
     filamentSettingsFilamentId,
     setFilamentSettingsFilamentId,
     setFilamentSettingOverridesById,
-    processBaselineNote
   } = useLocalSliceSettingsController({ project, isMobileViewport, onClose })
 
   // Read through a ref so the catalogue settling does not rebuild the save target (which would
@@ -100,6 +102,8 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
         // fetch the plate mesh from the anonymous catalogue so it loads with no workspace.
         targetPrinterModel={targetPrinterModel}
         bedModelPath="/api/public/slicing/bed-model"
+        flushDataPath="/api/public/slicing/flush-data"
+        flushCalibrationPath="/api/public/slicing/flush-calibration"
         resolveProcessConfig={resolveProcessConfig}
         resolveFilamentConfig={resolveFilamentConfig}
         // Straight off the in-tab parse: this host has no library DTO to read them from, and the
@@ -127,7 +131,6 @@ export function LocalEditorSurface({ project, projectFile, importStore, archiveR
             filamentChoices={processFilamentChoices}
             applyScope="project"
             resolveConfig={resolveProcessConfig}
-            baselineNote={processBaselineNote ?? undefined}
             onProfileChange={(profileId, carryOverrides) => {
               controller.processProfileSelectionTouchedRef.current = true
               controller.setProcessProfileId(profileId)

@@ -32,6 +32,7 @@ import { printerEvents } from './printer-events.js'
 import { printerManager } from './printer-manager.js'
 import { rootPrisma } from './prisma.js'
 import { isMissingColumnError } from './prisma-errors.js'
+import { serializeRecordedPrintStartOptions } from './print-job-options.js'
 import { ensurePrintJobSnapshot } from './print-job-snapshots.js'
 import { readLibraryThreeMfPlateUsage } from './library-three-mf.js'
 import { resolvePrinterCoverPath } from './printer-cover-source.js'
@@ -318,6 +319,7 @@ export async function createPrintJobStartRecord(input: {
     useAms: input.metadata?.useAms ?? null,
     bedLevel: input.metadata?.bedLevel ?? null,
     amsMapping: input.metadata?.amsMapping ? JSON.stringify(input.metadata.amsMapping) : null,
+    printOptionsJson: serializeRecordedPrintStartOptions(input.metadata?.printOptions),
     startedAt: input.startedAt ?? new Date(),
     sourceType: mapStoredJobKind(input.metadata?.jobKind ?? 'external'),
     calibrationOption: input.metadata?.calibrationOption ?? null,
@@ -411,6 +413,7 @@ export async function upsertTrackedPrintJobRecord(input: {
         useAms: input.metadata.useAms,
         bedLevel: input.metadata.bedLevel,
         amsMapping: input.metadata.amsMapping ? JSON.stringify(input.metadata.amsMapping) : null,
+        printOptionsJson: serializeRecordedPrintStartOptions(input.metadata.printOptions),
         startedAt: new Date(),
         finishedAt: null,
         progressPercent: null,

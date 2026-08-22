@@ -12,20 +12,63 @@
  *
  * Parsing and welding come from `@printstream/shared/three-mf`, the same code the api runs — the
  * weld especially, since an unwelded import reaches the slicer as triangle soup and mangles small
- * features. STEP is the one format this cannot stage: it needs the OpenCASCADE WASM build, which
- * only the api loads today.
+ * features.
+ *
+ * It stages every format the api does. STL parses inline; a 3MF's geometry is extracted by the
+ * SHARED extractor over an in-tab archive (`localThreeMfImport.ts`) and a STEP is tessellated by the
+ * same OpenCASCADE build the api runs, loaded lazily in the tab (`localStepImport.ts`). Only the
+ * byte source and the WASM loading differ from the api — never the resulting mesh, which is the
+ * point: a file must import identically whichever host opened it.
+ *
+ * `importableFormats` still exists because a host's capabilities are not assumed: the picker's
+ * `accept` is derived from it, so a store that loses a format cannot go on advertising it.
  */
 import {
+  ThreeMfImportError,
   computeMeshBounds,
   detectImportFormat,
   meshToBinaryStl,
   parseStlMesh,
   type ImportedMesh
 } from '@printstream/shared/three-mf'
-import type { StagedImport } from '@printstream/shared'
+import type { StagedImport, StagedImportFormat } from '@printstream/shared'
 import type { EditorImportStore } from './editorImportStore'
+import { ThreeMfArchiveError } from './threeMfArchive'
+import { ImportStagingDataError, disposeImportStagingWorker, stageImportGeometry } from './importStagingClient'
+import { extractThreeMfImportFromFile } from './localThreeMfImport'
+import { tessellateStepInBrowser } from './localStepImport'
 
 export class LocalImportError extends Error {}
+
+/**
+ * The name an import is listed and SAVED under, matching the api's `path.parse(originalname).name`.
+ *
+ * Only the final extension is dropped, so "Bracket v1.2.stl" stays "Bracket v1.2" rather than losing
+ * the version. A name with no extension is returned unchanged.
+ */
+function importDisplayName(fileName: string): string {
+  const cut = fileName.lastIndexOf('.')
+  return cut > 0 ? fileName.slice(0, cut) : fileName
+}
+
+/**
+ * What to tell the user when a 3MF or STEP import fails.
+ *
+ * A {@link ThreeMfImportError} is the shared extractor's considered refusal ("no importable
+ * geometry", "too many triangles") and is already user-facing, so it passes through verbatim.
+ * Anything else is a parse or WASM-load failure, where the raw message is noise — but the FORMAT is
+ * worth naming, because a STEP failure is usually the ~7 MB tessellator failing to load rather than
+ * anything wrong with the file.
+ */
+function importFailureMessage(format: StagedImportFormat, error: unknown): string {
+  // Both of these are considered, user-facing refusals ("no importable geometry", "this file is
+  // 300 MB…"), so they pass through verbatim; wrapping them buried the real reason mid-sentence.
+  if (error instanceof ThreeMfImportError || error instanceof ThreeMfArchiveError) return error.message
+  const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
+  return format === 'step'
+    ? `This STEP file could not be converted${detail}.`
+    : `This 3MF's geometry could not be read${detail}.`
+}
 
 export interface LocalImportStore extends EditorImportStore {
   /**
@@ -46,23 +89,61 @@ interface StagedEntry {
   parts: Array<{ name: string; mesh: ImportedMesh; stl: Uint8Array; subtype?: string | null }>
 }
 
+/**
+ * Geometry for one picked file, preferring the staging worker.
+ *
+ * A DATA failure (the file has no geometry, is over the triangle cap, is not a ZIP) is re-thrown as
+ * is: re-running it on the main thread would freeze the tab on the way to the identical message.
+ * Anything else means the worker MECHANISM is unavailable — no `Worker` (every node test takes this
+ * path), a module that would not load, a wedged task — and the same work runs inline, because a
+ * brief freeze beats an import that cannot happen at all.
+ */
+async function stageGeometry(
+  format: StagedImportFormat,
+  file: File,
+  bytes: Uint8Array
+): Promise<{ mesh: ImportedMesh; stl: Uint8Array; partStls: Uint8Array[] }> {
+  try {
+    return await stageImportGeometry(format, bytes)
+  } catch (error) {
+    if (error instanceof ImportStagingDataError) throw new LocalImportError(error.message)
+    if (typeof Worker !== 'undefined') {
+      console.warn('[import] staging worker unavailable; parsing on the main thread', error)
+    }
+    // The fallback leaves `partStls` empty; `stage` then serializes each part inline, which is the
+    // freeze this whole path exists to avoid — acceptable only because it is the last resort.
+    if (format === 'stl') return { mesh: parseStlMesh(bytes), stl: bytes, partStls: [] }
+    const mesh = format === '3mf'
+      ? await extractThreeMfImportFromFile(file)
+      : await tessellateStepInBrowser(bytes)
+    return { mesh, stl: meshToBinaryStl(mesh), partStls: [] }
+  }
+}
+
 export function createLocalImportStore(): LocalImportStore {
   const entries = new Map<string, StagedEntry>()
   const urls = new Map<string, string>()
   let nextId = 1
 
-  const stage = (name: string, mesh: ImportedMesh, stl: Uint8Array): StagedImport => {
+  /**
+   * `partStls` come from whoever produced the mesh, aligned with `mesh.parts`. Serializing them here
+   * instead put an assembly's whole triangle set through a SECOND pass on the main thread, in the
+   * middle of the import — so the staging worker does it, and only the fallback pays for it inline.
+   */
+  const stage = (name: string, mesh: ImportedMesh, stl: Uint8Array, format: StagedImportFormat, partStls: Uint8Array[] = []): StagedImport => {
     const importId = `local-${nextId++}`
-    const parts = (mesh.parts ?? []).map((part) => ({
+    const parts = (mesh.parts ?? []).map((part, index) => ({
       name: part.name,
       mesh: part.mesh,
-      stl: meshToBinaryStl(part.mesh),
+      stl: partStls[index] ?? meshToBinaryStl(part.mesh),
       ...(part.subtype !== undefined ? { subtype: part.subtype } : {})
     }))
     const descriptor: StagedImport = {
       importId,
       name,
-      format: 'stl',
+      // The SOURCE format, matching what the api records for the same file. Everything is held as
+      // STL bytes here regardless, but the descriptor is a shared DTO and must not misreport it.
+      format,
       triangleCount: Math.floor(mesh.indices.length / 3),
       bounds: mesh.bounds,
       parts: (mesh.parts ?? [{ name, mesh, subtype: null }]).map((part) => ({
@@ -99,6 +180,10 @@ export function createLocalImportStore(): LocalImportStore {
     // There is no library on a host that stages locally; the caller must not offer those entries.
     supportsLibrarySource: false,
 
+    // Every format the api stages, now that the 3MF extraction and the STEP fold are shared and the
+    // OCCT WASM loads in the tab. STEP costs a ~7 MB lazy chunk on FIRST use only.
+    importableFormats: ['stl', 'step', '3mf'],
+
     async stageFromLibrary(): Promise<StagedImport> {
       throw new LocalImportError('This editor has no library to import from. Choose a file instead.')
     },
@@ -108,22 +193,38 @@ export function createLocalImportStore(): LocalImportStore {
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
     },
 
-    async stageFile(file) {
+    async stageFile(file, signal) {
       const format = detectImportFormat(file.name)
-      if (format === 'step') {
-        throw new LocalImportError('STEP files need the desktop app or a signed-in workspace to convert. Try an STL or 3MF instead.')
-      }
-      if (format !== 'stl') {
-        throw new LocalImportError(`${file.name} is not a model this editor can import.`)
-      }
+      if (!format) throw new LocalImportError(`${file.name} is not a model this editor can import.`)
+      // The api names an import `path.parse(originalname).name`; matching it is what makes the same
+      // file import under the same object name on both hosts. The name is baked into the saved 3MF,
+      // so a mismatch is not cosmetic — and it reached added primitives too, which arrive here as
+      // `cube.stl` and were listed as "cube.stl" on one host and "cube" on the other.
+      const name = importDisplayName(file.name)
       const bytes = new Uint8Array(await file.arrayBuffer())
-      // parseStlMesh welds; do not swap in a bare STLLoader parse here.
-      const mesh = parseStlMesh(bytes)
-      return stage(file.name, mesh, bytes)
+      try {
+        // Off the main thread: OCCT tessellation and a 3MF's mesh parse + STL serialization are
+        // seconds of work on a real assembly, and inline they freeze the tab with a spinner that
+        // never paints. The STL the viewport loads is serialized FROM the same mesh the bake writes
+        // — paint lands per triangle INDEX, so the two orderings have to be the one ordering.
+        const { mesh, stl, partStls } = await stageGeometry(format, file, bytes)
+        // Staging is slow enough that the caller may have given up meanwhile (dialog closed, editor
+        // unmounted). Check before inserting: `stage` mutates the store, and an abandoned entry
+        // would otherwise sit in `entries` — and in `importsForBake()` — until dispose.
+        signal?.throwIfAborted()
+        return stage(name, mesh, stl, format, partStls)
+      } catch (error) {
+        // The shared extractor and the OCCT loader raise their own error types; the editor's import
+        // handler only knows how to present a LocalImportError. An abort is the caller's own doing
+        // and must stay an abort rather than becoming a user-facing "could not be read".
+        if (error instanceof LocalImportError) throw error
+        if (error instanceof DOMException && error.name === 'AbortError') throw error
+        throw new LocalImportError(importFailureMessage(format, error))
+      }
     },
 
     stageStlBytes(name, bytes) {
-      return stage(name, parseStlMesh(bytes), bytes)
+      return stage(name, parseStlMesh(bytes), bytes, 'stl')
     },
 
     meshUrl: (importId, partIndex) => {
@@ -149,6 +250,9 @@ export function createLocalImportStore(): LocalImportStore {
     },
 
     dispose() {
+      // Releases the staging worker with its instantiated OCCT runtime (~7 MB) — an editor that has
+      // closed has no use for it, and the next import starts a fresh one.
+      disposeImportStagingWorker()
       for (const url of urls.values()) URL.revokeObjectURL(url)
       urls.clear()
       entries.clear()

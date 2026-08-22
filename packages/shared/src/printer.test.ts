@@ -530,6 +530,42 @@ test('shared filament action availability validates AMS and external spool actio
     allowed: true,
     reason: null
   })
+
+  // A Filament Track Switch that is fitted but not set up routes nothing, so the printer ignores
+  // load/unload requests through it (BambuStudio blocks both with the same guidance). The unit here
+  // names no switch input, which is what "not set up" looks like on the wire.
+  const unconfiguredSwitchStatus = {
+    ...idleStatus,
+    filamentTrackSwitch: {
+      installed: true,
+      inputA: null,
+      inputB: null,
+      outputAExtruderId: null,
+      outputBExtruderId: null,
+      calibrating: false,
+      filamentPresent: null
+    }
+  }
+  const notSetUp = 'The Filament Track Switch has not been set up. Finish setup on the printer first.'
+  assert.deepEqual(getAmsLoadFilamentAvailability(unconfiguredSwitchStatus, 0, 1), { allowed: false, reason: notSetUp })
+  assert.deepEqual(getAmsUnloadFilamentAvailability(unconfiguredSwitchStatus, 0, 1), { allowed: false, reason: notSetUp })
+
+  // Once every unit names its input the switch is set up, and AMS load/unload is available again.
+  const readySwitchStatus = {
+    ...unconfiguredSwitchStatus,
+    ams: [{ ...idleAmsUnit, switchInput: 'A' as const }]
+  }
+  assert.deepEqual(getAmsLoadFilamentAvailability(readySwitchStatus, 0, 1), { allowed: true, reason: null })
+  assert.deepEqual(getAmsUnloadFilamentAvailability(readySwitchStatus, 0, 1), { allowed: true, reason: null })
+
+  // The external spool bypasses the switched feed path entirely, so it stays blocked even when the
+  // switch IS set up — this is a property of the hardware being fitted, not of its configuration.
+  const externalBlocked = 'Loading and unloading the external spool is not supported while a Filament Track Switch is fitted.'
+  assert.deepEqual(getExternalSpoolLoadAvailability(readySwitchStatus, 254), { allowed: false, reason: externalBlocked })
+  assert.deepEqual(getExternalSpoolUnloadAvailability(readySwitchStatus, 254), { allowed: false, reason: externalBlocked })
+
+  // Control: with no switch reported at all, nothing above changes.
+  assert.deepEqual(getExternalSpoolLoadAvailability(idleStatus, 254), { allowed: true, reason: null })
 })
 
 test('AMS rescan availability blocks a slot rescan while filament is loaded to the toolhead it feeds', () => {

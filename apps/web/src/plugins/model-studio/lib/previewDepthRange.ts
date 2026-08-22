@@ -33,6 +33,21 @@ const ABSOLUTE_NEAR_FLOOR = 0.05
 const NEAR_FLOOR_RADIUS_FRACTION = 0.005
 
 /**
+ * The near plane as a fraction of the camera's own distance, which is what lets the user keep
+ * zooming in once inside the content sphere.
+ *
+ * The radius floor above is a CONTENT-sized constant, so on a 350mm plate it pins the near plane at
+ * ~1.3mm however close the camera gets. Dollying nearer than that puts the camera inside its own
+ * near plane: the toolpaths vanish and zooming appears to stop working (reported as "zooming is
+ * less and less effective until it does nothing"). The controls were never stuck — the distance
+ * keeps halving, there is just nothing left un-clipped to see. Taking the SMALLER of the two floors
+ * means the radius floor still governs at normal viewing distances (unchanged precision there) and
+ * the distance floor takes over exactly when the camera closes in, so individual extrusions stay
+ * inspectable.
+ */
+const NEAR_FLOOR_DISTANCE_FRACTION = 0.02
+
+/**
  * Planes that bracket a sphere of `radius` centred on the origin, given the camera's distance from
  * that centre. Both inputs are in scene units (mm).
  *
@@ -45,7 +60,14 @@ export function fitPerspectiveDepthRange(distance: number, radius: number): { ne
   // the projection matrix singular — the canvas renders nothing, with no error anywhere.
   const safeRadius = Number.isFinite(radius) ? Math.max(radius, 1) : 1
   const safeDistance = Number.isFinite(distance) ? Math.max(distance, 0) : 0
-  const near = Math.max(safeDistance - safeRadius, safeRadius * NEAR_FLOOR_RADIUS_FRACTION, ABSOLUTE_NEAR_FLOOR)
+  // The floor is the tighter of the two: content-sized while the camera is far enough away for it
+  // to be the binding one, distance-sized once the camera is close (which is what keeps the near
+  // plane in front of the camera instead of behind it).
+  const insideFloor = Math.min(
+    safeRadius * NEAR_FLOOR_RADIUS_FRACTION,
+    safeDistance * NEAR_FLOOR_DISTANCE_FRACTION
+  )
+  const near = Math.max(safeDistance - safeRadius, insideFloor, ABSOLUTE_NEAR_FLOOR)
   // `near + safeRadius` only matters in the degenerate case where the distance is ~0; otherwise the
   // back of the sphere dominates. Keep it tight — every unit of unused far range costs precision.
   const far = Math.max(safeDistance + safeRadius, near + safeRadius)

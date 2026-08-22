@@ -49,6 +49,8 @@ import {
 } from './cli-profile-selection.js'
 import { assertSupportedEmbeddedMachineSwitch, shouldRetargetEmbeddedMachine } from './machine-switch-guard.js'
 import { readBedModel } from './bed-model.js'
+import { readFlushDatasets } from './flush-data.js'
+import { runFlushCalibration } from './flush-calibration.js'
 import { buildSkipObjectsArgs, deriveSkipObjectIdentifyIds } from './skip-objects.js'
 import { buildFilamentMapArgs } from './filament-map-args.js'
 import { ensurePositionalInputArgument, insertArgsBeforePositionalInput } from './cli-input-args.js'
@@ -222,6 +224,79 @@ app.get('/bed-model', async (request, response) => {
   response.setHeader('X-PrintStream-Bed-Model', bed.fileName)
   response.send(bed.bytes)
 })
+
+/**
+ * BambuStudio's measured flush tables, for the editor's flushing-volumes calculation.
+ *
+ * An engine with no tables answers `{}` rather than 404: the calculator falls back to Studio's
+ * colour formula, so "no tables" is a degraded-but-correct state the client handles, not an error.
+ */
+app.get('/flush-data', async (request, response) => {
+  const registry = await getSlicerTargetRegistry()
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const target = resolveSlicerTarget(registry, targetId)
+  if (!target) {
+    response.status(400).json({ error: targetId ? 'Unknown slicer target' : 'No slicer targets are configured' })
+    return
+  }
+  response.json({ datasets: await readFlushDatasets(target.appDir ?? null) })
+})
+
+/**
+ * Ask the engine to compute a flush matrix, so the API/web can check our port against it.
+ *
+ * Diagnostic only — see `flush-calibration.ts`. Answers `{ calibration: null }` rather than an
+ * error whenever the engine cannot be probed (no usable preset triple, a timeout, an old engine):
+ * a missing self-check must never look like a broken feature.
+ *
+ * The preset triple comes from a machine profile's OWN declared defaults, so this works on any
+ * image without a hardcoded model list.
+ */
+app.get('/flush-calibration', async (request, response) => {
+  const registry = await getSlicerTargetRegistry()
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const target = resolveSlicerTarget(registry, targetId)
+  if (!target) {
+    response.status(400).json({ error: targetId ? 'Unknown slicer target' : 'No slicer targets are configured' })
+    return
+  }
+  const profiles = await resolveFlushCalibrationProfiles(target.profileDir)
+  if (!profiles) {
+    response.json({ calibration: null })
+    return
+  }
+  const calibration = await runFlushCalibration({
+    cliPath: target.cliPath,
+    appDir: target.appDir ?? null,
+    profileDir: target.profileDir,
+    profiles,
+    workDir: env.SLICER_WORK_DIR,
+    env: process.env
+  })
+  response.json({ calibration })
+})
+
+/**
+ * A machine/process/filament triple to probe with, taken from a machine profile's own
+ * `defaultProcessProfile`/`defaultFilamentProfiles` so no printer model is hardcoded here. Null
+ * when no machine in this image declares both.
+ */
+async function resolveFlushCalibrationProfiles(
+  profileDir: string
+): Promise<{ machine: string; process: string; filament: string } | null> {
+  const profiles = await listBuiltinProfiles(profileDir)
+  const byName = new Set(profiles.map((profile) => `${profile.kind}:${profile.name}`))
+  for (const machine of profiles.filter((profile) => profile.kind === 'machine')) {
+    const processName = machine.defaultProcessProfile
+    const filamentName = machine.defaultFilamentProfiles?.[0]
+    if (!processName || !filamentName) continue
+    // The declared defaults can name a preset the flattened catalogue does not carry; skip rather
+    // than hand the CLI a path that does not exist.
+    if (!byName.has(`process:${processName}`) || !byName.has(`filament:${filamentName}`)) continue
+    return { machine: machine.name, process: processName, filament: filamentName }
+  }
+  return null
+}
 
 const resolveProcessConfigSchema = z.object({
   source: z.enum(['builtin', 'custom']),

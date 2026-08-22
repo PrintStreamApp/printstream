@@ -268,9 +268,9 @@ export function DirectoryPrimaryToolbar<TSort extends string, TPageSize extends 
   /**
    * Sort is optional AS A GROUP, like `filters` and `grouping`.
    *
-   * A directory whose listing has nothing to order by (the platform licences
-   * table, which the API returns newest-first) previously had to satisfy these
-   * anyway, and did it with a one-option list and two no-op handlers — a
+   * A directory whose listing has nothing to order by (the slicing-presets
+   * panel, whose rows come back in one fixed order) previously had to satisfy
+   * these anyway, and did it with a one-option list and two no-op handlers — a
    * control the operator can open and change that does nothing at all. Omit
    * them and the sort button is not rendered.
    */

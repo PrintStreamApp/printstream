@@ -124,6 +124,28 @@ publicSlicingRouter.post('/resolve-machine', async (request, response) => {
 })
 
 /**
+ * The public twin of `/api/slicing/flush-calibration` — engine data, nothing workspace-specific.
+ */
+publicSlicingRouter.get('/flush-calibration', async (request, response) => {
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const calibration = await slicerClient.flushCalibration(targetId)
+  response.setHeader('Cache-Control', `public, max-age=${CATALOGUE_CACHE_SECONDS}`)
+  response.json({ calibration })
+})
+
+/**
+ * BambuStudio's measured flush tables for the public editor's flushing-volumes calculation. Carries
+ * nothing workspace-specific — it is engine data — so it is publicly cacheable like the rest of the
+ * anonymous catalogue, and answers `{}` rather than 404 when the engine ships none.
+ */
+publicSlicingRouter.get('/flush-data', async (request, response) => {
+  const targetId = typeof request.query.targetId === 'string' ? request.query.targetId : null
+  const datasets = await slicerClient.flushDatasets(targetId)
+  response.setHeader('Cache-Control', `public, max-age=${CATALOGUE_CACHE_SECONDS}`)
+  response.json({ datasets })
+})
+
+/**
  * The modelled 3D build plate for a printer, from the slicer's bundled BambuStudio resources. A
  * printer with no bundled bed answers 404 and the editor keeps its millimetre grid, exactly as the
  * workspace route behaves.

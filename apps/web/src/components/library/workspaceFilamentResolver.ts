@@ -24,14 +24,19 @@ import type { FilamentConfigResolver } from './FilamentSettingsDialog'
  *
  * Rejects on transport/permission failure like any `apiFetch`; callers that must not fail a user
  * action on it (the save-time authoring pass) catch and treat the slot as unresolved.
+ *
+ * `options.signal` is for the query-driven callers (a query function passes TanStack's signal
+ * through). It is a second OPTIONAL parameter rather than part of the request so this stays
+ * structurally assignable to {@link FilamentConfigResolver} — the seam a host may replace, which
+ * knows nothing about cancellation. Mirrors `components/workspaceProcessResolver.ts`.
  */
-export const resolveWorkspaceFilamentConfig: FilamentConfigResolver = ({
-  filamentProfileId,
-  targetId,
-  sourceFileId,
-  projectFilamentId
-}) =>
-  apiFetch<ResolveFilamentConfigResponse>('/api/slicing/profiles/resolve-filament', {
+export function resolveWorkspaceFilamentConfig(
+  { filamentProfileId, targetId, sourceFileId, projectFilamentId }: Parameters<FilamentConfigResolver>[0],
+  options?: { signal?: AbortSignal }
+): Promise<ResolveFilamentConfigResponse> {
+  return apiFetch<ResolveFilamentConfigResponse>('/api/slicing/profiles/resolve-filament', {
     method: 'POST',
-    body: { filamentProfileId, targetId, sourceFileId, projectFilamentId }
+    body: { filamentProfileId, targetId, sourceFileId, projectFilamentId },
+    ...(options?.signal ? { signal: options.signal } : {})
   })
+}

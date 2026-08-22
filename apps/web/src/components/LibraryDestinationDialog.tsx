@@ -87,7 +87,7 @@ export function LibraryDestinationDialog({
     [folders, currentFolderId]
   )
   const destinationFilesQuery = useQuery({
-    queryKey: ['library-destination-files', bridgeId ?? 'none', currentFolderId ?? 'root'],
+    queryKey: ['library-browse', 'destination', bridgeId ?? 'none', currentFolderId ?? 'root'],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
       if (currentFolderId) params.set('folderId', currentFolderId)

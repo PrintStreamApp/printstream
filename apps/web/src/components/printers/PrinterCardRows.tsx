@@ -6,7 +6,7 @@
  * by status data and optional action callbacks.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Box, CircularProgress, IconButton, Menu, MenuItem, Stack, Tooltip, Typography } from '@mui/joy'
+import { Box, IconButton, Menu, MenuItem, Stack, Tooltip, Typography } from '@mui/joy'
 import EditRoundedIcon from '@mui/icons-material/EditRounded'
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
@@ -32,6 +32,7 @@ import {
   formatRemaining,
   humidityLevelLabel
 } from '../../lib/printersViewHelpers'
+import { ProgressSpinner } from '../ProgressSpinner'
 
 export function AmsUnitRow({
   unit,
@@ -359,7 +360,7 @@ export function AmsUnitRow({
                       zIndex: 1
                     }}
                   >
-                    <CircularProgress size="sm" determinate={false} />
+                    <ProgressSpinner size="sm" />
                   </Box>
                 )}
                 <Typography

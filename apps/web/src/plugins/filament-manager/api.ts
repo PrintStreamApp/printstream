@@ -1,8 +1,11 @@
 /**
- * Web data layer for the filament-manager plugin: query keys, TanStack hooks,
- * and the typed `apiFetch` wrappers for the spool endpoints. Mutations invalidate
- * the spool list locally for instant feedback; the WS `plugin.event` sync
- * (`useFilamentSync`) keeps other open clients in step.
+ * Web data layer for the filament-manager plugin: TanStack hooks and the typed
+ * `apiFetch` wrappers for the spool endpoints. Mutations invalidate the spool list
+ * locally for instant feedback.
+ *
+ * The read hooks mount `useFilamentSync` themselves, so a surface cannot subscribe to
+ * a spool and then miss the WS `plugin.event` that changes it — the freshness is a
+ * property of reading the data, not something each caller has to remember.
  */
 import { useCallback } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -19,11 +22,8 @@ import {
 import { apiFetch } from '../../lib/apiClient'
 import type { SlotFilamentIdentityLookup } from '../../lib/slotFilamentIdentity'
 import { findLoadedSpoolForSlot } from './filters'
-
-export const SPOOLS_QUERY_KEY = ['filament-manager', 'spools'] as const
-export const FILAMENT_STATS_QUERY_KEY = ['filament-manager', 'stats'] as const
-export const FILAMENT_SETTINGS_QUERY_KEY = ['plugin-settings', 'filament-manager'] as const
-export const spoolUsageQueryKey = (id: string) => ['filament-manager', 'usage', id] as const
+import { FILAMENT_STATS_QUERY_KEY, SPOOLS_QUERY_KEY, spoolUsageQueryKey } from './queryKeys'
+import { useFilamentSync } from './useFilamentSync'
 
 const BASE = '/api/plugins/filament-manager'
 
@@ -32,6 +32,7 @@ const BASE = '/api/plugins/filament-manager'
  * card never fires the `LIBRARY_VIEW`-protected endpoint for users who lack it.
  */
 export function useFilamentStatsQuery(enabled: boolean) {
+  useFilamentSync(enabled)
   return useQuery<FilamentUsageStats>({
     queryKey: FILAMENT_STATS_QUERY_KEY,
     queryFn: ({ signal }) => apiFetch<FilamentUsageStats>(`${BASE}/stats`, { signal }),
@@ -41,6 +42,7 @@ export function useFilamentStatsQuery(enabled: boolean) {
 }
 
 export function useSpoolsQuery(enabled = true) {
+  useFilamentSync(enabled)
   return useQuery<FilamentSpool[]>({
     queryKey: SPOOLS_QUERY_KEY,
     queryFn: async ({ signal }) => {

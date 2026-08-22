@@ -901,8 +901,9 @@ function roundForDisplay(value: number): string {
 }
 
 /**
- * "Add" split button: the default click opens the library file picker (the common
- * case); the dropdown offers uploading a local file or a primitive solid.
+ * "Add" split button: the default click opens the library file picker (the common case); the
+ * dropdown offers uploading a local file or a primitive solid. On a host with no library the
+ * library row is hidden and the default click uploads instead — see {@link onAddFromLibrary}.
  */
 export function AddObjectMenu({
   importing,
@@ -916,7 +917,12 @@ export function AddObjectMenu({
   /** Blocks adding objects (e.g. BambuStudio parity: a project needs a material first). */
   disabled?: boolean
   disabledReason?: string
-  onAddFromLibrary: () => void
+  /**
+   * Omitted on a host with no library (`EditorImportStore.supportsLibrarySource`), which hides the
+   * row AND hands the split button's primary action to {@link onImportFile} — otherwise the
+   * control's main click does nothing on the public editor.
+   */
+  onAddFromLibrary?: () => void
   onImportFile: () => void
   onAddPrimitive: (kind: PrimitiveKind) => void
 }) {
@@ -934,7 +940,7 @@ export function AddObjectMenu({
       startDecorator={importing ? <CircularProgress size="sm" /> : <AddRoundedIcon />}
       disabled={importing || disabled}
       disabledReason={disabled ? disabledReason : undefined}
-      onClick={onAddFromLibrary}
+      onClick={onAddFromLibrary ?? onImportFile}
       // The editor is a Modal (zIndex 1300); the menu popper defaults to the lower `popup`
       // layer, so lift it above the dialog or it renders behind it.
       // In a vertical menu Joy's ListItemDecorator only reserves height, not width, so icons of
@@ -947,10 +953,12 @@ export function AddObjectMenu({
         '& svg': { fontSize: '1.25rem' }
       }}
     >
-      <MenuItem onClick={onAddFromLibrary}>
-        <ListItemDecorator><InventoryRoundedIcon /></ListItemDecorator>
-        From library…
-      </MenuItem>
+      {onAddFromLibrary && (
+        <MenuItem onClick={onAddFromLibrary}>
+          <ListItemDecorator><InventoryRoundedIcon /></ListItemDecorator>
+          From library…
+        </MenuItem>
+      )}
       <MenuItem onClick={onImportFile}>
         <ListItemDecorator><UploadFileRoundedIcon /></ListItemDecorator>
         Upload local file…

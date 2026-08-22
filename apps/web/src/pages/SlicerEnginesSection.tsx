@@ -15,10 +15,11 @@
  */
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
-import { Alert, Box, Button, Card, CardContent, Chip, LinearProgress, Stack, Typography } from '@mui/joy'
+import { Alert, Box, Button, Card, CardContent, Chip, Stack, Typography } from '@mui/joy'
 import { extractErrorMessage, slicerEngineListResponseSchema, type SlicerEngine } from '@printstream/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/apiClient'
+import { ProgressBar } from '../components/ProgressBar'
 
 /** "1.7 GB" — a byte count tells an operator nothing about whether it fits. */
 function formatSize(bytes: number): string {
@@ -172,9 +173,8 @@ function EngineCard({ engine, isDefault, canManage, busy, onChange }: {
             {/* Determinate only while downloading: the unpack and profile steps
                 have no measurable total, and a bar that stalls at a number reads
                 as stuck rather than busy. */}
-            <LinearProgress
-              determinate={engine.status?.fraction !== undefined}
-              value={(engine.status?.fraction ?? 0) * 100}
+            <ProgressBar
+              value={engine.status?.fraction !== undefined ? engine.status.fraction * 100 : null}
             />
             <Typography level="body-xs" textColor="text.tertiary">
               {engine.status?.label}

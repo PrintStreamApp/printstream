@@ -44,7 +44,10 @@ export function SpoolList({
       <Table size="sm" borderAxis="xBetween" hoverRow stripe="odd" sx={{ '--TableCell-headBackground': 'transparent' }}>
         <thead>
           <tr>
-            {selectable && <th style={{ width: 48 }} aria-label="Select" />}
+            {/* 64, not 48: the theme gives a row's outer cells a wider gutter
+                than the gaps between columns, and a fixed-layout table would
+                squeeze the checkbox rather than grow the column. */}
+            {selectable && <th style={{ width: 64 }} aria-label="Select" />}
             <th style={{ width: '30%' }}>Spool</th>
             <th style={{ width: 96 }}>Material</th>
             <th style={{ width: 110 }}>Brand</th>

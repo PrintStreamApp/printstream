@@ -32,6 +32,7 @@ import { printerEvents } from '../lib/printer-events.js'
 import { printerManager } from '../lib/printer-manager.js'
 import { printGuards } from '../lib/print-guards.js'
 import { slotFilamentResolvers, type SlotFilamentResolver } from '../lib/slot-filament-registry.js'
+import { bambuAccountResolvers, type BambuAccountResolver } from '../lib/bambu-account-registry.js'
 import { wsBroadcaster } from '../lib/ws-server.js'
 import { blockedPluginsForWorkspace, planGatedPluginNames } from '../lib/plugin-plan-gate.js'
 import { broadcastPluginSettingsChanged, broadcastPluginsChanged } from '../lib/ws-resource-events.js'
@@ -367,6 +368,16 @@ export class PluginRegistry {
         const scopedResolver: SlotFilamentResolver = (query) =>
           this.isEnabledForWorkspace(entry, query.workspaceId) ? resolver(query) : Promise.resolve(null)
         const off = slotFilamentResolvers.register(scopedResolver)
+        entry.shutdownHandlers.push(off)
+        return off
+      },
+      registerBambuAccountResolver: (resolver) => {
+        // Same workspace scoping as the filament resolver, and it matters more here: the
+        // credential is the user's whole Bambu account, so a connection belonging to a
+        // workspace the plugin is disabled for must not be reachable through this seam.
+        const scopedResolver: BambuAccountResolver = (query) =>
+          this.isEnabledForWorkspace(entry, query.workspaceId) ? resolver(query) : Promise.resolve(null)
+        const off = bambuAccountResolvers.register(scopedResolver)
         entry.shutdownHandlers.push(off)
         return off
       }

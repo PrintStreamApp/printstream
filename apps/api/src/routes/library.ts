@@ -32,6 +32,7 @@ import {
   printerModelHasDualNozzles,
   printerModelSchema,
   printFromLibrarySchema,
+  printStartOptionSelectionSchema,
   startLibraryDeleteJobSchema,
   type LibraryDownloadLinkResponse,
   type LibraryFile,
@@ -43,7 +44,7 @@ import {
   type ThreeMfIndex as LibraryThreeMfIndexDto
 } from '@printstream/shared'
 import { toThreeMfIndexDto } from '@printstream/shared/three-mf'
-import { annotateRequestAuditLog } from '../lib/audit-logs.js'
+import { annotateRequestAuditLog, printOverrideAuditMetadata } from '../lib/audit-logs.js'
 import {
   copyBridgeLibraryFile,
   deleteLibraryFileBytes,
@@ -1735,7 +1736,9 @@ libraryRouter.post('/:id/print', requireRequestPermission(PRINTS_DISPATCH_PERMIS
       printerName: job.printerName,
       fileId: job.fileId,
       fileName: job.fileName,
-      plate: job.plate
+      plate: job.plate,
+      // Which safety gates this dispatch deliberately bypassed, when any.
+      ...printOverrideAuditMetadata(parsed.data)
     }
   })
   broadcastPrintDispatchChanged(workspaceId)
@@ -1761,6 +1764,8 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
     nozzleOffsetCalibration: true,
     allowIncompatibleFilament: true,
     allowPlateTypeMismatch: true,
+    allowFilamentTrackSwitchMismatch: true,
+    allowInsufficientFilament: true,
     currentPlateType: true,
     currentNozzleDiameters: true,
     plate: true,
@@ -1791,13 +1796,17 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
       throw notFound('File missing on bridge')
     }
 
-    assertLibraryPrintCompatibilityForIndex(index, {
+    await assertLibraryPrintCompatibilityForIndex(index, {
+      workspaceId: requireRequestWorkspaceId(request),
+      printerId: printer.id,
       plate: parsed.data.plate,
       printerModel: printer.model,
       printerStatus: printerManager.getStatus(printer.id),
       amsMapping: parsed.data.amsMapping,
       allowIncompatibleFilament: parsed.data.allowIncompatibleFilament,
       allowPlateTypeMismatch: parsed.data.allowPlateTypeMismatch,
+      allowFilamentTrackSwitchMismatch: parsed.data.allowFilamentTrackSwitchMismatch,
+      allowInsufficientFilament: parsed.data.allowInsufficientFilament,
       currentPlateType: parsed.data.currentPlateType,
       currentNozzleDiameters: parsed.data.currentNozzleDiameters
     })
@@ -1855,6 +1864,8 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
       useAms: parsed.data.useAms,
       bedLevel: normalizedOptions.bedLevel !== 'off',
       amsMapping: parsed.data.amsMapping ?? null,
+      // The user's selection, not `normalizedOptions`. See `print-job-options.ts`.
+      printOptions: printStartOptionSelectionSchema.parse(parsed.data),
       calibrationOption: null
     },
     publish: () => printerManager.publishCommand(printer.id, { print: printPayload })
@@ -1870,7 +1881,9 @@ libraryRouter.post('/:id/reprint', requireRequestPermission(PRINTS_DISPATCH_PERM
       fileId: file.id,
       fileName: file.name,
       plate: parsed.data.plate,
-      jobId: trackedJobId
+      jobId: trackedJobId,
+      // Which safety gates this dispatch deliberately bypassed, when any.
+      ...printOverrideAuditMetadata(parsed.data)
     }
   })
   response.status(202).end()
@@ -2032,6 +2045,7 @@ async function toDto(row: {
     ...(chips.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
     ...(chips.settingsRepairReasons?.length ? { settingsRepairReasons: chips.settingsRepairReasons } : {}),
     ...(chips.projectVersion ? { projectVersion: chips.projectVersion } : {}),
+    ...(chips.slicedWithFilamentTrackSwitch ? { slicedWithFilamentTrackSwitch: true } : {}),
     ...(row.currentVersionNumber ? { currentVersionNumber: row.currentVersionNumber } : {}),
     createdByName: row.createdByName ?? null,
     restoredFromVersionNumber: row.restoredFromVersionNumber ?? null,
@@ -2465,7 +2479,8 @@ function deriveChips(index: ParsedThreeMfIndex): DerivedChips {
     ...(index.objectExport ? { objectExport: true } : {}),
     ...(index.needsSettingsRepair ? { needsSettingsRepair: true } : {}),
     ...(index.settingsRepairReasons?.length ? { settingsRepairReasons: index.settingsRepairReasons } : {}),
-    ...(index.projectVersion ? { projectVersion: index.projectVersion } : {})
+    ...(index.projectVersion ? { projectVersion: index.projectVersion } : {}),
+    ...(index.slicedWithFilamentTrackSwitch ? { slicedWithFilamentTrackSwitch: true } : {})
   }
 }
 

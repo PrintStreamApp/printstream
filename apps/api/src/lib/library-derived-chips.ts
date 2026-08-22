@@ -35,6 +35,8 @@ export interface DerivedChips {
   settingsRepairReasons?: ThreeMfSettingsRepairReason[]
   /** Bambu Studio version that saved the project, for the newer-than-the-engine check. */
   projectVersion?: string | null
+  /** Sliced for a Filament Track Switch machine; must not print on one without it. */
+  slicedWithFilamentTrackSwitch?: boolean
 }
 
 /**

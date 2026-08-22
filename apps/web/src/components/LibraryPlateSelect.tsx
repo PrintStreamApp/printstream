@@ -328,11 +328,12 @@ function PlateThumb({
       sx={{ width: size }}
       contentSx={{ backgroundColor: 'var(--joy-palette-neutral-800)', borderColor: 'var(--joy-palette-neutral-700)' }}
     >
+      {/* Eager, like the card strip below — see the note there for why lazy loading strands
+          these thumbnails in a dialog. */}
       <Box
         component="img"
         src={buildApiUrl(buildPlateThumbnailPath(fileId, resourceBasePath, plate, thumbnailVersion))}
         alt={`Plate ${plate}`}
-        loading="lazy"
         onError={() => setFailed(true)}
         sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
       />
@@ -389,11 +390,18 @@ function PlateCardThumb({
     >
       {thumbnailUrl
         ? (
+          // NOT `loading="lazy"`. These tiles are a handful of small images that are on screen the
+          // moment their dialog opens, so deferring them buys nothing — and inside a dialog Chrome
+          // routinely never un-defers them: measured in the 3D plate preview, all four tiles sat at
+          // `complete: false` with an empty `currentSrc` indefinitely while fully visible, though
+          // the same URL loaded in ~200ms through a fresh `Image()` and in 1ms when the element's
+          // own `src` was reassigned. The strip rendered as blank plates, which reads as a file
+          // with no previews rather than as images that never started loading. Lazy loading belongs
+          // on long scrolling lists (`LibraryBrowser`), not here.
           <Box
             component="img"
             src={thumbnailUrl}
             alt=""
-            loading="lazy"
             onError={() => { if (serverThumbnailUrl) setFailed(true) }}
             sx={{ width: '100%', height: '100%', objectFit: 'contain', p: 0.5 }}
           />

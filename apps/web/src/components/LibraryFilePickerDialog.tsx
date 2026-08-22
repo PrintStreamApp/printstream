@@ -80,7 +80,7 @@ export function LibraryFilePickerDialog({
   const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   const browseQuery = useQuery({
-    queryKey: ['library-file-picker-browse', folderId ?? 'root', bridgeId ?? 'none', favoritesOnly],
+    queryKey: ['library-browse', 'file-picker', folderId ?? 'root', bridgeId ?? 'none', favoritesOnly],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
       if (folderId) params.set('folderId', folderId)
@@ -93,7 +93,7 @@ export function LibraryFilePickerDialog({
   const browseData = browseQuery.data
   const resolvedBridgeId = browseData?.activeBridgeId ?? bridgeId
   const foldersQuery = useQuery({
-    queryKey: ['library-file-picker-folders', resolvedBridgeId ?? 'none'],
+    queryKey: ['library-folders', 'file-picker', resolvedBridgeId ?? 'none'],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
       if (resolvedBridgeId) params.set('bridgeId', resolvedBridgeId)

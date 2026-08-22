@@ -73,3 +73,41 @@ export function setAllFilteredSlicingPresetsSelected(
   if (selected) return Array.from(new Set([...currentIds, ...filteredProfileIds]))
   return currentIds.filter((profileId) => !filteredProfileIdSet.has(profileId))
 }
+/** Whether a preset belongs to the workspace or ships with the slicer. */
+export type SlicingPresetSource = 'custom' | 'builtin'
+
+/**
+ * What the preset manager opens a kind's list on: the workspace's own presets. Built-ins outnumber
+ * them by orders of magnitude (2000+ materials), so showing everything by default would bury the
+ * presets someone came here to manage.
+ */
+export const DEFAULT_SLICING_PRESET_SOURCES: ReadonlyArray<SlicingPresetSource> = ['custom']
+
+/**
+ * ...unless the workspace has never made one of this kind, in which case that default hides
+ * everything and the empty state has nothing to offer — "No presets match" with a disabled Clear,
+ * over a catalogue of built-ins one un-obvious filter away.
+ *
+ * A stock install hits this on the Printer tab every time, because printer presets are the one kind
+ * most workspaces never customise: the tab read as "there are no printer presets" rather than "you
+ * have not customised one yet", and the printer editor behind it was unreachable.
+ */
+export function defaultSlicingPresetSources(
+  profiles: ReadonlyArray<SlicingPresetSummary>
+): SlicingPresetSource[] {
+  return profiles.some((profile) => profile.source !== 'builtin')
+    ? [...DEFAULT_SLICING_PRESET_SOURCES]
+    : ['custom', 'builtin']
+}
+
+/**
+ * Whether the source filter is untouched — order-insensitive, since the Select returns its own.
+ * Compared against the RESOLVED default so the "Filters (N)" badge does not count the view the
+ * panel opened as.
+ */
+export function slicingPresetSourcesAreDefault(
+  sources: ReadonlyArray<SlicingPresetSource>,
+  defaultSources: ReadonlyArray<SlicingPresetSource>
+): boolean {
+  return sources.length === defaultSources.length && defaultSources.every((source) => sources.includes(source))
+}

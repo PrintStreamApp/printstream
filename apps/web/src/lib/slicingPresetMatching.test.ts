@@ -886,3 +886,49 @@ test('with no baked index every plate-model flag is null so the table lookup is 
   assert.equal(choices[0]!.usedByPlateModels, null)
   assert.equal(choices[0]!.filamentType, null)
 })
+
+test('a material in an AMS behind a Filament Track Switch is not pinned to one toolhead', async () => {
+  const { buildLoadedPrinterMaterialOptions } = await import('./slicingPresetMatching')
+  const unit = (unitId: number, over: Record<string, unknown>) => ({
+    unitId,
+    nozzleId: 0,
+    type: 0,
+    slots: [{
+      slot: 0,
+      trayName: null,
+      filamentType: 'PLA',
+      color: '#FFFFFF',
+      colors: ['#FFFFFF'],
+      remainPercent: null,
+      active: false,
+      isReading: false,
+      occupied: true,
+      trayInfoIdx: null,
+      caliIdx: null,
+      trayUuid: null,
+      k: null
+    }],
+    ...over
+  })
+  // Both units REPORT nozzleId 0; only the second is behind the switch, which makes that binding
+  // meaningless for it. The toolhead chosen here becomes the sliced `filament_map`, so pinning a
+  // switched unit would undo exactly the routing freedom the switch provides.
+  const source = {
+    ams: [unit(0, {}), unit(1, { switchInput: 'B' })],
+    externalSpools: [],
+    nozzleCount: 2
+  } as never
+
+  const options = buildLoadedPrinterMaterialOptions(source, [], null, 'H2D')
+  assert.equal(options.length, 2)
+
+  const direct = options.find((option) => option.slotLabel === 'A1')
+  const switched = options.find((option) => option.slotLabel === 'B1')
+  assert.equal(direct?.nozzleId, 0)
+  assert.ok(direct?.toolheadId, 'a directly-bound unit still names its toolhead')
+
+  assert.equal(switched?.nozzleId, null)
+  assert.equal(switched?.toolheadId, null, 'a switched unit must not name a toolhead')
+  // The group label must not advertise a nozzle the material is not limited to.
+  assert.doesNotMatch(switched?.group ?? '', /Nozzle/)
+})

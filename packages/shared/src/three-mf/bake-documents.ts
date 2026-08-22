@@ -28,13 +28,21 @@ import { restoreFilamentPhysics } from '../repairs/restore-filament-physics.js'
 import { repairModelSettingsObjectExtruders, setObjectLevelExtruderMetadata, sharedCarryingPartExtruderOfBlock } from '../repairs/object-extruder.js'
 import { inspectProjectFilamentIds, repairFilamentIds } from '../repairs/filament-ids.js'
 import { inspectProjectInheritsGroup, repairInheritsGroup } from '../repairs/inherits-group.js'
-import { inspectProjectFlushVolumesMatrix, repairFlushMultiplier, repairFlushVolumesMatrix } from '../flush-volumes-matrix.js'
+import {
+  defaultFlushMultiplierFor,
+  flushMultiplierKeyForPrimeVolumeMode,
+  inspectProjectFlushVolumesMatrix,
+  repairFlushMultiplier,
+  repairFlushVolumesMatrix,
+  writeFlushVolumesMatrixBlocks
+} from '../flush-volumes-matrix.js'
 import { inspectProjectFilamentSelfIndex, rebuildFilamentSelfIndex, repairFilamentSelfIndex } from '../filament-variant-index.js'
 import { remapColorPaintInModelXml } from './triangle-paint-codec.js'
 import { threeMfPartSubtypeCarriesFilament } from '../three-mf-part-subtype.js'
 import type {
   SceneEdit,
   SceneEditFilament,
+  SceneEditFlushVolumes,
   SceneEditObjectBrimEars,
   SceneEditPartFilament,
   SceneEditPartPaint,
@@ -2214,6 +2222,13 @@ export function buildProjectSettingsTransforms(edit: SceneEdit): Array<(json: st
   if (edit.plates.some((plate) => plate.primeTower)) {
     transforms.push((json) => applyPrimeTowerSettings(json, edit))
   }
+  // AFTER the filament list (which remaps the matrix for the new material set) so the user's own
+  // numbers win, and BEFORE the repair pass so a stale edit is still caught by it rather than
+  // riding through as the exact shape the engine segfaults on.
+  if (edit.flushVolumes) {
+    const flushVolumes = edit.flushVolumes
+    transforms.push((json) => applyFlushVolumes(json, flushVolumes))
+  }
   if (edit.repairSettings) {
     transforms.push(repairProjectSettingsDocument)
   }
@@ -2319,6 +2334,48 @@ function applyProjectPlateType(projectSettingsJson: string, plateType: string): 
   if (!parsed || typeof parsed !== 'object') return projectSettingsJson
   const record = parsed as Record<string, unknown>
   record.curr_bed_type = canonical
+  return JSON.stringify(record)
+}
+
+/**
+ * Write the editor's purge volumes into `flush_volumes_matrix` and the mode's multiplier key.
+ *
+ * The edit is checked against the topology of the document it is landing in — the filament set
+ * this very bake just wrote — and DROPPED if it does not match, leaving the matrix
+ * {@link applyFilamentList} already remapped. That is deliberate: a matrix authored for a
+ * different material list describes purges between filaments that no longer exist, and forcing it
+ * to fit would either scramble the numbers or write the out-of-bounds shape that segfaults the
+ * engine mid-slice. Dropping loses an edit the user can redo; writing it loses the slice.
+ *
+ * The multiplier is per-EXTRUDER and independent of the filament set, so a stale one is conformed
+ * rather than dropped.
+ */
+function applyFlushVolumes(projectSettingsJson: string, flushVolumes: SceneEditFlushVolumes): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(projectSettingsJson)
+  } catch {
+    return projectSettingsJson
+  }
+  if (!parsed || typeof parsed !== 'object') return projectSettingsJson
+  const record = parsed as Record<string, unknown>
+  // Same sources as `inspectProjectFlushVolumesMatrix`: filaments from `filament_colour`, extruders
+  // from the NON-deduplicated `nozzle_diameter` (one entry per nozzle).
+  const filamentCount = Array.isArray(record.filament_colour) ? record.filament_colour.length : 0
+  const extruderCount = Array.isArray(record.nozzle_diameter) ? Math.max(record.nozzle_diameter.length, 1) : 1
+  if (filamentCount <= 0) return projectSettingsJson
+
+  const blocks = flushVolumes.matrix
+  const shapeMatches = blocks.length === extruderCount
+    && blocks.every((block) => block.length === filamentCount && block.every((row) => row.length === filamentCount))
+  if (shapeMatches) {
+    record.flush_volumes_matrix = writeFlushVolumesMatrixBlocks(blocks)
+  }
+
+  const multiplierKey = flushMultiplierKeyForPrimeVolumeMode(record.prime_volume_mode)
+  const multiplier = flushVolumes.multiplier.map((value) => String(value))
+  record[multiplierKey] = repairFlushMultiplier(multiplier, extruderCount, defaultFlushMultiplierFor(multiplierKey))
+    ?? multiplier
   return JSON.stringify(record)
 }
 

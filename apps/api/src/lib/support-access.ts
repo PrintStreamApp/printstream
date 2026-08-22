@@ -100,6 +100,46 @@ export async function readSupportAccessPermissions(input: {
   return parseSupportAccessPermissions(row.value)
 }
 
+/**
+ * {@link readSupportAccessPermissions} for many workspaces in one query.
+ *
+ * Callers that decide something per workspace across a support user's whole
+ * accessible set (e.g. "which of these may I upload to?") would otherwise issue
+ * one `Setting` lookup per workspace. Mirrors the batched read in
+ * {@link listSupportAccessibleWorkspaces}.
+ *
+ * Every requested id is present in the result: a workspace with no stored policy
+ * row means "unrestricted", exactly as the single-workspace read treats it.
+ */
+export async function readSupportAccessPermissionsForWorkspaces(input: {
+  workspaceIds: readonly string[]
+  bypassSupportAccess: boolean
+}): Promise<Map<string, Permission[]>> {
+  const result = new Map<string, Permission[]>()
+  if (input.workspaceIds.length === 0) return result
+
+  if (input.bypassSupportAccess) {
+    for (const workspaceId of input.workspaceIds) {
+      result.set(workspaceId, listAllWorkspaceSupportPermissions())
+    }
+    return result
+  }
+
+  const rows = await rootPrisma.setting.findMany({
+    where: {
+      key: { in: input.workspaceIds.map((id) => scopeSettingKeyForWorkspace(id, SUPPORT_ACCESS_PERMISSIONS_SETTING_KEY)) }
+    },
+    select: { key: true, value: true }
+  })
+  const valueByKey = new Map(rows.map((row) => [row.key, row.value] as const))
+
+  for (const workspaceId of input.workspaceIds) {
+    const value = valueByKey.get(scopeSettingKeyForWorkspace(workspaceId, SUPPORT_ACCESS_PERMISSIONS_SETTING_KEY))
+    result.set(workspaceId, value == null ? listAllWorkspaceSupportPermissions() : parseSupportAccessPermissions(value))
+  }
+  return result
+}
+
 export function serializeSupportAccessPermissions(permissions: readonly Permission[]): string {
   return JSON.stringify(filterPermissionsForWorkspaceContext([...permissions]))
 }

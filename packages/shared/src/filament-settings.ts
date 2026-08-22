@@ -18,6 +18,7 @@
  * profile's base config; the slicer applies the resulting `filamentSettingOverrides` on top of the
  * loaded filament profile at slice time (apps/slicer materializeProfileFile).
  */
+import type { SettingsBaselineOrigin } from './settings-baseline.js'
 import { z } from 'zod'
 import {
   diffProcessConfig,
@@ -169,6 +170,8 @@ export interface ResolvedFilamentState {
    * reporting "nothing changed" for a project whose preset went missing.
    */
   baselineResolved: boolean
+  /** See {@link ResolveFilamentConfigResponse.baselineOrigin}. */
+  baselineOrigin?: SettingsBaselineOrigin
   /** Per-key original vector length (baseline's shape preferred, own config's as fallback). */
   shapes: Record<string, number>
   /**
@@ -207,6 +210,7 @@ export function prepareResolvedFilamentState(response: ResolveFilamentConfigResp
     bakedKeys: response.overriddenKeys ?? [],
     declaresOverrides: response.declaresOverrides === true,
     baselineResolved: response.baselineResolved !== false,
+    ...(response.baselineOrigin ? { baselineOrigin: response.baselineOrigin } : {}),
     shapes,
     raw: { effective: rawEffective, baseline: rawBaseline, parentBaseline: rawParentBaseline }
   }
@@ -449,4 +453,10 @@ export interface ResolveFilamentConfigResponse {
    * always resolves needs no change.
    */
   baselineResolved?: boolean
+  /**
+   * Which preset the returned `baseConfig` actually IS, when it is not the one that was asked for.
+   * Absent means it is — see {@link SettingsBaselineOrigin}. The dialog turns this into the caveat
+   * it shows; only the anonymous resolvers ever set it.
+   */
+  baselineOrigin?: SettingsBaselineOrigin
 }

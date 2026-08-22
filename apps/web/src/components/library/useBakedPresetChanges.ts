@@ -19,11 +19,10 @@ import {
   resolvedFilamentModifiedKeys,
   resolvedVisibleProcessModifiedKeys,
   type ProcessConfig,
-  type ProcessVisibilityContext,
-  type ResolveFilamentConfigResponse,
-  type ResolveProcessConfigResponse
+  type ProcessVisibilityContext
 } from '@printstream/shared'
-import { apiFetch } from '../../lib/apiClient'
+import { resolveWorkspaceProcessConfig } from '../workspaceProcessResolver'
+import { resolveWorkspaceFilamentConfig } from './workspaceFilamentResolver'
 import { serverSourceFileId } from '../../lib/localSliceFileId'
 import type { ProcessConfigResolver } from '../ProcessSettingsDialog'
 import type { FilamentConfigResolver } from './FilamentSettingsDialog'
@@ -68,16 +67,15 @@ export function useFilamentChangedCount(input: {
             sourceFileId: input.sourceFileId,
             projectFilamentId: input.projectFilamentId
           })
-        : await apiFetch<ResolveFilamentConfigResponse>('/api/slicing/profiles/resolve-filament', {
-            method: 'POST',
-            body: {
-              filamentProfileId: input.filamentProfileId,
+        : await resolveWorkspaceFilamentConfig(
+            {
+              filamentProfileId: input.filamentProfileId as string,
               targetId: input.slicerTargetId || null,
               sourceFileId: input.sourceFileId,
               projectFilamentId: input.projectFilamentId
             },
-            signal
-          })
+            { signal }
+          )
       return prepareResolvedFilamentState(response)
     }
   })
@@ -126,16 +124,15 @@ export function useUnchangedProjectFilamentPresetIds(input: {
               sourceFileId: input.sourceFileId,
               projectFilamentId: preset.projectFilamentId
             })
-          : await apiFetch<ResolveFilamentConfigResponse>('/api/slicing/profiles/resolve-filament', {
-              method: 'POST',
-              body: {
+          : await resolveWorkspaceFilamentConfig(
+              {
                 filamentProfileId: preset.filamentProfileId,
                 targetId: input.slicerTargetId || null,
                 sourceFileId: input.sourceFileId,
                 projectFilamentId: preset.projectFilamentId
               },
-              signal
-            })
+              { signal }
+            )
         return prepareResolvedFilamentState(response)
       }
     }))
@@ -181,15 +178,10 @@ export function useProcessChangedCount(input: {
       if (input.resolveConfig) {
         return await input.resolveConfig({ processProfileId: input.processProfileId as string, targetId: input.slicerTargetId || null, sourceFileId: input.sourceFileId })
       }
-      return await apiFetch<ResolveProcessConfigResponse>('/api/slicing/profiles/resolve-process', {
-        method: 'POST',
-        body: {
-          processProfileId: input.processProfileId,
-          targetId: input.slicerTargetId || null,
-          sourceFileId: input.sourceFileId
-        },
-        signal
-      })
+      return await resolveWorkspaceProcessConfig(
+        { processProfileId: input.processProfileId as string, targetId: input.slicerTargetId || null, sourceFileId: input.sourceFileId },
+        { signal }
+      )
     }
   })
   if (!enabled || !query.data) return Object.keys(input.overrides).length

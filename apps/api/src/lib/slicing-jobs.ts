@@ -19,13 +19,14 @@ import type {
   SlicingOutputLine,
   SlicingMetadata
 } from '@printstream/shared'
-import { isActiveSlicingJob, isDirectPrintableFileName } from '@printstream/shared'
+import { isActiveSlicingJob, isDirectPrintableFileName, isFilamentTrackSwitchReady } from '@printstream/shared'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
 import yazl from 'yazl'
 import { env } from './env.js'
 import { conflict, HttpError, notFound } from './http-error.js'
 import { persistHistoryThumbnailFromLibrary } from './job-history-thumbnail-source.js'
 import { persistLibraryFileFromLocalPath } from './library-files.js'
+import { printerManager } from './printer-manager.js'
 import { authorSliceSettingsIntoProject } from './slice-settings-authoring.js'
 import { preserveSlicedProject } from './sliced-project-preservation.js'
 import { deletePrintJobThumbnail } from './print-job-thumbnails.js'
@@ -393,6 +394,20 @@ export class SlicingJobs {
     this.schedulePersist()
   }
 
+  /**
+   * Does this slice's target printer have a set-up Filament Track Switch?
+   *
+   * Read from LIVE printer status rather than the request: the browser could only send what was
+   * true when the dialog opened, and the value has to describe the machine at slice time for the
+   * printer's own slice-vs-machine check to agree with it. An offline printer (no status) reads as
+   * "no switch", which matches how an absent `has_filament_switcher` is interpreted everywhere.
+   */
+  private targetHasFilamentTrackSwitch(target: CreateSlicingJob['target']): boolean {
+    if (target.mode !== 'realPrinter') return false
+    const status = printerManager.getStatus(target.printerId)
+    return status ? isFilamentTrackSwitchReady(status) : false
+  }
+
   private pumpQueue(): void {
     const activeCount = Array.from(this.jobs.values()).filter((job) => job.status === 'preparing' || job.status === 'slicing' || job.status === 'saving').length
     const available = Math.max(0, env.SLICING_MAX_CONCURRENT_JOBS - activeCount)
@@ -650,7 +665,8 @@ export class SlicingJobs {
           slicerTargetId: job.request.slicerTargetId,
           target: job.request.target,
           projectPath: sourcePath,
-          fileName: path.basename(job.sourceFileName) || 'source.3mf'
+          fileName: path.basename(job.sourceFileName) || 'source.3mf',
+          hasFilamentTrackSwitch: this.targetHasFilamentTrackSwitch(job.request.target)
         }).catch((error: unknown) => {
           this.logJobEvent(job, 'warn', `Could not author the slice settings into the project: ${(error as Error).message}`)
           return null

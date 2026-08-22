@@ -25,6 +25,7 @@ function makePrintJob(overrides: Partial<PrintJob>): PrintJob {
     useAms: true,
     bedLevel: true,
     amsMapping: [0],
+    printOptions: null,
     progressPercent: null,
     durationSeconds: null,
     startedAt: '2026-05-04T10:00:00.000Z',

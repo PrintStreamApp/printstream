@@ -10,10 +10,12 @@ import SpeedRoundedIcon from '@mui/icons-material/SpeedRounded'
 import AirRoundedIcon from '@mui/icons-material/AirRounded'
 import MeetingRoomRoundedIcon from '@mui/icons-material/MeetingRoomRounded'
 import SwapVertRoundedIcon from '@mui/icons-material/SwapVertRounded'
-import type { PrinterCardContentSettings, PrinterStatus } from '@printstream/shared'
+import AltRouteRoundedIcon from '@mui/icons-material/AltRouteRounded'
+import { summarizeFilamentTrackSwitch, type PrinterCardContentSettings, type PrinterStatus } from '@printstream/shared'
 import { DualTempReadout, HeaterThermometerIcon, MetricChip, TempReadout } from './PrinterMetricChips'
 import { formatDuctMode, printerNozzles, speedLabel } from '../../lib/printersViewHelpers'
 import { formatNozzleSlotHardware, summarizeNozzleRack } from '../../lib/nozzleRackHelpers'
+import { formatFilamentTrackSwitchState } from '../../lib/filamentTrackSwitchHelpers'
 
 export interface PrinterCardMetricsProps {
   status: PrinterStatus
@@ -25,6 +27,8 @@ export interface PrinterCardMetricsProps {
   onOpenSpeedControls: () => void
   /** Opens the controls dialog on the Nozzles (nozzle changer) tab. */
   onOpenNozzleControls: () => void
+  /** Opens the controls dialog on the Track switch (FTS) tab. */
+  onOpenTrackSwitchControls: () => void
   showChamberTemperature: boolean
   chamberTemperature: number | null
   chamberTarget: number | null
@@ -41,6 +45,7 @@ export function PrinterCardMetrics({
   onOpenTemperatureControls,
   onOpenSpeedControls,
   onOpenNozzleControls,
+  onOpenTrackSwitchControls,
   showChamberTemperature,
   chamberTemperature,
   chamberTarget,
@@ -128,6 +133,23 @@ export function PrinterCardMetrics({
             value={summary.chipLabel}
             tooltipTitle={tooltip}
             onClick={canOpenControls ? onOpenNozzleControls : undefined}
+          />
+        )
+      })() : null}
+      {/* Only once the module is actually FITTED. The parser reports a switch object whenever the
+          printer mentions `device.fila_switch`, even with the installed bit clear, and a permanent
+          "Track switch not fitted" chip is noise on a machine that never had one. */}
+      {status.filamentTrackSwitch?.installed === true ? (() => {
+        const summary = summarizeFilamentTrackSwitch(status)
+        if (!summary) return null
+        const state = formatFilamentTrackSwitchState(summary)
+        return (
+          <MetricChip
+            icon={<AltRouteRoundedIcon fontSize="inherit" />}
+            ariaLabel={`Filament Track Switch: ${state}`}
+            value={`Track switch ${state.toLowerCase()}`}
+            tooltipTitle="Filament Track Switch: an AMS behind it can feed either nozzle."
+            onClick={canOpenControls ? onOpenTrackSwitchControls : undefined}
           />
         )
       })() : null}

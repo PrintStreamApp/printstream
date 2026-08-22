@@ -3,7 +3,7 @@ import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded'
 import ApartmentRoundedIcon from '@mui/icons-material/ApartmentRounded'
 import { Alert, Box, Button, Stack, Typography } from '@mui/joy'
 import CssBaseline from '@mui/joy/CssBaseline'
-import { CssVarsProvider } from '@mui/joy/styles'
+import { AppThemeProvider } from './theme/AppThemeProvider'
 import AccountCircleRoundedIcon from '@mui/icons-material/AccountCircleRounded'
 import ChecklistRoundedIcon from '@mui/icons-material/ChecklistRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
@@ -91,6 +91,7 @@ import {
   CONTEXT_CHOOSER_LABEL, buildPlatformWorkspacePath, buildWorkspacePath, buildWorkspaceSelectionPath, isPlatformWorkspacePath, isWorkspaceCandidatePath, parseWorkspacePathname } from './lib/workspaceRoute'
 import {
   isPluginActiveByName,
+  shouldMountPluginRouteByName,
   pluginSupportsRuntimeSurface
 } from './lib/pluginSettings'
 import { runtimePolicyContext } from './lib/runtimePolicy'
@@ -437,6 +438,14 @@ export function App() {
     () => allPluginRoutes
       .filter((route) => pluginSupportsRuntimeSurface(route, currentPluginSurface))
       .filter((route) => isPluginActiveByName(route.pluginName, apiPluginsByName, pluginStateQuery.data?.plugins != null)),
+    [allPluginRoutes, apiPluginsByName, currentPluginSurface, pluginStateQuery.data?.plugins]
+  )
+  // Routes, unlike tabs, stay mounted through the plugin-state load window so a
+  // cold-loaded deep link is not 404'd before the catalog answers.
+  const mountedPluginRoutes = useMemo(
+    () => allPluginRoutes
+      .filter((route) => pluginSupportsRuntimeSurface(route, currentPluginSurface))
+      .filter((route) => shouldMountPluginRouteByName(route.pluginName, apiPluginsByName, pluginStateQuery.data?.plugins != null)),
     [allPluginRoutes, apiPluginsByName, currentPluginSurface, pluginStateQuery.data?.plugins]
   )
   const pluginTabs = useMemo<ReadonlyArray<ShellTab>>(
@@ -1166,7 +1175,7 @@ export function App() {
 
   return (
     <runtimePolicyContext.Provider value={runtimePolicy}>
-      <CssVarsProvider theme={workspaceTheme} defaultMode="dark">
+      <AppThemeProvider theme={workspaceTheme}>
         <CssBaseline />
         <Box sx={workspaceChromeVars}>
           {authRouteState === 'auth' && !isPrivatePublicRoute ? (
@@ -1469,7 +1478,7 @@ export function App() {
                         )
                       )}
                 />
-                {pluginRoutes.map((route) => {
+                {mountedPluginRoutes.map((route) => {
                   const Element = route.element
                   return <Route key={`${route.pluginName}:scoped:${route.path}`} path={workspaceScopedRoutePath(route.path)} element={renderWorkspaceContextElement(<Element />)} />
                 })}
@@ -1501,7 +1510,7 @@ export function App() {
             </AppShell>
           )}
         </Box>
-      </CssVarsProvider>
+      </AppThemeProvider>
     </runtimePolicyContext.Provider>
   )
 }

@@ -744,6 +744,28 @@ export const sceneEditImportPartProcessOverrideSchema = z.object({
 })
 export type SceneEditImportPartProcessOverride = z.infer<typeof sceneEditImportPartProcessOverrideSchema>
 
+/**
+ * Edited purge volumes for the project — BambuStudio's "Flushing volumes for filament change".
+ *
+ * `matrix` is ONE `filaments x filaments` block PER EXTRUDER, in extruder order, holding mm3 to
+ * purge going from the row's filament to the column's. It is carried structured rather than
+ * pre-flattened so the bake can check it against the filament set it is actually writing: a
+ * flat array cannot be told apart from one sized for a different material list, and writing a
+ * mis-sized `flush_volumes_matrix` is not a soft failure — the engine reads it out of bounds and
+ * segfaults mid-slice. See `flush-volumes-matrix.ts`.
+ *
+ * `multiplier` carries one entry per extruder. Which KEY it lands in depends on the project's
+ * `prime_volume_mode`, so the bake decides that from the document rather than the client.
+ *
+ * Absent means "leave the project's flush settings alone" — including leaving them ABSENT, which
+ * is a legitimate state that makes BambuStudio compute the matrix itself.
+ */
+export const sceneEditFlushVolumesSchema = z.object({
+  matrix: z.array(z.array(z.array(z.number().nonnegative()).max(64)).max(64)).min(1).max(16),
+  multiplier: z.array(z.number().nonnegative()).min(1).max(16)
+})
+export type SceneEditFlushVolumes = z.infer<typeof sceneEditFlushVolumesSchema>
+
 export const sceneEditSchema = z.object({
   plates: z.array(sceneEditPlateSchema).min(1),
   instances: z.array(sceneEditInstanceSchema),
@@ -845,6 +867,8 @@ export const sceneEditSchema = z.object({
    * source project's filaments are kept as-is.
    */
   filaments: z.array(sceneEditFilamentSchema).optional(),
+  /** Optional edited purge volumes; see {@link sceneEditFlushVolumesSchema}. */
+  flushVolumes: sceneEditFlushVolumesSchema.optional(),
   /**
    * Archive entries for project-embedded filament presets the user removed
    * (`Metadata/filament_settings_N.config`).

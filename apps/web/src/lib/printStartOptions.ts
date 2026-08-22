@@ -7,6 +7,7 @@ import type {
   AuthBootstrap,
   PrintNozzleOffsetCalibrationMode,
   PrintOnOffAutoMode,
+  PrintStartOptionSelection,
   PrinterModel,
   PrinterPrintStartOptions
 } from '@printstream/shared'
@@ -103,6 +104,33 @@ export function mergePrintStartOptions(options: PrinterPrintStartOptions[]): Pri
       supported: options.some((option) => option.nozzleOffsetCalibration.supported),
       current: resolveSharedValue(options.map((option) => option.nozzleOffsetCalibration.current))
     }
+  }
+}
+
+/**
+ * Layer the options a specific print was started with over this browser's remembered
+ * preferences, for re-printing that job.
+ *
+ * Per field, not all-or-nothing: `recorded` is what a `PrintJob` actually captured, and a
+ * field it never captured is absent rather than defaulted (see `PrintJob.printOptions`).
+ * Absent falls through to the remembered preference, which is what a fresh print would use,
+ * so re-printing a job recorded before the options were persisted behaves as it always did,
+ * and re-printing a recent one restores that print's real choices.
+ *
+ * `firstLayerInspection` / `filamentDynamicsCalibration` are ignored: the print dialog does
+ * not offer them (it derives both at submit time), so there is no control to restore them to.
+ */
+export function applyRecordedPrintStartOptions(
+  remembered: StoredPrintStartOptions,
+  recorded: Partial<PrintStartOptionSelection> | null | undefined
+): StoredPrintStartOptions {
+  if (!recorded) return remembered
+  return {
+    bedLevel: recorded.bedLevel ?? remembered.bedLevel,
+    vibrationCompensation: recorded.vibrationCompensation ?? remembered.vibrationCompensation,
+    flowCalibration: recorded.flowCalibration ?? remembered.flowCalibration,
+    timelapse: recorded.timelapse ?? remembered.timelapse,
+    nozzleOffsetCalibration: recorded.nozzleOffsetCalibration ?? remembered.nozzleOffsetCalibration
   }
 }
 

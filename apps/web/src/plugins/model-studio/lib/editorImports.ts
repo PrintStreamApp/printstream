@@ -102,6 +102,8 @@ export async function fetchImportMesh(importId: string, partIndex?: number, sign
  */
 export const apiImportStore: EditorImportStore = {
   supportsLibrarySource: true,
+  // The server converts STEP (OpenCASCADE) and extracts 3MF geometry, so all three reach the bake.
+  importableFormats: ['stl', 'step', '3mf'],
   stageFile: stageImportFromFile,
   stageFromLibrary: stageImportFromLibrary,
   meshUrl: importMeshUrl,

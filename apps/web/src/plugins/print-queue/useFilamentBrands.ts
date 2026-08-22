@@ -21,7 +21,7 @@ export function buildFilamentBrands(profiles: SlicingPresetSummary[]): string[] 
   return [...brands].sort((left, right) => left.localeCompare(right))
 }
 
-const FILAMENT_BRANDS_QUERY_KEY = ['slicing', 'profiles', 'filament-brands'] as const
+const FILAMENT_BRANDS_QUERY_KEY = ['slicing-profiles', 'filament-brands'] as const
 
 /**
  * Filament brand suggestions for the custom-material picker. Returns `[]` when the slicer isn't

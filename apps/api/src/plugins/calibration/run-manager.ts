@@ -341,7 +341,13 @@ export async function printRun(deps: CalibrationRunManagerDeps, db: AnyPrismaCli
     // The run was sliced for the plate the user chose (defaulting to the installed one), so the
     // plate is already deliberate — don't re-block at dispatch. If they overrode to a plate that is
     // not installed, that was their explicit choice.
-    allowPlateTypeMismatch: true
+    allowPlateTypeMismatch: true,
+    // NOT waived, unlike the two above. A calibration plate is sliced by us, for this printer, moments
+    // earlier — so its Filament Track Switch flag already matches the machine. A mismatch here would
+    // mean the switch was fitted or removed mid-run, which is worth stopping for rather than printing
+    // a calibration whose results would be meaningless.
+    allowFilamentTrackSwitchMismatch: false,
+    allowInsufficientFilament: false
   }, workspaceId)
   await updateRun(db, workspaceId, runId, { status: 'printing' })
 }

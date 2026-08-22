@@ -51,6 +51,10 @@ export default defineConfig(({ command, mode }) => {
           cleanupOutdatedCaches: true,
           clientsClaim: true,
           maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+          // The OpenCASCADE build is ~7.6 MB and is only reached when someone imports a STEP file in
+          // the 3MF editor. Precaching it would make every install pay that download up front (and
+          // trip the size limit above, which fails the build); it is fetched on demand instead.
+          globIgnores: ['**/occt-import-js*.wasm'],
           navigateFallbackDenylist: [/^\/api(?:\/|$)/, /^\/ws(?:\/|$)/],
           skipWaiting: true,
           // Pulled in verbatim by the generated service worker. Adds the
@@ -112,7 +116,11 @@ export default defineConfig(({ command, mode }) => {
           "frame-ancestors 'none'",
           "object-src 'none'",
           "form-action 'self'",
-          "img-src 'self' data: blob: https://*.paddle.com",
+          // Provider cover hosts mirror the API's policy
+          // (`apps/api/src/lib/content-security-policy.ts`, derived from
+          // `REMOTE_IMPORT_THUMBNAIL_CSP_SOURCES`). Literal here like the other
+          // cross-origin hosts, so the config stays free of runtime imports.
+          "img-src 'self' data: blob: https://*.paddle.com https://bblmw.com https://*.bblmw.com https://makerworld.com https://*.makerworld.com https://printables.com https://*.printables.com",
           "media-src 'self' data: blob:",
           "font-src 'self' data:",
           "style-src 'self' 'unsafe-inline' https://*.paddle.com",

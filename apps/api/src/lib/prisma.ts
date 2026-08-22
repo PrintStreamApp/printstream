@@ -78,6 +78,9 @@ export const WORKSPACE_SCOPED_MODELS = new Set([
   'QueueItem',
   'WorkspaceStats',
   'PrinterStats',
+  'PrinterMaintenanceTask',
+  'PrinterMaintenanceLog',
+  'WorkspaceFeatureUsage',
   'WorkspaceSubscription'
 ])
 

@@ -8,21 +8,9 @@
  */
 import type { StatsActivityHistory } from '@printstream/shared'
 import { prisma, rootPrisma } from './prisma.js'
+import { addUtcDays, startOfUtcDay, toUtcDateKey } from './utc-day.js'
 
 const ACTIVITY_WINDOW_DAYS = 30
-function startOfUtcDay(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
-}
-
-function addUtcDays(date: Date, days: number): Date {
-  const copy = new Date(date)
-  copy.setUTCDate(copy.getUTCDate() + days)
-  return copy
-}
-
-function toUtcDateKey(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
 
 function buildStatsActivityHistory(input: {
   printerCreatedAt: readonly Date[]

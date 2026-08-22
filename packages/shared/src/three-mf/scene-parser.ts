@@ -5,7 +5,7 @@
  * work, so it belongs next to the index parser where every consumer can reach it, while each app
  * keeps its own ZIP I/O and caching. Consumers today:
  *  - `apps/api/src/lib/three-mf-reader.ts` (`readSceneManifest`) — Node ZIP I/O + an LRU cache.
- *  - `apps/web` public 3MF viewer — unzips in the browser so the file never leaves the machine.
+ *  - `apps/web` public 3MF editor — unzips in the browser so the file never leaves the machine.
  *
  * Where the index parser answers "what plates and filaments does this project have", this answers
  * "where does every object sit on plate N" — the flattened render list (`parts`), the editable

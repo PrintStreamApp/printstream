@@ -104,7 +104,7 @@ test('a workspace/custom filament id is not resolvable on an anonymous host', as
   await assert.rejects(resolver({ filamentProfileId: 'custom:whatever', targetId: null, sourceFileId: null, projectFilamentId: 1 }))
 })
 
-// The workspace reports a slot's baked drift against the stock preset it names; the viewer reported
+// The workspace reports a slot's baked drift against the stock preset it names; the public editor reported
 // none, because its builtin branch returned the preset and never looked at the file. Same project,
 // same badge, whichever host opened it.
 test('a builtin preset is measured against the slot the project actually carries', async () => {
@@ -191,4 +191,56 @@ test('a slot with no declared record still carries its values onto a new preset'
 
   assert.equal(result.config.supertack_plate_temp, '40', 'undeclared but unknown — keep it rather than discard it')
   assert.equal(result.declaresOverrides, false, 'recorded nothing — not the same as recording that nothing changed')
+})
+
+/**
+ * Which baseline the resolver settled on is REPORTED, not left for a caller to re-derive.
+ *
+ * The dialog turns `baselineOrigin` into the caveat it shows. It used to be computed separately in
+ * the controller, which got it wrong twice over: it answered per PRESET while this answers per
+ * SLOT, and it never looked at browser-stored presets at all — so the one case with a genuinely
+ * incomplete baseline was the one case that said nothing.
+ */
+test('an exact built-in match reports an exact baseline, so the dialog stays quiet', async () => {
+  const { resolveBuiltin } = stubBuiltin({ nozzle_temperature: '250' })
+  const project = projectWith({ filament_settings_id: ['Bambu PETG Basic'], nozzle_temperature: ['270'] })
+  const resolver = buildLocalFilamentConfigResolver({
+    project,
+    filamentProfiles: [{ ...petgProfile, name: 'Bambu PETG Basic' }],
+    resolveBuiltin
+  })
+  const result = await resolver({
+    filamentProfileId: buildProjectSlicingPresetId('filament', 'Bambu PETG Basic'),
+    targetId: 't1', sourceFileId: null, projectFilamentId: 1
+  })
+  assert.deepEqual(result.baselineOrigin, { kind: 'exact' })
+})
+
+test('a standard parent standing in for a custom preset is reported BY NAME', async () => {
+  const { resolveBuiltin } = stubBuiltin({ nozzle_temperature: '250' })
+  // "<standard> - Ryan" is the shape BambuStudio gives a workspace custom preset.
+  const project = projectWith({ filament_settings_id: ['Bambu PETG Basic - Ryan'], nozzle_temperature: ['270'] })
+  const resolver = buildLocalFilamentConfigResolver({
+    project,
+    filamentProfiles: [{ ...petgProfile, name: 'Bambu PETG Basic' }],
+    resolveBuiltin
+  })
+  const result = await resolver({
+    filamentProfileId: buildProjectSlicingPresetId('filament', 'Bambu PETG Basic - Ryan'),
+    targetId: 't1', sourceFileId: null, projectFilamentId: 1
+  })
+  // The NAME matters: the caveat tells the user which preset their markers are measured against.
+  assert.deepEqual(result.baselineOrigin, { kind: 'parent', name: 'Bambu PETG Basic' })
+})
+
+test('nothing resolvable reports a declared baseline, not a comparison', async () => {
+  const { resolveBuiltin } = stubBuiltin({ nozzle_temperature: '250' })
+  const project = projectWith({ filament_settings_id: ['Something Entirely Renamed'], nozzle_temperature: ['270'] })
+  const resolver = buildLocalFilamentConfigResolver({ project, filamentProfiles: [petgProfile], resolveBuiltin })
+  const result = await resolver({
+    filamentProfileId: buildProjectSlicingPresetId('filament', 'Something Entirely Renamed'),
+    targetId: 't1', sourceFileId: null, projectFilamentId: 1
+  })
+  assert.deepEqual(result.baselineOrigin, { kind: 'declared' })
+  assert.equal(result.baselineResolved, false, 'and the existing flag still says there was no diff source')
 })

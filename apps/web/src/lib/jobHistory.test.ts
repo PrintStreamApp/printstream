@@ -20,6 +20,7 @@ function makeJob(overrides: Partial<PrintJob>): PrintJob {
     useAms: true,
     bedLevel: true,
     amsMapping: null,
+    printOptions: null,
     activity: [],
     jobKind: 'file',
     calibrationOption: null,

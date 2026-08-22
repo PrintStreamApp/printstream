@@ -29,6 +29,9 @@ apps/slicer/result.json
 /result.json
 apps/bridge/data/
 apps/bridge/apps/bridge/data/
+# Bridge/demo runtime state written relative to CWD when a process is launched from `apps/`
+# rather than its own workspace. Holds an installationId + runtimeToken, which are secrets.
+apps/data/
 apps/bridge/release/
 apps/bridge/.cache/
 apps/server/release/
@@ -47,6 +50,11 @@ docs/current-work-status.md
 # Project-scoped MCP config: holds a per-install localhost token (Integrated
 # Browser MCP), so it's developer-local, not shared/committed.
 /.mcp.json
+
+# Hand-made backups of the developer-local files above. Ignored by pattern so a
+# `cp x x.bak` before a local experiment can't be swept into a commit by
+# `git add -A` — the original is already ignored, but the copy was not.
+*.bak
 
 # TypeScript incremental build info (per-package, kept out of git/CI)
 *.tsbuildinfo

@@ -56,6 +56,14 @@ export interface AuthorSliceSettingsInput {
   /** The project so far in the rewrite chain. Not modified; a new file is written. */
   projectPath: string
   fileName: string
+  /**
+   * Whether the target printer has a set-up Filament Track Switch, resolved from LIVE printer
+   * status by the caller (the browser never supplies it — it would go stale between the dialog and
+   * the slice, and a wrong value produces a file the printer refuses).
+   *
+   * `false`/omitted for manual-profile targets and every machine without the module.
+   */
+  hasFilamentTrackSwitch?: boolean
 }
 
 /**
@@ -107,6 +115,29 @@ export async function authorSliceSettingsIntoProject(input: AuthorSliceSettingsI
 
   const plateType = canonicalCurrBedType(input.target.plateType ?? null)
   if (plateType) settings.curr_bed_type = plateType
+
+  // Record whether this slice was made for a Filament Track Switch machine. BambuStudio writes the
+  // same key from the connected printer's readiness (`Plater.cpp`: `has_filament_switcher =
+  // sidebar->is_fila_switch_ready()`) and uses it two ways: the auto filament-grouping takes the
+  // flush-optimal group instead of the one matching what is currently loaded (`FilamentGroup.cpp`,
+  // `select_best_group_for_ams`), and the send dialog REFUSES to print a file whose value disagrees
+  // with the printer in front of it.
+  //
+  // Under our Manual `filament_map_mode` the grouping half is inert (that path only runs for auto
+  // modes) — this is authored so the file states what it was sliced for, both for our own
+  // consistency check and so it reopens correctly in BambuStudio.
+  //
+  // Written only when TRUE, and cleared when a project carries a stale `true`: an absent key
+  // already means "no switch" to BambuStudio's CLI and to `filamentTrackSwitchMatchesSlice`, so
+  // writing `false` everywhere would force a project rewrite on every slice for no change in
+  // meaning.
+  if (input.hasFilamentTrackSwitch === true) {
+    settings.has_filament_switcher = true
+  } else if (settings.has_filament_switcher) {
+    // Only a TRUTHY stale value is worth clearing. Deleting an existing `false` would mean the same
+    // thing either way and would force a full 3MF rewrite on every slice of such a project.
+    delete settings.has_filament_switcher
+  }
 
   const authored = JSON.stringify(settings)
   if (authored === before) return null

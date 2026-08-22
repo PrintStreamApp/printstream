@@ -284,6 +284,76 @@ export class SlicerClient {
     return null
   }
 
+  /**
+   * BambuStudio's measured flush tables (raw text, keyed by `nozzle_flush_dataset` code) from this
+   * target's bundled resources, for the editor's flushing-volumes calculation.
+   *
+   * Returns `{}` rather than throwing when no slicer answers or the engine ships none: the
+   * calculation degrades to Studio's colour formula, which is what Studio itself does with a
+   * missing data file, so an install with no slicer still gets a working dialog. Parsing belongs to
+   * the shared `parseFlushVolumeDataset` — this only moves bytes. See apps/slicer/src/flush-data.ts.
+   */
+  async flushDatasets(targetId: string | null | undefined): Promise<Record<string, string>> {
+    for (const baseUrl of this.baseUrls) {
+      try {
+        const params = new URLSearchParams()
+        if (targetId?.trim()) params.set('targetId', targetId.trim())
+        const response = await fetch(`${baseUrl}/flush-data?${params.toString()}`, {
+          headers: this.headers(),
+          // A handful of kilobytes; the short-request cap is plenty.
+          signal: AbortSignal.timeout(Math.min(env.SLICING_REQUEST_TIMEOUT_MS, 10_000))
+        })
+        if (!response.ok) {
+          console.warn('[slicer] flushDatasets failed', `slicer service at ${baseUrl} returned ${response.status}`)
+          continue
+        }
+        const body = await response.json() as { datasets?: unknown }
+        if (!body.datasets || typeof body.datasets !== 'object') return {}
+        const out: Record<string, string> = {}
+        for (const [code, text] of Object.entries(body.datasets as Record<string, unknown>)) {
+          if (typeof text === 'string') out[code] = text
+        }
+        return out
+      } catch (error) {
+        console.warn('[slicer] flushDatasets failed', `${baseUrl}: ${(error as Error).message}`)
+      }
+    }
+    return {}
+  }
+
+  /**
+   * BambuStudio's OWN computed flush matrix plus the settings it derived it from, so the browser
+   * can check our port against the engine that will actually slice (`evaluateFlushCalibration`).
+   *
+   * A diagnostic: null whenever the engine cannot be probed, which must never break the dialog it
+   * checks. The probe runs the CLI without slicing, but it is still a process spawn — callers cache
+   * it per target rather than calling it per interaction. See apps/slicer/src/flush-calibration.ts.
+   */
+  async flushCalibration(targetId: string | null | undefined): Promise<{ settingsJson: string; matrix: string[] } | null> {
+    for (const baseUrl of this.baseUrls) {
+      try {
+        const params = new URLSearchParams()
+        if (targetId?.trim()) params.set('targetId', targetId.trim())
+        const response = await fetch(`${baseUrl}/flush-calibration?${params.toString()}`, {
+          headers: this.headers(),
+          // A CLI spawn, so it needs the full slicing budget rather than the short-request cap.
+          signal: AbortSignal.timeout(env.SLICING_REQUEST_TIMEOUT_MS)
+        })
+        if (!response.ok) {
+          console.warn('[slicer] flushCalibration failed', `slicer service at ${baseUrl} returned ${response.status}`)
+          continue
+        }
+        const body = await response.json() as { calibration?: { settingsJson?: unknown; matrix?: unknown } | null }
+        const calibration = body.calibration
+        if (!calibration || typeof calibration.settingsJson !== 'string' || !Array.isArray(calibration.matrix)) return null
+        return { settingsJson: calibration.settingsJson, matrix: calibration.matrix.map((entry) => String(entry)) }
+      } catch (error) {
+        console.warn('[slicer] flushCalibration failed', `${baseUrl}: ${(error as Error).message}`)
+      }
+    }
+    return null
+  }
+
   async run(input: SlicerRunInput): Promise<SlicerRunResult> {
     const baseUrl = this.claimInstance(input.jobId)
     try {

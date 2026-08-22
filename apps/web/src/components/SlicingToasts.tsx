@@ -1,5 +1,14 @@
+/**
+ * Global slicing status toasts, grouped: several slices in flight share one
+ * toast with a line each, and the engine's progress wording, metadata and error
+ * live behind the expand chevron.
+ *
+ * A slice belongs to the tab that started it (see the filter below), so this is
+ * also where the "I'm leaving" signal for that ownership is sent from.
+ */
 import { useEffect, useMemo, useState } from 'react'
-import { Box, Button, Chip, CircularProgress, Stack, Typography } from '@mui/joy'
+import StopCircleRoundedIcon from '@mui/icons-material/StopCircleRounded'
+import { Typography } from '@mui/joy'
 import type { SlicingJob, SlicingJobResponse } from '@printstream/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '../lib/apiClient'
@@ -16,11 +25,13 @@ import { useSlicingJobs } from '../hooks/useSlicingJobs'
 import { useSuppressedJobToastIds } from '../lib/dialogToastSuppression'
 import { refreshSlicingJobs, seedSlicingJob } from '../lib/slicingJobsCache'
 import { readTabSessionId, reportTabLeaving } from '../lib/tabSession'
-import { StatusToast, StatusToastDismissButton } from './StatusToast'
+import { StatusToastIconAction } from './StatusToast'
+import { StatusToastGroup, type StatusToastGroupItem } from './StatusToastGroup'
 
 const RECENT_MS = 90_000
-const MAX_TOASTS = 4
+const MAX_ITEMS = 8
 const FINISHED_AUTO_DISMISS_MS = 5_000
+const SLICING_WORDING = { activeVerb: 'Slicing', noun: 'file', doneWord: 'sliced' }
 
 export function SlicingToasts() {
   const queryClient = useQueryClient()
@@ -59,7 +70,7 @@ export function SlicingToasts() {
       // missed the completion event) would otherwise be un-dismissable, leaving only Cancel.
       .filter((job) => !dismissed.has(job.id))
       .filter((job) => !suppressedJobIds.has(job.id))
-      .slice(0, MAX_TOASTS)
+      .slice(0, MAX_ITEMS)
   }, [dismissed, jobs, suppressedJobIds])
 
   useEffect(() => {
@@ -86,102 +97,50 @@ export function SlicingToasts() {
     }
   }, [dismissed, jobs])
 
-  if (visibleJobs.length === 0) return null
+  const items = visibleJobs.map((job): StatusToastGroupItem => {
+    const active = isActiveSlicingJob(job)
+    const progressFrame = getLatestSlicingProgressFrame(job)
+    const metadata = formatSlicingMetadataDisplay(job.metadata)
+    const name = formatLibraryFileName(job.outputFileName ?? job.sourceFileName)
+    return {
+      id: job.id,
+      title: name,
+      statusLabel: getSlicingJobStatusLabel(job),
+      color: slicingStatusColor(job.status),
+      active,
+      progress: active ? progressFrame?.totalPercent ?? null : null,
+      summary: formatSlicingProgress(job, progressFrame),
+      error: job.error,
+      onDismiss: () => setDismissed((current) => new Set(current).add(job.id)),
+      dismissLabel: `Dismiss the slicing notification for ${name}`,
+      actions: active ? (
+        <StatusToastIconAction
+          label={`Cancel slicing ${name}`}
+          color="danger"
+          loading={cancelSlicing.isPending && cancelSlicing.variables?.id === job.id}
+          onClick={() => cancelSlicing.mutate(job)}
+        >
+          <StopCircleRoundedIcon />
+        </StatusToastIconAction>
+      ) : undefined,
+      detail: metadata ? (
+        <Typography level="body-xs" textColor="text.tertiary">{metadata}</Typography>
+      ) : undefined
+    }
+  })
+
+  if (items.length === 0) return null
 
   return (
-    <>
-      {visibleJobs.map((job) => {
-        const active = isActiveSlicingJob(job)
-        const progressFrame = getLatestSlicingProgressFrame(job)
-        const progressPercent = progressFrame?.totalPercent ?? null
-        return (
-          <StatusToast
-            key={job.id}
-            color={slicingStatusColor(job.status)}
-            role={job.status === 'failed' ? 'alert' : 'status'}
-            startDecorator={active ? (
-              <CircularProgress
-                size="sm"
-                determinate={progressPercent != null}
-                value={progressPercent ?? undefined}
-              />
-            ) : <StatusDot status={job.status} />}
-          >
-            <Stack spacing={0.5} sx={{ minWidth: 0 }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-                <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography level="title-sm" noWrap sx={{ minWidth: 0, flex: 1 }}>
-                    {formatLibraryFileName(job.outputFileName ?? job.sourceFileName)}
-                  </Typography>
-                  <Chip size="sm" variant="soft" color={slicingStatusColor(job.status)} sx={{ flexShrink: 0 }}>
-                    {getSlicingJobStatusLabel(job)}
-                  </Chip>
-                </Stack>
-                <StatusToastDismissButton
-                  ariaLabel="Dismiss slicing notification"
-                  onClick={() => setDismissed((current) => new Set(current).add(job.id))}
-                />
-              </Stack>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-                <Typography level="body-xs" textColor="text.tertiary" noWrap sx={{ minWidth: 0, flex: 1 }}>
-                  {formatSlicingProgress(job, progressFrame)}
-                </Typography>
-                {active && (
-                  <Button
-                    size="sm"
-                    variant="plain"
-                    color="danger"
-                    loading={cancelSlicing.isPending && cancelSlicing.variables?.id === job.id}
-                    onClick={() => cancelSlicing.mutate(job)}
-                    sx={{ flexShrink: 0, ml: 'auto' }}
-                  >
-                    Cancel
-                  </Button>
-                )}
-              </Stack>
-              {job.metadata && formatMetadataDisplay(job.metadata) && (
-                <Typography level="body-xs" textColor="text.tertiary">
-                  {formatMetadataDisplay(job.metadata)}
-                </Typography>
-              )}
-              {job.error && <Typography level="body-xs" color="danger" noWrap>{job.error}</Typography>}
-            </Stack>
-          </StatusToast>
-        )
+    <StatusToastGroup
+      items={items}
+      wording={SLICING_WORDING}
+      onDismissAll={() => setDismissed((current) => {
+        const next = new Set(current)
+        for (const job of visibleJobs) next.add(job.id)
+        return next
       })}
-    </>
-  )
-}
-
-function formatMetadataDisplay(metadata: SlicingJob['metadata']): string {
-  return formatSlicingMetadataDisplay(metadata)
-}
-
-function statusDotColor(status: SlicingJob['status']): string {
-  switch (status) {
-    case 'queued': return 'var(--joy-palette-neutral-500)'
-    case 'preparing':
-    case 'slicing':
-    case 'saving': return 'var(--joy-palette-primary-500)'
-    case 'ready': return 'var(--joy-palette-success-500)'
-    case 'cancelled': return 'var(--joy-palette-warning-500)'
-    case 'failed': return 'var(--joy-palette-danger-500)'
-  }
-}
-
-function StatusDot({ status }: { status: SlicingJob['status'] }) {
-  const color = statusDotColor(status)
-  return (
-    <Box
-      aria-hidden
-      sx={{
-        width: 10,
-        height: 10,
-        mt: 0.5,
-        borderRadius: '50%',
-        backgroundColor: color,
-        boxShadow: `0 0 0 4px color-mix(in srgb, ${color} 22%, transparent)`
-      }}
+      dismissAllLabel="Dismiss the slicing notifications"
     />
   )
 }

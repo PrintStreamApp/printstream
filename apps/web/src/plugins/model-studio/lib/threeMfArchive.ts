@@ -4,13 +4,13 @@
  *
  * A 3MF is a ZIP. Everywhere else in the product a 3MF is unzipped server-side (the API's
  * `three-mf-internal.ts` / the bridge's `library-3mf.ts`) because the bytes live on a bridge. The
- * public 3MF viewer has no server copy on purpose: the user's file is read straight from their
+ * public 3MF editor has no server copy on purpose: the user's file is read straight from their
  * disk, so the unzip has to happen here. Counterpart of the API's `readSceneManifest` /
  * `readPlateIndex` ZIP I/O — the parsing itself is the SAME shared code
  * (`@printstream/shared/three-mf`), only the byte source differs.
  *
  * Contract: {@link openThreeMfArchive} decompresses the whole archive once, up front, and every
- * accessor after that is synchronous and allocation-cheap. That is the right trade for the viewer
+ * accessor after that is synchronous and allocation-cheap. That is the right trade for the editor
  * (the user is about to look at every plate anyway) but means peak memory is roughly the
  * uncompressed project — hence {@link MAX_CLIENT_THREE_MF_BYTES}.
  */
@@ -65,21 +65,39 @@ export class ThreeMfArchiveError extends Error {}
  *
  * @throws {ThreeMfArchiveError} when the file is too large, is not a ZIP, or carries no
  *   `3D/3dmodel.model` — i.e. every case where the caller should show "this is not a 3MF we can
- *   open" rather than a broken viewer.
+ *   open" rather than a broken editor.
  */
 export async function openThreeMfArchive(file: Blob): Promise<ThreeMfArchive> {
-  if (file.size > MAX_CLIENT_THREE_MF_BYTES) {
-    throw new ThreeMfArchiveError(
-      `This file is ${Math.round(file.size / (1024 * 1024))} MB. The viewer can open projects up to ${Math.round(MAX_CLIENT_THREE_MF_BYTES / (1024 * 1024))} MB.`
-    )
-  }
+  assertThreeMfSizeWithinLimit(file.size)
 
   const bytes = new Uint8Array(await file.arrayBuffer())
   const entries = await inflateArchive(bytes)
+  return threeMfArchiveFromEntries(entries)
+}
+
+/** The same refusal `openThreeMfArchive` raises for an over-size file, without reading it. */
+export function assertThreeMfSizeWithinLimit(byteLength: number): void {
+  if (byteLength > MAX_CLIENT_THREE_MF_BYTES) {
+    throw new ThreeMfArchiveError(
+      `This file is ${Math.round(byteLength / (1024 * 1024))} MB. The editor can open projects up to ${Math.round(MAX_CLIENT_THREE_MF_BYTES / (1024 * 1024))} MB.`
+    )
+  }
+}
+
+/**
+ * Wrap already-decompressed entries as an archive.
+ *
+ * Exported so a WORKER that unzipped synchronously (it is already off the main thread, so fflate's
+ * sync codec is the right one there) gets the identical accessors — entry decoding, the text cache,
+ * the scene/index entry selection — rather than a second implementation of them. The import-staging
+ * worker takes this path; `openThreeMfArchive` is the main-thread one.
+ *
+ * @throws {ThreeMfArchiveError} when the entries carry no `3D/3dmodel.model`.
+ */
+export function threeMfArchiveFromEntries(entries: Record<string, Uint8Array>): ThreeMfArchive {
   if (!entries[ROOT_MODEL_ENTRY]) {
     throw new ThreeMfArchiveError('This file does not look like a 3MF project (no 3D/3dmodel.model inside).')
   }
-
   return createArchive(entries)
 }
 

@@ -15,6 +15,17 @@
  * Runs outside any request context, so it uses `rootPrisma` with an explicit
  * workspace filter on every query. A per-printer signature skips DB work when the
  * relevant slot state has not changed since the last frame.
+ *
+ * Three rules keep the association honest, and each one is a bug this had:
+ * - **Only a status carrying AMS UNITS is evidence.** A report with no units at all is
+ *   a printer that has not told us about its trays — the placeholder a fresh
+ *   `ManagedPrinter` starts from — and letting it reach the unassign loop wipes every
+ *   association on the printer. `online` is not the test: several paths publish that
+ *   placeholder with `online: true`.
+ * - **The signature records SUCCESS, not attendance.** Recording it before the DB work
+ *   meant one failed pass left a removed spool associated until the slots changed again.
+ * - **One pass per printer at a time.** These frames arrive faster than the writes they
+ *   trigger, and two overlapping passes resolve each other's stale reads backwards.
  */
 import { resolveFilamentIdentity, type PrinterStatus } from '@printstream/shared'
 import type { ApiPluginContext } from '../../plugin/types.js'
@@ -87,23 +98,64 @@ function remainGramsFromPercent(remainPercent: number | null, netWeightGrams: nu
 }
 
 export function createStatusObserver(context: ApiPluginContext): (status: PrinterStatus) => void {
-  // Last processed slot signature per printer; skips redundant DB work.
+  // Last SUCCESSFULLY processed slot signature per printer; skips redundant DB work.
+  // Recorded only once a pass completes, so a pass that throws part-way is retried by
+  // the next frame instead of being remembered as handled. The pass is idempotent
+  // (identity-keyed writes plus a re-query before the unassign loop), so a partial
+  // failure costs a repeat, never a wrong result.
   const lastSignature = new Map<string, string>()
+  // Tail of the pass chain per printer. Frames arrive faster than the DB work, and two
+  // overlapping passes for one printer interleave destructively: the older frame's
+  // presences would be compared against rows the newer frame had already moved, so it
+  // re-assigns the spool that was removed and unassigns the one that is really there.
+  // Nothing after that corrects it, because the next identical frame short-circuits.
+  const chains = new Map<string, Promise<void>>()
 
   return (status: PrinterStatus): void => {
-    void handle(status).catch((error) => {
-      context.logger.error('Failed to sync filament spools from printer status', { printerId: status.printerId, error })
-    })
+    const printerId = status.printerId
+    const chained = (chains.get(printerId) ?? Promise.resolve())
+      .then(() => handle(status))
+      .catch((error) => {
+        context.logger.error('Failed to sync filament spools from printer status', { printerId, error })
+      })
+      .finally(() => {
+        // Only the tail clears the entry; an earlier link settling must not drop a
+        // successor that is still queued behind it.
+        if (chains.get(printerId) === chained) chains.delete(printerId)
+      })
+    chains.set(printerId, chained)
   }
 
   async function handle(status: PrinterStatus): Promise<void> {
     const workspaceId = printerManager.getWorkspaceId(status.printerId)
     if (!workspaceId || !(context.isEnabledForWorkspace?.(workspaceId) ?? true)) return
 
+    // Reporting NO AMS units is not the same as reporting empty ones, and only the
+    // second is evidence. A fresh `ManagedPrinter` starts from `makeOfflineStatus`,
+    // whose `ams` is `[]`, and several paths publish that placeholder before the
+    // printer's first real report — `hintOnline` on an SSDP sighting, an unparseable
+    // bridge frame, any partial delta with no `ams` key. Reaching the unassign loop it
+    // reads as "every slot is empty" and clears every RFID association on the printer.
+    //
+    // Note `online` does NOT distinguish these: `hintOnline` merges `{ online: true }`
+    // onto the untouched placeholder, so an online status can still carry no AMS at all.
+    // A real removal always arrives as a unit WITH empty slots, which passes here.
+    //
+    // Tested as "no SLOTS anywhere" rather than "no units", because both shapes mean the
+    // same thing — a unit cloned forward from a previous status with no `tray` array
+    // parsed yet has told us nothing about its trays either.
+    //
+    // The trade-off, stated: a printer that genuinely has no AMS never runs the
+    // unassign loop, so a stale association from a previous AMS-equipped state would
+    // need clearing by hand. Wiping on a placeholder is the worse failure.
+    //
+    // Deliberately does NOT record the signature, so the first real frame is processed
+    // normally rather than short-circuiting against the placeholder's.
+    if (status.ams.every((unit) => unit.slots.length === 0)) return
+
     const presences = collectPresences(status)
     const sig = signature(presences)
     if (lastSignature.get(status.printerId) === sig) return
-    lastSignature.set(status.printerId, sig)
 
     const autoAdd = await loadAutoAddBambuSpools(context.settings, workspaceId)
     let mutated = false
@@ -271,6 +323,8 @@ export function createStatusObserver(context: ApiPluginContext): (status: Printe
       }
     }
 
+    // Everything above landed, so this frame is genuinely handled.
+    lastSignature.set(status.printerId, sig)
     if (mutated) broadcastSpoolsChanged(context, workspaceId)
   }
 }

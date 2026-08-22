@@ -29,7 +29,7 @@ import {
   PRINTERS_CONTROL_CALIBRATE_SCOPE,
   selectJobHistoryPage
 } from '@printstream/shared'
-import { annotateRequestAuditLog } from '../lib/audit-logs.js'
+import { annotateRequestAuditLog, printOverrideAuditMetadata } from '../lib/audit-logs.js'
 import { getRelatedAuditLogsForPrintJobs } from '../lib/audit-logs.js'
 import { prisma } from '../lib/prisma.js'
 import { isMissingColumnError } from '../lib/prisma-errors.js'
@@ -43,12 +43,18 @@ import { assertRequestPermission, requireRequestPermission } from '../lib/author
 import { requireRequestWorkspaceId, requireRouteParam, sendModelBuffer } from '../lib/request-helpers.js'
 import { slicingJobs } from '../lib/slicing-jobs.js'
 import { broadcastJobsChanged, broadcastPrintDispatchChanged } from '../lib/ws-resource-events.js'
+import { readRecordedPrintStartOptions } from '../lib/print-job-options.js'
 import { parseAmsMapping, reprintJobFromRow, toPrintJobKind } from '../lib/print-reprint.js'
 
 export const jobsRouter = Router()
 const RESLICE_UNAVAILABLE = { sourceProjectFileId: null, sourceProjectFileName: null, sliceSettings: null } as const
 
-const reprintJobSchema = printFromLibrarySchema
+/**
+ * Re-print overrides: every dispatch knob optional, since an override-less re-print replays
+ * what the job recorded. Exported so `audit-logs.test.ts` can pin which safety gates this
+ * route is able to record against the real schema rather than a stand-in.
+ */
+export const reprintJobSchema = printFromLibrarySchema
   .omit({ fileId: true, printerId: true })
   .partial()
   .extend({
@@ -84,6 +90,7 @@ interface ModernJobRow extends JobRowBase {
   snapshotPath: string | null
   sourceProjectFileId: string | null
   sliceSettingsJson: string | null
+  printOptionsJson: string | null
   printer: { name: string }
   file: {
     sizeBytes: number
@@ -298,7 +305,14 @@ jobsRouter.post('/:id/reprint', async (request, response) => {
       fileId: job.fileId,
       fileName: job.fileName,
       plate: job.plate,
-      jobKind: result.kind
+      jobKind: result.kind,
+      // Which safety gates this re-print deliberately bypassed, matching the library-print,
+      // library-reprint and printer-storage-print routes. Read off the REQUEST rather than the
+      // dispatched options because a consent is never restored from the history row (see
+      // `printStartOptionSelectionSchema`), so a gate is bypassed here only if this caller
+      // asked for it. Without this, the one dispatch path that could bypass a filament or
+      // plate-type check left no durable trace of having done so.
+      ...printOverrideAuditMetadata(parsed.data)
     }
   })
   broadcastPrintDispatchChanged(workspaceId)
@@ -327,6 +341,7 @@ async function listJobs(workspaceId: string, printerId: string | undefined): Pro
         useAms: true,
         bedLevel: true,
         amsMapping: true,
+        printOptionsJson: true,
         progressPercent: true,
         startedAt: true,
         finishedAt: true,
@@ -402,6 +417,9 @@ async function toPrintJobDto(row: PrintJobRow, activity: AuditLogEntry[]) {
     useAms: row.useAms,
     bedLevel: row.bedLevel,
     amsMapping: parseAmsMapping(row.amsMapping),
+    // Shared with `reprintJobFromRow`, so the print dialog and an override-less
+    // `POST /jobs/:id/reprint` restore this job's options identically.
+    printOptions: readRecordedPrintStartOptions(row),
     jobKind,
     calibrationOption: 'calibrationOption' in row ? row.calibrationOption : null,
     ...toReslicePresentation(row),

@@ -21,8 +21,9 @@
  * still carry drift baked into the 3MF (this is how a project keeps a raised max volumetric speed
  * while still naming the stock preset). The workspace route reads that from the file server-side; here
  * it comes from the same in-tab archive, so the two hosts report the same badge for the same
- * project instead of the viewer flatly reporting none.
+ * project instead of the public editor flatly reporting none.
  */
+import type { SettingsBaselineOrigin } from '@printstream/shared'
 import {
   extractProjectFilamentConfig,
   filamentPresetChangedKeys,
@@ -82,22 +83,28 @@ export function buildLocalFilamentConfigResolver(input: {
       // fall back to the slot's changed-from-system keys. Same three-tier rule as the process
       // resolver — see `buildLocalProcessConfigResolver`.
       let baseline: ResolveFilamentConfigResponse['config'] | null = null
+      // Which of the three tiers we land on is not just a value: it changes what a marker MEANS, so
+      // it is reported alongside rather than left for a caller to guess at.
+      let baselineOrigin: SettingsBaselineOrigin = { kind: 'declared' }
       if (project.presetName) {
         const exact = input.filamentProfiles.find(
           (profile) => profile.kind === 'filament' && profile.name === project.presetName && slicingPresetProvenance(profile.id) === 'builtin'
         )
         const parent = exact ?? findParentBuiltinPreset(input.filamentProfiles, project.presetName, 'filament')
-        if (parent) baseline = (await resolveBuiltinFilament(parent.id, targetId)).config
+        if (parent) {
+          baseline = (await resolveBuiltinFilament(parent.id, targetId)).config
+          baselineOrigin = exact ? { kind: 'exact' } : { kind: 'parent', name: parent.name }
+        }
       }
       // The file's declared record rides along in BOTH branches, matching the workspace route: a
       // resolved baseline does not make it redundant, it is what says whether a difference from
       // that baseline was a user's change or drift the vendor would normalize away.
       return baseline
-        ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides }
+        ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineOrigin }
         // No preset resolved: `baseConfig` is a stand-in copy, so only the declared record can say
         // what changed. Flagged explicitly — the payload cannot be told apart from an unmodified
         // project otherwise. Same contract as the workspace route.
-        : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false }
+        : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false, baselineOrigin }
     }
     if (slicingPresetProvenance(filamentProfileId) === 'builtin') {
       const preset = await resolveBuiltinFilament(filamentProfileId, targetId)
@@ -147,7 +154,7 @@ export function buildLocalFilamentConfigResolver(input: {
       // FLATTENED onto its parent first. A BambuStudio export is a delta (`inherits` + the changed
       // keys), so handing `raw` out directly gave a slot a handful of values — enough to look
       // resolved, not enough for the repair to write anything. See `localPresetInheritance.ts`.
-      const { config, parentName, parentConfig } = await flattenLocalPreset(stored, input.filamentProfiles,
+      const { config, parentName, parentConfig, parentUnresolved } = await flattenLocalPreset(stored, input.filamentProfiles,
         async (builtinId) => (await resolveBuiltinFilament(builtinId, targetId)).config ?? null)
       const slot = projectFilamentId ? readProjectFilamentSlot(input.project, projectFilamentId) : null
       const slotValues = slot && Object.keys(slot.config).length > 0 ? slot.config : null
@@ -155,6 +162,12 @@ export function buildLocalFilamentConfigResolver(input: {
       return {
         config: effective,
         baseConfig: config,
+        // Only when a parent was NAMED and did not resolve: `config` is then short of its inherited
+        // values, so every one of them is compared against a catalog default instead, which reads as
+        // an ordinary resolved baseline unless it is said out loud. A preset that legitimately has
+        // no parent is complete, and telling that user their preset "is based on one that isn't
+        // available here" would be a false statement about their own file.
+        ...(parentUnresolved ? { baselineOrigin: { kind: 'partial' as const } } : {}),
         // A save needs the parent's name to bind this slot — a user preset whose project does not
         // name its parent reopens in BambuStudio as a `(<project>.3mf)` copy however right its
         // values are. Reported only when the parent actually resolved; the declared changes are the

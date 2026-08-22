@@ -54,3 +54,43 @@ test('invalidateLibraryListQueries refreshes the list slices but NOT the editor 
   ])
   assert.ok(!calls.some((key) => key?.some((part) => String(part).startsWith('library-editor'))))
 })
+/**
+ * Every `library-*` query key any surface actually declares, read out of the sources
+ * rather than restated here, checked against what the invalidator busts.
+ *
+ * Reading the files is the point: an earlier version of this test listed the keys as
+ * literals and asserted those, which passed just as happily when a dialog was re-spelled
+ * back to an unreachable key. It claimed to be the regression cover for exactly the
+ * silent failure it could not see.
+ */
+test('every library query key a surface declares is reachable from the list invalidator', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const { calls, invalidateQueries } = recordInvalidations()
+  await invalidateLibraryListQueries({ invalidateQueries })
+  const bustedPrefixes = new Set(calls.map((key) => String(key?.[0])))
+
+  // Surfaces whose keys must be reachable. Editor caches are deliberately NOT here:
+  // they are excluded from the list invalidator on purpose (see the header above).
+  const sources = [
+    'apps/web/src/components/LibraryFilePickerDialog.tsx',
+    'apps/web/src/components/LibraryDestinationDialog.tsx',
+    'apps/web/src/components/printers/LibraryPickerModal.tsx',
+    'apps/web/src/plugins/orders/components/OrderDialogs.tsx'
+  ]
+
+  const declared: Array<{ source: string; prefix: string }> = []
+  for (const source of sources) {
+    const text = await readFile(new URL(`../../../../${source}`, import.meta.url), 'utf8')
+    for (const match of text.matchAll(/queryKey:\s*\[\s*'(library-[a-z-]+)'/g)) {
+      declared.push({ source, prefix: match[1]! })
+    }
+  }
+
+  assert.ok(declared.length >= 6, `expected to find library query keys in the picker sources, found ${declared.length}`)
+  for (const { source, prefix } of declared) {
+    assert.ok(
+      bustedPrefixes.has(prefix),
+      `${source} declares ['${prefix}', ...], which invalidateLibraryListQueries does not bust`
+    )
+  }
+})

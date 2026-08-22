@@ -10,7 +10,7 @@
 import { useSyncExternalStore } from 'react'
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
-import { Box, IconButton, LinearProgress, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
+import { Box, IconButton, Sheet, Stack, Tooltip, Typography } from '@mui/joy'
 import {
   cancelAllLibraryUploads,
   cancelLibraryUpload,
@@ -22,6 +22,7 @@ import {
   subscribeLibraryUploads,
   type LibraryUploadEntry
 } from '../lib/libraryUploadQueue'
+import { ProgressBar } from './ProgressBar'
 
 const PHASE_LABELS: Record<string, string> = {
   'uploading-to-server': 'Uploading',
@@ -163,7 +164,7 @@ function UploadRow({ upload }: { upload: LibraryUploadEntry }) {
         )}
       </Stack>
       {upload.status === 'uploading' && (
-        <LinearProgress determinate value={percent} size="sm" sx={{ mt: 0.75 }} />
+        <ProgressBar value={percent} size="sm" sx={{ mt: 0.75 }} />
       )}
     </Box>
   )

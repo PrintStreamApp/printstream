@@ -9,7 +9,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import {
   Alert, Badge, Box, Button, CircularProgress, Dropdown, IconButton,
-  Menu, MenuButton, MenuItem, Sheet, Stack, Tooltip, Typography
+  ListItemDecorator, Menu, MenuButton, MenuItem, Sheet, Stack, Tooltip, Typography
 } from '@mui/joy'
 import CreateNewFolderRoundedIcon from '@mui/icons-material/CreateNewFolderRounded'
 import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
@@ -154,7 +154,7 @@ export function LibraryView() {
   const location = useLocation()
   const { demoMode } = useRuntimePolicy()
   const { workspaceSlug, folderId: currentFolderIdParam } = useParams<{ workspaceSlug: string; folderId?: string }>()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const authBootstrapQuery = useAuthBootstrapQuery()
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -449,20 +449,43 @@ export function LibraryView() {
   // Open the full slice/editor flow on a file. Used both to slice an existing file and
   // to back a brand-new project with a hidden scaffold (so a new project gets the SAME
   // full editor). `onDiscard` (scaffold cleanup) runs when the dialog closes.
-  const openSliceForSavedFile = useCallback(async (file: { id: string; name: string }, opts?: { onDiscard?: () => void }) => {
+  const openSliceForSavedFile = useCallback(async (
+    file: { id: string; name: string },
+    opts?: { onDiscard?: () => void; flow?: 'library' | 'print' }
+  ) => {
     try {
       const { file: full } = await apiFetch<{ file: LibraryFile }>(`/api/library/${file.id}`)
       sliceTargetCleanupRef.current = opts?.onDiscard ?? null
       // A new-project scaffold is the only caller that passes an onDiscard cleanup.
       setSliceTargetIsNewProject(Boolean(opts?.onDiscard))
       setSliceVersionId(null)
-      setSliceFlow('library')
+      setSliceFlow(opts?.flow ?? 'library')
       setSliceTarget(full)
     } catch (error) {
       opts?.onDiscard?.()
       toast.error(error instanceof Error ? error.message : 'Could not open the editor. Try again.')
     }
   }, [])
+
+  /**
+   * Deep link into the slice/print flow: `?slice=<fileId>&sliceFlow=print`.
+   *
+   * Exists so a surface that produces a file elsewhere — today the remote-import view,
+   * whose "Import and print" lands an unsliced 3MF — can hand off to the ONE flow that
+   * knows how to prepare it, instead of rebuilding this page's dialog stack. The params
+   * are consumed once and stripped, so a refresh or a back-navigation does not reopen
+   * a dialog the user already dismissed.
+   */
+  const requestedSliceFileId = searchParams.get('slice')?.trim() || null
+  const requestedSliceFlow = searchParams.get('sliceFlow') === 'print' ? 'print' : 'library'
+  useEffect(() => {
+    if (!requestedSliceFileId) return
+    const next = new URLSearchParams(searchParams)
+    next.delete('slice')
+    next.delete('sliceFlow')
+    setSearchParams(next, { replace: true })
+    void openSliceForSavedFile({ id: requestedSliceFileId, name: '' }, { flow: requestedSliceFlow })
+  }, [requestedSliceFileId, requestedSliceFlow, searchParams, setSearchParams, openSliceForSavedFile])
 
   // Uploads run through the module-level queue (lib/libraryUploadQueue), which
   // reports progress in a global toast and keeps draining after this view
@@ -698,8 +721,20 @@ export function LibraryView() {
       disabled={bridgeResourceUnavailable}
       onClick={() => inputRef.current?.click()}
     >
-      <MenuItem onClick={() => inputRef.current?.click()}><FileUploadRoundedIcon /> Upload files…</MenuItem>
-      <MenuItem onClick={() => folderInputRef.current?.click()}><DriveFolderUploadRoundedIcon /> Upload folder…</MenuItem>
+      <MenuItem onClick={() => inputRef.current?.click()}>
+        <ListItemDecorator><FileUploadRoundedIcon /></ListItemDecorator>
+        Upload files…
+      </MenuItem>
+      <MenuItem onClick={() => folderInputRef.current?.click()}>
+        <ListItemDecorator><DriveFolderUploadRoundedIcon /></ListItemDecorator>
+        Upload folder…
+      </MenuItem>
+      {/* Extra ways to get bytes into the library (today: import from a URL). Renders
+          nothing when no plugin contributes, so the menu keeps its two core items. */}
+      <PluginSlot
+        name="library.upload.menu"
+        context={{ folderId: currentFolderId, bridgeId: activeBridgeId }}
+      />
     </SplitButton>
   )
 

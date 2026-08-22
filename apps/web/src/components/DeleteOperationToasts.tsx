@@ -1,14 +1,21 @@
+/**
+ * Global toasts for long-running deletes (library sweeps, printer removals),
+ * grouped so a batch of them costs one toast with a line each.
+ *
+ * Renders into the app's single `StatusToastStack` as a child of it — it must
+ * not portal a stack of its own, or two stacks land in the same corner.
+ */
 import { useEffect, useMemo, useState } from 'react'
-import { Box, Chip, CircularProgress, LinearProgress, Stack, Typography } from '@mui/joy'
 import type { DeleteOperationJob } from '@printstream/shared'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '../lib/apiClient'
 import { readCurrentWorkspaceScopeKey, workspaceQueryKeys } from '../lib/workspaceScope'
-import { StatusToast, StatusToastDismissButton, StatusToastStack } from './StatusToast'
+import { StatusToastGroup, type StatusToastGroupItem } from './StatusToastGroup'
 
 const RECENT_MS = 90_000
-const MAX_TOASTS = 4
+const MAX_ITEMS = 8
 const FINISHED_AUTO_DISMISS_MS = 5_000
+const DELETE_WORDING = { activeVerb: 'Deleting', noun: 'item', doneWord: 'deleted' }
 
 export function DeleteOperationToasts() {
   const workspaceScopeKey = readCurrentWorkspaceScopeKey()
@@ -25,7 +32,7 @@ export function DeleteOperationToasts() {
     return jobs
       .filter((job) => isActive(job) || now - Date.parse(job.updatedAt) <= RECENT_MS)
       .filter((job) => !dismissed.has(job.id) || isActive(job))
-      .slice(0, MAX_TOASTS)
+      .slice(0, MAX_ITEMS)
   }, [dismissed, jobs])
 
   useEffect(() => {
@@ -52,48 +59,34 @@ export function DeleteOperationToasts() {
     }
   }, [dismissed, jobs])
 
-  if (visibleJobs.length === 0) return null
+  const items = visibleJobs.map((job): StatusToastGroupItem => ({
+    id: job.id,
+    title: job.summaryLabel,
+    statusLabel: statusLabel(job.status),
+    color: statusColor(job.status),
+    active: isActive(job),
+    // A running delete at 0% has an extent it has not moved through yet; showing
+    // that as a determinate bar draws an empty track that reads as stalled.
+    progress: isActive(job) && (job.progressPercent ?? 0) <= 0 ? null : job.progressPercent,
+    summary: `${job.targetName} - ${job.progressMessage}`,
+    error: job.error,
+    onDismiss: () => setDismissed((current) => new Set(current).add(job.id)),
+    dismissLabel: `Dismiss the delete notification for ${job.targetName}`
+  }))
+
+  if (items.length === 0) return null
 
   return (
-    <StatusToastStack>
-        {visibleJobs.map((job) => (
-          <StatusToast
-            key={job.id}
-            color={statusColor(job.status)}
-            role={job.status === 'failed' ? 'alert' : 'status'}
-            startDecorator={isActive(job) ? <CircularProgress size="sm" determinate={false} /> : <StatusDot status={job.status} />}
-          >
-            <Stack spacing={1}>
-              <Stack spacing={0.25} sx={{ flex: 1, minWidth: 0 }}>
-                <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-                  <Typography level="title-sm" noWrap sx={{ minWidth: 0, flex: 1 }}>
-                    {job.summaryLabel}
-                  </Typography>
-                  <Chip size="sm" variant="soft" color={statusColor(job.status)} sx={{ flexShrink: 0 }}>
-                    {statusLabel(job.status)}
-                  </Chip>
-                  <StatusToastDismissButton
-                    ariaLabel="Dismiss delete notification"
-                    onClick={() => setDismissed((current) => new Set(current).add(job.id))}
-                  />
-                </Stack>
-                <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                  {job.targetName} - {job.progressMessage}
-                </Typography>
-                {job.error && <Typography level="body-xs" color="danger" noWrap>{job.error}</Typography>}
-              </Stack>
-
-              {job.progressPercent != null && (
-                <LinearProgress
-                  determinate={!isActive(job) || job.progressPercent > 0}
-                  value={job.progressPercent}
-                  sx={{ '--LinearProgress-thickness': '6px' }}
-                />
-              )}
-            </Stack>
-          </StatusToast>
-        ))}
-    </StatusToastStack>
+    <StatusToastGroup
+      items={items}
+      wording={DELETE_WORDING}
+      onDismissAll={() => setDismissed((current) => {
+        const next = new Set(current)
+        for (const job of visibleJobs) next.add(job.id)
+        return next
+      })}
+      dismissAllLabel="Dismiss the delete notifications"
+    />
   )
 }
 
@@ -125,31 +118,4 @@ function statusColor(status: DeleteOperationJob['status']): 'neutral' | 'primary
     case 'failed':
       return 'danger'
   }
-}
-
-function statusGlow(status: DeleteOperationJob['status']): string {
-  switch (status) {
-    case 'queued':
-      return 'rgba(148, 163, 184, 0.24)'
-    case 'running':
-      return 'rgba(59, 130, 246, 0.28)'
-    case 'completed':
-      return 'rgba(34, 197, 94, 0.24)'
-    case 'failed':
-      return 'rgba(239, 68, 68, 0.24)'
-  }
-}
-
-function StatusDot({ status }: { status: DeleteOperationJob['status'] }) {
-  return (
-    <Box
-      sx={{
-        width: 10,
-        height: 10,
-        borderRadius: '50%',
-        backgroundColor: statusGlow(status).replace('0.24', '1').replace('0.28', '1'),
-        boxShadow: `0 0 0 4px ${statusGlow(status)}`
-      }}
-    />
-  )
 }

@@ -1,0 +1,251 @@
+/**
+ * Bambu Lab cloud relay: performs one named cloud call from the bridge's own network.
+ *
+ * Owns the HTTP half of the `bambu.cloud.request` RPC — URL construction, the client
+ * identity we present to Bambu, and the TOTP CSRF dance. It owns no policy: it does
+ * not decide whether a credential is dead, whether to retry, or what a status means.
+ * The API plugin (`apps/api/src/plugins/bambu-cloud-sync/`) owns all of that, because
+ * the bridge deploys separately and lags, so any rule kept here would need a bridge
+ * rollout to fix. This module hands back the raw status and body and nothing else.
+ *
+ * Why the bridge at all: on a multi-workspace deployment every workspace would
+ * otherwise reach Bambu from one shared egress IP, and Bambu's edge rate-limits and
+ * challenges per-IP — one busy workspace would degrade the feature for all of them.
+ * Relaying puts a household's traffic on that household's own connection.
+ *
+ * **Secrets.** The access token and (during sign-in only) the account password pass
+ * through here. Neither is persisted, and neither may be logged: `describeOperation`
+ * exists so failures can be traced by operation name without the payload.
+ */
+import {
+  BAMBU_CLOUD_BODY_TEXT_LIMIT,
+  BAMBU_SLICER_API_VERSION,
+  bambuCloudHosts,
+  type BridgeBambuCloudRequestParams,
+  type BridgeBambuCloudRequestResult
+} from '@printstream/shared'
+
+/**
+ * How we introduce ourselves to Bambu Lab. Honest identification, with a URL that
+ * makes the source unambiguous: this is an unofficial client and must never present
+ * itself as BambuStudio. (Bambu's May 2026 post on cloud access called out a fork for
+ * exactly that.) Our neutral `version` query parameter is the other half of the same
+ * posture — see `BAMBU_SLICER_API_VERSION`.
+ */
+const USER_AGENT = 'PrintStream/1.0 (+https://printstream.app)'
+
+/** Bambu's edge can be slow under challenge; well below the RPC timeout above us. */
+const REQUEST_TIMEOUT_MS = 20_000
+
+interface PreparedRequest {
+  url: string
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  body?: unknown
+  /** True when the call must not carry the bearer token (the sign-in endpoints). */
+  anonymous?: boolean
+}
+
+export async function performBambuCloudRequest(
+  params: BridgeBambuCloudRequestParams,
+  signal?: AbortSignal
+): Promise<BridgeBambuCloudRequestResult> {
+  const hosts = bambuCloudHosts(params.region)
+
+  // TOTP is the one operation that is not a plain call: it lives on the web origin,
+  // which is CSRF-protected by double submit, so it needs a token fetched first.
+  if (params.request.operation === 'verifyTotp') {
+    return await performTotpVerification(hosts.web, params.request.tfaKey, params.request.code, signal)
+  }
+
+  const prepared = prepareRequest(hosts.api, { ...params, request: params.request })
+  return await executeRequest(prepared, params.accessToken, {}, signal)
+}
+
+/**
+ * Everything except `verifyTotp`, which `performBambuCloudRequest` handles before it
+ * gets here (it targets the web origin and needs a CSRF token, so it is not a plain
+ * call). Stating that in the type rather than leaving it to a comment is what lets the
+ * switch below assert exhaustiveness.
+ */
+type PlainBambuCloudRequestParams = BridgeBambuCloudRequestParams & {
+  request: Exclude<BridgeBambuCloudRequestParams['request'], { operation: 'verifyTotp' }>
+}
+
+function prepareRequest(apiHost: string, params: PlainBambuCloudRequestParams): PreparedRequest {
+  const settingBase = `https://${apiHost}/v1/iot-service/api/slicer/setting`
+  // Bambu rejects a `slicer/setting` call with no `version` (HTTP 400) and one whose
+  // format is not XX.YY.ZZ.WW (HTTP 422), on every verb including DELETE.
+  const versionQuery = `?version=${encodeURIComponent(BAMBU_SLICER_API_VERSION)}`
+  const loginUrl = `https://${apiHost}/v1/user-service/user/login`
+
+  switch (params.request.operation) {
+    case 'login':
+      return {
+        url: loginUrl,
+        method: 'POST',
+        anonymous: true,
+        body: { account: params.request.account, password: params.request.password }
+      }
+    case 'verifyEmailCode':
+      // Same endpoint as login: sending `code` instead of `password` is what makes it
+      // the second leg rather than a fresh attempt.
+      return {
+        url: loginUrl,
+        method: 'POST',
+        anonymous: true,
+        body: { account: params.request.account, code: params.request.code }
+      }
+    case 'listSettings':
+      return { url: `${settingBase}${versionQuery}`, method: 'GET' }
+    case 'getSetting':
+      return { url: `${settingBase}/${encodeURIComponent(params.request.settingId)}${versionQuery}`, method: 'GET' }
+    case 'createSetting':
+      return { url: `${settingBase}${versionQuery}`, method: 'POST', body: params.request.payload }
+    case 'patchSetting':
+      // PATCH, not PUT: PUT answers 405 here, which is why an update is widely
+      // (and wrongly) believed to require delete-then-recreate.
+      return {
+        url: `${settingBase}/${encodeURIComponent(params.request.settingId)}${versionQuery}`,
+        method: 'PATCH',
+        body: params.request.payload
+      }
+    case 'deleteSetting':
+      return { url: `${settingBase}/${encodeURIComponent(params.request.settingId)}${versionQuery}`, method: 'DELETE' }
+    case 'refreshToken':
+      // Trades the refresh token for a new credential. Anonymous: the point is that the
+      // bearer token it would carry is the expired one.
+      return {
+        url: `https://${apiHost}/v1/user-service/user/refreshtoken`,
+        method: 'POST',
+        body: { refreshToken: params.request.refreshToken },
+        anonymous: true
+      }
+    default: {
+      // Compile-time exhaustiveness: this file and the API's `transport.ts` each switch
+      // over the same operation union in two different processes with independent deploy
+      // cadences, so adding an operation to the shared schema without updating BOTH would
+      // otherwise only surface at runtime, on whichever path happened to be taken. This
+      // makes the omission a typecheck failure instead.
+      const unhandled: never = params.request
+      void unhandled
+      throw new Error(`Unsupported Bambu cloud operation: ${describeOperation(params)}`)
+    }
+  }
+}
+
+/**
+ * TOTP sign-in, which does not go where everything else goes.
+ *
+ * The code is verified at `bambulab.com/api/sign-in/tfa` — the WEB origin, not the API
+ * host — and that origin enforces double-submit CSRF: without the `bbl_csrf_token`
+ * cookie the request is refused before the code is even read, and with the cookie but
+ * no matching header it is refused as `missing_header`. Only `GET /api/csrf` mints
+ * one. A CSRF rejection therefore looks nothing like a wrong code and must not be
+ * reported as one; the API side distinguishes them from the body.
+ */
+async function performTotpVerification(
+  webHost: string,
+  tfaKey: string,
+  code: string,
+  signal?: AbortSignal
+): Promise<BridgeBambuCloudRequestResult> {
+  const csrf = await fetchCsrfToken(webHost, signal)
+  if (!csrf) {
+    // Surfaced as a normal failed response rather than a thrown error so the API can
+    // tell the user their code was never the problem.
+    return {
+      status: 0,
+      body: null,
+      bodyText: 'Could not obtain a security token from Bambu Cloud (GET /api/csrf returned no bbl_csrf_token).'
+    }
+  }
+
+  return await executeRequest(
+    { url: `https://${webHost}/api/sign-in/tfa`, method: 'POST', anonymous: true, body: { tfaKey, tfaCode: code } },
+    undefined,
+    { 'x-bbl-csrf-token': csrf.token, cookie: csrf.cookie },
+    signal
+  )
+}
+
+/**
+ * Mints a `bbl_csrf_token` and returns both halves of the double submit.
+ *
+ * Fetched per verification rather than cached: a stale cookie that disagrees with the
+ * header it is echoed in fails the same way a missing one does, and this runs at most
+ * once per sign-in.
+ */
+async function fetchCsrfToken(webHost: string, signal?: AbortSignal): Promise<{ token: string; cookie: string } | null> {
+  try {
+    const response = await fetchWithTimeout(`https://${webHost}/api/csrf`, {
+      method: 'GET',
+      headers: { 'user-agent': USER_AGENT, accept: 'application/json' }
+    }, signal)
+    const setCookies = readSetCookies(response)
+    for (const raw of setCookies) {
+      const [pair] = raw.split(';')
+      const separator = pair?.indexOf('=') ?? -1
+      if (!pair || separator < 0) continue
+      if (pair.slice(0, separator).trim() !== 'bbl_csrf_token') continue
+      const token = pair.slice(separator + 1).trim()
+      if (token) return { token, cookie: `bbl_csrf_token=${token}` }
+    }
+    return null
+  } catch (error) {
+    // The caller turns this into "could not obtain a security token", which tells the user
+    // their code was not the problem but says nothing about why. Log the cause so a failing
+    // TOTP sign-in is diagnosable without reproducing it.
+    console.warn(`[bambu-cloud-relay] could not fetch the CSRF token: ${(error as Error).message}`)
+    return null
+  }
+}
+
+function readSetCookies(response: Response): string[] {
+  const headers = response.headers as Headers & { getSetCookie?: () => string[] }
+  if (typeof headers.getSetCookie === 'function') return headers.getSetCookie()
+  const single = response.headers.get('set-cookie')
+  return single ? [single] : []
+}
+
+async function executeRequest(
+  prepared: PreparedRequest,
+  accessToken: string | undefined,
+  extraHeaders: Record<string, string>,
+  signal?: AbortSignal
+): Promise<BridgeBambuCloudRequestResult> {
+  const headers: Record<string, string> = {
+    'user-agent': USER_AGENT,
+    accept: 'application/json',
+    ...extraHeaders
+  }
+  if (prepared.body !== undefined) headers['content-type'] = 'application/json'
+  if (accessToken && !prepared.anonymous) headers.authorization = `Bearer ${accessToken}`
+
+  const response = await fetchWithTimeout(prepared.url, {
+    method: prepared.method,
+    headers,
+    ...(prepared.body === undefined ? {} : { body: JSON.stringify(prepared.body) })
+  }, signal)
+
+  const text = await response.text()
+  if (!text.trim()) return { status: response.status, body: null }
+  try {
+    return { status: response.status, body: JSON.parse(text) as unknown }
+  } catch {
+    // Not JSON: a Cloudflare interstitial, an edge error page, or a plain-text
+    // validation message. Keep a bounded excerpt so it is diagnosable from a log
+    // without replaying the request; the API decides what it means.
+    return { status: response.status, body: null, bodyText: text.slice(0, BAMBU_CLOUD_BODY_TEXT_LIMIT) }
+  }
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  const composed = signal ? AbortSignal.any([signal, timeout]) : timeout
+  return await fetch(url, { ...init, signal: composed })
+}
+
+/** Operation name only — the params carry the account password and the access token. */
+export function describeOperation(params: BridgeBambuCloudRequestParams): string {
+  return `${params.request.operation} (${params.region})`
+}

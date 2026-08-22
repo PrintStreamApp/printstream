@@ -330,6 +330,9 @@ test('home-assistant skips workspace-scoped websocket events when the plugin is 
     },
     registerAuthProvider() {
       return () => {}
+    },
+    registerBambuAccountResolver() {
+      return () => {}
     }
   })
 

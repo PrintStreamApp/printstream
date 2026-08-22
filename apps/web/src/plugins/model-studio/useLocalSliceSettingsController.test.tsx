@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
-import { bridgeLibraryThreeMfIndexSchema, type SlicerFamily, type SlicingPresetSummary } from '@printstream/shared'
+import { bridgeLibraryThreeMfIndexSchema, buildBuiltinSlicingPresetId, type SlicerFamily, type SlicingPresetSummary } from '@printstream/shared'
 import { installJsdomGlobals } from '../../test-utils/jsdom'
 import type { ClientThreeMfProject } from './lib/clientThreeMfProject'
 
@@ -9,6 +9,7 @@ const dom = installJsdomGlobals()
 const React = (await import('react')).default
 const { act, cleanup, render } = await import('@testing-library/react')
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+const { publicSlicerTargetsQueryOptions, publicSlicingPresetsQueryOptions } = await import('./lib/publicSlicingCatalog')
 const { useLocalSliceSettingsController } = await import('./useLocalSliceSettingsController')
 
 afterEach(() => { cleanup() })
@@ -27,19 +28,39 @@ function fakeProject(): ClientThreeMfProject {
   return { fileName: 'Widget.3mf', sizeBytes: 4096, index } as ClientThreeMfProject
 }
 
+/**
+ * Ids come from the real builder, not a `builtin:kind:name` template: a builtin id base64url-encodes
+ * its name, so a hand-written one fails `slicingPresetProvenance` and every "is this a builtin?"
+ * branch silently becomes unreachable — which is how the baseline-note test below passed vacuously.
+ */
 const profile = (kind: SlicingPresetSummary['kind'], name: string, extra: Partial<SlicingPresetSummary> = {}): SlicingPresetSummary => ({
-  id: `builtin:${kind}:${name}`, source: 'builtin', kind, name, printerModels: ['X1C'], ...extra
+  id: buildBuiltinSlicingPresetId(kind, name), source: 'builtin', kind, name, printerModels: ['X1C'], ...extra
 } as SlicingPresetSummary)
+
+const TARGET_ID = 't1'
+
+/**
+ * Seed the anonymous catalogue the controller reads, keyed through the query-options builders
+ * rather than by literal.
+ *
+ * What that buys is NOT detection of a key rename — both sides move together, by design. It is that
+ * a seed can never point at a key nobody reads: with literals, a consumer drifting off the builder
+ * left these tests green while the public editor's sidebar rendered empty. The literal keys
+ * themselves are pinned once, in `lib/publicSlicingCatalog.test.ts`.
+ */
+function seedCatalogue(client: InstanceType<typeof QueryClient>, profiles: SlicingPresetSummary[]) {
+  client.setQueryData(publicSlicerTargetsQueryOptions().queryKey, {
+    configured: true,
+    defaultTargetId: TARGET_ID,
+    targets: [{ id: TARGET_ID, label: 'Bambu Studio 2.1', family: 'bambustudio' as SlicerFamily, version: '02.01.00.00', slicerName: 'Bambu Studio 2.1', supportsEstimateModeMachineSwitch: false, isDefault: true, prerelease: false }]
+  })
+  client.setQueryData(publicSlicingPresetsQueryOptions(TARGET_ID).queryKey, profiles)
+}
 
 /** A query client pre-seeded with the anonymous catalogue, so the hook never hits the network. */
 function seededClient() {
   const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity, retry: false } } })
-  client.setQueryData(['public-slicer-targets'], {
-    configured: true,
-    defaultTargetId: 't1',
-    targets: [{ id: 't1', label: 'Bambu Studio 2.1', family: 'bambustudio' as SlicerFamily, version: '02.01.00.00', slicerName: 'Bambu Studio 2.1', supportsEstimateModeMachineSwitch: false, isDefault: true, prerelease: false }]
-  })
-  client.setQueryData(['public-slicing-profiles', 't1'], [
+  seedCatalogue(client, [
     profile('machine', 'Bambu Lab X1 Carbon 0.4 nozzle', { defaultProcessProfile: '0.20mm Standard @BBL X1C' }),
     profile('process', '0.20mm Standard @BBL X1C', { layerHeight: 0.2 }),
     profile('filament', 'Bambu PLA Basic @BBL X1C', { filamentType: 'PLA' })
@@ -89,12 +110,7 @@ test('the badge resolver is withheld until the built-in catalogue is loaded', as
   // catalogue caches a wrong (low) count for its staleTime and never re-runs. The raw resolver used
   // by the tune dialogs (opened later, catalogue always ready) stays available regardless.
   const client = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity, retry: false } } })
-  client.setQueryData(['public-slicer-targets'], {
-    configured: true,
-    defaultTargetId: 't1',
-    targets: [{ id: 't1', label: 'Bambu Studio 2.1', family: 'bambustudio' as SlicerFamily, version: '02.01.00.00', slicerName: 'Bambu Studio 2.1', supportsEstimateModeMachineSwitch: false, isDefault: true, prerelease: false }]
-  })
-  client.setQueryData(['public-slicing-profiles', 't1'], []) // catalogue not yet loaded
+  seedCatalogue(client, []) // catalogue not yet loaded
   let result: ReturnType<typeof useLocalSliceSettingsController> | null = null
   // Stable across renders, like the real host's project prop — an inline fakeProject() would
   // change identity every render, which no real caller does.
@@ -118,6 +134,12 @@ test('the project process preset resolves from the catalogue', async () => {
 test('material options derive from the compatible filament presets', async () => {
   const get = await renderController()
   assert.ok(get().materialOptions.length > 0, 'the filament preset becomes a material option')
+  // Name the CATALOGUE preset explicitly: the project's own filament already satisfies the count
+  // above, so a controller that stopped reading the seeded catalogue would still pass that check.
+  assert.ok(
+    get().materialOptions.some((option) => option.id.includes(buildBuiltinSlicingPresetId('filament', 'Bambu PLA Basic @BBL X1C'))),
+    'the seeded builtin filament preset reaches the options'
+  )
 })
 
 test('it exposes the target printer model for the bed (separate from the controller)', async () => {

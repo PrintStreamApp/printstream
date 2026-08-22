@@ -1,0 +1,51 @@
+/**
+ * Who answers the low-filament question for a queued dispatch.
+ *
+ * Owns one rule: `allowInsufficientFilament` is a CONSENT flag, so it must be
+ * granted deliberately by a named origin and never fall out of an omitted
+ * argument. It used to be a defaulted parameter on the dispatch helper, which
+ * meant the unattended sweep's consent was what every caller got for free.
+ *
+ * Contract: every path that builds a queue dispatch states its origin here, and
+ * only `person-start` can withhold. Getting it wrong is invisible until a print
+ * runs dry or a queue stalls, which is why the three answers live together
+ * instead of as three booleans at three call sites.
+ *
+ * Counterpart: `assertSufficientFilament` in
+ * `apps/api/src/lib/print-filament-compatibility.ts` is what this consents to,
+ * and `QueueStartDialog` is where a person's answer comes from.
+ */
+
+export type QueueDispatchOrigin =
+  /** The unattended pass over idle printers, with nobody present to answer. */
+  | 'unattended-sweep'
+  /** Someone pressed Start and answered the dialog's confirmation themselves. */
+  | 'person-start'
+  /** The "Check" dry run, which starts nothing and reports what a Start would meet. */
+  | 'dry-run'
+
+/**
+ * Whether this dispatch may pass the low-filament guard without a person
+ * answering for it.
+ *
+ * - `unattended-sweep` consents. Holding the item instead would stall a queue on
+ *   an ESTIMATE (the printer reports only a percent, and only for tagged
+ *   spools) to avoid something the printer already handles by pausing when a
+ *   slot runs dry.
+ * - `person-start` consents only as far as `personConfirmed` says. Their answer
+ *   is the whole point of the dialog's confirmation.
+ * - `dry-run` WITHHOLDS, so the check actually runs and the dry run can see what
+ *   it found. It must not then report that as a failure: neither real path fails
+ *   on it (the sweep consents, and a person gets a confirmation to tick), so the
+ *   caller downgrades an `InsufficientFilamentError` to an advisory. Consenting
+ *   here instead would make the check silent about the one thing it was pressed
+ *   for; reporting it as a failure is what read as "Start would fail: Not enough
+ *   filament loaded for this print" on an item the queue starts happily.
+ *
+ * @param personConfirmed read only for `person-start`; ignored otherwise, since
+ *   no person is present on the other two paths.
+ */
+export function allowsInsufficientFilament(origin: QueueDispatchOrigin, personConfirmed = false): boolean {
+  if (origin === 'unattended-sweep') return true
+  return origin === 'person-start' ? personConfirmed : false
+}

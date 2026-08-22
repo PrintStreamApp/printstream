@@ -1,17 +1,18 @@
 /**
  * Process (quality) settings editor dialog.
  *
- * Renders the Bambu-faithful process settings catalog (generated from
- * BambuStudio source) page-by-page, applying the same conditional
- * visibility/enable rules and value-coercion validation that BambuStudio's
- * Process tab uses. The user edits values against a resolved base config; the
- * dialog emits the sparse override map (changed keys) back to the slice dialog
- * and can optionally persist the result as a reusable custom process preset.
+ * Owns the Bambu-faithful process VALUE SPACE: resolving a preset's base config, BambuStudio's
+ * conditional visibility/enable rules, its value-coercion clamps, and what counts as changed
+ * against a preset, a project's baked overrides, or an object's inherited config. The chrome it
+ * renders inside — tabs, search, "Changed only", the footer — belongs to
+ * `settings/SettingsCatalogDialog.tsx`, which the filament and machine editors share; this dialog
+ * reaches it through a {@link SettingsCatalogAdapter}. The user edits values against the resolved
+ * base config; the dialog emits the sparse override map (changed keys) back to the slice dialog and
+ * can optionally persist the result as a reusable custom process preset.
  *
  * The catalog's `develop`-tier options are hidden unless developer mode is on
  * (`useEffectiveSlicerDeveloperMode` — the workspace default from the Slicing
- * settings page, optionally overridden per device); see
- * `isProcessOptionVisibleInMode`.
+ * settings page, optionally overridden per device); the shell applies that gate.
  *
  * Per-object mode (`baseOverlay` present) additionally supports BULK editing — one dialog for a
  * multi-selection of objects or parts (`initialOverridesByMember`): keys the members disagree on
@@ -19,14 +20,7 @@
  * live in `lib/processBulkOverrides.ts`.
  */
 import { useEffect, useMemo, useState } from 'react'
-import {
-  Alert, Box, Button, Checkbox, CircularProgress, DialogActions, Divider, FormControl, FormLabel,
-  IconButton, Input, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography
-} from '@mui/joy'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
-import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
+import { FormControl, FormLabel, Stack, Typography } from '@mui/joy'
 import {
   applyProcessConfigDefaults,
   applySupportRecommendationChanges,
@@ -35,27 +29,29 @@ import {
   defaultProcessVisibilityContext,
   diffProcessConfig,
   getProcessFieldState,
-  isProcessOptionVisibleInMode,
   processConfigValuesEqual,
   processSettingsCatalog,
   recommendSupportSettingsForInterfaceFilament,
   validateProcessConfig,
-  type ProcessConfig,
   type ProcessSettingOption,
   type ProcessSettingOverrides,
   type ProcessVisibilityContext,
+  describeSettingsBaseline,
+  type ProcessConfig,
   type ResolveProcessConfigResponse,
+  type SettingsBaselineOrigin,
   type SlicingPresetSummary
 } from '@printstream/shared'
 import { apiFetch } from '../lib/apiClient'
 import { collectBulkOverridesResult, summarizeBulkOverrides } from '../lib/processBulkOverrides'
 import { useEffectiveSlicerDeveloperMode } from '../lib/slicerDeveloperMode'
-import { BackAwareModal } from './BackAwareModal'
-import { DialogSection } from './DialogSection'
-import { ScrollableDialogBody, ScrollableModalDialog } from './ScrollableDialog'
 import { SlicingPresetAutocomplete } from './library/SlicingPresetAutocomplete'
 import { usePromptDialog } from './PromptDialogProvider'
-import { SettingValueField, type SettingFilamentChoice } from './settings/SettingValueField'
+import { SettingsCatalogDialog } from './settings/SettingsCatalogDialog'
+import { SettingsBaselineNote } from './settings/SettingsBaselineNote'
+import { resolveWorkspaceProcessConfig } from './workspaceProcessResolver'
+import type { SettingsCatalogAdapter } from './settings/settingsCatalogAdapter'
+import type { SettingFilamentChoice } from './settings/SettingValueField'
 
 export interface ProcessSettingsDialogProps {
   open: boolean
@@ -131,12 +127,6 @@ export interface ProcessSettingsDialogProps {
    */
   resolveConfig?: ProcessConfigResolver
   /**
-   * Optional caveat shown under the profile picker about what the "changed" markers are relative to.
-   * The public editor sets it for a project that used a workspace CUSTOM preset (unavailable there),
-   * where changes are shown against the standard preset it's based on rather than the custom one.
-   */
-  baselineNote?: string
-  /**
    * Omitted for `applyScope: 'preset'`, which has nothing to apply to.
    *
    * `meta.clearedKeys` names keys the user RESET (relevant to per-object bulk editing, where the
@@ -177,27 +167,14 @@ function formatRecommendedSettingValue(option: ProcessSettingOption | undefined,
   return option.sidetext ? `${value} ${option.sidetext}` : value
 }
 
-type ResolveResponse = {
-  config: Record<string, string | string[]>
-  baseConfig?: Record<string, string | string[]>
-  /** The baseline preset's own parent — see `ResolveProcessConfigResponse`. */
-  parentConfig?: Record<string, string | string[]>
-  overriddenKeys?: string[]
-  /** Whether the 3MF declared a changed-from-system record — see `ResolveProcessConfigResponse`. */
-  declaresOverrides?: boolean
-  /** Whether `baseConfig` is a real resolved preset — see `ResolveProcessConfigResponse`. */
-  baselineResolved?: boolean
-}
-
 export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps): JSX.Element {
-  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, initialOverridesByMember, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, resolveConfig, baselineNote, onApply } = props
+  const { open, onClose, slicerTargetId, processProfileId, processProfileName, sourceFileId, initialOverrides, initialOverridesByMember, profileOptions, onProfileChange, allowedKeys, baseOverlay, titlePrefix, filamentChoices, applyScope = 'slice', canEditOriginal, resolveConfig, onApply } = props
   const allowedKeySet = useMemo(() => (allowedKeys ? new Set(allowedKeys) : null), [allowedKeys])
   const isKeyAllowed = (key: string): boolean => allowedKeySet === null || allowedKeySet.has(key)
   // Reveal BambuStudio's develop-tier options only when developer mode is on (workspace
-  // default, optionally overridden per device — see useEffectiveSlicerDeveloperMode).
+  // default, optionally overridden per device — see useEffectiveSlicerDeveloperMode). The shell
+  // applies the tier gate itself; this only tells it which mode it is in.
   const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
-  const isOptionVisibleInMode = (option: ProcessSettingOption): boolean =>
-    isProcessOptionVisibleInMode(option, showDeveloperOptions)
   // `baseConfig` is the preset baseline (reset target); `sliceBase` is the effective config the
   // slicer merges overrides onto (equal to baseConfig for installed presets, but the 3MF's
   // already-overridden config for a project profile). `bakedKeys` marks 3MF overrides whose
@@ -221,6 +198,12 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
    * declared record is then the only evidence of a change there is.
    */
   const [baselineResolved, setBaselineResolved] = useState(true)
+  /**
+   * What the change markers ended up being measured against, straight from the resolver. Held here
+   * rather than taken as a prop so the caveat can never disagree with the config it describes — a
+   * host computing it separately answered per PRESET while the resolver answers per REQUEST.
+   */
+  const [baselineOrigin, setBaselineOrigin] = useState<SettingsBaselineOrigin | undefined>(undefined)
   const [config, setConfig] = useState<ProcessConfig>({})
   // PER-OBJECT mode (baseOverlay present): the keys EXPLICITLY set as per-object overrides, tracked
   // apart from value equality. BambuStudio lists a per-object setting as "set" whenever it is present
@@ -240,11 +223,7 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [corrections, setCorrections] = useState<string[]>([])
-  const [activePage, setActivePage] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [query, setQuery] = useState('')
-  const [showChangedOnly, setShowChangedOnly] = useState(false)
-  const normalizedQuery = query.trim().toLowerCase()
   const { confirm, promptText } = usePromptDialog()
 
   // Callers pass `visibilityContext` as a fresh object literal each render (e.g. the editor:
@@ -272,16 +251,17 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     setLoading(true)
     setError(null)
     setBaseConfig(null)
-    const resolve = resolveConfig
-      ? resolveConfig({ processProfileId, targetId: slicerTargetId || null, sourceFileId: sourceFileId || null })
-      : apiFetch<ResolveResponse>('/api/slicing/profiles/resolve-process', {
-          method: 'POST',
-          body: { processProfileId, targetId: slicerTargetId || null, sourceFileId: sourceFileId || null }
-        })
+    // Same shape as the filament dialog's default branch, and it is what type-checks that the
+    // workspace resolver still satisfies the seam a host may replace.
+    const resolve = (resolveConfig ?? resolveWorkspaceProcessConfig)({
+      processProfileId,
+      targetId: slicerTargetId || null,
+      sourceFileId: sourceFileId || null
+    })
     resolve
       .then((response) => {
         if (cancelled) return
-        const effective = applyProcessConfigDefaults(response.config as ProcessConfig)
+        const effective = applyProcessConfigDefaults(response.config)
         if (baseOverlay) {
           // Per-object: the object inherits the global effective config (profile + global
           // overrides); that is both the slice base and the reset target.
@@ -305,15 +285,16 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
           setMixedKeys(seed.mixedKeys)
           setConfig({ ...globalEffective, ...seed.uniformOverrides })
         } else {
-          const baseline = applyProcessConfigDefaults((response.baseConfig ?? response.config) as ProcessConfig)
+          const baseline = applyProcessConfigDefaults(response.baseConfig)
           setSliceBase(effective)
           setBaseConfig(baseline)
           setParentBaseline(response.parentConfig
-            ? { ...baseline, ...applyProcessConfigDefaults(response.parentConfig as ProcessConfig) }
+            ? { ...baseline, ...applyProcessConfigDefaults(response.parentConfig) }
             : null)
-          setBakedKeys(new Set(response.overriddenKeys ?? []))
+          setBakedKeys(new Set(response.overriddenKeys))
           setDeclaresOverrides(response.declaresOverrides === true)
           setBaselineResolved(response.baselineResolved !== false)
+          setBaselineOrigin(response.baselineOrigin)
           setExplicitKeys(new Set())
           setMixedKeys(new Set())
           setInitialSetKeys(new Set())
@@ -411,47 +392,13 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     return null
   }
 
-  // Per-page count of the settings actually SHOWN under the active filters — the number in the tab
-  // label. Zero (and hidden) when neither filter is on. It applies the same gates the rows render
-  // behind (mode + conditional visibility), then the search match and/or the changed filter, so
-  // searching WHILE "Changed only" is checked narrows the count further (the intersection).
-  const filtersActive = Boolean(normalizedQuery) || showChangedOnly
-  const pageShownCounts = useMemo(() => processSettingsCatalog.pages.map((page) => {
-    if (!filtersActive) return 0
-    let count = 0
-    for (const group of page.groups) {
-      for (const line of group.lines) {
-        for (const key of line.keys) {
-          const option = processSettingsCatalog.options[key]
-          if (!option || !isOptionVisibleInMode(option) || !isKeyAllowed(key)) continue
-          if (!getProcessFieldState(fieldStates.states, key).visible) continue
-          if (normalizedQuery && !processKeyMatchesQuery(key, normalizedQuery)) continue
-          if (showChangedOnly && !isModified(key)) continue
-          count += 1
-        }
-      }
-    }
-    return count
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [filtersActive, normalizedQuery, showChangedOnly, fieldStates, allowedKeySet, config, baseConfig, bakedKeys, declaresOverrides, sliceBase, explicitKeys])
-
-  /** Whether each page has any visible, allowed setting — pages with none are hidden entirely
-   * (e.g. Speed when editing the restricted per-object subset). Independent of the search query. */
-  const pageHasContent = useMemo(() => processSettingsCatalog.pages.map((page) =>
-    page.groups.some((group) => group.lines.some((line) => line.keys.some((key) => {
-      const option = processSettingsCatalog.options[key]
-      if (!option || !isOptionVisibleInMode(option) || !isKeyAllowed(key) || !getProcessFieldState(fieldStates.states, key).visible) return false
-      return !showChangedOnly || isModified(key)
-    })))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [fieldStates, allowedKeySet, showChangedOnly, config, baseConfig, bakedKeys, declaresOverrides, sliceBase, explicitKeys])
-
-  // Keep the active tab on a page that still has content.
-  useEffect(() => {
-    if (pageHasContent[activePage]) return
-    const firstVisible = pageHasContent.findIndex(Boolean)
-    if (firstVisible >= 0 && firstVisible !== activePage) setActivePage(firstVisible)
-  }, [pageHasContent, activePage])
+  /**
+   * Whether a key renders at all: allowed by the per-object subset, and not hidden by the
+   * conditional engine (a setting whose controlling toggle is off). Developer-tier gating and the
+   * search/changed filters are the shell's job — this is the part only this dialog can answer.
+   */
+  const isKeyVisible = (key: string): boolean =>
+    isKeyAllowed(key) && getProcessFieldState(fieldStates.states, key).visible
 
   const commit = (next: ProcessConfig) => {
     // Apply BambuStudio's deterministic value clamps after each edit.
@@ -481,11 +428,6 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
       next.delete(key)
       return next
     })
-  }
-
-  const setValue = (key: string, value: string | string[]) => {
-    markExplicit(key)
-    commit({ ...config, [key]: value })
   }
 
   const setScalar = (key: string, scalar: string) => {
@@ -594,16 +536,6 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     return isValueChanged(key)
   }
 
-  // Count/flag ONLY keys the user can actually see and reset — the same gates the rows render
-  // behind (`isOptionVisibleInMode` + the CONDITIONAL `getProcessFieldState(...).visible`, which
-  // hides a setting whose controlling toggle is off). Without the conditional gate a modified but
-  // hidden key lit its tab and the "*" with no changed row to show for it.
-  const isModifiedAndVisible = (key: string): boolean => {
-    const option = processSettingsCatalog.options[key]
-    if (!option || !isOptionVisibleInMode(option) || !isKeyAllowed(key)) return false
-    if (!getProcessFieldState(fieldStates.states, key).visible) return false
-    return isModified(key)
-  }
   /**
    * Differs from what is SAVED — an edit made in this session, as opposed to an override the preset
    * already carries relative to its parent. BambuStudio colours only the former (Tab.cpp
@@ -612,25 +544,6 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
    */
   const isUnsaved = (key: string): boolean =>
     !processConfigValuesEqual(sliceBase[key], config[key], processSettingsCatalog.options[key])
-
-  const modifiedKeyCount = useMemo(() => {
-    if (!baseConfig) return 0
-    return Object.keys(processSettingsCatalog.options).filter((key) => isModifiedAndVisible(key)).length
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseConfig, config, bakedKeys, sliceBase, allowedKeySet, fieldStates, explicitKeys])
-
-  const modifiedPages = useMemo(() => {
-    if (!baseConfig) return new Set<number>()
-    const result = new Set<number>()
-    processSettingsCatalog.pages.forEach((page, index) => {
-      const anyModified = page.groups.some((group) =>
-        group.lines.some((line) => line.keys.some((key) => isModifiedAndVisible(key)))
-      )
-      if (anyModified) result.add(index)
-    })
-    return result
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseConfig, config, bakedKeys, sliceBase, allowedKeySet, fieldStates, explicitKeys])
 
   /**
    * The overrides to emit. Per-object mode preserves EVERY explicitly-set key (even one whose value
@@ -706,366 +619,119 @@ export default function ProcessSettingsDialog(props: ProcessSettingsDialogProps)
     await savePreset(processProfileName, true)
   }
 
-  const pages = processSettingsCatalog.pages
+  /**
+   * Everything the shared shell needs that only this dialog can answer: how to read and write a
+   * value (element 0 of a per-variant vector, as BambuStudio's process tab does), and what each of
+   * the change states means here.
+   */
+  const adapter: SettingsCatalogAdapter = {
+    columnsFor: (key) => {
+      const option = processSettingsCatalog.options[key]
+      if (!option) return []
+      return [{
+        id: key,
+        settingKey: key,
+        value: accessor.str(key),
+        enabled: getProcessFieldState(fieldStates.states, key).enabled,
+        enumRestriction: fieldStates.enumRestrictions.get(key),
+        mixed: mixedKeys.has(key),
+        onChange: (value) => setScalar(key, value)
+      }]
+    },
+    isModified,
+    isUnsaved,
+    // The FIELD marks any value differing from the preset baseline, while the LINE marks only what
+    // this session changed relative to the effective slice base — a 3MF's baked overrides sit
+    // between the two, and collapsing them would either hide a real deviation or colour one the
+    // user did not make.
+    isFieldChanged: isValueChanged,
+    isPresetOverride,
+    canReset,
+    onReset: resetKey,
+    originalOf,
+    // The per-object "set, but matching what it inherits" state: an explicit pin with no value
+    // difference to show, which is still resettable. Three flavours behind the one dot, each
+    // naming what reset will do.
+    lineMarker: (keys) => {
+      if (!perObjectMode) return null
+      if (!keys.some((key) => isModified(key))) return null
+      if (keys.some((key) => isValueChanged(key))) return null
+      if (keys.some((key) => mixedKeys.has(key))) {
+        return { tooltip: 'Set to different values across the selection — edit to apply one value to everything, or reset to clear it everywhere' }
+      }
+      return {
+        tooltip: bulkSelection
+          ? 'Set on every selected item (matches the inherited value) — reset to inherit'
+          : 'Set for this object (matches the inherited value) — reset to inherit'
+      }
+    }
+  }
+
+  const header = (
+    <>
+      {profileOptions && profileOptions.length > 1 && onProfileChange && (
+        <FormControl size="sm" sx={{ mt: 1 }}>
+          <FormLabel>Preset</FormLabel>
+          {/* Same grouped/sorted picker as the slice panel's process dropdown, so the two
+              surfaces present the catalog identically (groups, ordering, tooltips). */}
+          <SlicingPresetAutocomplete
+            profiles={profileOptions}
+            value={profileOptions.find((profile) => profile.id === processProfileId) ?? null}
+            placeholder="Choose a process preset"
+            ariaLabel="Process preset"
+            onChange={(profile) => {
+              if (profile && profile.id !== processProfileId && baseConfig) {
+                // Carry modifications (vs the current preset baseline) onto the new profile.
+                onProfileChange(profile.id, diffProcessConfig(baseConfig, config))
+              }
+            }}
+          />
+        </FormControl>
+      )}
+      {(() => {
+        // Rendered from the resolver's own report, so the caveat and the config it describes can
+        // never disagree.
+        const note = loading || error ? null : describeSettingsBaseline(baselineOrigin, 'process')
+        return note ? <SettingsBaselineNote note={note} /> : null
+      })()}
+    </>
+  )
 
   return (
-    <BackAwareModal open={open} onClose={onClose}>
-      <ScrollableModalDialog sx={{ maxWidth: 720, width: '100%' }}>
-        <Typography level="h4">{titlePrefix ?? 'Process settings'} — {modifiedKeyCount > 0 ? '*' : ''}{processProfileName}</Typography>
-        {profileOptions && profileOptions.length > 1 && onProfileChange && (
-          <FormControl size="sm" sx={{ mt: 1 }}>
-            <FormLabel>Preset</FormLabel>
-            {/* Same grouped/sorted picker as the slice panel's process dropdown, so the two
-                surfaces present the catalog identically (groups, ordering, tooltips). */}
-            <SlicingPresetAutocomplete
-              profiles={profileOptions}
-              value={profileOptions.find((profile) => profile.id === processProfileId) ?? null}
-              placeholder="Choose a process preset"
-              ariaLabel="Process preset"
-              onChange={(profile) => {
-                if (profile && profile.id !== processProfileId && baseConfig) {
-                  // Carry modifications (vs the current preset baseline) onto the new profile.
-                  onProfileChange(profile.id, diffProcessConfig(baseConfig, config))
-                }
-              }}
-            />
-          </FormControl>
-        )}
-        {baselineNote && !loading && !error && (
-          <Alert color="neutral" variant="soft" size="sm" startDecorator={<InfoOutlinedIcon fontSize="small" />} sx={{ mt: 1 }}>
-            <Typography level="body-xs">{baselineNote}</Typography>
-          </Alert>
-        )}
-        {loading && (
-          <ScrollableDialogBody sx={{ mt: 1, px: 0 }}>
-            <Stack alignItems="center" justifyContent="center" sx={{ py: 6 }} spacing={1}>
-              <CircularProgress />
-              <Typography level="body-sm">Loading process settings…</Typography>
-            </Stack>
-          </ScrollableDialogBody>
-        )}
-        {!loading && error && (
-          <ScrollableDialogBody sx={{ mt: 1, px: 0 }}>
-            <Alert color="danger" sx={{ m: 2 }}>{error}</Alert>
-          </ScrollableDialogBody>
-        )}
-        {!loading && !error && baseConfig && (
-          <Tabs
-            value={activePage}
-            onChange={(_event, value) => setActivePage(typeof value === 'number' ? value : 0)}
-            orientation="horizontal"
-            sx={{ mt: 1, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: 'transparent' }}
-          >
-            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexShrink: 0, mb: 1, flexWrap: 'wrap' }}>
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search settings…"
-                size="sm"
-                startDecorator={<Box component="span" sx={{ display: 'inline-flex', fontSize: 18, opacity: 0.6 }}><SearchRoundedIcon fontSize="inherit" /></Box>}
-                endDecorator={query ? (
-                  <IconButton size="sm" variant="plain" color="neutral" onClick={() => setQuery('')} aria-label="Clear search">
-                    <Box component="span" sx={{ display: 'inline-flex', fontSize: 16 }}><CloseRoundedIcon fontSize="inherit" /></Box>
-                  </IconButton>
-                ) : undefined}
-                sx={{ flex: 1, minWidth: 160 }}
-              />
-              <Checkbox
-                size="sm"
-                label="Changed only"
-                checked={showChangedOnly}
-                onChange={(event) => setShowChangedOnly(event.target.checked)}
-                disabled={modifiedKeyCount === 0 && !showChangedOnly}
-              />
-            </Stack>
-            <TabList
-              sx={{
-                overflowX: 'auto',
-                flexWrap: 'nowrap',
-                flexShrink: 0,
-                // The list scrolls rather than wraps (overflowX/nowrap above), but a Tab defaults to
-                // `white-space: normal` and is shrinkable — so instead of scrolling, tabs squeezed
-                // below their text and wrapped onto two lines while the row still had slack. Pinning
-                // each tab to its own width is what makes the scroll actually engage.
-                '& > *': { flexShrink: 0, whiteSpace: 'nowrap' }
-              }}
-            >
-              {pages.map((page, index) => pageHasContent[index] ? (
-                <Tab
-                  key={page.id}
-                  value={index}
-                  sx={modifiedPages.has(index) ? { color: 'warning.plainColor', fontWeight: 700 } : undefined}
-                >
-                  {page.title}{filtersActive ? ` (${pageShownCounts[index] ?? 0})` : ''}
-                </Tab>
-              ) : null)}
-            </TabList>
-            <ScrollableDialogBody sx={{ mt: 0, px: 0 }}>
-              {showChangedOnly && modifiedKeyCount === 0 && (
-                <Typography level="body-sm" textColor="text.tertiary" sx={{ p: 2 }}>No changed settings.</Typography>
-              )}
-              {corrections.length > 0 && (
-                <Alert color="warning" size="sm" sx={{ m: 1 }}>
-                  <Stack spacing={0.25}>
-                    {corrections.map((message) => <Typography key={message} level="body-xs">{message}</Typography>)}
-                  </Stack>
-                </Alert>
-              )}
-              {pages.map((page, index) => (
-                // No horizontal padding: the group cards must line up with the tabs/search/profile
-                // above, which sit at the dialog's own inner edge. `p: 2` here pushed them in 16px on
-                // each side. Vertical padding stays for breathing room from the tab list + footer.
-                <TabPanel key={page.id} value={index} sx={{ px: 0, py: 2 }}>
-                  <Stack spacing={2}>
-                    {page.groups.map((group) => {
-                      const visibleLines = group.lines.filter((line) =>
-                        line.keys.some((key) => {
-                          const option = processSettingsCatalog.options[key]
-                          if (!option || !isOptionVisibleInMode(option) || !isKeyAllowed(key)) return false
-                          if (!getProcessFieldState(fieldStates.states, key).visible) return false
-                          if (normalizedQuery && !processKeyMatchesQuery(key, normalizedQuery)) return false
-                          return !showChangedOnly || isModified(key)
-                        })
-                      )
-                      if (visibleLines.length === 0) return null
-                      return (
-                        <DialogSection key={group.title} title={group.title}>
-                          <Stack spacing={1.25}>
-                            {visibleLines.map((line, lineIndex) => (
-                              <ProcessSettingLineRow
-                                key={`${group.title}-${lineIndex}`}
-                                lineLabel={line.label}
-                                keys={line.keys.filter(isKeyAllowed)}
-                                showDeveloperOptions={showDeveloperOptions}
-                                code={line.code}
-                                fullWidth={line.fullWidth}
-                                fieldStates={fieldStates}
-                                accessor={accessor}
-                                config={config}
-                                perObjectMode={perObjectMode}
-                                bulkSelection={bulkSelection}
-                                isMixed={(key) => mixedKeys.has(key)}
-                                isModified={isModified}
-                                isUnsaved={isUnsaved}
-                                isValueChanged={isValueChanged}
-                                isPresetOverride={isPresetOverride}
-                                originalOf={originalOf}
-                                canReset={canReset}
-                                onReset={resetKey}
-                                onScalarChange={setScalar}
-                                onValueChange={setValue}
-                                filamentChoices={filamentChoices}
-                              />
-                            ))}
-                          </Stack>
-                        </DialogSection>
-                      )
-                    })}
-                  </Stack>
-                </TabPanel>
-              ))}
-            </ScrollableDialogBody>
-          </Tabs>
-        )}
-        <Divider />
-        <DialogActions sx={{ justifyContent: 'space-between' }}>
-          <Button
-            variant="plain"
-            color="warning"
-            onClick={handleResetAll}
-            disabled={loading || !baseConfig || saving || modifiedKeyCount === 0}
-            startDecorator={<Box component="span" sx={{ display: 'inline-flex', fontSize: 16 }}><RestartAltRoundedIcon fontSize="inherit" /></Box>}
-          >
-            Reset all
-          </Button>
-          <Stack direction="row" spacing={1}>
-            <Button variant="plain" color="neutral" onClick={onClose} disabled={saving}>Cancel</Button>
-            {/*
-              PER-OBJECT mode has no preset destination: the edit is a SUBSET of keys layered on the
-              project's process (`allowedKeys` + `baseOverlay`), so "save as preset" would mint a
-              full process preset silently carrying the whole inherited config. With one destination
-              left, naming it ("Apply to this project") implies a choice that does not exist — the
-              title already says whose settings these are ("Object settings — <name>").
-            */}
-            {!perObjectMode && canEditOriginal && (
-              <Button variant="outlined" onClick={handleUpdateOriginal} disabled={loading || !baseConfig || saving} loading={saving}>
-                Update preset
-              </Button>
-            )}
-            {!perObjectMode && (
-              <Button variant="outlined" onClick={handleSaveAsPreset} disabled={loading || !baseConfig || saving} loading={saving}>
-                Save as preset
-              </Button>
-            )}
-            {applyScope !== 'preset' && (
-              <Button variant="solid" onClick={handleApply} disabled={loading || !baseConfig || saving}>
-                {perObjectMode ? 'Apply' : applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice'}
-              </Button>
-            )}
-          </Stack>
-        </DialogActions>
-      </ScrollableModalDialog>
-    </BackAwareModal>
+    <SettingsCatalogDialog
+      open={open}
+      onClose={onClose}
+      catalog={processSettingsCatalog}
+      titlePrefix={titlePrefix ?? 'Process settings'}
+      presetName={processProfileName}
+      header={header}
+      loading={loading}
+      loadingLabel="Loading process settings…"
+      error={error}
+      ready={baseConfig !== null}
+      showDeveloperOptions={showDeveloperOptions}
+      isKeyVisible={isKeyVisible}
+      adapter={adapter}
+      corrections={corrections}
+      filamentChoices={filamentChoices}
+      actions={{
+        onResetAll: handleResetAll,
+        onCancel: onClose,
+        saving,
+        /*
+          PER-OBJECT mode has no preset destination: the edit is a SUBSET of keys layered on the
+          project's process (`allowedKeys` + `baseOverlay`), so "save as preset" would mint a full
+          process preset silently carrying the whole inherited config. With one destination left,
+          naming it ("Apply to this project") implies a choice that does not exist — the title
+          already says whose settings these are ("Object settings — <name>").
+        */
+        onUpdatePreset: !perObjectMode && canEditOriginal ? () => void handleUpdateOriginal() : undefined,
+        onSaveAsPreset: perObjectMode ? undefined : () => void handleSaveAsPreset(),
+        apply: applyScope === 'preset' ? undefined : {
+          label: perObjectMode ? 'Apply' : applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice',
+          onApply: handleApply
+        }
+      }}
+    />
   )
 }
-
-/** Case-insensitive match of a setting against the search query (label, key, or tooltip). */
-function processKeyMatchesQuery(key: string, normalizedQuery: string): boolean {
-  const option = processSettingsCatalog.options[key]
-  if (!option) return false
-  return option.label.toLowerCase().includes(normalizedQuery)
-    || key.toLowerCase().includes(normalizedQuery)
-    || (option.tooltip?.toLowerCase().includes(normalizedQuery) ?? false)
-}
-
-interface ProcessSettingLineRowProps {
-  lineLabel?: string
-  keys: string[]
-  /** Whether BambuStudio develop-tier options are revealed (developer-mode preference). */
-  showDeveloperOptions: boolean
-  code?: boolean
-  /** The line spans the row (BambuStudio's full-width lines: Notes and the G-code editors). */
-  fullWidth?: boolean
-  fieldStates: ReturnType<typeof computeProcessFieldStates>
-  accessor: ReturnType<typeof createProcessConfigAccessor>
-  config: ProcessConfig
-  /** Per-object dialog: enables the "set but value-matching" (dot + bold) treatment. */
-  perObjectMode: boolean
-  /** Editing several members at once — adjusts the "set" copy from "this object" to the selection. */
-  bulkSelection: boolean
-  /** The members disagree on this key (bulk editing): render the "Mixed" state. */
-  isMixed: (key: string) => boolean
-  isModified: (key: string) => boolean
-  isUnsaved: (key: string) => boolean
-  /** Value differs from the baseline (the orange "changed" state), vs merely being explicitly set. */
-  isValueChanged: (key: string) => boolean
-  /** The PRESET's own override of its parent — emphasis only, never counted. */
-  isPresetOverride: (key: string) => boolean
-  /** The baseline a changed value replaced, for the hover. */
-  originalOf: (key: string) => { value: string; label: string } | null
-  canReset: (key: string) => boolean
-  onReset: (key: string) => void
-  onScalarChange: (key: string, value: string) => void
-  onValueChange: (key: string, value: string | string[]) => void
-  filamentChoices?: SettingFilamentChoice[]
-}
-
-function ProcessSettingLineRow(props: ProcessSettingLineRowProps): JSX.Element | null {
-  const { keys, lineLabel, showDeveloperOptions, code, fullWidth, fieldStates, accessor, perObjectMode, bulkSelection, isMixed, isModified, isUnsaved, isValueChanged, isPresetOverride, originalOf, canReset, onReset, onScalarChange, filamentChoices } = props
-  const visibleKeys = keys.filter((key) => {
-    const option = processSettingsCatalog.options[key]
-    return option && isProcessOptionVisibleInMode(option, showDeveloperOptions) && getProcessFieldState(fieldStates.states, key).visible
-  })
-  if (visibleKeys.length === 0) return null
-
-  const firstKey = visibleKeys[0] ?? keys[0] ?? ''
-  const firstOption = processSettingsCatalog.options[firstKey]
-  const label = lineLabel ?? firstOption?.label ?? firstKey
-  // Label states: a value that DIFFERS from the baseline is orange+bold ("changed"). In PER-OBJECT
-  // mode a setting that is merely explicitly SET (its value matches the inherited one) is
-  // full-contrast + bold with a leading dot ("set", clearer than BambuStudio's bold alone). An
-  // inherited setting is the muted default. The global dialog keeps its original orange-for-modified
-  // styling (no per-object "set" distinction there).
-  const lineValueChanged = visibleKeys.some((key) => isValueChanged(key))
-  const lineModified = visibleKeys.some((key) => isModified(key))
-  const lineUnsaved = visibleKeys.some((key) => isUnsaved(key))
-  const lineMixed = visibleKeys.some((key) => isMixed(key))
-  // Full-width lines take the label above and the whole row: the G-code editors and Notes.
-  const spansRow = Boolean(code || fullWidth)
-  const lineSetOnly = perObjectMode && lineModified && !lineValueChanged
-  // Three "set" flavours behind the one dot: mixed across a bulk selection, uniformly set on a
-  // bulk selection, or set on the single object — each names what reset will do.
-  const setDotTooltip = lineMixed
-    ? 'Set to different values across the selection — edit to apply one value to everything, or reset to clear it everywhere'
-    : bulkSelection
-      ? 'Set on every selected item (matches the inherited value) — reset to inherit'
-      : 'Set for this object (matches the inherited value) — reset to inherit'
-  // Outside per-object mode this is the same three-state rule per-object mode already used, applied
-  // to the preset: an UNSAVED edit is coloured, an override the preset carries is bold only.
-  const labelColor = perObjectMode
-    ? (lineValueChanged ? 'warning.plainColor' : (lineSetOnly ? 'text.primary' : undefined))
-    : (lineUnsaved ? 'warning.plainColor' : undefined)
-
-  // See the note at its use: one control -> FormControl (so the label is really associated);
-  // several -> a plain Box, because each control carries its own label.
-  // Cast: both accept children and no required props, but a union of two component types is not
-  // callable as a JSX tag.
-  const RowRoot = (visibleKeys.length === 1 ? FormControl : Box) as typeof Box
-  return (
-    // A Joy FormControl may contain exactly ONE control, and it labels that control. A row with
-    // several visible keys is one setting per extruder variant — several controls, each labelling
-    // itself via `showOwnLabel` — so wrapping those in a FormControl is both a Joy error (logged on
-    // every render) and a false label association. Use it only when there really is one control.
-    <RowRoot>
-      {/* Same rule as the filament dialog: a G-code editor takes the label above and the full row
-          width rather than sitting in the value column at its minimum size. */}
-      <Stack direction={spansRow ? 'column' : { xs: 'column', sm: 'row' }} spacing={1} alignItems={spansRow ? 'stretch' : { sm: 'center' }}>
-        <Box sx={{ minWidth: spansRow ? undefined : { sm: 220 }, flexShrink: 0 }}>
-          <FormLabel sx={{
-            display: 'inline-flex', alignItems: 'center', gap: 0.5,
-            color: labelColor,
-            fontWeight: lineModified || lineUnsaved ? 'xl' : undefined
-          }}>
-            {lineSetOnly && (
-              <Tooltip title={setDotTooltip} variant="soft">
-                <Box component="span" sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'primary.solidBg', flexShrink: 0 }} />
-              </Tooltip>
-            )}
-            {label}
-            {firstOption?.tooltip && (
-              <Tooltip title={firstOption.tooltip} variant="soft" sx={{ maxWidth: 320 }}>
-                <Box component="span" sx={{ display: 'inline-flex', fontSize: 16, opacity: 0.6 }}>
-                  <InfoOutlinedIcon fontSize="inherit" />
-                </Box>
-              </Tooltip>
-            )}
-          </FormLabel>
-        </Box>
-        <Stack direction="row" spacing={1} sx={{ flex: 1, flexWrap: 'wrap', justifyContent: spansRow ? 'stretch' : { sm: 'flex-end' }, width: spansRow ? '100%' : undefined }}>
-          {visibleKeys.map((key) => {
-            const option = processSettingsCatalog.options[key]
-            if (!option) return null
-            const enabled = getProcessFieldState(fieldStates.states, key).enabled
-            const enumRestriction = fieldStates.enumRestrictions.get(key)
-            return (
-              <Stack key={key} direction="row" spacing={0.25} alignItems="center" sx={spansRow ? { flex: 1, minWidth: 0 } : undefined}>
-                <SettingValueField
-                  settingKey={key}
-                  option={option}
-                  value={accessor.str(key)}
-                  enabled={enabled}
-                  enumRestriction={enumRestriction}
-                  showOwnLabel={visibleKeys.length > 1}
-                  modified={isPresetOverride(key)}
-                  unsaved={isValueChanged(key)}
-                  mixed={isMixed(key)}
-                  original={originalOf(key)}
-                  filamentChoices={filamentChoices}
-                  onScalarChange={onScalarChange}
-                  isCode={code}
-                />
-                {canReset(key) && (
-                  <Tooltip title="Reset to preset default" variant="soft">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="warning"
-                      aria-label={`Reset ${option.label} to default`}
-                      onClick={() => onReset(key)}
-                      sx={{ '--IconButton-size': '1.75rem' }}
-                    >
-                      <Box component="span" sx={{ display: 'inline-flex', fontSize: 16 }}>
-                        <RestartAltRoundedIcon fontSize="inherit" />
-                      </Box>
-                    </IconButton>
-                  </Tooltip>
-                )}
-              </Stack>
-            )
-          })}
-        </Stack>
-      </Stack>
-    </RowRoot>
-  )
-}
-

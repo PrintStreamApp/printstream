@@ -6,6 +6,8 @@
  * printer manager later observes the real transition and links it back to
  * the same tracked job row.
  */
+import type { PrintStartOptionSelection } from '@printstream/shared'
+
 export interface PendingPrintJobSource {
   jobKind: 'file' | 'calibration' | 'external'
   jobId: string | null
@@ -24,8 +26,19 @@ export interface PendingPrintJobSource {
   sliceSettingsJson?: string | null
   plate: number | null
   useAms: boolean | null
+  /**
+   * Legacy bed-leveling record: the tri-state choice collapsed to a Boolean, so 'on' and
+   * 'auto' are indistinguishable here. Still written for the jobs DTO and for older readers;
+   * `printOptions` is what a re-print restores from.
+   */
   bedLevel: boolean | null
   amsMapping: number[] | null
+  /**
+   * The print-start options the user SELECTED, recorded so re-printing this job repeats them.
+   * Optional because only app-initiated prints have them: an externally started print's
+   * options were chosen on the printer or in Studio and are never reported to us.
+   */
+  printOptions?: PrintStartOptionSelection | null
   calibrationOption: number | null
 }
 

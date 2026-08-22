@@ -3,7 +3,7 @@
  *
  * Sits alongside `MarketingApp` as a third `Root` branch. It supplies what those pages do need and
  * the marketing branch does not: full-height layout for a 3D viewport, and the app's Joy theme +
- * chrome variables (App's `CssVarsProvider` lives inside App, which this branch never mounts).
+ * chrome variables (App's own `AppThemeProvider` lives inside App, which this branch never mounts).
  *
  * It does NOT create a React Query client — `main.tsx` already provides one above `Root`, so both
  * shells inherit it. The editor loads through queries even when its data is local, so that matters.
@@ -17,8 +17,10 @@ import CircularProgress from '@mui/joy/CircularProgress'
 import CssBaseline from '@mui/joy/CssBaseline'
 import Stack from '@mui/joy/Stack'
 import Typography from '@mui/joy/Typography'
-import { CssVarsProvider } from '@mui/joy/styles'
+import { AppThemeProvider } from './theme/AppThemeProvider'
 import { Route, Routes } from 'react-router-dom'
+import { StatusToastStack } from './components/StatusToast'
+import { Toaster } from './components/Toaster'
 import { ViewportSettingsScopeProvider } from './lib/editorViewportSettings'
 import { dismissSplashScreenImmediately } from './lib/splashScreen'
 import { buildChromeCssVars } from './theme/buildTheme'
@@ -44,7 +46,7 @@ export default function PublicToolApp() {
   }, [])
 
   return (
-    <CssVarsProvider theme={theme} defaultMode="dark">
+    <AppThemeProvider theme={theme}>
       <CssBaseline />
       {/* Full height, not a scrolling page: the editor owns its own layout and its viewport needs
           a bounded parent to size against. */}
@@ -61,8 +63,19 @@ export default function PublicToolApp() {
             </Routes>
           </Suspense>
         </Box>
+        {/* Every toast the editor raises — an import refused, a save failed — is rendered by this
+            host or by nothing at all. Without a Toaster here, `toast.error` on `/3mf-editor` went
+            nowhere, so a 3MF with no importable geometry looked like a click that simply did
+            nothing. It needs the same `StatusToastStack` as `App`: bare, it was an in-flow child of
+            the full-height column above and took its height out of the editor's viewport. Only one
+            of the two stacks ever exists, because `Root` renders only one branch. The workspace's
+            job/slice toast stacks are deliberately NOT mounted: they need a workspace and
+            permissions. */}
+        <StatusToastStack>
+          <Toaster />
+        </StatusToastStack>
       </ViewportSettingsScopeProvider>
-    </CssVarsProvider>
+    </AppThemeProvider>
   )
 }
 

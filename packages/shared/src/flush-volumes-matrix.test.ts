@@ -4,8 +4,10 @@ import {
   expectedFlushVolumesMatrixLength,
   inspectProjectFlushVolumesMatrix,
   isFlushVolumesMatrixInconsistent,
+  readFlushVolumesMatrixBlock,
   repairFlushMultiplier,
-  repairFlushVolumesMatrix
+  repairFlushVolumesMatrix,
+  writeFlushVolumesMatrixBlocks
 } from './flush-volumes-matrix.js'
 
 test('required length is filaments squared per extruder', () => {
@@ -196,4 +198,30 @@ test('repairFlushMultiplier returns null when there is nothing to do', () => {
   // Absent on a single-extruder machine equals the engine default; writing the key would churn
   // bytes for nothing.
   assert.equal(repairFlushMultiplier(undefined, 1), null)
+})
+
+test('a stored matrix reads back block-per-extruder, and round-trips', () => {
+  // Two filaments, two extruders: 8 entries as two 2x2 blocks.
+  const stored = ['0', '90', '900', '0', '1', '2', '3', '4']
+  assert.deepEqual(readFlushVolumesMatrixBlock(stored, 0, 2, 2), [[0, 90], [900, 0]])
+  assert.deepEqual(readFlushVolumesMatrixBlock(stored, 1, 2, 2), [[1, 2], [3, 4]])
+  assert.deepEqual(
+    writeFlushVolumesMatrixBlocks([[[0, 90], [900, 0]], [[1, 2], [3, 4]]]),
+    stored
+  )
+})
+
+test('reading a block refuses a matrix that does not match the topology', () => {
+  // An ABSENT matrix is legitimate (BambuStudio computes it), and a WRONG-sized one is the
+  // exit-139 defect — neither may be rendered as a grid of zeroes the user could then save.
+  assert.equal(readFlushVolumesMatrixBlock(null, 0, 2, 2), null)
+  assert.equal(readFlushVolumesMatrixBlock([], 0, 2, 2), null)
+  assert.equal(readFlushVolumesMatrixBlock(['0', '90', '900', '0'], 0, 2, 2), null)
+  assert.equal(readFlushVolumesMatrixBlock(['0', '90', '900', '0'], 1, 2, 1), null)
+})
+
+test('writing rejects block shapes the engine would read out of bounds', () => {
+  assert.throws(() => writeFlushVolumesMatrixBlocks([]))
+  assert.throws(() => writeFlushVolumesMatrixBlocks([[[0, 1], [2, 3]], [[0, 1]]]))
+  assert.throws(() => writeFlushVolumesMatrixBlocks([[[0, 1, 2], [2, 3, 4]]]))
 })

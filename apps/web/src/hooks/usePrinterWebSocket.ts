@@ -137,6 +137,13 @@ export function usePrinterWebSocket(enabled = true, scopeKey = 'default'): void 
           void queryClient.invalidateQueries({ queryKey: ['jobs'] })
           // Print jobs are half of the merged Jobs history.
           void queryClient.invalidateQueries({ queryKey: ['job-history'] })
+          // A finished job also rewrites the durable counters derived from it
+          // (`recordFinishedPrinterStats`), and nothing else refreshed them. The printer
+          // detail page renders the stats grid directly ABOVE the job history, so the two
+          // sat side by side disagreeing about whether the print had happened — the kind
+          // of staleness that reads as a bug in the numbers rather than in the cache.
+          void queryClient.invalidateQueries({ queryKey: ['printer-stats'] })
+          void queryClient.invalidateQueries({ queryKey: ['workspace-stats'] })
         }
         if (event.resource === 'logs') {
           void queryClient.invalidateQueries({ queryKey: ['logs'] })

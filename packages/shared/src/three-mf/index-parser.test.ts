@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildThreeMfIndex, extractProjectVersion, normalizePrinterModelName, parseModelSettingsPlates } from './index-parser.js'
+import { buildThreeMfIndex, extractProjectVersion, extractSlicedWithFilamentTrackSwitch, normalizePrinterModelName, parseModelSettingsPlates } from './index-parser.js'
 
 test('extractProjectVersion reads the Bambu Studio version that saved the project', () => {
   // Used to warn before a slice: BambuStudio refuses a project newer than the engine (exit 232).
@@ -95,4 +95,22 @@ test('normalizePrinterModelName tells the X1 family apart, plain X1 included', (
   assert.equal(normalizePrinterModelName('Bambu Lab X2D'), 'X2D')
   assert.equal(normalizePrinterModelName('Bambu Lab H2D'), 'H2D')
   assert.equal(normalizePrinterModelName('Bambu Lab A1 mini'), 'A1mini')
+})
+
+test('has_filament_switcher is read as the machine the project was sliced for', () => {
+  // BambuStudio writes bools into project_settings several ways depending on the writer, and the
+  // string forms are what a round-trip through its own serializer produces.
+  assert.equal(extractSlicedWithFilamentTrackSwitch('{"has_filament_switcher": true}'), true)
+  assert.equal(extractSlicedWithFilamentTrackSwitch('{"has_filament_switcher": "1"}'), true)
+  assert.equal(extractSlicedWithFilamentTrackSwitch('{"has_filament_switcher": 1}'), true)
+
+  assert.equal(extractSlicedWithFilamentTrackSwitch('{"has_filament_switcher": false}'), false)
+  assert.equal(extractSlicedWithFilamentTrackSwitch('{"has_filament_switcher": "0"}'), false)
+
+  // ABSENT is false, not unknown — that is how BambuStudio's CLI defaults it, and it is what every
+  // project saved before the switch existed has to read as.
+  assert.equal(extractSlicedWithFilamentTrackSwitch('{}'), false)
+  assert.equal(extractSlicedWithFilamentTrackSwitch(null), false)
+  // Unparseable settings must not throw or report true.
+  assert.equal(extractSlicedWithFilamentTrackSwitch('{not json'), false)
 })

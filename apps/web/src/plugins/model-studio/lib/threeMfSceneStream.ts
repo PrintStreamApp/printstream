@@ -1,7 +1,7 @@
 /**
  * Streams a plated 3MF scene's meshes into a Three.js group, one archive entry at a time.
  *
- * Split out of `PreviewView` so the read-only preview and the public 3MF viewer share one
+ * Split out of `PreviewView` so the read-only preview and the public 3MF editor share one
  * implementation — they differ only in where the mesh bytes come from, which is what
  * {@link ThreeMfEntryBytesLoader} abstracts: a library file streams them from the API's
  * `scene-entry` endpoint, the public viewer reads them out of an archive it unzipped locally and

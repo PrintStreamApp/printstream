@@ -1,15 +1,21 @@
 /**
- * The printer-card footer action bar: the split "Print" button (with its library/local-file menu)
- * followed by the plugin/control actions, which collapse into an overflow menu when the row runs
- * out of width. Width measurement and the inline/overflow split are owned by
+ * The printer-card footer action bar: the split "Print" button (with its library/local-file menu,
+ * plus whatever the `printers.print.menu` slot contributes) followed by the plugin/control actions,
+ * which collapse into an overflow menu when the row runs out of width. This is the per-printer
+ * Print control; the page-level one next to "Add printer" lives in `PrintersView` and offers the
+ * same slot, so a new print source appears in both without either being special-cased.
+ * Width measurement and the inline/overflow split are owned by
  * {@link useFooterActionOverflow}; this component only renders the live row and the hidden
  * measurement copy. Extracted from PrinterCard to keep the card body render-focused.
  */
 import { Fragment, type MutableRefObject } from 'react'
-import { Box, CardActions, CardOverflow, Divider, Dropdown, IconButton, Menu, MenuButton, MenuItem } from '@mui/joy'
+import { Box, CardActions, CardOverflow, Divider, Dropdown, IconButton, ListItemDecorator, Menu, MenuButton, MenuItem } from '@mui/joy'
 import PrintRoundedIcon from '@mui/icons-material/PrintRounded'
+import FolderCopyRoundedIcon from '@mui/icons-material/FolderCopyRounded'
+import UploadFileRoundedIcon from '@mui/icons-material/UploadFileRounded'
 import type { Printer } from '@printstream/shared'
 import { MoreVertIcon } from './PrinterGlyphs'
+import { PluginSlot } from '../../plugin/PluginSlot'
 import { SplitButton } from '../SplitButton'
 import type { PrinterCardFooterAction } from './useFooterActionOverflow'
 
@@ -127,8 +133,17 @@ export function PrinterCardFooterActions({
               disabled={!canPrintFromPrinter}
               disabledReason={printDisabledReason ?? undefined}
             >
-              <MenuItem onClick={() => onPrint(printer)}>Print from library…</MenuItem>
-              <MenuItem onClick={() => onPrintLocal(printer)}>Print from local file…</MenuItem>
+              {/* Decorated, not bare: this menu hosts a plugin slot, so its own items set
+                  the icon gutter the contributions line up against. */}
+              <MenuItem onClick={() => onPrint(printer)}>
+                <ListItemDecorator><FolderCopyRoundedIcon /></ListItemDecorator>
+                Print from library…
+              </MenuItem>
+              <MenuItem onClick={() => onPrintLocal(printer)}>
+                <ListItemDecorator><UploadFileRoundedIcon /></ListItemDecorator>
+                Print from local file…
+              </MenuItem>
+              <PluginSlot name="printers.print.menu" context={{ printerId: printer.id }} />
             </SplitButton>
           )}
           {visibleFooterActions.map((action) => (

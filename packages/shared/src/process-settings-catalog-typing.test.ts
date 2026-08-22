@@ -75,3 +75,24 @@ test('percent-awareness is restored: a length is not a percentage', () => {
   assert.equal(processConfigValuesEqual('50', '50%', option), false, '50 mm/s is not 50%')
   assert.equal(processConfigValuesEqual('50%', '50.0%', option), true, 'same percentage, different spelling')
 })
+
+test('every option a catalog LAYS OUT carries a label', () => {
+  // A laid-out option with no label renders as a nameless control: the machine catalog shipped five
+  // unnamed number boxes on Motion ability (the limits define only `def->full_label`, which the
+  // parser was dropping) and a nameless switch for `spaghetti_detector`, which BambuStudio has
+  // commented out of both PrintConfig.cpp and its printer tab. Options the catalog carries but
+  // never lays out are exempt — they exist for the conditional engine to read, not to render.
+  for (const [name, catalog] of [
+    ['process', processSettingsCatalog],
+    ['filament', filamentSettingsCatalog],
+    ['machine', machineSettingsCatalog]
+  ] as const) {
+    const laidOut = new Set(catalog.pages.flatMap((page) =>
+      page.groups.flatMap((group) => group.lines.flatMap((line) => line.keys))))
+    const unnamed = [...laidOut].filter((key) => {
+      const option = catalog.options[key]
+      return option && !option.label.trim()
+    })
+    assert.deepEqual(unnamed, [], `${name} catalog lays out options with no label`)
+  }
+})

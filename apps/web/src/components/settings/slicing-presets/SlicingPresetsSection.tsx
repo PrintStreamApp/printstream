@@ -23,6 +23,7 @@ import { apiFetch } from '../../../lib/apiClient'
 import { formatSlicingPresetKind, type SlicingPresetKind } from '../../../lib/slicingPresetDirectory'
 import { type ModalSafeStickyTop } from '../../DirectoryToolbar'
 import { usePersistentState } from '../../../hooks/usePersistentState'
+import { PluginSlot } from '../../../plugin/PluginSlot'
 import { SlicingPresetKindPanel } from './SlicingPresetKindPanel'
 import { SlicingPresetUploadCard } from './SlicingPresetUploadCard'
 
@@ -54,7 +55,9 @@ export function SlicingPresetsSettingsSection({ stickyTop, stickySurface }: {
   const customByKind = React.useMemo(() => groupProfilesByKind(allProfiles.filter((profile) => profile.source === 'custom')), [allProfiles])
   // Every preset of the kind, built-in included: the panel's Source filter decides what shows, and
   // it defaults to the workspace's own. The tab COUNT stays the custom count — it answers "how many
-  // have I made?", which a built-in total would drown.
+  // have I made?", which a built-in total would drown — but a zero is left OFF rather than shown,
+  // because a kind with none of its own opens on the built-ins, and "Printer 0" over 202 rows reads
+  // as a broken count instead of "you have not customised one yet".
   const byKind = React.useMemo(() => groupProfilesByKind(allProfiles), [allProfiles])
   const listError = profilesQuery.error ? extractErrorMessage(profilesQuery.error) : null
 
@@ -63,6 +66,19 @@ export function SlicingPresetsSettingsSection({ stickyTop, stickySurface }: {
       <Typography level="body-sm" textColor="text.tertiary">
         Upload BambuStudio presets for printer settings, material settings, and process settings.
       </Typography>
+
+      {/*
+        Where a preset SOURCE other than a manual upload contributes its own panel
+        (today: the Bambu Cloud account sync). Renders nothing when no plugin is
+        registered, so an install without one sees this manager unchanged.
+
+        `PluginSlot`, NOT `StaticPluginSlot`: the contributing plugin is toggleable per
+        workspace, and the static variant deliberately skips the enabled check (it exists
+        for auth/setup surfaces that must render before a plugin-manager session does).
+        Using it here rendered the Bambu Cloud panel for workspaces that had the plugin
+        turned off — far enough to type credentials into before anything said no.
+      */}
+      <PluginSlot name="slicing.presets.sync" />
 
       <SlicingPresetUploadCard />
 
@@ -77,7 +93,9 @@ export function SlicingPresetsSettingsSection({ stickyTop, stickySurface }: {
             {PROFILE_KINDS.map(({ kind }) => (
               <Tab key={kind} value={kind}>
                 {formatSlicingPresetKind(kind)}
-                <Chip size="sm" variant="soft" sx={{ ml: 0.75 }}>{customByKind[kind].length}</Chip>
+                {customByKind[kind].length > 0 && (
+                  <Chip size="sm" variant="soft" sx={{ ml: 0.75 }}>{customByKind[kind].length}</Chip>
+                )}
               </Tab>
             ))}
           </TabList>

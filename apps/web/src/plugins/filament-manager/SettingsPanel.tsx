@@ -7,7 +7,7 @@ import { Box, Checkbox, Stack, Typography } from '@mui/joy'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { FilamentManagerSettings } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
-import { FILAMENT_SETTINGS_QUERY_KEY } from './api'
+import { FILAMENT_SETTINGS_QUERY_KEY } from './queryKeys'
 
 export function FilamentManagerSettingsPanel() {
   const queryClient = useQueryClient()

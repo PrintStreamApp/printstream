@@ -2,9 +2,11 @@
  * Bridge-to-server runtime protocol contracts shared by the API and the bridge:
  * registration/handshake, the WebSocket message union (RPC, heartbeats, printer
  * status/discovery, camera frames), the RPC params/results for printer storage,
- * library file access, and 3MF inspection, and the release/update manifest.
+ * library file access, 3MF inspection, and the Bambu cloud relay, and the
+ * release/update manifest.
  */
 import { z } from 'zod'
+import { bambuCloudRequestSchema, bambuCloudResponseSchema } from './bambu-cloud.js'
 import { threeMfSettingsRepairReasonSchema } from './printer-contracts.js'
 import {
   bridgeBackupSnapshotSchema,
@@ -824,10 +826,60 @@ export const bridgeLibraryThreeMfIndexSchema = z.object({
    * when unknown. BambuStudio refuses to open a project saved by a newer version than the engine
    * slicing it, so the slice dialog compares this against the chosen slicer target.
    */
-  projectVersion: z.string().nullable().default(null)
+  projectVersion: z.string().nullable().default(null),
+  /**
+   * Sliced for a machine with a Filament Track Switch (`has_filament_switcher`). A file must be
+   * printed on the kind of machine it was sliced for — BambuStudio refuses the mismatch — so the
+   * print dialogs compare this against the target printer. Defaulted false because an absent key
+   * means "no switch" everywhere, including in BambuStudio's own CLI.
+   */
+  slicedWithFilamentTrackSwitch: z.boolean().default(false)
 })
 
 export type BridgeLibraryThreeMfIndex = z.infer<typeof bridgeLibraryThreeMfIndexSchema>
+
+/**
+ * `bambu.cloud.request` — relay one Bambu Lab cloud call through the bridge.
+ *
+ * Counterparts: `apps/bridge/src/bambu-cloud-relay.ts` performs the call;
+ * `apps/api/src/plugins/bambu-cloud-sync/transport.ts` decides when to use it.
+ *
+ * The bridge is PREFERRED over the API for these calls because on a multi-workspace
+ * deployment every workspace would otherwise reach Bambu from one shared egress IP,
+ * which is what draws rate limiting and Cloudflare challenges for everyone at once. A
+ * bridge sends a household's own traffic from that household's own connection. The
+ * API keeps a direct path for workspaces with no bridge, or an offline/older one.
+ *
+ * The params carry a NAMED operation, never a URL — see `bambuCloudOperationSchema`
+ * for why a URL-forwarding relay would be an SSRF proxy into the bridge's LAN.
+ */
+export const bridgeBambuCloudRequestParamsSchema = bambuCloudRequestSchema
+
+export type BridgeBambuCloudRequestParams = z.infer<typeof bridgeBambuCloudRequestParamsSchema>
+
+export const bridgeBambuCloudRequestResultSchema = bambuCloudResponseSchema
+
+export type BridgeBambuCloudRequestResult = z.infer<typeof bridgeBambuCloudRequestResultSchema>
+
+/**
+ * Prefix a bridge uses to reject an RPC method it does not implement.
+ *
+ * Capability detection for bridge RPCs is by ASKING, not by version comparison:
+ * bridges deploy separately from the API and update on a fingerprint rather than a
+ * semver, so there is no version number to gate on. A caller that can degrade (like
+ * the Bambu cloud relay, which falls back to a direct API-side call) matches this
+ * prefix on the RPC error and takes its fallback path instead of failing.
+ *
+ * Shared so the two sides cannot drift: `apps/bridge/src/runtime.ts` builds the
+ * message, `apps/api/src/plugins/bambu-cloud-sync/transport.ts` reads it.
+ */
+export const UNSUPPORTED_BRIDGE_RPC_ERROR_PREFIX = 'Unsupported bridge RPC method:'
+
+/** Whether an RPC rejection means "this bridge is too old for that method". */
+export function isUnsupportedBridgeRpcError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  return message.startsWith(UNSUPPORTED_BRIDGE_RPC_ERROR_PREFIX)
+}
 
 export const bridgeLibraryInspect3mfParamsSchema = z.object({
   storedPath: z.string().min(1)

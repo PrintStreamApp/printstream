@@ -33,16 +33,6 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
           "lines": [
             {
               "keys": [
-                "single_extruder_multi_material"
-              ]
-            },
-            {
-              "keys": [
-                "silent_mode"
-              ]
-            },
-            {
-              "keys": [
                 "printer_structure"
               ]
             },
@@ -50,6 +40,12 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
               "keys": [
                 "gcode_flavor"
               ]
+            },
+            {
+              "keys": [
+                "thumbnail_size"
+              ],
+              "fullWidth": true
             },
             {
               "keys": [
@@ -74,11 +70,6 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
             {
               "keys": [
                 "bed_temperature_formula"
-              ]
-            },
-            {
-              "keys": [
-                "spaghetti_detector"
               ]
             },
             {
@@ -571,20 +562,6 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
       "mode": "advanced",
       "default": "2"
     },
-    "single_extruder_multi_material": {
-      "type": "bool",
-      "label": "",
-      "tooltip": "",
-      "mode": "develop",
-      "default": "0"
-    },
-    "silent_mode": {
-      "type": "bool",
-      "label": "Supports silent mode",
-      "tooltip": "Whether the machine supports silent mode in which machine use lower acceleration to print",
-      "mode": "develop",
-      "default": "0"
-    },
     "printer_structure": {
       "type": "enum",
       "label": "Printer structure",
@@ -620,6 +597,16 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
       ],
       "mode": "advanced",
       "default": "marlin"
+    },
+    "thumbnail_size": {
+      "type": "point",
+      "vector": true,
+      "label": "Thumbnail size",
+      "tooltip": "Decides the size of thumbnail stored in gcode files",
+      "mode": "develop",
+      "default": "2",
+      "guiType": "one_string",
+      "fullWidth": true
     },
     "scan_first_layer": {
       "type": "bool",
@@ -663,12 +650,6 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
       ],
       "mode": "develop",
       "default": "by_first_filament"
-    },
-    "spaghetti_detector": {
-      "type": "bool",
-      "label": "",
-      "tooltip": "",
-      "mode": "simple"
     },
     "machine_load_filament_time": {
       "type": "float",
@@ -1148,7 +1129,7 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
     "machine_max_acceleration_extruding": {
       "type": "float",
       "vector": true,
-      "label": "",
+      "label": "Maximum acceleration for extruding",
       "tooltip": "Maximum acceleration for extruding (M204 P)",
       "sidetext": "mm/s²",
       "category": "Machine limits",
@@ -1159,7 +1140,7 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
     "machine_max_acceleration_retracting": {
       "type": "float",
       "vector": true,
-      "label": "",
+      "label": "Maximum acceleration for retracting",
       "tooltip": "Maximum acceleration for retracting (M204 R)",
       "sidetext": "mm/s²",
       "category": "Machine limits",
@@ -1170,7 +1151,7 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
     "machine_max_acceleration_travel": {
       "type": "float",
       "vector": true,
-      "label": "",
+      "label": "Maximum acceleration for travel",
       "tooltip": "Maximum acceleration for travel (M204 T)",
       "sidetext": "mm/s²",
       "category": "Machine limits",
@@ -1217,7 +1198,7 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
     "machine_min_extruding_rate": {
       "type": "float",
       "vector": true,
-      "label": "",
+      "label": "Minimum speed for extruding",
       "tooltip": "Minimum speed for extruding (M205 S)",
       "sidetext": "mm/s",
       "category": "Machine limits",
@@ -1228,7 +1209,7 @@ export const machineSettingsCatalog: ProcessSettingsCatalog = {
     "machine_min_travel_rate": {
       "type": "float",
       "vector": true,
-      "label": "",
+      "label": "Minimum travel speed",
       "tooltip": "Minimum travel speed (M205 T)",
       "sidetext": "mm/s",
       "category": "Machine limits",

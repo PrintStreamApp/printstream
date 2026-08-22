@@ -91,6 +91,25 @@ export const VIRTUAL_TRAY_MAIN_ID = 255
 export const VIRTUAL_TRAY_DEPUTY_ID = 254
 
 /**
+ * `ams_mapping[i]` for a filament index with NO tray: not a tray id, the absence of one.
+ *
+ * `ams_mapping` is POSITIONAL over the whole project's filament list, so a plate that uses
+ * a subset still has to say something at the indices it does not use, and this is what
+ * BambuStudio says. Its send loop pre-seeds `int tray_id = -1` per project filament and
+ * pushes it unchanged when the plate's mapping result has no entry for that index
+ * (`SelectMachine.cpp`, `SelectMachineDialog::get_ams_mapping_result`); the same loop then
+ * down-converts a mapped EXTERNAL spool (255/254) to -1 as well, so -1 is overloaded on the
+ * wire and only `ams_mapping2` tells the two apart ({255,255} unmapped vs {255,0}/{254,0}
+ * external). `amsMapping2Entry` in the dispatcher reproduces exactly that.
+ *
+ * Consequence for validation: -1 is a legitimate ENTRY of a mapping array but never a tray,
+ * so `isPhysicalAmsTrayIndex` and `printerTrayMappingSchema` keep rejecting it while
+ * `amsMappingEntrySchema` accepts it. Every guard that walks a mapping already skips
+ * entries below zero for this reason.
+ */
+export const AMS_TRAY_UNMAPPED = -1
+
+/**
  * Global tray index for a physical AMS slot, matching Bambu's
  * `GetTrayIndexMap`. Feed the result into `ams_mapping[filamentIndex]`.
  */

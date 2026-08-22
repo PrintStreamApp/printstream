@@ -54,11 +54,19 @@ export function applyBridgeDebugCaptureStatus(
 /**
  * Reflect a live `bridge.backup` WS event (a backup starting, finishing, or
  * failing) into the bridge settings, where a backup can run for minutes.
+ *
+ * Also stales the snapshot LIST, because a finished backup adds a row to it and the
+ * "View backups" dialog is exactly what someone has open while waiting: its chip went
+ * running -> done while the table below never gained the new snapshot. That dialog
+ * carries a manual Refresh button, which is the shape of a workaround for this.
  */
 export function applyBridgeBackupStatus(
-  queryClient: Pick<QueryClient, 'setQueryData'>,
+  queryClient: Pick<QueryClient, 'setQueryData' | 'invalidateQueries'>,
   bridgeId: string,
   status: BridgeBackupStatus
 ): void {
   patchBridgeInLists(queryClient, bridgeId, (bridge) => ({ ...bridge, backup: status }))
+  if (!status.running) {
+    void queryClient.invalidateQueries({ queryKey: ['bridge-backups', bridgeId] })
+  }
 }

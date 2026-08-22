@@ -16,6 +16,8 @@
  * than rejected so firmware updates do not break the connection.
  */
 import {
+  AMS_HT_TRAY_INDEX_MIN,
+  AMS_LITE_MIXED_TRAY_INDEX_OFFSET,
   amsUnitTypeFromCode,
   getPrinterDisplayCapabilities,
   getPrinterPrintStartOptions,
@@ -26,6 +28,7 @@ import {
   supportsPrinterAirductMode,
   supportsPrinterDoorSensor,
   supportsPrinterSecondaryChamberLight,
+  type AmsUnitType,
   type Printer,
   type PrinterAmsDryingPhase,
   type PrinterAirductMode,
@@ -1047,11 +1050,11 @@ function parseAms(
             ? null
             : previousSlot?.trayName ?? null
         const remainPercent = 'remain' in tray
-          ? clampPercentNullable(numberOrNull(tray.remain))
+          ? parseRemainPercent(numberOrNull(tray.remain))
           : clearsPreviousTrayIdentity
             ? null
             : previousSlot?.remainPercent ?? null
-        const trayExists = parseAmsTrayExists(trayExistBits, unitId, slotId, amsType)
+        const trayExists = parseAmsTrayExists(trayExistBits, unitId, slotId, unitType)
         // Third-party AMS spools may have no RFID-backed tray identity but
         // still report physical occupancy through `tray_exist_bits`.
         // BambuStudio renders `is_exists && !is_tray_info_ready()` as a
@@ -1063,16 +1066,12 @@ function parseAms(
           && trayName === null
           && remainPercent === null
         )
-        const color = isEmpty
-          ? null
-          : ('tray_color' in tray ? parseTrayColor(tray.tray_color) : previousSlot?.color ?? null)
-        const colors = isEmpty
-          ? []
-          : 'cols' in tray
-            ? parseTrayColors(tray.cols, color)
-            : 'tray_color' in tray
-              ? (color ? [color] : [])
-              : previousSlot?.colors ?? (color ? [color] : [])
+        const color = 'tray_color' in tray ? parseTrayColor(tray.tray_color) : previousSlot?.color ?? null
+        const colors = 'cols' in tray
+          ? parseTrayColors(tray.cols, color)
+          : 'tray_color' in tray
+            ? (color ? [color] : [])
+            : previousSlot?.colors ?? (color ? [color] : [])
         const caliIdx = 'cali_idx' in tray
           ? intOrNull(tray.cali_idx)
           : clearsPreviousTrayIdentity
@@ -1088,30 +1087,22 @@ function parseAms(
           : clearsPreviousTrayIdentity
             ? null
             : previousSlot?.trayUuid ?? null
-        // When the slot is empty, clear ALL spool identity — not just the
-        // color. A spool removal is often reported by flipping the slot's
-        // `tray_exist_bits` bit to 0 while the tray object still carries the
-        // removed spool's stale RFID identity (`tray_type`, `tray_info_idx`,
-        // `remain`, ...). Those identity fields fall back to `previousSlot`,
-        // so without this gate they leak into the merged state and the slot
-        // keeps showing a phantom spool until the process restarts. BambuStudio
-        // renders `!is_exists` as empty regardless of lingering RFID data; we
-        // mirror that so removed spools clear on the next report.
         const nextSlot: PrinterStatus['ams'][number]['slots'][number] = {
           slot: slotId,
-          trayName: isEmpty ? null : trayName,
-          filamentType: isEmpty ? null : filamentType,
+          trayName,
+          filamentType,
           color,
           colors,
-          remainPercent: isEmpty ? null : remainPercent,
+          remainPercent,
           active: previousSlot?.active ?? false,
           isReading: previousSlot?.isReading ?? false,
           occupied: trayExists ?? !isEmpty,
-          trayInfoIdx: isEmpty ? null : trayInfoIdx,
-          caliIdx: isEmpty ? null : caliIdx,
-          k: isEmpty ? null : k,
-          trayUuid: isEmpty ? null : trayUuid
+          trayInfoIdx,
+          caliIdx,
+          k,
+          trayUuid
         }
+        if (isEmpty) clearSlotFilamentIdentity(nextSlot)
 
         const existingIndex = nextUnit.slots.findIndex((slot) => slot.slot === slotId)
         if (existingIndex >= 0) nextUnit.slots[existingIndex] = nextSlot
@@ -1129,18 +1120,85 @@ function parseAms(
       unit.nozzleId = amsNozzleMap.get(unit.unitId) ?? unit.nozzleId ?? null
     }
   }
-  let slotBitIndex = 0
-  for (const unit of units) {
-    for (const slot of unit.slots) {
-      const isReadingBitSet = isHexBitSet(trayReadingBits, slotBitIndex)
-      if (trayReadingBits !== null) {
-        slot.isReading = isReadingBitSet
+  // `tray_exist_bits` is the printer's authoritative per-slot occupancy, and it
+  // describes EVERY slot — including any this report said nothing else about, which the
+  // per-tray loop above cannot reach because it only visits trays the payload carried.
+  //
+  // A BACKSTOP, not a fix for anything observed. A bridge capture of an H2D
+  // (`bambu-report-parser.capture.test.ts`) shows this firmware always sending the
+  // complete four-tray list per unit and stripping a removed slot's object to
+  // `{id, state}` — so the loop already reaches every slot and the sweep changes
+  // nothing there. It is kept because it is idempotent when the list IS complete
+  // (same bits, same answer) and costs one pass, while the alternative is trusting one
+  // firmware on one model. Do not cite it as fixing a reported symptom.
+  //
+  // Runs only when the bits are present: absence is not emptiness. That case is real —
+  // the same capture has AMS frames carrying full tray identity and no bitmap at all.
+  if (trayExistBits !== null) {
+    for (const unit of units) {
+      for (const slot of unit.slots) {
+        const exists = parseAmsTrayExists(trayExistBits, unit.unitId, slot.slot, unit.type)
+        if (exists === null) continue
+        slot.occupied = exists
+        if (!exists) clearSlotFilamentIdentity(slot)
       }
-      slotBitIndex += 1
+    }
+  }
+
+  // Indexed by the SAME bands as the exist bitmap above: BambuStudio feeds one
+  // `DevAms::GetTrayId` index to both fields. This used to walk a running counter over
+  // the slots, which agrees only for a contiguous set of classic 4-slot units -- an
+  // AMS HT unit (band 16+), an N9 (band 24+), or any gap in the unit ids made it read
+  // a neighbouring unit's bit, so the rescanning indicator appeared on the wrong tray.
+  if (isHexBits(trayReadingBits)) {
+    for (const unit of units) {
+      for (const slot of unit.slots) {
+        const bitIndex = amsTrayExistBitIndex(unit.unitId, slot.slot, unit.type)
+        // Unmapped band: say nothing, rather than claim this tray is not reading.
+        if (bitIndex === null) continue
+        slot.isReading = isHexBitSet(trayReadingBits, bitIndex)
+      }
     }
   }
 
   return units
+}
+
+/** The spool-identity fields an AMS slot and an external spool have in common. */
+type ClearableFilamentSlot = Pick<
+  PrinterStatus['ams'][number]['slots'][number],
+  'trayName' | 'filamentType' | 'color' | 'colors' | 'remainPercent' | 'trayInfoIdx' | 'caliIdx' | 'k' | 'trayUuid'
+>
+
+/**
+ * Blank every spool-identity field on a slot the printer reports as empty.
+ *
+ * The one definition of what "empty" clears, shared by all three callers — the
+ * per-tray merge, the exist-bits sweep, and the external/virtual tray — so they
+ * cannot drift.
+ *
+ * Why every field and not just the visible ones: a removed slot's tray object arrives
+ * stripped to `{id, state}` (observed, see `bambu-report-parser.capture.test.ts`), and
+ * every identity field falls back to the PREVIOUS slot when absent. So without a full
+ * clear the merge quietly reconstructs the spool that just left. A partial clear is
+ * worse still — the external path used to blank only the colour, leaving an "empty"
+ * slot advertising the removed spool's RFID tag and K profile. BambuStudio renders
+ * `!is_exists` as empty regardless of any lingering RFID data; this mirrors that.
+ *
+ * Deliberately leaves `active` and `isReading` alone: both are owned by other
+ * signals (`parseActiveTraySelections`, `tray_reading_bits`) that this must not
+ * overwrite from occupancy.
+ */
+function clearSlotFilamentIdentity(slot: ClearableFilamentSlot): void {
+  slot.trayName = null
+  slot.filamentType = null
+  slot.color = null
+  slot.colors = []
+  slot.remainPercent = null
+  slot.trayInfoIdx = null
+  slot.caliIdx = null
+  slot.k = null
+  slot.trayUuid = null
 }
 
 function parseAmsDryingPhase(
@@ -1228,16 +1286,95 @@ function parseAmsUnitSwitchInputFromInfo(unit: Record<string, unknown>): 'A' | '
   return null
 }
 
+/**
+ * Bit position of a slot within `tray_exist_bits` / `tray_reading_bits`, or null when
+ * this unit type's band is not known.
+ *
+ * A direct port of `DevAms::GetTrayId` (`DevFilaSystem.cpp`), which is the SAME index
+ * BambuStudio feeds to `get_flag_bits(tray_exist_bits, ...)`. Each unit family has its
+ * own band, and getting it wrong reads a neighbouring unit's bit:
+ *   AMS / AMS Lite / N3F -> unitId * 4 + slotId
+ *   N3S (AMS HT)         -> 16 + (unitId - 128) + slotId
+ *   AMS Lite Mixed (N9)  -> 24 + slotId
+ *
+ * NOT the same mapping as `amsTrayIndex` in `@printstream/shared`, despite the family
+ * resemblance: that one produces `ams_mapping` VALUES for a print command (where an HT
+ * unit's index is its unit id). These are bitmap positions. Two different Bambu
+ * numbering schemes that agree for classic AMS and diverge for HT — do not merge them.
+ *
+ * Returns null rather than guessing for a type whose band is unmapped, mirroring
+ * `GetTrayId`'s `assert(0); return -1`. That matters because callers CLEAR a slot on
+ * false: a guessed band on a future unit family would empty loaded slots.
+ */
+function amsTrayExistBitIndex(unitId: number, slotId: number, unitType: AmsUnitType): number | null {
+  switch (unitType) {
+    case 'ams':
+    case 'ams-lite':
+    case 'ams-2-pro':
+      return unitId * 4 + slotId
+    case 'ams-ht':
+      // The 128-152 band is what makes this formula addressable; a unit typed HT but
+      // numbered outside it is contradictory data, not a slot to empty.
+      return unitId >= AMS_HT_TRAY_INDEX_MIN ? 16 + (unitId - AMS_HT_TRAY_INDEX_MIN) + slotId : null
+    case 'ams-lite-mixed':
+      return AMS_LITE_MIXED_TRAY_INDEX_OFFSET + slotId
+    default:
+      // 'unknown' (no `info` seen yet, or a DevAmsType we do not map) and 'ext-spool'
+      // (external spools are not in this bitmap at all).
+      return null
+  }
+}
+
+/**
+ * A tray also carries an undocumented `state` int we deliberately do NOT parse.
+ *
+ * Decoded from a bridge capture, since BambuStudio ignores the field (it reads `state`
+ * on the extruder/chamber/nozzle objects as packed bit fields, never on a tray):
+ * **bit 0 is occupancy** and **bit 1 is "identity known"** — bit 1 tracks `tray_type`
+ * being populated and goes meaningless once bit 0 clears. Bits 2-4 appear only in
+ * transients while a spool is being inserted and are not decoded.
+ *
+ * **Read the sample sizes before trusting that.** 994 of the 996 observations are bit
+ * 0 SET across 32 slots on 7 printers, which is solid. The evidence that it CLEARS is
+ * two samples, two seconds apart, from one slot on one printer — and clearing is the
+ * direction that would do something. If bit 0 turns out to mean "ready to feed" rather
+ * than "spool present" on some model, using it would blank a loaded slot's identity,
+ * and the merge would keep it blank until a later report refilled it.
+ *
+ * So: not wired in, and the asymmetry is the reason rather than the correlation being
+ * weak. It also would not pay for itself — the gap it could plausibly fill is a frame
+ * with an AMS block and no bitmap, and of the 112 trays across the 19 such captured
+ * frames only 68 carried `state`, every one of them reading occupied. Revisit if a
+ * capture ever shows a removal announced in a frame that omits the bitmap; a
+ * confirm-only use (may assert occupancy, may never clear) is the safe shape if so.
+ */
+
+/**
+ * Whether the printer says this slot physically holds a spool, or null when the
+ * report does not say. Never infer emptiness from a null.
+ *
+ * Takes the resolved unit TYPE rather than the raw DevAmsType code: the band depends on
+ * it, and a delta that omits `info` carries no code while the type survives from the
+ * previous report.
+ *
+ * A too-short bitmap reads as 0, which is correct: BambuStudio parses this field with
+ * `stol(..., 16)` into a single integer and shifts, so a shorter string is just a
+ * smaller number and the high bits genuinely are clear.
+ */
 function parseAmsTrayExists(
   trayExistBits: string | null,
   unitId: number,
   slotId: number,
-  amsType: number | null
+  unitType: AmsUnitType
 ): boolean | null {
   if (trayExistBits === null) return null
-  const bitIndex = amsType === 4 || unitId >= 128
-    ? 16 + (unitId - 128) + slotId
-    : unitId * 4 + slotId
+  // A bitmap we cannot read is UNKNOWN, not "every tray empty". `isHexBitSet` cannot
+  // tell those apart (it answers false for both), and both callers clear a slot's
+  // whole spool identity on false, so one unreadable value would empty every loaded
+  // slot in every unit and keep it empty until a full pushall re-described each tray.
+  if (!isHexBits(trayExistBits)) return null
+  const bitIndex = amsTrayExistBitIndex(unitId, slotId, unitType)
+  if (bitIndex === null || bitIndex < 0) return null
   return isHexBitSet(trayExistBits, bitIndex)
 }
 
@@ -1663,23 +1800,40 @@ function parseExternalSpools(
         ? null
         : previous?.trayName ?? null
     const remainPercent = 'remain' in slot
-      ? clampPercentNullable(numberOrNull(slot.remain))
+      ? parseRemainPercent(numberOrNull(slot.remain))
       : clearsPreviousTrayIdentity
         ? null
         : previous?.remainPercent ?? null
-    const isEmpty = filamentType === null && trayInfoIdx === null && trayName === null && remainPercent === null
-    const color = isEmpty
-      ? null
-      : ('tray_color' in slot ? parseTrayColor(slot.tray_color) : previous?.color ?? null)
-    const colors = isEmpty
-      ? []
-      : 'cols' in slot
-        ? parseTrayColors(slot.cols, color)
-        : 'tray_color' in slot
-          ? (color ? [color] : [])
-          : previous?.colors ?? (color ? [color] : [])
+    const trayUuid = 'tray_uuid' in slot
+      ? parseTrayUuid(slot.tray_uuid)
+      : clearsPreviousTrayIdentity
+        ? null
+        : previous?.trayUuid ?? null
+    // The virtual tray has no `tray_exist_bits`, so "is anything in it" is inferred from
+    // whether anything identifies it — and `trayUuid` has to be part of that test, or a
+    // slot can be published as empty (colour blanked) while still carrying the tag that
+    // tells `collectPresences` a spool IS loaded there.
+    //
+    // In practice this term is expected to be inert: no populated `tray_uuid` has been
+    // observed from an external holder, and BambuStudio's `parse_vt_tray` defaults the
+    // field to "0" (which `parseTrayUuid` maps to null). It is written this way because
+    // the field IS in the wire format and Studio parses it — identically to an AMS tray,
+    // with no model gate anywhere — so the contradiction is unreachable rather than
+    // merely unlikely. Nothing here establishes whether any model reads RFID at the
+    // external holder; do not cite this comment in either direction.
+    const isEmpty = filamentType === null
+      && trayInfoIdx === null
+      && trayName === null
+      && remainPercent === null
+      && trayUuid === null
+    const color = 'tray_color' in slot ? parseTrayColor(slot.tray_color) : previous?.color ?? null
+    const colors = 'cols' in slot
+      ? parseTrayColors(slot.cols, color)
+      : 'tray_color' in slot
+        ? (color ? [color] : [])
+        : previous?.colors ?? (color ? [color] : [])
 
-    spoolsById.set(amsId, {
+    const nextSpool: PrinterStatus['externalSpools'][number] = {
       amsId,
       nozzleId: amsId === VIRTUAL_TRAY_MAIN_ID ? 0 : amsId === VIRTUAL_TRAY_DEPUTY_ID ? 1 : previous?.nozzleId ?? null,
       trayName,
@@ -1699,12 +1853,13 @@ function parseExternalSpools(
         : clearsPreviousTrayIdentity
           ? null
           : previous?.k ?? null,
-      trayUuid: 'tray_uuid' in slot
-        ? parseTrayUuid(slot.tray_uuid)
-        : clearsPreviousTrayIdentity
-          ? null
-          : previous?.trayUuid ?? null
-    })
+      trayUuid
+    }
+    // Same one rule the AMS slots clear by, so an empty external slot cannot keep the
+    // removed spool's calibration while the AMS path drops it.
+    if (isEmpty) clearSlotFilamentIdentity(nextSpool)
+
+    spoolsById.set(amsId, nextSpool)
   }
 
   const normalizedModel = printerModelSchema.safeParse(model).success ? printerModelSchema.parse(model) : 'unknown'
@@ -2194,10 +2349,25 @@ function resolvePressureAdvanceSelection(print: Record<string, unknown>): { amsI
   return { amsId: trayId >> 2, slot: trayId & 0x3 }
 }
 
+/**
+ * Whether a bitmap field is a bare hex string whose bit positions can be read.
+ *
+ * Separate from `isHexBitSet` because the two questions have different answers for
+ * junk: "is bit N set" must say false, while "what does this field tell us" must say
+ * nothing at all. Callers that CLEAR on false need the second one.
+ *
+ * A prefixed or separated value (`0x1f`) is deliberately unreadable rather than
+ * tolerated: no firmware or fixture in this repo has ever sent one, so stripping a
+ * prefix would be guessing at a format we have not seen.
+ */
+function isHexBits(value: string | null): value is string {
+  if (!value) return false
+  return /^[0-9a-f]+$/.test(value.trim().toLowerCase())
+}
+
 function isHexBitSet(value: string | null, bitIndex: number): boolean {
-  if (!value || bitIndex < 0) return false
+  if (!isHexBits(value) || bitIndex < 0) return false
   const normalized = value.trim().toLowerCase()
-  if (!/^[0-9a-f]+$/.test(normalized)) return false
   const nibbleIndexFromRight = Math.floor(bitIndex / 4)
   const digitIndex = normalized.length - 1 - nibbleIndexFromRight
   if (digitIndex < 0) return false
@@ -2207,9 +2377,18 @@ function isHexBitSet(value: string | null, bitIndex: number): boolean {
   return (nibble & mask) !== 0
 }
 
-function clampPercentNullable(value: number | null): number | null {
-  if (value === null) return null
-  return Math.max(0, Math.min(100, value))
+/**
+ * A tray's `remain` reading, or null when the printer is telling us it does not know.
+ *
+ * Firmware reports `remain: -1` for a spool it cannot measure — anything without an
+ * RFID tag, which is every third-party and manually-set spool. Clamping that to `0`
+ * (as this did) is not a harmless normalization: it turns "unmeasured" into "empty",
+ * which reads downstream as a spool that cannot finish anything. Consumers gate the
+ * percent on `trayUuid` anyway (`knownRemainGrams`), but the honest value is null.
+ */
+function parseRemainPercent(value: number | null): number | null {
+  if (value === null || value < 0) return null
+  return Math.min(100, value)
 }
 
 function parseAmsHumidityPercent(value: unknown, fallback: number | null): number | null {

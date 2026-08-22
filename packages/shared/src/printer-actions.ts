@@ -9,6 +9,7 @@
  */
 import type { PrinterStage, PrinterStatus } from './printer-contracts.js'
 import { isPrinterActiveJobStage } from './printer-capabilities.js'
+import { isFilamentTrackSwitchInstalled, isFilamentTrackSwitchReady } from './filament-track-switch.js'
 
 export type PrinterActionAvailability = {
   allowed: boolean
@@ -18,7 +19,7 @@ export type PrinterActionAvailability = {
 type PrinterFilamentActionStatus = Pick<
   PrinterStatus,
   'online' | 'stage' | 'subStage' | 'deviceError' | 'hmsErrors' | 'filamentChange' | 'ams' | 'externalSpools'
->
+> & Partial<Pick<PrinterStatus, 'filamentTrackSwitch'>>
 
 type PrinterPausedActionStatus = Pick<
   PrinterStatus,
@@ -280,6 +281,27 @@ export function getStopAvailability(
   return allowPrinterAction()
 }
 
+/**
+ * The external spool bypasses the AMS feed path the switch controls, so the
+ * printer offers no load/unload for it while an FTS is fitted. This is a
+ * property of the HARDWARE being present, not of it being set up, so it does not
+ * clear once the switch is calibrated (BambuStudio blocks it the same way).
+ */
+const EXTERNAL_SPOOL_TRACK_SWITCH_REASON =
+  'Loading and unloading the external spool is not supported while a Filament Track Switch is fitted.'
+
+/**
+ * A Filament Track Switch that is fitted but not set up routes nothing, so the
+ * printer ignores load/unload requests through it. Mirrors BambuStudio, which
+ * refuses both actions with the same guidance (`StatusPanel::sGetSwitchInfo`).
+ * Returns `null` when there is nothing to block on.
+ */
+function filamentTrackSwitchNotReadyReason(status: PrinterFilamentActionStatus): string | null {
+  if (!isFilamentTrackSwitchInstalled(status)) return null
+  if (isFilamentTrackSwitchReady(status)) return null
+  return 'The Filament Track Switch has not been set up. Finish setup on the printer first.'
+}
+
 export function getAmsLoadFilamentAvailability(
   status: PrinterFilamentActionStatus | null | undefined,
   amsId: number,
@@ -289,6 +311,9 @@ export function getAmsLoadFilamentAvailability(
 
   const slot = status.ams.find((unit) => unit.unitId === amsId)?.slots.find((entry) => entry.slot === slotId)
   if (!slot) return blockPrinterAction('Selected AMS slot is unavailable')
+
+  const switchReason = filamentTrackSwitchNotReadyReason(status)
+  if (switchReason) return blockPrinterAction(switchReason)
 
   const busyReason = isPausedFilamentRunout(status) ? null : filamentActionBusyReason(status)
   if (busyReason) return blockPrinterAction(busyReason)
@@ -309,6 +334,9 @@ export function getAmsUnloadFilamentAvailability(
 
   const slot = status.ams.find((unit) => unit.unitId === amsId)?.slots.find((entry) => entry.slot === slotId)
   if (!slot) return blockPrinterAction('Selected AMS slot is unavailable')
+
+  const switchReason = filamentTrackSwitchNotReadyReason(status)
+  if (switchReason) return blockPrinterAction(switchReason)
 
   const busyReason = filamentActionBusyReason(status)
   if (busyReason) return blockPrinterAction(busyReason)
@@ -368,6 +396,8 @@ export function getExternalSpoolLoadAvailability(
   const spool = status.externalSpools.find((entry) => entry.amsId === amsId)
   if (!spool) return blockPrinterAction('Selected external spool is unavailable')
 
+  if (isFilamentTrackSwitchInstalled(status)) return blockPrinterAction(EXTERNAL_SPOOL_TRACK_SWITCH_REASON)
+
   const busyReason = isPausedFilamentRunout(status) ? null : filamentActionBusyReason(status)
   if (busyReason) return blockPrinterAction(busyReason)
   if (!hasConfiguredFilamentDetails(spool)) {
@@ -386,6 +416,8 @@ export function getExternalSpoolUnloadAvailability(
 
   const spool = status.externalSpools.find((entry) => entry.amsId === amsId)
   if (!spool) return blockPrinterAction('Selected external spool is unavailable')
+
+  if (isFilamentTrackSwitchInstalled(status)) return blockPrinterAction(EXTERNAL_SPOOL_TRACK_SWITCH_REASON)
 
   const busyReason = filamentActionBusyReason(status)
   if (busyReason) return blockPrinterAction(busyReason)

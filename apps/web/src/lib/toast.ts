@@ -5,6 +5,13 @@
  *
  * The single `<Toaster />` mounted at the app root subscribes to the bus
  * and renders the visible stack.
+ *
+ * Repeats of an identical plain toast collapse into the entry already on screen
+ * (`count`), so a failure fired once per item does not paper the screen with
+ * copies of one sentence. Toasts the caller holds a handle to — an action, an
+ * `onClose`, a loading/progress state — never merge; see `findMergeableEntry`.
+ * Batches of DIFFERENT but like items (print sends, slices, deletes) are a
+ * different problem, solved by `components/StatusToastGroup`.
  */
 
 export type ToastTone = 'danger' | 'warning' | 'success' | 'neutral' | 'primary'
@@ -40,6 +47,12 @@ export interface ToastEntry {
   durationMs: number
   loading: boolean
   progress: number | null
+  /**
+   * How many times this exact toast has been raised. Repeats collapse into the
+   * entry that is already on screen (see {@link toast.show}), so the Toaster
+   * renders a count rather than five copies of one message.
+   */
+  count: number
   action?: ToastAction
   onClose?: (reason: ToastDismissReason) => void
 }
@@ -72,9 +85,32 @@ function buildEntry(id: number, input: ToastInput, previous?: ToastEntry): Toast
     durationMs: input.durationMs ?? previous?.durationMs ?? 6000,
     loading: input.loading ?? previous?.loading ?? false,
     progress: input.progress === undefined ? previous?.progress ?? null : input.progress,
+    count: previous?.count ?? 1,
     action: input.action ?? previous?.action,
     onClose: input.onClose ?? previous?.onClose
   }
+}
+
+/**
+ * The already-shown entry a repeat should fold into, or `undefined`.
+ *
+ * Only plain, self-dismissing toasts collapse: one carrying an action, an
+ * `onClose`, or a progress/loading state is a live handle its caller updates and
+ * dismisses by id, so merging it would silently drop one of those callbacks.
+ * That leaves the case this exists for — the same error fired N times in a row
+ * filling the screen with copies of itself.
+ */
+function findMergeableEntry(input: ToastInput, message: string, tone: ToastTone): ToastEntry | undefined {
+  if (input.action || input.onClose || input.loading || input.progress != null) return undefined
+  if ((input.durationMs ?? 6000) <= 0) return undefined
+  return entries.find((entry) => (
+    entry.message === message
+    && entry.tone === tone
+    && entry.durationMs > 0
+    && !entry.action
+    && !entry.onClose
+    && !entry.loading
+  ))
 }
 
 export const toast = {
@@ -86,6 +122,19 @@ export const toast = {
   },
   show(input: ToastInput | string): number {
     const normalized = normalizeToastInput(input)
+    const tone = normalized.tone ?? 'danger'
+    const message = normalizeToastMessage(normalized.message, tone === 'danger' ? 'Something went wrong' : '')
+    // A repeat re-raises the toast that is already there: its count goes up and
+    // the Toaster restarts its timer, so the last occurrence is what the dwell
+    // time is measured from.
+    const mergeable = findMergeableEntry(normalized, message, tone)
+    if (mergeable) {
+      entries = entries.map((entry) => (
+        entry.id === mergeable.id ? { ...entry, count: entry.count + 1 } : entry
+      ))
+      emit()
+      return mergeable.id
+    }
     const entry = buildEntry(nextId++, normalized)
     entries = [...entries, entry]
     emit()

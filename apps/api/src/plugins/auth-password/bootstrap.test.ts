@@ -119,6 +119,7 @@ test('password bootstrap creates the initial admin with a credential and signs t
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
     registerSlotFilamentResolver() { return () => undefined },
+    registerBambuAccountResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 
@@ -184,6 +185,7 @@ test('password bootstrap rejects creating a second initial admin', async () => {
     onShutdown() {},
     registerPrintGuard() { return () => undefined },
     registerSlotFilamentResolver() { return () => undefined },
+    registerBambuAccountResolver() { return () => undefined },
     registerAuthProvider() { return () => undefined }
   })
 

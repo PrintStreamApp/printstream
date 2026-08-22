@@ -1,46 +1,44 @@
 /**
  * Filament (material) settings editor dialog — the material "tune" dialog opened from the settings
- * icon next to a material's trashbin in the slice dialog. Mirrors ProcessSettingsDialog (tabs +
- * search + per-key reset + reset-all) but over the FILAMENT catalog, and lets the user persist the
- * result three ways, like Bambu Studio: save within this slice/3MF (the per-material override that
- * rides the slice), save as a new workspace preset, or update the original (custom presets only —
- * builtin Bambu presets are read-only, so that button is hidden for them).
+ * icon next to a material's trashbin in the slice dialog. It owns the FILAMENT value space and lets
+ * the user persist the result three ways, like Bambu Studio: save within this slice/3MF (the
+ * per-material override that rides the slice), save as a new workspace preset, or update the
+ * original (custom presets only — builtin Bambu presets are read-only, so that button is hidden).
+ *
+ * The chrome (tabs, search, "Changed only", footer) comes from
+ * `settings/SettingsCatalogDialog.tsx`, shared with the process and machine editors; this dialog
+ * reaches it through a {@link SettingsCatalogAdapter}. Its own two specialities are the "Setting
+ * Overrides" checkboxes and the per-variant broadcast: the fields edit element 0, but a value can
+ * differ on a later extruder variant, so every "is this changed" question and the emitted overrides
+ * work in the un-collapsed `raw` space.
  *
  * The filament tab has essentially no conditional show/enable rules (unlike the process tab), so
- * this dialog renders every catalog option (respecting only developer-mode tiering) without a field
- * -state engine. Counterpart: the API `/api/slicing/profiles/resolve-filament` route.
+ * this dialog passes no `isKeyVisible` and every catalog option renders, subject only to the
+ * shell's developer-mode tiering. Counterpart: the API `/api/slicing/profiles/resolve-filament` route.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Alert, Box, Button, Checkbox, CircularProgress, DialogActions, Divider, FormControl, FormLabel,
-  IconButton, Input, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography
-} from '@mui/joy'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded'
-import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
-import CloseRoundedIcon from '@mui/icons-material/CloseRounded'
+import { Checkbox, Tooltip, Typography } from '@mui/joy'
 import {
   diffFilamentVariantConfig,
   filamentSettingsCatalog,
   filamentVariantValuesEqual,
-  isProcessOptionVisibleInMode,
   prepareResolvedFilamentState,
   scalarizeFilamentConfig,
   type FilamentConfig,
-  type FilamentSettingOption,
   type FilamentSettingOverrides,
   type ResolveFilamentConfigResponse,
   type ResolvedFilamentState,
+  type SettingsBaselineOrigin,
+  describeSettingsBaseline,
   isNilSettingValue
 } from '@printstream/shared'
 import { apiFetch } from '../../lib/apiClient'
 import { resolveWorkspaceFilamentConfig } from './workspaceFilamentResolver'
 import { useEffectiveSlicerDeveloperMode } from '../../lib/slicerDeveloperMode'
-import { BackAwareModal } from '../BackAwareModal'
-import { DialogSection } from '../DialogSection'
-import { ScrollableDialogBody, ScrollableModalDialog } from '../ScrollableDialog'
 import { usePromptDialog } from '../PromptDialogProvider'
-import { SettingValueField } from '../settings/SettingValueField'
+import { SettingsCatalogDialog } from '../settings/SettingsCatalogDialog'
+import { SettingsBaselineNote } from '../settings/SettingsBaselineNote'
+import type { SettingsCatalogAdapter } from '../settings/settingsCatalogAdapter'
 
 export interface FilamentSettingsDialogProps {
   open: boolean
@@ -101,9 +99,8 @@ export type FilamentConfigResolver = (request: {
 
 export default function FilamentSettingsDialog(props: FilamentSettingsDialogProps): JSX.Element {
   const { open, onClose, slicerTargetId, filamentProfileId, filamentProfileName, filamentPresetFullName, sourceFileId, projectFilamentId, initialOverrides, canEditOriginal, applyScope = 'slice', resolveConfig, onApply } = props
+  // The shell applies the develop-tier gate itself; this only tells it which mode it is in.
   const showDeveloperOptions = useEffectiveSlicerDeveloperMode()
-  const isOptionVisibleInMode = (option: FilamentSettingOption): boolean =>
-    isProcessOptionVisibleInMode(option, showDeveloperOptions)
   const { promptText } = usePromptDialog()
 
   // `baseConfig` is the preset baseline (reset target + "modified" diff source) in element-0 scalar
@@ -122,14 +119,16 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
   const [declaresOverrides, setDeclaresOverrides] = useState(false)
   /** False when no preset resolved to diff against — see {@link ResolvedFilamentState.baselineResolved}. */
   const [baselineResolved, setBaselineResolved] = useState(true)
+  /**
+   * What the change markers ended up being measured against, straight from the resolver — see
+   * {@link SettingsBaselineOrigin}. Not a prop: a host computing it separately answered per PRESET
+   * while the resolver answers per SLOT, and knew nothing of browser-stored presets.
+   */
+  const [baselineOrigin, setBaselineOrigin] = useState<SettingsBaselineOrigin | undefined>(undefined)
   const [config, setConfig] = useState<FilamentConfig>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [activePage, setActivePage] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [query, setQuery] = useState('')
-  const [showChangedOnly, setShowChangedOnly] = useState(false)
-  const normalizedQuery = query.trim().toLowerCase()
   // Each key's original per-filament vector length (before scalarizing), so an emitted override can
   // be broadcast back to that shape at slice time — a scalar written where a multi-variant machine
   // expects N values would slice under-length.
@@ -165,6 +164,7 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
         setBakedKeys(new Set(state.bakedKeys))
         setDeclaresOverrides(state.declaresOverrides)
         setBaselineResolved(state.baselineResolved)
+        setBaselineOrigin(state.baselineOrigin)
         setConfig({ ...state.effective, ...scalarizeFilamentConfig(initialOverrides) })
         setRaw(state.raw)
         setRawConfig({ ...state.raw.effective, ...initialOverrides })
@@ -297,67 +297,6 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     return null
   }
 
-  const modifiedKeyCount = useMemo(() => {
-    if (!baseConfig) return 0
-    return Object.keys(filamentSettingsCatalog.options).filter(isProjectChange).length
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseConfig, rawConfig, raw, bakedKeys])
-
-  const modifiedPages = useMemo(() => {
-    const result = new Set<number>()
-    if (!baseConfig) return result
-    filamentSettingsCatalog.pages.forEach((page, index) => {
-      const anyModified = page.groups.some((group) =>
-        group.lines.some((line) => line.keys.some((key) => {
-          const option = filamentSettingsCatalog.options[key]
-          return Boolean(option) && isOptionVisibleInMode(option!) && isProjectChange(key)
-        }))
-      )
-      if (anyModified) result.add(index)
-    })
-    return result
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseConfig, rawConfig, raw, bakedKeys, declaresOverrides, showDeveloperOptions])
-
-  const pageMatchCounts = useMemo(() => filamentSettingsCatalog.pages.map((page) => {
-    if (!normalizedQuery) return 0
-    let count = 0
-    for (const group of page.groups) {
-      for (const line of group.lines) {
-        for (const key of line.keys) {
-          const option = filamentSettingsCatalog.options[key]
-          if (option && isOptionVisibleInMode(option) && filamentKeyMatchesQuery(key, normalizedQuery)) count += 1
-        }
-      }
-    }
-    return count
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [normalizedQuery, showDeveloperOptions])
-
-  // Whether a settings line is currently shown, honoring dev-mode visibility, the search query, and
-  // the "changed only" filter. Shared by the tab-visibility check and the per-tab line list.
-  const lineVisible = (line: { keys: string[] }): boolean =>
-    line.keys.some((key) => {
-      const option = filamentSettingsCatalog.options[key]
-      if (!option || !isOptionVisibleInMode(option)) return false
-      if (normalizedQuery && !filamentKeyMatchesQuery(key, normalizedQuery)) return false
-      if (showChangedOnly && !isProjectChange(key)) return false
-      return true
-    })
-
-  // Hide a tab entirely when it has no visible line (e.g. "changed only" with no changes on it).
-  const pageHasContent = filamentSettingsCatalog.pages.map((page) =>
-    page.groups.some((group) => group.lines.some(lineVisible))
-  )
-  const pageHasContentKey = pageHasContent.map((has) => (has ? '1' : '0')).join('')
-
-  // Keep the active tab on a page that still has content when the filter/search hides the current one.
-  useEffect(() => {
-    if (pageHasContent[activePage]) return
-    const first = pageHasContent.findIndex(Boolean)
-    if (first >= 0 && first !== activePage) setActivePage(first)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageHasContentKey, activePage])
 
   /**
    * The overrides this session should ride the slice with: every key whose per-variant value differs
@@ -426,284 +365,95 @@ export default function FilamentSettingsDialog(props: FilamentSettingsDialogProp
     await savePreset(filamentProfileName, true)
   }
 
-  const pages = filamentSettingsCatalog.pages
-
-  return (
-    <BackAwareModal open={open} onClose={onClose}>
-      <ScrollableModalDialog sx={{ maxWidth: 720, width: '100%' }}>
-        <Typography level="h4">Filament settings — {modifiedKeyCount > 0 ? '*' : ''}{filamentProfileName}</Typography>
-        {filamentPresetFullName && filamentPresetFullName !== filamentProfileName && (
-          <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: -0.5 }}>{filamentPresetFullName}</Typography>
-        )}
-        {loading && (
-          <ScrollableDialogBody sx={{ mt: 1, px: 0 }}>
-            <Stack alignItems="center" justifyContent="center" sx={{ py: 6 }} spacing={1}>
-              <CircularProgress />
-              <Typography level="body-sm">Loading filament settings…</Typography>
-            </Stack>
-          </ScrollableDialogBody>
-        )}
-        {!loading && error && (
-          <ScrollableDialogBody sx={{ mt: 1, px: 0 }}>
-            <Alert color="danger" sx={{ m: 2 }}>{error}</Alert>
-          </ScrollableDialogBody>
-        )}
-        {!loading && !error && baseConfig && (
-          <Tabs
-            value={activePage}
-            onChange={(_event, value) => setActivePage(typeof value === 'number' ? value : 0)}
-            orientation="horizontal"
-            sx={{ mt: 1, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', bgcolor: 'transparent' }}
-          >
-            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexShrink: 0, mb: 1, flexWrap: 'wrap' }}>
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search settings…"
-                size="sm"
-                startDecorator={<Box component="span" sx={{ display: 'inline-flex', fontSize: 18, opacity: 0.6 }}><SearchRoundedIcon fontSize="inherit" /></Box>}
-                endDecorator={query ? (
-                  <IconButton size="sm" variant="plain" color="neutral" onClick={() => setQuery('')} aria-label="Clear search">
-                    <Box component="span" sx={{ display: 'inline-flex', fontSize: 16 }}><CloseRoundedIcon fontSize="inherit" /></Box>
-                  </IconButton>
-                ) : undefined}
-                sx={{ flex: 1, minWidth: 160 }}
-              />
-              <Checkbox
-                size="sm"
-                label="Changed only"
-                checked={showChangedOnly}
-                onChange={(event) => setShowChangedOnly(event.target.checked)}
-                disabled={modifiedKeyCount === 0 && !showChangedOnly}
-              />
-            </Stack>
-            <TabList sx={{
-              overflowX: 'auto',
-              flexWrap: 'nowrap',
-              flexShrink: 0,
-                // The list scrolls rather than wraps (overflowX/nowrap above), but a Tab defaults to
-                // `white-space: normal` and is shrinkable — so instead of scrolling, tabs squeezed
-                // below their text and wrapped onto two lines while the row still had slack. Pinning
-                // each tab to its own width is what makes the scroll actually engage.
-                '& > *': { flexShrink: 0, whiteSpace: 'nowrap' }
-            }}>
-              {pages.map((page, index) => pageHasContent[index] ? (
-                <Tab
-                  key={page.id}
-                  value={index}
-                  sx={modifiedPages.has(index) ? { color: 'warning.plainColor', fontWeight: 700 } : undefined}
-                >
-                  {page.title}{normalizedQuery ? ` (${pageMatchCounts[index] ?? 0})` : ''}
-                </Tab>
-              ) : null)}
-            </TabList>
-            <ScrollableDialogBody sx={{ mt: 0, px: 0 }}>
-              {showChangedOnly && modifiedKeyCount === 0 && (
-                <Typography level="body-sm" textColor="text.tertiary" sx={{ p: 2 }}>No changed settings.</Typography>
-              )}
-              {pages.map((page, index) => (
-                <TabPanel key={page.id} value={index} sx={{ p: 2 }}>
-                  <Stack spacing={2}>
-                    {page.groups.map((group) => {
-                      const visibleLines = group.lines.filter(lineVisible)
-                      if (visibleLines.length === 0) return null
-                      return (
-                        <DialogSection key={group.title} title={group.title}>
-                          <Stack spacing={1.25}>
-                            {visibleLines.map((line, lineIndex) => (
-                              <FilamentSettingLineRow
-                                key={`${group.title}-${lineIndex}`}
-                                lineLabel={line.label}
-                                keys={line.keys}
-                                showDeveloperOptions={showDeveloperOptions}
-                                code={line.code}
-                                fullWidth={line.fullWidth}
-                                config={config}
-                                isProjectChange={isProjectChange}
-                                isPresetOverride={isPresetOverride}
-                                originalOf={originalOf}
-                                overrideKeys={overrideKeys}
-                                canReset={canReset}
-                                onReset={resetKey}
-                                onScalarChange={setScalar}
-                              />
-                            ))}
-                          </Stack>
-                        </DialogSection>
-                      )
-                    })}
-                  </Stack>
-                </TabPanel>
-              ))}
-            </ScrollableDialogBody>
-          </Tabs>
-        )}
-        <Divider />
-        <DialogActions sx={{ justifyContent: 'space-between' }}>
-          <Button
-            variant="plain"
-            color="warning"
-            onClick={handleResetAll}
-            disabled={loading || !baseConfig || saving || modifiedKeyCount === 0}
-            startDecorator={<Box component="span" sx={{ display: 'inline-flex', fontSize: 16 }}><RestartAltRoundedIcon fontSize="inherit" /></Box>}
-          >
-            Reset all
-          </Button>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <Button variant="plain" color="neutral" onClick={onClose} disabled={saving}>Cancel</Button>
-            {canEditOriginal && (
-              <Button variant="outlined" onClick={handleUpdateOriginal} disabled={loading || !baseConfig || saving} loading={saving}>
-                Update preset
-              </Button>
-            )}
-            <Button variant="outlined" onClick={handleSaveAsPreset} disabled={loading || !baseConfig || saving} loading={saving}>
-              Save as preset
-            </Button>
-            {applyScope !== 'preset' && (
-              <Button variant="solid" onClick={handleApply} disabled={loading || !baseConfig || saving}>
-                {applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice'}
-              </Button>
-            )}
-          </Stack>
-        </DialogActions>
-      </ScrollableModalDialog>
-    </BackAwareModal>
-  )
-}
-
-/** Case-insensitive match of a filament setting against the search query (label, key, or tooltip). */
-function filamentKeyMatchesQuery(key: string, normalizedQuery: string): boolean {
-  const option = filamentSettingsCatalog.options[key]
-  if (!option) return false
-  return option.label.toLowerCase().includes(normalizedQuery)
-    || key.toLowerCase().includes(normalizedQuery)
-    || (option.tooltip?.toLowerCase().includes(normalizedQuery) ?? false)
-}
-
-interface FilamentSettingLineRowProps {
-  lineLabel?: string
-  keys: string[]
-  showDeveloperOptions: boolean
-  code?: boolean
-  /** The line spans the row (BambuStudio's full-width lines: Notes and the G-code editors). */
-  fullWidth?: boolean
-  config: FilamentConfig
-  /** Changed by THIS project/session versus the preset in use — coloured, badged, filterable. */
-  isProjectChange: (key: string) => boolean
-  /** An override the preset itself carries versus its parent — emphasis only. */
-  isPresetOverride: (key: string) => boolean
-  /** The baseline a changed value replaced, for the hover. */
-  originalOf: (key: string) => { value: string; label: string } | null
-  overrideKeys: ReadonlySet<string>
-  canReset: (key: string) => boolean
-  onReset: (key: string) => void
-  onScalarChange: (key: string, value: string) => void
-}
-
-/** Renders one settings line (label + one or more value controls) with per-control reset. */
-function FilamentSettingLineRow(props: FilamentSettingLineRowProps): JSX.Element | null {
-  const { keys, lineLabel, showDeveloperOptions, code, fullWidth, config, isProjectChange, isPresetOverride, originalOf, overrideKeys, canReset, onReset, onScalarChange } = props
-  const visibleKeys = keys.filter((key) => {
-    const option = filamentSettingsCatalog.options[key]
-    return option && isProcessOptionVisibleInMode(option, showDeveloperOptions)
-  })
-  if (visibleKeys.length === 0) return null
-
-  const firstKey = visibleKeys[0] ?? keys[0] ?? ''
-  const firstOption = filamentSettingsCatalog.options[firstKey]
-  const label = lineLabel ?? firstOption?.label ?? firstKey
-  const lineProjectChange = visibleKeys.some((key) => isProjectChange(key))
-  const linePresetOverride = visibleKeys.some((key) => isPresetOverride(key))
-  // Full-width lines take the label above and the whole row: the G-code editors and Notes.
-  const spansRow = Boolean(code || fullWidth)
-
+  /** The current element-0 scalar the fields edit; see the `raw`/`config` split above. */
   const scalarOf = (key: string): string => {
     const value = config[key]
     if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
     return typeof value === 'string' ? value : ''
   }
 
-  // See the note at its use: one control -> FormControl (so the label is really associated);
-  // several -> a plain Box, because each control carries its own label.
-  // Cast: both accept children and no required props, but a union of two component types is not
-  // callable as a JSX tag.
-  const RowRoot = (visibleKeys.length === 1 ? FormControl : Box) as typeof Box
+  /**
+   * Everything the shared shell needs that only this dialog can answer.
+   *
+   * One column per key: the filament tab edits element 0 and broadcasts, because a material's
+   * per-variant values describe the same spool on different extruders rather than separate things
+   * to set. (The machine dialog is the opposite case — see `machineColumnsForPage`.)
+   */
+  // Suppressed while loading or errored: the caveat describes a config that is not on screen yet.
+  const baselineNoteText = loading || error ? null : describeSettingsBaseline(baselineOrigin, 'filament')
+
+  const adapter: SettingsCatalogAdapter = {
+    columnsFor: (key) => {
+      const option = filamentSettingsCatalog.options[key]
+      if (!option) return []
+      const isOverride = overrideKeys.has(key)
+      const overridden = isOverride && !isNilSettingValue(config[key])
+      return [{
+        id: key,
+        settingKey: key,
+        value: scalarOf(key),
+        enabled: !isOverride || overridden,
+        prefix: isOverride ? (
+          <Tooltip
+            title={overridden
+              ? 'Overriding the printer setting — uncheck to use the printer value'
+              : 'Not overridden — check to set a filament-specific value'}
+            variant="soft"
+          >
+            <Checkbox
+              size="sm"
+              checked={overridden}
+              slotProps={{ input: { 'aria-label': `Override ${option.label}` } }}
+              // Mirrors BambuStudio's Field::set_na_value / set_last_meaningful_value:
+              // unchecking stores nil, checking restores a real value (the catalog default,
+              // which is what the printer would have used anyway).
+              onChange={(event) => setScalar(key, event.target.checked ? (option.default ?? '0') : 'nil')}
+            />
+          </Tooltip>
+        ) : undefined,
+        onChange: (value) => setScalar(key, value)
+      }]
+    },
+    // One question here, not two: a filament change is measured against the preset in use, so what
+    // the dialog counts and what it colours are the same set.
+    isModified: isProjectChange,
+    isUnsaved: isProjectChange,
+    isPresetOverride,
+    canReset,
+    onReset: resetKey,
+    originalOf
+  }
+
   return (
-    // A Joy FormControl may contain exactly ONE control, and it labels that control. A row with
-    // several visible keys is one setting per extruder variant — several controls, each labelling
-    // itself via `showOwnLabel` — so wrapping those in a FormControl is both a Joy error (logged on
-    // every render) and a false label association. Use it only when there really is one control.
-    <RowRoot>
-      {/* A G-code field is a multi-line editor, not a value in a column: it takes the label ABOVE
-          and the full row width, the way BambuStudio lays its G-code groups out. Beside a 220px
-          label column it was stuck at its 280px minimum in a 720px dialog. */}
-      <Stack direction={spansRow ? 'column' : { xs: 'column', sm: 'row' }} spacing={1} alignItems={spansRow ? 'stretch' : { sm: 'center' }}>
-        <Box sx={{ minWidth: spansRow ? undefined : { sm: 220 }, flexShrink: 0 }}>
-          <FormLabel sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, color: lineProjectChange ? 'warning.plainColor' : undefined, fontWeight: linePresetOverride || lineProjectChange ? 700 : undefined, fontStyle: linePresetOverride && !lineProjectChange ? 'italic' : undefined }}>
-            {label}
-            {firstOption?.tooltip && (
-              <Tooltip title={firstOption.tooltip} variant="soft" sx={{ maxWidth: 320 }}>
-                <Box component="span" sx={{ display: 'inline-flex', fontSize: 16, opacity: 0.6 }}>
-                  <InfoOutlinedIcon fontSize="inherit" />
-                </Box>
-              </Tooltip>
-            )}
-          </FormLabel>
-        </Box>
-        <Stack direction="row" spacing={1} sx={{ flex: 1, flexWrap: 'wrap', justifyContent: spansRow ? 'stretch' : { sm: 'flex-end' }, width: spansRow ? '100%' : undefined }}>
-          {visibleKeys.map((key) => {
-            const option = filamentSettingsCatalog.options[key]
-            if (!option) return null
-            const isOverride = overrideKeys.has(key)
-            const overridden = isOverride && !isNilSettingValue(config[key])
-            return (
-              <Stack key={key} direction="row" spacing={0.25} alignItems="center" sx={spansRow ? { flex: 1, minWidth: 0 } : undefined}>
-                {isOverride && (
-                  <Tooltip title={overridden ? 'Overriding the printer setting — uncheck to use the printer value' : 'Not overridden — check to set a filament-specific value'} variant="soft">
-                    <Checkbox
-                      size="sm"
-                      checked={overridden}
-                      slotProps={{ input: { 'aria-label': `Override ${option.label}` } }}
-                      // Mirrors BambuStudio's Field::set_na_value / set_last_meaningful_value:
-                      // unchecking stores nil, checking restores a real value (the catalog default,
-                      // which is what the printer would have used anyway).
-                      onChange={(event) => onScalarChange(key, event.target.checked ? (option.default ?? '0') : 'nil')}
-                    />
-                  </Tooltip>
-                )}
-                <SettingValueField
-                  settingKey={key}
-                  option={option}
-                  value={scalarOf(key)}
-                  enabled={!isOverride || overridden}
-                  showOwnLabel={visibleKeys.length > 1}
-                  modified={isPresetOverride(key)}
-                  unsaved={isProjectChange(key)}
-                  original={originalOf(key)}
-                  onScalarChange={onScalarChange}
-                  isCode={code}
-                />
-                {canReset(key) && (
-                  <Tooltip title="Reset to profile default" variant="soft">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="warning"
-                      aria-label={`Reset ${option.label} to default`}
-                      onClick={() => onReset(key)}
-                      sx={{ '--IconButton-size': '1.75rem' }}
-                    >
-                      <Box component="span" sx={{ display: 'inline-flex', fontSize: 16 }}>
-                        <RestartAltRoundedIcon fontSize="inherit" />
-                      </Box>
-                    </IconButton>
-                  </Tooltip>
-                )}
-              </Stack>
-            )
-          })}
-        </Stack>
-      </Stack>
-    </RowRoot>
+    <SettingsCatalogDialog
+      open={open}
+      onClose={onClose}
+      catalog={filamentSettingsCatalog}
+      titlePrefix="Filament settings"
+      presetName={filamentProfileName}
+      subtitle={filamentPresetFullName && filamentPresetFullName !== filamentProfileName ? (
+        <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: -0.5 }}>{filamentPresetFullName}</Typography>
+      ) : undefined}
+      header={baselineNoteText ? <SettingsBaselineNote note={baselineNoteText} /> : undefined}
+      loading={loading}
+      loadingLabel="Loading filament settings…"
+      error={error}
+      ready={baseConfig !== null}
+      showDeveloperOptions={showDeveloperOptions}
+      adapter={adapter}
+      actions={{
+        onResetAll: handleResetAll,
+        onCancel: onClose,
+        saving,
+        // A built-in is editable but can only be saved as a NEW user preset, the way BambuStudio
+        // treats a system preset; the workspace's own can be updated in place.
+        onUpdatePreset: canEditOriginal ? () => void handleUpdateOriginal() : undefined,
+        onSaveAsPreset: () => void handleSaveAsPreset(),
+        apply: applyScope === 'preset' ? undefined : {
+          label: applyScope === 'project' ? 'Apply to this project' : 'Apply to this slice',
+          onApply: handleApply
+        }
+      }}
+    />
   )
 }

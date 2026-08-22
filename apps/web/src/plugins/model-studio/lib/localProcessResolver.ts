@@ -16,6 +16,7 @@
  *   dead-ended the tune dialog on "could not be resolved" while the preset sat visibly in Manage.
  * - WORKSPACE preset -> genuinely impossible here; treated as unresolvable.
  */
+import type { SettingsBaselineOrigin } from '@printstream/shared'
 import {
   extractProjectProcessConfig,
   isProjectSlicingPresetId,
@@ -69,22 +70,28 @@ export function buildLocalProcessConfigResolver(input: {
       // an edit whose value equals the standard, but it beats trusting the 3MF's recorded list;
       // (3) nothing resolvable -> fall back to the 3MF's changed-from-system keys.
       let baseline: ResolveProcessConfigResponse['config'] | null = null
+      // Which tier we land on changes what a marker MEANS, so it rides back with the config rather
+      // than being re-derived by a caller that would have to guess at the same three rules.
+      let baselineOrigin: SettingsBaselineOrigin = { kind: 'declared' }
       if (project.presetName) {
         const exact = input.processProfiles.find(
           (profile) => profile.kind === 'process' && profile.name === project.presetName && slicingPresetProvenance(profile.id) === 'builtin'
         )
         const parent = exact ?? findParentBuiltinPreset(input.processProfiles, project.presetName, 'process')
-        if (parent) baseline = (await resolveBuiltinProcess(parent.id, targetId)).config
+        if (parent) {
+          baseline = (await resolveBuiltinProcess(parent.id, targetId)).config
+          baselineOrigin = exact ? { kind: 'exact' } : { kind: 'parent', name: parent.name }
+        }
       }
       // The file's declared record rides along in BOTH branches, matching the workspace route: a
       // resolved baseline does not make it redundant, it is what says whether a difference from
       // that baseline was a user's change or drift the vendor would normalize away.
       return baseline
-        ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides }
+        ? { config: project.config, baseConfig: baseline, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineOrigin }
         // No preset resolved: `baseConfig` is a stand-in copy, so only the declared record can say
         // what changed. Flagged explicitly — the payload cannot be told apart from an unmodified
         // project otherwise. Same contract as the workspace route.
-        : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false }
+        : { config: project.config, baseConfig: project.config, overriddenKeys: project.overriddenKeys, declaresOverrides: project.declaresOverrides, baselineResolved: false, baselineOrigin }
     }
     if (slicingPresetProvenance(processProfileId) === 'builtin') {
       return resolveBuiltinProcess(processProfileId, targetId)
@@ -97,12 +104,15 @@ export function buildLocalProcessConfigResolver(input: {
     // until an edit changes it; the parent's values ride in `parentConfig` as emphasis only.
     const stored = listLocalSlicingPresets().find((preset) => preset.id === processProfileId && preset.kind === 'process')
     if (stored) {
-      const { config, parentConfig } = await flattenLocalPreset(stored, input.processProfiles,
+      const { config, parentConfig, parentUnresolved } = await flattenLocalPreset(stored, input.processProfiles,
         async (builtinId) => (await resolveBuiltinProcess(builtinId, targetId)).config ?? null)
       return {
         config,
         baseConfig: config,
         ...(parentConfig ? { parentConfig } : {}),
+        // Only when a parent was NAMED and did not resolve — see the filament twin. A self-contained
+        // preset is complete, and claiming otherwise is a false statement about the user's own file.
+        ...(parentUnresolved ? { baselineOrigin: { kind: 'partial' as const } } : {}),
         overriddenKeys: []
       }
     }

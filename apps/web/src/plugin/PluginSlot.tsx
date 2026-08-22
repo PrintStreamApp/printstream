@@ -2,14 +2,12 @@
  * Render every component plugins have registered for a named slot.
  * Core pages use this to expose extension points without depending on
  * any specific plugin.
+ *
+ * When a host needs to know whether a slot has contributors before it renders (to
+ * change its own markup, not just to fill a hole), use `usePluginSlots` directly.
  */
-import { useMemo } from 'react'
 import { Fragment, type ReactNode } from 'react'
-import type { PluginSurface } from '@printstream/shared'
-import { useAuthBootstrapQuery } from '../lib/authQuery'
-import { usePluginCatalogQuery } from '../lib/pluginCatalogQuery'
-import { isPluginActiveByName, pluginSupportsRuntimeSurface } from '../lib/pluginSettings'
-import { webPluginRegistry } from './registry'
+import { usePluginSlots } from './usePluginSlots'
 
 interface PluginSlotProps {
   name: string
@@ -26,23 +24,7 @@ interface PluginSlotProps {
 }
 
 export function PluginSlot({ name, context, fallback = null }: PluginSlotProps) {
-  const authBootstrapQuery = useAuthBootstrapQuery()
-  const pluginStateQuery = usePluginCatalogQuery({
-    enabled: authBootstrapQuery.isSuccess ? (!authBootstrapQuery.data.authEnabled || authBootstrapQuery.data.actor.type !== 'anonymous') : false,
-    suppressGlobalErrorToast: true
-  })
-  const currentSurface: PluginSurface = authBootstrapQuery.data?.workspace ? 'workspace' : 'platform'
-  const apiPluginsByName = useMemo(
-    () => new Map((pluginStateQuery.data?.plugins ?? []).map((plugin) => [plugin.name, plugin] as const)),
-    [pluginStateQuery.data?.plugins]
-  )
-  const slots = useMemo(
-    () => webPluginRegistry
-      .slots(name)
-      .filter((slot) => pluginSupportsRuntimeSurface(slot, currentSurface))
-      .filter((slot) => isPluginActiveByName(slot.pluginName, apiPluginsByName, pluginStateQuery.data?.plugins != null)),
-    [apiPluginsByName, currentSurface, name, pluginStateQuery.data?.plugins]
-  )
+  const slots = usePluginSlots(name)
   if (slots.length === 0) return <>{fallback}</>
   return (
     <>

@@ -85,6 +85,25 @@ export function isPluginActiveByName(
   return plugin ? plugin.availableInCurrentContext && plugin.installed && plugin.enabled : true
 }
 
+/**
+ * Whether a plugin's ROUTE should stay mounted, as opposed to whether its nav tab
+ * should show ({@link isPluginActiveByName}).
+ *
+ * The two differ only before plugin state has loaded: a tab must not appear until
+ * we know the plugin is active, but a route must — unmounting it during that
+ * window 404s a deep link that was perfectly valid, which is how an external
+ * hand-off (the remote-import Chrome helper posting to `/library/import`) loses
+ * its payload on a cold load.
+ */
+export function shouldMountPluginRouteByName(
+  pluginName: string,
+  apiPluginsByName: ReadonlyMap<string, ApiPluginInfo>,
+  hasPluginState: boolean
+): boolean {
+  if (!hasPluginState) return true
+  return isPluginActiveByName(pluginName, apiPluginsByName, hasPluginState)
+}
+
 export function getNewlyDisabledPluginNames(
   previous: ReadonlyArray<ApiPluginInfo>,
   next: ReadonlyArray<ApiPluginInfo>
