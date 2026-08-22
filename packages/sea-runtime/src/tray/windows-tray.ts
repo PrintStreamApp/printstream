@@ -149,7 +149,11 @@ $timer.add_Tick({
   $stopServiceItem.Visible = $true
   $restartServiceItem.Visible = $true
   $updateItem.Visible = [bool]$s.updateAvailable
-  $statusItem.Text = 'Status: ' + $s.lifecycle
+  # Prefer the app's own human wording for the lifecycle; fall back to the raw
+  # token for an app (or an older service) that publishes no label.
+  $lifecycleText = [string]$s.lifecycleLabel
+  if (-not $lifecycleText) { $lifecycleText = [string]$s.lifecycle }
+  $statusItem.Text = 'Status: ' + $lifecycleText
   $ver = $s.build.buildRevision
   if (-not $ver) { $ver = $s.build.releaseFingerprint }
   if ($ver) {
@@ -175,7 +179,7 @@ $timer.add_Tick({
   }
   $script:workspaceUrl = [string]$s.workspaceUrl
   $workspaceItem.Visible = [bool]$s.workspaceUrl
-  $text = $appName + ' - ' + $s.lifecycle
+  $text = $appName + ' - ' + $lifecycleText
   $notify.Text = $text.Substring(0, [Math]::Min(63, $text.Length))
 })
 $timer.Start()

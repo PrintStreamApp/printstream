@@ -252,7 +252,9 @@ class Tray:
             self.stop_service_item.hide()
             self.restart_service_item.hide()
             return True
-        lifecycle = status.get("lifecycle", "unknown")
+        # Prefer the app's own human wording for the lifecycle; fall back to the
+        # raw token for an app (or an older service) that publishes no label.
+        lifecycle = status.get("lifecycleLabel") or status.get("lifecycle", "unknown")
         self.status_item.set_label("Status: " + lifecycle)
         self.app_url = status.get("appUrl") or ""
         if self.app_url:

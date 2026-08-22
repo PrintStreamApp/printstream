@@ -67,6 +67,8 @@ test('flags the package matching the machine and opens its dialog with a Downloa
   assert.equal(link.getAttribute('href'), download('win32-x64').url)
   assert.equal(link.getAttribute('download'), download('win32-x64').fileName)
   assert.match(view.getByText(/Double-click the downloaded file/).textContent ?? '', /administrator prompt/)
+  // Installing is not the last step: say where the connect code comes from.
+  assert.match(view.getByText(/Setup shows a connect code/).textContent ?? '', /tray icon/)
 })
 
 test('a Linux package shows the chmod + sudo install command', async () => {
@@ -82,6 +84,10 @@ test('a Linux package shows the chmod + sudo install command', async () => {
   const link = await view.findByRole('link', { name: 'Download' })
   assert.equal(link.getAttribute('href'), download('linux-x64').url)
   assert.match(view.getByText(/chmod \+x/).textContent ?? '', /sudo \.\//)
+  // A headless Linux box has no tray icon and no setup window, so the command
+  // that reprints the connect code is the only way back to it.
+  assert.match(view.getByText(/prints a connect code/).textContent ?? '', /see it again later/)
+  assert.ok(view.getAllByText('printstream-bridge status').length > 0)
 })
 
 test('without a detected platform nothing is flagged, and each package opens the dialog', async () => {

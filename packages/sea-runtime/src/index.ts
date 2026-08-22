@@ -101,6 +101,8 @@ export type { ServiceSpec } from './service/spec.js'
 export { runCommand, commandSucceeds } from './service/exec.js'
 export type { RunCommandOptions } from './service/exec.js'
 export { generateSystemdUnit, systemdUnitPath, systemdController } from './service/systemd.js'
+export { ensureCommandLink, removeCommandLink } from './service/command-link.js'
+export type { CommandLinkInput } from './service/command-link.js'
 export { escapeXml } from './service/xml.js'
 export { parseMarkOfTheWeb, readMarkOfTheWebOrigin } from './download-origin.js'
 export {

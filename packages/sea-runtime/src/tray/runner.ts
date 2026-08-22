@@ -29,6 +29,12 @@ export interface RunTrayInput {
    * World-readable status file the provider polls. The tray runs as the desktop
    * user while the service that writes the file runs privileged, so the caller
    * resolves it at the service's (privileged) location.
+   *
+   * Keys the providers read, all optional: `pid`, `lifecycle`, `lifecycleLabel`
+   * (human wording for `lifecycle`, since an embedded PowerShell/Python script
+   * cannot import the app's own copy of that mapping; falls back to the raw
+   * token), `build.buildRevision` / `build.releaseFingerprint`, `connectCode`,
+   * `connectUrl`, `workspaceUrl`, `appUrl`, `updateAvailable`.
    */
   statusFile: string
   /**

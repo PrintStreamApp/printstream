@@ -182,6 +182,14 @@ function BridgeInstallHint({ platformKey, fileName, serverUrlOverride }: {
         <Typography level="body-sm">
           Double-click the downloaded file to install (approve the administrator prompt).
         </Typography>
+        {/* Where the code comes from, which the native path never said. The
+            Docker dialog has always answered this ("...prints a connect code in
+            its logs"); leaving it out here made the installer look like the end
+            of the process. */}
+        <Typography level="body-sm" textColor="text.tertiary">
+          Setup shows a connect code when it finishes, and the bridge&rsquo;s tray icon shows it any time after
+          that. Use &ldquo;Connect a bridge&rdquo; to pair it.
+        </Typography>
         {/* The download's filename carries the server, and the installer reads
             it — so the ordinary double-click joins THIS server with nothing to
             type. (Windows' Mark of the Web is only a backstop: setup strips it
@@ -218,6 +226,17 @@ function BridgeInstallHint({ platformKey, fileName, serverUrlOverride }: {
         text={`chmod +x ${fileName}\nsudo ./${fileName} setup${serverUrlFlag}`}
         copyAriaLabel="Copy command"
       />
+      {/* The headless case, and the reason this text exists: a server with no
+          desktop has no tray icon and no setup window, so the installer's own
+          output scrolling past is the only time the code is ever shown unless
+          the operator is told the command that reprints it. */}
+      <Typography level="body-sm" textColor="text.tertiary">
+        The installer prints a connect code when it finishes. To see it again later, on the bridge machine run:
+      </Typography>
+      <CopyableCodeBlock text="printstream-bridge status" copyAriaLabel="Copy command" />
+      <Typography level="body-sm" textColor="text.tertiary">
+        Then use &ldquo;Connect a bridge&rdquo; to pair it.
+      </Typography>
     </Stack>
   )
 }
